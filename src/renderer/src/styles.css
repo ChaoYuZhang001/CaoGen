@@ -1,5 +1,5 @@
 :root {
-  /* 主黑副白:中性纯黑背景 + 白色文字/强调,呼应图标黑西装白底,少杂色 */
+  /* 夜晚(主黑副白):中性纯黑背景 + 白色文字/强调,呼应图标黑西装白底,少杂色 */
   --bg: #0d0d0d;
   --bg-raised: #161616;
   --bg-card: #1e1e1e;
@@ -19,6 +19,26 @@
   --red: #e5534b;
   --yellow: #d9a94a;
   --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* 白天(主白副黑):中性纯白背景 + 黑色文字/强调 */
+[data-theme='light'] {
+  --bg: #f6f6f6;
+  --bg-raised: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --border: #e2e2e2;
+  --border-soft: #ececec;
+  --text: #161616;
+  --text-dim: #6a6a6a;
+  --text-faint: #9a9a9a;
+  --accent: #161616;
+  --accent-hover: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.06);
+  --accent-text: #ffffff;
+  --green: #3f9142;
+  --red: #d13d34;
+  --yellow: #b8860b;
 }
 
 * {

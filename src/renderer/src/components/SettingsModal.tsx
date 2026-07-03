@@ -3,6 +3,7 @@ import { MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '.
 import { useT } from '../i18n'
 import type {
   AppLanguage,
+  AppTheme,
   PermissionModeId,
   ProviderHealthView,
   ProviderView,
@@ -85,6 +86,21 @@ export default function SettingsModal(): React.JSX.Element {
                 >
                   <option value="zh">简体中文</option>
                   <option value="en">English</option>
+                </select>
+
+                <label className="field-label">{t('theme')}</label>
+                <select
+                  className="select select-block"
+                  value={draft.theme}
+                  onChange={(e) => {
+                    const v = e.target.value as AppTheme
+                    set('theme', v)
+                    void updateSettings({ theme: v }) // 立即应用 + 持久化(即时预览)
+                  }}
+                >
+                  <option value="light">{t('themeLight')}</option>
+                  <option value="dark">{t('themeDark')}</option>
+                  <option value="system">{t('themeSystem')}</option>
                 </select>
 
                 <label className="field-label">{t('defaultProvider')}</label>
