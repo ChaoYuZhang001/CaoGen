@@ -26,10 +26,19 @@ export default function OfficeView(): React.JSX.Element {
   const sessions = useStore((s) => s.sessions)
   const providers = useStore((s) => s.providers)
   const office = useStore((s) => s.settings.office)
+  const themePref = useStore((s) => s.settings.theme)
   const activeId = useStore((s) => s.activeId)
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
+
+  // 办公区场景色随主题切换
+  const isLight =
+    themePref === 'light' ||
+    (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
+  const scene = isLight
+    ? { bg: '#f0f0f0', floor: '#e6e6e6', grid1: '#d0d0d0', grid2: '#dcdcdc', ground: '#ececec' }
+    : { bg: '#0d0d0d', floor: '#151515', grid1: '#2a2a2a', grid2: '#1c1c1c', ground: '#151515' }
 
   const ids = order.filter((id) => sessions[id])
   const positions = gridPositions(ids.length)
@@ -72,8 +81,8 @@ export default function OfficeView(): React.JSX.Element {
         </div>
       ) : (
         <Canvas shadows camera={{ position: [7, 7, 9], fov: 42 }} dpr={[1, 1.75]}>
-          <color attach="background" args={['#0d0d0d']} />
-          <fog attach="fog" args={['#0d0d0d', 14, 34]} />
+          <color attach="background" args={[scene.bg]} />
+          <fog attach="fog" args={[scene.bg, 14, 34]} />
           <ambientLight intensity={0.55} />
           <directionalLight position={[6, 12, 6]} intensity={1.1} castShadow shadow-mapSize={[1024, 1024]} />
           <directionalLight position={[-8, 6, -6]} intensity={0.35} color="#8fb4ff" />
@@ -81,9 +90,9 @@ export default function OfficeView(): React.JSX.Element {
           {/* 地板 */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
             <planeGeometry args={[60, 60]} />
-            <meshStandardMaterial color="#151515" />
+            <meshStandardMaterial color={scene.ground} />
           </mesh>
-          <gridHelper args={[60, 60, '#2a2a2a', '#1c1c1c']} position={[0, 0.001, 0]} />
+          <gridHelper args={[60, 60, scene.grid1, scene.grid2]} position={[0, 0.001, 0]} />
 
           <Suspense fallback={null}>
             {ids.map((id, i) => (

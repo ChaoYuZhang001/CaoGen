@@ -243,6 +243,7 @@ export const useStore = create<AppStore>((set, get) => ({
     defaultProviderId: '',
     schedulerStrategy: 'balanced',
     language: 'zh',
+    theme: 'dark',
     persona: '',
     allowedTools: '',
     disallowedTools: '',

@@ -9,6 +9,7 @@ const DEFAULTS: AppSettings = {
   defaultProviderId: '',
   schedulerStrategy: 'balanced',
   language: 'zh',
+  theme: 'dark',
   persona: '',
   allowedTools: '',
   disallowedTools: '',

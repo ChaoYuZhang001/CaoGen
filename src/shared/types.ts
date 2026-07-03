@@ -74,6 +74,9 @@ export interface CreateSessionOptions {
 
 export type AppLanguage = 'zh' | 'en'
 
+/** 主题偏好:白天(主白副黑)/ 夜晚(主黑副白)/ 跟随系统 */
+export type AppTheme = 'light' | 'dark' | 'system'
+
 export interface OfficeSettings {
   /** 显示桌上厂商工牌 */
   showBadges: boolean
@@ -93,6 +96,8 @@ export interface AppSettings {
   schedulerStrategy: SchedulerStrategy
   /** 界面语言 */
   language: AppLanguage
+  /** 主题:light 白天 / dark 夜晚 / system 跟随系统 */
+  theme: AppTheme
   /** 人设:追加到系统提示词的自定义指令 */
   persona: string
   /** 权限:工具白名单(每行一个,空=不限制) */

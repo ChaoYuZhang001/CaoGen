@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect } from 'react'
 import { useStore } from './store'
+import { useThemeEffect } from './theme'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
 import WelcomeView from './components/WelcomeView'
@@ -16,6 +17,8 @@ export default function App(): React.JSX.Element {
   const view = useStore((s) => s.view)
   const showNewSession = useStore((s) => s.showNewSession)
   const showSettings = useStore((s) => s.showSettings)
+
+  useThemeEffect()
 
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
