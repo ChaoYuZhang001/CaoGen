@@ -1,6 +1,7 @@
 import type { ChatItem, ToolResultInfo } from '../store'
 import { formatCost, formatDuration, formatTokens } from '../format'
 import ToolCallCard from './ToolCallCard'
+import Markdown from './Markdown'
 
 interface Props {
   item: ChatItem
@@ -25,7 +26,7 @@ export default function MessageItem({ item, toolResults, runningTools }: Props):
             if (block.type === 'text') {
               return (
                 <div key={i} className="assistant-text">
-                  {block.text}
+                  <Markdown text={block.text} />
                 </div>
               )
             }
