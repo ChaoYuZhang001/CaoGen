@@ -9,6 +9,8 @@ import type {
 
 const api: AgentDeskApi = {
   listSessions: () => ipcRenderer.invoke('sessions:list'),
+  listPendingPermissions: (sessionId: string) =>
+    ipcRenderer.invoke('sessions:pendingPermissions', sessionId),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
   sendMessage: (sessionId: string, text: string) =>
     ipcRenderer.invoke('sessions:send', sessionId, text),

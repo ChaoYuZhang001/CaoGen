@@ -23,7 +23,10 @@ export function listHistory(): HistoryEntry[] {
 }
 
 export function upsertHistory(entry: HistoryEntry): void {
-  const list = listHistory().filter((e) => e.id !== entry.id)
+  // 恢复的会话是新 id + 同一 sdkSessionId,两个维度都要去重,否则同一对话反复出现
+  const list = listHistory().filter(
+    (e) => e.id !== entry.id && e.sdkSessionId !== entry.sdkSessionId
+  )
   list.unshift(entry)
   cache = list.slice(0, MAX_ENTRIES)
   try {

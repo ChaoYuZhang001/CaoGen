@@ -106,6 +106,7 @@ export interface SessionEventPayload {
 /** 通过 contextBridge 暴露给渲染进程的 API */
 export interface AgentDeskApi {
   listSessions(): Promise<SessionMeta[]>
+  listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   sendMessage(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
