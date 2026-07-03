@@ -33,15 +33,17 @@
 
 ### 支柱一:多厂商模型接入(分两层落地)
 
-**第一层 · Provider Profile(低成本,先做)**
-现有引擎(Claude Agent SDK)支持 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` 覆写,而市面上 one-api/new-api 类网关能把 OpenAI/Gemini/Qwen/DeepSeek 等翻译成 Anthropic 兼容端点。因此:
+**第一层 · Provider Profile(已完成 M3/M3.5)**
+现有引擎(Claude Agent SDK)只讲 **Anthropic Messages API 协议**(`/v1/messages`),支持 `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_CUSTOM_HEADERS` 覆写。因此:
 
-- 设置页维护 Provider 列表:`{ name, baseUrl, authToken, models[], 备注 }`
-- 每个会话创建时选 Provider + Model,`AgentSession` 按会话注入对应 env(现已整体传递 `process.env`,只需覆写两个变量)
-- 密钥存 safeStorage(Electron 加密),不落明文
+- 设置页维护 Provider 列表:`{ name, baseUrl, token(加密), models[], customHeaders, 备注 }`
+- 每个会话创建时选 Provider + Model,`AgentSession.buildEnv` 按会话注入对应 env;选定 Provider 时剥离宿主 host 托管鉴权,避免被盖过
+- 密钥存 safeStorage(Electron 加密),不落明文;渲染进程只见 `hasToken` 标记
+
+**关于 OpenAI / Gemini / 国产模型**:SDK 不直接讲 OpenAI 的 `/v1/chat/completions` 协议,需经 **Anthropic 兼容网关**(one-api、new-api、LiteLLM、claude-code-router 等)转译——网关对外暴露 `/v1/messages`,内部翻译到 OpenAI/Gemini 后端。M3.5 已提供网关预设模板 + 自定义请求头,一键配好。这是当前多厂商的推荐路径。
 
 **第二层 · EngineAdapter(重活,后做)**
-把 `AgentSession` 抽象为引擎接口(start/send/interrupt/permission/events),现实现更名 `ClaudeEngine`;后续接入 Codex CLI、Gemini CLI 等原生引擎。事件模型(`AgentEvent`)已与引擎解耦,适配面清晰。
+若要**原生**讲 OpenAI/Gemini 协议(不经网关),把 `AgentSession` 抽象为引擎接口(start/send/interrupt/permission/events),现实现更名 `ClaudeEngine`;后续接入 Codex CLI、Gemini CLI 或直连 OpenAI SDK 的自研引擎。事件模型(`AgentEvent`)已与引擎解耦,适配面清晰。这是 M6 的范围。
 
 ### 支柱二:模型调度(手动 + 智能)
 

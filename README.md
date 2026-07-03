@@ -4,6 +4,9 @@
 
 当前以 Claude Agent SDK 为引擎(与 Claude Code 同源),在桌面层提供 CLI 给不了的体验:
 
+> **多厂商 / OpenAI 格式接入**:引擎讲 Anthropic Messages API 协议。要接入 OpenAI / Gemini / 国产模型,在设置里添加一个指向 **Anthropic 兼容网关**(one-api、new-api、LiteLLM 等)的 Provider 即可——已内置网关预设模板,填入网关地址与密钥,选模型开工。原生(不经网关)多引擎见 ROADMAP 的 M6。
+
+
 - **多会话并行** — 同时在多个项目上运行 Agent,侧栏一键切换,互不阻塞
 - **工具调用可视化** — Bash / 文件编辑 / 搜索每一步以卡片呈现,输入输出可展开
 - **Diff 审查** — Edit / Write 的文件修改以红绿差异块呈现
