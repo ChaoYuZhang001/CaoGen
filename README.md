@@ -1,6 +1,8 @@
 # AgentDesk
 
-多会话并行的桌面 AI 编码 Agent。以 Claude Agent SDK 为引擎(与 Claude Code 同源),在桌面层提供 CLI 给不了的体验:
+多会话并行的桌面 AI 编码 Agent。目标是**超越 Codex、Claude Code、Marvis 等桌面端 Agent**:多厂商模型可配置、指定运行或智能自动调度、并行会话以 3D 动画办公区呈现——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
+
+当前以 Claude Agent SDK 为引擎(与 Claude Code 同源),在桌面层提供 CLI 给不了的体验:
 
 - **多会话并行** — 同时在多个项目上运行 Agent,侧栏一键切换,互不阻塞
 - **工具调用可视化** — Bash / 文件编辑 / 搜索每一步以卡片呈现,输入输出可展开
