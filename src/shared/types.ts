@@ -77,6 +77,14 @@ export type AppLanguage = 'zh' | 'en'
 /** 主题偏好:白天(主白副黑)/ 夜晚(主黑副白)/ 跟随系统 */
 export type AppTheme = 'light' | 'dark' | 'system'
 
+/** 收藏的项目目录(快速新建会话) */
+export interface Project {
+  id: string
+  name: string
+  path: string
+  lastUsedAt: number
+}
+
 export interface OfficeSettings {
   /** 显示桌上厂商工牌 */
   showBadges: boolean
@@ -232,6 +240,9 @@ export interface AgentDeskApi {
   deleteProvider(id: string): Promise<void>
   fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
+  listProjects(): Promise<Project[]>
+  updateProject(id: string, patch: { name?: string }): Promise<Project | null>
+  deleteProject(id: string): Promise<void>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
 }

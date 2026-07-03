@@ -234,7 +234,6 @@ textarea {
   display: none;
   gap: 2px;
 }
-
 .session-card:hover .session-card-actions {
   display: flex;
 }
@@ -265,6 +264,89 @@ textarea {
   width: 100%;
   font-size: 13px;
   padding: 5px 8px;
+}
+
+/* ---------- 项目管理 ---------- */
+
+/* 侧栏项目行 */
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 6px;
+  border-radius: 8px;
+  margin-bottom: 2px;
+}
+
+.project-row:hover {
+  background: var(--bg-card);
+}
+
+.project-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 5px 2px;
+  text-align: left;
+}
+
+.project-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.project-name {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-row .session-action {
+  opacity: 0;
+}
+
+.project-row:hover .session-action {
+  opacity: 1;
+}
+
+/* 新建会话弹窗:最近项目 chips */
+.project-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-chip {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-chip:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.project-chip.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
 }
 
 .history-card {

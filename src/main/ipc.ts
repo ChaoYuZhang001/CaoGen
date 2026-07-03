@@ -10,6 +10,7 @@ import {
   fetchModels
 } from './providers'
 import { listHealth } from './scheduler'
+import { listProjects, updateProject, deleteProject } from './projects'
 import type {
   AppSettings,
   CreateSessionOptions,
@@ -91,6 +92,14 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('providers:health', () => listHealth())
+
+  ipcMain.handle('projects:list', () => listProjects())
+  ipcMain.handle('projects:update', (_e, id: string, patch: { name?: string }) =>
+    updateProject(id, patch ?? {})
+  )
+  ipcMain.handle('projects:delete', (_e, id: string) => {
+    deleteProject(id)
+  })
 
   ipcMain.handle(
     'providers:fetchModels',

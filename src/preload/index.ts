@@ -37,6 +37,10 @@ const api: AgentDeskApi = {
   fetchProviderModels: (opts: { baseUrl: string; token?: string; providerId?: string }) =>
     ipcRenderer.invoke('providers:fetchModels', opts),
   listProviderHealth: () => ipcRenderer.invoke('providers:health'),
+  listProjects: () => ipcRenderer.invoke('projects:list'),
+  updateProject: (id: string, patch: { name?: string }) =>
+    ipcRenderer.invoke('projects:update', id, patch),
+  deleteProject: (id: string) => ipcRenderer.invoke('projects:delete', id),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {

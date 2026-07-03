@@ -18,13 +18,16 @@ export default function Sidebar(): React.JSX.Element {
   const sessions = useStore((s) => s.sessions)
   const activeId = useStore((s) => s.activeId)
   const history = useStore((s) => s.history)
+  const projects = useStore((s) => s.projects)
   const selectSession = useStore((s) => s.selectSession)
   const resumeFromHistory = useStore((s) => s.resumeFromHistory)
   const renameSession = useStore((s) => s.renameSession)
   const closeSession = useStore((s) => s.closeSession)
+  const deleteProject = useStore((s) => s.deleteProject)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setView = useStore((s) => s.setView)
+  const createSession = useStore((s) => s.createSession)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -39,6 +42,11 @@ export default function Sidebar(): React.JSX.Element {
   const commitRename = (): void => {
     if (editingId) void renameSession(editingId, draftTitle)
     setEditingId(null)
+  }
+
+  // 用某项目目录一键新建会话(沿用默认 Provider/模型/权限)
+  const newInProject = (path: string): void => {
+    void createSession({ cwd: path })
   }
 
   return (
@@ -57,6 +65,34 @@ export default function Sidebar(): React.JSX.Element {
       </button>
 
       <div className="sidebar-scroll">
+        {projects.length > 0 && (
+          <>
+            <div className="sidebar-section-title">{t('projects')}</div>
+            {projects.slice(0, 6).map((p) => (
+              <div key={p.id} className="project-row" title={p.path}>
+                <button className="project-row-main" onClick={() => newInProject(p.path)}>
+                  <span className="project-icon">📁</span>
+                  <span className="project-name">{p.name}</span>
+                </button>
+                <button
+                  className="session-action"
+                  title={t('newSessionHere')}
+                  onClick={() => newInProject(p.path)}
+                >
+                  ＋
+                </button>
+                <button
+                  className="session-action"
+                  title={t('delete')}
+                  onClick={() => void deleteProject(p.id)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
         <div className="sidebar-section-title">{t('ongoing')}</div>
         {order.length === 0 && <div className="sidebar-empty">{t('noSessions')}</div>}
         {order.map((id) => {
