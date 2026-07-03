@@ -196,6 +196,8 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   }
 }
 
+export type AppView = 'list' | 'office'
+
 interface AppStore {
   ready: boolean
   sessions: Record<string, SessionState>
@@ -204,6 +206,7 @@ interface AppStore {
   history: HistoryEntry[]
   settings: AppSettings
   providers: ProviderView[]
+  view: AppView
   showNewSession: boolean
   showSettings: boolean
   init(): Promise<void>
@@ -218,6 +221,7 @@ interface AppStore {
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
   updateSettings(patch: Partial<AppSettings>): Promise<void>
+  setView(view: AppView): void
   refreshProviders(): Promise<void>
   createProvider(input: ProviderInput): Promise<void>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
@@ -239,6 +243,7 @@ export const useStore = create<AppStore>((set, get) => ({
     schedulerStrategy: 'balanced'
   },
   providers: [],
+  view: 'list',
   showNewSession: false,
   showSettings: false,
 
@@ -405,6 +410,10 @@ export const useStore = create<AppStore>((set, get) => ({
   async updateSettings(patch) {
     const settings = await window.agentDesk.updateSettings(patch)
     set({ settings })
+  },
+
+  setView(view) {
+    set({ view })
   },
 
   async refreshProviders() {

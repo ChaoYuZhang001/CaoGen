@@ -19,6 +19,7 @@ export default function Sidebar(): React.JSX.Element {
   const resumeFromHistory = useStore((s) => s.resumeFromHistory)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const setView = useStore((s) => s.setView)
 
   const openSdkIds = new Set(order.map((id) => sessions[id]?.meta.sdkSessionId).filter(Boolean))
   const recent = history.filter((h) => !openSdkIds.has(h.sdkSessionId)).slice(0, 20)
@@ -32,6 +33,10 @@ export default function Sidebar(): React.JSX.Element {
 
       <button className="btn btn-primary sidebar-new" onClick={() => setShowNewSession(true)}>
         + 新建会话
+      </button>
+
+      <button className="btn btn-ghost sidebar-office" onClick={() => setView('office')}>
+        🏢 3D 办公区
       </button>
 
       <div className="sidebar-scroll">

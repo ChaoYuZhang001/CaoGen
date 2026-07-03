@@ -1095,6 +1095,126 @@ textarea {
   opacity: 0.85;
 }
 
+/* ---------- 3D 办公区 ---------- */
+
+.office {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #14161b;
+  position: relative;
+}
+
+.office-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 10px 90px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(20, 22, 27, 0.9);
+  z-index: 2;
+}
+
+.office-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.office-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.office-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+
+.office-empty {
+  flex: 1;
+  display: grid;
+  place-content: center;
+}
+
+.office-empty-inner {
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.office-empty-mark {
+  font-size: 56px;
+  margin-bottom: 12px;
+  opacity: 0.7;
+}
+
+.office-empty-inner p {
+  margin: 0 0 16px;
+}
+
+.office-loading {
+  flex: 1;
+  display: grid;
+  place-content: center;
+  color: var(--text-dim);
+  height: 100vh;
+  width: 100%;
+}
+
+.sidebar-office {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* 工位悬浮标签(drei Html) */
+.ws-label {
+  transform: translateY(-50%);
+  padding: 5px 10px;
+  border-radius: 10px;
+  background: rgba(24, 27, 33, 0.92);
+  border: 1px solid var(--border);
+  min-width: 90px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  pointer-events: auto;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.ws-label-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.ws-label-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-label-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
 /* ---------- 滚动条 ---------- */
 
 ::-webkit-scrollbar {
