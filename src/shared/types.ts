@@ -20,6 +20,8 @@ export interface SessionMeta {
   cwd: string
   /** 空字符串表示跟随 CLI 默认模型 */
   model: string
+  /** 此会话绑定的 Provider ID;空字符串 = 官方 Anthropic */
+  providerId: string
   permissionMode: PermissionModeId
   status: SessionStatus
   sdkSessionId?: string
@@ -35,6 +37,7 @@ export interface HistoryEntry {
   title: string
   cwd: string
   model: string
+  providerId: string
   permissionMode: PermissionModeId
   sdkSessionId: string
   createdAt: number
@@ -45,6 +48,7 @@ export interface HistoryEntry {
 export interface CreateSessionOptions {
   cwd: string
   model?: string
+  providerId?: string
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
@@ -55,6 +59,42 @@ export interface AppSettings {
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
   defaultPermissionMode: PermissionModeId
+  /** 新会话默认使用的 Provider ID;空字符串 = 官方 Anthropic */
+  defaultProviderId: string
+}
+
+export interface Provider {
+  id: string
+  name: string
+  /** 空字符串 = 官方 Anthropic API */
+  baseUrl: string
+  /** safeStorage 加密后的 token;空字符串 = 继承环境变量。仅存在于主进程 */
+  encryptedToken: string
+  /** 此 Provider 支持的模型列表(供 UI 下拉) */
+  models: string[]
+  /** 用户备注 */
+  note?: string
+  createdAt: number
+}
+
+/** 渲染进程可见的 Provider:不含密钥,只标记是否已配置 token */
+export interface ProviderView {
+  id: string
+  name: string
+  baseUrl: string
+  models: string[]
+  note?: string
+  createdAt: number
+  hasToken: boolean
+}
+
+export interface ProviderInput {
+  name: string
+  baseUrl: string
+  models: string[]
+  note?: string
+  /** 明文 token,经 IPC 传入主进程后加密落盘 */
+  token: string
 }
 
 export type AssistantBlock =
@@ -132,6 +172,10 @@ export interface AgentDeskApi {
   listHistory(): Promise<HistoryEntry[]>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  listProviders(): Promise<ProviderView[]>
+  createProvider(provider: ProviderInput): Promise<ProviderView>
+  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
+  deleteProvider(id: string): Promise<void>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
 }

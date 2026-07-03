@@ -7,6 +7,8 @@ import type {
   HistoryEntry,
   PermissionModeId,
   PermissionRequestInfo,
+  ProviderInput,
+  ProviderView,
   SessionMeta,
   TranscriptEntry,
   UsageTotals
@@ -192,6 +194,7 @@ interface AppStore {
   activeId: string | null
   history: HistoryEntry[]
   settings: AppSettings
+  providers: ProviderView[]
   showNewSession: boolean
   showSettings: boolean
   init(): Promise<void>
@@ -206,6 +209,10 @@ interface AppStore {
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
   updateSettings(patch: Partial<AppSettings>): Promise<void>
+  refreshProviders(): Promise<void>
+  createProvider(input: ProviderInput): Promise<void>
+  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
+  deleteProvider(id: string): Promise<void>
   setShowNewSession(v: boolean): void
   setShowSettings(v: boolean): void
 }
@@ -216,7 +223,8 @@ export const useStore = create<AppStore>((set, get) => ({
   order: [],
   activeId: null,
   history: [],
-  settings: { defaultModel: '', defaultPermissionMode: 'default' },
+  settings: { defaultModel: '', defaultPermissionMode: 'default', defaultProviderId: '' },
+  providers: [],
   showNewSession: false,
   showSettings: false,
 
@@ -224,10 +232,11 @@ export const useStore = create<AppStore>((set, get) => ({
     if (get().ready) return
     set({ ready: true })
     window.agentDesk.onSessionEvent((sessionId, event, seq) => get().handleEvent(sessionId, event, seq))
-    const [metas, history, settings] = await Promise.all([
+    const [metas, history, settings, providers] = await Promise.all([
       window.agentDesk.listSessions(),
       window.agentDesk.listHistory(),
-      window.agentDesk.getSettings()
+      window.agentDesk.getSettings(),
+      window.agentDesk.listProviders()
     ])
     set((s) => {
       const sessions = { ...s.sessions }
@@ -243,6 +252,7 @@ export const useStore = create<AppStore>((set, get) => ({
         order,
         history,
         settings,
+        providers,
         activeId: s.activeId ?? order[0] ?? null
       }
     })
@@ -311,6 +321,7 @@ export const useStore = create<AppStore>((set, get) => ({
     await get().createSession({
       cwd: entry.cwd,
       model: entry.model,
+      providerId: entry.providerId,
       permissionMode: entry.permissionMode,
       resumeSdkSessionId: entry.sdkSessionId,
       title: entry.title
@@ -380,6 +391,30 @@ export const useStore = create<AppStore>((set, get) => ({
   async updateSettings(patch) {
     const settings = await window.agentDesk.updateSettings(patch)
     set({ settings })
+  },
+
+  async refreshProviders() {
+    const providers = await window.agentDesk.listProviders()
+    set({ providers })
+  },
+
+  async createProvider(input) {
+    await window.agentDesk.createProvider(input)
+    await get().refreshProviders()
+  },
+
+  async updateProvider(id, patch) {
+    await window.agentDesk.updateProvider(id, patch)
+    await get().refreshProviders()
+  },
+
+  async deleteProvider(id) {
+    await window.agentDesk.deleteProvider(id)
+    await get().refreshProviders()
+    // 若默认 Provider 被删,回退到官方
+    if (get().settings.defaultProviderId === id) {
+      await get().updateSettings({ defaultProviderId: '' })
+    }
   },
 
   setShowNewSession(v) {

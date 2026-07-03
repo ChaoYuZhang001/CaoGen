@@ -27,6 +27,7 @@ class SessionManager {
     const meta = newSessionMeta({
       cwd: opts.cwd,
       model: opts.model ?? settings.defaultModel,
+      providerId: opts.providerId ?? settings.defaultProviderId,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
     })
@@ -82,6 +83,7 @@ class SessionManager {
       title: meta.title,
       cwd: meta.cwd,
       model: meta.model,
+      providerId: meta.providerId,
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
       createdAt: meta.createdAt,
