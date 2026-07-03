@@ -32,8 +32,18 @@
       "category": "public.app-category.developer-tools",
       "icon": "resources/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "dmg": {
@@ -41,19 +51,25 @@
     },
     "win": {
       "icon": "resources/icon.png",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
       "icon": "resources/icon.png",
       "category": "Development",
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
+    "@react-three/postprocessing": "^2.19.1",
     "highlight.js": "^11.11.1",
+    "postprocessing": "^6.39.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.1.0",

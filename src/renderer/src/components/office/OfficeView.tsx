@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
+import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import { useStore } from '../../store'
 import Workstation from './Workstation'
 import { brandFor } from './brand'
@@ -82,17 +83,44 @@ export default function OfficeView(): React.JSX.Element {
       ) : (
         <Canvas shadows camera={{ position: [7, 7, 9], fov: 42 }} dpr={[1, 1.75]}>
           <color attach="background" args={[scene.bg]} />
-          <fog attach="fog" args={[scene.bg, 14, 34]} />
-          <ambientLight intensity={0.55} />
-          <directionalLight position={[6, 12, 6]} intensity={1.1} castShadow shadow-mapSize={[1024, 1024]} />
-          <directionalLight position={[-8, 6, -6]} intensity={0.35} color="#8fb4ff" />
+          <fog attach="fog" args={[scene.bg, 16, 38]} />
+          <ambientLight intensity={isLight ? 0.75 : 0.4} />
+          <directionalLight
+            position={[6, 12, 6]}
+            intensity={isLight ? 1.3 : 1}
+            castShadow
+            shadow-mapSize={[2048, 2048]}
+          />
+          <directionalLight position={[-8, 6, -6]} intensity={0.4} color="#8fb4ff" />
+          {/* 顶部聚光,强化中心舞台感 */}
+          <spotLight position={[0, 14, 2]} angle={0.6} penumbra={0.8} intensity={isLight ? 0.5 : 0.9} />
+          {/* 补一盏跟随状态色调的点光,增强氛围 */}
+          <pointLight position={[0, 3, 4]} intensity={isLight ? 0.3 : 0.6} color={isLight ? '#ffffff' : '#4a5a80'} />
 
-          {/* 地板 */}
+          {/* 地板 + 接触阴影 */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
             <planeGeometry args={[60, 60]} />
-            <meshStandardMaterial color={scene.ground} />
+            <meshStandardMaterial color={scene.ground} metalness={0.2} roughness={0.85} />
           </mesh>
           <gridHelper args={[60, 60, scene.grid1, scene.grid2]} position={[0, 0.001, 0]} />
+          <ContactShadows
+            position={[0, 0.02, 0]}
+            opacity={isLight ? 0.35 : 0.55}
+            scale={40}
+            blur={2.2}
+            far={6}
+          />
+
+          {/* 环境浮尘 */}
+          <Sparkles
+            count={60}
+            scale={[26, 8, 26]}
+            position={[0, 4, 0]}
+            size={2}
+            speed={0.3}
+            opacity={isLight ? 0.3 : 0.5}
+            color={isLight ? '#888' : '#aab'}
+          />
 
           <Suspense fallback={null}>
             {ids.map((id, i) => (
@@ -115,8 +143,21 @@ export default function OfficeView(): React.JSX.Element {
             minDistance={6}
             maxDistance={22}
             maxPolarAngle={Math.PI / 2.2}
+            autoRotate
+            autoRotateSpeed={0.35}
             target={[0, 0.6, 0]}
           />
+
+          {/* 后处理:辉光让发光材质/粒子"绚"起来 + 暗角聚焦 */}
+          <EffectComposer>
+            <Bloom
+              intensity={isLight ? 0.6 : 1.3}
+              luminanceThreshold={isLight ? 0.5 : 0.25}
+              luminanceSmoothing={0.9}
+              mipmapBlur
+            />
+            <Vignette eskil={false} offset={0.15} darkness={isLight ? 0.4 : 0.75} />
+          </EffectComposer>
         </Canvas>
       )}
     </div>
