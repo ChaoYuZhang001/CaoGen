@@ -24,6 +24,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('sessions:setPermissionMode', sessionId, mode),
   setModel: (sessionId: string, model: string) =>
     ipcRenderer.invoke('sessions:setModel', sessionId, model),
+  renameSession: (sessionId: string, title: string) =>
+    ipcRenderer.invoke('sessions:rename', sessionId, title),
   listHistory: () => ipcRenderer.invoke('history:list'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),

@@ -72,6 +72,17 @@ export interface CreateSessionOptions {
   title?: string
 }
 
+export type AppLanguage = 'zh' | 'en'
+
+export interface OfficeSettings {
+  /** 显示桌上厂商工牌 */
+  showBadges: boolean
+  /** 小人动画活跃度倍率(0.5 沉稳 ~ 1.5 活泼) */
+  liveliness: number
+  /** 宠物化:给小人加猫耳 */
+  catEars: boolean
+}
+
 export interface AppSettings {
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
@@ -80,6 +91,16 @@ export interface AppSettings {
   defaultProviderId: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
+  /** 界面语言 */
+  language: AppLanguage
+  /** 人设:追加到系统提示词的自定义指令 */
+  persona: string
+  /** 权限:工具白名单(每行一个,空=不限制) */
+  allowedTools: string
+  /** 权限:工具黑名单(每行一个) */
+  disallowedTools: string
+  /** 3D 办公区 / 宠物设置 */
+  office: OfficeSettings
 }
 
 export interface Provider {
@@ -196,6 +217,7 @@ export interface AgentDeskApi {
   ): Promise<void>
   setPermissionMode(sessionId: string, mode: PermissionModeId): Promise<void>
   setModel(sessionId: string, model: string): Promise<void>
+  renameSession(sessionId: string, title: string): Promise<void>
   listHistory(): Promise<HistoryEntry[]>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>

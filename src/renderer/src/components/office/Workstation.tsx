@@ -34,14 +34,28 @@ interface Props {
   active: boolean
   /** 厂商品牌色(小人身体着色);缺省用状态色 */
   brandColor?: string
+  /** 办公区 / 宠物设置 */
+  showBadge?: boolean
+  liveliness?: number
+  catEars?: boolean
   onSelect: () => void
 }
 
-export default function Workstation({ session, position, active, brandColor, onSelect }: Props): React.JSX.Element {
+export default function Workstation({
+  session,
+  position,
+  active,
+  brandColor,
+  showBadge = true,
+  liveliness = 1,
+  catEars = false,
+  onSelect
+}: Props): React.JSX.Element {
   const activity = activityOf(session)
   const color = COLORS[activity]
   // 身体 = 厂商品牌色(身份),光环/屏幕 = 状态色(活动),两个维度一眼分辨
   const bodyColor = brandColor ?? color
+  const L = liveliness
 
   const avatarRef = useRef<Group>(null)
   const headRef = useRef<Group>(null)
@@ -60,32 +74,32 @@ export default function Workstation({ session, position, active, brandColor, onS
     if (!avatar || !head) return
 
     if (activity === 'working') {
-      // 打字:身体快速小幅上下 + 头微点 + 双臂交替
-      avatar.position.y = Math.abs(Math.sin(t * 8)) * 0.04
-      head.rotation.x = 0.12 + Math.sin(t * 8) * 0.06
+      // 打字:身体快速小幅上下 + 头微点 + 双臂交替(活跃度调频)
+      avatar.position.y = Math.abs(Math.sin(t * 8 * L)) * 0.04
+      head.rotation.x = 0.12 + Math.sin(t * 8 * L) * 0.06
       head.rotation.z = 0
-      if (armLRef.current) armLRef.current.rotation.x = -0.6 + Math.sin(t * 16) * 0.4
-      if (armRRef.current) armRRef.current.rotation.x = -0.6 + Math.cos(t * 16) * 0.4
+      if (armLRef.current) armLRef.current.rotation.x = -0.6 + Math.sin(t * 16 * L) * 0.4
+      if (armRRef.current) armRRef.current.rotation.x = -0.6 + Math.cos(t * 16 * L) * 0.4
     } else if (activity === 'awaiting') {
       // 举手求授权:整体弹跳 + 一只手举高
-      avatar.position.y = Math.abs(Math.sin(t * 4)) * 0.12
+      avatar.position.y = Math.abs(Math.sin(t * 4 * L)) * 0.12
       head.rotation.x = -0.1
       head.rotation.z = 0
       if (armLRef.current) armLRef.current.rotation.x = -0.3
-      if (armRRef.current) armRRef.current.rotation.x = -2.6 + Math.sin(t * 8) * 0.2
+      if (armRRef.current) armRRef.current.rotation.x = -2.6 + Math.sin(t * 8 * L) * 0.2
     } else if (activity === 'error') {
       // 异常:低头 + 轻微颤抖
       avatar.position.y = 0
       head.rotation.x = 0.4
-      head.rotation.z = Math.sin(t * 20) * 0.03
+      head.rotation.z = Math.sin(t * 20 * L) * 0.03
       if (armLRef.current) armLRef.current.rotation.x = -0.1
       if (armRRef.current) armRRef.current.rotation.x = -0.1
     } else {
       // 打盹:缓慢呼吸 + 头歪
       avatar.position.y = 0
       head.rotation.x = 0.05
-      head.rotation.z = 0.28 + Math.sin(t * 1.2) * 0.05
-      const breathe = 1 + Math.sin(t * 1.6) * 0.03
+      head.rotation.z = 0.28 + Math.sin(t * 1.2 * L) * 0.05
+      const breathe = 1 + Math.sin(t * 1.6 * L) * 0.03
       avatar.scale.y = breathe
       if (armLRef.current) armLRef.current.rotation.x = -0.05
       if (armRRef.current) armRRef.current.rotation.x = -0.05
@@ -199,14 +213,29 @@ export default function Workstation({ session, position, active, brandColor, onS
             <sphereGeometry args={[0.15, 16, 16]} />
             <meshStandardMaterial color="#e8d9c4" />
           </mesh>
+          {/* 宠物化:猫耳(品牌色) */}
+          {catEars && (
+            <>
+              <mesh position={[-0.09, 0.13, 0]} rotation={[0, 0, 0.3]}>
+                <coneGeometry args={[0.05, 0.11, 4]} />
+                <meshStandardMaterial color={bodyColor} />
+              </mesh>
+              <mesh position={[0.09, 0.13, 0]} rotation={[0, 0, -0.3]}>
+                <coneGeometry args={[0.05, 0.11, 4]} />
+                <meshStandardMaterial color={bodyColor} />
+              </mesh>
+            </>
+          )}
         </group>
       </group>
 
       {/* 桌上厂商工牌(品牌色小立牌) */}
-      <mesh position={[0.4, 0.53, -0.3]} rotation={[0, -0.3, 0]}>
-        <boxGeometry args={[0.16, 0.11, 0.015]} />
-        <meshStandardMaterial color={bodyColor} emissive={bodyColor} emissiveIntensity={0.25} />
-      </mesh>
+      {showBadge && (
+        <mesh position={[0.4, 0.53, -0.3]} rotation={[0, -0.3, 0]}>
+          <boxGeometry args={[0.16, 0.11, 0.015]} />
+          <meshStandardMaterial color={bodyColor} emissive={bodyColor} emissiveIntensity={0.25} />
+        </mesh>
+      )}
 
       {/* 异常冒烟 */}
       <group ref={smokeRef} position={[0, 0, 0.15]} visible={false}>

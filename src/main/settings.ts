@@ -7,7 +7,12 @@ const DEFAULTS: AppSettings = {
   defaultModel: '',
   defaultPermissionMode: 'default',
   defaultProviderId: '',
-  schedulerStrategy: 'balanced'
+  schedulerStrategy: 'balanced',
+  language: 'zh',
+  persona: '',
+  allowedTools: '',
+  disallowedTools: '',
+  office: { showBadges: true, liveliness: 1, catEars: false }
 }
 
 let cache: AppSettings | null = null
@@ -20,7 +25,7 @@ export function getSettings(): AppSettings {
   if (cache) return cache
   try {
     const raw = JSON.parse(readFileSync(settingsFile(), 'utf8')) as Partial<AppSettings>
-    cache = { ...DEFAULTS, ...raw }
+    cache = { ...DEFAULTS, ...raw, office: { ...DEFAULTS.office, ...(raw.office ?? {}) } }
   } catch {
     cache = { ...DEFAULTS }
   }
@@ -28,7 +33,8 @@ export function getSettings(): AppSettings {
 }
 
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
-  const next = { ...getSettings(), ...patch }
+  const prev = getSettings()
+  const next = { ...prev, ...patch, office: { ...prev.office, ...(patch.office ?? {}) } }
   cache = next
   try {
     mkdirSync(dirname(settingsFile()), { recursive: true })

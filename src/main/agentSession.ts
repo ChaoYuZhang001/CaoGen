@@ -42,6 +42,14 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** 把多行/逗号分隔的工具清单拆成数组 */
+function splitList(text: string): string[] {
+  return text
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 function emptyUsage(): UsageTotals {
   return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
 }
@@ -171,6 +179,10 @@ export class AgentSession {
     this.setStatus('starting')
     try {
       const sdk = await loadSdk()
+      const settings = getSettings()
+      const persona = settings.persona.trim()
+      const allowed = splitList(settings.allowedTools)
+      const disallowed = splitList(settings.disallowedTools)
       this.query = sdk.query({
         prompt: this.input,
         options: {
@@ -178,7 +190,13 @@ export class AgentSession {
           permissionMode: this.meta.permissionMode,
           includePartialMessages: true,
           env: this.buildEnv(),
-          systemPrompt: { type: 'preset', preset: 'claude_code' },
+          // 人设:preset 之上追加自定义指令
+          systemPrompt: persona
+            ? { type: 'preset', preset: 'claude_code', append: persona }
+            : { type: 'preset', preset: 'claude_code' },
+          // 权限:工具白/黑名单
+          ...(allowed.length > 0 ? { allowedTools: allowed } : {}),
+          ...(disallowed.length > 0 ? { disallowedTools: disallowed } : {}),
           // 'auto' 是调度哨兵而非真实模型名,不传给 SDK;每轮再 setModel
           ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
           ...(this.resumeSdkSessionId ? { resume: this.resumeSdkSessionId } : {}),
@@ -292,6 +310,13 @@ export class AgentSession {
   async setModel(model: string): Promise<void> {
     await this.query?.setModel(model || undefined)
     this.meta.model = model
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+  }
+
+  rename(title: string): void {
+    const t = title.trim()
+    if (!t) return
+    this.meta.title = t.slice(0, 60)
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 

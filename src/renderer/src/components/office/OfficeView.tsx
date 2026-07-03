@@ -25,6 +25,7 @@ export default function OfficeView(): React.JSX.Element {
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
   const providers = useStore((s) => s.providers)
+  const office = useStore((s) => s.settings.office)
   const activeId = useStore((s) => s.activeId)
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
@@ -92,6 +93,9 @@ export default function OfficeView(): React.JSX.Element {
                 position={positions[i]}
                 active={id === activeId}
                 brandColor={brandColorFor(sessions[id].meta.providerId)}
+                showBadge={office.showBadges}
+                liveliness={office.liveliness}
+                catEars={office.catEars}
                 onSelect={() => focus(id)}
               />
             ))}

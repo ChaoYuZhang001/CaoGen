@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 const FEATURES: Array<[string, string]> = [
   ['多会话并行', '同时在多个项目上运行 Agent,互不阻塞'],
@@ -10,6 +11,7 @@ const FEATURES: Array<[string, string]> = [
 ]
 
 export default function WelcomeView(): React.JSX.Element {
+  const t = useT()
   const setShowNewSession = useStore((s) => s.setShowNewSession)
 
   return (
@@ -17,9 +19,9 @@ export default function WelcomeView(): React.JSX.Element {
       <div className="welcome-inner">
         <div className="welcome-mark">◆</div>
         <h1 className="welcome-title">CaoGen</h1>
-        <p className="welcome-sub">多会话并行的桌面 AI 编码 Agent</p>
+        <p className="welcome-sub">{t('welcomeSub')}</p>
         <button className="btn btn-primary btn-lg" onClick={() => setShowNewSession(true)}>
-          选择项目目录,开始工作
+          {t('welcomeCta')}
         </button>
         <div className="welcome-grid">
           {FEATURES.map(([title, desc]) => (

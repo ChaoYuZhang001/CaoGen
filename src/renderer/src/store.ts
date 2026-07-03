@@ -220,6 +220,7 @@ interface AppStore {
   respondPermission(sessionId: string, requestId: string, allow: boolean): Promise<void>
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
+  renameSession(id: string, title: string): Promise<void>
   updateSettings(patch: Partial<AppSettings>): Promise<void>
   setView(view: AppView): void
   refreshProviders(): Promise<void>
@@ -240,7 +241,12 @@ export const useStore = create<AppStore>((set, get) => ({
     defaultModel: '',
     defaultPermissionMode: 'default',
     defaultProviderId: '',
-    schedulerStrategy: 'balanced'
+    schedulerStrategy: 'balanced',
+    language: 'zh',
+    persona: '',
+    allowedTools: '',
+    disallowedTools: '',
+    office: { showBadges: true, liveliness: 1, catEars: false }
   },
   providers: [],
   view: 'list',
@@ -405,6 +411,20 @@ export const useStore = create<AppStore>((set, get) => ({
   async setModel(model) {
     const id = get().activeId
     if (id) await window.agentDesk.setModel(id, model)
+  },
+
+  async renameSession(id, title) {
+    const t = title.trim()
+    if (!t) return
+    // 本地即时更新 + 主进程持久化
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session) return s
+      return {
+        sessions: { ...s.sessions, [id]: { ...session, meta: { ...session.meta, title: t } } }
+      }
+    })
+    await window.agentDesk.renameSession(id, t)
   },
 
   async updateSettings(patch) {
