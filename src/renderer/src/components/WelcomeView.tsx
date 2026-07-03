@@ -16,7 +16,7 @@ export default function WelcomeView(): React.JSX.Element {
     <div className="welcome">
       <div className="welcome-inner">
         <div className="welcome-mark">◆</div>
-        <h1 className="welcome-title">AgentDesk</h1>
+        <h1 className="welcome-title">CaoGen</h1>
         <p className="welcome-sub">多会话并行的桌面 AI 编码 Agent</p>
         <button className="btn btn-primary btn-lg" onClick={() => setShowNewSession(true)}>
           选择项目目录,开始工作

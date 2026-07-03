@@ -25,7 +25,7 @@ export default function App(): React.JSX.Element {
   if (typeof window.agentDesk === 'undefined') {
     return (
       <div className="app-fallback">
-        <h1>AgentDesk</h1>
+        <h1>CaoGen</h1>
         <p>请通过 Electron 启动本应用(npm run dev)。</p>
       </div>
     )

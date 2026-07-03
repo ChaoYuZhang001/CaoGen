@@ -28,7 +28,7 @@ export default function Sidebar(): React.JSX.Element {
     <aside className="sidebar">
       <div className="sidebar-brand drag-region">
         <span className="brand-mark">◆</span>
-        <span className="brand-name">AgentDesk</span>
+        <span className="brand-name">CaoGen</span>
       </div>
 
       <button className="btn btn-primary sidebar-new" onClick={() => setShowNewSession(true)}>
