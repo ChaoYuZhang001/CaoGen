@@ -38,6 +38,7 @@ function createWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(() => {
+  sessionManager.init()
   registerIpc()
   createWindow()
   app.on('activate', () => {

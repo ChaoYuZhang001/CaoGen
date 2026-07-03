@@ -11,6 +11,8 @@ export function registerIpc(): void {
     sessionManager.get(id)?.pendingPermissions() ?? []
   )
 
+  ipcMain.handle('sessions:transcript', (_e, id: string) => sessionManager.getTranscript(id))
+
   ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {
       throw new Error('必须指定工作目录')

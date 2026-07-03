@@ -11,6 +11,7 @@ const api: AgentDeskApi = {
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   listPendingPermissions: (sessionId: string) =>
     ipcRenderer.invoke('sessions:pendingPermissions', sessionId),
+  getTranscript: (sessionId: string) => ipcRenderer.invoke('sessions:transcript', sessionId),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
   sendMessage: (sessionId: string, text: string) =>
     ipcRenderer.invoke('sessions:send', sessionId, text),
@@ -28,7 +29,7 @@ const api: AgentDeskApi = {
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {
-      cb(payload.sessionId, payload.event)
+      cb(payload.sessionId, payload.event, payload.seq)
     }
     ipcRenderer.on('session:event', listener)
     return () => {

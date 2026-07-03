@@ -80,6 +80,7 @@ export type AgentEvent =
       permissionMode?: string
     }
   | { kind: 'meta'; meta: SessionMeta }
+  | { kind: 'user-message'; text: string }
   | { kind: 'text-delta'; text: string }
   | { kind: 'thinking-delta'; text: string }
   | { kind: 'tool-start'; toolUseId: string; name: string }
@@ -100,6 +101,14 @@ export type AgentEvent =
 
 export interface SessionEventPayload {
   sessionId: string
+  /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
+  seq: number
+  event: AgentEvent
+}
+
+/** 转录文件(JSONL)中的一行 */
+export interface TranscriptEntry {
+  seq: number
   event: AgentEvent
 }
 
@@ -107,6 +116,7 @@ export interface SessionEventPayload {
 export interface AgentDeskApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
+  getTranscript(sessionId: string): Promise<TranscriptEntry[]>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   sendMessage(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
@@ -123,5 +133,5 @@ export interface AgentDeskApi {
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   pickDirectory(): Promise<string | null>
-  onSessionEvent(cb: (sessionId: string, event: AgentEvent) => void): () => void
+  onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
 }
