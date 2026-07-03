@@ -9,7 +9,45 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:dir": "npm run build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.caogen.app",
+    "productName": "CaoGen",
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@anthropic-ai/claude-agent-sdk/**"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["x64"] },
+        { "target": "zip", "arch": ["x64"] }
+      ]
+    },
+    "dmg": {
+      "title": "CaoGen ${version}"
+    },
+    "win": {
+      "icon": "resources/icon.png",
+      "target": ["nsis"]
+    },
+    "linux": {
+      "icon": "resources/icon.png",
+      "category": "Development",
+      "target": ["AppImage"]
+    }
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
@@ -30,6 +68,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "40.10.2",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^3.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"

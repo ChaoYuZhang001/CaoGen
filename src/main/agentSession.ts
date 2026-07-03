@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { app } from 'electron'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
@@ -28,6 +31,32 @@ let sdkPromise: Promise<SdkModule> | undefined
 function loadSdk(): Promise<SdkModule> {
   sdkPromise ??= import('@anthropic-ai/claude-agent-sdk')
   return sdkPromise
+}
+
+/**
+ * 打包(asar)后 SDK 自动算出的 CLI 二进制路径会穿过 app.asar(文件非目录),
+ * spawn 报 ENOTDIR。显式指向解包后的原生二进制修复。dev 下返回 undefined 走默认。
+ */
+let cachedExecPath: string | null | undefined
+function claudeExecutablePath(): string | undefined {
+  if (cachedExecPath !== undefined) return cachedExecPath ?? undefined
+  if (!app.isPackaged) {
+    cachedExecPath = null
+    return undefined
+  }
+  const pkg = `claude-agent-sdk-${process.platform}-${process.arch}`
+  const bin = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  const p = join(
+    process.resourcesPath,
+    'app.asar.unpacked',
+    'node_modules',
+    '@anthropic-ai',
+    pkg,
+    bin
+  )
+  cachedExecPath = existsSync(p) ? p : null
+  if (!cachedExecPath) console.error('[caogen] 未找到打包后的 claude 二进制:', p)
+  return cachedExecPath ?? undefined
 }
 
 const TOOL_RESULT_MAX_CHARS = 20_000
@@ -183,6 +212,7 @@ export class AgentSession {
       const persona = settings.persona.trim()
       const allowed = splitList(settings.allowedTools)
       const disallowed = splitList(settings.disallowedTools)
+      const execPath = claudeExecutablePath()
       this.query = sdk.query({
         prompt: this.input,
         options: {
@@ -190,6 +220,7 @@ export class AgentSession {
           permissionMode: this.meta.permissionMode,
           includePartialMessages: true,
           env: this.buildEnv(),
+          ...(execPath ? { pathToClaudeCodeExecutable: execPath } : {}),
           // 人设:preset 之上追加自定义指令
           systemPrompt: persona
             ? { type: 'preset', preset: 'claude_code', append: persona }
