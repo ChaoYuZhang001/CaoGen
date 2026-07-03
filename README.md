@@ -1,4 +1,4 @@
-# AgentDesk
+# CaoGen
 
 多会话并行的桌面 AI 编码 Agent。目标是**超越 Codex、Claude Code、Marvis 等桌面端 Agent**:多厂商模型可配置、指定运行或智能自动调度、并行会话以 3D 动画办公区呈现——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
 

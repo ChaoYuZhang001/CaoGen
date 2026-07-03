@@ -1,21 +1,34 @@
 import { app, BrowserWindow, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
 
 // 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录
-app.setName('AgentDesk')
-app.setPath('userData', join(app.getPath('appData'), 'AgentDesk'))
+app.setName('CaoGen')
+app.setPath('userData', join(app.getPath('appData'), 'CaoGen'))
+
+/** 应用图标源文件;放置后自动生效(Windows/Linux 窗口图标 + 打包) */
+function iconPath(): string | undefined {
+  // 打包后 resources 随 app 一起分发;dev 时用仓库内的 resources/
+  const candidates = [
+    join(process.resourcesPath ?? '', 'icon.png'),
+    join(__dirname, '../../resources/icon.png')
+  ]
+  return candidates.find((p) => p && existsSync(p))
+}
 
 function createWindow(): BrowserWindow {
+  const icon = iconPath()
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
     minWidth: 920,
     minHeight: 600,
-    title: 'AgentDesk',
+    title: 'CaoGen',
     backgroundColor: '#181614',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
