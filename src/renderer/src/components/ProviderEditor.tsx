@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '../store'
+import { PROVIDER_PRESETS, useStore } from '../store'
 import type { ProviderView } from '../../../shared/types'
 
 interface Props {
@@ -15,13 +15,25 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [name, setName] = useState(provider?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
+  const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
   const [note, setNote] = useState(provider?.note ?? '')
   const [token, setToken] = useState('')
   const [tokenTouched, setTokenTouched] = useState(false)
+  const [presetHint, setPresetHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const isEdit = provider !== null
+
+  const applyPreset = (key: string): void => {
+    const preset = PROVIDER_PRESETS.find((p) => p.key === key)
+    if (!preset) return
+    setPresetHint(preset.hint)
+    if (preset.key === 'custom') return
+    if (!name.trim()) setName(preset.label)
+    setBaseUrl(preset.baseUrl)
+    setModelsText(preset.models.join('\n'))
+  }
 
   const save = async (): Promise<void> => {
     if (!name.trim()) {
@@ -36,16 +48,24 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     setError('')
     try {
       if (isEdit) {
-        // token 未改动则不传,避免清空已存密钥
         await updateProvider(provider.id, {
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           models,
+          customHeaders: customHeaders.trim(),
           note: note.trim(),
+          // token 未改动则不传,避免清空已存密钥
           ...(tokenTouched ? { token } : {})
         })
       } else {
-        await createProvider({ name: name.trim(), baseUrl: baseUrl.trim(), models, note: note.trim(), token })
+        await createProvider({
+          name: name.trim(),
+          baseUrl: baseUrl.trim(),
+          models,
+          customHeaders: customHeaders.trim(),
+          note: note.trim(),
+          token
+        })
       }
       onClose()
     } catch (err) {
@@ -58,6 +78,28 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     <div className="modal-backdrop modal-backdrop-nested" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">{isEdit ? '编辑 Provider' : '添加 Provider'}</h2>
+
+        {!isEdit && (
+          <>
+            <label className="field-label">快速模板</label>
+            <select className="select select-block" defaultValue="" onChange={(e) => applyPreset(e.target.value)}>
+              <option value="" disabled>
+                选择一个模板…
+              </option>
+              {PROVIDER_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <p className="provider-gateway-note">
+              底层引擎使用 Anthropic Messages API 协议。接入 <b>OpenAI / Gemini / 国产模型</b> 需经
+              Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译,填入网关地址即可。
+            </p>
+          </>
+        )}
+
+        {presetHint && <div className="notice notice-info">{presetHint}</div>}
 
         <label className="field-label">名称</label>
         <input
@@ -95,8 +137,19 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           className="input input-block textarea"
           value={modelsText}
           rows={4}
-          placeholder={'claude-sonnet-4\nclaude-opus-4\ngpt-4o'}
+          placeholder={'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro'}
           onChange={(e) => setModelsText(e.target.value)}
+        />
+
+        <label className="field-label">
+          自定义请求头 <span className="field-hint">(可选,每行 Name: value)</span>
+        </label>
+        <textarea
+          className="input input-block textarea"
+          value={customHeaders}
+          rows={2}
+          placeholder={'X-Gateway-Route: openai\nX-Custom: value'}
+          onChange={(e) => setCustomHeaders(e.target.value)}
         />
 
         <label className="field-label">备注(可选)</label>

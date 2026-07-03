@@ -439,3 +439,47 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
   { value: 'plan', label: '规划模式' },
   { value: 'bypassPermissions', label: '跳过权限' }
 ]
+
+/**
+ * Provider 预设模板。底层 SDK 只讲 Anthropic Messages API 协议,
+ * 要接入 OpenAI / Gemini / 国产模型,需经 Anthropic 兼容网关翻译。
+ * 模板预填 baseUrl 占位与常见模型名,降低配置成本。
+ */
+export interface ProviderPreset {
+  key: string
+  label: string
+  baseUrl: string
+  models: string[]
+  hint: string
+}
+
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    key: 'anthropic',
+    label: '官方 Anthropic 兼容端点',
+    baseUrl: '',
+    models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
+    hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
+  },
+  {
+    key: 'oneapi',
+    label: 'one-api / new-api 网关',
+    baseUrl: 'http://localhost:3000',
+    models: ['gpt-4o', 'gpt-4o-mini', 'gemini-1.5-pro', 'deepseek-chat'],
+    hint: '经 one-api/new-api 网关转译:请求走 Anthropic 协议,网关翻译到 OpenAI/Gemini 等后端。模型名需与网关映射一致。'
+  },
+  {
+    key: 'litellm',
+    label: 'LiteLLM 网关',
+    baseUrl: 'http://localhost:4000',
+    models: ['gpt-4o', 'claude-3-5-sonnet', 'gemini/gemini-1.5-pro'],
+    hint: 'LiteLLM 以 /v1/messages 暴露 Anthropic 兼容端点,后端可接 OpenAI/Azure/Bedrock 等。'
+  },
+  {
+    key: 'custom',
+    label: '自定义',
+    baseUrl: '',
+    models: [],
+    hint: '手动填写全部字段。'
+  }
+]

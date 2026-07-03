@@ -77,6 +77,7 @@ export function createProvider(input: ProviderInput): ProviderView {
     baseUrl: input.baseUrl,
     encryptedToken: encryptToken(input.token),
     models: input.models,
+    customHeaders: input.customHeaders,
     note: input.note,
     createdAt: Date.now()
   }
@@ -95,6 +96,7 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
     name: patch.name ?? prev.name,
     baseUrl: patch.baseUrl ?? prev.baseUrl,
     models: patch.models ?? prev.models,
+    customHeaders: patch.customHeaders ?? prev.customHeaders,
     note: patch.note ?? prev.note,
     encryptedToken: patch.token === undefined ? prev.encryptedToken : encryptToken(patch.token)
   }

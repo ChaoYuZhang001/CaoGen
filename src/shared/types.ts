@@ -72,6 +72,11 @@ export interface Provider {
   encryptedToken: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
+  /**
+   * 自定义请求头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
+   * 某些网关需要额外头(如自定义鉴权、路由标签)。
+   */
+  customHeaders?: string
   /** 用户备注 */
   note?: string
   createdAt: number
@@ -83,6 +88,7 @@ export interface ProviderView {
   name: string
   baseUrl: string
   models: string[]
+  customHeaders?: string
   note?: string
   createdAt: number
   hasToken: boolean
@@ -92,6 +98,7 @@ export interface ProviderInput {
   name: string
   baseUrl: string
   models: string[]
+  customHeaders?: string
   note?: string
   /** 明文 token,经 IPC 传入主进程后加密落盘 */
   token: string
