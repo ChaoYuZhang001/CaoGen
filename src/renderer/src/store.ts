@@ -8,6 +8,7 @@ import type {
   PermissionModeId,
   PermissionRequestInfo,
   SessionMeta,
+  TranscriptEntry,
   UsageTotals
 } from '../../shared/types'
 
@@ -18,12 +19,12 @@ const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
  * createSession IPC 返回前主进程可能已开始广播该会话的事件(status/init),
  * 此时 store 里还没有对应条目;先缓存,注册时按序重放,避免丢 sdkSessionId 等状态。
  */
-const pendingEvents = new Map<string, AgentEvent[]>()
+const pendingEvents = new Map<string, Array<{ seq: number; event: AgentEvent }>>()
 const PENDING_EVENTS_CAP = 200
 
-function stashPendingEvent(sessionId: string, event: AgentEvent): void {
+function stashPendingEvent(sessionId: string, seq: number, event: AgentEvent): void {
   const queue = pendingEvents.get(sessionId) ?? []
-  if (queue.length < PENDING_EVENTS_CAP) queue.push(event)
+  if (queue.length < PENDING_EVENTS_CAP) queue.push({ seq, event })
   pendingEvents.set(sessionId, queue)
 }
 
@@ -31,7 +32,18 @@ function drainPendingEvents(sessionId: string, state: SessionState): SessionStat
   const queue = pendingEvents.get(sessionId)
   if (!queue) return state
   pendingEvents.delete(sessionId)
-  return queue.reduce(reduceSession, state)
+  return queue.reduce((s, item) => applyEvent(s, item.seq, item.event), state)
+}
+
+/** 应用单条事件(seq 去重 + reduce) */
+function applyEvent(s: SessionState, seq: number, event: AgentEvent): SessionState {
+  if (seq <= s.lastSeq) return s
+  return { ...reduceSession(s, event), lastSeq: seq }
+}
+
+/** 批量回放转录(已按 seq 排序) */
+function replayTranscript(s: SessionState, entries: TranscriptEntry[]): SessionState {
+  return entries.reduce((state, e) => applyEvent(state, e.seq, e.event), s)
 }
 
 export interface ToolResultInfo {
@@ -64,6 +76,8 @@ export interface SessionState {
   pendingPermissions: PermissionRequestInfo[]
   effectiveModel?: string
   tools?: string[]
+  /** 已处理的最大 seq,供去重(转录回放 + 实时事件) */
+  lastSeq: number
 }
 
 function newSessionState(meta: SessionMeta): SessionState {
@@ -74,12 +88,15 @@ function newSessionState(meta: SessionMeta): SessionState {
     streamThinking: '',
     toolResults: {},
     runningTools: {},
-    pendingPermissions: []
+    pendingPermissions: [],
+    lastSeq: 0
   }
 }
 
 function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   switch (ev.kind) {
+    case 'user-message':
+      return { ...s, items: [...s.items, { id: genId(), kind: 'user', text: ev.text }] }
     case 'status': {
       const meta = { ...s.meta, status: ev.status, lastError: ev.error ?? s.meta.lastError }
       let items = s.items
@@ -178,7 +195,7 @@ interface AppStore {
   showNewSession: boolean
   showSettings: boolean
   init(): Promise<void>
-  handleEvent(sessionId: string, event: AgentEvent): void
+  handleEvent(sessionId: string, event: AgentEvent, seq: number): void
   createSession(opts: CreateSessionOptions): Promise<void>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   selectSession(id: string): void
@@ -206,7 +223,7 @@ export const useStore = create<AppStore>((set, get) => ({
   async init() {
     if (get().ready) return
     set({ ready: true })
-    window.agentDesk.onSessionEvent((sessionId, event) => get().handleEvent(sessionId, event))
+    window.agentDesk.onSessionEvent((sessionId, event, seq) => get().handleEvent(sessionId, event, seq))
     const [metas, history, settings] = await Promise.all([
       window.agentDesk.listSessions(),
       window.agentDesk.listHistory(),
@@ -229,35 +246,49 @@ export const useStore = create<AppStore>((set, get) => ({
         activeId: s.activeId ?? order[0] ?? null
       }
     })
-    // 渲染进程重载会丢掉未决权限请求;从主进程补回,否则会话会永远卡在等待授权
+    // 渲染进程重载会丢掉未决权限请求 + 聊天记录;从主进程补回
     for (const meta of metas) {
-      void window.agentDesk.listPendingPermissions(meta.id).then((reqs) => {
-        if (reqs.length === 0) return
-        set((s) => {
-          const session = s.sessions[meta.id]
-          if (!session) return s
+      const [reqs, transcript] = await Promise.all([
+        window.agentDesk.listPendingPermissions(meta.id),
+        window.agentDesk.getTranscript(meta.id)
+      ])
+      set((s) => {
+        const session = s.sessions[meta.id]
+        if (!session) return s
+        let next = session
+        if (reqs.length > 0) {
           const known = new Set(session.pendingPermissions.map((p) => p.requestId))
           const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
-          return {
-            sessions: {
-              ...s.sessions,
-              [meta.id]: { ...session, pendingPermissions: merged }
-            }
-          }
-        })
+          next = { ...next, pendingPermissions: merged }
+        }
+        if (transcript.length > 0) {
+          next = replayTranscript(next, transcript)
+        }
+        return { sessions: { ...s.sessions, [meta.id]: next } }
       })
     }
   },
 
-  handleEvent(sessionId, event) {
+  handleEvent(sessionId, event, seq) {
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) {
-        stashPendingEvent(sessionId, event)
+        stashPendingEvent(sessionId, seq, event)
         return s
       }
-      return { sessions: { ...s.sessions, [sessionId]: reduceSession(session, event) } }
+      return { sessions: { ...s.sessions, [sessionId]: applyEvent(session, seq, event) } }
     })
+    // init 到达意味着 sdkSessionId 已确定,转录文件已可读;触发回放(仅 resume 会话需要)
+    if (event.kind === 'init' && event.sdkSessionId) {
+      void window.agentDesk.getTranscript(sessionId).then((transcript) => {
+        if (transcript.length === 0) return
+        set((s) => {
+          const session = s.sessions[sessionId]
+          if (!session) return s
+          return { sessions: { ...s.sessions, [sessionId]: replayTranscript(session, transcript) } }
+        })
+      })
+    }
     if (event.kind === 'turn-result' || event.kind === 'init') {
       void window.agentDesk.listHistory().then((history) => set({ history }))
     }

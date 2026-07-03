@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { Pushable } from './pushable'
+import { TranscriptWriter } from './transcript'
 import type {
   AgentEvent,
   AssistantBlock,
@@ -105,14 +106,21 @@ export class AgentSession {
   private readonly input = new Pushable<SDKUserMessage>()
   private query: Query | null = null
   private readonly pending = new Map<string, PendingPermission>()
-  private readonly emit: (event: AgentEvent) => void
+  private readonly emitRaw: (event: AgentEvent) => void
+  private readonly transcript: TranscriptWriter
   private readonly resumeSdkSessionId?: string
   private disposed = false
 
-  constructor(meta: SessionMeta, emit: (event: AgentEvent) => void, resumeSdkSessionId?: string) {
+  constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
     this.meta = meta
-    this.emit = emit
+    this.transcript = new TranscriptWriter(resumeSdkSessionId)
+    this.emitRaw = (event) => emit(event, this.transcript.next(event))
     this.resumeSdkSessionId = resumeSdkSessionId
+    // resume 模式下 SDK 不会再发 system/init,手动设置并通知渲染进程
+    if (resumeSdkSessionId) {
+      this.meta.sdkSessionId = resumeSdkSessionId
+      this.emit({ kind: 'init', sdkSessionId: resumeSdkSessionId })
+    }
   }
 
   async start(): Promise<void> {
@@ -147,6 +155,7 @@ export class AgentSession {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
+    this.emit({ kind: 'user-message', text })
     if (this.meta.title === '新会话' && text.trim()) {
       this.meta.title = text.trim().replace(/\s+/g, ' ').slice(0, 40)
       this.emit({ kind: 'meta', meta: { ...this.meta } })
@@ -183,6 +192,11 @@ export class AgentSession {
 
   pendingPermissions(): PermissionRequestInfo[] {
     return [...this.pending.values()].map((p) => p.info)
+  }
+
+  /** 已持久化 + 缓冲的耐久事件(user/assistant/tool-result/turn-result),供恢复时回填 */
+  getTranscript() {
+    return this.transcript.read()
   }
 
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
@@ -341,6 +355,10 @@ export class AgentSession {
         }
       })
     })
+  }
+
+  private emit(event: AgentEvent): void {
+    this.emitRaw(event)
   }
 
   private setStatus(status: SessionMeta['status'], error?: string): void {

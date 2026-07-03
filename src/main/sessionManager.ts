@@ -1,12 +1,14 @@
 import { BrowserWindow } from 'electron'
 import { AgentSession, newSessionMeta } from './agentSession'
-import { upsertHistory } from './history'
+import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
+import { cleanupTranscripts } from './transcript'
 import type {
   AgentEvent,
   CreateSessionOptions,
   SessionEventPayload,
-  SessionMeta
+  SessionMeta,
+  TranscriptEntry
 } from '../shared/types'
 
 class SessionManager {
@@ -30,7 +32,7 @@ class SessionManager {
     })
     const session = new AgentSession(
       meta,
-      (event) => this.dispatch(meta.id, event),
+      (event, seq) => this.dispatch(meta.id, event, seq),
       opts.resumeSdkSessionId
     )
     this.sessions.set(meta.id, session)
@@ -50,8 +52,18 @@ class SessionManager {
     this.sessions.clear()
   }
 
-  private dispatch(sessionId: string, event: AgentEvent): void {
-    const payload: SessionEventPayload = { sessionId, event }
+  getTranscript(id: string): TranscriptEntry[] {
+    return this.sessions.get(id)?.getTranscript() ?? []
+  }
+
+  /** 启动时清理不可达转录文件 */
+  init(): void {
+    const keep = new Set(listHistory().map((h) => h.sdkSessionId))
+    cleanupTranscripts(keep)
+  }
+
+  private dispatch(sessionId: string, event: AgentEvent, seq: number): void {
+    const payload: SessionEventPayload = { sessionId, seq, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
