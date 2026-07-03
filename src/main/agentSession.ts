@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   AssistantBlock,
   PermissionModeId,
+  PermissionRequestInfo,
   SessionMeta,
   UsageTotals
 } from '../shared/types'
@@ -24,6 +25,7 @@ const TOOL_RESULT_MAX_CHARS = 20_000
 interface PendingPermission {
   resolve: (result: PermissionResult) => void
   input: Record<string, unknown>
+  info: PermissionRequestInfo
 }
 
 function errText(err: unknown): string {
@@ -140,6 +142,11 @@ export class AgentSession {
 
   send(text: string): void {
     if (this.disposed) return
+    // 流已死(启动失败 / 进程退出)时静默排队只会让 UI 永远停在"运行中"
+    if (!this.query || this.meta.status === 'error' || this.meta.status === 'closed') {
+      this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
+      return
+    }
     if (this.meta.title === '新会话' && text.trim()) {
       this.meta.title = text.trim().replace(/\s+/g, ' ').slice(0, 40)
       this.emit({ kind: 'meta', meta: { ...this.meta } })
@@ -172,6 +179,10 @@ export class AgentSession {
     } else {
       pending.resolve({ behavior: 'deny', message: message || '用户拒绝了此操作' })
     }
+  }
+
+  pendingPermissions(): PermissionRequestInfo[] {
+    return [...this.pending.values()].map((p) => p.info)
   }
 
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
@@ -263,15 +274,19 @@ export class AgentSession {
         const usage = normalizeUsage(msg.usage)
         const costUsd = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : undefined
         if (costUsd !== undefined) this.meta.costUsd = costUsd
-        this.meta.usage = usage
-        this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
+        // 中断/异常的 result 可能带全零 usage,不能覆盖已知的上下文规模
+        const hasUsage = usage.input + usage.output + usage.cacheRead + usage.cacheCreation > 0
+        if (hasUsage) {
+          this.meta.usage = usage
+          this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
+        }
         const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'unknown'
         this.emit({
           kind: 'turn-result',
           subtype,
           isError: msg.is_error === true || subtype !== 'success',
           costUsd,
-          usage,
+          usage: hasUsage ? usage : undefined,
           durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
           numTurns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
           resultText: typeof msg.result === 'string' ? msg.result : undefined
@@ -309,18 +324,16 @@ export class AgentSession {
     opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string } | undefined
   ): Promise<PermissionResult> {
     const requestId = randomUUID()
-    this.emit({
-      kind: 'permission-request',
-      request: {
-        requestId,
-        toolName,
-        input,
-        toolUseId: opts?.toolUseID,
-        decisionReason: opts?.decisionReason
-      }
-    })
+    const info: PermissionRequestInfo = {
+      requestId,
+      toolName,
+      input,
+      toolUseId: opts?.toolUseID,
+      decisionReason: opts?.decisionReason
+    }
+    this.emit({ kind: 'permission-request', request: info })
     return new Promise<PermissionResult>((resolve) => {
-      this.pending.set(requestId, { resolve, input })
+      this.pending.set(requestId, { resolve, input, info })
       opts?.signal?.addEventListener('abort', () => {
         if (this.pending.delete(requestId)) {
           this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })

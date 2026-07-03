@@ -7,6 +7,10 @@ import type { AppSettings, CreateSessionOptions, PermissionModeId } from '../sha
 export function registerIpc(): void {
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
+  ipcMain.handle('sessions:pendingPermissions', (_e, id: string) =>
+    sessionManager.get(id)?.pendingPermissions() ?? []
+  )
+
   ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {
       throw new Error('必须指定工作目录')

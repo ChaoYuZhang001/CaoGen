@@ -20,8 +20,8 @@ export default function Sidebar(): React.JSX.Element {
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
 
-  const openCwds = new Set(order.map((id) => sessions[id]?.meta.sdkSessionId).filter(Boolean))
-  const recent = history.filter((h) => !openCwds.has(h.sdkSessionId)).slice(0, 20)
+  const openSdkIds = new Set(order.map((id) => sessions[id]?.meta.sdkSessionId).filter(Boolean))
+  const recent = history.filter((h) => !openSdkIds.has(h.sdkSessionId)).slice(0, 20)
 
   return (
     <aside className="sidebar">

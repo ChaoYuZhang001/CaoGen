@@ -3,6 +3,10 @@ import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
 
+// 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录
+app.setName('AgentDesk')
+app.setPath('userData', join(app.getPath('appData'), 'AgentDesk'))
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1320,

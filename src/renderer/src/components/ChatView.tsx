@@ -50,7 +50,7 @@ export default function ChatView(): React.JSX.Element | null {
         <div className="chat-controls no-drag">
           <select
             className="select"
-            value={modelKnown ? meta.model : meta.model}
+            value={meta.model}
             onChange={(e) => void setModel(e.target.value)}
             title="切换模型"
           >

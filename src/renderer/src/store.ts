@@ -14,6 +14,26 @@ import type {
 let seq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
 
+/**
+ * createSession IPC 返回前主进程可能已开始广播该会话的事件(status/init),
+ * 此时 store 里还没有对应条目;先缓存,注册时按序重放,避免丢 sdkSessionId 等状态。
+ */
+const pendingEvents = new Map<string, AgentEvent[]>()
+const PENDING_EVENTS_CAP = 200
+
+function stashPendingEvent(sessionId: string, event: AgentEvent): void {
+  const queue = pendingEvents.get(sessionId) ?? []
+  if (queue.length < PENDING_EVENTS_CAP) queue.push(event)
+  pendingEvents.set(sessionId, queue)
+}
+
+function drainPendingEvents(sessionId: string, state: SessionState): SessionState {
+  const queue = pendingEvents.get(sessionId)
+  if (!queue) return state
+  pendingEvents.delete(sessionId)
+  return queue.reduce(reduceSession, state)
+}
+
 export interface ToolResultInfo {
   content: string
   isError: boolean
@@ -197,7 +217,7 @@ export const useStore = create<AppStore>((set, get) => ({
       const order = [...s.order]
       for (const meta of metas) {
         if (!sessions[meta.id]) {
-          sessions[meta.id] = newSessionState(meta)
+          sessions[meta.id] = drainPendingEvents(meta.id, newSessionState(meta))
           order.push(meta.id)
         }
       }
@@ -209,12 +229,33 @@ export const useStore = create<AppStore>((set, get) => ({
         activeId: s.activeId ?? order[0] ?? null
       }
     })
+    // 渲染进程重载会丢掉未决权限请求;从主进程补回,否则会话会永远卡在等待授权
+    for (const meta of metas) {
+      void window.agentDesk.listPendingPermissions(meta.id).then((reqs) => {
+        if (reqs.length === 0) return
+        set((s) => {
+          const session = s.sessions[meta.id]
+          if (!session) return s
+          const known = new Set(session.pendingPermissions.map((p) => p.requestId))
+          const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
+          return {
+            sessions: {
+              ...s.sessions,
+              [meta.id]: { ...session, pendingPermissions: merged }
+            }
+          }
+        })
+      })
+    }
   },
 
   handleEvent(sessionId, event) {
     set((s) => {
       const session = s.sessions[sessionId]
-      if (!session) return s
+      if (!session) {
+        stashPendingEvent(sessionId, event)
+        return s
+      }
       return { sessions: { ...s.sessions, [sessionId]: reduceSession(session, event) } }
     })
     if (event.kind === 'turn-result' || event.kind === 'init') {
@@ -225,8 +266,11 @@ export const useStore = create<AppStore>((set, get) => ({
   async createSession(opts) {
     const meta = await window.agentDesk.createSession(opts)
     set((s) => ({
-      sessions: { ...s.sessions, [meta.id]: newSessionState(meta) },
-      order: [...s.order, meta.id],
+      sessions: {
+        ...s.sessions,
+        [meta.id]: drainPendingEvents(meta.id, s.sessions[meta.id] ?? newSessionState(meta))
+      },
+      order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
       activeId: meta.id,
       showNewSession: false
     }))
@@ -273,6 +317,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
   async closeSession(id) {
     await window.agentDesk.closeSession(id)
+    pendingEvents.delete(id)
     set((s) => {
       const sessions = { ...s.sessions }
       delete sessions[id]
