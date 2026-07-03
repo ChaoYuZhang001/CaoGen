@@ -1,0 +1,60 @@
+import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { sessionManager } from './sessionManager'
+import { getSettings, updateSettings } from './settings'
+import { listHistory } from './history'
+import type { AppSettings, CreateSessionOptions, PermissionModeId } from '../shared/types'
+
+export function registerIpc(): void {
+  ipcMain.handle('sessions:list', () => sessionManager.list())
+
+  ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
+    if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {
+      throw new Error('必须指定工作目录')
+    }
+    return sessionManager.create(opts)
+  })
+
+  ipcMain.handle('sessions:send', (_e, id: string, text: string) => {
+    if (typeof text !== 'string' || text.trim().length === 0) return
+    sessionManager.get(id)?.send(text)
+  })
+
+  ipcMain.handle('sessions:interrupt', async (_e, id: string) => {
+    await sessionManager.get(id)?.interrupt()
+  })
+
+  ipcMain.handle('sessions:close', (_e, id: string) => {
+    sessionManager.close(id)
+  })
+
+  ipcMain.handle(
+    'sessions:permission',
+    (_e, id: string, requestId: string, allow: boolean, message?: string) => {
+      sessionManager.get(id)?.respondPermission(requestId, allow === true, message)
+    }
+  )
+
+  ipcMain.handle('sessions:setPermissionMode', async (_e, id: string, mode: PermissionModeId) => {
+    await sessionManager.get(id)?.setPermissionMode(mode)
+  })
+
+  ipcMain.handle('sessions:setModel', async (_e, id: string, model: string) => {
+    await sessionManager.get(id)?.setModel(typeof model === 'string' ? model : '')
+  })
+
+  ipcMain.handle('history:list', () => listHistory())
+
+  ipcMain.handle('settings:get', () => getSettings())
+
+  ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) =>
+    updateSettings(patch ?? {})
+  )
+
+  ipcMain.handle('dialog:pickDirectory', async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const result = win
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
+}
