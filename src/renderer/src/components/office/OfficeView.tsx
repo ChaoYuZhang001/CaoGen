@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import { useStore } from '../../store'
 import Workstation from './Workstation'
+import { brandFor } from './brand'
 
 /** 把会话按网格铺开;返回每个会话的世界坐标 */
 function gridPositions(count: number): Array<[number, number, number]> {
@@ -23,6 +24,7 @@ function gridPositions(count: number): Array<[number, number, number]> {
 export default function OfficeView(): React.JSX.Element {
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
+  const providers = useStore((s) => s.providers)
   const activeId = useStore((s) => s.activeId)
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
@@ -30,6 +32,12 @@ export default function OfficeView(): React.JSX.Element {
 
   const ids = order.filter((id) => sessions[id])
   const positions = gridPositions(ids.length)
+
+  // 会话 → 厂商品牌色(providerId 映射到 Provider 名称,空则官方)
+  const brandColorFor = (providerId: string): string => {
+    const name = providerId ? providers.find((p) => p.id === providerId)?.name : ''
+    return brandFor(name).color
+  }
 
   const focus = (id: string): void => {
     selectSession(id)
@@ -83,6 +91,7 @@ export default function OfficeView(): React.JSX.Element {
                 session={sessions[id]}
                 position={positions[i]}
                 active={id === activeId}
+                brandColor={brandColorFor(sessions[id].meta.providerId)}
                 onSelect={() => focus(id)}
               />
             ))}

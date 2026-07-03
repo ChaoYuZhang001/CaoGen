@@ -32,12 +32,16 @@ interface Props {
   session: SessionState
   position: [number, number, number]
   active: boolean
+  /** 厂商品牌色(小人身体着色);缺省用状态色 */
+  brandColor?: string
   onSelect: () => void
 }
 
-export default function Workstation({ session, position, active, onSelect }: Props): React.JSX.Element {
+export default function Workstation({ session, position, active, brandColor, onSelect }: Props): React.JSX.Element {
   const activity = activityOf(session)
   const color = COLORS[activity]
+  // 身体 = 厂商品牌色(身份),光环/屏幕 = 状态色(活动),两个维度一眼分辨
+  const bodyColor = brandColor ?? color
 
   const avatarRef = useRef<Group>(null)
   const headRef = useRef<Group>(null)
@@ -170,23 +174,23 @@ export default function Workstation({ session, position, active, onSelect }: Pro
 
       {/* Agent 小人 */}
       <group ref={avatarRef} position={[0, 0, 0.15]} onClick={onSelect}>
-        {/* 身体 */}
+        {/* 身体(厂商品牌色) */}
         <mesh position={[0, 0.32, 0]} castShadow>
           <capsuleGeometry args={[0.16, 0.28, 6, 12]} />
-          <meshStandardMaterial color={color} />
+          <meshStandardMaterial color={bodyColor} />
         </mesh>
         {/* 左臂 */}
         <group ref={armLRef} position={[-0.17, 0.42, 0]}>
           <mesh position={[0, -0.12, 0.02]}>
             <capsuleGeometry args={[0.05, 0.2, 4, 8]} />
-            <meshStandardMaterial color={color} />
+            <meshStandardMaterial color={bodyColor} />
           </mesh>
         </group>
         {/* 右臂 */}
         <group ref={armRRef} position={[0.17, 0.42, 0]}>
           <mesh position={[0, -0.12, 0.02]}>
             <capsuleGeometry args={[0.05, 0.2, 4, 8]} />
-            <meshStandardMaterial color={color} />
+            <meshStandardMaterial color={bodyColor} />
           </mesh>
         </group>
         {/* 头 */}
@@ -197,6 +201,12 @@ export default function Workstation({ session, position, active, onSelect }: Pro
           </mesh>
         </group>
       </group>
+
+      {/* 桌上厂商工牌(品牌色小立牌) */}
+      <mesh position={[0.4, 0.53, -0.3]} rotation={[0, -0.3, 0]}>
+        <boxGeometry args={[0.16, 0.11, 0.015]} />
+        <meshStandardMaterial color={bodyColor} emissive={bodyColor} emissiveIntensity={0.25} />
+      </mesh>
 
       {/* 异常冒烟 */}
       <group ref={smokeRef} position={[0, 0, 0.15]} visible={false}>
