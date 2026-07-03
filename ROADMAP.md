@@ -75,7 +75,7 @@
 | M1 | 端到端可用 | 全链路实测 + 7 处缺陷修复 | ✅ 已完成 |
 | M2 | 会话内容持久化 | ChatItem 转录落盘(JSONL),重载回填;恢复聊天记录 | ✅ 已完成(冷启动 resume 回放留有已知缺陷) |
 | M3 | 多厂商 Provider | Provider Profile 配置页 + 会话级 env 注入 + safeStorage 密钥 | ✅ 已完成 |
-| M4 | 智能调度 v1 | 规则路由(意图分级 + 健康度 + 故障切换)+ 路由透明面板 | 规划 |
+| M4 | 智能调度 v1 | 规则路由(意图分级 + 健康度)+ 路由透明面板 | ✅ 已完成(跨 Provider 故障切换留 M4.1) |
 | M5 | 3D 办公区 v1 | R3F 场景、工位状态动画、点击聚焦、双视图切换 | 规划 |
 | M6 | 原生多引擎 | EngineAdapter 抽象,接入 Codex CLI / Gemini CLI | 规划 |
 | M7 | 打包分发 | electron-builder、图标、自动更新 | 规划 |
