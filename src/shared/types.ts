@@ -203,6 +203,7 @@ export interface AgentDeskApi {
   createProvider(provider: ProviderInput): Promise<ProviderView>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
   deleteProvider(id: string): Promise<void>
+  fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
