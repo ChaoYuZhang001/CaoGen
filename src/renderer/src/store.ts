@@ -8,6 +8,7 @@ import type {
   HistoryEntry,
   PermissionModeId,
   PermissionRequestInfo,
+  Project,
   ProviderInput,
   ProviderView,
   SchedulerStrategy,
@@ -206,6 +207,7 @@ interface AppStore {
   history: HistoryEntry[]
   settings: AppSettings
   providers: ProviderView[]
+  projects: Project[]
   view: AppView
   showNewSession: boolean
   showSettings: boolean
@@ -227,6 +229,8 @@ interface AppStore {
   createProvider(input: ProviderInput): Promise<void>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
   deleteProvider(id: string): Promise<void>
+  refreshProjects(): Promise<void>
+  deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean): void
   setShowSettings(v: boolean): void
 }
@@ -250,6 +254,7 @@ export const useStore = create<AppStore>((set, get) => ({
     office: { showBadges: true, liveliness: 1, catEars: false }
   },
   providers: [],
+  projects: [],
   view: 'list',
   showNewSession: false,
   showSettings: false,
@@ -258,11 +263,12 @@ export const useStore = create<AppStore>((set, get) => ({
     if (get().ready) return
     set({ ready: true })
     window.agentDesk.onSessionEvent((sessionId, event, seq) => get().handleEvent(sessionId, event, seq))
-    const [metas, history, settings, providers] = await Promise.all([
+    const [metas, history, settings, providers, projects] = await Promise.all([
       window.agentDesk.listSessions(),
       window.agentDesk.listHistory(),
       window.agentDesk.getSettings(),
-      window.agentDesk.listProviders()
+      window.agentDesk.listProviders(),
+      window.agentDesk.listProjects()
     ])
     set((s) => {
       const sessions = { ...s.sessions }
@@ -279,6 +285,7 @@ export const useStore = create<AppStore>((set, get) => ({
         history,
         settings,
         providers,
+        projects,
         activeId: s.activeId ?? order[0] ?? null
       }
     })
@@ -341,6 +348,7 @@ export const useStore = create<AppStore>((set, get) => ({
       activeId: meta.id,
       showNewSession: false
     }))
+    void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
   },
 
   async resumeFromHistory(entry) {
@@ -459,6 +467,16 @@ export const useStore = create<AppStore>((set, get) => ({
     if (get().settings.defaultProviderId === id) {
       await get().updateSettings({ defaultProviderId: '' })
     }
+  },
+
+  async refreshProjects() {
+    const projects = await window.agentDesk.listProjects()
+    set({ projects })
+  },
+
+  async deleteProject(id) {
+    await window.agentDesk.deleteProject(id)
+    await get().refreshProjects()
   },
 
   setShowNewSession(v) {

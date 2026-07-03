@@ -3,6 +3,7 @@ import { AgentSession, newSessionMeta } from './agentSession'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { cleanupTranscripts } from './transcript'
+import { touchProject } from './projects'
 import type {
   AgentEvent,
   CreateSessionOptions,
@@ -38,6 +39,7 @@ class SessionManager {
     )
     this.sessions.set(meta.id, session)
     void session.start()
+    touchProject(meta.cwd)
     return { ...meta }
   }
 

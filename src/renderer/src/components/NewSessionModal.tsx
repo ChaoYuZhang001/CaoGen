@@ -6,6 +6,7 @@ import type { PermissionModeId } from '../../../shared/types'
 export default function NewSessionModal(): React.JSX.Element {
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
+  const projects = useStore((s) => s.projects)
   const createSession = useStore((s) => s.createSession)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
 
@@ -62,6 +63,24 @@ export default function NewSessionModal(): React.JSX.Element {
     <div className="modal-backdrop" onClick={() => setShowNewSession(false)}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal-title">新建会话</h2>
+
+        {projects.length > 0 && (
+          <>
+            <label className="field-label">最近项目</label>
+            <div className="project-chips">
+              {projects.slice(0, 8).map((p) => (
+                <button
+                  key={p.id}
+                  className={`project-chip ${cwd === p.path ? 'active' : ''}`}
+                  title={p.path}
+                  onClick={() => setCwd(p.path)}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <label className="field-label">项目目录</label>
         <div className="field-row">

@@ -14,6 +14,8 @@ const DICT: Dict = {
   settings: { zh: '⚙ 设置', en: '⚙ Settings' },
   listView: { zh: '列表视图', en: 'List View' },
   ongoing: { zh: '进行中', en: 'Active' },
+  projects: { zh: '项目', en: 'Projects' },
+  newSessionHere: { zh: '在此项目新建会话', en: 'New session here' },
   recent: { zh: '最近会话', en: 'Recent' },
   noSessions: { zh: '暂无会话', en: 'No sessions' },
   cancel: { zh: '取消', en: 'Cancel' },
