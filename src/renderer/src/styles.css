@@ -204,6 +204,45 @@ textarea {
   place-content: center;
 }
 
+/* 会话卡片悬浮操作(重命名 / 删除) */
+.session-card-actions {
+  flex-shrink: 0;
+  display: none;
+  gap: 2px;
+}
+
+.session-card:hover .session-card-actions {
+  display: flex;
+}
+
+.session-action {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  display: grid;
+  place-content: center;
+}
+
+.session-action:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.session-card-editing {
+  padding: 6px 8px;
+}
+
+.session-rename-input {
+  width: 100%;
+  font-size: 13px;
+  padding: 5px 8px;
+}
+
 .history-card {
   opacity: 0.75;
 }
@@ -1042,6 +1081,90 @@ textarea {
   width: 560px;
   max-height: calc(100vh - 80px);
   overflow-y: auto;
+}
+
+/* ---------- 设置中心(分类 tab) ---------- */
+
+.settings-center {
+  width: 680px;
+}
+
+.settings-body {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+  min-height: 340px;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 120px;
+}
+
+.settings-tab {
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.settings-tab:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.settings-tab.active {
+  background: var(--bg-input);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings-pane {
+  flex: 1;
+  min-width: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.settings-pane .field-label:first-child {
+  margin-top: 0;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.plugins-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.plugins-paths code {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 12px;
 }
 
 .modal-backdrop-nested {

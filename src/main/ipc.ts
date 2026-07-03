@@ -61,6 +61,10 @@ export function registerIpc(): void {
     await sessionManager.get(id)?.setModel(typeof model === 'string' ? model : '')
   })
 
+  ipcMain.handle('sessions:rename', (_e, id: string, title: string) => {
+    if (typeof title === 'string') sessionManager.get(id)?.rename(title)
+  })
+
   ipcMain.handle('history:list', () => listHistory())
 
   ipcMain.handle('settings:get', () => getSettings())
