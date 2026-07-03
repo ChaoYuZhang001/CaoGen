@@ -1,17 +1,21 @@
 :root {
-  --bg: #181614;
-  --bg-raised: #1f1c19;
-  --bg-card: #262220;
-  --bg-input: #14120f;
-  --border: #38322b;
-  --border-soft: #2b2622;
-  --text: #ece7df;
-  --text-dim: #9c948a;
-  --text-faint: #6f695f;
-  --accent: #d97757;
-  --accent-hover: #e08663;
-  --accent-soft: rgba(217, 119, 87, 0.14);
-  --green: #7fb069;
+  /* 主黑副白:中性纯黑背景 + 白色文字/强调,呼应图标黑西装白底,少杂色 */
+  --bg: #0d0d0d;
+  --bg-raised: #161616;
+  --bg-card: #1e1e1e;
+  --bg-input: #080808;
+  --border: #2c2c2c;
+  --border-soft: #202020;
+  --text: #f4f4f4;
+  --text-dim: #9a9a9a;
+  --text-faint: #666666;
+  /* 强调 = 白(主按钮白底黑字);text-on-accent 供其上文字用 */
+  --accent: #f4f4f4;
+  --accent-hover: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.1);
+  --accent-text: #0d0d0d;
+  /* 状态色仅用于语义提示,保持克制 */
+  --green: #6db06b;
   --red: #e5534b;
   --yellow: #d9a94a;
   --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
@@ -197,7 +201,7 @@ textarea {
   padding: 0 5px;
   border-radius: 9px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 700;
   display: grid;
@@ -315,7 +319,7 @@ textarea {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -532,6 +536,11 @@ textarea {
 }
 
 .assistant-text {
+  word-break: break-word;
+}
+
+.md-fallback {
+  white-space: pre-wrap;
   word-break: break-word;
 }
 
