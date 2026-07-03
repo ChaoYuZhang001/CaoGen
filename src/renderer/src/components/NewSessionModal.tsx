@@ -1,19 +1,36 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import type { PermissionModeId } from '../../../shared/types'
 
 export default function NewSessionModal(): React.JSX.Element {
   const settings = useStore((s) => s.settings)
+  const providers = useStore((s) => s.providers)
   const createSession = useStore((s) => s.createSession)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
 
   const [cwd, setCwd] = useState('')
+  const [providerId, setProviderId] = useState(settings.defaultProviderId)
   const [model, setModel] = useState(settings.defaultModel)
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
     settings.defaultPermissionMode
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表;官方则用内置别名
+  const modelOptions = useMemo(() => {
+    const provider = providers.find((p) => p.id === providerId)
+    if (provider && provider.models.length > 0) {
+      return [{ value: '', label: '默认模型' }, ...provider.models.map((m) => ({ value: m, label: m }))]
+    }
+    return MODEL_OPTIONS
+  }, [providers, providerId])
+
+  const onProviderChange = (id: string): void => {
+    setProviderId(id)
+    // 切换 Provider 后旧模型可能不在新列表里,重置为默认
+    setModel('')
+  }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
@@ -28,7 +45,7 @@ export default function NewSessionModal(): React.JSX.Element {
     setBusy(true)
     setError('')
     try {
-      await createSession({ cwd: cwd.trim(), model, permissionMode })
+      await createSession({ cwd: cwd.trim(), model, providerId, permissionMode })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -53,9 +70,24 @@ export default function NewSessionModal(): React.JSX.Element {
           </button>
         </div>
 
+        <label className="field-label">厂商 / Provider</label>
+        <select
+          className="select select-block"
+          value={providerId}
+          onChange={(e) => onProviderChange(e.target.value)}
+        >
+          <option value="">官方 Anthropic(默认登录)</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.hasToken ? '' : ' (未配置密钥)'}
+            </option>
+          ))}
+        </select>
+
         <label className="field-label">模型</label>
         <select className="select select-block" value={model} onChange={(e) => setModel(e.target.value)}>
-          {MODEL_OPTIONS.map((o) => (
+          {modelOptions.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>

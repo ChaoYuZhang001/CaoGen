@@ -2,7 +2,18 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
 import { listHistory } from './history'
-import type { AppSettings, CreateSessionOptions, PermissionModeId } from '../shared/types'
+import {
+  listProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider
+} from './providers'
+import type {
+  AppSettings,
+  CreateSessionOptions,
+  PermissionModeId,
+  ProviderInput
+} from '../shared/types'
 
 export function registerIpc(): void {
   ipcMain.handle('sessions:list', () => sessionManager.list())
@@ -55,6 +66,23 @@ export function registerIpc(): void {
   ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) =>
     updateSettings(patch ?? {})
   )
+
+  ipcMain.handle('providers:list', () => listProviders())
+
+  ipcMain.handle('providers:create', (_e, input: ProviderInput) => {
+    if (!input || typeof input.name !== 'string' || input.name.trim().length === 0) {
+      throw new Error('Provider 名称不能为空')
+    }
+    return createProvider(input)
+  })
+
+  ipcMain.handle('providers:update', (_e, id: string, patch: Partial<ProviderInput>) =>
+    updateProvider(id, patch ?? {})
+  )
+
+  ipcMain.handle('providers:delete', (_e, id: string) => {
+    deleteProvider(id)
+  })
 
   ipcMain.handle('dialog:pickDirectory', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)

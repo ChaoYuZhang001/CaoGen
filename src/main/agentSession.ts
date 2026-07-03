@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
+import { getProvider, decryptToken } from './providers'
 import type {
   AgentEvent,
   AssistantBlock,
@@ -123,6 +124,36 @@ export class AgentSession {
     }
   }
 
+  /**
+   * 组装 SDK 子进程 env:以 process.env 为基,叠加所选 Provider 的
+   * ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 覆写,实现按会话切换厂商。
+   * env 是整体替换而非合并,必须显式带上 process.env(PATH、登录凭据等)。
+   */
+  private buildEnv(): NodeJS.ProcessEnv {
+    const env = { ...process.env }
+    if (!this.meta.providerId) return env
+    const provider = getProvider(this.meta.providerId)
+    if (!provider) {
+      console.warn('[agent-desk] Provider 不存在,回退默认:', this.meta.providerId)
+      return env
+    }
+    // 用户显式选了 Provider 时,剥离 host 托管鉴权,否则宿主(如 Claude 桌面)
+    // 的 host-creds 文件会盖过我们注入的凭据,导致 Provider 形同虚设。
+    delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+    delete env.CLAUDE_CODE_HOST_CREDS_FILE
+    delete env.CLAUDE_CODE_HOST_AUTH_ENV_VAR
+    delete env.CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
+    delete env.CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH
+    if (provider.baseUrl) env.ANTHROPIC_BASE_URL = provider.baseUrl
+    const token = decryptToken(provider.encryptedToken)
+    if (token) {
+      env.ANTHROPIC_AUTH_TOKEN = token
+      // 兼容以 API key 方式鉴权的网关;两者择一即可,一并覆写避免旧值干扰
+      env.ANTHROPIC_API_KEY = token
+    }
+    return env
+  }
+
   async start(): Promise<void> {
     this.setStatus('starting')
     try {
@@ -133,8 +164,7 @@ export class AgentSession {
           cwd: this.meta.cwd,
           permissionMode: this.meta.permissionMode,
           includePartialMessages: true,
-          // env 是整体替换而非合并,必须显式带上 process.env(PATH、登录凭据等)
-          env: { ...process.env },
+          env: this.buildEnv(),
           systemPrompt: { type: 'preset', preset: 'claude_code' },
           ...(this.meta.model ? { model: this.meta.model } : {}),
           ...(this.resumeSdkSessionId ? { resume: this.resumeSdkSessionId } : {}),
@@ -371,6 +401,7 @@ export class AgentSession {
 export function newSessionMeta(opts: {
   cwd: string
   model: string
+  providerId: string
   permissionMode: PermissionModeId
   title?: string
 }): SessionMeta {
@@ -379,6 +410,7 @@ export function newSessionMeta(opts: {
     title: opts.title || '新会话',
     cwd: opts.cwd,
     model: opts.model,
+    providerId: opts.providerId,
     permissionMode: opts.permissionMode,
     status: 'starting',
     costUsd: 0,

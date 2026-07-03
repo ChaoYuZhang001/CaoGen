@@ -9,6 +9,7 @@ import type { PermissionModeId } from '../../../shared/types'
 export default function ChatView(): React.JSX.Element | null {
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
+  const providers = useStore((s) => s.providers)
   const closeSession = useStore((s) => s.closeSession)
   const interrupt = useStore((s) => s.interrupt)
   const setPermissionMode = useStore((s) => s.setPermissionMode)
@@ -29,6 +30,9 @@ export default function ChatView(): React.JSX.Element | null {
   const { meta } = session
   const running = meta.status === 'running' || meta.status === 'starting'
   const modelKnown = MODEL_OPTIONS.some((o) => o.value === meta.model)
+  const providerName = meta.providerId
+    ? providers.find((p) => p.id === meta.providerId)?.name ?? '未知 Provider'
+    : '官方'
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -130,6 +134,7 @@ export default function ChatView(): React.JSX.Element | null {
                   ? '错误'
                   : '已关闭'}
         </span>
+        <span className="status-item">厂商 {providerName}</span>
         {session.effectiveModel && <span className="status-item">模型 {session.effectiveModel}</span>}
         <span className="status-spacer" />
         <span className="status-item">上下文 ~{formatTokens(meta.contextTokens)} tokens</span>

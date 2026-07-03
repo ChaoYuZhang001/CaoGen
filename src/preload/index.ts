@@ -4,6 +4,7 @@ import type {
   AppSettings,
   CreateSessionOptions,
   PermissionModeId,
+  ProviderInput,
   SessionEventPayload
 } from '../shared/types'
 
@@ -26,6 +27,11 @@ const api: AgentDeskApi = {
   listHistory: () => ipcRenderer.invoke('history:list'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),
+  listProviders: () => ipcRenderer.invoke('providers:list'),
+  createProvider: (provider: ProviderInput) => ipcRenderer.invoke('providers:create', provider),
+  updateProvider: (id: string, patch: Partial<ProviderInput>) =>
+    ipcRenderer.invoke('providers:update', id, patch),
+  deleteProvider: (id: string) => ipcRenderer.invoke('providers:delete', id),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {

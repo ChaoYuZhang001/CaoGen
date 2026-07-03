@@ -919,6 +919,124 @@ textarea {
   margin-top: 22px;
 }
 
+.modal-wide {
+  width: 560px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
+.modal-backdrop-nested {
+  z-index: 110;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.input-block {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.field-hint {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+/* ---------- 设置区块 / Provider 列表 ---------- */
+
+.settings-section {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-section:first-of-type {
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-hint {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-empty {
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.provider-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.provider-row-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.provider-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.provider-tag-warn {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(220, 160, 60, 0.18);
+  color: #d8a23c;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 /* ---------- 滚动条 ---------- */
 
 ::-webkit-scrollbar {
