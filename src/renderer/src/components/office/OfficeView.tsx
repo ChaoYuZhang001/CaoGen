@@ -72,8 +72,8 @@ export default function OfficeView(): React.JSX.Element {
         </div>
       ) : (
         <Canvas shadows camera={{ position: [7, 7, 9], fov: 42 }} dpr={[1, 1.75]}>
-          <color attach="background" args={['#14161b']} />
-          <fog attach="fog" args={['#14161b', 14, 34]} />
+          <color attach="background" args={['#0d0d0d']} />
+          <fog attach="fog" args={['#0d0d0d', 14, 34]} />
           <ambientLight intensity={0.55} />
           <directionalLight position={[6, 12, 6]} intensity={1.1} castShadow shadow-mapSize={[1024, 1024]} />
           <directionalLight position={[-8, 6, -6]} intensity={0.35} color="#8fb4ff" />
@@ -81,9 +81,9 @@ export default function OfficeView(): React.JSX.Element {
           {/* 地板 */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
             <planeGeometry args={[60, 60]} />
-            <meshStandardMaterial color="#191c22" />
+            <meshStandardMaterial color="#151515" />
           </mesh>
-          <gridHelper args={[60, 60, '#2a2f39', '#212530']} position={[0, 0.001, 0]} />
+          <gridHelper args={[60, 60, '#2a2a2a', '#1c1c1c']} position={[0, 0.001, 0]} />
 
           <Suspense fallback={null}>
             {ids.map((id, i) => (

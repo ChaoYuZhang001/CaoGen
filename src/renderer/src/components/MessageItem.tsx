@@ -1,7 +1,10 @@
+import { memo, Suspense, lazy } from 'react'
 import type { ChatItem, ToolResultInfo } from '../store'
 import { formatCost, formatDuration, formatTokens } from '../format'
 import ToolCallCard from './ToolCallCard'
-import Markdown from './Markdown'
+
+// Markdown 依赖 highlight.js(~700KB),懒加载拆出首屏包;未加载完先按纯文本显示
+const Markdown = lazy(() => import('./Markdown'))
 
 interface Props {
   item: ChatItem
@@ -9,7 +12,7 @@ interface Props {
   runningTools: Record<string, true>
 }
 
-export default function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Element | null {
+function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Element | null {
   switch (item.kind) {
     case 'user':
       return (
@@ -26,7 +29,9 @@ export default function MessageItem({ item, toolResults, runningTools }: Props):
             if (block.type === 'text') {
               return (
                 <div key={i} className="assistant-text">
-                  <Markdown text={block.text} />
+                  <Suspense fallback={<div className="md-fallback">{block.text}</div>}>
+                    <Markdown text={block.text} />
+                  </Suspense>
                 </div>
               )
             }
@@ -86,3 +91,10 @@ export default function MessageItem({ item, toolResults, runningTools }: Props):
       return null
   }
 }
+
+/**
+ * memo:流式输出时 streamText 每字更新会重渲染 ChatView,但已成型的消息内容不变。
+ * item 引用稳定(来自 items 数组),tool 相关在纯文本流式期间也稳定,故 memo 生效,
+ * 避免每个 delta 重跑所有 MessageItem + 重解析 Markdown。
+ */
+export default memo(MessageItem)

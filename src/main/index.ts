@@ -26,7 +26,7 @@ function createWindow(): BrowserWindow {
     minWidth: 920,
     minHeight: 600,
     title: 'CaoGen',
-    backgroundColor: '#181614',
+    backgroundColor: '#0d0d0d',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     ...(icon ? { icon } : {}),
     webPreferences: {
