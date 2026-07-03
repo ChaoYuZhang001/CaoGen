@@ -109,3 +109,62 @@ export function deleteProvider(id: string): void {
   cache = load().filter((p) => p.id !== id)
   persist()
 }
+
+/**
+ * 用 API key 从端点拉取模型列表(GET {baseUrl}/v1/models)。
+ * 同时带 x-api-key 与 Authorization: Bearer,兼容 Anthropic / OpenAI 两种鉴权。
+ * token 显式传入(新建时),或经 providerId 取已存密钥(编辑时)。
+ */
+export async function fetchModels(opts: {
+  baseUrl: string
+  token?: string
+  providerId?: string
+}): Promise<string[]> {
+  const base = (opts.baseUrl || '').trim().replace(/\/+$/, '')
+  if (!base) throw new Error('请先填写 Base URL')
+  let token = opts.token?.trim() || ''
+  if (!token && opts.providerId) {
+    const p = getProvider(opts.providerId)
+    if (p) token = decryptToken(p.encryptedToken)
+  }
+  if (!token) throw new Error('请先填写 API 密钥')
+
+  const url = `${base}/v1/models`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        'x-api-key': token,
+        authorization: `Bearer ${token}`,
+        'anthropic-version': '2023-06-01'
+      }
+    })
+  } catch (err) {
+    throw new Error(`请求失败:${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!res.ok) {
+    throw new Error(`端点返回 ${res.status}${res.status === 401 ? '(密钥无效?)' : ''}`)
+  }
+  let json: unknown
+  try {
+    json = await res.json()
+  } catch {
+    throw new Error('响应不是合法 JSON,可能端点不支持 /v1/models')
+  }
+  // 兼容 {data:[{id}]}(Anthropic/OpenAI)与直接数组
+  const arr = Array.isArray(json)
+    ? json
+    : Array.isArray((json as Record<string, unknown>)?.data)
+      ? ((json as Record<string, unknown>).data as unknown[])
+      : []
+  const ids = arr
+    .map((m) => {
+      const o = m as Record<string, unknown> | string
+      if (typeof o === 'string') return o
+      return typeof o?.id === 'string' ? o.id : ''
+    })
+    .filter(Boolean)
+  if (ids.length === 0) throw new Error('端点未返回任何模型')
+  // 去重保序
+  return [...new Set(ids)]
+}

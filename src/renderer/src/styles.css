@@ -949,6 +949,24 @@ textarea {
   opacity: 0.7;
 }
 
+.field-hint-ok {
+  display: block;
+  margin: 6px 0 0;
+  color: #4caf7d;
+  opacity: 1;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 16px 0 6px;
+}
+
+.field-label-row .field-label {
+  margin: 0;
+}
+
 /* ---------- 设置区块 / Provider 列表 ---------- */
 
 .settings-section {

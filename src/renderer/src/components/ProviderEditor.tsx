@@ -22,8 +22,29 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [presetHint, setPresetHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [fetchNote, setFetchNote] = useState('')
 
   const isEdit = provider !== null
+
+  const fetchModels = async (): Promise<void> => {
+    setFetching(true)
+    setError('')
+    setFetchNote('')
+    try {
+      const models = await window.agentDesk.fetchProviderModels({
+        baseUrl: baseUrl.trim(),
+        token: token.trim() || undefined,
+        providerId: provider?.id
+      })
+      setModelsText(models.join('\n'))
+      setFetchNote(`已获取 ${models.length} 个模型`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setFetching(false)
+    }
+  }
 
   const applyPreset = (key: string): void => {
     const preset = PROVIDER_PRESETS.find((p) => p.key === key)
@@ -132,7 +153,17 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           }}
         />
 
-        <label className="field-label">模型列表(每行一个)</label>
+        <div className="field-label-row">
+          <label className="field-label">模型列表(每行一个)</label>
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={fetching}
+            onClick={() => void fetchModels()}
+            title="用上面的 Base URL + 密钥调用 /v1/models 自动获取"
+          >
+            {fetching ? '获取中…' : '⤓ 用密钥获取'}
+          </button>
+        </div>
         <textarea
           className="input input-block textarea"
           value={modelsText}
@@ -140,6 +171,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           placeholder={'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro'}
           onChange={(e) => setModelsText(e.target.value)}
         />
+        {fetchNote && <div className="field-hint field-hint-ok">{fetchNote}</div>}
 
         <label className="field-label">
           自定义请求头 <span className="field-hint">(可选,每行 Name: value)</span>

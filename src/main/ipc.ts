@@ -6,7 +6,8 @@ import {
   listProviders,
   createProvider,
   updateProvider,
-  deleteProvider
+  deleteProvider,
+  fetchModels
 } from './providers'
 import { listHealth } from './scheduler'
 import type {
@@ -86,6 +87,11 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('providers:health', () => listHealth())
+
+  ipcMain.handle(
+    'providers:fetchModels',
+    (_e, opts: { baseUrl: string; token?: string; providerId?: string }) => fetchModels(opts ?? {})
+  )
 
   ipcMain.handle('dialog:pickDirectory', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
