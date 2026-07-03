@@ -151,6 +151,10 @@ export class AgentSession {
       // 兼容以 API key 方式鉴权的网关;两者择一即可,一并覆写避免旧值干扰
       env.ANTHROPIC_API_KEY = token
     }
+    // 网关专用请求头(每行 "Name: value"),SDK 读 ANTHROPIC_CUSTOM_HEADERS
+    if (provider.customHeaders && provider.customHeaders.trim()) {
+      env.ANTHROPIC_CUSTOM_HEADERS = provider.customHeaders
+    }
     return env
   }
 

@@ -1037,6 +1037,21 @@ textarea {
   font-weight: 600;
 }
 
+.provider-gateway-note {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.provider-gateway-note b {
+  color: var(--text);
+}
+
 /* ---------- 滚动条 ---------- */
 
 ::-webkit-scrollbar {
