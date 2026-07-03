@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { AUTO_MODEL } from '../../shared/types'
 import type {
   AgentEvent,
   AppSettings,
@@ -9,6 +10,7 @@ import type {
   PermissionRequestInfo,
   ProviderInput,
   ProviderView,
+  SchedulerStrategy,
   SessionMeta,
   TranscriptEntry,
   UsageTotals
@@ -66,6 +68,7 @@ export type ChatItem =
       durationMs?: number
       resultText?: string
     }
+  | { id: string; kind: 'routing'; model: string; reason: string }
   | { id: string; kind: 'notice'; level: 'info' | 'error'; text: string }
 
 export interface SessionState {
@@ -99,6 +102,12 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   switch (ev.kind) {
     case 'user-message':
       return { ...s, items: [...s.items, { id: genId(), kind: 'user', text: ev.text }] }
+    case 'routing':
+      return {
+        ...s,
+        items: [...s.items, { id: genId(), kind: 'routing', model: ev.model, reason: ev.reason }],
+        effectiveModel: ev.model
+      }
     case 'status': {
       const meta = { ...s.meta, status: ev.status, lastError: ev.error ?? s.meta.lastError }
       let items = s.items
@@ -223,7 +232,12 @@ export const useStore = create<AppStore>((set, get) => ({
   order: [],
   activeId: null,
   history: [],
-  settings: { defaultModel: '', defaultPermissionMode: 'default', defaultProviderId: '' },
+  settings: {
+    defaultModel: '',
+    defaultPermissionMode: 'default',
+    defaultProviderId: '',
+    schedulerStrategy: 'balanced'
+  },
   providers: [],
   showNewSession: false,
   showSettings: false,
@@ -427,10 +441,17 @@ export const useStore = create<AppStore>((set, get) => ({
 }))
 
 export const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: AUTO_MODEL, label: '🧭 自动调度' },
   { value: '', label: '默认模型' },
   { value: 'opus', label: 'Opus' },
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'haiku', label: 'Haiku' }
+]
+
+export const STRATEGY_OPTIONS: Array<{ value: SchedulerStrategy; label: string }> = [
+  { value: 'balanced', label: '均衡' },
+  { value: 'quality', label: '质量优先' },
+  { value: 'cost', label: '成本优先' }
 ]
 
 export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string }> = [

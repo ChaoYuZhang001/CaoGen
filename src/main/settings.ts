@@ -6,7 +6,8 @@ import type { AppSettings } from '../shared/types'
 const DEFAULTS: AppSettings = {
   defaultModel: '',
   defaultPermissionMode: 'default',
-  defaultProviderId: ''
+  defaultProviderId: '',
+  schedulerStrategy: 'balanced'
 }
 
 let cache: AppSettings | null = null

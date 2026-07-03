@@ -1052,6 +1052,49 @@ textarea {
   color: var(--text);
 }
 
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.health-ok {
+  background: #4caf7d;
+  box-shadow: 0 0 6px rgba(76, 175, 125, 0.6);
+}
+
+.health-bad {
+  background: #d8593c;
+  box-shadow: 0 0 6px rgba(216, 89, 60, 0.6);
+}
+
+/* ---------- 路由标注(智能调度透明) ---------- */
+
+.routing-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(120, 130, 220, 0.12);
+  border: 1px solid rgba(120, 130, 220, 0.25);
+  font-size: 11px;
+  color: var(--text-dim);
+  align-self: flex-start;
+  width: fit-content;
+}
+
+.routing-icon {
+  font-size: 12px;
+}
+
+.routing-text {
+  color: var(--text);
+  opacity: 0.85;
+}
+
 /* ---------- 滚动条 ---------- */
 
 ::-webkit-scrollbar {

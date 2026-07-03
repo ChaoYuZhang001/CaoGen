@@ -3,6 +3,14 @@ import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/clau
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken } from './providers'
+import {
+  pickModel,
+  recordSuccess,
+  recordFailure,
+  DEFAULT_AUTO_CANDIDATES
+} from './scheduler'
+import { getSettings } from './settings'
+import { AUTO_MODEL } from '../shared/types'
 import type {
   AgentEvent,
   AssistantBlock,
@@ -111,6 +119,7 @@ export class AgentSession {
   private readonly transcript: TranscriptWriter
   private readonly resumeSdkSessionId?: string
   private disposed = false
+  private turnStartedAt = 0
 
   constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -170,7 +179,8 @@ export class AgentSession {
           includePartialMessages: true,
           env: this.buildEnv(),
           systemPrompt: { type: 'preset', preset: 'claude_code' },
-          ...(this.meta.model ? { model: this.meta.model } : {}),
+          // 'auto' 是调度哨兵而非真实模型名,不传给 SDK;每轮再 setModel
+          ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
           ...(this.resumeSdkSessionId ? { resume: this.resumeSdkSessionId } : {}),
           canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
         }
@@ -195,6 +205,46 @@ export class AgentSession {
       this.emit({ kind: 'meta', meta: { ...this.meta } })
     }
     this.setStatus('running')
+    this.turnStartedAt = Date.now()
+    // 自动调度:挑模型 → setModel → 透明事件,完成后再推消息保证顺序
+    if (this.meta.model === AUTO_MODEL) {
+      void this.autoRouteThenPush(text)
+    } else {
+      this.pushUserMessage(text)
+    }
+  }
+
+  private async autoRouteThenPush(text: string): Promise<void> {
+    try {
+      const candidates = this.candidateModels()
+      const strategy = getSettings().schedulerStrategy
+      const decision = pickModel(candidates, text, strategy)
+      if (decision) {
+        await this.query?.setModel(decision.model)
+        this.emit({
+          kind: 'routing',
+          model: decision.model,
+          reason: decision.reason,
+          providerId: this.meta.providerId
+        })
+      }
+    } catch (err) {
+      console.error('[agent-desk] 自动路由失败,回退默认模型:', err)
+    }
+    this.pushUserMessage(text)
+  }
+
+  /** 自动模式的候选模型:Provider 声明的列表,或官方默认三档 */
+  private candidateModels(): string[] {
+    if (this.meta.providerId) {
+      const provider = getProvider(this.meta.providerId)
+      if (provider && provider.models.length > 0) return provider.models
+    }
+    return DEFAULT_AUTO_CANDIDATES
+  }
+
+  private pushUserMessage(text: string): void {
+    if (this.disposed) return
     const message = {
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text }] },
@@ -271,7 +321,10 @@ export class AgentSession {
       }
       if (!this.disposed) this.setStatus('closed')
     } catch (err) {
-      if (!this.disposed) this.setStatus('error', errText(err))
+      if (!this.disposed) {
+        recordFailure(this.meta.providerId, errText(err))
+        this.setStatus('error', errText(err))
+      }
     }
   }
 
@@ -329,10 +382,18 @@ export class AgentSession {
           this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
         }
         const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'unknown'
+        const isError = msg.is_error === true || subtype !== 'success'
+        // Provider 健康度:成功记成功+延迟,异常记失败
+        const latency = this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined
+        if (isError) {
+          recordFailure(this.meta.providerId, typeof msg.result === 'string' ? msg.result : subtype)
+        } else {
+          recordSuccess(this.meta.providerId, latency)
+        }
         this.emit({
           kind: 'turn-result',
           subtype,
-          isError: msg.is_error === true || subtype !== 'success',
+          isError,
           costUsd,
           usage: hasUsage ? usage : undefined,
           durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,

@@ -5,6 +5,23 @@
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 
+export type SchedulerStrategy = 'quality' | 'cost' | 'balanced'
+
+/** 会话 model 字段取此哨兵值 = 启用智能自动调度 */
+export const AUTO_MODEL = 'auto'
+
+export interface ProviderHealthView {
+  /** '' / 'official' = 官方 Anthropic;否则 Provider id */
+  providerId: string
+  successes: number
+  failures: number
+  consecutiveFailures: number
+  lastLatencyMs?: number
+  lastError?: string
+  lastUsedAt?: number
+  healthy: boolean
+}
+
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 
 export interface UsageTotals {
@@ -61,6 +78,8 @@ export interface AppSettings {
   defaultPermissionMode: PermissionModeId
   /** 新会话默认使用的 Provider ID;空字符串 = 官方 Anthropic */
   defaultProviderId: string
+  /** 自动调度策略 */
+  schedulerStrategy: SchedulerStrategy
 }
 
 export interface Provider {
@@ -128,6 +147,7 @@ export type AgentEvent =
     }
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'user-message'; text: string }
+  | { kind: 'routing'; model: string; reason: string; providerId: string }
   | { kind: 'text-delta'; text: string }
   | { kind: 'thinking-delta'; text: string }
   | { kind: 'tool-start'; toolUseId: string; name: string }
@@ -183,6 +203,7 @@ export interface AgentDeskApi {
   createProvider(provider: ProviderInput): Promise<ProviderView>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
   deleteProvider(id: string): Promise<void>
+  listProviderHealth(): Promise<ProviderHealthView[]>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
 }
