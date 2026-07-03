@@ -3,7 +3,8 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import { useStore } from '../../store'
-import Workstation from './Workstation'
+import Workstation, { activityOf } from './Workstation'
+import MessagePackets from './MessagePackets'
 import { brandFor } from './brand'
 
 /** 把会话按网格铺开;返回每个会话的世界坐标 */
@@ -136,6 +137,13 @@ export default function OfficeView(): React.JSX.Element {
                 onSelect={() => focus(id)}
               />
             ))}
+            {/* 工位间飞行的消息包:多 Agent 协作氛围 */}
+            <MessagePackets
+              stations={ids.map((id, i) => ({
+                pos: positions[i],
+                active: activityOf(sessions[id]) === 'working'
+              }))}
+            />
           </Suspense>
 
           <OrbitControls
