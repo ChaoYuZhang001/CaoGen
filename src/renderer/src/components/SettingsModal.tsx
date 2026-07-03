@@ -1,6 +1,11 @@
-import { useState } from 'react'
-import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
-import type { PermissionModeId, ProviderView } from '../../../shared/types'
+import { useEffect, useState } from 'react'
+import { MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
+import type {
+  PermissionModeId,
+  ProviderHealthView,
+  ProviderView,
+  SchedulerStrategy
+} from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
 
 export default function SettingsModal(): React.JSX.Element {
@@ -13,13 +18,23 @@ export default function SettingsModal(): React.JSX.Element {
   const [model, setModel] = useState(settings.defaultModel)
   const [mode, setMode] = useState<PermissionModeId>(settings.defaultPermissionMode)
   const [providerId, setProviderId] = useState(settings.defaultProviderId)
+  const [strategy, setStrategy] = useState<SchedulerStrategy>(settings.schedulerStrategy)
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
+  const [health, setHealth] = useState<ProviderHealthView[]>([])
+
+  useEffect(() => {
+    void window.agentDesk.listProviderHealth().then(setHealth)
+  }, [])
+
+  const healthOf = (pid: string): ProviderHealthView | undefined =>
+    health.find((h) => h.providerId === (pid || 'official'))
 
   const save = async (): Promise<void> => {
     await updateSettings({
       defaultModel: model,
       defaultPermissionMode: mode,
-      defaultProviderId: providerId
+      defaultProviderId: providerId,
+      schedulerStrategy: strategy
     })
     setShowSettings(false)
   }
@@ -49,27 +64,41 @@ export default function SettingsModal(): React.JSX.Element {
             {providers.length === 0 && (
               <div className="provider-empty">尚未配置额外 Provider,当前使用官方 Anthropic 登录。</div>
             )}
-            {providers.map((p) => (
-              <div key={p.id} className="provider-row">
-                <div className="provider-row-body">
-                  <div className="provider-row-name">
-                    {p.name}
-                    {!p.hasToken && <span className="provider-tag-warn">未配置密钥</span>}
+            {providers.map((p) => {
+              const h = healthOf(p.id)
+              return (
+                <div key={p.id} className="provider-row">
+                  <div className="provider-row-body">
+                    <div className="provider-row-name">
+                      {p.name}
+                      {!p.hasToken && <span className="provider-tag-warn">未配置密钥</span>}
+                      {h && (
+                        <span
+                          className={`health-dot ${h.healthy ? 'health-ok' : 'health-bad'}`}
+                          title={
+                            h.healthy
+                              ? `健康 · 成功 ${h.successes} 失败 ${h.failures}${h.lastLatencyMs ? ` · ${h.lastLatencyMs}ms` : ''}`
+                              : `异常 · 连续失败 ${h.consecutiveFailures}${h.lastError ? ` · ${h.lastError}` : ''}`
+                          }
+                        />
+                      )}
+                    </div>
+                    <div className="provider-row-sub">
+                      {p.baseUrl || '官方端点'} · {p.models.length} 个模型
+                      {h && ` · 成功 ${h.successes}/失败 ${h.failures}`}
+                    </div>
                   </div>
-                  <div className="provider-row-sub">
-                    {p.baseUrl || '官方端点'} · {p.models.length} 个模型
+                  <div className="provider-row-actions">
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(p)}>
+                      编辑
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => void remove(p)}>
+                      删除
+                    </button>
                   </div>
                 </div>
-                <div className="provider-row-actions">
-                  <button className="btn btn-ghost btn-sm" onClick={() => setEditing(p)}>
-                    编辑
-                  </button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => void remove(p)}>
-                    删除
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </section>
 
@@ -93,6 +122,21 @@ export default function SettingsModal(): React.JSX.Element {
           <label className="field-label">默认模型</label>
           <select className="select select-block" value={model} onChange={(e) => setModel(e.target.value)}>
             {MODEL_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
+          <label className="field-label">
+            自动调度策略 <span className="field-hint">(模型选"自动调度"时生效)</span>
+          </label>
+          <select
+            className="select select-block"
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value as SchedulerStrategy)}
+          >
+            {STRATEGY_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

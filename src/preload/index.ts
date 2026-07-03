@@ -32,6 +32,7 @@ const api: AgentDeskApi = {
   updateProvider: (id: string, patch: Partial<ProviderInput>) =>
     ipcRenderer.invoke('providers:update', id, patch),
   deleteProvider: (id: string) => ipcRenderer.invoke('providers:delete', id),
+  listProviderHealth: () => ipcRenderer.invoke('providers:health'),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {

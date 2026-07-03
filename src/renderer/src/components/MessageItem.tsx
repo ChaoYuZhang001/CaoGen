@@ -70,6 +70,14 @@ export default function MessageItem({ item, toolResults, runningTools }: Props):
         </div>
       )
 
+    case 'routing':
+      return (
+        <div className="routing-note" title="智能调度决策">
+          <span className="routing-icon">🧭</span>
+          <span className="routing-text">{item.reason}</span>
+        </div>
+      )
+
     case 'notice':
       return <div className={`notice notice-${item.level}`}>{item.text}</div>
 

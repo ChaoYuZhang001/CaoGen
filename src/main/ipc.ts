@@ -8,6 +8,7 @@ import {
   updateProvider,
   deleteProvider
 } from './providers'
+import { listHealth } from './scheduler'
 import type {
   AppSettings,
   CreateSessionOptions,
@@ -83,6 +84,8 @@ export function registerIpc(): void {
   ipcMain.handle('providers:delete', (_e, id: string) => {
     deleteProvider(id)
   })
+
+  ipcMain.handle('providers:health', () => listHealth())
 
   ipcMain.handle('dialog:pickDirectory', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)

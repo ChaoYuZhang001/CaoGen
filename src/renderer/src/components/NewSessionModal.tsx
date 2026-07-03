@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { AUTO_MODEL } from '../../../shared/types'
 import type { PermissionModeId } from '../../../shared/types'
 
 export default function NewSessionModal(): React.JSX.Element {
@@ -17,19 +18,24 @@ export default function NewSessionModal(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表;官方则用内置别名
+  // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表;官方则用内置别名。
+  // 无论如何都保留"自动调度",否则指定 Provider 就用不上调度器。
   const modelOptions = useMemo(() => {
     const provider = providers.find((p) => p.id === providerId)
     if (provider && provider.models.length > 0) {
-      return [{ value: '', label: '默认模型' }, ...provider.models.map((m) => ({ value: m, label: m }))]
+      return [
+        { value: AUTO_MODEL, label: '🧭 自动调度' },
+        { value: '', label: '默认模型' },
+        ...provider.models.map((m) => ({ value: m, label: m }))
+      ]
     }
     return MODEL_OPTIONS
   }, [providers, providerId])
 
   const onProviderChange = (id: string): void => {
     setProviderId(id)
-    // 切换 Provider 后旧模型可能不在新列表里,重置为默认
-    setModel('')
+    // 切换 Provider 后旧的具体模型可能不在新列表里,重置为默认;但保留"自动"意图
+    if (model !== AUTO_MODEL) setModel('')
   }
 
   const browse = async (): Promise<void> => {
