@@ -110,10 +110,21 @@ function newSessionState(meta: SessionMeta): SessionState {
 function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   switch (ev.kind) {
     case 'user-message':
-      return { ...s, items: [...s.items, { id: genId(), kind: 'user', text: ev.text }] }
+      return {
+        ...s,
+        items: [...s.items, { id: ev.messageId ?? genId(), kind: 'user', text: ev.text }]
+      }
     case 'checkpoint': {
-      // 把检查点挂到最近一条尚无检查点的用户消息上
+      // 新事件按本地用户消息 id 精确绑定;旧转录没有 userMessageId 时才回退到邻近匹配。
       const items = [...s.items]
+      if (ev.userMessageId) {
+        const idx = items.findIndex((it) => it.kind === 'user' && it.id === ev.userMessageId)
+        if (idx >= 0) {
+          const it = items[idx]
+          if (it.kind === 'user') items[idx] = { ...it, checkpointId: ev.messageId }
+          return { ...s, items }
+        }
+      }
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i]
         if (it.kind === 'user' && !it.checkpointId) {
@@ -601,6 +612,27 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: '',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
+  },
+  {
+    key: 'deepseek',
+    label: 'DeepSeek(官方直连)',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    hint: 'DeepSeek 官方 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
+  },
+  {
+    key: 'kimi',
+    label: 'Kimi / 月之暗面(官方直连)',
+    baseUrl: 'https://api.moonshot.cn/anthropic',
+    models: ['kimi-k2-0711-preview', 'moonshot-v1-auto'],
+    hint: 'Moonshot 官方 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
+  },
+  {
+    key: 'glm',
+    label: '智谱 GLM(官方直连)',
+    baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+    models: ['glm-4.5', 'glm-4.5-air'],
+    hint: '智谱官方 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
   },
   {
     key: 'oneapi',

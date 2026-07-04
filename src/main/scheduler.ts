@@ -19,7 +19,15 @@ const CAP_TABLE: Array<{ match: RegExp; cap: ModelCap }> = [
   { match: /gpt-4o|gpt-4\.1|o3|o1/i, cap: { quality: 3, cost: 2, speed: 2 } },
   { match: /gpt-3\.5|mini|flash|lite/i, cap: { quality: 1, cost: 1, speed: 3 } },
   { match: /gemini.*pro|1\.5-pro|2\.0-pro/i, cap: { quality: 3, cost: 2, speed: 2 } },
-  { match: /deepseek/i, cap: { quality: 2, cost: 1, speed: 2 } }
+  { match: /deepseek.*(reasoner|r1)/i, cap: { quality: 3, cost: 1, speed: 1 } },
+  { match: /deepseek/i, cap: { quality: 2, cost: 1, speed: 2 } },
+  // 国产模型档位(官方 Anthropic 兼容端点直连,一等公民)
+  { match: /kimi-k2|kimi.*thinking/i, cap: { quality: 3, cost: 1, speed: 2 } },
+  { match: /kimi|moonshot/i, cap: { quality: 2, cost: 1, speed: 2 } },
+  { match: /glm-4\.5-air|glm.*flash/i, cap: { quality: 1, cost: 1, speed: 3 } },
+  { match: /glm/i, cap: { quality: 2, cost: 1, speed: 2 } },
+  { match: /qwen.*max|qwen3/i, cap: { quality: 3, cost: 2, speed: 2 } },
+  { match: /qwen/i, cap: { quality: 2, cost: 1, speed: 2 } }
 ]
 
 const DEFAULT_CAP: ModelCap = { quality: 2, cost: 2, speed: 2 }

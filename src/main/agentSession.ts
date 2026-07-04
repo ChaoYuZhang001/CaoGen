@@ -184,6 +184,8 @@ export class AgentSession implements Engine {
   private lastUserText = ''
   /** 上次发过检查点的用户消息 uuid,去重避免同轮重复发 */
   private lastCheckpointUuid = ''
+  /** 等待绑定 SDK checkpoint uuid 的本地用户消息 id 队列。 */
+  private pendingCheckpointUserMessageIds: string[] = []
   /** 本轮已尝试过的 Provider(含起始),切换时排除,防止打转 */
   private triedProviders = new Set<string>()
   private failoverBusy = false
@@ -282,7 +284,7 @@ export class AgentSession implements Engine {
     if (this.disposed) return
     // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
     if (this.failoverBusy) {
-      this.emit({ kind: 'user-message', text })
+      this.emitUserMessage(text)
       this.queuedDuringFailover.push(text)
       return
     }
@@ -291,7 +293,7 @@ export class AgentSession implements Engine {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
-    this.emit({ kind: 'user-message', text })
+    this.emitUserMessage(text)
     if (this.meta.title === '新会话' && text.trim()) {
       this.meta.title = text.trim().replace(/\s+/g, ' ').slice(0, 40)
       this.emit({ kind: 'meta', meta: { ...this.meta } })
@@ -397,7 +399,7 @@ export class AgentSession implements Engine {
       }
       if (!q.rewindFiles) return { canRewind: false, error: 'SDK 不支持文件检查点' }
       const result = await q.rewindFiles(messageId, { dryRun })
-      if (!dryRun && !result.error) {
+      if (!dryRun && result.canRewind && !result.error) {
         this.emit({
           kind: 'checkpoint-restore',
           messageId,
@@ -416,7 +418,16 @@ export class AgentSession implements Engine {
   private emitCheckpoint(uuid: string): void {
     if (!uuid || uuid === this.lastCheckpointUuid) return
     this.lastCheckpointUuid = uuid
-    this.emit({ kind: 'checkpoint', messageId: uuid })
+    const userMessageId = this.pendingCheckpointUserMessageIds.shift()
+    this.emit({ kind: 'checkpoint', messageId: uuid, userMessageId })
+  }
+
+  /** 用户消息入聊天流时先分配本地 id,之后 SDK checkpoint uuid 按该 id 精确回填。 */
+  private emitUserMessage(text: string): string {
+    const messageId = randomUUID()
+    this.pendingCheckpointUserMessageIds.push(messageId)
+    this.emit({ kind: 'user-message', text, messageId })
+    return messageId
   }
 
   /** 每轮最多自动切换厂商次数,防止在大量厂商间雪崩式重试 */
@@ -749,6 +760,14 @@ export class AgentSession implements Engine {
 
 export function newSessionMeta(opts: {
   cwd: string
+  isolated?: boolean
+  sourceCwd?: string
+  repoRoot?: string
+  worktreePath?: string
+  branch?: string
+  baseBranch?: string | null
+  baseSha?: string
+  worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
   engine?: EngineKind
@@ -759,6 +778,14 @@ export function newSessionMeta(opts: {
     id: randomUUID(),
     title: opts.title || '新会话',
     cwd: opts.cwd,
+    isolated: opts.isolated,
+    sourceCwd: opts.sourceCwd,
+    repoRoot: opts.repoRoot,
+    worktreePath: opts.worktreePath,
+    branch: opts.branch,
+    baseBranch: opts.baseBranch,
+    baseSha: opts.baseSha,
+    worktreeState: opts.worktreeState,
     model: opts.model,
     providerId: opts.providerId,
     engine: opts.engine ?? 'claude',

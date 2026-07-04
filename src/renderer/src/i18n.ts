@@ -145,6 +145,26 @@ const DICT: Dict = {
   tabOffice: { zh: '办公区 / 宠物', en: 'Office / Pet' },
   tabProviders: { zh: '厂商', en: 'Providers' },
   tabPlugins: { zh: '插件 / 技能', en: 'Plugins / Skills' },
+  tabMigrate: { zh: '迁移', en: 'Migrate' },
+  migrateTitle: { zh: '从其他 Agent 一键搬家', en: 'Migrate from other agents' },
+  migrateHint: {
+    zh: '扫描 Cursor / Codex / Windsurf / Cline / Aider / Copilot / Gemini 等的规则与 MCP 配置。规则注入项目 CLAUDE.md(带来源标注,原文件不动,已有 CLAUDE.md 先备份);MCP 合并进 .mcp.json(同名跳过)。',
+    en: 'Scan rules & MCP configs from Cursor / Codex / Windsurf / Cline / Aider / Copilot / Gemini. Rules are injected into the project CLAUDE.md (source-tagged, originals untouched, existing CLAUDE.md backed up); MCP merges into .mcp.json (name conflicts skipped).'
+  },
+  migrateScan: { zh: '扫描', en: 'Scan' },
+  migrateScanning: { zh: '扫描中…', en: 'Scanning…' },
+  migrateClaudeNative: {
+    zh: '检测到 Claude Code 原生资产(CLAUDE.md / .claude),CaoGen 直接继承,无需导入',
+    en: 'Claude Code native assets detected (CLAUDE.md / .claude) — inherited directly, no import needed'
+  },
+  migrateNothing: {
+    zh: '未检测到其他 Agent 的配置资产。',
+    en: 'No assets from other agents detected.'
+  },
+  migrateKindRules: { zh: '规则', en: 'rules' },
+  migrateKindConfig: { zh: '配置', en: 'config' },
+  migrateImport: { zh: '导入所选({n} 项)', en: 'Import selected ({n})' },
+  migrateImporting: { zh: '导入中…', en: 'Importing…' },
   language: { zh: '界面语言', en: 'Language' },
   theme: { zh: '主题', en: 'Theme' },
   themeLight: { zh: '白天(主白副黑)', en: 'Light' },
