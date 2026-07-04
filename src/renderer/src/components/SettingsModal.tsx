@@ -4,6 +4,7 @@ import { useT } from '../i18n'
 import type {
   AppLanguage,
   AppTheme,
+  MigrationScan,
   PermissionModeId,
   ProviderHealthView,
   ProviderView,
@@ -11,7 +12,7 @@ import type {
 } from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
 
-type Tab = 'general' | 'permissions' | 'persona' | 'office' | 'providers' | 'plugins'
+type Tab = 'general' | 'permissions' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
 
 export default function SettingsModal(): React.JSX.Element {
   const t = useT()
@@ -26,10 +27,66 @@ export default function SettingsModal(): React.JSX.Element {
   const [draft, setDraft] = useState(settings)
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
+  // 迁移向导状态
+  const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
+  const projects = useStore((s) => s.projects)
+  const [migrateDir, setMigrateDir] = useState('')
+  const [scan, setScan] = useState<MigrationScan | null>(null)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [migrateBusy, setMigrateBusy] = useState(false)
+  const [migrateResult, setMigrateResult] = useState('')
 
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
   }, [])
+
+  // 打开迁移页时,默认用当前会话 cwd 或最近项目
+  useEffect(() => {
+    if (tab === 'migrate' && !migrateDir) {
+      const dir = activeSession?.meta.cwd ?? projects[0]?.path ?? ''
+      if (dir) setMigrateDir(dir)
+    }
+  }, [tab, migrateDir, activeSession, projects])
+
+  const runScan = async (dir: string): Promise<void> => {
+    if (!dir.trim()) return
+    setMigrateBusy(true)
+    setMigrateResult('')
+    try {
+      const result = await window.agentDesk.scanMigration(dir.trim())
+      setScan(result)
+      setPicked(new Set(result.assets.map((a) => a.path))) // 默认全选
+    } catch (err) {
+      setMigrateResult(err instanceof Error ? err.message : String(err))
+      setScan(null)
+    } finally {
+      setMigrateBusy(false)
+    }
+  }
+
+  const runImport = async (): Promise<void> => {
+    if (!scan || picked.size === 0) return
+    setMigrateBusy(true)
+    try {
+      const summary = await window.agentDesk.importMigrationAssets(scan.cwd, [...picked])
+      setMigrateResult(summary)
+      await runScan(scan.cwd) // 重扫,已导入项在下次导入时自动跳过
+      setMigrateResult(summary)
+    } catch (err) {
+      setMigrateResult(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMigrateBusy(false)
+    }
+  }
+
+  const togglePick = (path: string): void => {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
 
   const set = <K extends keyof typeof draft>(key: K, val: (typeof draft)[K]): void =>
     setDraft((d) => ({ ...d, [key]: val }))
@@ -54,7 +111,8 @@ export default function SettingsModal(): React.JSX.Element {
     { id: 'persona', label: t('tabPersona') },
     { id: 'office', label: t('tabOffice') },
     { id: 'providers', label: t('tabProviders') },
-    { id: 'plugins', label: t('tabPlugins') }
+    { id: 'plugins', label: t('tabPlugins') },
+    { id: 'migrate', label: t('tabMigrate') }
   ]
 
   return (
@@ -299,6 +357,80 @@ export default function SettingsModal(): React.JSX.Element {
                   <code>~/.claude/agents/</code>
                   <code>.claude/settings.json → mcpServers</code>
                 </div>
+              </>
+            )}
+
+            {tab === 'migrate' && (
+              <>
+                <h3 className="settings-h3">{t('migrateTitle')}</h3>
+                <p className="settings-hint">{t('migrateHint')}</p>
+
+                <label className="field-label">{t('projectDir')}</label>
+                <div className="field-row">
+                  <input
+                    className="input"
+                    value={migrateDir}
+                    placeholder="/path/to/project"
+                    onChange={(e) => setMigrateDir(e.target.value)}
+                  />
+                  <button
+                    className="btn btn-ghost"
+                    disabled={migrateBusy || !migrateDir.trim()}
+                    onClick={() => void runScan(migrateDir)}
+                  >
+                    {migrateBusy ? t('migrateScanning') : t('migrateScan')}
+                  </button>
+                </div>
+
+                {scan && (
+                  <>
+                    {scan.claudeNative && (
+                      <p className="settings-hint">✓ {t('migrateClaudeNative')}</p>
+                    )}
+                    {scan.assets.length === 0 ? (
+                      <div className="provider-empty">{t('migrateNothing')}</div>
+                    ) : (
+                      <div className="provider-list">
+                        {scan.assets.map((a) => (
+                          <label key={a.path} className="provider-row migrate-row" title={a.preview}>
+                            <input
+                              type="checkbox"
+                              checked={picked.has(a.path)}
+                              onChange={() => togglePick(a.path)}
+                            />
+                            <div className="provider-row-body">
+                              <div className="provider-row-name">
+                                {a.agent} · {a.name}
+                                <span className="migrate-kind">
+                                  {a.kind === 'rules'
+                                    ? t('migrateKindRules')
+                                    : a.kind === 'mcp'
+                                      ? 'MCP'
+                                      : t('migrateKindConfig')}
+                                </span>
+                              </div>
+                              <div className="provider-row-sub">{a.path}</div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {scan.assets.length > 0 && (
+                      <button
+                        className="btn btn-primary"
+                        disabled={migrateBusy || picked.size === 0}
+                        onClick={() => void runImport()}
+                      >
+                        {migrateBusy
+                          ? t('migrateImporting')
+                          : t('migrateImport', { n: picked.size })}
+                      </button>
+                    )}
+                  </>
+                )}
+                {migrateResult && (
+                  <div className="notice notice-info migrate-result">{migrateResult}</div>
+                )}
               </>
             )}
           </div>

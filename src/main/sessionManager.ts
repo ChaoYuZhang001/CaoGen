@@ -7,6 +7,7 @@ import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { cleanupTranscripts } from './transcript'
 import { touchProject } from './projects'
+import { prepareWorktree } from './worktrees'
 import type {
   AgentEvent,
   CreateSessionOptions,
@@ -28,7 +29,7 @@ class SessionManager {
 
   create(opts: CreateSessionOptions): SessionMeta {
     const settings = getSettings()
-    const meta = newSessionMeta({
+    const baseMeta = newSessionMeta({
       cwd: opts.cwd,
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
@@ -36,6 +37,28 @@ class SessionManager {
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
     })
+    const worktree =
+      opts.resumeSdkSessionId !== undefined
+        ? { ok: true as const, isolated: false, cwd: opts.cwd }
+        : prepareWorktree({ sessionId: baseMeta.id, cwd: opts.cwd, isolated: opts.isolated })
+    if (!worktree.ok) throw new Error(worktree.error)
+    const meta = newSessionMeta({
+      cwd: worktree.cwd,
+      isolated: worktree.isolated,
+      sourceCwd: worktree.record?.sourceCwd,
+      repoRoot: worktree.record?.repoRoot,
+      worktreePath: worktree.record?.worktreePath,
+      branch: worktree.record?.branch,
+      baseBranch: worktree.record?.baseBranch,
+      baseSha: worktree.record?.baseSha,
+      worktreeState: worktree.record?.state,
+      model: opts.model ?? settings.defaultModel,
+      providerId: opts.providerId ?? settings.defaultProviderId,
+      engine: opts.engine,
+      permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
+      title: opts.title
+    })
+    meta.id = baseMeta.id
     const session = createEngine(
       opts.engine,
       meta,
@@ -44,7 +67,7 @@ class SessionManager {
     )
     this.sessions.set(meta.id, session)
     void session.start()
-    touchProject(meta.cwd)
+    touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
   }
 
@@ -90,6 +113,14 @@ class SessionManager {
       id: meta.id,
       title: meta.title,
       cwd: meta.cwd,
+      isolated: meta.isolated,
+      sourceCwd: meta.sourceCwd,
+      repoRoot: meta.repoRoot,
+      worktreePath: meta.worktreePath,
+      branch: meta.branch,
+      baseBranch: meta.baseBranch,
+      baseSha: meta.baseSha,
+      worktreeState: meta.worktreeState,
       model: meta.model,
       providerId: meta.providerId,
       permissionMode: meta.permissionMode,

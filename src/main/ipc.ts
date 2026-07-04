@@ -11,6 +11,7 @@ import {
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
+import { scanMigration, importAssets } from './migration'
 import { listProjects, updateProject, deleteProject } from './projects'
 import { suggestFiles } from './fileSuggest'
 import type {
@@ -107,6 +108,17 @@ export function registerIpc(): void {
   ipcMain.handle('providers:health', () => listHealth())
 
   ipcMain.handle('engines:list', () => listEngines())
+
+  ipcMain.handle('migration:scan', (_e, cwd: string) => {
+    if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
+    return scanMigration(cwd)
+  })
+
+  ipcMain.handle('migration:import', (_e, cwd: string, paths: string[]) => {
+    if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
+    if (!Array.isArray(paths)) return '未选择任何资产'
+    return importAssets(cwd, paths.filter((p): p is string => typeof p === 'string'))
+  })
 
   ipcMain.handle('projects:list', () => listProjects())
   ipcMain.handle('projects:update', (_e, id: string, patch: { name?: string }) =>

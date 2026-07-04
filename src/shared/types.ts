@@ -45,6 +45,22 @@ export interface SessionMeta {
   id: string
   title: string
   cwd: string
+  /** 是否使用 CaoGen managed Git worktree 隔离运行。 */
+  isolated?: boolean
+  /** 用户最初选择的目录;隔离会话中 cwd 会改为 worktree 内对应目录。 */
+  sourceCwd?: string
+  /** 原仓库根目录。 */
+  repoRoot?: string
+  /** CaoGen 管理的 worktree 根目录。 */
+  worktreePath?: string
+  /** worktree 分支名。 */
+  branch?: string
+  /** 创建 worktree 时的基点分支;detached HEAD 时为空。 */
+  baseBranch?: string | null
+  /** 创建 worktree 时的 HEAD sha。 */
+  baseSha?: string
+  /** managed worktree 生命周期状态。 */
+  worktreeState?: 'active' | 'removed'
   /** 空字符串表示跟随 CLI 默认模型 */
   model: string
   /** 此会话绑定的 Provider ID;空字符串 = 官方 Anthropic */
@@ -65,6 +81,14 @@ export interface HistoryEntry {
   id: string
   title: string
   cwd: string
+  isolated?: boolean
+  sourceCwd?: string
+  repoRoot?: string
+  worktreePath?: string
+  branch?: string
+  baseBranch?: string | null
+  baseSha?: string
+  worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
   permissionMode: PermissionModeId
@@ -76,6 +100,8 @@ export interface HistoryEntry {
 
 export interface CreateSessionOptions {
   cwd: string
+  /** undefined = Git 仓库自动隔离;false = 主工作区直接运行;true = 强制隔离。 */
+  isolated?: boolean
   model?: string
   providerId?: string
   /** Agent 引擎;缺省 claude */
@@ -196,8 +222,8 @@ export type AgentEvent =
       permissionMode?: string
     }
   | { kind: 'meta'; meta: SessionMeta }
-  | { kind: 'user-message'; text: string }
-  | { kind: 'checkpoint'; messageId: string }
+  | { kind: 'user-message'; text: string; messageId?: string }
+  | { kind: 'checkpoint'; messageId: string; userMessageId?: string }
   | {
       kind: 'checkpoint-restore'
       messageId: string
@@ -244,6 +270,24 @@ export interface RewindResult {
   deletions?: number
 }
 
+/** D11 迁移向导:检测到的他家 Agent 资产 */
+export interface MigrationAsset {
+  /** 来源 Agent 名(Cursor / Codex / Cline …) */
+  agent: string
+  /** rules = 规则/记忆文件;mcp = MCP 配置;config = 其他配置 */
+  kind: 'rules' | 'mcp' | 'config'
+  path: string
+  name: string
+  preview: string
+}
+
+export interface MigrationScan {
+  cwd: string
+  assets: MigrationAsset[]
+  /** 本机/本项目已有 Claude Code 原生资产(CaoGen 直接继承,无需导入) */
+  claudeNative: boolean
+}
+
 export interface SessionEventPayload {
   sessionId: string
   /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
@@ -287,6 +331,8 @@ export interface AgentDeskApi {
   fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
   listEngines(): Promise<EngineInfo[]>
+  scanMigration(cwd: string): Promise<MigrationScan>
+  importMigrationAssets(cwd: string, paths: string[]): Promise<string>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: { name?: string }): Promise<Project | null>
   deleteProject(id: string): Promise<void>

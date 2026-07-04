@@ -42,6 +42,9 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('providers:fetchModels', opts),
   listProviderHealth: () => ipcRenderer.invoke('providers:health'),
   listEngines: () => ipcRenderer.invoke('engines:list'),
+  scanMigration: (cwd: string) => ipcRenderer.invoke('migration:scan', cwd),
+  importMigrationAssets: (cwd: string, paths: string[]) =>
+    ipcRenderer.invoke('migration:import', cwd, paths),
   listProjects: () => ipcRenderer.invoke('projects:list'),
   updateProject: (id: string, patch: { name?: string }) =>
     ipcRenderer.invoke('projects:update', id, patch),

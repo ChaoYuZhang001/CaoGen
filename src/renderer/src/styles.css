@@ -1602,6 +1602,29 @@ textarea {
   border-color: rgba(224, 163, 60, 0.4);
 }
 
+/* ---------- 迁移向导 ---------- */
+
+.migrate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.migrate-kind {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.migrate-result {
+  margin-top: 10px;
+  white-space: pre-wrap;
+}
+
 /* ---------- 3D 办公区 ---------- */
 
 .office {
