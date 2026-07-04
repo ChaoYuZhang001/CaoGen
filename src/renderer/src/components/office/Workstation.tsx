@@ -6,6 +6,7 @@ import type { Group, Mesh, MeshStandardMaterial, Points } from 'three'
 import type { SessionState } from '../../store'
 import { useT } from '../../i18n'
 import { formatCost } from '../../format'
+import type { OfficeTask, OfficeTaskStats } from './model'
 
 export type Activity = 'idle' | 'working' | 'awaiting' | 'error'
 
@@ -40,6 +41,8 @@ interface Props {
   showBadge?: boolean
   liveliness?: number
   catEars?: boolean
+  currentTask?: OfficeTask
+  taskStats?: OfficeTaskStats
   onSelect: () => void
 }
 
@@ -55,6 +58,8 @@ export default function Workstation({
   showBadge = true,
   liveliness = 1,
   catEars = false,
+  currentTask,
+  taskStats,
   onSelect
 }: Props): React.JSX.Element {
   // useT 基于 zustand(useSyncExternalStore),不依赖 React Context,R3F 树内可安全使用
@@ -97,6 +102,7 @@ export default function Workstation({
   }, [])
 
   const positionsAttr = useMemo(() => new Float32Array(PARTICLE_COUNT * 3), [])
+  const taskLine = taskLabel(currentTask, taskStats)
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime() + phase
@@ -381,8 +387,36 @@ export default function Workstation({
             <span className="ws-dot" style={{ background: targetColor }} />
             {t(STATUS_LABEL_KEY[activity])} · {formatCost(session.meta.costUsd)}
           </div>
+          {taskLine && (
+            <div
+              className="ws-label-meta"
+              title={currentTask?.title}
+              style={{ maxWidth: 160, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            >
+              {taskLine}
+            </div>
+          )}
         </div>
       </Html>
     </group>
   )
+}
+
+function taskLabel(task: OfficeTask | undefined, stats: OfficeTaskStats | undefined): string {
+  if (task) {
+    const prefix =
+      task.status === 'awaiting'
+        ? '待授权'
+        : task.status === 'running'
+          ? '运行中'
+          : task.status === 'error'
+            ? '失败'
+            : task.status === 'done'
+              ? '已完成'
+              : '排队'
+    return `${prefix}: ${task.title}`
+  }
+  if (!stats || stats.total === 0) return ''
+  if (stats.subtasks > 0) return `子任务 ${stats.subtasks} · 工具 ${stats.tools}`
+  return `工具 ${stats.tools}`
 }

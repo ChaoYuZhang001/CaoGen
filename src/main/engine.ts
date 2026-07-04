@@ -3,6 +3,7 @@ import type {
   PermissionModeId,
   PermissionRequestInfo,
   RewindResult,
+  SendMessagePayload,
   SessionMeta,
   TranscriptEntry
 } from '../shared/types'
@@ -18,7 +19,7 @@ import type {
 export interface Engine {
   readonly meta: SessionMeta
   start(): Promise<void>
-  send(text: string): void
+  send(input: string | SendMessagePayload): void
   interrupt(): Promise<void>
   respondPermission(requestId: string, allow: boolean, message?: string): void
   pendingPermissions(): PermissionRequestInfo[]

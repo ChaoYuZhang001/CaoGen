@@ -8,6 +8,13 @@ import RewindButton from './RewindButton'
 // Markdown 依赖 highlight.js(~700KB),懒加载拆出首屏包;未加载完先按纯文本显示
 const Markdown = lazy(() => import('./Markdown'))
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 interface Props {
   item: ChatItem
   toolResults: Record<string, ToolResultInfo>
@@ -23,9 +30,19 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
         <div className="msg-user">
           <div className="msg-user-head">
             <div className="msg-user-label">{t('you')}</div>
-            {item.checkpointId && <RewindButton messageId={item.checkpointId} />}
+            {item.checkpointId && <RewindButton messageId={item.checkpointId} sourceText={item.text} />}
           </div>
-          <div className="msg-user-text">{item.text}</div>
+          {item.text && <div className="msg-user-text">{item.text}</div>}
+          {item.attachments && item.attachments.length > 0 && (
+            <div className="msg-user-attachments">
+              {item.attachments.map((attachment, index) => (
+                <div key={`${attachment.id}-${index}`} className="msg-user-attachment">
+                  <span>{attachment.mime.replace('image/', '').toUpperCase()}</span>
+                  <span>{formatBytes(attachment.bytes)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )
 

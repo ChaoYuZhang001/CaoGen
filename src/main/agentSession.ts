@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { app } from 'electron'
+import { app, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken, listProviders } from './providers'
 import { readReferencedFiles } from './fileSuggest'
+import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
 import {
   pickModel,
@@ -24,9 +26,12 @@ import type {
   AgentEvent,
   AssistantBlock,
   EngineKind,
+  ImageAttachmentView,
   PermissionModeId,
   PermissionRequestInfo,
+  SendMessagePayload,
   SessionMeta,
+  UserMessageAttachmentView,
   UsageTotals
 } from '../shared/types'
 
@@ -67,6 +72,11 @@ function claudeExecutablePath(): string | undefined {
 }
 
 const TOOL_RESULT_MAX_CHARS = 20_000
+
+interface NormalizedSendPayload {
+  text: string
+  images: ImageAttachmentView[]
+}
 
 interface PendingPermission {
   resolve: (result: PermissionResult) => void
@@ -135,6 +145,38 @@ function normalizeBlocks(content: unknown): AssistantBlock[] {
   return out
 }
 
+function normalizeSendPayload(input: string | SendMessagePayload): NormalizedSendPayload {
+  if (typeof input === 'string') return { text: input.trim(), images: [] }
+  return {
+    text: typeof input.text === 'string' ? input.text.trim() : '',
+    images: Array.isArray(input.images) ? input.images.filter(isImageAttachmentView) : []
+  }
+}
+
+function isImageAttachmentView(value: unknown): value is ImageAttachmentView {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.hash === 'string' &&
+    typeof record.path === 'string' &&
+    typeof record.mime === 'string' &&
+    typeof record.bytes === 'number' &&
+    Number.isFinite(record.bytes) &&
+    typeof record.createdAt === 'string'
+  )
+}
+
+function userMessageText(payload: NormalizedSendPayload): string {
+  if (payload.text) return payload.text
+  return payload.images.length > 0 ? `图片输入 (${payload.images.length} 张)` : ''
+}
+
+function compactUserAttachments(images: ImageAttachmentView[]): UserMessageAttachmentView[] | undefined {
+  if (images.length === 0) return undefined
+  return images.map((image) => ({ id: image.id, mime: image.mime, bytes: image.bytes }))
+}
+
 function toolResultText(content: unknown): string {
   let text: string
   if (typeof content === 'string') {
@@ -181,7 +223,8 @@ export class AgentSession implements Engine {
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
   private generation = 0
   /** 本轮用户消息原文,故障切换后重发 */
-  private lastUserText = ''
+  /** 本轮完整用户 payload,故障切换后重发(含图片)。 */
+  private lastUserPayload: NormalizedSendPayload | null = null
   /** 上次发过检查点的用户消息 uuid,去重避免同轮重复发 */
   private lastCheckpointUuid = ''
   /** 等待绑定 SDK checkpoint uuid 的本地用户消息 id 队列。 */
@@ -190,9 +233,11 @@ export class AgentSession implements Engine {
   private triedProviders = new Set<string>()
   private failoverBusy = false
   /** 故障切换窗口期(旧引擎已死、新引擎未起)收到的消息,切换完成后补推 */
-  private queuedDuringFailover: string[] = []
+  private queuedDuringFailover: NormalizedSendPayload[] = []
   /** 用户主动中断标记:中断产生的错误 result 不触发故障切换 */
   private interrupting = false
+  /** 本会话在轮次运行中持有的系统防休眠句柄。 */
+  private powerBlockerId: number | null = null
 
   constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -280,12 +325,15 @@ export class AgentSession implements Engine {
     void this.consume(gen)
   }
 
-  send(text: string): void {
+  send(input: string | SendMessagePayload): void {
     if (this.disposed) return
+    const payload = normalizeSendPayload(input)
+    const displayText = userMessageText(payload)
+    if (!displayText && payload.images.length === 0) return
     // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
     if (this.failoverBusy) {
-      this.emitUserMessage(text)
-      this.queuedDuringFailover.push(text)
+      this.emitUserMessage(displayText, payload.images)
+      this.queuedDuringFailover.push(payload)
       return
     }
     // 流已死(启动失败 / 进程退出)时静默排队只会让 UI 永远停在"运行中"
@@ -293,29 +341,29 @@ export class AgentSession implements Engine {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
-    this.emitUserMessage(text)
-    if (this.meta.title === '新会话' && text.trim()) {
-      this.meta.title = text.trim().replace(/\s+/g, ' ').slice(0, 40)
+    this.emitUserMessage(displayText, payload.images)
+    if (this.meta.title === '新会话' && displayText.trim()) {
+      this.meta.title = displayText.trim().replace(/\s+/g, ' ').slice(0, 40)
       this.emit({ kind: 'meta', meta: { ...this.meta } })
     }
     this.setStatus('running')
     this.turnStartedAt = Date.now()
     // 新一轮:重置故障切换尝试记录(仅在本轮内防打转)
-    this.lastUserText = text
+    this.lastUserPayload = payload
     this.triedProviders = new Set([this.meta.providerId])
     // 自动调度:挑模型 → setModel → 透明事件,完成后再推消息保证顺序
     if (this.meta.model === AUTO_MODEL) {
-      void this.autoRouteThenPush(text)
+      void this.autoRouteThenPush(payload)
     } else {
-      this.pushUserMessage(text)
+      void this.pushUserMessage(payload)
     }
   }
 
-  private async autoRouteThenPush(text: string): Promise<void> {
+  private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
     try {
       const candidates = this.candidateModels()
       const strategy = getSettings().schedulerStrategy
-      const decision = pickModel(candidates, text, strategy)
+      const decision = pickModel(candidates, userMessageText(payload), strategy)
       if (decision) {
         await this.query?.setModel(decision.model)
         this.emit({
@@ -328,7 +376,7 @@ export class AgentSession implements Engine {
     } catch (err) {
       console.error('[agent-desk] 自动路由失败,回退默认模型:', err)
     }
-    this.pushUserMessage(text)
+    await this.pushUserMessage(payload)
   }
 
   /** 自动模式的候选模型:Provider 声明的列表,或官方默认三档 */
@@ -340,19 +388,28 @@ export class AgentSession implements Engine {
     return DEFAULT_AUTO_CANDIDATES
   }
 
-  private pushUserMessage(text: string): void {
+  private async pushUserMessage(payload: NormalizedSendPayload): Promise<void> {
     if (this.disposed) return
-    // 展开 @文件引用:把被引文件内容追加到发给模型的 prompt(UI 仍显示原文)
-    const mentions = extractMentions(text)
-    const injected = mentions.length > 0 ? readReferencedFiles(this.meta.cwd, mentions) : ''
-    const promptText = injected ? text + injected : text
-    const message = {
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text: promptText }] },
-      parent_tool_use_id: null,
-      session_id: this.meta.sdkSessionId ?? ''
+    try {
+      // 展开 @文件引用:把被引文件内容追加到发给模型的 prompt(UI 仍显示原文)
+      const mentions = extractMentions(payload.text)
+      const injected = mentions.length > 0 ? readReferencedFiles(this.meta.cwd, mentions) : ''
+      const promptText = injected ? payload.text + injected : payload.text
+      const content: ContentBlockParam[] = []
+      if (promptText) content.push({ type: 'text', text: promptText })
+      for (const image of payload.images) {
+        content.push((await imageToContentBlock(image.path)) as unknown as ContentBlockParam)
+      }
+      const message = {
+        type: 'user',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+        session_id: this.meta.sdkSessionId ?? ''
+      }
+      this.input.push(message as unknown as SDKUserMessage)
+    } catch (err) {
+      this.setStatus('error', `图片输入失败: ${errText(err)}`)
     }
-    this.input.push(message as unknown as SDKUserMessage)
   }
 
   async interrupt(): Promise<void> {
@@ -362,6 +419,7 @@ export class AgentSession implements Engine {
     } catch (err) {
       console.error('[agent-desk] interrupt 失败:', err)
     } finally {
+      this.stopPowerBlocker()
       // result 消息在 interrupt() resolve 后到达,稍留窗口再复位
       setTimeout(() => {
         this.interrupting = false
@@ -423,10 +481,10 @@ export class AgentSession implements Engine {
   }
 
   /** 用户消息入聊天流时先分配本地 id,之后 SDK checkpoint uuid 按该 id 精确回填。 */
-  private emitUserMessage(text: string): string {
+  private emitUserMessage(text: string, images: ImageAttachmentView[] = []): string {
     const messageId = randomUUID()
     this.pendingCheckpointUserMessageIds.push(messageId)
-    this.emit({ kind: 'user-message', text, messageId })
+    this.emit({ kind: 'user-message', text, messageId, attachments: compactUserAttachments(images) })
     return messageId
   }
 
@@ -436,7 +494,7 @@ export class AgentSession implements Engine {
   /** 有用户消息在途(值得为它切换厂商重试) */
   private get turnInFlight(): boolean {
     return (
-      this.lastUserText.length > 0 &&
+      this.lastUserPayload !== null &&
       (this.meta.status === 'running' || this.meta.status === 'starting')
     )
   }
@@ -463,7 +521,7 @@ export class AgentSession implements Engine {
   private async tryFailover(errorText: string): Promise<boolean> {
     if (this.disposed || this.failoverBusy || this.interrupting) return false
     if (!getSettings().failoverEnabled) return false
-    if (!this.lastUserText) return false // 无在途轮次,无从重试
+    if (!this.lastUserPayload) return false // 无在途轮次,无从重试
     if (this.triedProviders.size > AgentSession.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
     if (!failure.switchable) return false
@@ -526,14 +584,16 @@ export class AgentSession implements Engine {
       // 重发本轮消息(user-message 已在转录中,不重复 emit)
       this.setStatus('running')
       this.turnStartedAt = Date.now()
-      if (this.meta.model === AUTO_MODEL) {
-        void this.autoRouteThenPush(this.lastUserText)
-      } else {
-        this.pushUserMessage(this.lastUserText)
+      if (this.lastUserPayload) {
+        if (this.meta.model === AUTO_MODEL) {
+          void this.autoRouteThenPush(this.lastUserPayload)
+        } else {
+          void this.pushUserMessage(this.lastUserPayload)
+        }
       }
       // 补推切换窗口期用户发的消息
       for (const queued of this.queuedDuringFailover.splice(0)) {
-        this.pushUserMessage(queued)
+        void this.pushUserMessage(queued)
       }
       return true
     } finally {
@@ -564,6 +624,7 @@ export class AgentSession implements Engine {
     if (this.disposed) return
     this.disposed = true
     this.input.end()
+    this.stopPowerBlocker()
     for (const [requestId, pending] of this.pending) {
       pending.resolve({ behavior: 'deny', message: '会话已关闭' })
       this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
@@ -693,7 +754,7 @@ export class AgentSession implements Engine {
           })
         } else {
           recordSuccess(this.meta.providerId, latency)
-          this.lastUserText = '' // 本轮成功,清除重试凭据
+          this.lastUserPayload = null // 本轮成功,清除重试凭据
           finish()
         }
         break
@@ -752,9 +813,34 @@ export class AgentSession implements Engine {
   }
 
   private setStatus(status: SessionMeta['status'], error?: string): void {
+    if (status === 'running') {
+      this.startPowerBlocker()
+    } else if (status === 'idle' || status === 'error' || status === 'closed') {
+      this.stopPowerBlocker()
+    }
     this.meta.status = status
     if (error) this.meta.lastError = error
     this.emit({ kind: 'status', status, error })
+  }
+
+  private startPowerBlocker(): void {
+    if (this.powerBlockerId !== null) return
+    try {
+      this.powerBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+    } catch (err) {
+      console.error('[agent-desk] 启动防休眠失败:', err)
+    }
+  }
+
+  private stopPowerBlocker(): void {
+    if (this.powerBlockerId === null) return
+    const id = this.powerBlockerId
+    this.powerBlockerId = null
+    try {
+      if (powerSaveBlocker.isStarted(id)) powerSaveBlocker.stop(id)
+    } catch (err) {
+      console.error('[agent-desk] 释放防休眠失败:', err)
+    }
   }
 }
 

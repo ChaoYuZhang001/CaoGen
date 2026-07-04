@@ -5,6 +5,7 @@ import { formatCost, formatTokens } from '../format'
 import MessageItem from './MessageItem'
 import PermissionBar from './PermissionBar'
 import Composer from './Composer'
+import RewindPanel from './RewindPanel'
 import type { PermissionModeId } from '../../../shared/types'
 
 export default function ChatView(): React.JSX.Element | null {
@@ -16,6 +17,11 @@ export default function ChatView(): React.JSX.Element | null {
   const interrupt = useStore((s) => s.interrupt)
   const setPermissionMode = useStore((s) => s.setPermissionMode)
   const setModel = useStore((s) => s.setModel)
+  const openLatestRewindPanel = useStore((s) => s.openLatestRewindPanel)
+  const openBrowserPanel = useStore((s) => s.openBrowserPanel)
+  const openFilesPanel = useStore((s) => s.openFilesPanel)
+  const openWorktreePanel = useStore((s) => s.openWorktreePanel)
+  const openTerminalPanel = useStore((s) => s.openTerminalPanel)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -27,6 +33,23 @@ export default function ChatView(): React.JSX.Element | null {
     const el = scrollRef.current
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [itemCount, streamLen, activeId])
+
+  useEffect(() => {
+    let lastEsc = 0
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      const now = Date.now()
+      if (now - lastEsc < 700) {
+        e.preventDefault()
+        openLatestRewindPanel('shortcut')
+        lastEsc = 0
+        return
+      }
+      lastEsc = now
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [openLatestRewindPanel])
 
   if (!session || !activeId) return null
   const { meta } = session
@@ -84,6 +107,20 @@ export default function ChatView(): React.JSX.Element | null {
               {t('stop')}
             </button>
           )}
+          {meta.isolated && (
+            <button className="btn btn-ghost" onClick={() => void openWorktreePanel()}>
+              {t('worktreeShort')}
+            </button>
+          )}
+          <button className="btn btn-ghost" onClick={() => void openFilesPanel()}>
+            {t('filesShort')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => void openBrowserPanel()}>
+            {t('browserShort')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => void openTerminalPanel()}>
+            {t('terminalShort')}
+          </button>
           <button
             className="btn btn-ghost"
             title={t('closeSession')}
@@ -122,6 +159,7 @@ export default function ChatView(): React.JSX.Element | null {
 
       <PermissionBar sessionId={activeId} requests={session.pendingPermissions} />
       <Composer running={running} />
+      <RewindPanel />
 
       <footer className="status-bar">
         <span className={`status-dot status-${meta.status}`} />
