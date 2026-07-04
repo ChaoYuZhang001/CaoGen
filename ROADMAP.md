@@ -48,7 +48,7 @@
 - ✅ 一个界面同时驾驭 ≥4 个并行 Agent 而不迷失(多会话架构 + 侧栏 + 写实 3D 办公区双视图)
 - ✅ 任一厂商挂掉(余额/限流/模型下线)时自动切换,任务不中断(M4.1 故障切换)
 - ✅ 打开 3D 办公区,3 秒内读出所有会话的状态与开销(M5:状态动画 + 悬浮标签 + 品牌色)
-- 🚧 Codex/Claude 深度用户迁移首日可完成常用动作:`@` 文件、`/` 命令、检查点代码回溯、Diff 审查、终端、文件编辑器、产物预览已可用;图片输入已有后端 helper,Composer 粘贴/拖拽 UI 待接
+- 🚧 Codex/Claude 深度用户迁移首日可完成常用动作:`@` 文件、`/` 命令、图片粘贴/拖拽输入、检查点代码回溯、CaoGen 对话转录回溯、Diff 审查、终端、文件编辑器、产物预览已可用;图片标注/OCR、底层 SDK 上下文级对话回溯仍待补齐
 - 🚧 每个 Agent 默认独立 worktree 后端与管理面板已接入;patch 导出/丢弃可用,直接合并/PR 路径仍需补齐
 - 🚧 主 Agent 能真实派活给 ≥3 个子 Agent,各自运行、回传、合并仍未完成;但 3D 办公区已停止随机假协作包,改为从真实 `tool_use` / `runningTools` / `toolResults` / `pendingPermissions` 派生任务流第一版
 - ⬜ 笔记本关闭后,云端 Routines 仍能按计划触发任务,重新打开桌面端可接续上下文、产物和日志
@@ -59,7 +59,15 @@
 
 ### 当前进展 vs 终极目标差距
 
-当前进展已经从"能聊天的桌面壳"推进到"多会话工程工作台底座":worktree 隔离已有自动创建、管理面板、patch 导出/丢弃与合并审查 helper,但离终极目标还差直接合并/PR、冲突三栏审查、子代理独立 worktree 生命周期和主工作区零污染验收;浏览器批注已有 WebContentsView 面板、导航、选区批注保存、页面高亮和批注发给 Agent,但还缺 DOM 圈选、截图批注、控制台/网络摘要和 Agent 只读复验工具;记忆/自动化/主动建议已有 confirmed/draft memory store、Routine JSON store 与本地开工建议 helper,但还缺确认 UI、本地调度器、Routine 收件箱、跨天续做和来源可追溯治理;插件生态+预览+通知+防休眠已有 registry 扫描 helper、HTML/Markdown/Text/CSV/JSON/Image/PDF 预览识别/UI、完成通知与 powerSaveBlocker,但还缺插件浏览器、MCP 状态、安装/权限/版本治理、90+ 能力覆盖、PDF 深渲染、表格/PPT 和预览批注;`@`文件/图片/斜杠命令已有文件引用、命令面板和图片附件后端/base64 block helper,但还缺 Composer 粘贴/拖拽、多图标注/OCR、引用快照回显和插件/Routine 命令参数化;checkpoint 回溯已有 rewindFiles 核心、Esc Esc 入口和回溯面板,但还缺对话回溯、代码/对话/两者的完整一致性、回退前 diff 解释和跨 worktree checkpoint 索引;子代理编排目前仅 3D 真实 tool/task 派生任务流替代随机动画,离主 Agent 派活、≥3 子 Agent 并行、回传、合并队列和任务图仍有明显差距;Routines 云端定时仍是规划,需要 Cloud Scheduler/Runner、加密上下文、仓库授权、预算闸门、日志/产物/checkpoint 回传;分屏 workbench 已有 Diff/Worktree/Terminal/File Editor/Browser/Preview 六面板壳和首版 IPC/UI,但还缺拖拽停靠、布局保存、逐 hunk accept/reject、预览到批注到修复闭环;hooks/background 目前只有 SDK 能力识别和路线图设计,还需 hooks 事件桥接、权限/超时/日志策略、backgroundTasks 管理 UI、后台任务升格终端与输出回灌 Agent。
+当前进展已经从"能聊天的桌面壳"推进到"多会话工程工作台底座":worktree 隔离已有自动创建、管理面板、patch 导出/丢弃与合并审查 helper,但离终极目标还差直接合并/PR、冲突三栏审查、子代理独立 worktree 生命周期和主工作区零污染验收;浏览器批注已有 WebContentsView 面板、导航、选区批注保存、页面高亮和批注发给 Agent,但还缺 DOM 圈选、截图批注、控制台/网络摘要和 Agent 只读复验工具;记忆/自动化/主动建议已有 confirmed/draft memory store、Routine JSON store 与本地开工建议 helper,但还缺确认 UI、本地调度器、Routine 收件箱、跨天续做和来源可追溯治理;插件生态+预览+通知+防休眠已有 registry 扫描 helper、HTML/Markdown/Text/CSV/JSON/Image/PDF 预览识别/UI、完成通知与 powerSaveBlocker,但还缺插件浏览器、MCP 状态、安装/权限/版本治理、90+ 能力覆盖、PDF 深渲染、表格/PPT 和预览批注;`@`文件/图片/斜杠命令已有文件引用、命令面板、Composer 图片粘贴/拖拽和 SDK base64 image block,但还缺多图标注/OCR、引用快照回显和插件/Routine 命令参数化;checkpoint 回溯已有 rewindFiles 核心、Esc Esc 入口、代码/对话/两者面板和 CaoGen transcript 原子截断,但还缺底层 Claude SDK 上下文级重建、回退前 diff 解释和跨 worktree checkpoint 索引;子代理编排目前仅 3D 真实 tool/task 派生任务流替代随机动画,离主 Agent 派活、≥3 子 Agent 并行、回传、合并队列和任务图仍有明显差距;Routines 云端定时仍是规划,需要 Cloud Scheduler/Runner、加密上下文、仓库授权、预算闸门、日志/产物/checkpoint 回传;分屏 workbench 已有 Diff/Worktree/Terminal/File Editor/Browser/Preview 六面板壳和首版 IPC/UI,但还缺拖拽停靠、布局保存、逐 hunk accept/reject、预览到批注到修复闭环;hooks/background 目前只有 SDK 能力识别和路线图设计,还需 hooks 事件桥接、权限/超时/日志策略、backgroundTasks 管理 UI、后台任务升格终端与输出回灌 Agent。
+
+### 下一轮优先攻坚
+
+- **P0 · checkpoint 深一致性 + worktree 合并/PR 打通**:在已接入"代码 / 对话 / 两者"与 CaoGen transcript 原子回溯的基础上,补底层 Claude SDK 上下文级重建,建立 message id、checkpoint、tool diff、worktree 路径的可索引链路;回退前必须解释将恢复/丢弃的代码 diff 与聊天范围;WorktreePanel 接上 `worktreeMerge` 的 apply-check、合并回主工作区、生成 PR、冲突三栏和合并后 checkpoint 验收,硬标准是主工作区零污染、任一 worktree 可回退/可丢弃/可 PR。
+- **P0 · 子代理真实编排 MVP**:接 SDK `supportedAgents()` / `agents` 能力到主 Agent 派活,落 TaskGraph、≥3 子 Agent 独立 worktree、事件流回传、预算/权限/验收命令与合并队列;3D 办公区只消费真实 task/subagent/worktree 状态,不再新增视觉假状态。
+- **P1 · 云端 Routines 最小闭环**:先把本地调度器、Routine Inbox、run log、artifact、diff、checkpoint 回传做成可复验链路;云端以 GitHub Actions 桥接或最小 Cloud Scheduler/Runner 试点,强制加密上下文、仓库授权、Secrets 范围、预算闸门、最大运行时和 PR-only 默认策略。
+- **P1 · 插件/Routine 面板接线**:把 `pluginRegistry` 扫描结果接入插件浏览器、MCP 状态面板、安装/启用/权限/版本治理;`/` 面板聚合插件命令与 Routine 模板,支持参数表单、最近使用、失败诊断和一键生成 Routine。
+- **P2 · 预览深渲染与批注闭环**:把 PDF 从占位升级为页级渲染、搜索、缩略图和批注;CSV/表格补筛选、公式/图表识别,PPT 补缩略图与页批注;所有预览批注都能结构化发给 Agent,形成"看产物 → 批注 → 修复 → 复验"链路。
 
 ---
 

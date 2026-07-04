@@ -63,6 +63,7 @@ export interface PluginRegistryPanelProps {
   truncated?: boolean
   loading?: boolean
   error?: string
+  message?: string
   selectedItemId?: string
   className?: string
   labels?: PluginRegistryPanelLabels
@@ -206,6 +207,7 @@ export default function PluginRegistryPanel({
   truncated = false,
   loading = false,
   error,
+  message,
   selectedItemId,
   className,
   labels: labelOverrides,
@@ -281,6 +283,7 @@ export default function PluginRegistryPanel({
       </header>
 
       {error && <div className="notice notice-error plugin-registry-notice">{error}</div>}
+      {message && <div className="notice notice-info plugin-registry-notice">{message}</div>}
 
       <section className="plugin-registry-summary" aria-label={labels.status}>
         <StatCard label={labels.total} value={stats.total} />

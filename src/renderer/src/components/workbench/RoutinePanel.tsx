@@ -33,11 +33,15 @@ export interface RoutinePanelProps {
   subtitle?: ReactNode
   loading?: boolean
   disabled?: boolean
+  error?: ReactNode
+  message?: ReactNode
   selectedRoutineId?: string | null
   now?: RoutinePanelTimestamp
   showCloudSchedulingNote?: boolean
   cloudSchedulingNote?: ReactNode
   emptyState?: RoutinePanelEmptyState
+  onRefresh?: () => void | Promise<void>
+  onClose?: () => void
   onSelectRoutine?: (routine: RoutinePanelItem) => void
   onToggleRoutine?: (routine: RoutinePanelItem, enabled: boolean) => void
   onRunRoutine?: (routine: RoutinePanelItem) => void
@@ -297,7 +301,7 @@ function RoutineRow({
           title={routine.disabledReason}
           onClick={() => onRunRoutine?.(routine)}
         >
-          {running ? '运行中' : queued ? '排队中' : '立即运行'}
+          {running ? '运行中' : queued ? '排队中' : '标记运行'}
         </button>
       </div>
     </article>
@@ -309,8 +313,12 @@ export default function RoutinePanel({
   cloudSchedulingNote = DEFAULT_CLOUD_NOTE,
   disabled = false,
   emptyState,
+  error,
   loading = false,
+  message,
   now,
+  onClose,
+  onRefresh,
   onRunRoutine,
   onSelectRoutine,
   onToggleRoutine,
@@ -330,9 +338,23 @@ export default function RoutinePanel({
           <h2 className="routine-panel-title">{title}</h2>
           {subtitle && <div className="routine-panel-subtitle">{subtitle}</div>}
         </div>
-        <div className="routine-panel-count">{loading ? '加载中' : `${routines.length} 个`}</div>
+        <div className="routine-panel-header-actions">
+          <div className="routine-panel-count">{loading ? '加载中' : `${routines.length} 个`}</div>
+          {onRefresh && (
+            <button className="btn btn-ghost btn-sm" disabled={loading} onClick={() => void onRefresh()}>
+              刷新
+            </button>
+          )}
+          {onClose && (
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>
+              关闭
+            </button>
+          )}
+        </div>
       </header>
 
+      {error && <div className="notice notice-error routine-panel-notice">{error}</div>}
+      {message && <div className="notice notice-info routine-panel-notice">{message}</div>}
       {showCloudSchedulingNote && <div className="routine-panel-cloud-note">{cloudSchedulingNote}</div>}
 
       <div className="routine-panel-list" role="list">

@@ -61,6 +61,8 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const openFilesPanel = useStore((s) => s.openFilesPanel)
   const openWorktreePanel = useStore((s) => s.openWorktreePanel)
   const openTerminalPanel = useStore((s) => s.openTerminalPanel)
+  const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
+  const openRoutinePanel = useStore((s) => s.openRoutinePanel)
   const updateSettings = useStore((s) => s.updateSettings)
   const setModel = useStore((s) => s.setModel)
   const theme = useStore((s) => s.settings.theme)
@@ -128,6 +130,18 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       title: '/files',
       hint: t('slashFilesHint'),
       run: () => void openFilesPanel()
+    },
+    {
+      id: 'plugins',
+      title: '/plugins',
+      hint: t('slashPluginsHint'),
+      run: () => void openPluginRegistryPanel()
+    },
+    {
+      id: 'routine',
+      title: '/routine',
+      hint: t('slashRoutineHint'),
+      run: () => void openRoutinePanel()
     },
     {
       id: 'worktree',

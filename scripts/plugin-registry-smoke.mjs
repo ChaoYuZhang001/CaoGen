@@ -31,6 +31,21 @@ try {
 
   const compiledModule = findCompiledModule(outDir)
   const pluginRegistry = await import(pathToFileURL(compiledModule).href)
+  assertEqual(typeof pluginRegistry.scanPluginRegistry, 'function')
+
+  const emptyRoot = path.join(tempRoot, 'empty', '.claude')
+  mkdirSync(path.join(emptyRoot, 'plugins'), { recursive: true })
+  const emptyView = pluginRegistry.scanPluginRegistry([emptyRoot])
+  assertEqual(emptyView.roots.length, 1)
+  assertEqual(emptyView.items.length, 0)
+  assertEqual(emptyView.diagnostics.length, 0)
+  assertEqual(emptyView.truncated, false)
+  assert(Number.isFinite(Date.parse(emptyView.scannedAt)), 'scan should include an ISO scannedAt timestamp')
+
+  const missingRoot = path.join(tempRoot, 'missing', '.claude')
+  const missingView = pluginRegistry.scanPluginRegistry([missingRoot])
+  assertEqual(missingView.items.length, 0)
+  assertDiagnostic(missingView, 'root_missing', missingRoot)
 
   const claudeRoot = path.join(tempRoot, 'happy', '.claude')
   mkdirSync(path.join(claudeRoot, 'skills', 'foo'), { recursive: true })
@@ -55,14 +70,59 @@ try {
   assertEqual(mcp.summary, 'command: node')
   assertEqual(view.diagnostics.length, 0)
 
+  const pluginRoot = path.join(tempRoot, 'with-plugins', '.claude', 'plugins', 'demo-plugin')
+  mkdirSync(path.join(pluginRoot, 'skills', 'plugin-skill'), { recursive: true })
+  writeFileSync(
+    path.join(pluginRoot, 'plugin.json'),
+    JSON.stringify({ name: 'Demo Plugin', version: '1.0.0' }, null, 2)
+  )
+  writeFileSync(
+    path.join(pluginRoot, 'skills', 'plugin-skill', 'SKILL.md'),
+    ['---', 'name: Plugin Skill', 'description: Skill shipped by a plugin package.', '---', '', '# Plugin'].join('\n')
+  )
+  writeFileSync(
+    path.join(pluginRoot, '.mcp.json'),
+    JSON.stringify({ mcpServers: { pluginMcp: { url: 'http://127.0.0.1:4321/mcp' } } }, null, 2)
+  )
+
+  const pluginView = pluginRegistry.scanPluginRegistry([pluginRoot])
+  const pluginSkill = assertItem(pluginView, 'skill', 'Plugin Skill')
+  assert(pluginSkill.path.includes(path.join('.claude', 'plugins', 'demo-plugin', 'skills', 'plugin-skill')))
+  assertEqual(pluginSkill.summary, 'Skill shipped by a plugin package.')
+  const pluginMcp = assertItem(pluginView, 'mcp', 'pluginMcp')
+  assertEqual(pluginMcp.summary, 'url: http://127.0.0.1:4321/mcp')
+  assertEqual(pluginView.diagnostics.length, 0)
+
+  const siblingRoot = path.join(tempRoot, 'sibling-project', '.claude')
+  mkdirSync(siblingRoot, { recursive: true })
+  writeFileSync(
+    path.join(path.dirname(siblingRoot), '.mcp.json'),
+    JSON.stringify({ mcpServers: { sibling: { transport: 'stdio' } } }, null, 2)
+  )
+  const siblingView = pluginRegistry.scanPluginRegistry([siblingRoot])
+  const siblingMcp = assertItem(siblingView, 'mcp', 'sibling')
+  assertEqual(siblingMcp.summary, 'transport: stdio')
+  const noSiblingView = pluginRegistry.scanPluginRegistry([siblingRoot], { includeSiblingProjectMcp: false })
+  assertNoItem(noSiblingView, 'mcp', 'sibling')
+
   const badRoot = path.join(tempRoot, 'bad-json', '.claude')
   mkdirSync(badRoot, { recursive: true })
   writeFileSync(path.join(badRoot, '.mcp.json'), '{ bad json', 'utf8')
   const badView = pluginRegistry.scanPluginRegistry([badRoot])
-  assert(
-    badView.diagnostics.some((diag) => diag.code === 'json_parse_failed' && diag.path.endsWith('.mcp.json')),
-    'bad MCP JSON should be reported as a diagnostic'
-  )
+  assertDiagnostic(badView, 'json_parse_failed', '.mcp.json')
+
+  const badShapeRoot = path.join(tempRoot, 'bad-shape', '.claude')
+  mkdirSync(badShapeRoot, { recursive: true })
+  writeFileSync(path.join(badShapeRoot, 'settings.json'), JSON.stringify({ mcpServers: [] }, null, 2))
+  const badShapeView = pluginRegistry.scanPluginRegistry([badShapeRoot])
+  assertDiagnostic(badShapeView, 'json_shape_invalid', 'settings.json')
+
+  const oversizedRoot = path.join(tempRoot, 'oversized', '.claude')
+  mkdirSync(path.join(oversizedRoot, 'skills', 'big'), { recursive: true })
+  writeFileSync(path.join(oversizedRoot, 'skills', 'big', 'SKILL.md'), '# Big\n\nThis file is intentionally over the read limit.')
+  const oversizedView = pluginRegistry.scanPluginRegistry([oversizedRoot], { maxReadBytes: 8 })
+  assertNoItem(oversizedView, 'skill', 'big')
+  assertDiagnostic(oversizedView, 'read_failed', path.join('skills', 'big', 'SKILL.md'))
 
   const constrainedRoot = path.join(tempRoot, 'constrained', '.claude')
   mkdirSync(path.join(constrainedRoot, 'skills', 'shallow'), { recursive: true })
@@ -81,13 +141,17 @@ try {
   assertNoItem(constrainedView, 'skill', 'two')
   assertNoItem(constrainedView, 'skill', 'ignored')
   assertNoItem(constrainedView, 'agent', 'ignored')
+  assertEqual(constrainedView.limits.maxDepth, 1)
+  assertEqual(constrainedView.truncated, false)
 
   const limitedView = pluginRegistry.scanPluginRegistry([claudeRoot], { maxFiles: 1 })
   assert(limitedView.truncated, 'maxFiles should truncate the scan')
-  assert(
-    limitedView.diagnostics.some((diag) => diag.code === 'max_files_reached'),
-    'maxFiles truncation should return a diagnostic'
-  )
+  assertEqual(limitedView.limits.maxFiles, 1)
+  assertDiagnostic(limitedView, 'max_files_reached')
+
+  const normalizedLimitView = pluginRegistry.scanPluginRegistry([emptyRoot], { maxFiles: 0, maxDepth: 0 })
+  assertEqual(normalizedLimitView.limits.maxFiles, 1)
+  assertEqual(normalizedLimitView.limits.maxDepth, 1)
 
   console.log('pluginRegistry smoke ok')
 } finally {
@@ -122,6 +186,13 @@ function assertNoItem(view, kind, name) {
   assert(
     !view.items.some((candidate) => candidate.kind === kind && candidate.name === name),
     `${kind} ${name} should not be discovered`
+  )
+}
+
+function assertDiagnostic(view, code, pathSuffix) {
+  assert(
+    view.diagnostics.some((diag) => diag.code === code && (!pathSuffix || diag.path.endsWith(pathSuffix))),
+    `${code} diagnostic${pathSuffix ? ` for ${pathSuffix}` : ''} should be reported`
   )
 }
 

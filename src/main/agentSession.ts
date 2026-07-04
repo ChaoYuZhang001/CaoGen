@@ -25,10 +25,13 @@ import type { Engine } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
   EngineKind,
   ImageAttachmentView,
   PermissionModeId,
   PermissionRequestInfo,
+  RewindResult,
   SendMessagePayload,
   SessionMeta,
   UserMessageAttachmentView,
@@ -449,18 +452,114 @@ export class AgentSession implements Engine {
   }
 
   /** 回退文件到某条用户消息时的状态;dryRun 只预览不改动 */
-  async rewindFiles(messageId: string, dryRun: boolean): Promise<import('../shared/types').RewindResult> {
+  async rewindFiles(messageId: string, dryRun: boolean): Promise<RewindResult> {
+    return this.runFileRewind(messageId, dryRun, true)
+  }
+
+  async restoreCheckpoint(
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult> {
+    const wantsCode = mode === 'code' || mode === 'both'
+    const wantsChat = mode === 'chat' || mode === 'both'
+    const chat = wantsChat ? this.transcript.planRestore(messageId) : undefined
+    const code = wantsCode ? await this.runFileRewind(messageId, dryRun, false) : undefined
+
+    if (code?.error) {
+      return { mode, checkpointId: messageId, canRewind: false, code, chat, error: code.error }
+    }
+    if (wantsChat && !chat?.ok) {
+      return {
+        mode,
+        checkpointId: messageId,
+        canRewind: false,
+        code,
+        chat,
+        error: chat?.reason ?? '无法恢复对话转录'
+      }
+    }
+
+    const canRewind = Boolean((wantsCode && code?.canRewind) || (wantsChat && chat?.ok))
+    if (dryRun || !canRewind) {
+      return {
+        mode,
+        checkpointId: messageId,
+        canRewind,
+        applied: false,
+        code,
+        chat,
+        filesChanged: code?.filesChanged,
+        insertions: code?.insertions,
+        deletions: code?.deletions,
+        chatRemovedEntries: chat?.removedEntries,
+        note: wantsChat
+          ? '对话回溯会恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+          : undefined
+      }
+    }
+
+    const restoreEvent = (chatPlan?: { removedEntries?: number }): AgentEvent => ({
+      kind: 'checkpoint-restore',
+      messageId,
+      mode,
+      filesChanged: code?.filesChanged ?? [],
+      insertions: code?.insertions,
+      deletions: code?.deletions,
+      chatRemovedEntries: chatPlan?.removedEntries ?? chat?.removedEntries,
+      note: wantsChat
+        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+        : undefined
+    })
+    const restored = wantsChat ? this.transcript.restore(messageId, restoreEvent) : undefined
+    if (wantsChat && !restored?.plan.ok) {
+      return {
+        mode,
+        checkpointId: messageId,
+        canRewind: false,
+        applied: false,
+        code,
+        chat: restored?.plan ?? chat,
+        error: restored?.plan.reason ?? '无法恢复对话转录'
+      }
+    }
+    if (!wantsChat) this.emit(restoreEvent())
+
+    return {
+      mode,
+      checkpointId: messageId,
+      canRewind: true,
+      applied: true,
+      code,
+      chat: restored?.plan ?? chat,
+      transcript: restored?.entries,
+      filesChanged: code?.filesChanged,
+      insertions: code?.insertions,
+      deletions: code?.deletions,
+      chatRemovedEntries: restored?.plan.removedEntries ?? chat?.removedEntries,
+      note: wantsChat
+        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+        : undefined
+    }
+  }
+
+  private async runFileRewind(
+    messageId: string,
+    dryRun: boolean,
+    emitRestoreEvent: boolean
+  ): Promise<RewindResult> {
     if (!this.query) return { canRewind: false, error: '会话未运行' }
     try {
       const q = this.query as unknown as {
-        rewindFiles?: (id: string, opts?: { dryRun?: boolean }) => Promise<import('../shared/types').RewindResult>
+        rewindFiles?: (id: string, opts?: { dryRun?: boolean }) => Promise<RewindResult>
       }
       if (!q.rewindFiles) return { canRewind: false, error: 'SDK 不支持文件检查点' }
       const result = await q.rewindFiles(messageId, { dryRun })
-      if (!dryRun && result.canRewind && !result.error) {
+      if (emitRestoreEvent && !dryRun && result.canRewind && !result.error) {
         this.emit({
           kind: 'checkpoint-restore',
           messageId,
+          mode: 'code',
           filesChanged: result.filesChanged ?? [],
           insertions: result.insertions,
           deletions: result.deletions

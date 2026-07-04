@@ -10,17 +10,26 @@ import OfficeScene from './kit/OfficeScene'
 import { brandFor } from './brand'
 import { buildOfficeModel } from './model'
 
-/** 把会话按网格铺开;返回每个会话的世界坐标 */
+/**
+ * 把会话按网格铺开在房间中央空地(OfficeScene 家具占外围:
+ * 前区 z≈+6~8 休息/会议、左右墙 x≈±9.5、四角盆栽)。
+ * 网格限定在 x∈[-6,6]、z∈[-5,3] 的安全区,间距随数量自适应收紧,绝不越界撞家具。
+ */
 function gridPositions(count: number): Array<[number, number, number]> {
+  if (count === 0) return []
   const cols = Math.max(1, Math.ceil(Math.sqrt(count)))
-  const gap = 3.0
+  const rowCount = Math.ceil(count / cols)
+  const SAFE_X = 12 // 中央可用宽度(x∈[-6,6])
+  const SAFE_Z = 8 // 中央可用进深(z∈[-5,3])
+  const gapX = cols > 1 ? Math.min(3.2, SAFE_X / (cols - 1)) : 0
+  const gapZ = rowCount > 1 ? Math.min(3.2, SAFE_Z / (rowCount - 1)) : 0
+  const centerZ = -1 // 整体略朝后,给前区休息/会议区留白
   const out: Array<[number, number, number]> = []
   for (let i = 0; i < count; i++) {
     const col = i % cols
     const row = Math.floor(i / cols)
-    const rowCount = Math.ceil(count / cols)
-    const x = (col - (cols - 1) / 2) * gap
-    const z = (row - (rowCount - 1) / 2) * gap
+    const x = (col - (cols - 1) / 2) * gapX
+    const z = (row - (rowCount - 1) / 2) * gapZ + centerZ
     out.push([x, 0, z])
   }
   return out
@@ -90,16 +99,19 @@ export default function OfficeView(): React.JSX.Element {
         <Canvas shadows camera={{ position: [7, 7, 9], fov: 42 }} dpr={[1, 1.75]}>
           <color attach="background" args={[scene.bg]} />
           <fog attach="fog" args={[scene.bg, 16, 38]} />
-          <ambientLight intensity={isLight ? 0.75 : 0.4} />
+          <ambientLight intensity={isLight ? 0.95 : 0.7} />
           <directionalLight
             position={[6, 12, 6]}
-            intensity={isLight ? 1.3 : 1}
+            intensity={isLight ? 1.4 : 1.15}
             castShadow
             shadow-mapSize={[2048, 2048]}
           />
-          <directionalLight position={[-8, 6, -6]} intensity={0.4} color="#8fb4ff" />
+          <directionalLight position={[-8, 6, -6]} intensity={0.55} color="#9fc0ff" />
           {/* 顶部聚光,强化中心舞台感 */}
-          <spotLight position={[0, 14, 2]} angle={0.6} penumbra={0.8} intensity={isLight ? 0.5 : 0.9} />
+          <spotLight position={[0, 14, 2]} angle={0.7} penumbra={0.8} intensity={isLight ? 0.6 : 1.1} />
+          {/* 中央暖色补光,提亮工位区,驱散 night 家具阴影 */}
+          <pointLight position={[0, 5, 0]} intensity={isLight ? 0.4 : 0.9} distance={26} color={isLight ? '#ffffff' : '#cfd8f0'} />
+          <hemisphereLight args={[isLight ? '#ffffff' : '#8a97b8', '#20242c', isLight ? 0.5 : 0.45]} />
           {/* 补一盏跟随状态色调的点光,增强氛围 */}
           <pointLight position={[0, 3, 4]} intensity={isLight ? 0.3 : 0.6} color={isLight ? '#ffffff' : '#4a5a80'} />
 

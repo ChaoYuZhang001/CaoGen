@@ -22,6 +22,8 @@ export default function ChatView(): React.JSX.Element | null {
   const openFilesPanel = useStore((s) => s.openFilesPanel)
   const openWorktreePanel = useStore((s) => s.openWorktreePanel)
   const openTerminalPanel = useStore((s) => s.openTerminalPanel)
+  const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
+  const openRoutinePanel = useStore((s) => s.openRoutinePanel)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -114,6 +116,12 @@ export default function ChatView(): React.JSX.Element | null {
           )}
           <button className="btn btn-ghost" onClick={() => void openFilesPanel()}>
             {t('filesShort')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => void openPluginRegistryPanel()}>
+            {t('pluginsShort')}
+          </button>
+          <button className="btn btn-ghost" onClick={() => void openRoutinePanel()}>
+            {t('routinesShort')}
           </button>
           <button className="btn btn-ghost" onClick={() => void openBrowserPanel()}>
             {t('browserShort')}
