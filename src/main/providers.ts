@@ -70,11 +70,38 @@ export function getProvider(id: string): Provider | undefined {
   return load().find((p) => p.id === id)
 }
 
+/**
+ * 已知官方端点的 Anthropic 兼容 API 在 /anthropic 子路径下(如 DeepSeek/Kimi/智谱)。
+ * 用户常误填裸域名(如 https://api.deepseek.com),导致 SDK 打到 /v1/messages
+ * 而非 /anthropic/v1/messages,对话必然失败。此处防御性补全 /anthropic 后缀。
+ */
+const ANTHROPIC_SUBPATH_HOSTS = [
+  'api.deepseek.com',
+  'api.moonshot.cn',
+  'api.moonshot.ai',
+  'open.bigmodel.cn' // 智谱 GLM
+]
+
+function normalizeBaseUrl(baseUrl: string): string {
+  const url = (baseUrl || '').trim().replace(/\/+$/, '')
+  if (!url) return url
+  try {
+    const parsed = new URL(url)
+    const needsSubpath = ANTHROPIC_SUBPATH_HOSTS.some((h) => parsed.host === h)
+    if (needsSubpath && !/\/anthropic($|\/)/.test(parsed.pathname)) {
+      return `${url}/anthropic`
+    }
+  } catch {
+    // 非法 URL 原样返回,交由后续请求报错
+  }
+  return url
+}
+
 export function createProvider(input: ProviderInput): ProviderView {
   const provider: Provider = {
     id: randomUUID(),
     name: input.name,
-    baseUrl: input.baseUrl,
+    baseUrl: normalizeBaseUrl(input.baseUrl),
     encryptedToken: encryptToken(input.token),
     models: input.models,
     customHeaders: input.customHeaders,
@@ -94,7 +121,7 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
   const next: Provider = {
     ...prev,
     name: patch.name ?? prev.name,
-    baseUrl: patch.baseUrl ?? prev.baseUrl,
+    baseUrl: patch.baseUrl === undefined ? prev.baseUrl : normalizeBaseUrl(patch.baseUrl),
     models: patch.models ?? prev.models,
     customHeaders: patch.customHeaders ?? prev.customHeaders,
     note: patch.note ?? prev.note,

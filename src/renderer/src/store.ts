@@ -546,6 +546,7 @@ interface AppStore {
   openPluginRegistryPanel(): Promise<void>
   closePluginRegistryPanel(): void
   refreshPluginRegistryPanel(): Promise<void>
+  loadPluginRegistryForSlash(): Promise<void>
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
   togglePluginRegistryItem(item: PluginRegistryItem, enabled: boolean): Promise<void>
@@ -1714,6 +1715,42 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryLoading: true,
         pluginRegistryError: undefined,
         pluginRegistryMessage: undefined
+      }
+    }))
+    try {
+      const pluginRegistry = await window.agentDesk.scanPluginRegistry(id)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistry,
+          pluginRegistryLoading: false,
+          pluginRegistryError: undefined,
+          selectedPluginRegistryItemId:
+            s.workbench.selectedPluginRegistryItemId &&
+            pluginRegistry.items.some((item) => item.id === s.workbench.selectedPluginRegistryItemId)
+              ? s.workbench.selectedPluginRegistryItemId
+              : pluginRegistry.items[0]?.id
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryLoading: false,
+          pluginRegistryError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async loadPluginRegistryForSlash() {
+    const id = get().activeId ?? undefined
+    if (get().workbench.pluginRegistryLoading) return
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        pluginRegistryLoading: true,
+        pluginRegistryError: undefined
       }
     }))
     try {
