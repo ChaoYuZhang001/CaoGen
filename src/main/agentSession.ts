@@ -226,6 +226,8 @@ export class AgentSession implements Engine {
   private readonly transcript: TranscriptWriter
   /** 下次 start() 要恢复的 SDK 会话;故障切换重启时指向当前 sdkSessionId */
   private resumeId?: string
+  /** chat/both 回退后的 SDK resume 截断点;与 resumeId 一起传给 SDK。 */
+  private resumeAtId?: string
   private disposed = false
   private turnStartedAt = 0
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
@@ -334,6 +336,7 @@ export class AgentSession implements Engine {
           // 'auto' 是调度哨兵而非真实模型名,不传给 SDK;每轮再 setModel
           ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
           ...(this.resumeId ? { resume: this.resumeId } : {}),
+          ...(this.resumeId && this.resumeAtId ? { resumeSessionAt: this.resumeAtId } : {}),
           canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
         }
       })
@@ -493,20 +496,19 @@ export class AgentSession implements Engine {
     const wantsCode = mode === 'code' || mode === 'both'
     const wantsChat = mode === 'chat' || mode === 'both'
     const chat = wantsChat ? this.transcript.planRestore(messageId) : undefined
-    const code = wantsCode ? await this.runFileRewind(messageId, dryRun, false) : undefined
-
-    if (code?.error) {
-      return { mode, checkpointId: messageId, canRewind: false, code, chat, error: code.error }
-    }
     if (wantsChat && !chat?.ok) {
       return {
         mode,
         checkpointId: messageId,
         canRewind: false,
-        code,
         chat,
         error: chat?.reason ?? '无法恢复对话转录'
       }
+    }
+
+    const code = wantsCode ? await this.runFileRewind(messageId, dryRun, false) : undefined
+    if (code?.error) {
+      return { mode, checkpointId: messageId, canRewind: false, code, chat, error: code.error }
     }
 
     const canRewind = Boolean((wantsCode && code?.canRewind) || (wantsChat && chat?.ok))
@@ -523,7 +525,7 @@ export class AgentSession implements Engine {
         deletions: code?.deletions,
         chatRemovedEntries: chat?.removedEntries,
         note: wantsChat
-          ? '对话回溯会恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+          ? '对话回溯会恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
           : undefined
       }
     }
@@ -537,7 +539,7 @@ export class AgentSession implements Engine {
       deletions: code?.deletions,
       chatRemovedEntries: chatPlan?.removedEntries ?? chat?.removedEntries,
       note: wantsChat
-        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
         : undefined
     })
     const restored = wantsChat ? this.transcript.restore(messageId, restoreEvent) : undefined
@@ -553,6 +555,7 @@ export class AgentSession implements Engine {
       }
     }
     if (!wantsChat) this.emit(restoreEvent())
+    if (wantsChat) this.resumeAtId = messageId
 
     return {
       mode,
@@ -567,7 +570,7 @@ export class AgentSession implements Engine {
       deletions: code?.deletions,
       chatRemovedEntries: restored?.plan.removedEntries ?? chat?.removedEntries,
       note: wantsChat
-        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在后续引擎重建阶段完全对齐。'
+        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
         : undefined
     }
   }
