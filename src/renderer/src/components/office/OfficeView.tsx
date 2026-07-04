@@ -9,6 +9,7 @@ import MessagePackets from './MessagePackets'
 import OfficeScene from './kit/OfficeScene'
 import Wanderers, { type WandererSpec } from './kit/Wanderers'
 import { brandFor } from './brand'
+import { vendorKeyFor } from './kit/VendorSkins'
 import { buildOfficeModel } from './model'
 
 /**
@@ -64,6 +65,12 @@ export default function OfficeView(): React.JSX.Element {
   const brandColorFor = (providerId: string): string => {
     const name = providerId ? providers.find((p) => p.id === providerId)?.name : ''
     return brandFor(name).color
+  }
+
+  // 会话 → 厂商键(驱动桌面 3D 吉祥物:DeepSeek 鲸鱼等),空则官方
+  const vendorKeyOf = (providerId: string): string => {
+    const name = providerId ? providers.find((p) => p.id === providerId)?.name : ''
+    return vendorKeyFor(name)
   }
 
   // 空闲工位派 ≤3 个小人去会议桌(≈[7,0,6.5])环绕交流;活跃工位留守打字
@@ -168,6 +175,7 @@ export default function OfficeView(): React.JSX.Element {
                 position={positions[i]}
                 active={id === activeId}
                 brandColor={brandColorFor(sessions[id].meta.providerId)}
+                vendorKey={vendorKeyOf(sessions[id].meta.providerId)}
                 showBadge={office.showBadges}
                 liveliness={office.liveliness}
                 catEars={office.catEars}
