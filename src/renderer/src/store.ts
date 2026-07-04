@@ -87,6 +87,8 @@ export type ChatItem =
       id: string
       kind: 'user'
       text: string
+      /** 主进程回传的权威消息 id;乐观追加时为空,user-message 事件到达后补上 */
+      messageId?: string
       checkpointId?: string
       attachments?: UserMessageAttachmentView[]
     }
@@ -141,7 +143,26 @@ function newSessionState(meta: SessionMeta): SessionState {
 
 function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   switch (ev.kind) {
-    case 'user-message':
+    case 'user-message': {
+      // 去重:sendMessage 已乐观追加一条 user 项(pending);此事件是主进程回传的
+      // 权威副本。若末尾是尚未确认(无 messageId)且文本一致的 user 项,就"确认"它
+      // (补上 messageId),而非再追加一条 —— 否则聊天流出现重复气泡。
+      // 重载转录回放时没有乐观项,走正常追加分支。
+      const last = s.items[s.items.length - 1]
+      if (
+        last &&
+        last.kind === 'user' &&
+        !last.messageId &&
+        last.text === ev.text
+      ) {
+        const items = s.items.slice()
+        items[items.length - 1] = {
+          ...last,
+          messageId: ev.messageId,
+          attachments: last.attachments ?? ev.attachments
+        }
+        return { ...s, items }
+      }
       return {
         ...s,
         items: [
@@ -149,11 +170,13 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
           {
             id: ev.messageId ?? genId(),
             kind: 'user',
+            messageId: ev.messageId,
             text: ev.text,
             attachments: ev.attachments
           }
         ]
       }
+    }
     case 'checkpoint': {
       // 新事件按本地用户消息 id 精确绑定;旧转录没有 userMessageId 时才回退到邻近匹配。
       const items = [...s.items]
@@ -356,6 +379,11 @@ export interface WorkbenchState {
   pluginRegistryError?: string
   pluginRegistryMessage?: string
   selectedPluginRegistryItemId?: string
+  subagentOpen: boolean
+  subagentBusy: boolean
+  subagentError?: string
+  subagentMessage?: string
+  lastSubagentDispatch?: SubagentDispatchResult
   routineOpen: boolean
   routineLoading: boolean
   routines: Routine[]
@@ -443,6 +471,9 @@ interface AppStore {
   refreshPluginRegistryPanel(): Promise<void>
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
+  openSubagentPanel(): void
+  closeSubagentPanel(): void
+  dispatchSubagentText(tasksText: string): Promise<SubagentDispatchResult | undefined>
   openRoutinePanel(): Promise<void>
   closeRoutinePanel(): void
   refreshRoutinePanel(): Promise<void>
@@ -507,6 +538,8 @@ export const useStore = create<AppStore>((set, get) => ({
     previewLoading: false,
     pluginRegistryOpen: false,
     pluginRegistryLoading: false,
+    subagentOpen: false,
+    subagentBusy: false,
     routineOpen: false,
     routineLoading: false,
     routines: [],
@@ -872,6 +905,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false
       }
     }))
@@ -919,6 +953,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false
       }
     }))
@@ -1021,6 +1056,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false
       }
     }))
@@ -1087,6 +1123,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false
       }
     }))
@@ -1236,6 +1273,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: true,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false,
         previewPath: nextPath,
         previewError: undefined
@@ -1294,6 +1332,7 @@ export const useStore = create<AppStore>((set, get) => ({
         previewOpen: false,
         browserOpen: true,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: false,
         browserLoading: true,
         browserError: undefined,
@@ -1437,6 +1476,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: true,
+        subagentOpen: false,
         routineOpen: false,
         pluginRegistryError: undefined,
         pluginRegistryMessage: undefined
@@ -1510,6 +1550,69 @@ export const useStore = create<AppStore>((set, get) => ({
     }))
   },
 
+  openSubagentPanel() {
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        diffOpen: false,
+        worktreeOpen: false,
+        terminalOpen: false,
+        filesOpen: false,
+        browserOpen: false,
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        subagentOpen: true,
+        routineOpen: false,
+        subagentError: undefined,
+        subagentMessage: undefined
+      }
+    }))
+  },
+
+  closeSubagentPanel() {
+    set((s) => ({ workbench: { ...s.workbench, subagentOpen: false } }))
+  },
+
+  async dispatchSubagentText(tasksText) {
+    const tasks = tasksText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line, index) => {
+        const match = /^([A-Za-z0-9._-]{1,40})\s*:\s*(.+)$/.exec(line)
+        return match
+          ? { id: match[1], role: match[1], title: match[1], prompt: match[2].trim() }
+          : { id: `task-${index + 1}`, prompt: line }
+      })
+    if (tasks.length === 0) return undefined
+    if (tasks.length > 33) {
+      set((s) => ({ workbench: { ...s.workbench, subagentError: '一次最多派发 33 个子 Agent' } }))
+      return undefined
+    }
+    set((s) => ({ workbench: { ...s.workbench, subagentBusy: true, subagentError: undefined, subagentMessage: undefined } }))
+    try {
+      const result = await get().dispatchSubagents({ tasks })
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          subagentBusy: false,
+          lastSubagentDispatch: result ?? s.workbench.lastSubagentDispatch,
+          subagentMessage: result ? `已派发 ${result.children.length} 个子 Agent` : undefined
+        }
+      }))
+      return result
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          subagentBusy: false,
+          subagentError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+      return undefined
+    }
+  },
+
   async openRoutinePanel() {
     set((s) => ({
       workbench: {
@@ -1521,6 +1624,7 @@ export const useStore = create<AppStore>((set, get) => ({
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
+        subagentOpen: false,
         routineOpen: true,
         routineError: undefined,
         routineMessage: undefined

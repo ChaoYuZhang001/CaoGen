@@ -94,6 +94,7 @@ const electronStub = {
   Notification: class {
     constructor(opts) { this.opts = opts }
     on() {}
+    once() {}
     show() { notifications.push(this.opts) }
     static isSupported() { return true }
   },
@@ -439,8 +440,54 @@ async function main() {
     assert(sess.items.some((i) => i.kind === 'failover'), 'failover 未入聊天流')
   })
 
-  // ---- T12 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
-  await test('T12 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
+  // ---- T12 真子代理编排:父会话派出真实 child sessions + 独立 worktree ----
+  await test('T12 subagents:父会话派出真实子会话并独立 worktree', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    sm.init()
+    const repoDir = mkRepo('subagents-repo')
+    const parent = sm.create({ cwd: repoDir, title: 'parent', isolated: true, providerId: 'prov-b', model: 'm-b' })
+    await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
+    const result = sm.dispatchSubagents(parent.id, {
+      tasks: [
+        { id: 'front', role: 'frontend', prompt: '实现前端面板' },
+        { id: 'api', role: 'backend', prompt: '实现后端 API' },
+        { id: 'test', role: 'tester', prompt: '补充测试验证' }
+      ]
+    })
+    eq(result.children.length, 3, '子代理数量')
+    eq(new Set(result.children.map((child) => child.meta.id)).size, 3, '子会话 id 应唯一')
+    eq(new Set(result.children.map((child) => child.meta.worktreePath)).size, 3, '子会话 worktree 应唯一')
+    for (const child of result.children) {
+      const session = sm.get(child.meta.id)
+      assert(session, `缺子会话 ${child.meta.id}`)
+      eq(child.meta.parentSessionId, parent.id, '父会话关联')
+      eq(child.meta.orchestrationId, result.orchestrationId, '编排批次')
+      assert(child.meta.isolated && child.meta.worktreePath, '子代理必须独立 worktree')
+      assert(child.meta.sourceCwd === repoDir, '子代理 sourceCwd 应指向原仓库')
+      assert(child.meta.cwd !== repoDir, '子代理 cwd 不能污染主仓')
+      await waitFor(() => session.getTranscript().some((entry) => entry.event.kind === 'turn-result'), 5000, `等待 ${child.taskId} 完成`)
+      assert(
+        session.getTranscript().some((entry) => entry.event.kind === 'user-message' && entry.event.text === child.prompt),
+        `子代理 ${child.taskId} 未收到自己的 prompt`
+      )
+    }
+
+    const batch33 = Array.from({ length: 33 }, (_, i) => ({ id: `b${i}`, prompt: `noop ${i}` }))
+    const result33 = sm.dispatchSubagents(parent.id, { tasks: batch33, isolated: false })
+    eq(result33.children.length, 33, '应允许一次派发 33 个子代理')
+    let overLimit = false
+    try {
+      sm.dispatchSubagents(parent.id, { tasks: [...batch33, { id: 'too-many', prompt: 'x' }] })
+    } catch (err) {
+      overLimit = /33/.test(String(err.message))
+    }
+    assert(overLimit, '超过 33 个子代理应拒绝')
+    for (const child of [...result.children, ...result33.children]) sm.close(child.meta.id)
+    sm.close(parent.id)
+  })
+
+  // ---- T13 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
+  await test('T13 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
     const providers = M('main/providers.js')
     const server = http.createServer((req, res) => {
       const auth = req.headers['x-api-key'] || String(req.headers['authorization'] || '').replace('Bearer ', '')
@@ -468,8 +515,8 @@ async function main() {
     server.close()
   })
 
-  // ---- T13 迁移向导回归(真文件) ----
-  await test('T13 迁移向导:扫描/导入/幂等回归', async () => {
+  // ---- T14 迁移向导回归(真文件) ----
+  await test('T14 迁移向导:扫描/导入/幂等回归', async () => {
     const mig = M('main/migration.js')
     const proj = path.join(tmpRoot, 'migproj')
     fs.mkdirSync(path.join(proj, '.cursor', 'rules'), { recursive: true })
@@ -487,8 +534,8 @@ async function main() {
     assert(/跳过/.test(second), '幂等防护失效')
   })
 
-  // ---- T14 调度器回归 ----
-  await test('T14 调度器:分类/能力表/故障目标回归', async () => {
+  // ---- T15 调度器回归 ----
+  await test('T15 调度器:分类/能力表/故障目标回归', async () => {
     const s = M('main/scheduler.js')
     assert(s.classifyFailure('Insufficient credit balance').switchable, '余额分类')
     assert(!s.classifyFailure('error_max_turns').switchable, 'max_turns 不切换')

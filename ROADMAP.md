@@ -1,6 +1,6 @@
 # CaoGen 目标与路线图
 
-> 制定日期:2026-07-03 · 状态:2026-07-04 加速轮 —— M0–M5、M4.1 已完成;M6 架构落地(适配器待实现);M7 打包链路完成(自动更新待补);M8.1 @文件、M8.2 检查点回溯核心+回溯面板、斜杠命令面板、通知/防休眠已落地;M8 图片附件后端 helper 已落地(UI 待接);M9 worktree 隔离后端+管理面板+patch 导出/丢弃已落地,合并审查 helper 已落地;D11 迁移向导已落地;M10 Diff/Worktree/Terminal/File Editor/Preview 工作台第一版已落地,产物预览可发给 Agent;M11 WebContentsView 浏览器面板 + 选区批注保存 + 批注发给 Agent 第一版已接入;M12 3D 随机协作动画已替换为真实 tool/task 派生任务流第一版;M13 项目记忆、Routine 存储、开工建议 helper 已落地;M15 插件扫描 helper 已落地;迁移攻坚 M8–M15 设计定稿于 DESIGN-V2.md
+> 制定日期:2026-07-03 · 状态:2026-07-04 加速轮 —— M0–M5、M4.1 已完成;M6 架构落地(适配器待实现);M7 打包链路完成(自动更新待补);M8.1 @文件、M8.2 检查点回溯核心+回溯面板、斜杠命令面板、图片粘贴/拖拽、通知/防休眠已落地;M9 worktree 隔离后端+管理面板+patch 导出/丢弃已落地,合并审查 helper 已落地;D11 迁移向导已落地;M10 Diff/Worktree/Terminal/File Editor/Preview 工作台第一版已落地,产物预览可发给 Agent;M11 WebContentsView 浏览器面板 + 选区批注保存 + 批注发给 Agent 第一版已接入;M12 真实 child session 派发后端/IPC/preload/store/面板第一版已落地,一次最多 33 个子 Agent,默认独立 worktree;M13 项目记忆、Routine 存储、开工建议 helper 已落地;M15 插件扫描 helper 已落地;迁移攻坚 M8–M15 设计定稿于 DESIGN-V2.md
 
 ## 终极产品目标
 
@@ -50,7 +50,7 @@
 - ✅ 打开 3D 办公区,3 秒内读出所有会话的状态与开销(M5:状态动画 + 悬浮标签 + 品牌色)
 - 🚧 Codex/Claude 深度用户迁移首日可完成常用动作:`@` 文件、`/` 命令、图片粘贴/拖拽输入、检查点代码回溯、CaoGen 对话转录回溯、Diff 审查、终端、文件编辑器、产物预览已可用;图片标注/OCR、底层 SDK 上下文级对话回溯仍待补齐
 - 🚧 每个 Agent 默认独立 worktree 后端与管理面板已接入;patch 导出/丢弃可用,直接合并/PR 路径仍需补齐
-- 🚧 主 Agent 能真实派活给 ≥3 个子 Agent,各自运行、回传、合并仍未完成;但 3D 办公区已停止随机假协作包,改为从真实 `tool_use` / `runningTools` / `toolResults` / `pendingPermissions` 派生任务流第一版
+- 🚧 主 Agent 可通过 Subagent 面板真实派发 ≥3 个子 Agent,后端已验证 33 个上限、child session 关系、prompt 投递和默认独立 worktree;SDK `supportedAgents()` / `agents` 桥接、任务图、预算/权限闸门、回传归档、合并队列和 3D 编排视图仍需补齐
 - ⬜ 笔记本关闭后,云端 Routines 仍能按计划触发任务,重新打开桌面端可接续上下文、产物和日志
 - 🚧 插件/预览生态覆盖 90+ 常用能力仍未完成;插件 registry 扫描 helper 与 HTML/Markdown/Text/CSV/JSON/Image/PDF 预览识别/UI 已落地,PDF 深度渲染/表格/PPT/预览批注待接
 - ⬜ 完成跨竞品迁移验收:Codex、Claude Code、Gemini CLI、Cursor、Cline、Aider 等各类深度用户用 CaoGen 完成一天真实工作流,关键动作无需回退原工具
@@ -59,12 +59,23 @@
 
 ### 当前进展 vs 终极目标差距
 
-当前进展已经从"能聊天的桌面壳"推进到"多会话工程工作台底座":worktree 隔离已有自动创建、管理面板、patch 导出/丢弃与合并审查 helper,但离终极目标还差直接合并/PR、冲突三栏审查、子代理独立 worktree 生命周期和主工作区零污染验收;浏览器批注已有 WebContentsView 面板、导航、选区批注保存、页面高亮和批注发给 Agent,但还缺 DOM 圈选、截图批注、控制台/网络摘要和 Agent 只读复验工具;记忆/自动化/主动建议已有 confirmed/draft memory store、Routine JSON store 与本地开工建议 helper,但还缺确认 UI、本地调度器、Routine 收件箱、跨天续做和来源可追溯治理;插件生态+预览+通知+防休眠已有 registry 扫描 helper、HTML/Markdown/Text/CSV/JSON/Image/PDF 预览识别/UI、完成通知与 powerSaveBlocker,但还缺插件浏览器、MCP 状态、安装/权限/版本治理、90+ 能力覆盖、PDF 深渲染、表格/PPT 和预览批注;`@`文件/图片/斜杠命令已有文件引用、命令面板、Composer 图片粘贴/拖拽和 SDK base64 image block,但还缺多图标注/OCR、引用快照回显和插件/Routine 命令参数化;checkpoint 回溯已有 rewindFiles 核心、Esc Esc 入口、代码/对话/两者面板和 CaoGen transcript 原子截断,但还缺底层 Claude SDK 上下文级重建、回退前 diff 解释和跨 worktree checkpoint 索引;子代理编排目前仅 3D 真实 tool/task 派生任务流替代随机动画,离主 Agent 派活、≥3 子 Agent 并行、回传、合并队列和任务图仍有明显差距;Routines 云端定时仍是规划,需要 Cloud Scheduler/Runner、加密上下文、仓库授权、预算闸门、日志/产物/checkpoint 回传;分屏 workbench 已有 Diff/Worktree/Terminal/File Editor/Browser/Preview 六面板壳和首版 IPC/UI,但还缺拖拽停靠、布局保存、逐 hunk accept/reject、预览到批注到修复闭环;hooks/background 目前只有 SDK 能力识别和路线图设计,还需 hooks 事件桥接、权限/超时/日志策略、backgroundTasks 管理 UI、后台任务升格终端与输出回灌 Agent。
+当前进展已经从"能聊天的桌面壳"推进到"多会话工程工作台底座",但离终极目标还不是一个量级的收尾工作,而是若干条必须闭环的产品链路:
+
+- **Worktree 隔离**:自动创建、管理面板、patch 导出/丢弃与合并审查 helper 已落地;还缺直接合并/PR、冲突三栏审查、逐 hunk 接受/拒绝和合并后 checkpoint 验收。
+- **内置浏览器批注**:WebContentsView 面板、导航、选区批注保存、页面高亮和批注发给 Agent 已落地;还缺 DOM 圈选、截图批注、控制台/网络摘要和 Agent 只读复验工具。
+- **记忆/自动化/主动建议**:confirmed/draft memory store、Routine JSON store 与本地开工建议 helper 已落地;还缺确认 UI、本地调度器、Routine 收件箱、跨天续做和来源可追溯治理。
+- **插件生态 + 产物预览**:registry 扫描 helper、HTML/Markdown/Text/CSV/JSON/Image/PDF 预览识别/UI、完成通知与 powerSaveBlocker 已落地;还缺插件浏览器、MCP 状态、安装/权限/版本治理、90+ 能力覆盖、PDF 深渲染、表格/PPT 和预览批注。
+- **高频输入**:`@` 文件、斜杠命令、Composer 图片粘贴/拖拽和 SDK base64 image block 已落地;还缺多图标注/OCR、引用快照回显和插件/Routine 命令参数化。
+- **Checkpoint 回溯**:rewindFiles 核心、Esc Esc 入口、代码/对话/两者面板和 CaoGen transcript 原子截断已落地;还缺底层 Claude SDK 上下文级重建、回退前 diff 解释和跨 worktree checkpoint 索引。
+- **子代理编排**:真实 `dispatchSubagents` 已能从父会话创建 child sessions、记录 parent/orchestration/task 元数据、默认隔离 worktree、立即投递 prompt,渲染端已有 Subagent 面板和 `/subagents` 入口;还缺 SDK `supportedAgents()` / `agents` 桥接、TaskGraph、事件回传总线、预算/权限闸门、合并队列和由真实 child session 驱动的 3D 编排视图。
+- **云端 Routines**:仍是规划,需要 Cloud Scheduler/Runner、加密上下文、仓库授权、预算闸门、日志/产物/checkpoint 回传。
+- **分屏工作台**:已有 Diff/Worktree/Terminal/File Editor/Browser/Preview 六面板壳和首版 IPC/UI;还缺拖拽停靠、布局保存、逐 hunk accept/reject、预览到批注到修复闭环。
+- **Hooks / 后台任务**:目前只有 SDK 能力识别和路线图设计;还需 hooks 事件桥接、权限/超时/日志策略、backgroundTasks 管理 UI、后台任务升格终端与输出回灌 Agent。
 
 ### 下一轮优先攻坚
 
 - **P0 · checkpoint 深一致性 + worktree 合并/PR 打通**:在已接入"代码 / 对话 / 两者"与 CaoGen transcript 原子回溯的基础上,补底层 Claude SDK 上下文级重建,建立 message id、checkpoint、tool diff、worktree 路径的可索引链路;回退前必须解释将恢复/丢弃的代码 diff 与聊天范围;WorktreePanel 接上 `worktreeMerge` 的 apply-check、合并回主工作区、生成 PR、冲突三栏和合并后 checkpoint 验收,硬标准是主工作区零污染、任一 worktree 可回退/可丢弃/可 PR。
-- **P0 · 子代理真实编排 MVP**:接 SDK `supportedAgents()` / `agents` 能力到主 Agent 派活,落 TaskGraph、≥3 子 Agent 独立 worktree、事件流回传、预算/权限/验收命令与合并队列;3D 办公区只消费真实 task/subagent/worktree 状态,不再新增视觉假状态。
+- **P0 · 子代理真实编排二期**:在已落地的父会话 `dispatchSubagents` / 33 child sessions / 默认独立 worktree 基础上,接 SDK `supportedAgents()` / `agents` 能力,落 TaskGraph、事件流回传、预算/权限/验收命令与合并队列;3D 办公区只消费真实 child session、task、worktree 状态,不再新增视觉假状态。
 - **P1 · 云端 Routines 最小闭环**:先把本地调度器、Routine Inbox、run log、artifact、diff、checkpoint 回传做成可复验链路;云端以 GitHub Actions 桥接或最小 Cloud Scheduler/Runner 试点,强制加密上下文、仓库授权、Secrets 范围、预算闸门、最大运行时和 PR-only 默认策略。
 - **P1 · 插件/Routine 面板接线**:把 `pluginRegistry` 扫描结果接入插件浏览器、MCP 状态面板、安装/启用/权限/版本治理;`/` 面板聚合插件命令与 Routine 模板,支持参数表单、最近使用、失败诊断和一键生成 Routine。
 - **P2 · 预览深渲染与批注闭环**:把 PDF 从占位升级为页级渲染、搜索、缩略图和批注;CSV/表格补筛选、公式/图表识别,PPT 补缩略图与页批注;所有预览批注都能结构化发给 Agent,形成"看产物 → 批注 → 修复 → 复验"链路。
@@ -126,11 +137,11 @@
 | M5 | 3D 办公区 v1 | R3F 场景、工位状态动画、点击聚焦、双视图切换 | ✅ 已完成 |
 | M6 | 原生多引擎 | EngineAdapter 抽象,接入 Codex CLI / Gemini CLI | 🚧 架构已落地(Engine 接口 + 注册表 + 引擎选择 UI;AgentSession=ClaudeEngine;Codex/Gemini 适配器待实现) |
 | M7 | 打包分发 | electron-builder、图标、自动更新 | 🚧 打包链路已完成;自动更新待实现 |
-| M8 | 肌肉记忆层 | `@`文件 / 图片输入 / 斜杠命令 / 快捷键 + 通知防休眠 + 3D 材质光影(D1/D9/D10.1) | 🚧 `@`文件、`/`命令面板、Esc Esc、通知/防休眠已完成;图片附件复制/base64 content block helper 已完成,Composer 粘贴/拖拽 UI 待接;材质光影待实现 |
+| M8 | 肌肉记忆层 | `@`文件 / 图片输入 / 斜杠命令 / 快捷键 + 通知防休眠 + 3D 材质光影(D1/D9/D10.1) | 🚧 `@`文件、`/`命令面板、Esc Esc、通知/防休眠、图片附件复制/base64 content block helper 与 Composer 粘贴/拖拽 UI 已完成;图片标注/OCR 与材质光影待实现 |
 | M9 | 检查点 + Worktree | `Esc Esc`//rewind 回溯(代码/对话/两者)+ 每 Agent worktree 隔离与合并路径(D2/D3/D10.2) | 🚧 checkpoint rewindFiles 核心 + 回溯面板 + worktree 自动隔离/管理面板/patch 导出/丢弃 + 合并审查/patch apply-check helper 已完成;对话回溯/直接合并 UI/PR 待实现 |
 | M10 | 工作台化 | 拖拽分屏 + 内置终端/编辑器 + 重做 Diff + HTML/PDF/表格/PPT 预览(D4) | 🚧 分屏壳 + 工作区 Diff 面板 + Worktree 面板 + 终端后端/API/UI 第一版 + 安全文件编辑器 IPC/preload/store/UI 第一版 + PreviewPanel/PreviewRenderer 第一版已完成;预览内容可一键发给 Agent;拖拽布局/逐 hunk accept/PDF 深度渲染/表格/PPT 待实现 |
 | M11 | 浏览器批注 | 内置浏览器 + DOM 圈选批注喂给 Agent + Agent 只读观测复验(D6) | 🚧 WebContentsView 浏览器面板、导航、后退/前进/刷新、选区批注保存、页面高亮、批注发给 Agent 第一版已接入;DOM 圈选/截图批注/Agent 只读观测工具待实现 |
-| M12 | 真子代理 + Hooks | SDK agents/hooks 桥接 + 跨会话派活 + 任务图 + 3D 真实任务流(假动画退役)(D5/D8/D10.3) | 🚧 3D 假消息包已退役为 renderer-only 真实 tool/task 派生任务流;SDK agents/hooks 桥接、跨会话派活、任务图、合并队列待实现 |
+| M12 | 真子代理 + Hooks | SDK agents/hooks 桥接 + 跨会话派活 + 任务图 + 3D 真实任务流(假动画退役)(D5/D8/D10.3) | 🚧 `dispatchSubagents` 后端/IPC/preload/store/面板入口已落地,可从父会话派发真实 child sessions,默认独立 worktree,一次最多 33 个;SDK agents/hooks 桥接、TaskGraph、事件回传、预算/权限闸门、合并队列待实现 |
 | M13 | 记忆 + 本地 Routines | 项目记忆(确认制)+ 开工建议 + 本地 cron + 跨天续做(D7) | 🚧 项目记忆 confirmed/draft store + Routine JSON store helper + 开工建议 helper 已完成;确认 UI、本地调度器、收件箱、跨天续做 UI 待实现 |
 | M14 | 云端 Routines | GitHub Actions 桥接先行,自建 Runner 视反馈评估(D7 云端) | 规划 |
 | M15 | 插件生态 | 插件浏览器 + MCP 面板 + 90+ 覆盖与治理(D9) | 🚧 skills/agents/MCP registry 扫描 helper 已完成;插件浏览器、MCP 状态面板、安装/权限/版本治理待实现 |
@@ -203,7 +214,7 @@
 - **结果合并**:主 Agent 汇总子 Agent diff、测试结果和产物;冲突进入合并队列;用户可逐块接受
 - **Hooks**:pre-send、post-edit、post-command、pre-commit、on-failure、on-complete;支持项目级和全局级;每个 hook 有权限、超时、日志和失败策略
 - **后台任务**:dev server、watch test、lint、long-running build 独立管理;可暂停/恢复/发输出给 Agent;不阻塞聊天
-- **已落地底座**:3D `MessagePackets` 已移除随机假协作动画,改由 `buildOfficeModel` 从真实 `tool_use`、运行中工具、工具结果、权限请求派生任务包与当前任务;真实 SDK subagent/hook 事件桥接仍待实现
+- **已落地底座**:3D `MessagePackets` 已移除随机假协作动画,改由 `buildOfficeModel` 从真实 `tool_use`、运行中工具、工具结果、权限请求派生任务包与当前任务;`dispatchSubagents` 已能创建真实 child sessions、写入 parent/orchestration/task 元数据、默认独立 worktree 并立即投递 prompt,Subagent 面板和 `/subagents` 入口已接入;SDK agents/hooks 桥接、TaskGraph、事件回传总线和合并队列仍待实现
 - **验收**:一个"前后端同时做"任务能拆给 ≥3 个子 Agent,独立执行并最终合并成可审查结果
 
 ### M13 记忆 + 主动建议 + 本地 Routines

@@ -23,6 +23,7 @@ export default function ChatView(): React.JSX.Element | null {
   const openWorktreePanel = useStore((s) => s.openWorktreePanel)
   const openTerminalPanel = useStore((s) => s.openTerminalPanel)
   const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
+  const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -114,6 +115,9 @@ export default function ChatView(): React.JSX.Element | null {
               {t('worktreeShort')}
             </button>
           )}
+          <button className="btn btn-ghost" onClick={() => void openSubagentPanel()}>
+            {t('subagentsShort')}
+          </button>
           <button className="btn btn-ghost" onClick={() => void openFilesPanel()}>
             {t('filesShort')}
           </button>
