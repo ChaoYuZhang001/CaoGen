@@ -7,6 +7,7 @@ import { useT } from '../../i18n'
 import Workstation, { activityOf } from './Workstation'
 import MessagePackets from './MessagePackets'
 import OfficeScene from './kit/OfficeScene'
+import Wanderers, { type WandererSpec } from './kit/Wanderers'
 import { brandFor } from './brand'
 import { buildOfficeModel } from './model'
 
@@ -64,6 +65,27 @@ export default function OfficeView(): React.JSX.Element {
     const name = providerId ? providers.find((p) => p.id === providerId)?.name : ''
     return brandFor(name).color
   }
+
+  // 空闲工位派 ≤3 个小人去会议桌(≈[7,0,6.5])环绕交流;活跃工位留守打字
+  const wandererSpecs = useMemo<WandererSpec[]>(() => {
+    const idle = ids.filter((id) => activityOf(sessions[id]) === 'idle')
+    const MEET = [7, 0, 6.5] as const
+    const seats: Array<[number, number, number]> = [
+      [7, 0, 5.1],
+      [8.4, 0, 6.5],
+      [5.6, 0, 6.5]
+    ]
+    return idle.slice(0, 3).map((id, i) => {
+      const idx = ids.indexOf(id)
+      return {
+        id,
+        home: positions[idx] ?? [0, 0, 0],
+        meet: seats[i] ?? [MEET[0], MEET[1], MEET[2]],
+        bodyColor: brandColorFor(sessions[id].meta.providerId),
+        phase: i * 2.3
+      }
+    })
+  }, [ids, sessions, positions]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const focus = (id: string): void => {
     selectSession(id)
@@ -162,6 +184,8 @@ export default function OfficeView(): React.JSX.Element {
               }))}
               packets={officeModel.packets}
             />
+            {/* 空闲小人离席去会议桌交流(纯氛围,让办公室"活"起来) */}
+            <Wanderers specs={wandererSpecs} />
           </Suspense>
 
           <OrbitControls
