@@ -30,10 +30,13 @@ export default function ChatView(): React.JSX.Element | null {
   const startSuggestions = useStore((s) => s.visibleStartSuggestions())
   const startSuggestionsLoading = useStore((s) => s.workbench.startSuggestionsLoading)
   const startSuggestionsError = useStore((s) => s.workbench.startSuggestionsError)
+  const memorySuggestion = useStore((s) => s.workbench.memorySuggestion)
   const refreshStartSuggestions = useStore((s) => s.refreshStartSuggestions)
   const sendStartSuggestion = useStore((s) => s.sendStartSuggestion)
   const laterStartSuggestion = useStore((s) => s.laterStartSuggestion)
   const ignoreStartSuggestion = useStore((s) => s.ignoreStartSuggestion)
+  const acceptMemorySuggestion = useStore((s) => s.acceptMemorySuggestion)
+  const dismissMemorySuggestion = useStore((s) => s.dismissMemorySuggestion)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -74,6 +77,7 @@ export default function ChatView(): React.JSX.Element | null {
   const providerName = meta.providerId
     ? providers.find((p) => p.id === meta.providerId)?.name ?? t('unknownProvider')
     : t('providerOfficial')
+  const activeMemorySuggestion = memorySuggestion?.sessionId === activeId ? memorySuggestion : undefined
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -198,6 +202,19 @@ export default function ChatView(): React.JSX.Element | null {
       </div>
 
       <PermissionBar sessionId={activeId} requests={session.pendingPermissions} />
+      {activeMemorySuggestion && (
+        <div className="memory-suggestion-bar">
+          <div className="memory-suggestion-text" title={activeMemorySuggestion.text}>
+            记住这条约定? {activeMemorySuggestion.text}
+          </div>
+          <button className="btn btn-primary btn-sm" onClick={acceptMemorySuggestion}>
+            记住
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={dismissMemorySuggestion}>
+            忽略
+          </button>
+        </div>
+      )}
       <Composer running={running} />
       <RewindPanel />
 

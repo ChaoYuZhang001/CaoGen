@@ -23,6 +23,7 @@ import {
   deleteMemoryEntry,
   type ProjectMemoryDraftInput
 } from './memoryStore'
+import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
 import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
@@ -504,6 +505,11 @@ export function registerIpc(): void {
   ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
     if (!payload) return
+    if (payload.text && shouldProposeMemory(payload.text)) {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
+      }
+    }
     sessionManager.get(id)?.send(payload)
   })
 

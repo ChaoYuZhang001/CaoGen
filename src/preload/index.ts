@@ -7,6 +7,7 @@ import type {
   CreateSessionOptions,
   DispatchSubagentsInput,
   MarkRunOptions,
+  MemorySuggestionEvent,
   PermissionModeId,
   PluginRegistryScanOptions,
   ProjectMemoryDraftInput,
@@ -159,6 +160,15 @@ const api: AgentDeskApi = {
     ipcRenderer.on('session:event', listener)
     return () => {
       ipcRenderer.removeListener('session:event', listener)
+    }
+  },
+  onMemorySuggestion: (cb) => {
+    const listener = (_e: IpcRendererEvent, event: MemorySuggestionEvent): void => {
+      cb(event)
+    }
+    ipcRenderer.on('memory:suggestion', listener)
+    return () => {
+      ipcRenderer.removeListener('memory:suggestion', listener)
     }
   }
 }

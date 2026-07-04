@@ -17,6 +17,7 @@ import type {
   GitStatus,
   SubagentDispatchResult,
   HistoryEntry,
+  MemorySuggestionEvent,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
@@ -477,6 +478,8 @@ export interface WorkbenchState {
   routineMessage?: string
   selectedRoutineId?: string | null
   memoryOpen: boolean
+  memorySuggestion?: MemorySuggestionEvent
+  memoryInitialForm?: { kind: string; title: string; body: string; reason: string }
   startSuggestions: StartSuggestion[]
   startSuggestionsLoading: boolean
   startSuggestionsError?: string
@@ -507,6 +510,7 @@ interface AppStore {
   showSettings: boolean
   init(): Promise<void>
   handleEvent(sessionId: string, event: AgentEvent, seq: number): void
+  handleMemorySuggestion(event: MemorySuggestionEvent): void
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
   createSession(opts: CreateSessionOptions): Promise<void>
@@ -592,6 +596,8 @@ interface AppStore {
   laterStartSuggestion(id: string): void
   visibleStartSuggestions(): StartSuggestion[]
   openMemoryPanel(): void
+  acceptMemorySuggestion(): void
+  dismissMemorySuggestion(): void
   closeMemoryPanel(): void
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
@@ -675,6 +681,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (get().ready) return
     set({ ready: true })
     window.agentDesk.onSessionEvent((sessionId, event, seq) => get().handleEvent(sessionId, event, seq))
+    window.agentDesk.onMemorySuggestion((event) => get().handleMemorySuggestion(event))
     window.agentDesk.onTerminalEvent((event) => get().handleTerminalEvent(event))
     window.agentDesk.onBrowserEvent((event) => get().handleBrowserEvent(event))
     const [metas, history, settings, providers, projects] = await Promise.all([
@@ -749,6 +756,19 @@ export const useStore = create<AppStore>((set, get) => ({
     if (event.kind === 'turn-result' || event.kind === 'init') {
       void window.agentDesk.listHistory().then((history) => set({ history }))
     }
+  },
+
+  handleMemorySuggestion(event) {
+    set((s) => {
+      const current = s.workbench.memorySuggestion
+      if (current?.sessionId === event.sessionId && current.text === event.text) return s
+      return {
+        workbench: {
+          ...s.workbench,
+          memorySuggestion: event
+        }
+      }
+    })
   },
 
   handleTerminalEvent(event) {
@@ -2456,13 +2476,49 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: false,
         subagentOpen: false,
         routineOpen: false,
-        memoryOpen: true
+        memoryOpen: true,
+        memoryInitialForm: undefined
       }
     }))
   },
 
+  acceptMemorySuggestion() {
+    const suggestion = get().workbench.memorySuggestion
+    if (!suggestion) return
+    const text = suggestion.text.trim()
+    const title = text.length > 28 ? `${text.slice(0, 28)}...` : text || '用户约定'
+    closeNativeBrowserView(get().activeId)
+    set((s) => ({
+      activeId: suggestion.sessionId,
+      workbench: {
+        ...s.workbench,
+        diffOpen: false,
+        worktreeOpen: false,
+        terminalOpen: false,
+        filesOpen: false,
+        browserOpen: false,
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        subagentOpen: false,
+        routineOpen: false,
+        memoryOpen: true,
+        memorySuggestion: undefined,
+        memoryInitialForm: {
+          kind: 'convention',
+          title,
+          body: text,
+          reason: '用户输入包含长期约定关键词'
+        }
+      }
+    }))
+  },
+
+  dismissMemorySuggestion() {
+    set((s) => ({ workbench: { ...s.workbench, memorySuggestion: undefined } }))
+  },
+
   closeMemoryPanel() {
-    set((s) => ({ workbench: { ...s.workbench, memoryOpen: false } }))
+    set((s) => ({ workbench: { ...s.workbench, memoryOpen: false, memoryInitialForm: undefined } }))
   },
 
   openRewindPanel(messageId, sourceText, reason = 'button') {

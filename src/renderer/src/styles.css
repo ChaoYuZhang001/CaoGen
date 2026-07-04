@@ -1942,6 +1942,25 @@ textarea {
   flex-shrink: 0;
 }
 
+.memory-suggestion-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card);
+}
+
+.memory-suggestion-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 /* ---------- 输入区 / 状态栏 ---------- */
 
 .composer {

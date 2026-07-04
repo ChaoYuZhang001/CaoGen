@@ -45,6 +45,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const routineError = useStore((s) => s.workbench.routineError)
   const routineMessage = useStore((s) => s.workbench.routineMessage)
   const selectedRoutineId = useStore((s) => s.workbench.selectedRoutineId)
+  const memoryInitialForm = useStore((s) => s.workbench.memoryInitialForm)
   const refreshPluginRegistryPanel = useStore((s) => s.refreshPluginRegistryPanel)
   const closePluginRegistryPanel = useStore((s) => s.closePluginRegistryPanel)
   const selectPluginRegistryItem = useStore((s) => s.selectPluginRegistryItem)
@@ -153,7 +154,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
               onRunRoutine={(routine) => void markRoutineRun(routine.id)}
             />
           ) : memoryOpen && activeId ? (
-            <MemoryPanel sessionId={activeId} onClose={closeMemoryPanel} />
+            <MemoryPanel sessionId={activeId} initialForm={memoryInitialForm} onClose={closeMemoryPanel} />
           ) : worktreeOpen ? (
             <WorktreePanel />
           ) : (
