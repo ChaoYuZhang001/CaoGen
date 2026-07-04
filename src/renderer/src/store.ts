@@ -31,6 +31,7 @@ import type {
   SchedulerStrategy,
   SendMessagePayload,
   SessionMeta,
+  StartSuggestion,
   UserMessageAttachmentView,
   TranscriptEntry,
   TerminalEvent,
@@ -476,6 +477,11 @@ export interface WorkbenchState {
   routineMessage?: string
   selectedRoutineId?: string | null
   memoryOpen: boolean
+  startSuggestions: StartSuggestion[]
+  startSuggestionsLoading: boolean
+  startSuggestionsError?: string
+  ignoredStartSuggestions: Record<string, true>
+  laterStartSuggestions: Record<string, number>
 }
 
 export interface RewindPanelState {
@@ -580,6 +586,11 @@ interface AppStore {
   toggleRoutine(id: string, enabled: boolean): Promise<void>
   markRoutineRun(id: string): Promise<void>
   deleteRoutine(id: string): Promise<void>
+  refreshStartSuggestions(): Promise<void>
+  sendStartSuggestion(suggestion: StartSuggestion): Promise<void>
+  ignoreStartSuggestion(id: string): void
+  laterStartSuggestion(id: string): void
+  visibleStartSuggestions(): StartSuggestion[]
   openMemoryPanel(): void
   closeMemoryPanel(): void
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
@@ -650,7 +661,11 @@ export const useStore = create<AppStore>((set, get) => ({
     routineLoading: false,
     routines: [],
     selectedRoutineId: null,
-    memoryOpen: false
+    memoryOpen: false,
+    startSuggestions: [],
+    startSuggestionsLoading: false,
+    ignoredStartSuggestions: {},
+    laterStartSuggestions: {}
   },
   rewindPanel: { open: false },
   showNewSession: false,
@@ -2354,6 +2369,77 @@ export const useStore = create<AppStore>((set, get) => ({
         }
       }))
     }
+  },
+
+  async refreshStartSuggestions() {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        startSuggestionsLoading: true,
+        startSuggestionsError: undefined
+      }
+    }))
+    try {
+      const suggestions = await window.agentDesk.getStartSuggestions(id)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          startSuggestions: suggestions,
+          startSuggestionsLoading: false,
+          startSuggestionsError: undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          startSuggestionsLoading: false,
+          startSuggestionsError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async sendStartSuggestion(suggestion) {
+    await get().sendMessage(suggestion.prompt)
+    get().ignoreStartSuggestion(suggestion.id)
+  },
+
+  ignoreStartSuggestion(id) {
+    const activeId = get().activeId
+    if (!activeId) return
+    const key = `${activeId}:${id}`
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        ignoredStartSuggestions: { ...s.workbench.ignoredStartSuggestions, [key]: true }
+      }
+    }))
+  },
+
+  laterStartSuggestion(id) {
+    const activeId = get().activeId
+    if (!activeId) return
+    const key = `${activeId}:${id}`
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        laterStartSuggestions: { ...s.workbench.laterStartSuggestions, [key]: Date.now() + 30 * 60 * 1000 }
+      }
+    }))
+  },
+
+  visibleStartSuggestions() {
+    const activeId = get().activeId
+    if (!activeId) return []
+    const now = Date.now()
+    const { ignoredStartSuggestions, laterStartSuggestions, startSuggestions } = get().workbench
+    return startSuggestions.filter((suggestion) => {
+      const key = `${activeId}:${suggestion.id}`
+      return !ignoredStartSuggestions[key] && (laterStartSuggestions[key] ?? 0) <= now
+    })
   },
 
   openMemoryPanel() {

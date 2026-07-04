@@ -1,17 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
-
-export type StartSuggestionPriority = 'high' | 'medium' | 'low'
-
-export interface StartSuggestion {
-  id: string
-  title: string
-  body: string
-  source: string
-  priority: StartSuggestionPriority
-  prompt: string
-}
+import type { StartSuggestion, StartSuggestionPriority } from '../shared/types'
 
 export interface StartSuggestionSignal {
   id?: string

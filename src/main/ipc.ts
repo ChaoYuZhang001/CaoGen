@@ -34,6 +34,7 @@ import {
   unstageFiles
 } from './gitOps'
 import { applyHunk, getWorkspaceDiff } from './gitDiff'
+import { getStartSuggestions, type StartSuggestionSignal } from './startSuggestions'
 import {
   applyManagedWorktreePatch,
   checkManagedWorktreeApply,
@@ -627,6 +628,56 @@ export function registerIpc(): void {
   ipcMain.handle('routines:markRun', (_e, id: string, options?: MarkRunOptions) => {
     if (typeof id !== 'string' || id.trim().length === 0) return null
     return markRun(routineStoreRoot(), id, options ?? {})
+  })
+
+  ipcMain.handle('startSuggestions:get', async (_e, id: string) => {
+    const session = sessionManager.get(id)
+    if (!session) return []
+    const projectRoot = session.meta.sourceCwd ?? session.meta.cwd
+    const memory = await readProjectMemory(projectRoot, memoryRoot()).catch(() => ({ entries: [] }))
+    const worktree = getManagedWorktreeSummary(id)
+    const historySignals: StartSuggestionSignal[] = listHistory().slice(0, 8).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      body: entry.cwd,
+      source: 'history',
+      updatedAt: entry.updatedAt,
+      ok: true
+    }))
+    const routines = await listRoutines(routineStoreRoot())
+    const routineSignals: StartSuggestionSignal[] = routines.map((routine) => ({
+      id: routine.id,
+      title: routine.name,
+      body: routine.prompt,
+      source: 'routine',
+      status: routine.enabled ? 'enabled' : 'disabled',
+      updatedAt: routine.updatedAt,
+      ok: true
+    }))
+    return getStartSuggestions(projectRoot, {
+      memoryEntries: memory.entries.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        body: entry.body,
+        source: entry.source || 'memory',
+        status: entry.kind,
+        updatedAt: entry.updatedAt,
+        failed: /失败|报错|阻塞|failed|error|blocked/i.test(`${entry.title}\n${entry.body}\n${entry.reason}`)
+      })),
+      worktreeSummaries: [
+        {
+          id,
+          title: worktree.record?.branch ?? session.meta.title,
+          body: worktree.error ?? `${worktree.changedFiles} changed files`,
+          source: 'worktree',
+          status: worktree.dirty ? 'dirty' : 'clean',
+          failed: worktree.ok === false,
+          ok: worktree.ok
+        }
+      ],
+      historySummaries: historySignals,
+      routineSummaries: routineSignals
+    })
   })
 
   ipcMain.handle('migration:scan', (_e, cwd: string) => {
