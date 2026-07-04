@@ -24,8 +24,8 @@ export interface ProviderHealthView {
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 
-/** Agent 引擎标识:claude = Claude Agent SDK(默认);codex / gemini 经 EngineAdapter 接入 */
-export type EngineKind = 'claude' | 'codex' | 'gemini'
+/** Agent 引擎标识:claude = Claude Agent SDK(默认);openai = OpenAI Responses API;codex / gemini 经 EngineAdapter 接入 */
+export type EngineKind = 'claude' | 'openai' | 'codex' | 'gemini'
 
 export interface EngineInfo {
   kind: string
@@ -103,6 +103,7 @@ export interface HistoryEntry {
   worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
+  engine?: EngineKind
   permissionMode: PermissionModeId
   sdkSessionId: string
   createdAt: number
