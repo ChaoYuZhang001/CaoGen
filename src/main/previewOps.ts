@@ -3,6 +3,7 @@ import path from 'node:path'
 import { TextDecoder } from 'node:util'
 
 const DEFAULT_MAX_TEXT_PREVIEW_BYTES = 1_000_000
+const DEFAULT_MAX_ASSET_PREVIEW_BYTES = 20_000_000
 
 export type PreviewType =
   | 'html'
@@ -40,6 +41,7 @@ export interface TextPreview extends PreviewDetection {
 export interface AssetPreview extends PreviewDetection {
   mode: 'asset'
   type: 'image' | 'pdf'
+  dataUrl: string
 }
 
 export interface UnknownPreview extends PreviewDetection {
@@ -49,6 +51,7 @@ export interface UnknownPreview extends PreviewDetection {
 
 export interface PreparePreviewOptions {
   maxTextBytes?: number
+  maxAssetBytes?: number
 }
 
 export type DetectPreviewResult = PreviewDetection | PreviewOpsFailure
@@ -146,7 +149,16 @@ export async function preparePreview(
 
     if (kind.mode !== 'text') {
       if (kind.type === 'unknown') return base as UnknownPreview
-      return base as AssetPreview
+      const maxAssetBytes = positiveLimit(options.maxAssetBytes, DEFAULT_MAX_ASSET_PREVIEW_BYTES)
+      if (target.bytes > maxAssetBytes) {
+        return failure(`预览资产过大: ${target.bytes} bytes, 上限 ${maxAssetBytes} bytes`)
+      }
+      const buffer = await readFile(target.fullPath)
+      return {
+        ...base,
+        bytes: buffer.byteLength,
+        dataUrl: `data:${kind.mime};base64,${buffer.toString('base64')}`
+      } as AssetPreview
     }
 
     const maxTextBytes = positiveLimit(options.maxTextBytes, DEFAULT_MAX_TEXT_PREVIEW_BYTES)

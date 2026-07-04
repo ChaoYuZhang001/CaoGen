@@ -74,15 +74,31 @@ try {
   assert(canApply.canApply, `patch should apply cleanly: ${canApply.error ?? 'unknown error'}`)
   git(projectDir, ['apply', '--check', patch.path])
 
+  const apply = worktreeMerge.applySquashPatch(projectDir, patch.patchText)
+  assertOk(apply, 'applySquashPatch should apply a clean patch')
+  assert(apply.applied, 'non-empty patch should report applied=true')
+  assertEqual(apply.changedFiles, 2)
+  assert(readFileSync(path.join(projectDir, 'notes.txt'), 'utf8').includes('worktree line'))
+  assert(readFileSync(path.join(projectDir, 'new-file.txt'), 'utf8').includes('fresh'))
+
   const emptyPatch = worktreeMerge.canFastApplyPatch(projectDir, ' \n\t\n')
   assertOk(emptyPatch, 'canFastApplyPatch should accept an empty patch')
   assert(emptyPatch.canApply, 'empty patch should be treated as a no-op')
 
+  const emptyApply = worktreeMerge.applySquashPatch(projectDir, ' \n\t\n')
+  assertOk(emptyApply, 'applySquashPatch should accept an empty patch')
+  assert(!emptyApply.applied, 'empty patch should be treated as a no-op')
+
+  git(projectDir, ['reset', '--hard', 'HEAD'])
+  rmSync(path.join(projectDir, 'new-file.txt'), { force: true })
   writeFileSync(path.join(projectDir, 'notes.txt'), 'alpha\nmain line\n', 'utf8')
   const blockedApply = worktreeMerge.canFastApplyPatch(projectDir, patch.patchText)
   assertOk(blockedApply, 'canFastApplyPatch should report apply-check failures')
   assert(!blockedApply.canApply, 'patch should be blocked by conflicting main worktree content')
   assert(blockedApply.error, 'blocked apply-check should include the git error')
+
+  const blockedRealApply = worktreeMerge.applySquashPatch(projectDir, patch.patchText)
+  assert(!blockedRealApply.ok, 'applySquashPatch should not apply a blocked patch')
 
   const conflictedInspect = worktreeMerge.inspectMerge(projectDir, worktreeDir, baseSha)
   assertOk(conflictedInspect, 'inspectMerge should not crash on conflict risk')

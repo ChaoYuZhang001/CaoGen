@@ -8,9 +8,10 @@ import { markRun } from './routineStore'
 import { initAutoUpdater } from './updater'
 import type { Routine } from '../shared/types'
 
-// 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录
+// 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录。
+// 测试脚本可通过 CAOGEN_USER_DATA_DIR 指向临时目录,避免污染真实 CaoGen 配置。
 app.setName('CaoGen')
-app.setPath('userData', join(app.getPath('appData'), 'CaoGen'))
+app.setPath('userData', process.env.CAOGEN_USER_DATA_DIR || join(app.getPath('appData'), 'CaoGen'))
 
 /** 应用图标源文件;放置后自动生效(Windows/Linux 窗口图标 + 打包) */
 function iconPath(): string | undefined {

@@ -40,8 +40,11 @@ export interface RoutinePanelProps {
   showCloudSchedulingNote?: boolean
   cloudSchedulingNote?: ReactNode
   emptyState?: RoutinePanelEmptyState
+  onAddRoutine?: () => void
   onRefresh?: () => void | Promise<void>
   onClose?: () => void
+  onDeleteRoutine?: (routine: RoutinePanelItem) => void
+  onEditRoutine?: (routine: RoutinePanelItem) => void
   onSelectRoutine?: (routine: RoutinePanelItem) => void
   onToggleRoutine?: (routine: RoutinePanelItem, enabled: boolean) => void
   onRunRoutine?: (routine: RoutinePanelItem) => void
@@ -200,6 +203,8 @@ function RoutineMain({
 function RoutineRow({
   disabled,
   now,
+  onDeleteRoutine,
+  onEditRoutine,
   onRunRoutine,
   onSelectRoutine,
   onToggleRoutine,
@@ -208,6 +213,8 @@ function RoutineRow({
 }: {
   disabled: boolean
   now: Date
+  onDeleteRoutine?: (routine: RoutinePanelItem) => void
+  onEditRoutine?: (routine: RoutinePanelItem) => void
   onRunRoutine?: (routine: RoutinePanelItem) => void
   onSelectRoutine?: (routine: RoutinePanelItem) => void
   onToggleRoutine?: (routine: RoutinePanelItem, enabled: boolean) => void
@@ -303,6 +310,24 @@ function RoutineRow({
         >
           {running ? '运行中' : queued ? '排队中' : '标记运行'}
         </button>
+        <div className="routine-panel-row-buttons">
+          <button
+            className="routine-panel-secondary"
+            type="button"
+            disabled={disabled || !onEditRoutine}
+            onClick={() => onEditRoutine?.(routine)}
+          >
+            编辑
+          </button>
+          <button
+            className="routine-panel-secondary routine-panel-secondary-danger"
+            type="button"
+            disabled={disabled || !onDeleteRoutine}
+            onClick={() => onDeleteRoutine?.(routine)}
+          >
+            删除
+          </button>
+        </div>
       </div>
     </article>
   )
@@ -317,7 +342,10 @@ export default function RoutinePanel({
   loading = false,
   message,
   now,
+  onAddRoutine,
   onClose,
+  onDeleteRoutine,
+  onEditRoutine,
   onRefresh,
   onRunRoutine,
   onSelectRoutine,
@@ -340,6 +368,11 @@ export default function RoutinePanel({
         </div>
         <div className="routine-panel-header-actions">
           <div className="routine-panel-count">{loading ? '加载中' : `${routines.length} 个`}</div>
+          {onAddRoutine && (
+            <button className="btn btn-primary btn-sm" disabled={loading} onClick={onAddRoutine}>
+              新增
+            </button>
+          )}
           {onRefresh && (
             <button className="btn btn-ghost btn-sm" disabled={loading} onClick={() => void onRefresh()}>
               刷新
@@ -371,6 +404,8 @@ export default function RoutinePanel({
               key={routine.id}
               disabled={disabled}
               now={nowDate}
+              onDeleteRoutine={onDeleteRoutine}
+              onEditRoutine={onEditRoutine}
               onRunRoutine={onRunRoutine}
               onSelectRoutine={onSelectRoutine}
               onToggleRoutine={onToggleRoutine}

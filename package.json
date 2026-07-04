@@ -10,6 +10,9 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test:page": "node scripts/page-operation-smoke.mjs",
+    "test:deep": "node scripts/deep-test.mjs",
+    "test:deep:install-hourly": "node scripts/install-hourly-deep-test.mjs",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:dir": "npm run build && electron-builder --dir"

@@ -3,6 +3,11 @@ import { MODEL_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import type { ImageAttachmentView } from '../../../shared/types'
 import ImageAttachmentTray from './ImageAttachmentTray'
+import {
+  buildPluginSlashCommands,
+  pluginSlashCommandMatches,
+  shouldLoadPluginSlashRegistry
+} from '../pluginSlashCommands'
 
 interface Mention {
   start: number
@@ -64,12 +69,19 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
   const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
+  const openMemoryPanel = useStore((s) => s.openMemoryPanel)
+  const loadPluginRegistryForSlash = useStore((s) => s.loadPluginRegistryForSlash)
+  const sendPluginRegistryItemToAgent = useStore((s) => s.sendPluginRegistryItemToAgent)
+  const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
   const updateSettings = useStore((s) => s.updateSettings)
   const setModel = useStore((s) => s.setModel)
   const theme = useStore((s) => s.settings.theme)
   const activeId = useStore((s) => s.activeId)
+  const pluginRegistry = useStore((s) => s.workbench.pluginRegistry)
+  const pluginRegistryLoading = useStore((s) => s.workbench.pluginRegistryLoading)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewUrls = useRef(new Set<string>())
+  const slashRegistryScanKey = useRef<string | null>(null)
 
   const [mention, setMention] = useState<Mention | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
@@ -107,6 +119,22 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
 
   const mentionOpen = mention !== null && suggestions.length > 0
   const slashQuery = text.startsWith('/') && !text.includes('\n') ? text.slice(1).trim().toLowerCase() : null
+  const pluginSlashCommands: SlashCommand[] =
+    slashQuery && slashQuery.length > 0
+      ? buildPluginSlashCommands(pluginRegistry?.items ?? []).map((cmd) => ({
+          id: cmd.id,
+          title: cmd.title,
+          hint: cmd.hint,
+          searchText: cmd.searchText,
+          run: () => {
+            if (cmd.action === 'dispatch-agent') {
+              void dispatchPluginAgent(cmd.item)
+            } else {
+              void sendPluginRegistryItemToAgent(cmd.item)
+            }
+          }
+        }))
+      : []
   const slashCommands: SlashCommand[] = [
     {
       id: 'rewind',
@@ -151,6 +179,12 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       run: () => void openRoutinePanel()
     },
     {
+      id: 'memory',
+      title: '/memory',
+      hint: t('slashMemoryHint'),
+      run: () => openMemoryPanel()
+    },
+    {
       id: 'worktree',
       title: '/worktree',
       hint: t('slashWorktreeHint'),
@@ -182,16 +216,26 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       title: `/model ${m.value}`,
       hint: t('slashModelHint', { model: m.label }),
       run: () => void setModel(m.value)
-    }))
+    })),
+    ...pluginSlashCommands
   ]
   const slashMatches =
     slashQuery === null
       ? []
       : slashCommands.filter((cmd) => {
+          if (cmd.searchText) return pluginSlashCommandMatches(cmd as SlashCommand & { searchText: string }, slashQuery)
           const haystack = `${cmd.title} ${cmd.hint}`.toLowerCase()
           return slashQuery.length === 0 || haystack.includes(slashQuery)
         })
   const slashOpen = slashQuery !== null && slashMatches.length > 0
+
+  useEffect(() => {
+    if (!shouldLoadPluginSlashRegistry(slashQuery) || pluginRegistryLoading) return
+    const key = activeId ?? '__no_session__'
+    if (slashRegistryScanKey.current === key && pluginRegistry) return
+    slashRegistryScanKey.current = key
+    void loadPluginRegistryForSlash()
+  }, [activeId, loadPluginRegistryForSlash, pluginRegistry, pluginRegistryLoading, slashQuery])
 
   useEffect(() => {
     setSlashIndex(0)
@@ -273,7 +317,8 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const submit = (): void => {
     const trimmed = text.trim()
     if (!trimmed && attachments.length === 0) return
-    const exactSlash = slashCommands.find((cmd) => cmd.title === trimmed)
+    const normalizedTrimmed = trimmed.toLowerCase()
+    const exactSlash = slashCommands.find((cmd) => cmd.title.toLowerCase() === normalizedTrimmed)
     if (exactSlash && attachments.length === 0) {
       runSlashCommand(exactSlash)
       return

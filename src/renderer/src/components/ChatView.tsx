@@ -25,6 +25,7 @@ export default function ChatView(): React.JSX.Element | null {
   const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
   const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
+  const openMemoryPanel = useStore((s) => s.openMemoryPanel)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -126,6 +127,9 @@ export default function ChatView(): React.JSX.Element | null {
           </button>
           <button className="btn btn-ghost" onClick={() => void openRoutinePanel()}>
             {t('routinesShort')}
+          </button>
+          <button className="btn btn-ghost" onClick={openMemoryPanel}>
+            {t('memoryShort')}
           </button>
           <button className="btn btn-ghost" onClick={() => void openBrowserPanel()}>
             {t('browserShort')}

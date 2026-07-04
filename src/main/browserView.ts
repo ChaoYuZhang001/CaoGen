@@ -58,6 +58,8 @@ class BrowserViewManager {
         partition: `persist:caogen-browser-${safePartitionId(sessionId)}`
       }
     })
+    // Keep the native view invisible until the React BrowserPanel reports its viewport bounds.
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     owner.contentView.addChildView(view)
 
     const record: BrowserRecord = {

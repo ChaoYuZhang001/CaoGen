@@ -34,6 +34,9 @@ import type {
   TerminalInfo,
   UsageTotals,
   WorkspaceDiff,
+  WorktreeApplyCheckResult,
+  WorktreeApplyResult,
+  WorktreeMergeSummary,
   WorktreePatchResult,
   WorktreeRemoveResult,
   WorktreeSummary
@@ -41,6 +44,71 @@ import type {
 
 let seq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
+
+function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
+  const kindLabel =
+    item.kind === 'plugin'
+      ? '插件包'
+      : item.kind === 'skill'
+        ? 'Skill'
+        : item.kind === 'agent'
+          ? 'Agent 定义'
+          : 'MCP 服务'
+  const usageHint =
+    item.kind === 'plugin'
+      ? '这是一个插件包容器。先查看该目录下的 .codex-plugin/plugin.json、skills/、agents/、mcp/ 等子资源,再选择最适合当前目标的能力使用。'
+      : item.kind === 'skill'
+      ? '如果需要细节,先读取该目录下的 SKILL.md,再按其中的触发条件和步骤执行。'
+      : item.kind === 'agent'
+        ? '如果需要细节,先读取这个 Agent 定义文件,再判断是否应该按它的角色拆分或执行任务。'
+        : '先判断当前会话是否已经暴露对应 MCP 工具;如果没有可调用工具,不要假装调用成功,请说明需要启用或配置该 MCP。'
+  return [
+    `请在当前任务中合理使用这个 ${kindLabel},但只在它确实适合当前目标时使用。`,
+    '',
+    `名称: ${item.name}`,
+    `类型: ${item.kind}`,
+    `状态: ${item.enabled ? '已启用' : '未启用或不可用'}`,
+    `来源根目录: ${item.sourceRoot}`,
+    `路径: ${item.path}`,
+    `摘要: ${item.summary || '(无摘要)'}`,
+    '',
+    usageHint,
+    '使用前请先核对实际文件/工具状态;不要仅凭名称推断能力。'
+  ].join('\n')
+}
+
+function pluginRegistryAgentTaskId(item: PluginRegistryItem): string {
+  const slug = item.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36)
+  return slug || 'plugin-agent'
+}
+
+function pluginRegistryAgentDispatchPrompt(item: PluginRegistryItem): string {
+  return [
+    `你将作为子 Agent「${item.name}」参与当前父会话任务。`,
+    '',
+    '请先核对你的 Agent 定义文件,再执行工作:',
+    `定义路径: ${item.path}`,
+    `来源根目录: ${item.sourceRoot}`,
+    `摘要: ${item.summary || '(无摘要)'}`,
+    `当前扫描状态: ${item.enabled ? '已启用' : '未启用或不可用'}`,
+    '',
+    '工作要求:',
+    '1. 读取并遵守该 Agent 定义文件中的角色、边界和输出格式。',
+    '2. 围绕父会话当前目标推进一个可验证的子任务;如果上下文不足,先从仓库中的 REQUIREMENTS.md、ROADMAP.md、DESIGN-V2.md 或相关源码提取事实。',
+    '3. 不要假装具备定义文件没有提供的工具或权限;遇到缺口要明确说明。',
+    '4. 产出应包含你检查过的证据、做出的修改或建议、以及可运行的验证命令。'
+  ].join('\n')
+}
+
+function closeNativeBrowserView(sessionId: string | null | undefined): void {
+  if (!sessionId) return
+  void window.agentDesk.closeBrowser(sessionId).catch(() => undefined)
+}
 
 /**
  * createSession IPC 返回前主进程可能已开始广播该会话的事件(status/init),
@@ -339,6 +407,12 @@ export interface WorkbenchState {
   worktreeOpen: boolean
   worktreeLoading: boolean
   worktree?: WorktreeSummary
+  worktreeMergeSummary?: WorktreeMergeSummary
+  worktreeMergePatch?: WorktreePatchResult
+  worktreeApplyCheck?: WorktreeApplyCheckResult
+  worktreeApplyResult?: WorktreeApplyResult
+  worktreeMergeInspecting: boolean
+  worktreeApplying: boolean
   worktreeMessage?: string
   worktreeError?: string
   terminalOpen: boolean
@@ -390,6 +464,7 @@ export interface WorkbenchState {
   routineError?: string
   routineMessage?: string
   selectedRoutineId?: string | null
+  memoryOpen: boolean
 }
 
 export interface RewindPanelState {
@@ -442,6 +517,8 @@ interface AppStore {
   closeWorktreePanel(): void
   refreshWorktreePanel(): Promise<void>
   exportWorktreePatch(): Promise<WorktreePatchResult | undefined>
+  inspectWorktreeMerge(): Promise<void>
+  applyWorktreePatch(): Promise<WorktreeApplyResult | undefined>
   removeWorktree(opts?: { deleteBranch?: boolean; force?: boolean }): Promise<WorktreeRemoveResult | undefined>
   openTerminalPanel(): Promise<void>
   closeTerminalPanel(): void
@@ -471,6 +548,9 @@ interface AppStore {
   refreshPluginRegistryPanel(): Promise<void>
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
+  togglePluginRegistryItem(item: PluginRegistryItem, enabled: boolean): Promise<void>
+  sendPluginRegistryItemToAgent(item: PluginRegistryItem): Promise<void>
+  dispatchPluginAgent(item: PluginRegistryItem): Promise<void>
   openSubagentPanel(): void
   closeSubagentPanel(): void
   dispatchSubagentText(tasksText: string): Promise<SubagentDispatchResult | undefined>
@@ -480,6 +560,9 @@ interface AppStore {
   selectRoutine(id: string): void
   toggleRoutine(id: string, enabled: boolean): Promise<void>
   markRoutineRun(id: string): Promise<void>
+  deleteRoutine(id: string): Promise<void>
+  openMemoryPanel(): void
+  closeMemoryPanel(): void
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
@@ -520,6 +603,8 @@ export const useStore = create<AppStore>((set, get) => ({
     diffLoading: false,
     worktreeOpen: false,
     worktreeLoading: false,
+    worktreeMergeInspecting: false,
+    worktreeApplying: false,
     terminalOpen: false,
     terminalLoading: false,
     terminalBuffer: '',
@@ -543,7 +628,8 @@ export const useStore = create<AppStore>((set, get) => ({
     routineOpen: false,
     routineLoading: false,
     routines: [],
-    selectedRoutineId: null
+    selectedRoutineId: null,
+    memoryOpen: false
   },
   rewindPanel: { open: false },
   showNewSession: false,
@@ -777,7 +863,22 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   selectSession(id) {
-    set({ activeId: id })
+    const previousId = get().activeId
+    if (previousId && previousId !== id) closeNativeBrowserView(previousId)
+    set((s) => ({
+      activeId: id,
+      workbench:
+        previousId && previousId !== id
+          ? {
+              ...s.workbench,
+              browserState: undefined,
+              browserAnnotations: [],
+              browserLoading: false,
+              browserError: undefined,
+              browserMessage: undefined
+            }
+          : s.workbench
+    }))
   },
 
   async sendMessage(input) {
@@ -828,6 +929,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async closeSession(id) {
+    closeNativeBrowserView(id)
     await window.agentDesk.closeSession(id)
     pendingEvents.delete(id)
     set((s) => {
@@ -896,6 +998,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openDiffPanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -907,7 +1010,8 @@ export const useStore = create<AppStore>((set, get) => ({
         previewOpen: false,
         pluginRegistryOpen: false,
         subagentOpen: false,
-        routineOpen: false
+        routineOpen: false,
+        memoryOpen: false
       }
     }))
     await get().refreshDiffPanel()
@@ -944,18 +1048,26 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openWorktreePanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
         diffOpen: false,
         worktreeOpen: true,
+        worktreeMergeSummary: undefined,
+        worktreeMergePatch: undefined,
+        worktreeApplyCheck: undefined,
+        worktreeApplyResult: undefined,
+        worktreeMergeInspecting: false,
+        worktreeApplying: false,
         terminalOpen: false,
         filesOpen: false,
         browserOpen: false,
         previewOpen: false,
         pluginRegistryOpen: false,
         subagentOpen: false,
-        routineOpen: false
+        routineOpen: false,
+        memoryOpen: false
       }
     }))
     await get().refreshWorktreePanel()
@@ -972,6 +1084,7 @@ export const useStore = create<AppStore>((set, get) => ({
       workbench: {
         ...s.workbench,
         worktreeLoading: true,
+        worktreeApplyResult: undefined,
         worktreeError: undefined,
         worktreeMessage: undefined
       }
@@ -1011,6 +1124,99 @@ export const useStore = create<AppStore>((set, get) => ({
     return result
   },
 
+  async inspectWorktreeMerge() {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        worktreeMergeInspecting: true,
+        worktreeApplyResult: undefined,
+        worktreeError: undefined,
+        worktreeMessage: undefined
+      }
+    }))
+    try {
+      const [summary, patch, applyCheck] = await Promise.all([
+        window.agentDesk.inspectWorktreeMerge(id),
+        window.agentDesk.createWorktreeMergePatch(id),
+        window.agentDesk.checkWorktreeApply(id)
+      ])
+      const firstError =
+        !summary.ok
+          ? summary.error
+          : !patch.ok
+            ? patch.error
+            : !applyCheck.ok
+              ? applyCheck.error
+              : !applyCheck.canApply
+                ? applyCheck.error
+                : undefined
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeMergeSummary: summary,
+          worktreeMergePatch: patch,
+          worktreeApplyCheck: applyCheck,
+          worktreeMergeInspecting: false,
+          worktreeError: firstError,
+          worktreeMessage: firstError ? undefined : '合并检查通过，可应用到主工作区'
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeMergeInspecting: false,
+          worktreeError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async applyWorktreePatch() {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        worktreeApplying: true,
+        worktreeApplyResult: undefined,
+        worktreeError: undefined,
+        worktreeMessage: undefined
+      }
+    }))
+    try {
+      const result = await window.agentDesk.applyWorktreePatch(id)
+      const worktree = await window.agentDesk.getWorktreeSummary(id).catch(() => undefined)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          ...(worktree ? { worktree } : {}),
+          worktreeApplyResult: result,
+          worktreeApplying: false,
+          worktreeError: result.ok ? undefined : result.error,
+          worktreeMessage: result.ok
+            ? result.applied
+              ? `已应用 ${result.changedFiles} 个文件到主工作区`
+              : '没有需要应用的改动'
+            : undefined
+        }
+      }))
+      return result
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeApplying: false,
+          worktreeError: message
+        }
+      }))
+      return { ok: false, error: message }
+    }
+  },
+
   async removeWorktree(opts) {
     const id = get().activeId
     if (!id) return undefined
@@ -1047,6 +1253,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openTerminalPanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -1058,7 +1265,8 @@ export const useStore = create<AppStore>((set, get) => ({
         previewOpen: false,
         pluginRegistryOpen: false,
         subagentOpen: false,
-        routineOpen: false
+        routineOpen: false,
+        memoryOpen: false
       }
     }))
     await get().startTerminal()
@@ -1114,6 +1322,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openFilesPanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -1125,7 +1334,8 @@ export const useStore = create<AppStore>((set, get) => ({
         previewOpen: false,
         pluginRegistryOpen: false,
         subagentOpen: false,
-        routineOpen: false
+        routineOpen: false,
+        memoryOpen: false
       }
     }))
     await get().refreshFilesPanel()
@@ -1263,6 +1473,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openPreviewPanel(path) {
+    closeNativeBrowserView(get().activeId)
     const nextPath = path ?? get().workbench.previewPath ?? get().workbench.currentFilePath
     set((s) => ({
       workbench: {
@@ -1276,6 +1487,7 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: false,
         subagentOpen: false,
         routineOpen: false,
+        memoryOpen: false,
         previewPath: nextPath,
         previewError: undefined
       }
@@ -1335,6 +1547,7 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: false,
         subagentOpen: false,
         routineOpen: false,
+        memoryOpen: false,
         browserLoading: true,
         browserError: undefined,
         browserMessage: undefined
@@ -1467,6 +1680,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openPluginRegistryPanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -1479,6 +1693,7 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: true,
         subagentOpen: false,
         routineOpen: false,
+        memoryOpen: false,
         pluginRegistryError: undefined,
         pluginRegistryMessage: undefined
       }
@@ -1551,7 +1766,184 @@ export const useStore = create<AppStore>((set, get) => ({
     }))
   },
 
+  async togglePluginRegistryItem(item, enabled) {
+    const id = get().activeId ?? undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        selectedPluginRegistryItemId: item.id,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined
+      }
+    }))
+    try {
+      const result = await window.agentDesk.setPluginRegistryItemEnabled(item, enabled, id)
+      if (!result.ok || !result.item) {
+        set((s) => ({
+          workbench: {
+            ...s.workbench,
+            pluginRegistryError: result.error || '插件状态更新失败',
+            pluginRegistryMessage: undefined
+          }
+        }))
+        return
+      }
+      const updatedItem = result.item
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistry: s.workbench.pluginRegistry
+            ? {
+                ...s.workbench.pluginRegistry,
+                items: s.workbench.pluginRegistry.items.map((candidate) =>
+                  candidate.id === updatedItem.id &&
+                  candidate.kind === updatedItem.kind &&
+                  candidate.sourceRoot === updatedItem.sourceRoot &&
+                  candidate.path === updatedItem.path &&
+                  candidate.name === updatedItem.name
+                    ? updatedItem
+                    : candidate
+                )
+              }
+            : s.workbench.pluginRegistry,
+          selectedPluginRegistryItemId: updatedItem.id,
+          pluginRegistryMessage: `${updatedItem.name} 已${updatedItem.enabled ? '启用' : '停用'}`,
+          pluginRegistryError: undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: err instanceof Error ? err.message : String(err),
+          pluginRegistryMessage: undefined
+        }
+      }))
+    }
+  },
+
+  async sendPluginRegistryItemToAgent(item) {
+    const id = get().activeId
+    if (!id) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: '请先选择一个会话',
+          pluginRegistryMessage: undefined
+        }
+      }))
+      return
+    }
+    if (!item.enabled) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          selectedPluginRegistryItemId: item.id,
+          pluginRegistryError: '该插件条目已停用,请先启用再交给 Agent',
+          pluginRegistryMessage: undefined
+        }
+      }))
+      return
+    }
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        selectedPluginRegistryItemId: item.id,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined
+      }
+    }))
+    try {
+      await get().sendMessage(pluginRegistryItemPrompt(item))
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryMessage: `已把 ${item.name} 发给当前 Agent`,
+          pluginRegistryError: undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async dispatchPluginAgent(item) {
+    if (item.kind !== 'agent') {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: '只有 Agent 定义可以派发为子 Agent',
+          pluginRegistryMessage: undefined
+        }
+      }))
+      return
+    }
+    if (!item.enabled) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          selectedPluginRegistryItemId: item.id,
+          pluginRegistryError: '该 Agent 定义已停用,请先启用再派发子 Agent',
+          pluginRegistryMessage: undefined
+        }
+      }))
+      return
+    }
+    const parentId = get().activeId
+    if (!parentId) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: '请先选择一个父会话',
+          pluginRegistryMessage: undefined
+        }
+      }))
+      return
+    }
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        selectedPluginRegistryItemId: item.id,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined
+      }
+    }))
+    try {
+      const result = await get().dispatchSubagents({
+        tasks: [
+          {
+            id: pluginRegistryAgentTaskId(item),
+            role: item.name,
+            title: `${item.name} 子 Agent`,
+            prompt: pluginRegistryAgentDispatchPrompt(item)
+          }
+        ]
+      })
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          lastSubagentDispatch: result ?? s.workbench.lastSubagentDispatch,
+          pluginRegistryMessage: result ? `已派发 ${item.name} 子 Agent` : undefined,
+          pluginRegistryError: result ? undefined : '子 Agent 派发失败'
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
   openSubagentPanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -1564,6 +1956,7 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: false,
         subagentOpen: true,
         routineOpen: false,
+        memoryOpen: false,
         subagentError: undefined,
         subagentMessage: undefined
       }
@@ -1615,6 +2008,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   async openRoutinePanel() {
+    closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -1627,6 +2021,7 @@ export const useStore = create<AppStore>((set, get) => ({
         pluginRegistryOpen: false,
         subagentOpen: false,
         routineOpen: true,
+        memoryOpen: false,
         routineError: undefined,
         routineMessage: undefined
       }
@@ -1713,7 +2108,7 @@ export const useStore = create<AppStore>((set, get) => ({
             : s.workbench.routines,
           routineError: routine ? undefined : '未找到 Routine',
           routineMessage: routine
-            ? `${routine.name} 已标记运行时间；当前尚未接入执行器`
+            ? `${routine.name} 已手动更新运行时间`
             : undefined
         }
       }))
@@ -1725,6 +2120,61 @@ export const useStore = create<AppStore>((set, get) => ({
         }
       }))
     }
+  },
+
+  async deleteRoutine(id) {
+    set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
+    try {
+      const routineName = get().workbench.routines.find((routine) => routine.id === id)?.name ?? 'Routine'
+      const ok = await window.agentDesk.deleteRoutine(id)
+      set((s) => ({
+        workbench: ok
+          ? {
+              ...s.workbench,
+              routines: s.workbench.routines.filter((routine) => routine.id !== id),
+              selectedRoutineId:
+                s.workbench.selectedRoutineId === id
+                  ? (s.workbench.routines.find((routine) => routine.id !== id)?.id ?? null)
+                  : s.workbench.selectedRoutineId,
+              routineMessage: `${routineName} 已删除`,
+              routineError: undefined
+            }
+          : {
+              ...s.workbench,
+              routineError: '未找到 Routine'
+            }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  openMemoryPanel() {
+    closeNativeBrowserView(get().activeId)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        diffOpen: false,
+        worktreeOpen: false,
+        terminalOpen: false,
+        filesOpen: false,
+        browserOpen: false,
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        subagentOpen: false,
+        routineOpen: false,
+        memoryOpen: true
+      }
+    }))
+  },
+
+  closeMemoryPanel() {
+    set((s) => ({ workbench: { ...s.workbench, memoryOpen: false } }))
   },
 
   openRewindPanel(messageId, sourceText, reason = 'button') {

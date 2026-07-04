@@ -5,10 +5,14 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import type {
   ManagedWorktreeView,
+  WorktreeApplyResult,
+  WorktreeApplyCheckResult,
+  WorktreeMergeSummary,
   WorktreePatchResult,
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../shared/types'
+import { applySquashPatch, canFastApplyPatch, createSquashPatch, inspectMerge } from './worktreeMerge'
 
 const WORKTREE_BRANCH_PREFIX = 'caogen'
 const GIT_TIMEOUT_MS = 120_000
@@ -411,6 +415,60 @@ export function exportManagedWorktreePatch(sessionId: string): WorktreePatchResu
     // git() 帮手会 trim 输出末尾换行,而 git apply 要求 patch 以换行结尾(否则 corrupt patch)
     writeFileSync(patchPath, patch ? `${patch}\n` : patch)
     return { ok: true, path: patchPath, bytes: statSync(patchPath).size }
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+export function inspectManagedWorktreeMerge(sessionId: string): WorktreeMergeSummary {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
+    return inspectMerge(record.repoRoot, record.worktreePath, record.baseSha)
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+export function createManagedWorktreeMergePatch(sessionId: string): WorktreePatchResult {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
+    return createSquashPatch(record.repoRoot, record.worktreePath, patchesRoot(), record.baseSha)
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+export function checkManagedWorktreeApply(sessionId: string): WorktreeApplyCheckResult {
+  try {
+    const patch = createManagedWorktreeMergePatch(sessionId)
+    if (!patch.ok) return { ok: false, error: patch.error ?? '无法生成 worktree patch' }
+    return canFastApplyPatch(patch.repoRoot ?? '', patch.patchText ?? '')
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+export function applyManagedWorktreePatch(sessionId: string): WorktreeApplyResult {
+  try {
+    const patch = createManagedWorktreeMergePatch(sessionId)
+    if (!patch.ok) return { ok: false, error: patch.error ?? '无法生成 worktree patch' }
+    const apply = applySquashPatch(patch.repoRoot ?? '', patch.patchText ?? '')
+    if (!apply.ok) return apply
+    return {
+      ...apply,
+      path: patch.path,
+      headSha: patch.headSha,
+      baseSha: patch.baseSha,
+      worktreePath: patch.worktreePath
+    }
   } catch (err) {
     return { ok: false, error: errorText(err) }
   }
