@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { formatCost, formatTime } from '../../format'
-import type { SessionMeta, SessionStatus, SubagentDispatchResult } from '../../../../shared/types'
+import type { SessionMeta, SessionStatus, SubagentDispatchResult, SubagentResult } from '../../../../shared/types'
 
 interface SubagentPanelProps {
   childSessions?: SessionMeta[]
@@ -8,6 +8,7 @@ interface SubagentPanelProps {
   error?: string
   message?: string
   lastResult?: SubagentDispatchResult
+  childResults?: Record<string, SubagentResult>
   onClose?: () => void
   onSelectChild?: (sessionId: string) => void
   onDispatch: (tasksText: string) => Promise<SubagentDispatchResult | undefined>
@@ -89,6 +90,7 @@ export default function SubagentPanel({
   childSessions = [],
   busy = false,
   error,
+  childResults = {},
   lastResult,
   message,
   onClose,
@@ -160,6 +162,40 @@ export default function SubagentPanel({
                   <span className="subagent-panel-child-title">{child.meta.title}</span>
                   <code className="subagent-panel-child-path">{child.meta.worktreePath || child.meta.cwd}</code>
                 </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="subagent-panel-result">
+          <div className="subagent-panel-result-head">
+            <span>编排结果</span>
+            <b>{Object.keys(childResults).length} 个</b>
+          </div>
+          {Object.keys(childResults).length === 0 ? (
+            <div className="subagent-panel-empty">子 Agent 完成后会在这里汇总结果。</div>
+          ) : (
+            <div className="subagent-panel-child-list">
+              {Object.entries(childResults).map(([key, result]) => (
+                <button
+                  key={key}
+                  className="subagent-panel-child subagent-panel-child-button"
+                  onClick={() => onSelectChild?.(result.childSessionId)}
+                >
+                  <span className={`subagent-panel-live-status status-${result.status === 'error' ? 'error' : 'idle'}`}>
+                    {result.status === 'error' ? '错误' : '完成'}
+                  </span>
+                  <span className="subagent-panel-child-title">
+                    {result.childRole || result.childTaskId || result.childSessionId.slice(0, 8)}
+                  </span>
+                  <span className="subagent-panel-child-path" title={result.resultText || ''}>
+                    {result.resultText || '无摘要'}
+                  </span>
+                  <span className="subagent-panel-child-meta">
+                    {formatCost(result.costUsd ?? 0)}
+                    {result.durationMs !== undefined ? ` · ${Math.round(result.durationMs / 1000)}s` : ''}
+                  </span>
+                </button>
               ))}
             </div>
           )}

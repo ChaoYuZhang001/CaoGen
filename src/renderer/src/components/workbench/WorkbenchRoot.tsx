@@ -76,6 +76,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
         .map((id) => sessions[id]?.meta)
         .filter((meta): meta is SessionMeta => Boolean(meta && meta.parentSessionId === activeId))
     : []
+  const childResults = activeId ? sessions[activeId]?.childResults ?? {} : {}
   const sideOpen =
     diffOpen ||
     browserOpen ||
@@ -125,6 +126,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
           ) : subagentOpen ? (
             <SubagentPanel
               childSessions={childSessions}
+              childResults={childResults}
               busy={subagentBusy}
               error={subagentError}
               message={subagentMessage}

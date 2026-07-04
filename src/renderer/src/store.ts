@@ -16,6 +16,7 @@ import type {
   GitOperationResult,
   GitStatus,
   SubagentDispatchResult,
+  SubagentResult,
   HistoryEntry,
   MemorySuggestionEvent,
   PermissionModeId,
@@ -196,6 +197,7 @@ export interface SessionState {
   toolResults: Record<string, ToolResultInfo>
   runningTools: Record<string, true>
   pendingPermissions: PermissionRequestInfo[]
+  childResults: Record<string, SubagentResult>
   effectiveModel?: string
   tools?: string[]
   /** 已处理的最大 seq,供去重(转录回放 + 实时事件) */
@@ -211,6 +213,7 @@ function newSessionState(meta: SessionMeta): SessionState {
     toolResults: {},
     runningTools: {},
     pendingPermissions: [],
+    childResults: {},
     lastSeq: 0
   }
 }
@@ -396,6 +399,25 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
             resultText: ev.isError ? ev.resultText : undefined
           }
         ]
+      }
+    }
+    case 'subagent-result': {
+      const key = ev.childTaskId || ev.childSessionId
+      return {
+        ...s,
+        childResults: {
+          ...s.childResults,
+          [key]: {
+            orchestrationId: ev.orchestrationId,
+            childTaskId: ev.childTaskId,
+            childSessionId: ev.childSessionId,
+            childRole: ev.childRole,
+            status: ev.status,
+            resultText: ev.resultText,
+            costUsd: ev.costUsd,
+            durationMs: ev.durationMs
+          }
+        }
       }
     }
     default:
@@ -734,6 +756,14 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   handleEvent(sessionId, event, seq) {
+    if (event.kind === 'subagent-result') {
+      set((s) => {
+        const session = s.sessions[sessionId]
+        if (!session) return s
+        return { sessions: { ...s.sessions, [sessionId]: reduceSession(session, event) } }
+      })
+      return
+    }
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) {

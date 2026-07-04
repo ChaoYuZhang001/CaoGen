@@ -37,6 +37,12 @@ export interface OfficePacket {
   toolName: string
 }
 
+function childStatus(status: string): OfficeTaskStatus {
+  if (status === 'error') return 'error'
+  if (status === 'running' || status === 'starting') return 'running'
+  return 'done'
+}
+
 export interface OfficeSessionModel {
   sessionId: string
   tasks: OfficeTask[]
@@ -269,6 +275,7 @@ export function buildOfficeModel(ids: string[], sessions: Record<string, Session
   const allTasks: OfficeTask[] = []
   const packets: OfficePacket[] = []
   const totalStats = newStats()
+  const stationBySession = new Map(ids.map((id, index) => [id, index] as const))
 
   ids.forEach((sessionId, stationIndex) => {
     const session = sessions[sessionId]
@@ -283,6 +290,25 @@ export function buildOfficeModel(ids: string[], sessions: Record<string, Session
       const packet = packetFor(task, stationIndex)
       if (packet) packets.push(packet)
     }
+  })
+
+  ids.forEach((sessionId) => {
+    const session = sessions[sessionId]
+    const parentId = session?.meta.parentSessionId
+    if (!session || !parentId) return
+    const from = stationBySession.get(parentId)
+    const to = stationBySession.get(sessionId)
+    if (from === undefined || to === undefined) return
+    packets.push({
+      id: `subagent:${parentId}:${sessionId}:${session.meta.status}`,
+      sessionId,
+      from,
+      to,
+      kind: 'subtask',
+      status: childStatus(session.meta.status),
+      label: session.meta.childRole || session.meta.childTaskId || session.meta.title,
+      toolName: 'Subagent'
+    })
   })
 
   return {

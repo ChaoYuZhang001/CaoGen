@@ -192,6 +192,25 @@ class SessionManager {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
+    const session = this.sessions.get(sessionId)
+    const parentSessionId = session?.meta.parentSessionId
+    if (event.kind === 'turn-result' && parentSessionId && this.sessions.has(parentSessionId)) {
+      const childResult: AgentEvent = {
+        kind: 'subagent-result',
+        orchestrationId: session.meta.orchestrationId,
+        childTaskId: session.meta.childTaskId,
+        childSessionId: sessionId,
+        childRole: session.meta.childRole,
+        status: event.isError ? 'error' : 'done',
+        resultText: event.resultText,
+        costUsd: event.costUsd,
+        durationMs: event.durationMs
+      }
+      const parentPayload: SessionEventPayload = { sessionId: parentSessionId, seq: 0, event: childResult }
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('session:event', parentPayload)
+      }
+    }
     this.handleNotification(sessionId, event)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
