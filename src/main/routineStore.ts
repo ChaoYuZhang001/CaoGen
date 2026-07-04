@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { nextAfter } from './cronParse'
 import type { PermissionModeId } from '../shared/types'
 
 export type RoutinePermissionMode = PermissionModeId
@@ -72,6 +73,7 @@ export class RoutineStoreValidationError extends Error {
 
 const ROUTINES_FILE = 'routines.json'
 const STORE_VERSION = 1
+const MINUTE_MS = 60_000
 const PERMISSION_MODES = new Set<RoutinePermissionMode>([
   'default',
   'acceptEdits',
@@ -133,6 +135,10 @@ export async function createRoutine(rootDir: string, input: CreateRoutineInput):
   }
   const nextRunAt = normalizeNullableTimestamp(input.nextRunAt, 'nextRunAt')
   if (nextRunAt !== null) routine.nextRunAt = nextRunAt
+  else if (routine.enabled && !hasOwn(input, 'nextRunAt')) {
+    const seeded = computeInitialNextRun(routine.schedule, now)
+    if (seeded !== null) routine.nextRunAt = seeded
+  }
 
   file.routines.push(routine)
   await writeStore(rootDir, file.routines)
@@ -319,6 +325,23 @@ function normalizeBudget(value: unknown): number {
     throw new RoutineStoreValidationError('budgetUsd must be a non-negative number')
   }
   return value
+}
+
+function computeInitialNextRun(schedule: string, from: number): number | null {
+  const trimmed = schedule.trim()
+  const interval = parseIntervalSchedule(trimmed)
+  if (interval !== null) return interval > 0 ? from + interval : null
+  return nextAfter(trimmed, from)
+}
+
+function parseIntervalSchedule(input: string): number | null {
+  const match = /^(?:every\s+)?(\d+)\s*([smhd])$/i.exec(input)
+  if (!match) return null
+  const value = Number(match[1])
+  if (!Number.isFinite(value) || value <= 0) return 0
+  const unit = match[2].toLowerCase()
+  const unitMs = unit === 's' ? 1_000 : unit === 'm' ? MINUTE_MS : unit === 'h' ? 3_600_000 : 86_400_000
+  return value * unitMs
 }
 
 function normalizeBoolean(value: unknown, field: string): boolean {
