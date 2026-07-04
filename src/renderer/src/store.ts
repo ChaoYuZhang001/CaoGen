@@ -11,6 +11,8 @@ import type {
   CheckpointRestoreMode,
   CheckpointRestoreResult,
   CreateSessionOptions,
+  DispatchSubagentsInput,
+  SubagentDispatchResult,
   HistoryEntry,
   PermissionModeId,
   PluginRegistryItem,
@@ -388,6 +390,7 @@ interface AppStore {
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
   createSession(opts: CreateSessionOptions): Promise<void>
+  dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   selectSession(id: string): void
   sendMessage(input: string | SendMessagePayload): Promise<void>
@@ -706,6 +709,26 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
+  },
+
+  async dispatchSubagents(input) {
+    const parentId = get().activeId
+    if (!parentId) return undefined
+    const result = await window.agentDesk.dispatchSubagents(parentId, input)
+    set((s) => {
+      const sessions = { ...s.sessions }
+      const order = [...s.order]
+      for (const child of result.children) {
+        sessions[child.meta.id] = drainPendingEvents(
+          child.meta.id,
+          sessions[child.meta.id] ?? newSessionState(child.meta)
+        )
+        if (!order.includes(child.meta.id)) order.push(child.meta.id)
+      }
+      return { sessions, order }
+    })
+    void get().refreshProjects()
+    return result
   },
 
   async resumeFromHistory(entry) {

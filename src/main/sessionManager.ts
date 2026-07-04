@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { newSessionMeta } from './agentSession'
 import { createEngine } from './engine'
 import type { Engine } from './engine'
@@ -12,6 +13,8 @@ import { showDesktopNotification } from './desktopNotify'
 import type {
   AgentEvent,
   CreateSessionOptions,
+  DispatchSubagentsInput,
+  SubagentDispatchResult,
   SessionEventPayload,
   SessionMeta,
   TranscriptEntry
@@ -38,6 +41,17 @@ function formatDuration(ms: number | undefined): string | undefined {
   return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
 }
 
+function cleanOneLine(text: string, fallback: string, max = 80): string {
+  const clean = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : ''
+  return (clean || fallback).slice(0, max)
+}
+
+function normalizeTaskId(value: string | undefined, fallback: string): string {
+  const clean = typeof value === 'string' ? value.trim() : ''
+  if (!clean) return fallback
+  return clean.replace(/[^A-Za-z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 80) || fallback
+}
+
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
   private readonly notificationStates = new Map<string, SessionNotificationState>()
@@ -54,6 +68,10 @@ class SessionManager {
     const settings = getSettings()
     const baseMeta = newSessionMeta({
       cwd: opts.cwd,
+      parentSessionId: opts.parentSessionId,
+      orchestrationId: opts.orchestrationId,
+      childTaskId: opts.childTaskId,
+      childRole: opts.childRole,
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
       engine: opts.engine,
@@ -67,6 +85,10 @@ class SessionManager {
     if (!worktree.ok) throw new Error(worktree.error)
     const meta = newSessionMeta({
       cwd: worktree.cwd,
+      parentSessionId: opts.parentSessionId,
+      orchestrationId: opts.orchestrationId,
+      childTaskId: opts.childTaskId,
+      childRole: opts.childRole,
       isolated: worktree.isolated,
       sourceCwd: worktree.record?.sourceCwd,
       repoRoot: worktree.record?.repoRoot,
@@ -92,6 +114,45 @@ class SessionManager {
     void session.start()
     touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
+  }
+
+  dispatchSubagents(parentSessionId: string, input: DispatchSubagentsInput): SubagentDispatchResult {
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent) throw new Error('父会话不存在')
+    const tasks = Array.isArray(input?.tasks) ? input.tasks : []
+    if (tasks.length === 0) throw new Error('至少需要一个子代理任务')
+    if (tasks.length > 33) throw new Error('一次最多派发 33 个子代理')
+
+    const orchestrationId = randomUUID()
+    const children: SubagentDispatchResult['children'] = []
+    const usedTaskIds = new Set<string>()
+
+    tasks.forEach((task, index) => {
+      const prompt = typeof task.prompt === 'string' ? task.prompt.trim() : ''
+      if (!prompt) throw new Error(`子代理任务 ${index + 1} 缺少 prompt`)
+      let taskId = normalizeTaskId(task.id, `task-${index + 1}`)
+      while (usedTaskIds.has(taskId)) taskId = `${taskId}-${index + 1}`
+      usedTaskIds.add(taskId)
+      const role = cleanOneLine(task.role ?? '', '', 40) || undefined
+      const title = cleanOneLine(task.title ?? role ?? prompt, `子代理 ${index + 1}`, 42)
+      const meta = this.create({
+        cwd: task.cwd ?? input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
+        isolated: task.isolated ?? input.isolated ?? true,
+        model: task.model ?? input.model ?? parent.meta.model,
+        providerId: task.providerId ?? input.providerId ?? parent.meta.providerId,
+        engine: task.engine ?? input.engine ?? parent.meta.engine,
+        permissionMode: task.permissionMode ?? input.permissionMode ?? parent.meta.permissionMode,
+        title,
+        parentSessionId,
+        orchestrationId,
+        childTaskId: taskId,
+        childRole: role
+      })
+      this.sessions.get(meta.id)?.send(prompt)
+      children.push({ taskId, prompt, meta })
+    })
+
+    return { orchestrationId, parentSessionId, children }
   }
 
   close(id: string): void {
@@ -228,6 +289,10 @@ class SessionManager {
       id: meta.id,
       title: meta.title,
       cwd: meta.cwd,
+      parentSessionId: meta.parentSessionId,
+      orchestrationId: meta.orchestrationId,
+      childTaskId: meta.childTaskId,
+      childRole: meta.childRole,
       isolated: meta.isolated,
       sourceCwd: meta.sourceCwd,
       repoRoot: meta.repoRoot,

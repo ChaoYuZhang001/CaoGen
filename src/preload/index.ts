@@ -3,7 +3,9 @@ import type {
   AgentDeskApi,
   AppSettings,
   CheckpointRestoreMode,
+  CreateRoutineInput,
   CreateSessionOptions,
+  DispatchSubagentsInput,
   MarkRunOptions,
   PermissionModeId,
   PluginRegistryScanOptions,
@@ -31,6 +33,8 @@ const api: AgentDeskApi = {
     dryRun: boolean
   ) => ipcRenderer.invoke('sessions:restoreCheckpoint', sessionId, messageId, mode, dryRun),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
+  dispatchSubagents: (parentSessionId: string, input: DispatchSubagentsInput) =>
+    ipcRenderer.invoke('sessions:dispatchSubagents', parentSessionId, input),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>
     ipcRenderer.invoke('attachments:copyImage', sessionId, sourcePath),
   saveImageAttachmentBytes: (sessionId: string, input: SaveImageAttachmentBytesInput) =>
@@ -64,6 +68,8 @@ const api: AgentDeskApi = {
   revealPluginRegistryItem: (path: string, sessionId?: string) =>
     ipcRenderer.invoke('plugins:reveal', path, sessionId),
   listRoutines: () => ipcRenderer.invoke('routines:list'),
+  createRoutine: (input: CreateRoutineInput) => ipcRenderer.invoke('routines:create', input),
+  deleteRoutine: (id: string) => ipcRenderer.invoke('routines:delete', id),
   updateRoutine: (id: string, patch: UpdateRoutineInput) =>
     ipcRenderer.invoke('routines:update', id, patch),
   markRoutineRun: (id: string, options?: MarkRunOptions) =>

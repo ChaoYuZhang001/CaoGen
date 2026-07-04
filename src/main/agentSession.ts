@@ -339,8 +339,8 @@ export class AgentSession implements Engine {
       this.queuedDuringFailover.push(payload)
       return
     }
-    // 流已死(启动失败 / 进程退出)时静默排队只会让 UI 永远停在"运行中"
-    if (!this.query || this.meta.status === 'error' || this.meta.status === 'closed') {
+    // query 创建前 Pushable 已可排队;仅已失败/已关闭时拒绝,避免初始任务竞态丢失。
+    if (this.meta.status === 'error' || this.meta.status === 'closed') {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
@@ -945,6 +945,10 @@ export class AgentSession implements Engine {
 
 export function newSessionMeta(opts: {
   cwd: string
+  parentSessionId?: string
+  orchestrationId?: string
+  childTaskId?: string
+  childRole?: string
   isolated?: boolean
   sourceCwd?: string
   repoRoot?: string
@@ -963,6 +967,10 @@ export function newSessionMeta(opts: {
     id: randomUUID(),
     title: opts.title || '新会话',
     cwd: opts.cwd,
+    parentSessionId: opts.parentSessionId,
+    orchestrationId: opts.orchestrationId,
+    childTaskId: opts.childTaskId,
+    childRole: opts.childRole,
     isolated: opts.isolated,
     sourceCwd: opts.sourceCwd,
     repoRoot: opts.repoRoot,

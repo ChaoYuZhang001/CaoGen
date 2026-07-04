@@ -35,12 +35,14 @@ import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
 import { scanPluginRegistry } from './pluginRegistry'
-import { listRoutines, markRun, updateRoutine } from './routineStore'
+import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
 import type {
   AppSettings,
   BrowserBounds,
   CheckpointRestoreMode,
+  CreateRoutineInput,
   CreateSessionOptions,
+  DispatchSubagentsInput,
   ImageAttachmentView,
   MarkRunOptions,
   PermissionModeId,
@@ -327,6 +329,14 @@ export function registerIpc(): void {
     return sessionManager.create(opts)
   })
 
+  ipcMain.handle('sessions:dispatchSubagents', (_e, parentSessionId: string, input: DispatchSubagentsInput) => {
+    if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
+      throw new Error('必须指定父会话')
+    }
+    if (!input || !Array.isArray(input.tasks)) throw new Error('必须提供子代理任务列表')
+    return sessionManager.dispatchSubagents(parentSessionId, input)
+  })
+
   ipcMain.handle('attachments:copyImage', async (_e, id: string, sourcePath: string) => {
     if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
     if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
@@ -426,6 +436,15 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('routines:list', () => listRoutines(routineStoreRoot()))
+
+  ipcMain.handle('routines:create', (_e, input: CreateRoutineInput) =>
+    createRoutine(routineStoreRoot(), input)
+  )
+
+  ipcMain.handle('routines:delete', (_e, id: string) => {
+    if (typeof id !== 'string' || id.trim().length === 0) return false
+    return deleteRoutine(routineStoreRoot(), id)
+  })
 
   ipcMain.handle('routines:update', (_e, id: string, patch: UpdateRoutineInput) => {
     if (typeof id !== 'string' || id.trim().length === 0) return null
