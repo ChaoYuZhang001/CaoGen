@@ -1,4 +1,6 @@
 import { app, BrowserWindow, WebContentsView, shell } from 'electron'
+import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   listAnnotations,
@@ -146,12 +148,16 @@ class BrowserViewManager {
     const record = this.requireRecord(sessionId)
     const selection = await record.view.webContents.executeJavaScript(selectionScript(), true)
     const payload = normalizeSelectionPayload(selection)
+    const annotationId = randomUUID()
+    const screenshotPath = await captureAnnotationScreenshot(record, annotationId).catch(() => undefined)
     const annotationInput: BrowserAnnotationInput = {
+      id: annotationId,
       sessionId,
       url: payload.url || record.state.url,
       title: payload.title || record.state.title,
       selector: payload.selector,
       boundingBox: payload.boundingBox,
+      screenshotPath,
       note: note.trim() || payload.text || '网页批注',
       consoleErrors: record.consoleErrors,
       viewport: payload.viewport
@@ -251,6 +257,21 @@ class BrowserViewManager {
 
 function annotationsRoot(): string {
   return join(app.getPath('userData'), 'browser-annotations')
+}
+
+async function captureAnnotationScreenshot(
+  record: BrowserRecord,
+  annotationId: string
+): Promise<string | undefined> {
+  const bounds = record.view.getBounds()
+  if (bounds.width <= 0 || bounds.height <= 0) return undefined
+  const image = await record.view.webContents.capturePage()
+  if (image.isEmpty()) return undefined
+  const sessionDir = join(annotationsRoot(), record.sessionId)
+  await mkdir(sessionDir, { recursive: true })
+  const screenshotPath = join(sessionDir, `${annotationId}.png`)
+  await writeFile(screenshotPath, image.toPNG())
+  return screenshotPath
 }
 
 function safePartitionId(value: string): string {
