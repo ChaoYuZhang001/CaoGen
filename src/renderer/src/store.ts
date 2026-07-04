@@ -530,6 +530,7 @@ interface AppStore {
   rewindPanel: RewindPanelState
   showNewSession: boolean
   showSettings: boolean
+  sidebarQuery: string
   init(): Promise<void>
   handleEvent(sessionId: string, event: AgentEvent, seq: number): void
   handleMemorySuggestion(event: MemorySuggestionEvent): void
@@ -551,6 +552,11 @@ interface AppStore {
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
   renameSession(id: string, title: string): Promise<void>
+  archiveHistory(id: string, archived: boolean): Promise<void>
+  pinHistory(id: string, pinned: boolean): Promise<void>
+  renameHistoryEntry(id: string, title: string): Promise<void>
+  deleteHistoryEntry(id: string): Promise<void>
+  setSidebarQuery(q: string): void
   updateSettings(patch: Partial<AppSettings>): Promise<void>
   setView(view: AppView): void
   openDiffPanel(): Promise<void>
@@ -657,6 +663,7 @@ export const useStore = create<AppStore>((set, get) => ({
   providers: [],
   projects: [],
   view: 'list',
+  sidebarQuery: '',
   workbench: {
     diffOpen: false,
     diffLoading: false,
@@ -1073,6 +1080,36 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     })
     await window.agentDesk.renameSession(id, t)
+  },
+
+  async archiveHistory(id, archived) {
+    await window.agentDesk.setHistoryArchived(id, archived)
+    const history = await window.agentDesk.listHistory()
+    set({ history })
+  },
+
+  async pinHistory(id, pinned) {
+    await window.agentDesk.setHistoryPinned(id, pinned)
+    const history = await window.agentDesk.listHistory()
+    set({ history })
+  },
+
+  async renameHistoryEntry(id, title) {
+    const t = title.trim()
+    if (!t) return
+    await window.agentDesk.renameHistory(id, t)
+    const history = await window.agentDesk.listHistory()
+    set({ history })
+  },
+
+  async deleteHistoryEntry(id) {
+    await window.agentDesk.deleteHistory(id)
+    const history = await window.agentDesk.listHistory()
+    set({ history })
+  },
+
+  setSidebarQuery(q) {
+    set({ sidebarQuery: q })
   },
 
   async updateSettings(patch) {

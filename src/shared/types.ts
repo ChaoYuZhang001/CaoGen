@@ -113,6 +113,10 @@ export interface HistoryEntry {
   createdAt: number
   updatedAt: number
   costUsd: number
+  /** 归档:从主列表收起到归档区(不删) */
+  archived?: boolean
+  /** 置顶:排在最前 */
+  pinned?: boolean
 }
 
 export interface CreateSessionOptions {
@@ -911,6 +915,10 @@ export interface AgentDeskApi {
   setModel(sessionId: string, model: string): Promise<void>
   renameSession(sessionId: string, title: string): Promise<void>
   listHistory(): Promise<HistoryEntry[]>
+  setHistoryArchived(id: string, archived: boolean): Promise<void>
+  setHistoryPinned(id: string, pinned: boolean): Promise<void>
+  renameHistory(id: string, title: string): Promise<void>
+  deleteHistory(id: string): Promise<void>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   listProviders(): Promise<ProviderView[]>

@@ -53,6 +53,12 @@ const api: AgentDeskApi = {
   renameSession: (sessionId: string, title: string) =>
     ipcRenderer.invoke('sessions:rename', sessionId, title),
   listHistory: () => ipcRenderer.invoke('history:list'),
+  setHistoryArchived: (id: string, archived: boolean) =>
+    ipcRenderer.invoke('history:setArchived', id, archived),
+  setHistoryPinned: (id: string, pinned: boolean) =>
+    ipcRenderer.invoke('history:setPinned', id, pinned),
+  renameHistory: (id: string, title: string) => ipcRenderer.invoke('history:rename', id, title),
+  deleteHistory: (id: string) => ipcRenderer.invoke('history:delete', id),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),
   listProviders: () => ipcRenderer.invoke('providers:list'),

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
-import { listHistory } from './history'
+import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
 import {
   listProviders,
   createProvider,
@@ -541,6 +541,16 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('history:list', () => listHistory())
+  ipcMain.handle('history:setArchived', (_e, id: string, archived: boolean) =>
+    setHistoryArchived(id, archived === true)
+  )
+  ipcMain.handle('history:setPinned', (_e, id: string, pinned: boolean) =>
+    setHistoryPinned(id, pinned === true)
+  )
+  ipcMain.handle('history:rename', (_e, id: string, title: string) => {
+    if (typeof title === 'string') renameHistory(id, title)
+  })
+  ipcMain.handle('history:delete', (_e, id: string) => deleteHistory(id))
 
   ipcMain.handle('settings:get', () => getSettings())
 
