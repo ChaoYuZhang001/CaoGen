@@ -164,6 +164,17 @@ export interface SubagentDispatchResult {
   children: SubagentDispatchItem[]
 }
 
+export interface SubagentResult {
+  orchestrationId?: string
+  childTaskId?: string
+  childSessionId: string
+  childRole?: string
+  status: 'done' | 'error'
+  resultText?: string
+  costUsd?: number
+  durationMs?: number
+}
+
 export type AppLanguage = 'zh' | 'en'
 
 /** 主题偏好:白天(主白副黑)/ 夜晚(主黑副白)/ 跟随系统 */
@@ -393,6 +404,7 @@ export type AgentEvent =
       numTurns?: number
       resultText?: string
     }
+  | ({ kind: 'subagent-result' } & SubagentResult)
 
 /** 文件回退结果(对应 SDK RewindFilesResult) */
 export interface RewindResult {
