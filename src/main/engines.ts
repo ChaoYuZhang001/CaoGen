@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { AgentSession } from './agentSession'
 import { registerEngine } from './engine'
 import { openAIEngineFactory } from './openaiEngine'
+import { CodexEngine } from './codexEngine'
+import { geminiEngineFactory } from './geminiEngine'
 import type { Engine, EngineEmit } from './engine'
 import type { SessionMeta } from '../shared/types'
 
@@ -28,7 +30,6 @@ function cliExists(bin: string): boolean {
 }
 
 const codexInstalled = cliExists('codex')
-const geminiInstalled = cliExists('gemini')
 
 export function registerBuiltinEngines(): void {
   registerEngine({
@@ -41,23 +42,15 @@ export function registerBuiltinEngines(): void {
 
   registerEngine(openAIEngineFactory)
 
-  // 占位工厂:CLI 已装则提示"适配器开发中",未装则 UI 置灰。
-  // 不注册假实现——create 被意外调用时抛错并回退由调用方处理。
+  // Codex CLI 引擎(实验性):CLI 已装才可用,spawn `codex` 翻译事件
   registerEngine({
     kind: 'codex',
-    label: `Codex CLI${codexInstalled ? '(适配器开发中)' : '(未安装)'}`,
-    available: () => false,
-    create: () => {
-      throw new Error('Codex 引擎适配器尚未实现')
-    }
+    label: `Codex CLI${codexInstalled ? '(实验性)' : '(未安装)'}`,
+    available: () => codexInstalled,
+    create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
+      new CodexEngine(meta, emit, resumeSdkSessionId)
   })
 
-  registerEngine({
-    kind: 'gemini',
-    label: `Gemini CLI${geminiInstalled ? '(适配器开发中)' : '(未安装)'}`,
-    available: () => false,
-    create: () => {
-      throw new Error('Gemini 引擎适配器尚未实现')
-    }
-  })
+  // Gemini CLI 引擎(实验性):工厂内部用 geminiCliAvailable() 自探测
+  registerEngine(geminiEngineFactory)
 }
