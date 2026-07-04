@@ -5,6 +5,7 @@ import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
 import { startRoutineScheduler, stopRoutineScheduler, computeNextRun } from './routineScheduler'
 import { markRun } from './routineStore'
+import { initAutoUpdater } from './updater'
 import type { Routine } from '../shared/types'
 
 // 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录
@@ -92,6 +93,8 @@ void app.whenReady().then(() => {
     rootDir: join(app.getPath('userData'), 'routines'),
     onTrigger: runRoutine
   })
+  // 自动更新(打包环境查更新只通知不静默下载;dev/未装依赖降级 no-op)
+  initAutoUpdater()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

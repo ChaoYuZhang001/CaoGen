@@ -486,8 +486,74 @@ async function main() {
     sm.close(parent.id)
   })
 
-  // ---- T13 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
-  await test('T13 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
+  // ---- T13 OpenAI 原生引擎:Responses API SSE → CaoGen 事件 ----
+  await test('T13 openai engine:原生 Responses API 流式事件', async () => {
+    const { openAIEngineFactory } = M('main/openaiEngine.js')
+    eq(openAIEngineFactory.kind, 'openai', 'OpenAI 引擎 kind')
+    assert(openAIEngineFactory.available(), 'OpenAI 引擎应在引擎列表中可选')
+
+    const server = http.createServer((req, res) => {
+      if (req.method !== 'POST' || req.url !== '/v1/responses') {
+        res.writeHead(404).end()
+        return
+      }
+      let body = ''
+      req.on('data', (chunk) => { body += chunk })
+      req.on('end', () => {
+        const parsed = JSON.parse(body)
+        eq(parsed.model, 'gpt-4.1-mini', 'OpenAI 请求模型')
+        eq(req.headers.authorization, 'Bearer test-openai-key', 'OpenAI 鉴权头')
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive'
+        })
+        res.write('event: response.output_text.delta\n')
+        res.write('data: {"type":"response.output_text.delta","delta":"你好"}\n\n')
+        res.write('event: response.output_text.delta\n')
+        res.write('data: {"type":"response.output_text.delta","delta":" OpenAI"}\n\n')
+        res.write('event: response.completed\n')
+        res.write('data: {"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3}}}}\n\n')
+        res.end('data: [DONE]\n\n')
+      })
+    })
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const baseUrl = `http://127.0.0.1:${server.address().port}`
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    process.env.OPENAI_BASE_URL = baseUrl
+    try {
+      const events = []
+      const meta = AS.newSessionMeta({
+        cwd: tmpRoot,
+        model: 'gpt-4.1-mini',
+        providerId: '',
+        engine: 'openai',
+        permissionMode: 'default',
+        title: 'openai-itest'
+      })
+      const engine = openAIEngineFactory.create(meta, (event, seq) => events.push({ event, seq }))
+      await engine.start()
+      eq(meta.status, 'idle', 'OpenAI start 后应 idle')
+      engine.send('测试 OpenAI')
+      await waitFor(() => events.some((entry) => entry.event.kind === 'turn-result'), 3000, '等待 OpenAI turn-result')
+      assert(events.some((entry) => entry.event.kind === 'text-delta' && entry.event.text === '你好'), '缺 OpenAI delta')
+      assert(events.some((entry) => entry.event.kind === 'assistant-message'), '缺 OpenAI assistant-message')
+      const result = events.find((entry) => entry.event.kind === 'turn-result').event
+      assert(!result.isError, 'OpenAI turn 不应失败')
+      eq(result.usage.input, 11, 'OpenAI input usage')
+      eq(result.usage.output, 7, 'OpenAI output usage')
+      eq(result.usage.cacheRead, 3, 'OpenAI cached usage')
+      eq(meta.contextTokens, 14, 'OpenAI context tokens')
+      engine.dispose()
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+      delete process.env.OPENAI_API_KEY
+      delete process.env.OPENAI_BASE_URL
+    }
+  })
+
+  // ---- T14 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
+  await test('T14 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
     const providers = M('main/providers.js')
     const server = http.createServer((req, res) => {
       const auth = req.headers['x-api-key'] || String(req.headers['authorization'] || '').replace('Bearer ', '')
@@ -515,8 +581,8 @@ async function main() {
     server.close()
   })
 
-  // ---- T14 迁移向导回归(真文件) ----
-  await test('T14 迁移向导:扫描/导入/幂等回归', async () => {
+  // ---- T15 迁移向导回归(真文件) ----
+  await test('T15 迁移向导:扫描/导入/幂等回归', async () => {
     const mig = M('main/migration.js')
     const proj = path.join(tmpRoot, 'migproj')
     fs.mkdirSync(path.join(proj, '.cursor', 'rules'), { recursive: true })
@@ -534,8 +600,8 @@ async function main() {
     assert(/跳过/.test(second), '幂等防护失效')
   })
 
-  // ---- T15 调度器回归 ----
-  await test('T15 调度器:分类/能力表/故障目标回归', async () => {
+  // ---- T16 调度器回归 ----
+  await test('T16 调度器:分类/能力表/故障目标回归', async () => {
     const s = M('main/scheduler.js')
     assert(s.classifyFailure('Insufficient credit balance').switchable, '余额分类')
     assert(!s.classifyFailure('error_max_turns').switchable, 'max_turns 不切换')
