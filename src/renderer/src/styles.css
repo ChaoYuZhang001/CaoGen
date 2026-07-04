@@ -1113,6 +1113,55 @@ textarea {
   padding: 12px 18px;
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
+  position: relative;
+}
+
+/* @文件引用补全弹层 */
+.mention-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 18px;
+  right: 18px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  z-index: 30;
+}
+
+.mention-hint {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: 4px;
+}
+
+.mention-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* 长路径显示尾部(文件名) */
+  text-align: left;
+}
+
+.mention-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 .composer-input {

@@ -13,6 +13,8 @@ const api: AgentDeskApi = {
   listPendingPermissions: (sessionId: string) =>
     ipcRenderer.invoke('sessions:pendingPermissions', sessionId),
   getTranscript: (sessionId: string) => ipcRenderer.invoke('sessions:transcript', sessionId),
+  suggestFiles: (sessionId: string, query: string) =>
+    ipcRenderer.invoke('sessions:suggestFiles', sessionId, query),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
   sendMessage: (sessionId: string, text: string) =>
     ipcRenderer.invoke('sessions:send', sessionId, text),
