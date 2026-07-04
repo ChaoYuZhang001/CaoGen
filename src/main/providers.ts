@@ -142,6 +142,55 @@ export function deleteProvider(id: string): void {
  * 同时带 x-api-key 与 Authorization: Bearer,兼容 Anthropic / OpenAI 两种鉴权。
  * token 显式传入(新建时),或经 providerId 取已存密钥(编辑时)。
  */
+/** 从一个候选 URL 拉模型;返回 null 表示该 URL 不适用(404/JSON 非法),交由下一候选 */
+async function tryFetchModelsFrom(url: string, token: string): Promise<string[] | null> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        'x-api-key': token,
+        authorization: `Bearer ${token}`,
+        'anthropic-version': '2023-06-01'
+      }
+    })
+  } catch {
+    return null // 网络失败,试下一个
+  }
+  // 401/403 是鉴权问题,不是端点不对 —— 直接抛,别再试其它候选
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`端点返回 ${res.status}(密钥无效?)`)
+  }
+  if (res.status === 404) return null // 此路径无模型端点,试下一候选
+  if (!res.ok) return null
+  let json: unknown
+  try {
+    json = await res.json()
+  } catch {
+    return null
+  }
+  const arr = Array.isArray(json)
+    ? json
+    : Array.isArray((json as Record<string, unknown>)?.data)
+      ? ((json as Record<string, unknown>).data as unknown[])
+      : []
+  const ids = arr
+    .map((m) => {
+      const o = m as Record<string, unknown> | string
+      if (typeof o === 'string') return o
+      return typeof o?.id === 'string' ? o.id : ''
+    })
+    .filter(Boolean)
+  return ids.length > 0 ? [...new Set(ids)] : null
+}
+
+/**
+ * 用 API key 拉取模型列表。按多个候选端点依次尝试,兼容不同厂商布局:
+ * - Anthropic 兼容:{base}/v1/models
+ * - OpenAI 风格 / 部分厂商(如 DeepSeek):{base}/models
+ * - base 含 /anthropic 子路径时(如 https://api.deepseek.com/anthropic),
+ *   模型列表常在根域:{root}/v1/models、{root}/models
+ * 401/403 立即抛(密钥问题);全部 404/无果才报"端点不支持"。
+ */
 export async function fetchModels(opts: {
   baseUrl: string
   token?: string
@@ -156,42 +205,13 @@ export async function fetchModels(opts: {
   }
   if (!token) throw new Error('请先填写 API 密钥')
 
-  const url = `${base}/v1/models`
-  let res: Response
-  try {
-    res = await fetch(url, {
-      headers: {
-        'x-api-key': token,
-        authorization: `Bearer ${token}`,
-        'anthropic-version': '2023-06-01'
-      }
-    })
-  } catch (err) {
-    throw new Error(`请求失败:${err instanceof Error ? err.message : String(err)}`)
+  // 候选端点(去重,保序)
+  const root = base.replace(/\/anthropic$/, '')
+  const candidates = [...new Set([`${base}/v1/models`, `${base}/models`, `${root}/v1/models`, `${root}/models`])]
+
+  for (const url of candidates) {
+    const models = await tryFetchModelsFrom(url, token) // 401/403 会向上抛
+    if (models) return models
   }
-  if (!res.ok) {
-    throw new Error(`端点返回 ${res.status}${res.status === 401 ? '(密钥无效?)' : ''}`)
-  }
-  let json: unknown
-  try {
-    json = await res.json()
-  } catch {
-    throw new Error('响应不是合法 JSON,可能端点不支持 /v1/models')
-  }
-  // 兼容 {data:[{id}]}(Anthropic/OpenAI)与直接数组
-  const arr = Array.isArray(json)
-    ? json
-    : Array.isArray((json as Record<string, unknown>)?.data)
-      ? ((json as Record<string, unknown>).data as unknown[])
-      : []
-  const ids = arr
-    .map((m) => {
-      const o = m as Record<string, unknown> | string
-      if (typeof o === 'string') return o
-      return typeof o?.id === 'string' ? o.id : ''
-    })
-    .filter(Boolean)
-  if (ids.length === 0) throw new Error('端点未返回任何模型')
-  // 去重保序
-  return [...new Set(ids)]
+  throw new Error('未能获取模型列表:该端点可能不提供 /models 接口,请手动填写模型名')
 }
