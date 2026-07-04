@@ -189,6 +189,35 @@ export interface ProviderView {
   hasToken: boolean
 }
 
+export interface ImageAttachmentView {
+  id: string
+  hash: string
+  path: string
+  mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | string
+  bytes: number
+  createdAt: string
+}
+
+export type ImageAttachmentResult =
+  | ({ ok: true } & ImageAttachmentView)
+  | { ok: false; error: string }
+
+export interface UserMessageAttachmentView {
+  id: string
+  mime: string
+  bytes: number
+}
+
+export interface SaveImageAttachmentBytesInput {
+  data: string | ArrayBuffer
+  mime?: string
+}
+
+export interface SendMessagePayload {
+  text: string
+  images?: ImageAttachmentView[]
+}
+
 export interface ProviderInput {
   name: string
   baseUrl: string
@@ -222,7 +251,12 @@ export type AgentEvent =
       permissionMode?: string
     }
   | { kind: 'meta'; meta: SessionMeta }
-  | { kind: 'user-message'; text: string; messageId?: string }
+  | {
+      kind: 'user-message'
+      text: string
+      messageId?: string
+      attachments?: UserMessageAttachmentView[]
+    }
   | { kind: 'checkpoint'; messageId: string; userMessageId?: string }
   | {
       kind: 'checkpoint-restore'
@@ -270,6 +304,205 @@ export interface RewindResult {
   deletions?: number
 }
 
+export interface WorkspaceDiffLine {
+  type: 'context' | 'add' | 'delete'
+  text: string
+  oldLine?: number
+  newLine?: number
+}
+
+export interface WorkspaceDiffHunk {
+  header: string
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: WorkspaceDiffLine[]
+}
+
+export interface WorkspaceDiffFile {
+  oldPath: string
+  newPath: string
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'binary' | 'unknown'
+  hunks: WorkspaceDiffHunk[]
+  binary?: boolean
+}
+
+export interface WorkspaceDiff {
+  ok: boolean
+  cwd: string
+  files: WorkspaceDiffFile[]
+  rawBytes: number
+  truncated?: boolean
+  error?: string
+}
+
+export interface ManagedWorktreeView {
+  sessionId: string
+  repoRoot: string
+  sourceCwd: string
+  worktreePath: string
+  cwd: string
+  branch: string
+  baseSha: string
+  baseBranch: string | null
+  state: 'active' | 'removed'
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorktreeSummary {
+  ok: boolean
+  isolated: boolean
+  record?: ManagedWorktreeView
+  changedFiles: number
+  insertions?: number
+  deletions?: number
+  dirty: boolean
+  error?: string
+}
+
+export interface WorktreePatchResult {
+  ok: boolean
+  path?: string
+  bytes?: number
+  error?: string
+}
+
+export interface WorktreeRemoveResult {
+  ok: boolean
+  record?: ManagedWorktreeView
+  error?: string
+}
+
+export type ProjectFileKind = 'file' | 'directory'
+
+export interface ProjectFileEntry {
+  path: string
+  name: string
+  kind: ProjectFileKind
+  size?: number
+  mtimeMs: number
+}
+
+export interface ListProjectFilesResult {
+  ok: boolean
+  root?: string
+  entries: ProjectFileEntry[]
+  truncated?: boolean
+  error?: string
+}
+
+export interface ReadTextFileResult {
+  ok: boolean
+  path?: string
+  content?: string
+  bytes?: number
+  mtimeMs?: number
+  error?: string
+}
+
+export interface WriteTextFileResult {
+  ok: boolean
+  path?: string
+  bytes?: number
+  mtimeMs?: number
+  error?: string
+}
+
+export type PreviewType = 'html' | 'markdown' | 'text' | 'csv' | 'json' | 'image' | 'pdf' | 'unknown'
+export type PreviewMode = 'text' | 'asset' | 'unsupported'
+
+export interface PreparedPreview {
+  ok: boolean
+  path?: string
+  type?: PreviewType
+  mode?: PreviewMode
+  mime?: string
+  bytes?: number
+  mtimeMs?: number
+  content?: string
+  error?: string
+}
+
+export type TerminalBackend = 'pty' | 'pipe'
+
+export interface TerminalExitInfo {
+  exitCode: number | null
+  signal?: number | string
+  reason?: string
+  at: number
+}
+
+export interface TerminalInfo {
+  id: string
+  sessionId?: string
+  cwd: string
+  shell: string
+  pid?: number
+  backend: TerminalBackend
+  cols: number
+  rows: number
+  startedAt: number
+  fallbackReason?: string
+  exit?: TerminalExitInfo
+}
+
+export type TerminalEvent =
+  | { kind: 'started'; terminal: TerminalInfo }
+  | { kind: 'output'; id: string; data: string }
+  | { kind: 'exit'; id: string; exit: TerminalExitInfo }
+  | { kind: 'error'; id?: string; message: string; fatal: boolean }
+
+export interface BrowserBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface BrowserAnnotationBoundingBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface BrowserAnnotationViewport {
+  width: number
+  height: number
+  deviceScaleFactor?: number
+}
+
+export interface BrowserAnnotation {
+  id: string
+  sessionId: string
+  url: string
+  title?: string
+  selector?: string
+  boundingBox?: BrowserAnnotationBoundingBox
+  screenshotPath?: string
+  note: string
+  consoleErrors: string[]
+  viewport?: BrowserAnnotationViewport
+  createdAt: string
+}
+
+export interface BrowserViewState {
+  sessionId: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
+export type BrowserEvent =
+  | { kind: 'state'; sessionId: string; state: BrowserViewState }
+  | { kind: 'annotation'; sessionId: string; annotation: BrowserAnnotation }
+  | { kind: 'closed'; sessionId: string }
+  | { kind: 'error'; sessionId?: string; message: string }
+
 /** D11 迁移向导:检测到的他家 Agent 资产 */
 export interface MigrationAsset {
   /** 来源 Agent 名(Cursor / Codex / Cline …) */
@@ -309,7 +542,12 @@ export interface AgentDeskApi {
   suggestFiles(sessionId: string, query: string): Promise<string[]>
   rewindFiles(sessionId: string, messageId: string, dryRun: boolean): Promise<RewindResult>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
-  sendMessage(sessionId: string, text: string): Promise<void>
+  copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
+  saveImageAttachmentBytes(
+    sessionId: string,
+    input: SaveImageAttachmentBytesInput
+  ): Promise<ImageAttachmentResult>
+  sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<void>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>
   respondPermission(
@@ -331,6 +569,33 @@ export interface AgentDeskApi {
   fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
   listEngines(): Promise<EngineInfo[]>
+  getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
+  getWorktreeSummary(sessionId: string): Promise<WorktreeSummary>
+  exportWorktreePatch(sessionId: string): Promise<WorktreePatchResult>
+  removeWorktree(
+    sessionId: string,
+    opts?: { deleteBranch?: boolean; force?: boolean }
+  ): Promise<WorktreeRemoveResult>
+  listProjectFiles(sessionId: string): Promise<ListProjectFilesResult>
+  readTextFile(sessionId: string, path: string): Promise<ReadTextFileResult>
+  writeTextFile(sessionId: string, path: string, content: string): Promise<WriteTextFileResult>
+  preparePreview(sessionId: string, path: string): Promise<PreparedPreview>
+  openBrowser(sessionId: string, url?: string): Promise<BrowserViewState>
+  navigateBrowser(sessionId: string, url: string): Promise<BrowserViewState>
+  setBrowserBounds(sessionId: string, bounds: BrowserBounds): Promise<void>
+  browserGoBack(sessionId: string): Promise<BrowserViewState>
+  browserGoForward(sessionId: string): Promise<BrowserViewState>
+  reloadBrowser(sessionId: string): Promise<BrowserViewState>
+  closeBrowser(sessionId: string): Promise<void>
+  captureBrowserAnnotation(sessionId: string, note: string): Promise<BrowserAnnotation>
+  listBrowserAnnotations(sessionId: string): Promise<BrowserAnnotation[]>
+  onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
+  listTerminals(): Promise<TerminalInfo[]>
+  startTerminal(sessionId: string, opts?: { cols?: number; rows?: number; reuse?: boolean }): Promise<TerminalInfo>
+  writeTerminal(id: string, data: string): Promise<void>
+  resizeTerminal(id: string, cols: number, rows: number): Promise<void>
+  closeTerminal(id: string): Promise<void>
+  onTerminalEvent(cb: (event: TerminalEvent) => void): () => void
   scanMigration(cwd: string): Promise<MigrationScan>
   importMigrationAssets(cwd: string, paths: string[]): Promise<string>
   listProjects(): Promise<Project[]>

@@ -8,6 +8,7 @@ import { getSettings } from './settings'
 import { cleanupTranscripts } from './transcript'
 import { touchProject } from './projects'
 import { prepareWorktree } from './worktrees'
+import { showDesktopNotification } from './desktopNotify'
 import type {
   AgentEvent,
   CreateSessionOptions,
@@ -16,8 +17,30 @@ import type {
   TranscriptEntry
 } from '../shared/types'
 
+interface SessionNotificationState {
+  turnActive: boolean
+  permissionNotified: boolean
+  terminalNotified: boolean
+}
+
+function trimForNotification(text: string, max = 120): string {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
+}
+
+function formatDuration(ms: number | undefined): string | undefined {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
+}
+
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly notificationStates = new Map<string, SessionNotificationState>()
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }))
@@ -75,12 +98,21 @@ class SessionManager {
     const session = this.sessions.get(id)
     if (!session) return
     this.sessions.delete(id)
+    this.notificationStates.delete(id)
     session.dispose()
+  }
+
+  updateWorktreeState(id: string, state: SessionMeta['worktreeState']): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.meta.worktreeState = state
+    this.persist(id)
   }
 
   disposeAll(): void {
     for (const session of this.sessions.values()) session.dispose()
     this.sessions.clear()
+    this.notificationStates.clear()
   }
 
   getTranscript(id: string): TranscriptEntry[] {
@@ -99,8 +131,91 @@ class SessionManager {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
+    this.handleNotification(sessionId, event)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
+    }
+  }
+
+  private notificationState(sessionId: string): SessionNotificationState {
+    let state = this.notificationStates.get(sessionId)
+    if (!state) {
+      state = {
+        turnActive: false,
+        permissionNotified: false,
+        terminalNotified: false
+      }
+      this.notificationStates.set(sessionId, state)
+    }
+    return state
+  }
+
+  private sessionNotificationLabel(meta: SessionMeta | undefined): string {
+    if (!meta) return '未知会话'
+    if (meta.title && meta.title !== '新会话') return trimForNotification(meta.title, 80)
+    return trimForNotification(meta.cwd, 100)
+  }
+
+  private notify(sessionId: string, title: string, body: string): void {
+    showDesktopNotification({ title, body, sessionId })
+  }
+
+  private handleNotification(sessionId: string, event: AgentEvent): void {
+    if (!this.sessions.has(sessionId) && !this.notificationStates.has(sessionId)) return
+    const state = this.notificationState(sessionId)
+    const meta = this.sessions.get(sessionId)?.meta
+    const label = this.sessionNotificationLabel(meta)
+
+    if (event.kind === 'user-message') {
+      state.turnActive = true
+      state.permissionNotified = false
+      state.terminalNotified = false
+      return
+    }
+
+    if (event.kind === 'status') {
+      if (event.status === 'running' && !state.turnActive) {
+        state.turnActive = true
+        state.permissionNotified = false
+        state.terminalNotified = false
+      } else if (event.status === 'error') {
+        if (!state.terminalNotified) {
+          const error = event.error || meta?.lastError || '未知错误'
+          this.notify(sessionId, 'CaoGen: 任务失败', `${label} · ${trimForNotification(error)}`)
+          state.terminalNotified = true
+        }
+        state.turnActive = false
+      } else if (event.status === 'idle' || event.status === 'closed') {
+        state.turnActive = false
+        if (event.status === 'closed') this.notificationStates.delete(sessionId)
+      }
+      return
+    }
+
+    if (event.kind === 'permission-request') {
+      if (!state.permissionNotified) {
+        const tool = trimForNotification(event.request.toolName, 60)
+        this.notify(sessionId, 'CaoGen: 等待权限', `${label} · ${tool}`)
+        state.permissionNotified = true
+      }
+      return
+    }
+
+    if (event.kind === 'turn-result') {
+      if (!state.terminalNotified) {
+        const bits = [label]
+        const duration = formatDuration(event.durationMs)
+        if (duration) bits.push(duration)
+        if (typeof event.costUsd === 'number' && Number.isFinite(event.costUsd)) {
+          bits.push(`$${event.costUsd.toFixed(4)}`)
+        }
+        if (event.isError && event.resultText) {
+          bits.push(trimForNotification(event.resultText))
+        }
+        this.notify(sessionId, event.isError ? 'CaoGen: 任务失败' : 'CaoGen: 任务完成', bits.join(' · '))
+        state.terminalNotified = true
+      }
+      state.turnActive = false
     }
   }
 

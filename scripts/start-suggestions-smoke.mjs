@@ -1,0 +1,159 @@
+import { execFileSync, spawnSync } from 'node:child_process'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const repoRoot = process.cwd()
+const tempRoot = mkdtempSync(path.join(tmpdir(), 'agent-desk-start-suggestions-'))
+const outDir = path.join(tempRoot, 'compiled')
+const projectDir = path.join(tempRoot, 'repo')
+const noGitDir = path.join(tempRoot, 'no-git')
+const largeDir = path.join(tempRoot, 'large')
+
+try {
+  execFileSync(
+    process.platform === 'win32' ? 'npx.cmd' : 'npx',
+    [
+      'tsc',
+      'src/main/startSuggestions.ts',
+      '--outDir',
+      outDir,
+      '--target',
+      'ES2022',
+      '--module',
+      'NodeNext',
+      '--moduleResolution',
+      'NodeNext',
+      '--types',
+      'node',
+      '--skipLibCheck',
+      '--esModuleInterop'
+    ],
+    { cwd: repoRoot, stdio: 'inherit' }
+  )
+
+  const startSuggestions = await import(pathToFileURL(path.join(outDir, 'startSuggestions.js')).href)
+
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(
+    path.join(projectDir, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'suggestion-smoke',
+        scripts: {
+          typecheck: 'tsc --noEmit',
+          test: 'node test.js'
+        }
+      },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  writeFileSync(path.join(projectDir, 'README.md'), '# Smoke\n\nTODO: wire the start suggestions helper.\n', 'utf8')
+  writeFileSync(path.join(projectDir, 'package-lock.json'), '{"lockfileVersion":3}\n', 'utf8')
+
+  git(projectDir, ['init'])
+  git(projectDir, ['config', 'user.email', 'smoke@example.test'])
+  git(projectDir, ['config', 'user.name', 'Start Suggestions Smoke'])
+  git(projectDir, ['add', 'package.json', 'README.md', 'package-lock.json'])
+  git(projectDir, ['commit', '-m', 'initial'])
+
+  writeFileSync(path.join(projectDir, 'README.md'), '# Smoke\n\nTODO: finish the helper smoke test.\n', 'utf8')
+  writeFileSync(path.join(projectDir, 'TODO.md'), 'FIXME: cover git dirty state.\n', 'utf8')
+
+  const suggestions = startSuggestions.buildStartSuggestions({
+    projectDir,
+    memoryEntries: [
+      {
+        title: 'Last attempt failed',
+        body: 'Smoke memory says the previous run failed during validation.',
+        status: 'failed'
+      }
+    ],
+    worktreeSummaries: [
+      {
+        title: 'Feature worktree has changed files',
+        summary: 'A related worktree is dirty but has no conflict.'
+      }
+    ]
+  })
+
+  assert(Array.isArray(suggestions), 'buildStartSuggestions should return an array')
+  assert(suggestions.length > 0, 'temp project should produce suggestions')
+  for (const suggestion of suggestions) assertSuggestionShape(suggestion)
+  assertHasSource(suggestions, 'git-status')
+  assertHasSource(suggestions, 'readme-todo')
+  assertHasSource(suggestions, 'package-json')
+  assertHasSource(suggestions, 'memory')
+  assert(
+    suggestions.some((suggestion) => suggestion.priority === 'high'),
+    'dirty/failure/TODO signals should include a high-priority suggestion'
+  )
+  assert(!readFileSync(path.join(projectDir, 'TODO.md'), 'utf8').includes('generated'), 'helper should not write project files')
+
+  mkdirSync(noGitDir, { recursive: true })
+  writeFileSync(path.join(noGitDir, 'package.json'), '{"name":"no-git","scripts":{"build":"vite build"}}\n', 'utf8')
+  const noGitSuggestions = startSuggestions.getStartSuggestions(noGitDir)
+  assert(Array.isArray(noGitSuggestions), 'non-git project should not throw')
+  assert(!noGitSuggestions.some((suggestion) => suggestion.source === 'git-status'), 'non-git project should not emit git suggestions')
+  assertHasSource(noGitSuggestions, 'package-json')
+
+  mkdirSync(largeDir, { recursive: true })
+  writeFileSync(path.join(largeDir, 'README.md'), `TODO: ${'large '.repeat(40_000)}`, 'utf8')
+  const largeSuggestions = startSuggestions.buildStartSuggestions({
+    projectDir: largeDir,
+    maxFileBytes: 1_024
+  })
+  assert(
+    !largeSuggestions.some((suggestion) => suggestion.source === 'readme-todo'),
+    'large README should be skipped instead of read for TODO suggestions'
+  )
+
+  console.log('startSuggestions smoke ok')
+} finally {
+  rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function git(cwd, args) {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    const output = result.stderr.trim() || result.stdout.trim()
+    throw new Error(`git ${args.join(' ')} failed: ${output}`)
+  }
+  return result.stdout.trim()
+}
+
+function assertHasSource(suggestions, source) {
+  assert(
+    suggestions.some((suggestion) => suggestion.source === source),
+    `expected suggestion source ${source}, got ${suggestions.map((suggestion) => suggestion.source).join(', ')}`
+  )
+}
+
+function assertSuggestionShape(suggestion) {
+  assert(typeof suggestion.id === 'string' && suggestion.id, 'suggestion.id should be non-empty')
+  assert(typeof suggestion.title === 'string' && suggestion.title, 'suggestion.title should be non-empty')
+  assert(typeof suggestion.body === 'string' && suggestion.body, 'suggestion.body should be non-empty')
+  assert(typeof suggestion.source === 'string' && suggestion.source, 'suggestion.source should be non-empty')
+  assert(['high', 'medium', 'low'].includes(suggestion.priority), 'suggestion.priority should be valid')
+  assert(typeof suggestion.prompt === 'string' && suggestion.prompt, 'suggestion.prompt should be non-empty')
+}
+
+function assert(condition, message = 'assertion failed') {
+  if (!condition) {
+    throw new Error(message)
+  }
+}

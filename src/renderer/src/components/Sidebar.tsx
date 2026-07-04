@@ -99,6 +99,7 @@ export default function Sidebar(): React.JSX.Element {
           const s = sessions[id]
           if (!s) return null
           const { meta } = s
+          const displayCwd = meta.sourceCwd ?? meta.cwd
           if (editingId === id) {
             return (
               <div key={id} className="session-card session-card-editing">
@@ -129,9 +130,16 @@ export default function Sidebar(): React.JSX.Element {
                 title={t(STATUS_LABEL_KEY[meta.status])}
               />
               <span className="session-card-body">
-                <span className="session-card-title">{meta.title}</span>
+                <span className="session-card-title">
+                  {meta.isolated && (
+                    <span className="worktree-mark" title="Git worktree 隔离">
+                      ⎇
+                    </span>
+                  )}
+                  {meta.title}
+                </span>
                 <span className="session-card-sub">
-                  {basename(meta.cwd)} · {formatCost(meta.costUsd)}
+                  {basename(displayCwd)} · {formatCost(meta.costUsd)}
                 </span>
               </span>
               {s.pendingPermissions.length > 0 && (
@@ -172,14 +180,21 @@ export default function Sidebar(): React.JSX.Element {
               <button
                 key={h.id}
                 className="session-card history-card"
-                title={t('resumeSessionTitle', { cwd: h.cwd })}
+                title={t('resumeSessionTitle', { cwd: h.sourceCwd ?? h.cwd })}
                 onClick={() => void resumeFromHistory(h)}
               >
                 <span className="history-icon">↻</span>
                 <span className="session-card-body">
-                  <span className="session-card-title">{h.title}</span>
+                  <span className="session-card-title">
+                    {h.isolated && (
+                      <span className="worktree-mark" title="Git worktree 隔离">
+                        ⎇
+                      </span>
+                    )}
+                    {h.title}
+                  </span>
                   <span className="session-card-sub">
-                    {basename(h.cwd)} · {formatTime(h.updatedAt)}
+                    {basename(h.sourceCwd ?? h.cwd)} · {formatTime(h.updatedAt)}
                   </span>
                 </span>
               </button>

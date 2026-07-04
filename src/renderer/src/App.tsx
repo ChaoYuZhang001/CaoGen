@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect } from 'react'
 import { useStore } from './store'
 import { useThemeEffect } from './theme'
 import Sidebar from './components/Sidebar'
-import ChatView from './components/ChatView'
+import WorkbenchRoot from './components/workbench/WorkbenchRoot'
 import WelcomeView from './components/WelcomeView'
 import NewSessionModal from './components/NewSessionModal'
 import SettingsModal from './components/SettingsModal'
@@ -43,7 +43,7 @@ export default function App(): React.JSX.Element {
       ) : (
         <>
           <Sidebar />
-          <main className="main">{hasActive ? <ChatView key={activeId} /> : <WelcomeView />}</main>
+          <main className="main">{hasActive ? <WorkbenchRoot key={activeId} /> : <WelcomeView />}</main>
         </>
       )}
       {showNewSession && <NewSessionModal />}

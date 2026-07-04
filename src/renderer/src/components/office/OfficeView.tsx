@@ -1,4 +1,4 @@
-import { Suspense } from 'react'
+import { Suspense, useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
@@ -6,7 +6,9 @@ import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import Workstation, { activityOf } from './Workstation'
 import MessagePackets from './MessagePackets'
+import OfficeScene from './kit/OfficeScene'
 import { brandFor } from './brand'
+import { buildOfficeModel } from './model'
 
 /** 把会话按网格铺开;返回每个会话的世界坐标 */
 function gridPositions(count: number): Array<[number, number, number]> {
@@ -46,6 +48,7 @@ export default function OfficeView(): React.JSX.Element {
 
   const ids = order.filter((id) => sessions[id])
   const positions = gridPositions(ids.length)
+  const officeModel = useMemo(() => buildOfficeModel(ids, sessions), [ids, sessions])
 
   // 会话 → 厂商品牌色(providerId 映射到 Provider 名称,空则官方)
   const brandColorFor = (providerId: string): string => {
@@ -100,12 +103,10 @@ export default function OfficeView(): React.JSX.Element {
           {/* 补一盏跟随状态色调的点光,增强氛围 */}
           <pointLight position={[0, 3, 4]} intensity={isLight ? 0.3 : 0.6} color={isLight ? '#ffffff' : '#4a5a80'} />
 
-          {/* 地板 + 接触阴影 */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-            <planeGeometry args={[60, 60]} />
-            <meshStandardMaterial color={scene.ground} metalness={0.2} roughness={0.85} />
-          </mesh>
-          <gridHelper args={[60, 60, scene.grid1, scene.grid2]} position={[0, 0.001, 0]} />
+          {/* 富场景背景层:地板/墙/落地窗/家具/休息区/会议桌/白板/机架/茶水角 */}
+          <Suspense fallback={null}>
+            <OfficeScene />
+          </Suspense>
           <ContactShadows
             position={[0, 0.02, 0]}
             opacity={isLight ? 0.35 : 0.55}
@@ -136,15 +137,18 @@ export default function OfficeView(): React.JSX.Element {
                 showBadge={office.showBadges}
                 liveliness={office.liveliness}
                 catEars={office.catEars}
+                currentTask={officeModel.sessions[id]?.currentTask}
+                taskStats={officeModel.sessions[id]?.taskStats}
                 onSelect={() => focus(id)}
               />
             ))}
-            {/* 工位间飞行的消息包:多 Agent 协作氛围 */}
+            {/* 真实任务流消息包:由 tool_use/runningTools/toolResults/pendingPermissions 派生 */}
             <MessagePackets
               stations={ids.map((id, i) => ({
                 pos: positions[i],
                 active: activityOf(sessions[id]) === 'working'
               }))}
+              packets={officeModel.packets}
             />
           </Suspense>
 

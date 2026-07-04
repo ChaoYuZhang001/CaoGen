@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AssistantBlock } from '../../../shared/types'
-import type { ToolResultInfo } from '../store'
+import { useStore, type ToolResultInfo } from '../store'
 import { useT } from '../i18n'
 import DiffView from './DiffView'
 
@@ -133,6 +133,10 @@ function ToolBody({ block }: { block: ToolUseBlock }): React.JSX.Element {
   }
 }
 
+function isWorkspaceMutationTool(name: string): boolean {
+  return name === 'Edit' || name === 'MultiEdit' || name === 'Write' || name === 'NotebookEdit'
+}
+
 export default function ToolCallCard({
   block,
   result,
@@ -143,6 +147,7 @@ export default function ToolCallCard({
   running: boolean
 }): React.JSX.Element {
   const t = useT()
+  const openDiffPanel = useStore((s) => s.openDiffPanel)
   const [expanded, setExpanded] = useState(false)
   const [showFullResult, setShowFullResult] = useState(false)
   const input = asRecord(block.input)
@@ -176,6 +181,11 @@ export default function ToolCallCard({
       </button>
       {expanded && (
         <div className="tool-body">
+          {isWorkspaceMutationTool(block.name) && (
+            <button className="btn btn-ghost btn-sm tool-workspace-diff" onClick={() => void openDiffPanel()}>
+              {t('openWorkspaceDiff')}
+            </button>
+          )}
           <ToolBody block={block} />
           {result && (
             <div className={`tool-result ${result.isError ? 'tool-result-error' : ''}`}>
