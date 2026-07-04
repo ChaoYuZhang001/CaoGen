@@ -8,6 +8,7 @@ const DEFAULTS: AppSettings = {
   defaultPermissionMode: 'default',
   defaultProviderId: '',
   schedulerStrategy: 'balanced',
+  failoverEnabled: true,
   language: 'zh',
   theme: 'dark',
   persona: '',

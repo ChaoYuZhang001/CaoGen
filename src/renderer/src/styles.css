@@ -1466,6 +1466,12 @@ textarea {
   opacity: 0.85;
 }
 
+/* 故障切换标注:琥珀色警示,与常规路由区分 */
+.failover-note {
+  background: rgba(224, 163, 60, 0.14);
+  border-color: rgba(224, 163, 60, 0.4);
+}
+
 /* ---------- 3D 办公区 ---------- */
 
 .office {

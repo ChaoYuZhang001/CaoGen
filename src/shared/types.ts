@@ -102,6 +102,8 @@ export interface AppSettings {
   defaultProviderId: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
+  /** 厂商故障时自动切换到其他 Provider 重试(M4.1) */
+  failoverEnabled: boolean
   /** 界面语言 */
   language: AppLanguage
   /** 主题:light 白天 / dark 夜晚 / system 跟随系统 */
@@ -182,6 +184,17 @@ export type AgentEvent =
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'user-message'; text: string }
   | { kind: 'routing'; model: string; reason: string; providerId: string }
+  | {
+      /** 跨厂商故障切换:旧 Provider 失败,已自动切到新 Provider 重试 */
+      kind: 'failover'
+      fromProviderId: string
+      toProviderId: string
+      fromName: string
+      toName: string
+      /** 切换后使用的模型(目标厂商无模型列表时为空,走其默认) */
+      model?: string
+      reason: string
+    }
   | { kind: 'text-delta'; text: string }
   | { kind: 'thinking-delta'; text: string }
   | { kind: 'tool-start'; toolUseId: string; name: string }
