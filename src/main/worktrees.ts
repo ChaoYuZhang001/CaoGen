@@ -397,8 +397,11 @@ export function exportManagedWorktreePatch(sessionId: string): WorktreePatchResu
     if (record.state !== 'active' || !existsSync(record.worktreePath)) {
       return { ok: false, error: 'worktree 已不存在或已移除' }
     }
+    // 相对基线的完整改动 = 已提交(baseSha..HEAD)+ 工作区未提交(HEAD 相对工作树)。
+    // 用 `git diff --binary baseSha`(不带 -- 的三点/两点)对比"基线↔当前工作树",
+    // 它同时涵盖已提交与未提交改动,一步到位;再叠加未跟踪文件。
     const patch = [
-      git(record.worktreePath, ['diff', '--binary', record.baseSha, '--']),
+      git(record.worktreePath, ['diff', '--binary', record.baseSha]),
       untrackedPatch(record.worktreePath)
     ]
       .filter(Boolean)
