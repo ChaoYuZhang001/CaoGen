@@ -312,17 +312,17 @@ const DICT: Dict = {
   quickTemplate: { zh: '快速模板', en: 'Quick templates' },
   pickTemplate: { zh: '选择一个模板…', en: 'Pick a template…' },
   gatewayNote1: {
-    zh: '底层引擎使用 Anthropic Messages API 协议。接入 ',
-    en: 'The engine speaks the Anthropic Messages API. To use '
+    zh: 'OpenAI 可选 Responses API 引擎直连;Claude 引擎接入 ',
+    en: 'OpenAI can connect directly through the Responses API engine. With the Claude engine, '
   },
   gatewayNoteBold: { zh: 'OpenAI / Gemini / 国产模型', en: 'OpenAI / Gemini / other vendors' },
   gatewayNote2: {
-    zh: ' 需经 Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译,填入网关地址即可。',
-    en: ', route through an Anthropic-compatible gateway (one-api, new-api, LiteLLM, …) and enter its URL here.'
+    zh: ' 仍需经 Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译。',
+    en: ' still needs an Anthropic-compatible gateway (one-api, new-api, LiteLLM, …).'
   },
   nameLabel: { zh: '名称', en: 'Name' },
   namePlaceholder: { zh: '例如:公司网关 / OpenRouter', en: 'e.g. Company gateway / OpenRouter' },
-  baseUrlLabel: { zh: 'Base URL(Anthropic 兼容端点)', en: 'Base URL (Anthropic-compatible endpoint)' },
+  baseUrlLabel: { zh: 'Base URL(按所选引擎)', en: 'Base URL (matches selected engine)' },
   apiKeyLabel: { zh: 'API 密钥', en: 'API key' },
   savedKeepEmpty: { zh: '(已保存,留空不改)', en: '(saved — leave blank to keep)' },
   tokenPlaceholderSaved: { zh: '••••••••(不改动请留空)', en: '•••••••• (leave blank to keep)' },

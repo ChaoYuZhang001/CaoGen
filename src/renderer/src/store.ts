@@ -769,6 +769,7 @@ export const useStore = create<AppStore>((set, get) => ({
       cwd: entry.cwd,
       model: entry.model,
       providerId: entry.providerId,
+      engine: entry.engine,
       permissionMode: entry.permissionMode,
       resumeSdkSessionId: entry.sdkSessionId,
       title: entry.title
@@ -1830,9 +1831,8 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 ]
 
 /**
- * Provider 预设模板。底层 SDK 只讲 Anthropic Messages API 协议,
- * 要接入 OpenAI / Gemini / 国产模型,需经 Anthropic 兼容网关翻译。
- * 模板预填 baseUrl 占位与常见模型名,降低配置成本。
+ * Provider 预设模板。Claude 引擎使用 Anthropic Messages API;OpenAI 引擎
+ * 使用 OpenAI Responses API。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
   key: string
@@ -1849,6 +1849,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: '',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
+  },
+  {
+    key: 'openai',
+    label: 'OpenAI(官方直连)',
+    baseUrl: 'https://api.openai.com',
+    models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
+    hint: '选择 OpenAI Responses API 引擎时可原生直连,填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
   },
   {
     key: 'deepseek',

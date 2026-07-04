@@ -1,6 +1,6 @@
 # CaoGen 目标与路线图
 
-> 制定日期:2026-07-03 · 状态:2026-07-04 加速轮 —— M0–M5、M4.1 已完成;M6 架构落地(适配器待实现);M7 打包链路完成(自动更新待补);M8.1 @文件、M8.2 检查点回溯核心+回溯面板、斜杠命令面板、图片粘贴/拖拽、通知/防休眠已落地;M9 worktree 隔离后端+管理面板+patch 导出/丢弃已落地,合并审查 helper 已落地;D11 迁移向导已落地;M10 Diff/Worktree/Terminal/File Editor/Preview 工作台第一版已落地,产物预览可发给 Agent;M11 WebContentsView 浏览器面板 + 选区批注保存 + 批注发给 Agent 第一版已接入;M12 真实 child session 派发后端/IPC/preload/store/面板第一版已落地,一次最多 33 个子 Agent,默认独立 worktree;M13 项目记忆、Routine 存储、开工建议 helper 已落地;M15 插件扫描 helper 已落地;迁移攻坚 M8–M15 设计定稿于 DESIGN-V2.md
+> 制定日期:2026-07-03 · 状态:2026-07-04 加速轮 —— M0–M5、M4.1 已完成;M6 架构落地,OpenAI Responses API 原生引擎第一版已接入,Codex/Gemini 适配器待实现;M7 打包链路完成(自动更新待补);M8.1 @文件、M8.2 检查点回溯核心+回溯面板、斜杠命令面板、图片粘贴/拖拽、通知/防休眠已落地;M9 worktree 隔离后端+管理面板+patch 导出/丢弃已落地,合并审查 helper 已落地;D11 迁移向导已落地;M10 Diff/Worktree/Terminal/File Editor/Preview 工作台第一版已落地,产物预览可发给 Agent;M11 WebContentsView 浏览器面板 + 选区批注保存 + 批注发给 Agent 第一版已接入;M12 真实 child session 派发后端/IPC/preload/store/面板第一版已落地,一次最多 33 个子 Agent,默认独立 worktree;M13 项目记忆、Routine 存储、开工建议 helper 已落地;M15 插件扫描 helper 已落地;迁移攻坚 M8–M15 设计定稿于 DESIGN-V2.md
 
 ## 终极产品目标
 
@@ -93,10 +93,10 @@
 - 每个会话创建时选 Provider + Model,`AgentSession.buildEnv` 按会话注入对应 env;选定 Provider 时剥离宿主 host 托管鉴权,避免被盖过
 - 密钥存 safeStorage(Electron 加密),不落明文;渲染进程只见 `hasToken` 标记
 
-**关于 OpenAI / Gemini / 国产模型**:SDK 不直接讲 OpenAI 的 `/v1/chat/completions` 协议,需经 **Anthropic 兼容网关**(one-api、new-api、LiteLLM、claude-code-router 等)转译——网关对外暴露 `/v1/messages`,内部翻译到 OpenAI/Gemini 后端。M3.5 已提供网关预设模板 + 自定义请求头,一键配好。这是当前多厂商的推荐路径。
+**关于 OpenAI / Gemini / 国产模型**:OpenAI 已有原生 Responses API 引擎第一版,可选择 `OpenAI Responses API` 直接使用官方或兼容端点。Claude Agent SDK 引擎仍不直接讲 OpenAI 的 `/v1/chat/completions`/Responses 协议;在 Claude 引擎下接 OpenAI/Gemini 仍需 **Anthropic 兼容网关**(one-api、new-api、LiteLLM、claude-code-router 等)转译。M3.5 已提供网关预设模板 + 自定义请求头,OpenAI 模板则配合 OpenAI 引擎直连使用。
 
 **第二层 · EngineAdapter(架构已落地)**
-`src/main/engine.ts` 定义 `Engine` 接口(start/send/interrupt/permission/transcript/events)与注册表;`AgentSession implements Engine` 即 ClaudeEngine,经 `engines.ts` 注册为默认引擎;`sessionManager.create` 走 `createEngine(kind)` 工厂,`SessionMeta.engine` 记录会话引擎,新建会话 UI 提供引擎下拉(`engines:list` IPC)。Codex CLI / Gemini CLI 探测本机安装情况如实上报,适配器实现为 M6 剩余工作——各自把 CLI 流式输出翻译成 `AgentEvent` 即可,事件模型已与引擎解耦。
+`src/main/engine.ts` 定义 `Engine` 接口(start/send/interrupt/permission/transcript/events)与注册表;`AgentSession implements Engine` 即 ClaudeEngine,经 `engines.ts` 注册为默认引擎;`OpenAIEngine` 已接 OpenAI Responses API,支持文本/图片输入、流式输出、中断、转录和模型切换;`sessionManager.create` 走 `createEngine(kind)` 工厂,`SessionMeta.engine` 记录会话引擎,新建会话 UI 提供引擎下拉(`engines:list` IPC)。Codex CLI / Gemini CLI 探测本机安装情况如实上报,适配器实现为 M6 剩余工作——各自把 CLI 的流式输出翻译成 `AgentEvent` 即可,事件模型已与引擎解耦。
 
 ### 支柱二:模型调度(手动 + 智能)
 
@@ -135,7 +135,7 @@
 | M4 | 智能调度 v1 | 规则路由(意图分级 + 健康度)+ 路由透明面板 | ✅ 已完成 |
 | M4.1 | 跨厂商故障切换 | 错误分类(余额/限流/模型下线/网络)→ 自动切健康厂商 resume 重试,任务不中断;聊天流透明标注;可设置开关 | ✅ 已完成 |
 | M5 | 3D 办公区 v1 | R3F 场景、工位状态动画、点击聚焦、双视图切换 | ✅ 已完成 |
-| M6 | 原生多引擎 | EngineAdapter 抽象,接入 Codex CLI / Gemini CLI | 🚧 架构已落地(Engine 接口 + 注册表 + 引擎选择 UI;AgentSession=ClaudeEngine;Codex/Gemini 适配器待实现) |
+| M6 | 原生多引擎 | EngineAdapter 抽象,接入 OpenAI / Codex CLI / Gemini CLI | 🚧 架构已落地;OpenAI Responses API 引擎第一版已接入;Codex/Gemini 适配器待实现 |
 | M7 | 打包分发 | electron-builder、图标、自动更新 | 🚧 打包链路已完成;自动更新待实现 |
 | M8 | 肌肉记忆层 | `@`文件 / 图片输入 / 斜杠命令 / 快捷键 + 通知防休眠 + 3D 材质光影(D1/D9/D10.1) | 🚧 `@`文件、`/`命令面板、Esc Esc、通知/防休眠、图片附件复制/base64 content block helper 与 Composer 粘贴/拖拽 UI 已完成;图片标注/OCR 与材质光影待实现 |
 | M9 | 检查点 + Worktree | `Esc Esc`//rewind 回溯(代码/对话/两者)+ 每 Agent worktree 隔离与合并路径(D2/D3/D10.2) | 🚧 checkpoint rewindFiles 核心 + 回溯面板 + worktree 自动隔离/管理面板/patch 导出/丢弃 + 合并审查/patch apply-check helper 已完成;对话回溯/直接合并 UI/PR 待实现 |

@@ -8,6 +8,7 @@ import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken, listProviders } from './providers'
 import { readReferencedFiles } from './fileSuggest'
+import { buildMemorySystemAppend } from './memoryInject'
 import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
 import {
@@ -299,6 +300,17 @@ export class AgentSession implements Engine {
       const allowed = splitList(settings.allowedTools)
       const disallowed = splitList(settings.disallowedTools)
       const execPath = claudeExecutablePath()
+      // 项目记忆:把已确认条目注入 systemPrompt(与人设合并为统一 append)
+      let memoryAppend = ''
+      try {
+        memoryAppend = await buildMemorySystemAppend(
+          this.meta.sourceCwd ?? this.meta.cwd,
+          join(app.getPath('userData'), 'memory')
+        )
+      } catch (err) {
+        console.error('[caogen] 读取项目记忆失败:', err)
+      }
+      const append = [persona, memoryAppend].filter((s) => s && s.trim()).join('\n\n')
       this.query = sdk.query({
         prompt: this.input,
         options: {
@@ -308,9 +320,9 @@ export class AgentSession implements Engine {
           enableFileCheckpointing: true,
           env: this.buildEnv(),
           ...(execPath ? { pathToClaudeCodeExecutable: execPath } : {}),
-          // 人设:preset 之上追加自定义指令
-          systemPrompt: persona
-            ? { type: 'preset', preset: 'claude_code', append: persona }
+          // 人设 + 项目记忆:preset 之上追加
+          systemPrompt: append
+            ? { type: 'preset', preset: 'claude_code', append }
             : { type: 'preset', preset: 'claude_code' },
           // 权限:工具白/黑名单
           ...(allowed.length > 0 ? { allowedTools: allowed } : {}),
