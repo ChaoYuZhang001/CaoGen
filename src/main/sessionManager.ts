@@ -303,6 +303,7 @@ class SessionManager {
       worktreeState: meta.worktreeState,
       model: meta.model,
       providerId: meta.providerId,
+      engine: meta.engine,
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
       createdAt: meta.createdAt,

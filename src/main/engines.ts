@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { AgentSession } from './agentSession'
 import { registerEngine } from './engine'
+import { openAIEngineFactory } from './openaiEngine'
 import type { Engine, EngineEmit } from './engine'
 import type { SessionMeta } from '../shared/types'
 
 /**
  * M6 · 引擎注册。
  * - claude:Claude Agent SDK(AgentSession),完整能力,默认引擎。
+ * - openai:OpenAI Responses API,原生直连,覆盖文本/图片输入与流式输出。
  * - codex / gemini:探测本机 CLI 是否安装;适配器尚未实现,可用性
  *   如实上报为 false(UI 置灰),避免"能选但不能用"的假象。
  *   接入路径:各自实现 Engine 接口,把 CLI 的流式输出翻译成 AgentEvent。
@@ -36,6 +38,8 @@ export function registerBuiltinEngines(): void {
     create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
       new AgentSession(meta, emit, resumeSdkSessionId)
   })
+
+  registerEngine(openAIEngineFactory)
 
   // 占位工厂:CLI 已装则提示"适配器开发中",未装则 UI 置灰。
   // 不注册假实现——create 被意外调用时抛错并回退由调用方处理。
