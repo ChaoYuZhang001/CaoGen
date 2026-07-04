@@ -377,6 +377,19 @@ export const useStore = create<AppStore>((set, get) => ({
       activeId: meta.id,
       showNewSession: false
     }))
+    // M2 缺陷修复:resume 会话的 init 事件先于本 IPC 返回抵达,被 stash 后
+    // drain 只做 reduce,不会触发 handleEvent 里的 init→转录回放副作用,
+    // 导致恢复的会话聊天记录空白。此处注册完成后主动补拉一次转录。
+    if (opts.resumeSdkSessionId) {
+      const transcript = await window.agentDesk.getTranscript(meta.id)
+      if (transcript.length > 0) {
+        set((s) => {
+          const session = s.sessions[meta.id]
+          if (!session) return s
+          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+        })
+      }
+    }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
   },
 

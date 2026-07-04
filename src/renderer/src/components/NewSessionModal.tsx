@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { useT } from '../i18n'
 import { AUTO_MODEL } from '../../../shared/types'
-import type { PermissionModeId } from '../../../shared/types'
+import type { EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
 
 export default function NewSessionModal(): React.JSX.Element {
+  const t = useT()
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
   const projects = useStore((s) => s.projects)
@@ -13,11 +15,17 @@ export default function NewSessionModal(): React.JSX.Element {
   const [cwd, setCwd] = useState('')
   const [providerId, setProviderId] = useState(settings.defaultProviderId)
   const [model, setModel] = useState(settings.defaultModel)
+  const [engine, setEngine] = useState<EngineKind>('claude')
+  const [engines, setEngines] = useState<EngineInfo[]>([])
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
     settings.defaultPermissionMode
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    void window.agentDesk.listEngines().then(setEngines)
+  }, [])
 
   // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表;官方则用内置别名。
   // 无论如何都保留"自动调度",否则指定 Provider 就用不上调度器。
@@ -25,13 +33,13 @@ export default function NewSessionModal(): React.JSX.Element {
     const provider = providers.find((p) => p.id === providerId)
     if (provider && provider.models.length > 0) {
       return [
-        { value: AUTO_MODEL, label: '🧭 自动调度' },
-        { value: '', label: '默认模型' },
+        { value: AUTO_MODEL, label: t('autoRoute') },
+        { value: '', label: t('defaultModel') },
         ...provider.models.map((m) => ({ value: m, label: m }))
       ]
     }
     return MODEL_OPTIONS
-  }, [providers, providerId])
+  }, [providers, providerId, t])
 
   const onProviderChange = (id: string): void => {
     setProviderId(id)
@@ -46,13 +54,13 @@ export default function NewSessionModal(): React.JSX.Element {
 
   const create = async (): Promise<void> => {
     if (!cwd.trim()) {
-      setError('请选择项目目录')
+      setError(t('errNeedProjectDir'))
       return
     }
     setBusy(true)
     setError('')
     try {
-      await createSession({ cwd: cwd.trim(), model, providerId, permissionMode })
+      await createSession({ cwd: cwd.trim(), model, providerId, engine, permissionMode })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -62,11 +70,11 @@ export default function NewSessionModal(): React.JSX.Element {
   return (
     <div className="modal-backdrop" onClick={() => setShowNewSession(false)}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">新建会话</h2>
+        <h2 className="modal-title">{t('newSessionTitle')}</h2>
 
         {projects.length > 0 && (
           <>
-            <label className="field-label">最近项目</label>
+            <label className="field-label">{t('recentProjects')}</label>
             <div className="project-chips">
               {projects.slice(0, 8).map((p) => (
                 <button
@@ -82,7 +90,7 @@ export default function NewSessionModal(): React.JSX.Element {
           </>
         )}
 
-        <label className="field-label">项目目录</label>
+        <label className="field-label">{t('projectDir')}</label>
         <div className="field-row">
           <input
             className="input"
@@ -91,26 +99,43 @@ export default function NewSessionModal(): React.JSX.Element {
             onChange={(e) => setCwd(e.target.value)}
           />
           <button className="btn btn-ghost" onClick={() => void browse()}>
-            浏览…
+            {t('browse')}
           </button>
         </div>
 
-        <label className="field-label">厂商 / Provider</label>
+        {engines.length > 1 && (
+          <>
+            <label className="field-label">{t('engineLabel')}</label>
+            <select
+              className="select select-block"
+              value={engine}
+              onChange={(e) => setEngine(e.target.value as EngineKind)}
+            >
+              {engines.map((en) => (
+                <option key={en.kind} value={en.kind} disabled={!en.available}>
+                  {en.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <label className="field-label">{t('providerLabel')}</label>
         <select
           className="select select-block"
           value={providerId}
           onChange={(e) => onProviderChange(e.target.value)}
         >
-          <option value="">官方 Anthropic(默认登录)</option>
+          <option value="">{t('officialAnthropicDefault')}</option>
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
-              {p.hasToken ? '' : ' (未配置密钥)'}
+              {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
             </option>
           ))}
         </select>
 
-        <label className="field-label">模型</label>
+        <label className="field-label">{t('model')}</label>
         <select className="select select-block" value={model} onChange={(e) => setModel(e.target.value)}>
           {modelOptions.map((o) => (
             <option key={o.value} value={o.value}>
@@ -119,7 +144,7 @@ export default function NewSessionModal(): React.JSX.Element {
           ))}
         </select>
 
-        <label className="field-label">权限模式</label>
+        <label className="field-label">{t('permissionMode')}</label>
         <select
           className="select select-block"
           value={permissionMode}
@@ -136,10 +161,10 @@ export default function NewSessionModal(): React.JSX.Element {
 
         <div className="modal-actions">
           <button className="btn btn-ghost" onClick={() => setShowNewSession(false)}>
-            取消
+            {t('cancel')}
           </button>
           <button className="btn btn-primary" disabled={busy} onClick={() => void create()}>
-            {busy ? '创建中…' : '创建'}
+            {busy ? t('creating') : t('create')}
           </button>
         </div>
       </div>

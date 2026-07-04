@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { useT } from '../i18n'
 import { formatCost, formatTokens } from '../format'
 import MessageItem from './MessageItem'
 import PermissionBar from './PermissionBar'
@@ -7,6 +8,7 @@ import Composer from './Composer'
 import type { PermissionModeId } from '../../../shared/types'
 
 export default function ChatView(): React.JSX.Element | null {
+  const t = useT()
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const providers = useStore((s) => s.providers)
@@ -31,8 +33,8 @@ export default function ChatView(): React.JSX.Element | null {
   const running = meta.status === 'running' || meta.status === 'starting'
   const modelKnown = MODEL_OPTIONS.some((o) => o.value === meta.model)
   const providerName = meta.providerId
-    ? providers.find((p) => p.id === meta.providerId)?.name ?? '未知 Provider'
-    : '官方'
+    ? providers.find((p) => p.id === meta.providerId)?.name ?? t('unknownProvider')
+    : t('providerOfficial')
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -56,7 +58,7 @@ export default function ChatView(): React.JSX.Element | null {
             className="select"
             value={meta.model}
             onChange={(e) => void setModel(e.target.value)}
-            title="切换模型"
+            title={t('switchModel')}
           >
             {MODEL_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -69,7 +71,7 @@ export default function ChatView(): React.JSX.Element | null {
             className="select"
             value={meta.permissionMode}
             onChange={(e) => void setPermissionMode(e.target.value as PermissionModeId)}
-            title="权限模式"
+            title={t('permissionMode')}
           >
             {PERMISSION_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -79,12 +81,12 @@ export default function ChatView(): React.JSX.Element | null {
           </select>
           {running && (
             <button className="btn btn-danger" onClick={() => void interrupt()}>
-              ⏹ 停止
+              {t('stop')}
             </button>
           )}
           <button
             className="btn btn-ghost"
-            title="关闭会话"
+            title={t('closeSession')}
             onClick={() => void closeSession(activeId)}
           >
             ✕
@@ -105,14 +107,14 @@ export default function ChatView(): React.JSX.Element | null {
 
           {session.streamThinking && (
             <div className="thinking-stream">
-              <div className="thinking-label">思考中…</div>
+              <div className="thinking-label">{t('thinkingLive')}</div>
               <div className="thinking-text">{session.streamThinking}</div>
             </div>
           )}
           {session.streamText && <div className="assistant-text streaming">{session.streamText}</div>}
           {running && !session.streamText && !session.streamThinking && (
             <div className="working-indicator">
-              <span className="spinner" /> Agent 工作中…
+              <span className="spinner" /> {t('agentWorking')}
             </div>
           )}
         </div>
@@ -125,19 +127,27 @@ export default function ChatView(): React.JSX.Element | null {
         <span className={`status-dot status-${meta.status}`} />
         <span className="status-text">
           {meta.status === 'running'
-            ? '运行中'
+            ? t('statusRunning')
             : meta.status === 'starting'
-              ? '启动中'
+              ? t('statusStarting')
               : meta.status === 'idle'
-                ? '空闲'
+                ? t('statusIdle')
                 : meta.status === 'error'
-                  ? '错误'
-                  : '已关闭'}
+                  ? t('statusError')
+                  : t('statusClosed')}
         </span>
-        <span className="status-item">厂商 {providerName}</span>
-        {session.effectiveModel && <span className="status-item">模型 {session.effectiveModel}</span>}
+        <span className="status-item">
+          {t('provider')} {providerName}
+        </span>
+        {session.effectiveModel && (
+          <span className="status-item">
+            {t('model')} {session.effectiveModel}
+          </span>
+        )}
         <span className="status-spacer" />
-        <span className="status-item">上下文 ~{formatTokens(meta.contextTokens)} tokens</span>
+        <span className="status-item">
+          {t('statusContext')} ~{formatTokens(meta.contextTokens)} tokens
+        </span>
         <span className="status-item">
           ↑{formatTokens(meta.usage.input + meta.usage.cacheRead + meta.usage.cacheCreation)} ↓
           {formatTokens(meta.usage.output)}

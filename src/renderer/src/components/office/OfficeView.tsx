@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import { useStore } from '../../store'
+import { useT } from '../../i18n'
 import Workstation, { activityOf } from './Workstation'
 import MessagePackets from './MessagePackets'
 import { brandFor } from './brand'
@@ -24,6 +25,7 @@ function gridPositions(count: number): Array<[number, number, number]> {
 }
 
 export default function OfficeView(): React.JSX.Element {
+  const t = useT()
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
   const providers = useStore((s) => s.providers)
@@ -59,14 +61,14 @@ export default function OfficeView(): React.JSX.Element {
   return (
     <div className="office">
       <div className="office-topbar drag-region">
-        <div className="office-title no-drag">🏢 办公区</div>
+        <div className="office-title no-drag">{t('officeTitle')}</div>
         <div className="office-actions no-drag">
-          <span className="office-hint">拖拽旋转 · 滚轮缩放 · 点击工位进入会话</span>
+          <span className="office-hint">{t('officeHint')}</span>
           <button className="btn btn-ghost" onClick={() => setShowNewSession(true)}>
-            + 新建
+            {t('newShort')}
           </button>
           <button className="btn btn-primary" onClick={() => setView('list')}>
-            列表视图
+            {t('listView')}
           </button>
         </div>
       </div>
@@ -75,9 +77,9 @@ export default function OfficeView(): React.JSX.Element {
         <div className="office-empty">
           <div className="office-empty-inner">
             <div className="office-empty-mark">🏢</div>
-            <p>办公区还没有工位。新建一个会话,看它入职开工。</p>
+            <p>{t('officeEmpty')}</p>
             <button className="btn btn-primary" onClick={() => setShowNewSession(true)}>
-              + 新建会话
+              {t('newSession')}
             </button>
           </div>
         </div>

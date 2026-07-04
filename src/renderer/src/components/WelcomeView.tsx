@@ -1,13 +1,14 @@
 import { useStore } from '../store'
 import { useT } from '../i18n'
 
+/** [标题 key, 描述 key];渲染时经 t() 取当前语言文案 */
 const FEATURES: Array<[string, string]> = [
-  ['多会话并行', '同时在多个项目上运行 Agent,互不阻塞'],
-  ['工具调用可视化', 'Bash / 编辑 / 搜索每一步都看得见'],
-  ['Diff 审查', '文件修改以差异视图呈现,一目了然'],
-  ['权限掌控', '敏感操作逐条审批,或一键切换模式'],
-  ['成本仪表盘', '每轮对话的 token 与费用实时统计'],
-  ['会话恢复', '历史会话随时恢复上下文继续工作']
+  ['featParallel', 'featParallelDesc'],
+  ['featTools', 'featToolsDesc'],
+  ['featDiff', 'featDiffDesc'],
+  ['featPerm', 'featPermDesc'],
+  ['featCost', 'featCostDesc'],
+  ['featResume', 'featResumeDesc']
 ]
 
 export default function WelcomeView(): React.JSX.Element {
@@ -24,10 +25,10 @@ export default function WelcomeView(): React.JSX.Element {
           {t('welcomeCta')}
         </button>
         <div className="welcome-grid">
-          {FEATURES.map(([title, desc]) => (
-            <div key={title} className="welcome-card">
-              <div className="welcome-card-title">{title}</div>
-              <div className="welcome-card-desc">{desc}</div>
+          {FEATURES.map(([titleKey, descKey]) => (
+            <div key={titleKey} className="welcome-card">
+              <div className="welcome-card-title">{t(titleKey)}</div>
+              <div className="welcome-card-desc">{t(descKey)}</div>
             </div>
           ))}
         </div>
