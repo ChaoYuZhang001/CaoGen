@@ -5,12 +5,13 @@ import type {
   ReadProjectMemoryResult
 } from '../../../shared/types'
 
+const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
+
 interface Props {
   sessionId: string
   onClose?: () => void
+  initialForm?: Partial<typeof EMPTY_FORM>
 }
-
-const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
 
 /**
  * 项目记忆管理面板。
@@ -22,7 +23,7 @@ const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
  * 直接调用 window.agentDesk.*(与 SettingsModal 的迁移/健康检查同风格),
  * 无需经 store。所有 IPC 在 acting 期间禁用按钮避免并发竞态。
  */
-export default function MemoryPanel({ sessionId, onClose }: Props): React.JSX.Element {
+export default function MemoryPanel({ sessionId, onClose, initialForm }: Props): React.JSX.Element {
   const [data, setData] = useState<ReadProjectMemoryResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -47,6 +48,12 @@ export default function MemoryPanel({ sessionId, onClose }: Props): React.JSX.El
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (!initialForm) return
+    setForm({ ...EMPTY_FORM, ...initialForm })
+    setShowForm(true)
+  }, [initialForm])
 
   const propose = async (): Promise<void> => {
     if (!form.title.trim() || !form.body.trim()) {

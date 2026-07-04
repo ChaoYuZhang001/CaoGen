@@ -205,6 +205,11 @@ export interface ReadProjectMemoryResult {
   drafts: ProjectMemoryDraft[]
 }
 
+export interface MemorySuggestionEvent {
+  sessionId: string
+  text: string
+}
+
 export type StartSuggestionPriority = 'high' | 'medium' | 'low'
 
 export interface StartSuggestion {
@@ -957,4 +962,5 @@ export interface AgentDeskApi {
   deleteMemoryEntry(sessionId: string, entryId: string): Promise<{ id: string; deleted: boolean; deletedFrom: Array<'confirmed' | 'drafts'> }>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
+  onMemorySuggestion(cb: (event: MemorySuggestionEvent) => void): () => void
 }
