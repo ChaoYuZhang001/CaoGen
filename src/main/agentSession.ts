@@ -352,6 +352,11 @@ export class AgentSession implements Engine {
     const payload = normalizeSendPayload(input)
     const displayText = userMessageText(payload)
     if (!displayText && payload.images.length === 0) return
+    const authError = this.providerAuthError()
+    if (authError) {
+      this.setStatus('error', authError)
+      return
+    }
     const budget = this.effectiveBudgetUsd()
     if (budget > 0 && this.meta.costUsd >= budget) {
       this.setStatus('error', `已达预算上限 $${budget.toFixed(2)},如需继续请调高预算`)
@@ -384,6 +389,14 @@ export class AgentSession implements Engine {
     } else {
       void this.pushUserMessage(payload)
     }
+  }
+
+  private providerAuthError(): string | null {
+    if (!this.meta.providerId) return null
+    const provider = getProvider(this.meta.providerId)
+    if (!provider) return `Provider 不存在:${this.meta.providerId}`
+    if (decryptToken(provider.encryptedToken)) return null
+    return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
   private effectiveBudgetUsd(): number {

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { AUTO_MODEL } from '../../shared/types'
+import { AUTO_MODEL, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../../shared/types'
 import type {
   AgentEvent,
   AppSettings,
@@ -641,9 +641,9 @@ export const useStore = create<AppStore>((set, get) => ({
   activeId: null,
   history: [],
   settings: {
-    defaultModel: '',
+    defaultModel: DEEPSEEK_DEFAULT_MODEL,
     defaultPermissionMode: 'default',
-    defaultProviderId: '',
+    defaultProviderId: DEEPSEEK_PROVIDER_ID,
     schedulerStrategy: 'balanced',
     budgetUsdPerSession: 0,
     failoverEnabled: true,

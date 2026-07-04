@@ -9,6 +9,8 @@ export type SchedulerStrategy = 'quality' | 'cost' | 'balanced'
 
 /** 会话 model 字段取此哨兵值 = 启用智能自动调度 */
 export const AUTO_MODEL = 'auto'
+export const DEEPSEEK_PROVIDER_ID = 'deepseek-official'
+export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-chat'
 
 export interface ProviderHealthView {
   /** '' / 'official' = 官方 Anthropic;否则 Provider id */
