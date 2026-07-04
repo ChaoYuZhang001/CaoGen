@@ -1,8 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import type {
+  ManagedWorktreeView,
+  WorktreePatchResult,
+  WorktreeRemoveResult,
+  WorktreeSummary
+} from '../shared/types'
 
 const WORKTREE_BRANCH_PREFIX = 'caogen'
 const GIT_TIMEOUT_MS = 120_000
@@ -37,12 +43,23 @@ export type WorktreeOpResult =
   | { ok: true; record: ManagedWorktreeRecord }
   | { ok: false; error: string; record?: ManagedWorktreeRecord }
 
+interface WorktreeDiffStats {
+  changedFiles: number
+  insertions?: number
+  deletions?: number
+  dirty: boolean
+}
+
 function worktreesRoot(): string {
   return join(app.getPath('userData'), 'worktrees')
 }
 
 function registryFile(): string {
   return join(worktreesRoot(), 'index.json')
+}
+
+function patchesRoot(): string {
+  return join(app.getPath('userData'), 'patches')
 }
 
 function git(cwd: string, args: string[]): string {
@@ -63,6 +80,21 @@ function gitOrNull(cwd: string, args: string[]): string | null {
     return git(cwd, args)
   } catch {
     return null
+  }
+}
+
+function gitOutputAllowDiffExit(cwd: string, args: string[]): string {
+  try {
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GIT_TIMEOUT_MS
+    })
+  } catch (err) {
+    const stdout = err instanceof Error ? bufferText((err as Error & { stdout?: Buffer | string }).stdout) : ''
+    if (stdout) return `${stdout}\n`
+    throw new Error(`git ${args.join(' ')} failed: ${errorText(err)}`)
   }
 }
 
@@ -182,6 +214,69 @@ function updateRecord(record: ManagedWorktreeRecord): ManagedWorktreeRecord {
   return record
 }
 
+function toView(record: ManagedWorktreeRecord): ManagedWorktreeView {
+  return { ...record }
+}
+
+function recordForSession(sessionId: string): ManagedWorktreeRecord | null {
+  const normalizedSessionId = normalizeSessionId(sessionId)
+  return loadRegistry().find((item) => item.sessionId === normalizedSessionId) ?? null
+}
+
+function diffStats(record: ManagedWorktreeRecord): WorktreeDiffStats {
+  if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+    return { changedFiles: 0, dirty: false }
+  }
+  const numstat = git(record.worktreePath, ['diff', '--numstat', record.baseSha, '--'])
+  let changedFiles = 0
+  let insertions = 0
+  let deletions = 0
+  for (const line of numstat.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    const [added, removed] = line.split(/\t/)
+    changedFiles += 1
+    if (/^\d+$/.test(added)) insertions += Number(added)
+    if (/^\d+$/.test(removed)) deletions += Number(removed)
+  }
+  for (const file of untrackedFiles(record.worktreePath)) {
+    changedFiles += 1
+    insertions += countTextLines(record.worktreePath, file)
+  }
+  return { changedFiles, insertions, deletions, dirty: changedFiles > 0 }
+}
+
+function untrackedFiles(worktreePath: string): string[] {
+  const output = execFileSync(
+    'git',
+    ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'],
+    {
+      cwd: worktreePath,
+      encoding: 'buffer',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GIT_TIMEOUT_MS
+    }
+  )
+  return output.toString('utf8').split('\0').filter(Boolean)
+}
+
+function countTextLines(worktreePath: string, relPath: string): number {
+  try {
+    const buf = readFileSync(join(worktreePath, relPath))
+    if (buf.includes(0)) return 0
+    const text = buf.toString('utf8')
+    if (!text) return 0
+    return text.endsWith('\n') ? text.split(/\r?\n/).length - 1 : text.split(/\r?\n/).length
+  } catch {
+    return 0
+  }
+}
+
+function untrackedPatch(worktreePath: string): string {
+  return untrackedFiles(worktreePath)
+    .map((file) => gitOutputAllowDiffExit(worktreePath, ['diff', '--no-index', '--binary', '--', '/dev/null', file]))
+    .join('\n')
+}
+
 export function isGitRepository(cwd: string): boolean {
   if (!cwd) return false
   try {
@@ -265,6 +360,59 @@ export function listManagedWorktrees(): ManagedWorktreeRecord[] {
   }
 }
 
+export function getManagedWorktreeSummary(sessionId: string): WorktreeSummary {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) {
+      return {
+        ok: false,
+        isolated: false,
+        changedFiles: 0,
+        dirty: false,
+        error: '当前会话没有 CaoGen 管理的 worktree'
+      }
+    }
+    const stats = diffStats(record)
+    return {
+      ok: true,
+      isolated: true,
+      record: toView(record),
+      ...stats
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      isolated: false,
+      changedFiles: 0,
+      dirty: false,
+      error: errorText(err)
+    }
+  }
+}
+
+export function exportManagedWorktreePatch(sessionId: string): WorktreePatchResult {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
+    const patch = [
+      git(record.worktreePath, ['diff', '--binary', record.baseSha, '--']),
+      untrackedPatch(record.worktreePath)
+    ]
+      .filter(Boolean)
+      .join('\n')
+    mkdirSync(patchesRoot(), { recursive: true })
+    const patchPath = join(patchesRoot(), `${safePathSegment(record.sessionId)}-${Date.now()}.patch`)
+    // git() 帮手会 trim 输出末尾换行,而 git apply 要求 patch 以换行结尾(否则 corrupt patch)
+    writeFileSync(patchPath, patch ? `${patch}\n` : patch)
+    return { ok: true, path: patchPath, bytes: statSync(patchPath).size }
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
 export function removeManagedWorktree(
   sessionId: string,
   opts: { deleteBranch?: boolean; force?: boolean } = {}
@@ -307,4 +455,14 @@ export function removeManagedWorktree(
   } catch (err) {
     return { ok: false, error: errorText(err) }
   }
+}
+
+export function removeManagedWorktreeView(
+  sessionId: string,
+  opts: { deleteBranch?: boolean; force?: boolean } = {}
+): WorktreeRemoveResult {
+  const result = removeManagedWorktree(sessionId, opts)
+  if (result.ok) return { ok: true, record: toView(result.record) }
+  const failed = result as Extract<WorktreeOpResult, { ok: false }>
+  return { ok: false, error: failed.error, record: failed.record ? toView(failed.record) : undefined }
 }

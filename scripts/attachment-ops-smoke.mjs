@@ -1,0 +1,100 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const repoRoot = process.cwd()
+const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-attachment-ops-'))
+const outDir = path.join(tempRoot, 'compiled')
+const inputDir = path.join(tempRoot, 'input')
+const attachmentsRoot = path.join(tempRoot, 'userData', 'attachments')
+
+const minPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+  'base64'
+)
+
+try {
+  mkdirSync(inputDir, { recursive: true })
+
+  execFileSync(
+    'npx',
+    [
+      'tsc',
+      'src/main/attachmentOps.ts',
+      '--outDir',
+      outDir,
+      '--target',
+      'ES2022',
+      '--module',
+      'NodeNext',
+      '--moduleResolution',
+      'NodeNext',
+      '--types',
+      'node',
+      '--skipLibCheck'
+    ],
+    { cwd: repoRoot, stdio: 'inherit' }
+  )
+
+  const attachmentOps = await import(pathToFileURL(path.join(outDir, 'attachmentOps.js')).href)
+
+  const pngSource = path.join(inputDir, 'pixel.png')
+  writeFileSync(pngSource, minPng)
+
+  const copied = await attachmentOps.copyImageAttachment(pngSource, attachmentsRoot)
+  assertOk(copied, 'copyImageAttachment should copy a valid PNG')
+
+  const expectedHash = createHash('sha256').update(minPng).digest('hex')
+  const expectedPath = path.join(realpathSync(attachmentsRoot), `${expectedHash}.png`)
+  assertEqual(copied.id, expectedHash)
+  assertEqual(copied.hash, expectedHash)
+  assertEqual(copied.path, expectedPath)
+  assertEqual(copied.mime, 'image/png')
+  assertEqual(copied.bytes, minPng.byteLength)
+  assert(typeof copied.createdAt === 'string' && copied.createdAt.length > 0, 'createdAt should be present')
+  assert(existsSync(expectedPath), 'copied file should exist at content-hash path')
+  assert(readFileSync(expectedPath).equals(minPng), 'copied bytes should match source')
+
+  const block = await attachmentOps.imageToContentBlock(copied.path)
+  assertEqual(block.type, 'image')
+  assert(block.source && typeof block.source === 'object', 'image block should include source')
+  assertEqual(block.source.type, 'base64')
+  assertEqual(block.source.media_type, 'image/png')
+  assertEqual(block.source.data, minPng.toString('base64'))
+
+  const textSource = path.join(inputDir, 'note.txt')
+  writeFileSync(textSource, 'not an image')
+  const nonImage = await attachmentOps.copyImageAttachment(textSource, attachmentsRoot)
+  assert(!nonImage.ok, 'copyImageAttachment should reject non-image extensions')
+
+  const directorySource = path.join(inputDir, 'folder.png')
+  mkdirSync(directorySource)
+  const directoryResult = await attachmentOps.copyImageAttachment(directorySource, attachmentsRoot)
+  assert(!directoryResult.ok, 'copyImageAttachment should reject directories')
+
+  const tooLargeSource = path.join(inputDir, 'too-large.png')
+  writeFileSync(tooLargeSource, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(5 * 1024 * 1024)]))
+  const tooLarge = await attachmentOps.copyImageAttachment(tooLargeSource, attachmentsRoot)
+  assert(!tooLarge.ok, 'copyImageAttachment should reject images over the default 5MB limit')
+
+  console.log('attachmentOps smoke ok')
+} finally {
+  rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function assertOk(result, message) {
+  assert(result.ok, `${message}: ${result.error ?? 'unknown error'}`)
+}
+
+function assertEqual(actual, expected) {
+  assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+}
+
+function assert(condition, message = 'assertion failed') {
+  if (!condition) {
+    throw new Error(message)
+  }
+}
