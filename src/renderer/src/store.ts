@@ -645,6 +645,7 @@ export const useStore = create<AppStore>((set, get) => ({
     defaultPermissionMode: 'default',
     defaultProviderId: '',
     schedulerStrategy: 'balanced',
+    budgetUsdPerSession: 0,
     failoverEnabled: true,
     language: 'zh',
     theme: 'dark',

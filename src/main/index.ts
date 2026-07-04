@@ -62,6 +62,7 @@ function runRoutine(routine: Routine): void {
       cwd: routine.projectCwd,
       model: routine.model || undefined,
       providerId: routine.providerId || undefined,
+      budgetUsd: routine.budgetUsd,
       permissionMode: routine.permissionMode,
       title: `⏱ ${routine.name}`
     })

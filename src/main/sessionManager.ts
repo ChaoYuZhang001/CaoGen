@@ -74,6 +74,7 @@ class SessionManager {
       childRole: opts.childRole,
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
+      budgetUsd: opts.budgetUsd,
       engine: opts.engine,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
@@ -99,6 +100,7 @@ class SessionManager {
       worktreeState: worktree.record?.state,
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
+      budgetUsd: opts.budgetUsd,
       engine: opts.engine,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
