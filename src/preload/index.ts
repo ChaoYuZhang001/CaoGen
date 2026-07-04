@@ -76,6 +76,11 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('routines:update', id, patch),
   markRoutineRun: (id: string, options?: MarkRunOptions) =>
     ipcRenderer.invoke('routines:markRun', id, options),
+  gitStatus: (sessionId: string) => ipcRenderer.invoke('git:status', sessionId),
+  stageFiles: (sessionId: string, paths: string[]) => ipcRenderer.invoke('git:stage', sessionId, paths),
+  stageAll: (sessionId: string) => ipcRenderer.invoke('git:stageAll', sessionId),
+  unstageFiles: (sessionId: string, paths: string[]) => ipcRenderer.invoke('git:unstage', sessionId, paths),
+  gitCommit: (sessionId: string, message: string) => ipcRenderer.invoke('git:commit', sessionId, message),
   getWorkspaceDiff: (sessionId: string) => ipcRenderer.invoke('workspace:diff', sessionId),
   getWorktreeSummary: (sessionId: string) => ipcRenderer.invoke('worktrees:summary', sessionId),
   exportWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:exportPatch', sessionId),
