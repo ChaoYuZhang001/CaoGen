@@ -57,7 +57,7 @@ export function buildPluginSlashCommands(
     .map(toPluginSlashCommand)
 }
 
-export function pluginSlashCommandMatches(command: PluginSlashCommandDescriptor, query: string): boolean {
+export function pluginSlashCommandMatches(command: Pick<PluginSlashCommandDescriptor, 'searchText'>, query: string): boolean {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return true
   return command.searchText.includes(normalized)

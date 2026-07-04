@@ -18,6 +18,7 @@ interface SlashCommand {
   id: string
   title: string
   hint: string
+  searchText?: string
   insert?: string
   run?: () => void
 }
@@ -223,7 +224,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     slashQuery === null
       ? []
       : slashCommands.filter((cmd) => {
-          if (cmd.searchText) return pluginSlashCommandMatches(cmd as SlashCommand & { searchText: string }, slashQuery)
+          if (cmd.searchText) return pluginSlashCommandMatches({ searchText: cmd.searchText }, slashQuery)
           const haystack = `${cmd.title} ${cmd.hint}`.toLowerCase()
           return slashQuery.length === 0 || haystack.includes(slashQuery)
         })
