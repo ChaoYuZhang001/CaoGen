@@ -15,6 +15,13 @@ import { listHealth } from './scheduler'
 import { listEngines } from './engine'
 import { scanMigration, importAssets } from './migration'
 import { listProjects, updateProject, deleteProject } from './projects'
+import {
+  readProjectMemory,
+  proposeMemoryDraft,
+  acceptMemoryDraft,
+  deleteMemoryEntry,
+  type ProjectMemoryDraftInput
+} from './memoryStore'
 import { suggestFiles } from './fileSuggest'
 import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
@@ -447,6 +454,33 @@ export function registerIpc(): void {
   )
   ipcMain.handle('projects:delete', (_e, id: string) => {
     deleteProject(id)
+  })
+
+  // 项目记忆:草稿→确认制,按项目隔离。projectRoot 取会话源目录(worktree 前的原仓库)
+  const memoryRoot = (): string => join(app.getPath('userData'), 'memory')
+  const projectRootFor = (sessionId: string): string | null => {
+    const meta = sessionManager.get(sessionId)?.meta
+    return meta ? (meta.sourceCwd ?? meta.cwd) : null
+  }
+  ipcMain.handle('memory:read', (_e, sessionId: string) => {
+    const root = projectRootFor(sessionId)
+    if (!root) return { projectHash: '', markdown: '', entries: [], drafts: [] }
+    return readProjectMemory(root, memoryRoot())
+  })
+  ipcMain.handle('memory:propose', (_e, sessionId: string, input: ProjectMemoryDraftInput) => {
+    const root = projectRootFor(sessionId)
+    if (!root) throw new Error('会话不存在')
+    return proposeMemoryDraft(root, memoryRoot(), input)
+  })
+  ipcMain.handle('memory:accept', (_e, sessionId: string, draftId: string) => {
+    const root = projectRootFor(sessionId)
+    if (!root) throw new Error('会话不存在')
+    return acceptMemoryDraft(root, memoryRoot(), draftId)
+  })
+  ipcMain.handle('memory:delete', (_e, sessionId: string, entryId: string) => {
+    const root = projectRootFor(sessionId)
+    if (!root) throw new Error('会话不存在')
+    return deleteMemoryEntry(root, memoryRoot(), entryId)
   })
 
   ipcMain.handle(

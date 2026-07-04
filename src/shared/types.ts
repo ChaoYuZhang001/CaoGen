@@ -125,6 +125,34 @@ export interface Project {
   lastUsedAt: number
 }
 
+/** 项目记忆:确认制条目(agent 提议 → 用户批准)。按项目隔离 */
+export interface ProjectMemoryEntry {
+  id: string
+  kind: string
+  title: string
+  body: string
+  source: string
+  reason: string
+  createdAt: string
+  updatedAt: string
+}
+export interface ProjectMemoryDraft extends ProjectMemoryEntry {
+  status: 'draft'
+}
+export interface ProjectMemoryDraftInput {
+  kind: string
+  title: string
+  body: string
+  source: string
+  reason: string
+}
+export interface ReadProjectMemoryResult {
+  projectHash: string
+  markdown: string
+  entries: ProjectMemoryEntry[]
+  drafts: ProjectMemoryDraft[]
+}
+
 export interface OfficeSettings {
   /** 显示桌上厂商工牌 */
   showBadges: boolean
@@ -755,6 +783,10 @@ export interface AgentDeskApi {
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: { name?: string }): Promise<Project | null>
   deleteProject(id: string): Promise<void>
+  readProjectMemory(sessionId: string): Promise<ReadProjectMemoryResult>
+  proposeMemoryDraft(sessionId: string, input: ProjectMemoryDraftInput): Promise<ProjectMemoryDraft>
+  acceptMemoryDraft(sessionId: string, draftId: string): Promise<ProjectMemoryEntry>
+  deleteMemoryEntry(sessionId: string, entryId: string): Promise<{ id: string; deleted: boolean; deletedFrom: Array<'confirmed' | 'drafts'> }>
   pickDirectory(): Promise<string | null>
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
 }
