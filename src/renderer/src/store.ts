@@ -12,6 +12,9 @@ import type {
   CheckpointRestoreResult,
   CreateSessionOptions,
   DispatchSubagentsInput,
+  GitCommitResult,
+  GitOperationResult,
+  GitStatus,
   SubagentDispatchResult,
   HistoryEntry,
   PermissionModeId,
@@ -404,6 +407,11 @@ export interface WorkbenchState {
   diffLoading: boolean
   diff?: WorkspaceDiff
   diffError?: string
+  gitStatus?: GitStatus
+  gitLoading: boolean
+  gitBusy: boolean
+  gitMessage?: string
+  gitError?: string
   worktreeOpen: boolean
   worktreeLoading: boolean
   worktree?: WorktreeSummary
@@ -513,6 +521,11 @@ interface AppStore {
   openDiffPanel(): Promise<void>
   closeDiffPanel(): void
   refreshDiffPanel(): Promise<void>
+  refreshGitStatus(): Promise<void>
+  stageGitFiles(paths: string[]): Promise<GitOperationResult | undefined>
+  stageAllGitFiles(): Promise<GitOperationResult | undefined>
+  unstageGitFiles(paths: string[]): Promise<GitOperationResult | undefined>
+  commitGit(message: string): Promise<GitCommitResult | undefined>
   openWorktreePanel(): Promise<void>
   closeWorktreePanel(): void
   refreshWorktreePanel(): Promise<void>
@@ -602,6 +615,8 @@ export const useStore = create<AppStore>((set, get) => ({
   workbench: {
     diffOpen: false,
     diffLoading: false,
+    gitLoading: false,
+    gitBusy: false,
     worktreeOpen: false,
     worktreeLoading: false,
     worktreeMergeInspecting: false,
@@ -1015,7 +1030,7 @@ export const useStore = create<AppStore>((set, get) => ({
         memoryOpen: false
       }
     }))
-    await get().refreshDiffPanel()
+    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus()])
   },
 
   closeDiffPanel() {
@@ -1046,6 +1061,99 @@ export const useStore = create<AppStore>((set, get) => ({
         }
       }))
     }
+  },
+
+  async refreshGitStatus() {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({ workbench: { ...s.workbench, gitLoading: true, gitError: undefined } }))
+    try {
+      const status = await window.agentDesk.gitStatus(id)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          gitStatus: status,
+          gitLoading: false,
+          gitError: status.ok ? undefined : status.error
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          gitLoading: false,
+          gitError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async stageGitFiles(paths) {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({ workbench: { ...s.workbench, gitBusy: true, gitError: undefined, gitMessage: undefined } }))
+    const result = await window.agentDesk.stageFiles(id, paths)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        gitBusy: false,
+        gitMessage: result.ok ? '已暂存选中文件' : undefined,
+        gitError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshGitStatus(), get().refreshDiffPanel()])
+    return result
+  },
+
+  async stageAllGitFiles() {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({ workbench: { ...s.workbench, gitBusy: true, gitError: undefined, gitMessage: undefined } }))
+    const result = await window.agentDesk.stageAll(id)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        gitBusy: false,
+        gitMessage: result.ok ? '已暂存全部改动' : undefined,
+        gitError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshGitStatus(), get().refreshDiffPanel()])
+    return result
+  },
+
+  async unstageGitFiles(paths) {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({ workbench: { ...s.workbench, gitBusy: true, gitError: undefined, gitMessage: undefined } }))
+    const result = await window.agentDesk.unstageFiles(id, paths)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        gitBusy: false,
+        gitMessage: result.ok ? '已取消暂存选中文件' : undefined,
+        gitError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshGitStatus(), get().refreshDiffPanel()])
+    return result
+  },
+
+  async commitGit(message) {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({ workbench: { ...s.workbench, gitBusy: true, gitError: undefined, gitMessage: undefined } }))
+    const result = await window.agentDesk.gitCommit(id, message)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        gitBusy: false,
+        gitMessage: result.ok ? `已提交 ${result.sha.slice(0, 8)}` : undefined,
+        gitError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshGitStatus(), get().refreshDiffPanel()])
+    return result
   },
 
   async openWorktreePanel() {

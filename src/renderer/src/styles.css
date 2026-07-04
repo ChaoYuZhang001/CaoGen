@@ -1195,6 +1195,114 @@ textarea {
   margin: 10px 12px 0;
 }
 
+.git-commit-box {
+  margin: 10px 12px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.git-commit-head,
+.git-commit-actions,
+.git-commit-form,
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.git-commit-head {
+  justify-content: space-between;
+}
+
+.git-commit-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.git-commit-sub {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.git-commit-notice {
+  margin-top: 8px;
+}
+
+.git-file-list {
+  margin-top: 10px;
+  max-height: 150px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.git-file-row {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.git-file-row:last-child {
+  border-bottom: 0;
+}
+
+.git-file-row-all {
+  background: var(--bg-raised);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.git-file-row input {
+  flex: 0 0 auto;
+}
+
+.git-file-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.git-file-state {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.git-file-empty {
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.git-commit-actions {
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.git-commit-form {
+  margin-top: 10px;
+}
+
+.git-commit-input {
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg-input);
+}
+
 .workspace-diff-scroll {
   flex: 1;
   min-height: 0;

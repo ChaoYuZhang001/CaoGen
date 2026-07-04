@@ -26,6 +26,13 @@ import {
 import { suggestFiles } from './fileSuggest'
 import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
+import {
+  commit as gitCommit,
+  gitStatus,
+  stageAll,
+  stageFiles,
+  unstageFiles
+} from './gitOps'
 import { getWorkspaceDiff } from './gitDiff'
 import {
   applyManagedWorktreePatch,
@@ -257,6 +264,47 @@ export function registerIpc(): void {
       return session.restoreCheckpoint(messageId, safeMode, dryRun === true)
     }
   )
+
+  ipcMain.handle('git:status', (_e, id: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) {
+      return {
+        ok: false,
+        cwd: '',
+        branch: '',
+        files: [],
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+        error: '会话不存在'
+      }
+    }
+    return gitStatus(cwd)
+  })
+
+  ipcMain.handle('git:stage', (_e, id: string, paths: string[]) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return stageFiles(cwd, paths)
+  })
+
+  ipcMain.handle('git:stageAll', (_e, id: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return stageAll(cwd)
+  })
+
+  ipcMain.handle('git:unstage', (_e, id: string, paths: string[]) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return unstageFiles(cwd, paths)
+  })
+
+  ipcMain.handle('git:commit', (_e, id: string, message: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return gitCommit(cwd, message)
+  })
 
   ipcMain.handle('workspace:diff', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd

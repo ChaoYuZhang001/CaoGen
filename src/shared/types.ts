@@ -535,6 +535,32 @@ export interface MarkRunOptions {
   nextRunAt?: number | null
 }
 
+export interface GitFileStatus {
+  path: string
+  oldPath?: string
+  indexStatus: string
+  worktreeStatus: string
+  staged: boolean
+  unstaged: boolean
+  untracked: boolean
+  kind: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'unknown'
+}
+
+export interface GitStatus {
+  ok: boolean
+  cwd: string
+  branch: string
+  files: GitFileStatus[]
+  staged: number
+  unstaged: number
+  untracked: number
+  error?: string
+}
+
+export type GitOperationResult = { ok: true } | { ok: false; error: string }
+
+export type GitCommitResult = { ok: true; sha: string } | { ok: false; error: string }
+
 export interface WorkspaceDiffLine {
   type: 'context' | 'add' | 'delete'
   text: string
@@ -867,6 +893,11 @@ export interface AgentDeskApi {
   deleteRoutine(id: string): Promise<boolean>
   updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
+  gitStatus(sessionId: string): Promise<GitStatus>
+  stageFiles(sessionId: string, paths: string[]): Promise<GitOperationResult>
+  stageAll(sessionId: string): Promise<GitOperationResult>
+  unstageFiles(sessionId: string, paths: string[]): Promise<GitOperationResult>
+  gitCommit(sessionId: string, message: string): Promise<GitCommitResult>
   getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
   getWorktreeSummary(sessionId: string): Promise<WorktreeSummary>
   exportWorktreePatch(sessionId: string): Promise<WorktreePatchResult>
