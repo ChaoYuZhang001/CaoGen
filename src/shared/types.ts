@@ -197,6 +197,7 @@ export type AgentEvent =
     }
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'user-message'; text: string }
+  | { kind: 'checkpoint'; messageId: string }
   | { kind: 'routing'; model: string; reason: string; providerId: string }
   | {
       /** 跨厂商故障切换:旧 Provider 失败,已自动切到新 Provider 重试 */
@@ -227,6 +228,15 @@ export type AgentEvent =
       resultText?: string
     }
 
+/** 文件回退结果(对应 SDK RewindFilesResult) */
+export interface RewindResult {
+  canRewind: boolean
+  error?: string
+  filesChanged?: string[]
+  insertions?: number
+  deletions?: number
+}
+
 export interface SessionEventPayload {
   sessionId: string
   /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
@@ -246,6 +256,7 @@ export interface AgentDeskApi {
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
   suggestFiles(sessionId: string, query: string): Promise<string[]>
+  rewindFiles(sessionId: string, messageId: string, dryRun: boolean): Promise<RewindResult>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   sendMessage(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>

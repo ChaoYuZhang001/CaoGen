@@ -15,6 +15,8 @@ const api: AgentDeskApi = {
   getTranscript: (sessionId: string) => ipcRenderer.invoke('sessions:transcript', sessionId),
   suggestFiles: (sessionId: string, query: string) =>
     ipcRenderer.invoke('sessions:suggestFiles', sessionId, query),
+  rewindFiles: (sessionId: string, messageId: string, dryRun: boolean) =>
+    ipcRenderer.invoke('sessions:rewindFiles', sessionId, messageId, dryRun),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
   sendMessage: (sessionId: string, text: string) =>
     ipcRenderer.invoke('sessions:send', sessionId, text),

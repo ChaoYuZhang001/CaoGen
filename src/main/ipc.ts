@@ -34,6 +34,12 @@ export function registerIpc(): void {
     return cwd ? suggestFiles(cwd, typeof query === 'string' ? query : '') : []
   })
 
+  ipcMain.handle('sessions:rewindFiles', async (_e, id: string, messageId: string, dryRun: boolean) => {
+    const session = sessionManager.get(id)
+    if (!session) return { canRewind: false, error: '会话不存在' }
+    return session.rewindFiles(messageId, dryRun === true)
+  })
+
   ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {
       throw new Error('必须指定工作目录')
