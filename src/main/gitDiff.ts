@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type {
+  WorkspaceHunkResult,
   WorkspaceDiff,
   WorkspaceDiffFile,
   WorkspaceDiffHunk,
@@ -12,9 +13,37 @@ const MAX_DIFF_CHARS = 1_000_000
 const MAX_EXEC_BUFFER = MAX_DIFF_CHARS * 20
 const MAX_UNTRACKED_FILE_BYTES = 250_000
 
-type MutableWorkspaceDiffFile = WorkspaceDiffFile
+type ParsedWorkspaceDiffFile = WorkspaceDiffFile & { patchHeader: string[] }
+type ParsedWorkspaceDiffHunk = WorkspaceDiffHunk & { patchLines: string[] }
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+
+export function applyHunk(
+  cwd: string,
+  _filePath: string,
+  hunkPatch: string,
+  options: { reverse?: boolean } = {}
+): WorkspaceHunkResult {
+  if (typeof hunkPatch !== 'string' || hunkPatch.trim().length === 0) {
+    return { ok: false, error: 'hunk patch 不能为空' }
+  }
+  if (hunkPatch.length > MAX_DIFF_CHARS) return { ok: false, error: 'hunk patch 过大' }
+
+  const patch = hunkPatch.endsWith('\n') ? hunkPatch : `${hunkPatch}\n`
+  const args = options.reverse ? ['apply', '-R', '--whitespace=nowarn'] : ['apply', '--cached', '--whitespace=nowarn']
+  try {
+    execFileSync('git', ['-C', cwd, ...args], {
+      input: patch,
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: MAX_EXEC_BUFFER,
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) }
+  }
+}
 
 export function getWorkspaceDiff(cwd: string): WorkspaceDiff {
   let output: Buffer
@@ -95,6 +124,8 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
 
     const lines = buffer.toString('utf8').split(/\r?\n/)
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    const patchHeader = [`diff --git a/${relPath} b/${relPath}`, 'new file mode 100644', '--- /dev/null', `+++ b/${relPath}`]
+    const patchLines = [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]
     files.push({
       oldPath: relPath,
       newPath: relPath,
@@ -106,6 +137,7 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
           oldLines: 0,
           newStart: 1,
           newLines: lines.length,
+          patch: `${patchHeader.join('\n')}\n${patchLines.join('\n')}\n`,
           lines: lines.map<WorkspaceDiffLine>((line, idx) => ({
             type: 'add',
             text: line,
@@ -120,14 +152,20 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
 }
 
 function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
-  const files: MutableWorkspaceDiffFile[] = []
-  let currentFile: MutableWorkspaceDiffFile | null = null
-  let currentHunk: WorkspaceDiffHunk | null = null
+  const files: ParsedWorkspaceDiffFile[] = []
+  let currentFile: ParsedWorkspaceDiffFile | null = null
+  let currentHunk: ParsedWorkspaceDiffHunk | null = null
   let oldLine = 0
   let newLine = 0
 
+  const finalizeHunk = (): void => {
+    if (!currentFile || !currentHunk) return
+    currentHunk.patch = `${currentFile.patchHeader.join('\n')}\n${currentHunk.patchLines.join('\n')}\n`
+  }
+
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('diff --git ')) {
+      finalizeHunk()
       currentFile = createFileFromHeader(line)
       files.push(currentFile)
       currentHunk = null
@@ -139,22 +177,26 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     if (!currentFile) continue
 
     if (line.startsWith('new file mode ')) {
+      currentFile.patchHeader.push(line)
       currentFile.status = 'added'
       continue
     }
 
     if (line.startsWith('deleted file mode ')) {
+      currentFile.patchHeader.push(line)
       currentFile.status = 'deleted'
       continue
     }
 
     if (line.startsWith('rename from ')) {
+      currentFile.patchHeader.push(line)
       currentFile.status = 'renamed'
       currentFile.oldPath = unquoteGitPath(line.slice('rename from '.length))
       continue
     }
 
     if (line.startsWith('rename to ')) {
+      currentFile.patchHeader.push(line)
       currentFile.status = 'renamed'
       currentFile.newPath = unquoteGitPath(line.slice('rename to '.length))
       continue
@@ -175,23 +217,27 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     }
 
     if (line.startsWith('--- ')) {
+      currentFile.patchHeader.push(line)
       currentFile.oldPath = parseFilePathLine(line.slice(4))
       continue
     }
 
     if (line.startsWith('+++ ')) {
+      currentFile.patchHeader.push(line)
       currentFile.newPath = parseFilePathLine(line.slice(4))
       continue
     }
 
     const hunkMatch = line.match(HUNK_RE)
     if (hunkMatch) {
-      const hunk: WorkspaceDiffHunk = {
+      finalizeHunk()
+      const hunk: ParsedWorkspaceDiffHunk = {
         header: line,
         oldStart: Number(hunkMatch[1]),
         oldLines: hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2]),
         newStart: Number(hunkMatch[3]),
         newLines: hunkMatch[4] === undefined ? 1 : Number(hunkMatch[4]),
+        patchLines: [line],
         lines: []
       }
       currentFile.hunks.push(hunk)
@@ -202,6 +248,11 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     }
 
     if (!currentHunk) continue
+    if (line === '') continue
+
+    currentHunk.patchLines.push(line)
+
+    if (line.startsWith('\\ ')) continue
 
     if (line.startsWith(' ')) {
       currentHunk.lines.push({
@@ -235,15 +286,24 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     }
   }
 
-  return files
+  finalizeHunk()
+
+  return files.map(({ patchHeader, ...file }) => ({
+    ...file,
+    hunks: file.hunks.map((hunk) => {
+      const { patchLines, ...cleanHunk } = hunk as ParsedWorkspaceDiffHunk
+      return cleanHunk
+    })
+  }))
 }
 
-function createFileFromHeader(line: string): MutableWorkspaceDiffFile {
+function createFileFromHeader(line: string): ParsedWorkspaceDiffFile {
   const paths = parseDiffGitPaths(line)
   return {
     oldPath: paths.oldPath,
     newPath: paths.newPath,
     status: 'modified',
+    patchHeader: [line],
     hunks: []
   }
 }

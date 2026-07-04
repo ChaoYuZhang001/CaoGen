@@ -33,7 +33,7 @@ import {
   stageFiles,
   unstageFiles
 } from './gitOps'
-import { getWorkspaceDiff } from './gitDiff'
+import { applyHunk, getWorkspaceDiff } from './gitDiff'
 import {
   applyManagedWorktreePatch,
   checkManagedWorktreeApply,
@@ -312,6 +312,18 @@ export function registerIpc(): void {
       return { ok: false, cwd: '', files: [], rawBytes: 0, error: '会话不存在' }
     }
     return getWorkspaceDiff(cwd)
+  })
+
+  ipcMain.handle('workspace:applyHunk', (_e, id: string, filePath: string, hunkPatch: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return applyHunk(cwd, typeof filePath === 'string' ? filePath : '', hunkPatch, { reverse: false })
+  })
+
+  ipcMain.handle('workspace:discardHunk', (_e, id: string, filePath: string, hunkPatch: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, error: '会话不存在' }
+    return applyHunk(cwd, typeof filePath === 'string' ? filePath : '', hunkPatch, { reverse: true })
   })
 
   ipcMain.handle('worktrees:summary', (_e, id: string) => getManagedWorktreeSummary(id))

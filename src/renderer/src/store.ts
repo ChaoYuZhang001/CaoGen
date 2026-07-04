@@ -37,6 +37,7 @@ import type {
   TerminalInfo,
   UsageTotals,
   WorkspaceDiff,
+  WorkspaceHunkResult,
   WorktreeApplyCheckResult,
   WorktreeApplyResult,
   WorktreeMergeSummary,
@@ -407,6 +408,8 @@ export interface WorkbenchState {
   diffLoading: boolean
   diff?: WorkspaceDiff
   diffError?: string
+  diffMessage?: string
+  hunkBusyKey?: string
   gitStatus?: GitStatus
   gitLoading: boolean
   gitBusy: boolean
@@ -522,6 +525,8 @@ interface AppStore {
   closeDiffPanel(): void
   refreshDiffPanel(): Promise<void>
   refreshGitStatus(): Promise<void>
+  applyWorkspaceHunk(filePath: string, hunkPatch: string, hunkKey: string): Promise<WorkspaceHunkResult | undefined>
+  discardWorkspaceHunk(filePath: string, hunkPatch: string, hunkKey: string): Promise<WorkspaceHunkResult | undefined>
   stageGitFiles(paths: string[]): Promise<GitOperationResult | undefined>
   stageAllGitFiles(): Promise<GitOperationResult | undefined>
   unstageGitFiles(paths: string[]): Promise<GitOperationResult | undefined>
@@ -1086,6 +1091,58 @@ export const useStore = create<AppStore>((set, get) => ({
         }
       }))
     }
+  },
+
+  async applyWorkspaceHunk(filePath, hunkPatch, hunkKey) {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        hunkBusyKey: hunkKey,
+        diffError: undefined,
+        diffMessage: undefined,
+        gitError: undefined,
+        gitMessage: undefined
+      }
+    }))
+    const result = await window.agentDesk.applyWorkspaceHunk(id, filePath, hunkPatch)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        hunkBusyKey: undefined,
+        diffMessage: result.ok ? '已暂存 hunk' : undefined,
+        diffError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus()])
+    return result
+  },
+
+  async discardWorkspaceHunk(filePath, hunkPatch, hunkKey) {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        hunkBusyKey: hunkKey,
+        diffError: undefined,
+        diffMessage: undefined,
+        gitError: undefined,
+        gitMessage: undefined
+      }
+    }))
+    const result = await window.agentDesk.discardWorkspaceHunk(id, filePath, hunkPatch)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        hunkBusyKey: undefined,
+        diffMessage: result.ok ? '已丢弃 hunk' : undefined,
+        diffError: result.ok ? undefined : result.error
+      }
+    }))
+    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus()])
+    return result
   },
 
   async stageGitFiles(paths) {

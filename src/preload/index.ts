@@ -82,6 +82,10 @@ const api: AgentDeskApi = {
   unstageFiles: (sessionId: string, paths: string[]) => ipcRenderer.invoke('git:unstage', sessionId, paths),
   gitCommit: (sessionId: string, message: string) => ipcRenderer.invoke('git:commit', sessionId, message),
   getWorkspaceDiff: (sessionId: string) => ipcRenderer.invoke('workspace:diff', sessionId),
+  applyWorkspaceHunk: (sessionId: string, filePath: string, hunkPatch: string) =>
+    ipcRenderer.invoke('workspace:applyHunk', sessionId, filePath, hunkPatch),
+  discardWorkspaceHunk: (sessionId: string, filePath: string, hunkPatch: string) =>
+    ipcRenderer.invoke('workspace:discardHunk', sessionId, filePath, hunkPatch),
   getWorktreeSummary: (sessionId: string) => ipcRenderer.invoke('worktrees:summary', sessionId),
   exportWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:exportPatch', sessionId),
   inspectWorktreeMerge: (sessionId: string) => ipcRenderer.invoke('worktrees:mergeInspect', sessionId),

@@ -561,6 +561,8 @@ export type GitOperationResult = { ok: true } | { ok: false; error: string }
 
 export type GitCommitResult = { ok: true; sha: string } | { ok: false; error: string }
 
+export type WorkspaceHunkResult = { ok: true } | { ok: false; error: string }
+
 export interface WorkspaceDiffLine {
   type: 'context' | 'add' | 'delete'
   text: string
@@ -574,6 +576,7 @@ export interface WorkspaceDiffHunk {
   oldLines: number
   newStart: number
   newLines: number
+  patch?: string
   lines: WorkspaceDiffLine[]
 }
 
@@ -899,6 +902,8 @@ export interface AgentDeskApi {
   unstageFiles(sessionId: string, paths: string[]): Promise<GitOperationResult>
   gitCommit(sessionId: string, message: string): Promise<GitCommitResult>
   getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
+  applyWorkspaceHunk(sessionId: string, filePath: string, hunkPatch: string): Promise<WorkspaceHunkResult>
+  discardWorkspaceHunk(sessionId: string, filePath: string, hunkPatch: string): Promise<WorkspaceHunkResult>
   getWorktreeSummary(sessionId: string): Promise<WorktreeSummary>
   exportWorktreePatch(sessionId: string): Promise<WorktreePatchResult>
   inspectWorktreeMerge(sessionId: string): Promise<WorktreeMergeSummary>
