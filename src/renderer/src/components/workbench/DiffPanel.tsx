@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import type { GitFileStatus, WorkspaceDiffFile, WorkspaceDiffLine } from '../../../../shared/types'
+import type { GitFileStatus, WorkspaceDiffFile, WorkspaceDiffHunk, WorkspaceDiffLine } from '../../../../shared/types'
 
 function fileLabel(file: WorkspaceDiffFile): string {
   if (file.status === 'renamed') return `${file.oldPath} -> ${file.newPath}`
@@ -161,6 +161,52 @@ function GitCommitBox(): React.JSX.Element {
   )
 }
 
+function HunkHeader({
+  file,
+  hunk,
+  hunkKey
+}: {
+  file: WorkspaceDiffFile
+  hunk: WorkspaceDiffHunk
+  hunkKey: string
+}): React.JSX.Element {
+  const hunkBusyKey = useStore((s) => s.workbench.hunkBusyKey)
+  const applyWorkspaceHunk = useStore((s) => s.applyWorkspaceHunk)
+  const discardWorkspaceHunk = useStore((s) => s.discardWorkspaceHunk)
+  const filePath = file.newPath || file.oldPath
+  const busy = hunkBusyKey === hunkKey
+  const canOperate = Boolean(hunk.patch) && !file.binary && !busy
+
+  return (
+    <div className="workspace-diff-hunk-head">
+      <span>{hunk.header}</span>
+      {hunk.patch && !file.binary && (
+        <span className="workspace-diff-hunk-actions">
+          <button
+            className="btn btn-ghost btn-xs"
+            disabled={!canOperate}
+            title="Stage this hunk"
+            onClick={() => void applyWorkspaceHunk(filePath, hunk.patch ?? '', hunkKey)}
+          >
+            {busy ? '...' : '✓'}
+          </button>
+          <button
+            className="btn btn-ghost btn-xs"
+            disabled={!canOperate}
+            title="Discard this hunk"
+            onClick={() => {
+              if (!window.confirm(`丢弃 ${filePath} 的这个 hunk?`)) return
+              void discardWorkspaceHunk(filePath, hunk.patch ?? '', hunkKey)
+            }}
+          >
+            ×
+          </button>
+        </span>
+      )}
+    </div>
+  )
+}
+
 function FileDiff({ file }: { file: WorkspaceDiffFile }): React.JSX.Element {
   return (
     <article className="workspace-diff-file">
@@ -175,14 +221,17 @@ function FileDiff({ file }: { file: WorkspaceDiffFile }): React.JSX.Element {
       ) : file.hunks.length === 0 ? (
         <div className="workspace-diff-empty">No textual hunks</div>
       ) : (
-        file.hunks.map((hunk, idx) => (
-          <div key={`${fileLabel(file)}-${idx}`} className="workspace-diff-hunk">
-            <div className="workspace-diff-hunk-head">{hunk.header}</div>
+        file.hunks.map((hunk, idx) => {
+          const hunkKey = `${fileLabel(file)}-${idx}-${hunk.header}`
+          return (
+          <div key={hunkKey} className="workspace-diff-hunk">
+            <HunkHeader file={file} hunk={hunk} hunkKey={hunkKey} />
             {hunk.lines.map((line, lineIdx) => (
               <Line key={lineIdx} line={line} />
             ))}
           </div>
-        ))
+          )
+        })
       )}
     </article>
   )
@@ -191,7 +240,7 @@ function FileDiff({ file }: { file: WorkspaceDiffFile }): React.JSX.Element {
 export default function DiffPanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
-  const { diff, diffError, diffLoading } = useStore((s) => s.workbench)
+  const { diff, diffError, diffLoading, diffMessage } = useStore((s) => s.workbench)
   const refresh = useStore((s) => s.refreshDiffPanel)
   const refreshGitStatus = useStore((s) => s.refreshGitStatus)
   const close = useStore((s) => s.closeDiffPanel)
@@ -225,6 +274,7 @@ export default function DiffPanel(): React.JSX.Element {
       <GitCommitBox />
 
       {diffError && <div className="notice notice-error workspace-diff-notice">{diffError}</div>}
+      {diffMessage && <div className="notice notice-info workspace-diff-notice">{diffMessage}</div>}
       {diffLoading && !diff && <div className="workspace-diff-empty">{t('loadingDiff')}</div>}
       {!diffLoading && diff && diff.ok && files.length === 0 && (
         <div className="workspace-diff-empty">{t('noWorkspaceChanges')}</div>

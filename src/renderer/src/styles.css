@@ -487,6 +487,12 @@ textarea {
   font-size: 12px;
 }
 
+.btn-xs {
+  min-height: 22px;
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
 .btn-lg {
   padding: 11px 24px;
   font-size: 14.5px;
@@ -1367,11 +1373,22 @@ textarea {
 }
 
 .workspace-diff-hunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 5px 10px;
   background: rgba(120, 130, 220, 0.11);
   color: var(--accent);
   font-family: var(--mono);
   font-size: 11px;
+}
+
+.workspace-diff-hunk-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .workspace-diff-line {
