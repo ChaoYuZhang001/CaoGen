@@ -3111,6 +3111,230 @@ textarea {
   color: var(--green);
 }
 
+.subagent-panel {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.subagent-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.subagent-panel-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.subagent-panel-subtitle {
+  margin-top: 3px;
+  max-width: 440px;
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-panel-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subagent-panel-count {
+  min-width: 48px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.subagent-panel-notice {
+  margin: 10px 12px 0;
+}
+
+.subagent-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.subagent-panel-label {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.subagent-panel-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.subagent-panel-templates .btn {
+  min-width: 94px;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.subagent-panel-textarea {
+  min-height: 156px;
+  max-height: 260px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.subagent-panel-textarea:focus {
+  border-color: var(--text-faint);
+}
+
+.subagent-panel-warning {
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 169, 74, 0.42);
+  border-radius: 8px;
+  background: rgba(217, 169, 74, 0.1);
+  color: var(--yellow);
+  font-size: 11.5px;
+}
+
+.subagent-panel-dispatch {
+  width: 100%;
+  min-height: 34px;
+}
+
+.subagent-panel-result {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.subagent-panel-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.subagent-panel-result-head b {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subagent-panel-child-list {
+  min-height: 0;
+  max-height: 340px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.subagent-panel-child {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(74px, 0.28fr) minmax(120px, 0.72fr);
+  gap: 7px 10px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.subagent-panel-child:last-child {
+  border-bottom: 0;
+}
+
+.subagent-panel-child-role,
+.subagent-panel-child-title,
+.subagent-panel-child-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-panel-child-role {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.subagent-panel-child-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.subagent-panel-child-path {
+  grid-column: 1 / -1;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+@media (max-width: 720px) {
+  .subagent-panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .subagent-panel-actions {
+    justify-content: space-between;
+  }
+
+  .subagent-panel-child {
+    grid-template-columns: 1fr;
+  }
+
+  .subagent-panel-child-path {
+    grid-column: auto;
+  }
+}
+
 .routine-panel {
   height: 100%;
   min-height: 0;

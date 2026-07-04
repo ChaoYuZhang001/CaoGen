@@ -62,6 +62,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const openWorktreePanel = useStore((s) => s.openWorktreePanel)
   const openTerminalPanel = useStore((s) => s.openTerminalPanel)
   const openPluginRegistryPanel = useStore((s) => s.openPluginRegistryPanel)
+  const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
   const updateSettings = useStore((s) => s.updateSettings)
   const setModel = useStore((s) => s.setModel)
@@ -136,6 +137,12 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       title: '/plugins',
       hint: t('slashPluginsHint'),
       run: () => void openPluginRegistryPanel()
+    },
+    {
+      id: 'subagents',
+      title: '/subagents',
+      hint: t('slashSubagentsHint'),
+      run: () => void openSubagentPanel()
     },
     {
       id: 'routine',

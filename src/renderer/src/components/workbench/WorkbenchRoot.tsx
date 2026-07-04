@@ -6,6 +6,7 @@ import PreviewPanel from './PreviewPanel'
 import WorktreePanel from './WorktreePanel'
 import TerminalPanel from './TerminalPanel'
 import PluginRegistryPanel from './PluginRegistryPanel'
+import SubagentPanel from './SubagentPanel'
 import RoutinePanel from './RoutinePanel'
 import { useStore } from '../../store'
 
@@ -17,12 +18,17 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const worktreeOpen = useStore((s) => s.workbench.worktreeOpen)
   const terminalOpen = useStore((s) => s.workbench.terminalOpen)
   const pluginRegistryOpen = useStore((s) => s.workbench.pluginRegistryOpen)
+  const subagentOpen = useStore((s) => s.workbench.subagentOpen)
   const routineOpen = useStore((s) => s.workbench.routineOpen)
   const pluginRegistry = useStore((s) => s.workbench.pluginRegistry)
   const pluginRegistryLoading = useStore((s) => s.workbench.pluginRegistryLoading)
   const pluginRegistryError = useStore((s) => s.workbench.pluginRegistryError)
   const pluginRegistryMessage = useStore((s) => s.workbench.pluginRegistryMessage)
   const selectedPluginRegistryItemId = useStore((s) => s.workbench.selectedPluginRegistryItemId)
+  const subagentBusy = useStore((s) => s.workbench.subagentBusy)
+  const subagentError = useStore((s) => s.workbench.subagentError)
+  const subagentMessage = useStore((s) => s.workbench.subagentMessage)
+  const lastSubagentDispatch = useStore((s) => s.workbench.lastSubagentDispatch)
   const routines = useStore((s) => s.workbench.routines)
   const routineLoading = useStore((s) => s.workbench.routineLoading)
   const routineError = useStore((s) => s.workbench.routineError)
@@ -32,6 +38,8 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const closePluginRegistryPanel = useStore((s) => s.closePluginRegistryPanel)
   const selectPluginRegistryItem = useStore((s) => s.selectPluginRegistryItem)
   const revealPluginRegistryItem = useStore((s) => s.revealPluginRegistryItem)
+  const closeSubagentPanel = useStore((s) => s.closeSubagentPanel)
+  const dispatchSubagentText = useStore((s) => s.dispatchSubagentText)
   const refreshRoutinePanel = useStore((s) => s.refreshRoutinePanel)
   const closeRoutinePanel = useStore((s) => s.closeRoutinePanel)
   const selectRoutine = useStore((s) => s.selectRoutine)
@@ -45,6 +53,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
     worktreeOpen ||
     terminalOpen ||
     pluginRegistryOpen ||
+    subagentOpen ||
     routineOpen
 
   return (
@@ -77,6 +86,15 @@ export default function WorkbenchRoot(): React.JSX.Element {
               onClose={closePluginRegistryPanel}
               onSelectItem={(item) => selectPluginRegistryItem(item.id)}
               onRevealItem={(item) => void revealPluginRegistryItem(item)}
+            />
+          ) : subagentOpen ? (
+            <SubagentPanel
+              busy={subagentBusy}
+              error={subagentError}
+              message={subagentMessage}
+              lastResult={lastSubagentDispatch}
+              onClose={closeSubagentPanel}
+              onDispatch={dispatchSubagentText}
             />
           ) : routineOpen ? (
             <RoutinePanel
