@@ -198,6 +198,13 @@ export type AgentEvent =
   | { kind: 'meta'; meta: SessionMeta }
   | { kind: 'user-message'; text: string }
   | { kind: 'checkpoint'; messageId: string }
+  | {
+      kind: 'checkpoint-restore'
+      messageId: string
+      filesChanged: string[]
+      insertions?: number
+      deletions?: number
+    }
   | { kind: 'routing'; model: string; reason: string; providerId: string }
   | {
       /** 跨厂商故障切换:旧 Provider 失败,已自动切到新 Provider 重试 */

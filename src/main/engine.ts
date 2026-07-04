@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   PermissionModeId,
   PermissionRequestInfo,
+  RewindResult,
   SessionMeta,
   TranscriptEntry
 } from '../shared/types'
@@ -25,6 +26,8 @@ export interface Engine {
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
   rename(title: string): void
+  /** 文件检查点回退(引擎可选;不支持则返回 canRewind:false) */
+  rewindFiles?(messageId: string, dryRun: boolean): Promise<RewindResult>
   dispose(): void
 }
 

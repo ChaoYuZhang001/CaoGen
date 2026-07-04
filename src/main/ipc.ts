@@ -36,7 +36,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('sessions:rewindFiles', async (_e, id: string, messageId: string, dryRun: boolean) => {
     const session = sessionManager.get(id)
-    if (!session) return { canRewind: false, error: '会话不存在' }
+    if (!session?.rewindFiles) return { canRewind: false, error: '会话不存在或引擎不支持' }
     return session.rewindFiles(messageId, dryRun === true)
   })
 
