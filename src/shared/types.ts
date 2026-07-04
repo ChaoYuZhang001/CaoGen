@@ -45,6 +45,14 @@ export interface SessionMeta {
   id: string
   title: string
   cwd: string
+  /** 父会话 ID;存在时此会话是主会话派出的真实子 Agent。 */
+  parentSessionId?: string
+  /** 一次子代理编排批次 ID,用于聚合同一轮派活。 */
+  orchestrationId?: string
+  /** 子代理任务 ID;父会话下唯一。 */
+  childTaskId?: string
+  /** 子代理角色/分工,如 frontend/backend/test/review。 */
+  childRole?: string
   /** 是否使用 CaoGen managed Git worktree 隔离运行。 */
   isolated?: boolean
   /** 用户最初选择的目录;隔离会话中 cwd 会改为 worktree 内对应目录。 */
@@ -81,6 +89,10 @@ export interface HistoryEntry {
   id: string
   title: string
   cwd: string
+  parentSessionId?: string
+  orchestrationId?: string
+  childTaskId?: string
+  childRole?: string
   isolated?: boolean
   sourceCwd?: string
   repoRoot?: string
@@ -100,6 +112,10 @@ export interface HistoryEntry {
 
 export interface CreateSessionOptions {
   cwd: string
+  parentSessionId?: string
+  orchestrationId?: string
+  childTaskId?: string
+  childRole?: string
   /** undefined = Git 仓库自动隔离;false = 主工作区直接运行;true = 强制隔离。 */
   isolated?: boolean
   model?: string
@@ -110,6 +126,41 @@ export interface CreateSessionOptions {
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
   title?: string
+}
+
+export interface DispatchSubagentTaskInput {
+  id?: string
+  title?: string
+  role?: string
+  prompt: string
+  cwd?: string
+  isolated?: boolean
+  model?: string
+  providerId?: string
+  engine?: EngineKind
+  permissionMode?: PermissionModeId
+}
+
+export interface DispatchSubagentsInput {
+  tasks: DispatchSubagentTaskInput[]
+  cwd?: string
+  isolated?: boolean
+  model?: string
+  providerId?: string
+  engine?: EngineKind
+  permissionMode?: PermissionModeId
+}
+
+export interface SubagentDispatchItem {
+  taskId: string
+  prompt: string
+  meta: SessionMeta
+}
+
+export interface SubagentDispatchResult {
+  orchestrationId: string
+  parentSessionId: string
+  children: SubagentDispatchItem[]
 }
 
 export type AppLanguage = 'zh' | 'en'
@@ -716,6 +767,10 @@ export interface AgentDeskApi {
     dryRun: boolean
   ): Promise<CheckpointRestoreResult>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
+  dispatchSubagents(
+    parentSessionId: string,
+    input: DispatchSubagentsInput
+  ): Promise<SubagentDispatchResult>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
   saveImageAttachmentBytes(
     sessionId: string,
@@ -749,6 +804,8 @@ export interface AgentDeskApi {
   ): Promise<PluginRegistryView>
   revealPluginRegistryItem(path: string, sessionId?: string): Promise<PluginRegistryRevealResult>
   listRoutines(): Promise<Routine[]>
+  createRoutine(input: CreateRoutineInput): Promise<Routine>
+  deleteRoutine(id: string): Promise<boolean>
   updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
   getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
