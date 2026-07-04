@@ -76,6 +76,7 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('routines:update', id, patch),
   markRoutineRun: (id: string, options?: MarkRunOptions) =>
     ipcRenderer.invoke('routines:markRun', id, options),
+  getStartSuggestions: (sessionId: string) => ipcRenderer.invoke('startSuggestions:get', sessionId),
   gitStatus: (sessionId: string) => ipcRenderer.invoke('git:status', sessionId),
   stageFiles: (sessionId: string, paths: string[]) => ipcRenderer.invoke('git:stage', sessionId, paths),
   stageAll: (sessionId: string) => ipcRenderer.invoke('git:stageAll', sessionId),

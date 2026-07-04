@@ -205,6 +205,17 @@ export interface ReadProjectMemoryResult {
   drafts: ProjectMemoryDraft[]
 }
 
+export type StartSuggestionPriority = 'high' | 'medium' | 'low'
+
+export interface StartSuggestion {
+  id: string
+  title: string
+  body: string
+  source: string
+  priority: StartSuggestionPriority
+  prompt: string
+}
+
 export interface OfficeSettings {
   /** 显示桌上厂商工牌 */
   showBadges: boolean
@@ -896,6 +907,7 @@ export interface AgentDeskApi {
   deleteRoutine(id: string): Promise<boolean>
   updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
+  getStartSuggestions(sessionId: string): Promise<StartSuggestion[]>
   gitStatus(sessionId: string): Promise<GitStatus>
   stageFiles(sessionId: string, paths: string[]): Promise<GitOperationResult>
   stageAll(sessionId: string): Promise<GitOperationResult>

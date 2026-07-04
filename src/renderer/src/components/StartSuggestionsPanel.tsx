@@ -1,13 +1,4 @@
-export type StartSuggestionPriority = 'high' | 'medium' | 'low'
-
-export interface StartSuggestionPanelItem {
-  id: string
-  title: string
-  body: string
-  source: string
-  priority: StartSuggestionPriority
-  prompt: string
-}
+import type { StartSuggestion, StartSuggestionPriority } from '../../../shared/types'
 
 export interface StartSuggestionsPanelLabels {
   title: string
@@ -21,10 +12,10 @@ export interface StartSuggestionsPanelLabels {
 }
 
 export interface StartSuggestionsPanelProps {
-  suggestions: StartSuggestionPanelItem[]
-  onSendToAgent: (suggestion: StartSuggestionPanelItem) => void
-  onLater: (suggestion: StartSuggestionPanelItem) => void
-  onIgnore: (suggestion: StartSuggestionPanelItem) => void
+  suggestions: StartSuggestion[]
+  onSendToAgent: (suggestion: StartSuggestion) => void
+  onLater: (suggestion: StartSuggestion) => void
+  onIgnore: (suggestion: StartSuggestion) => void
   className?: string
   compact?: boolean
   disabled?: boolean

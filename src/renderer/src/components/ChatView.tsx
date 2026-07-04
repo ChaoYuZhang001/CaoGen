@@ -6,6 +6,7 @@ import MessageItem from './MessageItem'
 import PermissionBar from './PermissionBar'
 import Composer from './Composer'
 import RewindPanel from './RewindPanel'
+import StartSuggestionsPanel from './StartSuggestionsPanel'
 import type { PermissionModeId } from '../../../shared/types'
 
 export default function ChatView(): React.JSX.Element | null {
@@ -26,6 +27,13 @@ export default function ChatView(): React.JSX.Element | null {
   const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
   const openMemoryPanel = useStore((s) => s.openMemoryPanel)
+  const startSuggestions = useStore((s) => s.visibleStartSuggestions())
+  const startSuggestionsLoading = useStore((s) => s.workbench.startSuggestionsLoading)
+  const startSuggestionsError = useStore((s) => s.workbench.startSuggestionsError)
+  const refreshStartSuggestions = useStore((s) => s.refreshStartSuggestions)
+  const sendStartSuggestion = useStore((s) => s.sendStartSuggestion)
+  const laterStartSuggestion = useStore((s) => s.laterStartSuggestion)
+  const ignoreStartSuggestion = useStore((s) => s.ignoreStartSuggestion)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -37,6 +45,10 @@ export default function ChatView(): React.JSX.Element | null {
     const el = scrollRef.current
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [itemCount, streamLen, activeId])
+
+  useEffect(() => {
+    if (activeId) void refreshStartSuggestions()
+  }, [activeId, refreshStartSuggestions])
 
   useEffect(() => {
     let lastEsc = 0
@@ -149,6 +161,18 @@ export default function ChatView(): React.JSX.Element | null {
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
+          {startSuggestionsError && (
+            <div className="notice notice-error start-suggestions-chat-notice">{startSuggestionsError}</div>
+          )}
+          <StartSuggestionsPanel
+            suggestions={startSuggestions}
+            compact
+            disabled={running || startSuggestionsLoading}
+            maxVisible={3}
+            onSendToAgent={(suggestion) => void sendStartSuggestion(suggestion)}
+            onLater={(suggestion) => laterStartSuggestion(suggestion.id)}
+            onIgnore={(suggestion) => ignoreStartSuggestion(suggestion.id)}
+          />
           {session.items.map((item) => (
             <MessageItem
               key={item.id}
