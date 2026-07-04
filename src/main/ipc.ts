@@ -12,6 +12,7 @@ import {
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
 import { listProjects, updateProject, deleteProject } from './projects'
+import { suggestFiles } from './fileSuggest'
 import type {
   AppSettings,
   CreateSessionOptions,
@@ -27,6 +28,11 @@ export function registerIpc(): void {
   )
 
   ipcMain.handle('sessions:transcript', (_e, id: string) => sessionManager.getTranscript(id))
+
+  ipcMain.handle('sessions:suggestFiles', (_e, id: string, query: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    return cwd ? suggestFiles(cwd, typeof query === 'string' ? query : '') : []
+  })
 
   ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {

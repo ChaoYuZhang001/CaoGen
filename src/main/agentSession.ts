@@ -6,6 +6,7 @@ import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/clau
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken, listProviders } from './providers'
+import { readReferencedFiles } from './fileSuggest'
 import {
   pickModel,
   recordSuccess,
@@ -82,6 +83,18 @@ function splitList(text: string): string[] {
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+/** 从消息文本提取 @文件引用(路径:字母数字 / . _ - 及分隔符) */
+function extractMentions(text: string): string[] {
+  const out: string[] = []
+  const re = /@([A-Za-z0-9._\-/\\]+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const p = m[1].replace(/[.,;:)]+$/, '') // 去掉尾随标点
+    if (p) out.push(p)
+  }
+  return out
 }
 
 function emptyUsage(): UsageTotals {
@@ -323,9 +336,13 @@ export class AgentSession implements Engine {
 
   private pushUserMessage(text: string): void {
     if (this.disposed) return
+    // 展开 @文件引用:把被引文件内容追加到发给模型的 prompt(UI 仍显示原文)
+    const mentions = extractMentions(text)
+    const injected = mentions.length > 0 ? readReferencedFiles(this.meta.cwd, mentions) : ''
+    const promptText = injected ? text + injected : text
     const message = {
       type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
+      message: { role: 'user', content: [{ type: 'text', text: promptText }] },
       parent_tool_use_id: null,
       session_id: this.meta.sdkSessionId ?? ''
     }

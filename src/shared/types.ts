@@ -245,6 +245,7 @@ export interface AgentDeskApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
+  suggestFiles(sessionId: string, query: string): Promise<string[]>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   sendMessage(sessionId: string, text: string): Promise<void>
   interrupt(sessionId: string): Promise<void>
