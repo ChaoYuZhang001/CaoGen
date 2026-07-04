@@ -1,6 +1,6 @@
 # CaoGen
 
-多会话并行的桌面 AI 编码 Agent。目标是**超越 Codex、Claude Code、Marvis 等桌面端 Agent**:多厂商模型可配置、指定运行或智能自动调度、每个 Agent 用 Git worktree 隔离、并行会话以写实 3D 办公区呈现,并补齐深度用户迁移所需的检查点回溯、子代理编排、内置浏览器批注、插件生态、产物预览、自动化与主动建议——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
+多会话并行的桌面 AI 编码 Agent。终极目标是让 **Codex、Claude Code、Gemini CLI、Marvis 以及其他主流 Agent 的深度用户丝滑转用 CaoGen**,把 CaoGen 做成中国原创、世界级第一梯队的桌面 AI 编码工作室:多厂商模型可配置、指定运行或智能自动调度、每个 Agent 用 Git worktree 隔离、并行会话以写实 3D 办公区呈现,并补齐深度用户迁移所需的检查点回溯、子代理编排、内置浏览器批注、插件生态、产物预览、自动化与主动建议——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
 
 当前以 Claude Agent SDK 为引擎(与 Claude Code 同源),在桌面层提供 CLI 给不了的体验:
 

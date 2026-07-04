@@ -19,7 +19,8 @@ const PERSIST_KINDS = new Set<AgentEvent['kind']>([
   'turn-result',
   'routing',
   'failover',
-  'checkpoint'
+  'checkpoint',
+  'checkpoint-restore'
 ])
 
 /** 回放上限:超长会话只回填最近这么多条,避免打开即卡死 */

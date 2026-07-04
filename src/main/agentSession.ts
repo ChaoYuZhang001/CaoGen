@@ -7,6 +7,7 @@ import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken, listProviders } from './providers'
 import { readReferencedFiles } from './fileSuggest'
+import { latestUserTextUuid } from './checkpoints'
 import {
   pickModel,
   recordSuccess,
@@ -181,6 +182,8 @@ export class AgentSession implements Engine {
   private generation = 0
   /** 本轮用户消息原文,故障切换后重发 */
   private lastUserText = ''
+  /** 上次发过检查点的用户消息 uuid,去重避免同轮重复发 */
+  private lastCheckpointUuid = ''
   /** 本轮已尝试过的 Provider(含起始),切换时排除,防止打转 */
   private triedProviders = new Set<string>()
   private failoverBusy = false
@@ -393,10 +396,27 @@ export class AgentSession implements Engine {
         rewindFiles?: (id: string, opts?: { dryRun?: boolean }) => Promise<import('../shared/types').RewindResult>
       }
       if (!q.rewindFiles) return { canRewind: false, error: 'SDK 不支持文件检查点' }
-      return await q.rewindFiles(messageId, { dryRun })
+      const result = await q.rewindFiles(messageId, { dryRun })
+      if (!dryRun && !result.error) {
+        this.emit({
+          kind: 'checkpoint-restore',
+          messageId,
+          filesChanged: result.filesChanged ?? [],
+          insertions: result.insertions,
+          deletions: result.deletions
+        })
+      }
+      return result
     } catch (err) {
       return { canRewind: false, error: errText(err) }
     }
+  }
+
+  /** 只发布真实用户消息 uuid 作为 rewindFiles 锚点,并做会话内去重。 */
+  private emitCheckpoint(uuid: string): void {
+    if (!uuid || uuid === this.lastCheckpointUuid) return
+    this.lastCheckpointUuid = uuid
+    this.emit({ kind: 'checkpoint', messageId: uuid })
   }
 
   /** 每轮最多自动切换厂商次数,防止在大量厂商间雪崩式重试 */
@@ -598,14 +618,14 @@ export class AgentSession implements Engine {
         const message = msg.message as Record<string, unknown> | undefined
         const content = message?.content
         if (!Array.isArray(content)) break
-        // 用户消息回放带 uuid = 检查点回退目标;仅对含文本块(用户 prompt 回放)
-        // 的消息发检查点,tool_result 类不算
+        // rewindFiles 接受 SDK 用户消息 uuid;tool_result 回放也属于 user 消息,
+        // 但不是可回退锚点,所以只记录含文本块的人类 prompt。
         const uuid = typeof msg.uuid === 'string' ? msg.uuid : ''
         const hasText = content.some(
           (r) => (r as Record<string, unknown> | null)?.type === 'text'
         )
         if (uuid && hasText) {
-          this.emit({ kind: 'checkpoint', messageId: uuid })
+          this.emitCheckpoint(uuid)
         }
         for (const raw of content) {
           const block = raw as Record<string, unknown> | null
@@ -634,6 +654,12 @@ export class AgentSession implements Engine {
         const isError = msg.is_error === true || subtype !== 'success'
         const latency = this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined
         const finish = (): void => {
+          // 检查点:本轮结束后从 CLI transcript 取本轮用户消息 uuid 作回退锚点
+          // (用户 prompt 不在 SDK 事件流里,但会落到 CLI transcript;文件检查点挂在它上)
+          if (!isError && this.meta.sdkSessionId) {
+            const uuid = latestUserTextUuid(this.meta.sdkSessionId)
+            if (uuid) this.emitCheckpoint(uuid)
+          }
           this.emit({
             kind: 'turn-result',
             subtype,

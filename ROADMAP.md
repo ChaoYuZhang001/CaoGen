@@ -4,7 +4,9 @@
 
 ## 北极星目标
 
-做一个**超越 Codex、Claude Code、Marvis 等桌面端 Agent** 的桌面 AI 编码工作室。CaoGen 不是"Claude Code GUI",而是深度 coding-agent 用户的桌面驾驶舱:多模型、多 Agent、多工作区、多产物、多自动化都在一个可观测、可回退、可排期的工作室里完成。
+做一个**超越 Codex、Claude Code、Gemini CLI、Marvis 等桌面端 Agent** 的桌面 AI 编码工作室。CaoGen 不是"Claude Code GUI",而是面向所有主流 Agent 深度用户的迁移终点:多模型、多 Agent、多工作区、多产物、多自动化都在一个可观测、可回退、可排期的工作室里完成。
+
+战略定位:以中国原创桌面 Agent 工作室路线冲击世界第一。这里的"世界第一"不是营销口号,而是可验收目标:深度用户迁移成本最低、并行工程可信度最高、桌面可观测性最强、长期自动化闭环最完整。
 
 终极目标靠五根支柱建立代差:
 
@@ -16,7 +18,7 @@
 
 ### 竞争定位
 
-| 维度 | Codex / Claude Code / Marvis 等 | CaoGen |
+| 维度 | Codex / Claude Code / Gemini CLI / Marvis 等 | CaoGen |
 |---|---|---|
 | 厂商 | 各自绑定自家模型 | 多厂商配置 + 跨厂商故障切换 |
 | 模型选择 | 手动指定为主 | 手动指定 + 智能自动调度 |
@@ -41,6 +43,7 @@
 - ⬜ 主 Agent 能真实派活给 ≥3 个子 Agent,各自运行、回传、合并,3D 办公区显示真实任务流而非装饰动画
 - ⬜ 笔记本关闭后,云端 Routines 仍能按计划触发任务,重新打开桌面端可接续上下文、产物和日志
 - ⬜ 插件/预览生态覆盖 90+ 常用能力,PDF/表格/PPT/HTML 可直接查看、批注并交给 Agent 修改
+- ⬜ 完成跨竞品迁移验收:Codex、Claude Code、Gemini CLI、Marvis 深度用户各自用 CaoGen 完成一天真实工作流,关键动作无需回退原工具
 
 ---
 

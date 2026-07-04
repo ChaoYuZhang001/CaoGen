@@ -123,6 +123,24 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
       }
       return { ...s, items }
     }
+    case 'checkpoint-restore': {
+      const count = ev.filesChanged.length
+      return {
+        ...s,
+        items: [
+          ...s.items,
+          {
+            id: genId(),
+            kind: 'notice',
+            level: 'info',
+            text:
+              count > 0
+                ? `已回退 ${count} 个文件 (+${ev.insertions ?? 0}/-${ev.deletions ?? 0})`
+                : '已执行回退,没有文件需要恢复'
+          }
+        ]
+      }
+    }
     case 'routing':
       return {
         ...s,
