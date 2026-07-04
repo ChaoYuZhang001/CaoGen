@@ -7,6 +7,7 @@ import type {
   MarkRunOptions,
   PermissionModeId,
   PluginRegistryScanOptions,
+  ProjectMemoryDraftInput,
   ProviderInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
@@ -121,6 +122,13 @@ const api: AgentDeskApi = {
   updateProject: (id: string, patch: { name?: string }) =>
     ipcRenderer.invoke('projects:update', id, patch),
   deleteProject: (id: string) => ipcRenderer.invoke('projects:delete', id),
+  readProjectMemory: (sessionId: string) => ipcRenderer.invoke('memory:read', sessionId),
+  proposeMemoryDraft: (sessionId: string, input: ProjectMemoryDraftInput) =>
+    ipcRenderer.invoke('memory:propose', sessionId, input),
+  acceptMemoryDraft: (sessionId: string, draftId: string) =>
+    ipcRenderer.invoke('memory:accept', sessionId, draftId),
+  deleteMemoryEntry: (sessionId: string, entryId: string) =>
+    ipcRenderer.invoke('memory:delete', sessionId, entryId),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {
