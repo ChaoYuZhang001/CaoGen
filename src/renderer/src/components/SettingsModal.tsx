@@ -142,6 +142,16 @@ export default function SettingsModal(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
+
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.failoverEnabled}
+                    onChange={(e) => set('failoverEnabled', e.target.checked)}
+                  />
+                  {t('failoverEnabled')}
+                </label>
+                <p className="settings-hint">{t('failoverHint')}</p>
               </>
             )}
 

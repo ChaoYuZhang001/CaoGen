@@ -84,6 +84,17 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
         </div>
       )
 
+    case 'failover':
+      return (
+        <div className="routing-note failover-note" title="厂商故障自动切换">
+          <span className="routing-icon">⚡</span>
+          <span className="routing-text">
+            {item.fromName} 故障({item.reason}),已切换 → {item.toName}
+            {item.model ? ` · ${item.model}` : ''},自动重试中
+          </span>
+        </div>
+      )
+
     case 'notice':
       return <div className={`notice notice-${item.level}`}>{item.text}</div>
 

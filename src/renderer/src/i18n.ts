@@ -41,6 +41,11 @@ const DICT: Dict = {
   defaultProvider: { zh: '默认 Provider', en: 'Default Provider' },
   defaultModel: { zh: '默认模型', en: 'Default Model' },
   schedulerStrategy: { zh: '自动调度策略', en: 'Scheduler Strategy' },
+  failoverEnabled: { zh: '厂商故障自动切换(任务不中断)', en: 'Auto failover across providers' },
+  failoverHint: {
+    zh: '当前厂商余额不足/限流/宕机时,自动切到健康厂商重试本轮任务。',
+    en: 'On credit/rate-limit/outage errors, retry the turn on a healthy provider.'
+  },
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },

@@ -70,6 +70,14 @@ export type ChatItem =
       resultText?: string
     }
   | { id: string; kind: 'routing'; model: string; reason: string }
+  | {
+      id: string
+      kind: 'failover'
+      fromName: string
+      toName: string
+      model?: string
+      reason: string
+    }
   | { id: string; kind: 'notice'; level: 'info' | 'error'; text: string }
 
 export interface SessionState {
@@ -108,6 +116,26 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         ...s,
         items: [...s.items, { id: genId(), kind: 'routing', model: ev.model, reason: ev.reason }],
         effectiveModel: ev.model
+      }
+    case 'failover':
+      return {
+        ...s,
+        // 切换即换厂商:清掉进行中的流式/工具状态(旧引擎已终止)
+        streamText: '',
+        streamThinking: '',
+        runningTools: {},
+        effectiveModel: ev.model ?? s.effectiveModel,
+        items: [
+          ...s.items,
+          {
+            id: genId(),
+            kind: 'failover',
+            fromName: ev.fromName,
+            toName: ev.toName,
+            model: ev.model,
+            reason: ev.reason
+          }
+        ]
       }
     case 'status': {
       const meta = { ...s.meta, status: ev.status, lastError: ev.error ?? s.meta.lastError }
@@ -246,6 +274,7 @@ export const useStore = create<AppStore>((set, get) => ({
     defaultPermissionMode: 'default',
     defaultProviderId: '',
     schedulerStrategy: 'balanced',
+    failoverEnabled: true,
     language: 'zh',
     theme: 'dark',
     persona: '',

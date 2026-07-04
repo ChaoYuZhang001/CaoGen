@@ -5,13 +5,16 @@ import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
-import { getProvider, decryptToken } from './providers'
+import { getProvider, decryptToken, listProviders } from './providers'
 import {
   pickModel,
   recordSuccess,
   recordFailure,
+  classifyFailure,
+  pickFailoverTarget,
   DEFAULT_AUTO_CANDIDATES
 } from './scheduler'
+import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
 import { AUTO_MODEL } from '../shared/types'
 import type {
@@ -149,20 +152,32 @@ function toolResultText(content: unknown): string {
  */
 export class AgentSession {
   readonly meta: SessionMeta
-  private readonly input = new Pushable<SDKUserMessage>()
+  private input = new Pushable<SDKUserMessage>()
   private query: Query | null = null
   private readonly pending = new Map<string, PendingPermission>()
   private readonly emitRaw: (event: AgentEvent) => void
   private readonly transcript: TranscriptWriter
-  private readonly resumeSdkSessionId?: string
+  /** 下次 start() 要恢复的 SDK 会话;故障切换重启时指向当前 sdkSessionId */
+  private resumeId?: string
   private disposed = false
   private turnStartedAt = 0
+  /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
+  private generation = 0
+  /** 本轮用户消息原文,故障切换后重发 */
+  private lastUserText = ''
+  /** 本轮已尝试过的 Provider(含起始),切换时排除,防止打转 */
+  private triedProviders = new Set<string>()
+  private failoverBusy = false
+  /** 故障切换窗口期(旧引擎已死、新引擎未起)收到的消息,切换完成后补推 */
+  private queuedDuringFailover: string[] = []
+  /** 用户主动中断标记:中断产生的错误 result 不触发故障切换 */
+  private interrupting = false
 
   constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
     this.meta = meta
     this.transcript = new TranscriptWriter(resumeSdkSessionId)
     this.emitRaw = (event) => emit(event, this.transcript.next(event))
-    this.resumeSdkSessionId = resumeSdkSessionId
+    this.resumeId = resumeSdkSessionId
     // resume 模式下 SDK 不会再发 system/init,手动设置并通知渲染进程
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
@@ -205,6 +220,8 @@ export class AgentSession {
   }
 
   async start(): Promise<void> {
+    if (this.disposed) return
+    const gen = ++this.generation
     this.setStatus('starting')
     try {
       const sdk = await loadSdk()
@@ -230,7 +247,7 @@ export class AgentSession {
           ...(disallowed.length > 0 ? { disallowedTools: disallowed } : {}),
           // 'auto' 是调度哨兵而非真实模型名,不传给 SDK;每轮再 setModel
           ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
-          ...(this.resumeSdkSessionId ? { resume: this.resumeSdkSessionId } : {}),
+          ...(this.resumeId ? { resume: this.resumeId } : {}),
           canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
         }
       })
@@ -238,11 +255,17 @@ export class AgentSession {
       this.setStatus('error', errText(err))
       return
     }
-    void this.consume()
+    void this.consume(gen)
   }
 
   send(text: string): void {
     if (this.disposed) return
+    // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
+    if (this.failoverBusy) {
+      this.emit({ kind: 'user-message', text })
+      this.queuedDuringFailover.push(text)
+      return
+    }
     // 流已死(启动失败 / 进程退出)时静默排队只会让 UI 永远停在"运行中"
     if (!this.query || this.meta.status === 'error' || this.meta.status === 'closed') {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
@@ -255,6 +278,9 @@ export class AgentSession {
     }
     this.setStatus('running')
     this.turnStartedAt = Date.now()
+    // 新一轮:重置故障切换尝试记录(仅在本轮内防打转)
+    this.lastUserText = text
+    this.triedProviders = new Set([this.meta.providerId])
     // 自动调度:挑模型 → setModel → 透明事件,完成后再推消息保证顺序
     if (this.meta.model === AUTO_MODEL) {
       void this.autoRouteThenPush(text)
@@ -304,10 +330,16 @@ export class AgentSession {
   }
 
   async interrupt(): Promise<void> {
+    this.interrupting = true
     try {
       await this.query?.interrupt()
     } catch (err) {
       console.error('[agent-desk] interrupt 失败:', err)
+    } finally {
+      // result 消息在 interrupt() resolve 后到达,稍留窗口再复位
+      setTimeout(() => {
+        this.interrupting = false
+      }, 3000)
     }
   }
 
@@ -330,6 +362,117 @@ export class AgentSession {
   /** 已持久化 + 缓冲的耐久事件(user/assistant/tool-result/turn-result),供恢复时回填 */
   getTranscript() {
     return this.transcript.read()
+  }
+
+  /** 每轮最多自动切换厂商次数,防止在大量厂商间雪崩式重试 */
+  private static readonly MAX_FAILOVERS_PER_TURN = 3
+
+  /** 有用户消息在途(值得为它切换厂商重试) */
+  private get turnInFlight(): boolean {
+    return (
+      this.lastUserText.length > 0 &&
+      (this.meta.status === 'running' || this.meta.status === 'starting')
+    )
+  }
+
+  private providerName(id: string): string {
+    if (!id) return '官方 Anthropic'
+    return getProvider(id)?.name ?? '未知厂商'
+  }
+
+  /** 故障切换候选:官方 Anthropic + 全部已配置 Provider */
+  private failoverCandidates(): FailoverCandidate[] {
+    const out: FailoverCandidate[] = [
+      { id: '', name: '官方 Anthropic', models: [...DEFAULT_AUTO_CANDIDATES] }
+    ]
+    for (const p of listProviders()) out.push({ id: p.id, name: p.name, models: p.models })
+    return out
+  }
+
+  /**
+   * 跨厂商故障切换(M4.1)。当前厂商故障时:挑一个健康的替代厂商,
+   * 结束旧引擎 → 以 resume 延续上下文重建引擎 → 重发本轮消息,任务不中断。
+   * 返回 true 表示已切换接管,调用方不应再把本轮按失败收尾。
+   */
+  private async tryFailover(errorText: string): Promise<boolean> {
+    if (this.disposed || this.failoverBusy || this.interrupting) return false
+    if (!getSettings().failoverEnabled) return false
+    if (!this.lastUserText) return false // 无在途轮次,无从重试
+    if (this.triedProviders.size > AgentSession.MAX_FAILOVERS_PER_TURN) return false
+    const failure = classifyFailure(errorText)
+    if (!failure.switchable) return false
+
+    const target = pickFailoverTarget({
+      candidates: this.failoverCandidates(),
+      exclude: this.triedProviders,
+      desiredModel: this.meta.model !== AUTO_MODEL ? this.meta.model : ''
+    })
+    if (!target) return false
+
+    this.failoverBusy = true
+    try {
+      // 先令旧引擎代数作废:此后旧 consume 循环的任何消息/异常都被丢弃,
+      // 不会在切换过程中把会话误标为 error/closed
+      this.generation++
+      const fromId = this.meta.providerId
+      const fromName = this.providerName(fromId)
+      console.warn(
+        `[caogen] 厂商故障切换:${fromName} → ${target.name}(${failure.label})`
+      )
+      // 旧引擎的未决权限全部拒绝(其进程即将终止)
+      for (const [requestId, pending] of this.pending) {
+        pending.resolve({ behavior: 'deny', message: '厂商已切换,操作作废' })
+        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      }
+      this.pending.clear()
+      this.input.end()
+      try {
+        this.query?.close()
+      } catch {
+        // 进程可能已退出
+      }
+      this.query = null
+      this.input = new Pushable<SDKUserMessage>()
+
+      // 切换身份:providerId 必换;固定模型就近映射到目标厂商的同档模型
+      this.meta.providerId = target.providerId
+      if (this.meta.model !== AUTO_MODEL && target.model) this.meta.model = target.model
+      this.triedProviders.add(target.providerId)
+      // 延续对话上下文:从当前 SDK 会话 resume(首轮尚无 id 时全新开始)
+      this.resumeId = this.meta.sdkSessionId || this.resumeId
+
+      this.emit({
+        kind: 'failover',
+        fromProviderId: fromId,
+        toProviderId: target.providerId,
+        fromName,
+        toName: target.name,
+        model: this.meta.model === AUTO_MODEL ? undefined : this.meta.model,
+        reason: failure.label
+      })
+      this.emit({ kind: 'meta', meta: { ...this.meta } })
+
+      await this.start()
+      // 已提交切换(旧引擎已终止),即使新引擎启动失败也返回 true:
+      // start() 失败路径已把会话置为 error,调用方不得再按正常轮次收尾
+      if (!this.query) return true
+
+      // 重发本轮消息(user-message 已在转录中,不重复 emit)
+      this.setStatus('running')
+      this.turnStartedAt = Date.now()
+      if (this.meta.model === AUTO_MODEL) {
+        void this.autoRouteThenPush(this.lastUserText)
+      } else {
+        this.pushUserMessage(this.lastUserText)
+      }
+      // 补推切换窗口期用户发的消息
+      for (const queued of this.queuedDuringFailover.splice(0)) {
+        this.pushUserMessage(queued)
+      }
+      return true
+    } finally {
+      this.failoverBusy = false
+    }
   }
 
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
@@ -368,19 +511,25 @@ export class AgentSession {
     this.setStatus('closed')
   }
 
-  private async consume(): Promise<void> {
+  private async consume(gen: number): Promise<void> {
     const q = this.query
     if (!q) return
     try {
       for await (const message of q) {
+        // 故障切换会重建引擎;旧引擎的残余消息一律丢弃
+        if (this.disposed || gen !== this.generation) return
         this.handleMessage(message as unknown as Record<string, unknown>)
       }
-      if (!this.disposed) this.setStatus('closed')
+      if (!this.disposed && gen === this.generation) this.setStatus('closed')
     } catch (err) {
-      if (!this.disposed) {
-        recordFailure(this.meta.providerId, errText(err))
-        this.setStatus('error', errText(err))
-      }
+      if (this.disposed || gen !== this.generation) return
+      const text = errText(err)
+      recordFailure(this.meta.providerId, text)
+      // 流层崩溃(进程退出/网络断):仅当有轮次在途时值得切厂商重试
+      if (this.turnInFlight && (await this.tryFailover(text))) return
+      // await 期间可能有并行的故障切换已接管(代数已推进),此时不再报错
+      if (this.disposed || gen !== this.generation) return
+      this.setStatus('error', text)
     }
   }
 
@@ -439,24 +588,33 @@ export class AgentSession {
         }
         const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'unknown'
         const isError = msg.is_error === true || subtype !== 'success'
-        // Provider 健康度:成功记成功+延迟,异常记失败
         const latency = this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined
+        const finish = (): void => {
+          this.emit({
+            kind: 'turn-result',
+            subtype,
+            isError,
+            costUsd,
+            usage: hasUsage ? usage : undefined,
+            durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
+            numTurns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
+            resultText: typeof msg.result === 'string' ? msg.result : undefined
+          })
+          this.setStatus('idle')
+        }
+        // Provider 健康度:成功记成功+延迟,异常记失败
         if (isError) {
-          recordFailure(this.meta.providerId, typeof msg.result === 'string' ? msg.result : subtype)
+          const errorText = typeof msg.result === 'string' ? msg.result : subtype
+          recordFailure(this.meta.providerId, errorText)
+          // 厂商侧故障:先尝试切换厂商续跑;不可切换或无处可切时按原样收尾
+          void this.tryFailover(errorText).then((switched) => {
+            if (!switched) finish()
+          })
         } else {
           recordSuccess(this.meta.providerId, latency)
+          this.lastUserText = '' // 本轮成功,清除重试凭据
+          finish()
         }
-        this.emit({
-          kind: 'turn-result',
-          subtype,
-          isError,
-          costUsd,
-          usage: hasUsage ? usage : undefined,
-          durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
-          numTurns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
-          resultText: typeof msg.result === 'string' ? msg.result : undefined
-        })
-        this.setStatus('idle')
         break
       }
       default:

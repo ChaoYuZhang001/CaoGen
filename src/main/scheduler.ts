@@ -160,3 +160,91 @@ export function getHealth(providerId: string): ProviderHealth {
 export function listHealth(): ProviderHealth[] {
   return [...health.values()]
 }
+
+// ---------- 故障分类与跨厂商切换(M4.1) ----------
+
+export interface FailureClass {
+  /** 换一个厂商大概率能解决 → 值得自动切换重试 */
+  switchable: boolean
+  /** 面向用户的简短原因标签 */
+  label: string
+}
+
+/**
+ * 按错误文本归类失败原因。只有"厂商侧"故障(余额/限流/鉴权/模型下线/
+ * 服务端/网络/进程崩溃)才可切换;执行类错误(如 max_turns)换厂商无意义。
+ */
+export function classifyFailure(text: string | undefined): FailureClass {
+  const t = (text || '').slice(0, 2000)
+  if (/credit|balance|quota|insufficient|billing|余额|配额/i.test(t))
+    return { switchable: true, label: '余额/配额不足' }
+  if (/rate.?limit|too.?many.?requests|\b429\b|overloaded|限流|过载/i.test(t))
+    return { switchable: true, label: '限流/过载' }
+  if (
+    /model.{0,24}(not.?found|not.?exist|not.?support|unavailable|invalid)|(unknown|invalid|no such).{0,8}model|模型不存在|无此模型/i.test(
+      t
+    )
+  )
+    return { switchable: true, label: '模型不可用' }
+  if (/unauthorized|authentication|invalid.{0,12}(api.?key|token)|\b401\b|鉴权/i.test(t))
+    return { switchable: true, label: '鉴权失败' }
+  if (/forbidden|permission.?denied|\b403\b/i.test(t)) return { switchable: true, label: '访问被拒' }
+  if (/\b(500|502|503|504|529)\b|internal.?server|bad.?gateway|service.?unavailable/i.test(t))
+    return { switchable: true, label: '服务端错误' }
+  if (/econnrefused|enotfound|etimedout|econnreset|network|fetch.?failed|socket|dns/i.test(t))
+    return { switchable: true, label: '网络异常' }
+  if (/exited with code|process exited|closed unexpectedly|spawn/i.test(t))
+    return { switchable: true, label: '引擎异常退出' }
+  return { switchable: false, label: t ? '执行错误' : '未知错误' }
+}
+
+export interface FailoverCandidate {
+  /** '' = 官方 Anthropic */
+  id: string
+  name: string
+  models: string[]
+}
+
+export interface FailoverTarget {
+  providerId: string
+  name: string
+  /** 目标厂商上与原模型能力档最接近的模型;无模型列表时为空 */
+  model?: string
+}
+
+/**
+ * 挑选故障切换目标:排除已试过的厂商,跳过不健康厂商,
+ * 在剩余候选里选"有与期望模型能力档最接近的模型"的一家(打平选成本低)。
+ */
+export function pickFailoverTarget(opts: {
+  candidates: FailoverCandidate[]
+  exclude: Set<string>
+  desiredModel: string
+}): FailoverTarget | null {
+  const want = capOf(opts.desiredModel || 'sonnet').quality
+  let best: { c: FailoverCandidate; model?: string; dist: number } | null = null
+  for (const c of opts.candidates) {
+    if (opts.exclude.has(c.id)) continue
+    if (!ensure(c.id).healthy) continue
+    let model: string | undefined
+    let dist = 1 // 无模型列表:能力未知,给轻微劣势
+    if (c.models.length > 0) {
+      let bm = c.models[0]
+      let bd = Number.POSITIVE_INFINITY
+      let bc = 4
+      for (const m of c.models) {
+        const cap = capOf(m)
+        const d = Math.abs(cap.quality - want)
+        if (d < bd || (d === bd && cap.cost < bc)) {
+          bm = m
+          bd = d
+          bc = cap.cost
+        }
+      }
+      model = bm
+      dist = bd
+    }
+    if (!best || dist < best.dist) best = { c, model, dist }
+  }
+  return best ? { providerId: best.c.id, name: best.c.name, model: best.model } : null
+}

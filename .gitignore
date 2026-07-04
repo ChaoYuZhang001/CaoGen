@@ -3,3 +3,6 @@ out/
 dist/
 *.log
 .DS_Store
+
+.claude/settings.local.json
+electron.vite.config.*.mjs
