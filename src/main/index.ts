@@ -3,6 +3,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
+import { startRoutineScheduler, stopRoutineScheduler, computeNextRun } from './routineScheduler'
+import { markRun } from './routineStore'
+import type { Routine } from '../shared/types'
 
 // 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录
 app.setName('CaoGen')
@@ -50,10 +53,45 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+/** Routine 到点触发:起一个会话并自动发送 routine.prompt,随后记录本次运行并算下次 */
+function runRoutine(routine: Routine): void {
+  try {
+    const meta = sessionManager.create({
+      cwd: routine.projectCwd,
+      model: routine.model || undefined,
+      providerId: routine.providerId || undefined,
+      permissionMode: routine.permissionMode,
+      title: `⏱ ${routine.name}`
+    })
+    // 起会话是异步 start();稍等 SDK init 后再发首条 prompt
+    const prompt = routine.prompt
+    setTimeout(() => {
+      try {
+        sessionManager.get(meta.id)?.send(prompt)
+      } catch (err) {
+        console.error('[caogen] routine 发送 prompt 失败:', err)
+      }
+    }, 1200)
+  } catch (err) {
+    console.error('[caogen] routine 触发起会话失败:', err)
+  }
+  const now = Date.now()
+  const next = computeNextRun(routine.schedule, now)
+  void markRun(join(app.getPath('userData'), 'routines'), routine.id, {
+    ranAt: now,
+    nextRunAt: next ?? undefined
+  })
+}
+
 void app.whenReady().then(() => {
   sessionManager.init()
   registerIpc()
   createWindow()
+  // Routine 定时调度:每 30s 轮询,到点起会话执行(补齐"定时自动执行"承诺)
+  startRoutineScheduler({
+    rootDir: join(app.getPath('userData'), 'routines'),
+    onTrigger: runRoutine
+  })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -61,6 +99,10 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  stopRoutineScheduler()
 })
 
 app.on('before-quit', () => {
