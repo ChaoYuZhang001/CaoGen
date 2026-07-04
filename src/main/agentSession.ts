@@ -252,6 +252,7 @@ export class AgentSession implements Engine {
           cwd: this.meta.cwd,
           permissionMode: this.meta.permissionMode,
           includePartialMessages: true,
+          enableFileCheckpointing: true,
           env: this.buildEnv(),
           ...(execPath ? { pathToClaudeCodeExecutable: execPath } : {}),
           // 人设:preset 之上追加自定义指令
@@ -382,6 +383,20 @@ export class AgentSession implements Engine {
   /** 已持久化 + 缓冲的耐久事件(user/assistant/tool-result/turn-result),供恢复时回填 */
   getTranscript() {
     return this.transcript.read()
+  }
+
+  /** 回退文件到某条用户消息时的状态;dryRun 只预览不改动 */
+  async rewindFiles(messageId: string, dryRun: boolean): Promise<import('../shared/types').RewindResult> {
+    if (!this.query) return { canRewind: false, error: '会话未运行' }
+    try {
+      const q = this.query as unknown as {
+        rewindFiles?: (id: string, opts?: { dryRun?: boolean }) => Promise<import('../shared/types').RewindResult>
+      }
+      if (!q.rewindFiles) return { canRewind: false, error: 'SDK 不支持文件检查点' }
+      return await q.rewindFiles(messageId, { dryRun })
+    } catch (err) {
+      return { canRewind: false, error: errText(err) }
+    }
   }
 
   /** 每轮最多自动切换厂商次数,防止在大量厂商间雪崩式重试 */
@@ -583,6 +598,15 @@ export class AgentSession implements Engine {
         const message = msg.message as Record<string, unknown> | undefined
         const content = message?.content
         if (!Array.isArray(content)) break
+        // 用户消息回放带 uuid = 检查点回退目标;仅对含文本块(用户 prompt 回放)
+        // 的消息发检查点,tool_result 类不算
+        const uuid = typeof msg.uuid === 'string' ? msg.uuid : ''
+        const hasText = content.some(
+          (r) => (r as Record<string, unknown> | null)?.type === 'text'
+        )
+        if (uuid && hasText) {
+          this.emit({ kind: 'checkpoint', messageId: uuid })
+        }
         for (const raw of content) {
           const block = raw as Record<string, unknown> | null
           if (block && block.type === 'tool_result') {

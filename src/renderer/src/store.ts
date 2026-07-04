@@ -57,7 +57,7 @@ export interface ToolResultInfo {
 }
 
 export type ChatItem =
-  | { id: string; kind: 'user'; text: string }
+  | { id: string; kind: 'user'; text: string; checkpointId?: string }
   | { id: string; kind: 'assistant'; blocks: AssistantBlock[] }
   | {
       id: string
@@ -111,6 +111,18 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
   switch (ev.kind) {
     case 'user-message':
       return { ...s, items: [...s.items, { id: genId(), kind: 'user', text: ev.text }] }
+    case 'checkpoint': {
+      // 把检查点挂到最近一条尚无检查点的用户消息上
+      const items = [...s.items]
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i]
+        if (it.kind === 'user' && !it.checkpointId) {
+          items[i] = { ...it, checkpointId: ev.messageId }
+          break
+        }
+      }
+      return { ...s, items }
+    }
     case 'routing':
       return {
         ...s,

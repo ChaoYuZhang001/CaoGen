@@ -3,6 +3,7 @@ import type { ChatItem, ToolResultInfo } from '../store'
 import { useT } from '../i18n'
 import { formatCost, formatDuration, formatTokens } from '../format'
 import ToolCallCard from './ToolCallCard'
+import RewindButton from './RewindButton'
 
 // Markdown 依赖 highlight.js(~700KB),懒加载拆出首屏包;未加载完先按纯文本显示
 const Markdown = lazy(() => import('./Markdown'))
@@ -20,7 +21,10 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
     case 'user':
       return (
         <div className="msg-user">
-          <div className="msg-user-label">{t('you')}</div>
+          <div className="msg-user-head">
+            <div className="msg-user-label">{t('you')}</div>
+            {item.checkpointId && <RewindButton messageId={item.checkpointId} />}
+          </div>
           <div className="msg-user-text">{item.text}</div>
         </div>
       )
