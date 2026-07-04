@@ -52,6 +52,16 @@ export type CanFastApplyPatchResult =
   | { ok: true; canApply: false; error: string }
   | WorktreeMergeFailure
 
+export interface ApplySquashPatchSuccess {
+  ok: true
+  repoRoot: string
+  bytes: number
+  changedFiles: number
+  applied: boolean
+}
+
+export type ApplySquashPatchResult = ApplySquashPatchSuccess | WorktreeMergeFailure
+
 interface MergeContext {
   repoRoot: string
   worktreePath: string
@@ -105,10 +115,11 @@ export function inspectMerge(
 export function createSquashPatch(
   repoRoot: string,
   worktreePath: string,
-  outDir?: string
+  outDir?: string,
+  baseSha?: string
 ): CreateSquashPatchResult {
   try {
-    const context = resolveMergeContext(repoRoot, worktreePath)
+    const context = resolveMergeContext(repoRoot, worktreePath, baseSha)
     const patch = buildSquashPatchText(context.worktreePath, context.baseSha)
     if (patch.ok === false) return failure(patch.error)
 
@@ -147,6 +158,35 @@ export function canFastApplyPatch(repoRoot: string, patchText: string): CanFastA
       return { ok: true, canApply: false, error: check.error ?? 'git apply --check failed' }
     }
     return failure(check.error ?? 'git apply --check 无法执行')
+  } catch (err) {
+    return failure(errorMessage(err))
+  }
+}
+
+export function applySquashPatch(repoRoot: string, patchText: string): ApplySquashPatchResult {
+  try {
+    const root = normalizeDirectory('repoRoot', repoRoot)
+    assertGitWorktreeRoot(root, 'repoRoot')
+    if (typeof patchText !== 'string') return failure('patchText 必须是字符串')
+    if (patchText.trim() === '') {
+      return { ok: true, repoRoot: root, bytes: 0, changedFiles: 0, applied: false }
+    }
+
+    const normalizedPatch = ensureTrailingNewline(patchText)
+    const check = canFastApplyPatch(root, normalizedPatch)
+    if (check.ok === false) return failure(check.error)
+    if (check.canApply === false) return failure(check.error)
+
+    const apply = runGit(root, ['apply', '--whitespace=nowarn', '-'], { input: normalizedPatch })
+    if (!apply.ok) return failure(apply.error ?? 'git apply failed')
+
+    return {
+      ok: true,
+      repoRoot: root,
+      bytes: Buffer.byteLength(normalizedPatch, 'utf8'),
+      changedFiles: changedFileCountFromPatch(normalizedPatch),
+      applied: true
+    }
   } catch (err) {
     return failure(errorMessage(err))
   }
@@ -379,6 +419,17 @@ function gitError(args: string[], status: number | null, stdout: string, stderr:
 function ensureTrailingNewline(text: string): string {
   if (!text) return text
   return text.endsWith('\n') ? text : `${text}\n`
+}
+
+function changedFileCountFromPatch(patchText: string): number {
+  const files = new Set<string>()
+  for (const line of patchText.split(/\r?\n/)) {
+    const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
+    if (!match) continue
+    const target = match[2]
+    if (target && target !== '/dev/null') files.add(target)
+  }
+  return files.size
 }
 
 function failure(error: string): WorktreeMergeFailure {

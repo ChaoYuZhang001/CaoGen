@@ -1,12 +1,15 @@
 import { useMemo, useState } from 'react'
-import type { SubagentDispatchResult } from '../../../../shared/types'
+import { formatCost, formatTime } from '../../format'
+import type { SessionMeta, SessionStatus, SubagentDispatchResult } from '../../../../shared/types'
 
 interface SubagentPanelProps {
+  childSessions?: SessionMeta[]
   busy?: boolean
   error?: string
   message?: string
   lastResult?: SubagentDispatchResult
   onClose?: () => void
+  onSelectChild?: (sessionId: string) => void
   onDispatch: (tasksText: string) => Promise<SubagentDispatchResult | undefined>
 }
 
@@ -65,12 +68,31 @@ function childSummary(result: SubagentDispatchResult | undefined): string {
   return `${result.children.length} 个子 Agent · ${result.orchestrationId.slice(0, 8)}`
 }
 
+function statusLabel(status: SessionStatus): string {
+  switch (status) {
+    case 'starting':
+      return '启动中'
+    case 'running':
+      return '运行中'
+    case 'idle':
+      return '空闲'
+    case 'error':
+      return '错误'
+    case 'closed':
+      return '已关闭'
+    default:
+      return status
+  }
+}
+
 export default function SubagentPanel({
+  childSessions = [],
   busy = false,
   error,
   lastResult,
   message,
   onClose,
+  onSelectChild,
   onDispatch
 }: SubagentPanelProps): React.JSX.Element {
   const [tasksText, setTasksText] = useState(EXAMPLE_TASKS)
@@ -138,6 +160,40 @@ export default function SubagentPanel({
                   <span className="subagent-panel-child-title">{child.meta.title}</span>
                   <code className="subagent-panel-child-path">{child.meta.worktreePath || child.meta.cwd}</code>
                 </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="subagent-panel-result">
+          <div className="subagent-panel-result-head">
+            <span>实时子 Agent</span>
+            <b>{childSessions.length} 个</b>
+          </div>
+          {childSessions.length === 0 ? (
+            <div className="subagent-panel-empty">当前父会话还没有打开的子 Agent。</div>
+          ) : (
+            <div className="subagent-panel-child-list">
+              {childSessions.map((child) => (
+                <button
+                  key={child.id}
+                  className="subagent-panel-child subagent-panel-child-button"
+                  onClick={() => onSelectChild?.(child.id)}
+                >
+                  <span className={`subagent-panel-live-status status-${child.status}`}>
+                    {statusLabel(child.status)}
+                  </span>
+                  <span className="subagent-panel-child-title">
+                    {child.childRole || child.childTaskId || 'child'} · {child.title}
+                  </span>
+                  <code className="subagent-panel-child-path" title={child.worktreePath || child.cwd}>
+                    {child.worktreePath || child.cwd}
+                  </code>
+                  <span className="subagent-panel-child-meta">
+                    {formatCost(child.costUsd)} · {formatTime(child.createdAt)}
+                    {child.orchestrationId ? ` · ${child.orchestrationId.slice(0, 8)}` : ''}
+                  </span>
+                </button>
               ))}
             </div>
           )}

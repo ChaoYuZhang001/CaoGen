@@ -7,6 +7,7 @@ import type {
 
 interface Props {
   sessionId: string
+  onClose?: () => void
 }
 
 const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
@@ -21,7 +22,7 @@ const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
  * 直接调用 window.agentDesk.*(与 SettingsModal 的迁移/健康检查同风格),
  * 无需经 store。所有 IPC 在 acting 期间禁用按钮避免并发竞态。
  */
-export default function MemoryPanel({ sessionId }: Props): React.JSX.Element {
+export default function MemoryPanel({ sessionId, onClose }: Props): React.JSX.Element {
   const [data, setData] = useState<ReadProjectMemoryResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -105,13 +106,20 @@ export default function MemoryPanel({ sessionId }: Props): React.JSX.Element {
     <div className="memory-panel">
       <div className="settings-section-head">
         <h3 className="settings-h3">项目记忆</h3>
-        <button
-          className="btn btn-ghost btn-sm"
-          disabled={acting}
-          onClick={() => setShowForm((v) => !v)}
-        >
-          {showForm ? '取消' : '添加记忆'}
-        </button>
+        <div className="memory-panel-actions">
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={acting}
+            onClick={() => setShowForm((v) => !v)}
+          >
+            {showForm ? '取消' : '添加记忆'}
+          </button>
+          {onClose && (
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>
+              关闭
+            </button>
+          )}
+        </div>
       </div>
       <p className="settings-hint">
         记忆按项目隔离,采纳后写入项目记忆文件,供后续会话读取。草稿需确认后生效。

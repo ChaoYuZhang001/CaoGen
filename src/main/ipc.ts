@@ -1,6 +1,7 @@
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
 import { listHistory } from './history'
@@ -27,14 +28,24 @@ import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
 import { getWorkspaceDiff } from './gitDiff'
 import {
+  applyManagedWorktreePatch,
+  checkManagedWorktreeApply,
+  createManagedWorktreeMergePatch,
   exportManagedWorktreePatch,
   getManagedWorktreeSummary,
+  inspectManagedWorktreeMerge,
   removeManagedWorktreeView
 } from './worktrees'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
-import { scanPluginRegistry } from './pluginRegistry'
+import {
+  pluginRegistryItemKey,
+  readPluginRegistryState,
+  scanPluginRegistry,
+  setPluginRegistryItemEnabled,
+  writePluginRegistryState
+} from './pluginRegistry'
 import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
 import type {
   AppSettings,
@@ -46,6 +57,7 @@ import type {
   ImageAttachmentView,
   MarkRunOptions,
   PermissionModeId,
+  PluginRegistryItem,
   PluginRegistryScanOptions,
   ProviderInput,
   SaveImageAttachmentBytesInput,
@@ -98,6 +110,17 @@ function isImageAttachmentView(value: unknown): value is ImageAttachmentView {
   )
 }
 
+function isPluginRegistryItem(value: unknown): value is PluginRegistryItem {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    (record.kind === 'plugin' || record.kind === 'skill' || record.kind === 'agent' || record.kind === 'mcp') &&
+    typeof record.name === 'string' &&
+    typeof record.sourceRoot === 'string' &&
+    typeof record.path === 'string'
+  )
+}
+
 function pluginRegistryRoots(sessionId?: string): string[] {
   const roots: string[] = []
   const session = typeof sessionId === 'string' ? sessionManager.get(sessionId) : undefined
@@ -106,12 +129,43 @@ function pluginRegistryRoots(sessionId?: string): string[] {
   )
   for (const cwd of projectCwds) roots.push(join(cwd, '.claude'))
   roots.push(join(homedir(), '.claude'))
+  roots.push(join(homedir(), '.codex', 'skills'))
+  roots.push(...codexPluginPackageRoots())
+  return roots
+}
+
+function codexPluginPackageRoots(): string[] {
+  const cacheRoot = join(homedir(), '.codex', 'plugins', 'cache')
+  const roots: string[] = []
+  const maxDepth = 5
+  const maxRoots = 500
+
+  const walk = (dir: string, depth: number): void => {
+    if (roots.length >= maxRoots || depth > maxDepth) return
+    if (existsSync(join(dir, '.codex-plugin', 'plugin.json')) || existsSync(join(dir, 'plugin.json'))) {
+      roots.push(dir)
+      return
+    }
+    let entries: Dirent<string>[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true, encoding: 'utf8' })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name === '.git') continue
+      walk(join(dir, entry.name), depth + 1)
+      if (roots.length >= maxRoots) return
+    }
+  }
+
+  walk(cacheRoot, 0)
   return roots
 }
 
 function normalizePluginScanOptions(options?: PluginRegistryScanOptions): PluginRegistryScanOptions {
   return {
-    maxFiles: clampPositiveInt(options?.maxFiles, 1000, 5000),
+    maxFiles: clampPositiveInt(options?.maxFiles, 3000, 5000),
     maxDepth: clampPositiveInt(options?.maxDepth, 6, 12),
     maxReadBytes: clampPositiveInt(options?.maxReadBytes, 256 * 1024, 1024 * 1024),
     includeSiblingProjectMcp: options?.includeSiblingProjectMcp ?? true
@@ -127,6 +181,10 @@ function routineStoreRoot(): string {
   return join(app.getPath('userData'), 'routines')
 }
 
+function pluginRegistryStateFile(): string {
+  return join(app.getPath('userData'), 'plugin-registry-state.json')
+}
+
 function canRevealPluginPath(targetPath: string, sessionId?: string): boolean {
   if (typeof targetPath !== 'string' || targetPath.trim().length === 0) return false
   const target = resolve(targetPath)
@@ -138,6 +196,13 @@ function canRevealPluginPath(targetPath: string, sessionId?: string): boolean {
     }
   }
   return false
+}
+
+function findScannedPluginRegistryItem(item: PluginRegistryItem, sessionId?: string): PluginRegistryItem | undefined {
+  const state = readPluginRegistryState(pluginRegistryStateFile())
+  const view = scanPluginRegistry(pluginRegistryRoots(sessionId), normalizePluginScanOptions(), state)
+  const key = pluginRegistryItemKey(item)
+  return view.items.find((candidate) => pluginRegistryItemKey(candidate) === key)
 }
 
 function isInsidePath(root: string, target: string): boolean {
@@ -204,6 +269,20 @@ export function registerIpc(): void {
   ipcMain.handle('worktrees:summary', (_e, id: string) => getManagedWorktreeSummary(id))
 
   ipcMain.handle('worktrees:exportPatch', (_e, id: string) => exportManagedWorktreePatch(id))
+
+  ipcMain.handle('worktrees:mergeInspect', (_e, id: string) => inspectManagedWorktreeMerge(id))
+
+  ipcMain.handle('worktrees:mergePatch', (_e, id: string) => createManagedWorktreeMergePatch(id))
+
+  ipcMain.handle('worktrees:applyCheck', (_e, id: string) => checkManagedWorktreeApply(id))
+
+  ipcMain.handle('worktrees:applyPatch', (_e, id: string) => {
+    const session = sessionManager.get(id)
+    if (session?.meta.status === 'running' || session?.meta.status === 'starting') {
+      return { ok: false, error: '会话仍在运行，停止后才能合并 worktree 改动' }
+    }
+    return applyManagedWorktreePatch(id)
+  })
 
   ipcMain.handle(
     'worktrees:remove',
@@ -424,7 +503,11 @@ export function registerIpc(): void {
   ipcMain.handle(
     'plugins:scan',
     (_e, sessionId?: string, options?: PluginRegistryScanOptions) =>
-      scanPluginRegistry(pluginRegistryRoots(sessionId), normalizePluginScanOptions(options))
+      scanPluginRegistry(
+        pluginRegistryRoots(sessionId),
+        normalizePluginScanOptions(options),
+        readPluginRegistryState(pluginRegistryStateFile())
+      )
   )
 
   ipcMain.handle('plugins:reveal', (_e, targetPath: string, sessionId?: string) => {
@@ -433,6 +516,34 @@ export function registerIpc(): void {
     }
     shell.showItemInFolder(resolve(targetPath))
     return { ok: true, path: resolve(targetPath) }
+  })
+
+  ipcMain.handle('plugins:setEnabled', (_e, item: unknown, enabled: unknown, sessionId?: string) => {
+    if (!isPluginRegistryItem(item)) return { ok: false, error: '插件条目无效' }
+    if (typeof enabled !== 'boolean') return { ok: false, error: '插件状态无效' }
+
+    const scannedItem = findScannedPluginRegistryItem(item, sessionId)
+    if (!scannedItem) return { ok: false, error: '插件条目不在当前允许的扫描范围内' }
+
+    const state = setPluginRegistryItemEnabled(
+      readPluginRegistryState(pluginRegistryStateFile()),
+      scannedItem,
+      enabled
+    )
+    writePluginRegistryState(pluginRegistryStateFile(), state)
+
+    const refreshed = scanPluginRegistry(
+      pluginRegistryRoots(sessionId),
+      normalizePluginScanOptions(),
+      state
+    )
+    return {
+      ok: true,
+      item: refreshed.items.find((candidate) => pluginRegistryItemKey(candidate) === pluginRegistryItemKey(scannedItem)) ?? {
+        ...scannedItem,
+        enabled
+      }
+    }
   })
 
   ipcMain.handle('routines:list', () => listRoutines(routineStoreRoot()))

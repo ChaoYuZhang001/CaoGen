@@ -67,6 +67,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('plugins:scan', sessionId, options),
   revealPluginRegistryItem: (path: string, sessionId?: string) =>
     ipcRenderer.invoke('plugins:reveal', path, sessionId),
+  setPluginRegistryItemEnabled: (item, enabled, sessionId?: string) =>
+    ipcRenderer.invoke('plugins:setEnabled', item, enabled, sessionId),
   listRoutines: () => ipcRenderer.invoke('routines:list'),
   createRoutine: (input: CreateRoutineInput) => ipcRenderer.invoke('routines:create', input),
   deleteRoutine: (id: string) => ipcRenderer.invoke('routines:delete', id),
@@ -77,6 +79,10 @@ const api: AgentDeskApi = {
   getWorkspaceDiff: (sessionId: string) => ipcRenderer.invoke('workspace:diff', sessionId),
   getWorktreeSummary: (sessionId: string) => ipcRenderer.invoke('worktrees:summary', sessionId),
   exportWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:exportPatch', sessionId),
+  inspectWorktreeMerge: (sessionId: string) => ipcRenderer.invoke('worktrees:mergeInspect', sessionId),
+  createWorktreeMergePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:mergePatch', sessionId),
+  checkWorktreeApply: (sessionId: string) => ipcRenderer.invoke('worktrees:applyCheck', sessionId),
+  applyWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:applyPatch', sessionId),
   removeWorktree: (sessionId: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
     ipcRenderer.invoke('worktrees:remove', sessionId, opts),
   listProjectFiles: (sessionId: string) => ipcRenderer.invoke('files:list', sessionId),

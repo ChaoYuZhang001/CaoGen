@@ -1,16 +1,21 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, type Dirent } from 'node:fs'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 
-export type PluginRegistryKind = 'skill' | 'agent' | 'mcp'
+export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
+export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
+export type PluginRegistryEnabledSource = 'manifest' | 'user'
 
 export interface PluginRegistryItem {
   id: string
   name: string
   kind: PluginRegistryKind
+  sourceKind?: PluginRegistrySourceKind
   sourceRoot: string
   path: string
   enabled: boolean
+  enabledSource?: PluginRegistryEnabledSource
+  enabledUpdatedAt?: string
   summary?: string
 }
 
@@ -35,6 +40,16 @@ export interface PluginRegistryView {
   }
   scannedAt: string
   truncated: boolean
+}
+
+export interface PluginRegistryStateEntry {
+  enabled: boolean
+  updatedAt: string
+}
+
+export interface PluginRegistryState {
+  version: 1
+  items: Record<string, PluginRegistryStateEntry>
 }
 
 export interface PluginRegistryScanOptions {
@@ -67,7 +82,11 @@ const IGNORED_DIRS = new Set(['.git', 'node_modules'])
 const MCP_CONFIG_NAMES = new Set(['.mcp.json', 'mcp.json', 'settings.json'])
 const SUMMARY_CHARS = 180
 
-export function scanPluginRegistry(roots: string[], options: PluginRegistryScanOptions = {}): PluginRegistryView {
+export function scanPluginRegistry(
+  roots: string[],
+  options: PluginRegistryScanOptions = {},
+  state: PluginRegistryState = emptyPluginRegistryState()
+): PluginRegistryView {
   const limits = normalizeLimits(options)
   const ctx: ScanContext = {
     diagnostics: [],
@@ -84,14 +103,18 @@ export function scanPluginRegistry(roots: string[], options: PluginRegistryScanO
       continue
     }
 
+    scanPluginManifest(sourceRoot, items, ctx)
+    scanStandaloneSkillRoot(sourceRoot, items, ctx)
     scanSkills(sourceRoot, items, ctx)
     scanAgents(sourceRoot, items, ctx)
     scanMcpConfigs(sourceRoot, items, ctx)
   }
 
+  const mergedItems = applyPluginRegistryState(dedupeItems(items), state).sort(compareItems)
+
   return {
     roots: sourceRoots,
-    items: dedupeItems(items).sort(compareItems),
+    items: mergedItems,
     diagnostics: ctx.diagnostics,
     limits: {
       maxFiles: limits.maxFiles,
@@ -100,6 +123,134 @@ export function scanPluginRegistry(roots: string[], options: PluginRegistryScanO
     scannedAt: new Date().toISOString(),
     truncated: ctx.truncated
   }
+}
+
+export function emptyPluginRegistryState(): PluginRegistryState {
+  return { version: 1, items: {} }
+}
+
+export function readPluginRegistryState(path: string): PluginRegistryState {
+  try {
+    return normalizePluginRegistryState(JSON.parse(readFileSync(path, 'utf8')))
+  } catch {
+    return emptyPluginRegistryState()
+  }
+}
+
+export function writePluginRegistryState(path: string, state: PluginRegistryState): void {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(normalizePluginRegistryState(state), null, 2))
+}
+
+export function setPluginRegistryItemEnabled(
+  state: PluginRegistryState,
+  item: PluginRegistryItem,
+  enabled: boolean,
+  now: Date = new Date()
+): PluginRegistryState {
+  return {
+    version: 1,
+    items: {
+      ...normalizePluginRegistryState(state).items,
+      [pluginRegistryItemKey(item)]: {
+        enabled,
+        updatedAt: now.toISOString()
+      }
+    }
+  }
+}
+
+export function pluginRegistryItemKey(
+  item: Pick<PluginRegistryItem, 'kind' | 'sourceRoot' | 'path' | 'name'>
+): string {
+  return JSON.stringify([item.kind, resolve(item.sourceRoot), resolve(item.path), item.name])
+}
+
+function applyPluginRegistryState(
+  items: PluginRegistryItem[],
+  state: PluginRegistryState
+): PluginRegistryItem[] {
+  const normalized = normalizePluginRegistryState(state)
+  return items.map((item) => {
+    const override = normalized.items[pluginRegistryItemKey(item)]
+    const withSource = { ...item, sourceKind: sourceKindForRoot(item.sourceRoot) }
+    return override
+      ? {
+          ...withSource,
+          enabled: override.enabled,
+          enabledSource: 'user',
+          enabledUpdatedAt: override.updatedAt
+        }
+      : { ...withSource, enabledSource: 'manifest' }
+  })
+}
+
+function sourceKindForRoot(sourceRoot: string): PluginRegistrySourceKind {
+  const root = resolve(sourceRoot)
+  const home = resolve(homedir())
+  const codexRoot = resolve(join(home, '.codex'))
+  const claudeRoot = resolve(join(home, '.claude'))
+
+  if (isInsidePath(codexRoot, root)) return 'codex'
+  if (root === claudeRoot || isInsidePath(claudeRoot, root)) return 'user'
+  if (root.split(/[\\/]+/).includes('.claude')) return 'project'
+  return 'other'
+}
+
+function isInsidePath(root: string, target: string): boolean {
+  const rel = relative(root, target)
+  return rel === '' || (!rel.startsWith('..') && rel !== '..')
+}
+
+function normalizePluginRegistryState(value: unknown): PluginRegistryState {
+  if (!isJsonObject(value)) return emptyPluginRegistryState()
+  const items: Record<string, PluginRegistryStateEntry> = {}
+  if (isJsonObject(value.items)) {
+    for (const [key, entry] of Object.entries(value.items)) {
+      if (!isJsonObject(entry) || typeof entry.enabled !== 'boolean') continue
+      const updatedAt = typeof entry.updatedAt === 'string' && entry.updatedAt.trim()
+        ? entry.updatedAt
+        : new Date(0).toISOString()
+      items[key] = { enabled: entry.enabled, updatedAt }
+    }
+  }
+  return { version: 1, items }
+}
+
+function scanStandaloneSkillRoot(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+  if (basename(sourceRoot) !== 'skills' && !existsSync(join(sourceRoot, 'SKILL.md'))) return
+  visitSkillDir(sourceRoot, sourceRoot, 0, items, ctx)
+}
+
+function scanPluginManifest(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+  const manifest = readFirstExistingText(
+    [join(sourceRoot, '.codex-plugin', 'plugin.json'), join(sourceRoot, 'plugin.json')],
+    ctx
+  )
+  if (!manifest) return
+
+  const parsed = parseJson(manifest.path, manifest.text, ctx)
+  if (!parsed) return
+
+  const meta = extractJsonMetadata(parsed)
+  const name = meta.name ?? basename(sourceRoot)
+  items.push({
+    id: makeId('plugin', sourceRoot, sourceRoot, name),
+    name,
+    kind: 'plugin',
+    sourceRoot,
+    path: sourceRoot,
+    enabled: inferEnabled(parsed),
+    summary: meta.summary ?? pluginVersionSummary(parsed)
+  })
+}
+
+function readFirstExistingText(paths: string[], ctx: ScanContext): { path: string; text: string } | null {
+  for (const path of paths) {
+    const text = readTextFile(path, ctx)
+    if (text !== null) return { path, text }
+  }
+  return null
 }
 
 function scanSkills(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
@@ -299,9 +450,12 @@ function extractTextMetadata(text: string): { name?: string; summary?: string } 
 }
 
 function extractJsonMetadata(obj: JsonObject): { name?: string; summary?: string } {
+  const pluginInterface = isJsonObject(obj.interface) ? obj.interface : undefined
   return {
-    name: cleanOneLine(firstString(obj.name, obj.title, obj.id)),
-    summary: cleanOneLine(firstString(obj.description, obj.summary))
+    name: cleanOneLine(firstString(pluginInterface?.displayName, obj.name, obj.title, obj.id)),
+    summary: cleanOneLine(
+      firstString(pluginInterface?.shortDescription, pluginInterface?.longDescription, obj.description, obj.summary)
+    )
   }
 }
 
@@ -348,6 +502,11 @@ function describeMcpServer(config: unknown): string | undefined {
   const transport = cleanOneLine(firstString(config.transport))
   if (transport) return `transport: ${transport}`
   return undefined
+}
+
+function pluginVersionSummary(config: JsonObject): string | undefined {
+  const version = cleanOneLine(firstString(config.version))
+  return version ? `version: ${version}` : undefined
 }
 
 function inferEnabled(config: unknown): boolean {

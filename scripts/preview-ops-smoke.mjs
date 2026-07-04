@@ -81,7 +81,10 @@ try {
   assertEqual(pdfPreview.mode, 'asset')
   assertEqual(pdfPreview.mime, 'application/pdf')
   assertEqual(pdfPreview.bytes, pdfPlaceholder.byteLength)
+  assertEqual(pdfPreview.dataUrl, `data:application/pdf;base64,${pdfPlaceholder.toString('base64')}`)
   assert(!('content' in pdfPreview), 'pdf preview should not include content')
+  const tooLargePdf = await previewOps.preparePreview(projectDir, 'assets/report.pdf', { maxAssetBytes: 4 })
+  assert(!tooLargePdf.ok, 'preparePreview should reject assets above maxAssetBytes')
 
   const xlsxPlaceholder = Buffer.from('504b030414000000', 'hex')
   writeFileSync(path.join(projectDir, 'assets/report.xlsx'), xlsxPlaceholder)
@@ -101,7 +104,10 @@ try {
   assertEqual(pptxDetect.mode, 'unsupported')
   assertEqual(pptxDetect.mime, 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
 
-  const pngPlaceholder = Buffer.from('89504e470d0a1a0a', 'hex')
+  const pngPlaceholder = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64'
+  )
   writeFileSync(path.join(projectDir, 'assets/logo.png'), pngPlaceholder)
   const imagePreview = await previewOps.preparePreview(projectDir, 'assets/logo.png')
   assertOk(imagePreview, 'preparePreview should return image metadata')
@@ -109,6 +115,7 @@ try {
   assertEqual(imagePreview.mode, 'asset')
   assertEqual(imagePreview.mime, 'image/png')
   assertEqual(imagePreview.bytes, pngPlaceholder.byteLength)
+  assertEqual(imagePreview.dataUrl, `data:image/png;base64,${pngPlaceholder.toString('base64')}`)
   assert(!('content' in imagePreview), 'image preview should not include content')
 
   const imageDetect = await previewOps.detectPreview(projectDir, 'assets/logo.png')

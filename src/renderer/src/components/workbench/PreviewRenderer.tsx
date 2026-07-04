@@ -289,12 +289,22 @@ function ImagePreview({ preview }: { preview: PreviewRendererValue }): React.JSX
 }
 
 function PdfPreview({ preview }: { preview: PreviewRendererValue }): React.JSX.Element {
+  const src = resolveAssetSource(preview)
+
+  if (!src) {
+    return (
+      <div style={styles.placeholder}>
+        <strong>PDF preview source unavailable</strong>
+        <span>{stringValue(preview.path || preview.fullPath) || 'No PDF URL was provided.'}</span>
+        <span>{metadataLine(preview)}</span>
+      </div>
+    )
+  }
+
   return (
-    <div style={styles.placeholder}>
-      <strong>PDF preview placeholder</strong>
-      <span>{stringValue(preview.path || preview.fullPath) || 'No PDF path was provided.'}</span>
-      <span>{metadataLine(preview)}</span>
-    </div>
+    <object data={src} type="application/pdf" style={styles.pdfObject} aria-label={stringValue(preview.path) || 'PDF preview'}>
+      <iframe src={src} style={styles.iframe} title={stringValue(preview.path) || 'PDF preview'} />
+    </object>
   )
 }
 
@@ -357,14 +367,21 @@ function contentAsText(value: unknown): string {
 }
 
 function resolveAssetSource(preview: PreviewRendererValue): string {
-  return (
+  const direct =
     stringValue(preview.src) ||
     stringValue(preview.url) ||
     stringValue(preview.dataUrl) ||
-    stringValue(preview.previewUrl) ||
-    stringValue(preview.fullPath) ||
-    stringValue(preview.path)
-  )
+    stringValue(preview.previewUrl)
+  if (direct) return direct
+  return localFileUrl(stringValue(preview.fullPath))
+}
+
+function localFileUrl(value: string): string {
+  if (!value) return ''
+  if (/^(data|blob|https?|file):/i.test(value)) return value
+  if (value.startsWith('/')) return `file://${encodeURI(value)}`
+  if (/^[A-Za-z]:[\\/]/.test(value)) return `file:///${encodeURI(value.replace(/\\/g, '/'))}`
+  return ''
 }
 
 function metadataLine(preview: PreviewRendererValue): string {
@@ -525,6 +542,14 @@ const styles = {
     maxWidth: '100%',
     maxHeight: '100%',
     objectFit: 'contain'
+  },
+  pdfObject: {
+    width: '100%',
+    height: '100%',
+    minHeight: 520,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: '#fff'
   },
   placeholder: {
     display: 'flex',

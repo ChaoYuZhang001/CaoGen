@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
+import WorktreeMergeInspector from './WorktreeMergeInspector'
 
 function shortSha(sha?: string): string {
   return sha ? sha.slice(0, 8) : ''
@@ -10,11 +11,24 @@ export default function WorktreePanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
-  const { worktree, worktreeError, worktreeLoading, worktreeMessage } = useStore((s) => s.workbench)
+  const {
+    worktree,
+    worktreeApplyCheck,
+    worktreeApplying,
+    worktreeError,
+    worktreeLoading,
+    worktreeMergeInspecting,
+    worktreeMergePatch,
+    worktreeMergeSummary,
+    worktreeMessage,
+    worktreeApplyResult
+  } = useStore((s) => s.workbench)
   const refresh = useStore((s) => s.refreshWorktreePanel)
   const close = useStore((s) => s.closeWorktreePanel)
   const openDiff = useStore((s) => s.openDiffPanel)
   const exportPatch = useStore((s) => s.exportWorktreePatch)
+  const inspectMerge = useStore((s) => s.inspectWorktreeMerge)
+  const applyPatch = useStore((s) => s.applyWorktreePatch)
   const removeWorktree = useStore((s) => s.removeWorktree)
   const [removing, setRemoving] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -25,6 +39,8 @@ export default function WorktreePanel(): React.JSX.Element {
 
   const record = worktree?.record
   const isolated = Boolean(session?.meta.isolated || worktree?.isolated)
+  const canApply = worktreeApplyCheck?.ok === true && worktreeApplyCheck.canApply === true
+  const applied = worktreeApplyResult?.ok === true
 
   const onExport = async (): Promise<void> => {
     setExporting(true)
@@ -39,6 +55,12 @@ export default function WorktreePanel(): React.JSX.Element {
     await removeWorktree({ deleteBranch: true, force: true })
     await refresh()
     setRemoving(false)
+  }
+
+  const onApply = async (): Promise<void> => {
+    const ok = window.confirm(t('worktreeApplyConfirm'))
+    if (!ok) return
+    await applyPatch()
   }
 
   return (
@@ -114,6 +136,32 @@ export default function WorktreePanel(): React.JSX.Element {
                 {removing ? t('removingWorktree') : t('worktreeRemove')}
               </button>
             </div>
+
+            <WorktreeMergeInspector
+              summary={worktreeMergeSummary}
+              patch={worktreeMergePatch}
+              applyCheck={worktreeApplyCheck}
+              isInspecting={worktreeMergeInspecting}
+              isApplying={worktreeApplying}
+              inspectDisabled={worktreeLoading || record.state !== 'active'}
+              applyDisabled={!canApply || applied || record.state !== 'active'}
+              labels={{
+                title: t('worktreeMergeTitle'),
+                subtitle: t('worktreeMergeSubtitle'),
+                inspect: t('worktreeInspectMerge'),
+                inspecting: t('worktreeInspectingMerge'),
+                apply: t('worktreeApplyPatch'),
+                applying: t('worktreeApplyingPatch'),
+                summary: t('worktreeMergeSummary'),
+                patch: t('worktreeMergePatch'),
+                applyCheck: t('worktreeApplyCheck'),
+                emptySummary: t('worktreeEmptySummary'),
+                emptyPatch: t('worktreeEmptyPatch'),
+                emptyApplyCheck: t('worktreeEmptyApplyCheck')
+              }}
+              onInspect={() => void inspectMerge()}
+              onApply={() => void onApply()}
+            />
           </>
         ) : null}
       </div>

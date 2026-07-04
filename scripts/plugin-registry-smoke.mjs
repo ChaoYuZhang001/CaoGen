@@ -74,7 +74,16 @@ try {
   mkdirSync(path.join(pluginRoot, 'skills', 'plugin-skill'), { recursive: true })
   writeFileSync(
     path.join(pluginRoot, 'plugin.json'),
-    JSON.stringify({ name: 'Demo Plugin', version: '1.0.0' }, null, 2)
+    JSON.stringify(
+      {
+        name: 'demo-plugin',
+        version: '1.0.0',
+        description: 'Fallback plugin description.',
+        interface: { displayName: 'Demo Plugin', shortDescription: 'Human friendly plugin package.' }
+      },
+      null,
+      2
+    )
   )
   writeFileSync(
     path.join(pluginRoot, 'skills', 'plugin-skill', 'SKILL.md'),
@@ -86,12 +95,60 @@ try {
   )
 
   const pluginView = pluginRegistry.scanPluginRegistry([pluginRoot])
+  const pluginPackage = assertItem(pluginView, 'plugin', 'Demo Plugin')
+  assertEqual(pluginPackage.summary, 'Human friendly plugin package.')
+  assertEqual(pluginPackage.sourceKind, 'project')
   const pluginSkill = assertItem(pluginView, 'skill', 'Plugin Skill')
   assert(pluginSkill.path.includes(path.join('.claude', 'plugins', 'demo-plugin', 'skills', 'plugin-skill')))
   assertEqual(pluginSkill.summary, 'Skill shipped by a plugin package.')
   const pluginMcp = assertItem(pluginView, 'mcp', 'pluginMcp')
   assertEqual(pluginMcp.summary, 'url: http://127.0.0.1:4321/mcp')
   assertEqual(pluginView.diagnostics.length, 0)
+
+  const disabledState = pluginRegistry.setPluginRegistryItemEnabled(
+    pluginRegistry.emptyPluginRegistryState(),
+    pluginSkill,
+    false,
+    new Date('2026-07-04T08:00:00.000Z')
+  )
+  const disabledView = pluginRegistry.scanPluginRegistry([pluginRoot], {}, disabledState)
+  const disabledSkill = findItem(disabledView, 'skill', 'Plugin Skill')
+  assert(disabledSkill && !disabledSkill.enabled, 'state override should disable a scanned item')
+  assertEqual(disabledSkill.enabledSource, 'user')
+  assertEqual(disabledSkill.enabledUpdatedAt, '2026-07-04T08:00:00.000Z')
+
+  const stateFile = path.join(tempRoot, 'state', 'plugin-registry-state.json')
+  pluginRegistry.writePluginRegistryState(stateFile, disabledState)
+  const persistedView = pluginRegistry.scanPluginRegistry(
+    [pluginRoot],
+    {},
+    pluginRegistry.readPluginRegistryState(stateFile)
+  )
+  const persistedSkill = findItem(persistedView, 'skill', 'Plugin Skill')
+  assert(persistedSkill && !persistedSkill.enabled, 'persisted state should survive read/write')
+  assertEqual(typeof pluginRegistry.emptyPluginRegistryState, 'function')
+  assertEqual(typeof pluginRegistry.setPluginRegistryItemEnabled, 'function')
+  assertEqual(typeof pluginRegistry.readPluginRegistryState, 'function')
+  assertEqual(typeof pluginRegistry.writePluginRegistryState, 'function')
+
+  const enabledState = pluginRegistry.setPluginRegistryItemEnabled(
+    pluginRegistry.readPluginRegistryState(stateFile),
+    pluginSkill,
+    true
+  )
+  const enabledView = pluginRegistry.scanPluginRegistry([pluginRoot], {}, enabledState)
+  const enabledSkill = findItem(enabledView, 'skill', 'Plugin Skill')
+  assert(enabledSkill && enabledSkill.enabled, 'state override should re-enable a scanned item')
+
+  const codexSkillsRoot = path.join(tempRoot, 'codex-home', 'skills')
+  mkdirSync(path.join(codexSkillsRoot, '.system', 'openai-docs'), { recursive: true })
+  writeFileSync(
+    path.join(codexSkillsRoot, '.system', 'openai-docs', 'SKILL.md'),
+    ['---', 'name: openai-docs', 'description: Official OpenAI documentation helper.', '---', '', '# OpenAI Docs'].join('\n')
+  )
+  const codexSkillsView = pluginRegistry.scanPluginRegistry([codexSkillsRoot])
+  const codexSkill = assertItem(codexSkillsView, 'skill', 'openai-docs')
+  assert(codexSkill.path.endsWith(path.join('skills', '.system', 'openai-docs')))
 
   const siblingRoot = path.join(tempRoot, 'sibling-project', '.claude')
   mkdirSync(siblingRoot, { recursive: true })
@@ -173,13 +230,17 @@ function findCompiledModule(root) {
 }
 
 function assertItem(view, kind, name) {
-  const item = view.items.find((candidate) => candidate.kind === kind && candidate.name === name)
+  const item = findItem(view, kind, name)
   assert(item, `${kind} ${name} should be discovered`)
   assertEqual(item.enabled, true)
   assert(item.id, `${kind} ${name} should have an id`)
   assert(item.sourceRoot, `${kind} ${name} should have a sourceRoot`)
   assert(item.path, `${kind} ${name} should have a path`)
   return item
+}
+
+function findItem(view, kind, name) {
+  return view.items.find((candidate) => candidate.kind === kind && candidate.name === name)
 }
 
 function assertNoItem(view, kind, name) {

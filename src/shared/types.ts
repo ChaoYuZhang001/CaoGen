@@ -421,15 +421,20 @@ export interface CheckpointRestoreResult {
   note?: string
 }
 
-export type PluginRegistryKind = 'skill' | 'agent' | 'mcp'
+export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
+export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
+export type PluginRegistryEnabledSource = 'manifest' | 'user'
 
 export interface PluginRegistryItem {
   id: string
   name: string
   kind: PluginRegistryKind
+  sourceKind?: PluginRegistrySourceKind
   sourceRoot: string
   path: string
   enabled: boolean
+  enabledSource?: PluginRegistryEnabledSource
+  enabledUpdatedAt?: string
   summary?: string
 }
 
@@ -466,6 +471,12 @@ export interface PluginRegistryScanOptions {
 export interface PluginRegistryRevealResult {
   ok: boolean
   path?: string
+  error?: string
+}
+
+export interface PluginRegistrySetEnabledResult {
+  ok: boolean
+  item?: PluginRegistryItem
   error?: string
 }
 
@@ -582,12 +593,53 @@ export interface WorktreeSummary {
   error?: string
 }
 
-export interface WorktreePatchResult {
-  ok: boolean
-  path?: string
-  bytes?: number
-  error?: string
-}
+export type WorktreeConflictRisk = 'low' | 'medium' | 'unknown'
+
+export type WorktreeMergeSummary =
+  | {
+      ok: true
+      repoRoot: string
+      worktreePath: string
+      baseSha: string
+      headSha: string
+      changedFiles: number
+      insertions: number
+      deletions: number
+      conflictRisk: WorktreeConflictRisk
+    }
+  | { ok: false; error: string }
+
+export type WorktreePatchResult =
+  | {
+      ok: true
+      repoRoot?: string
+      worktreePath?: string
+      baseSha?: string
+      headSha?: string
+      path?: string
+      patchText?: string
+      bytes?: number
+    }
+  | { ok: false; error: string }
+
+export type WorktreeApplyCheckResult =
+  | { ok: true; canApply: true }
+  | { ok: true; canApply: false; error: string }
+  | { ok: false; error: string }
+
+export type WorktreeApplyResult =
+  | {
+      ok: true
+      repoRoot: string
+      worktreePath?: string
+      baseSha?: string
+      headSha?: string
+      path?: string
+      bytes: number
+      changedFiles: number
+      applied: boolean
+    }
+  | { ok: false; error: string }
 
 export interface WorktreeRemoveResult {
   ok: boolean
@@ -642,6 +694,7 @@ export interface PreparedPreview {
   bytes?: number
   mtimeMs?: number
   content?: string
+  dataUrl?: string
   error?: string
 }
 
@@ -804,6 +857,11 @@ export interface AgentDeskApi {
     options?: PluginRegistryScanOptions
   ): Promise<PluginRegistryView>
   revealPluginRegistryItem(path: string, sessionId?: string): Promise<PluginRegistryRevealResult>
+  setPluginRegistryItemEnabled(
+    item: PluginRegistryItem,
+    enabled: boolean,
+    sessionId?: string
+  ): Promise<PluginRegistrySetEnabledResult>
   listRoutines(): Promise<Routine[]>
   createRoutine(input: CreateRoutineInput): Promise<Routine>
   deleteRoutine(id: string): Promise<boolean>
@@ -812,6 +870,10 @@ export interface AgentDeskApi {
   getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
   getWorktreeSummary(sessionId: string): Promise<WorktreeSummary>
   exportWorktreePatch(sessionId: string): Promise<WorktreePatchResult>
+  inspectWorktreeMerge(sessionId: string): Promise<WorktreeMergeSummary>
+  createWorktreeMergePatch(sessionId: string): Promise<WorktreePatchResult>
+  checkWorktreeApply(sessionId: string): Promise<WorktreeApplyCheckResult>
+  applyWorktreePatch(sessionId: string): Promise<WorktreeApplyResult>
   removeWorktree(
     sessionId: string,
     opts?: { deleteBranch?: boolean; force?: boolean }
