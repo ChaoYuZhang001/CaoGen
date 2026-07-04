@@ -92,6 +92,10 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+function normalizeBudget(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
 /** 把多行/逗号分隔的工具清单拆成数组 */
 function splitList(text: string): string[] {
   return text
@@ -345,6 +349,11 @@ export class AgentSession implements Engine {
     const payload = normalizeSendPayload(input)
     const displayText = userMessageText(payload)
     if (!displayText && payload.images.length === 0) return
+    const budget = this.effectiveBudgetUsd()
+    if (budget > 0 && this.meta.costUsd >= budget) {
+      this.setStatus('error', `已达预算上限 $${budget.toFixed(2)},如需继续请调高预算`)
+      return
+    }
     // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
     if (this.failoverBusy) {
       this.emitUserMessage(displayText, payload.images)
@@ -372,6 +381,14 @@ export class AgentSession implements Engine {
     } else {
       void this.pushUserMessage(payload)
     }
+  }
+
+  private effectiveBudgetUsd(): number {
+    const sessionBudget = normalizeBudget(this.meta.budgetUsd)
+    if (sessionBudget > 0) return sessionBudget
+    const providerBudget = this.meta.providerId ? normalizeBudget(getProvider(this.meta.providerId)?.budgetUsd) : 0
+    if (providerBudget > 0) return providerBudget
+    return normalizeBudget(getSettings().budgetUsdPerSession)
   }
 
   private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
@@ -971,6 +988,7 @@ export function newSessionMeta(opts: {
   worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
+  budgetUsd?: number
   engine?: EngineKind
   permissionMode: PermissionModeId
   title?: string
@@ -993,6 +1011,7 @@ export function newSessionMeta(opts: {
     worktreeState: opts.worktreeState,
     model: opts.model,
     providerId: opts.providerId,
+    budgetUsd: normalizeBudget(opts.budgetUsd),
     engine: opts.engine ?? 'claude',
     permissionMode: opts.permissionMode,
     status: 'starting',

@@ -73,6 +73,8 @@ export interface SessionMeta {
   model: string
   /** 此会话绑定的 Provider ID;空字符串 = 官方 Anthropic */
   providerId: string
+  /** 本会话预算上限;0/undefined = 继承 Provider 或全局设置。 */
+  budgetUsd?: number
   /** Agent 引擎;缺省 = 'claude' */
   engine?: EngineKind
   permissionMode: PermissionModeId
@@ -121,6 +123,7 @@ export interface CreateSessionOptions {
   isolated?: boolean
   model?: string
   providerId?: string
+  budgetUsd?: number
   /** Agent 引擎;缺省 claude */
   engine?: EngineKind
   permissionMode?: PermissionModeId
@@ -249,6 +252,8 @@ export interface AppSettings {
   defaultProviderId: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
+  /** 单会话全局预算上限;0 = 不限制 */
+  budgetUsdPerSession: number
   /** 厂商故障时自动切换到其他 Provider 重试(M4.1) */
   failoverEnabled: boolean
   /** 界面语言 */
@@ -279,6 +284,8 @@ export interface Provider {
    * 某些网关需要额外头(如自定义鉴权、路由标签)。
    */
   customHeaders?: string
+  /** Provider 级预算上限;0/undefined = 继承全局设置 */
+  budgetUsd?: number
   /** 用户备注 */
   note?: string
   createdAt: number
@@ -291,6 +298,7 @@ export interface ProviderView {
   baseUrl: string
   models: string[]
   customHeaders?: string
+  budgetUsd: number
   note?: string
   createdAt: number
   hasToken: boolean
@@ -330,6 +338,7 @@ export interface ProviderInput {
   baseUrl: string
   models: string[]
   customHeaders?: string
+  budgetUsd?: number
   note?: string
   /** 明文 token,经 IPC 传入主进程后加密落盘 */
   token: string

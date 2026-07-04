@@ -18,6 +18,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
+  const [budgetUsd, setBudgetUsd] = useState(provider?.budgetUsd ? String(provider.budgetUsd) : '')
   const [note, setNote] = useState(provider?.note ?? '')
   const [token, setToken] = useState('')
   const [tokenTouched, setTokenTouched] = useState(false)
@@ -67,6 +68,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
       .split('\n')
       .map((m) => m.trim())
       .filter(Boolean)
+    const budget = Number(budgetUsd)
     setBusy(true)
     setError('')
     try {
@@ -76,6 +78,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           baseUrl: baseUrl.trim(),
           models,
           customHeaders: customHeaders.trim(),
+          budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           note: note.trim(),
           // token 未改动则不传,避免清空已存密钥
           ...(tokenTouched ? { token } : {})
@@ -86,6 +89,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           baseUrl: baseUrl.trim(),
           models,
           customHeaders: customHeaders.trim(),
+          budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           note: note.trim(),
           token
         })
@@ -194,6 +198,17 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           className="input input-block"
           value={note}
           onChange={(e) => setNote(e.target.value)}
+        />
+
+        <label className="field-label">Provider 预算上限 ($)</label>
+        <input
+          className="input input-block"
+          type="number"
+          min="0"
+          step="0.01"
+          value={budgetUsd}
+          placeholder="0 = 继承全局设置"
+          onChange={(e) => setBudgetUsd(e.target.value)}
         />
 
         {error && <div className="notice notice-error">{error}</div>}

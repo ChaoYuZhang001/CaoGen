@@ -90,6 +90,10 @@ export default function SettingsModal(): React.JSX.Element {
 
   const set = <K extends keyof typeof draft>(key: K, val: (typeof draft)[K]): void =>
     setDraft((d) => ({ ...d, [key]: val }))
+  const setBudget = (value: string): void => {
+    const budget = Number(value)
+    set('budgetUsdPerSession', Number.isFinite(budget) && budget > 0 ? budget : 0)
+  }
   const setOffice = (patch: Partial<typeof draft.office>): void =>
     setDraft((d) => ({ ...d, office: { ...d.office, ...patch } }))
 
@@ -210,6 +214,18 @@ export default function SettingsModal(): React.JSX.Element {
                   {t('failoverEnabled')}
                 </label>
                 <p className="settings-hint">{t('failoverHint')}</p>
+
+                <label className="field-label">单会话预算上限 ($)</label>
+                <input
+                  className="input input-block"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draft.budgetUsdPerSession || ''}
+                  placeholder="0 = 不限制"
+                  onChange={(e) => setBudget(e.target.value)}
+                />
+                <p className="settings-hint">达到预算后会拦截下一轮发送；0 表示不限制。</p>
               </>
             )}
 

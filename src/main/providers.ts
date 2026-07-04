@@ -58,7 +58,7 @@ export function decryptToken(encrypted: string): string {
 
 function toView(p: Provider): ProviderView {
   const { encryptedToken, ...rest } = p
-  return { ...rest, hasToken: encryptedToken.length > 0 }
+  return { ...rest, budgetUsd: normalizeBudget(p.budgetUsd), hasToken: encryptedToken.length > 0 }
 }
 
 export function listProviders(): ProviderView[] {
@@ -105,6 +105,7 @@ export function createProvider(input: ProviderInput): ProviderView {
     encryptedToken: encryptToken(input.token),
     models: input.models,
     customHeaders: input.customHeaders,
+    budgetUsd: normalizeBudget(input.budgetUsd),
     note: input.note,
     createdAt: Date.now()
   }
@@ -124,12 +125,19 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
     baseUrl: patch.baseUrl === undefined ? prev.baseUrl : normalizeBaseUrl(patch.baseUrl),
     models: patch.models ?? prev.models,
     customHeaders: patch.customHeaders ?? prev.customHeaders,
+    budgetUsd: patch.budgetUsd === undefined ? normalizeBudget(prev.budgetUsd) : normalizeBudget(patch.budgetUsd),
     note: patch.note ?? prev.note,
     encryptedToken: patch.token === undefined ? prev.encryptedToken : encryptToken(patch.token)
   }
   cache = [...list.slice(0, idx), next, ...list.slice(idx + 1)]
   persist()
   return toView(next)
+}
+
+function normalizeBudget(value: unknown): number {
+  if (value === undefined || value === null) return 0
+  const budget = Number(value)
+  return Number.isFinite(budget) && budget > 0 ? budget : 0
 }
 
 export function deleteProvider(id: string): void {
