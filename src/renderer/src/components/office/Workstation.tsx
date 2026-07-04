@@ -7,6 +7,7 @@ import type { SessionState } from '../../store'
 import { useT } from '../../i18n'
 import { formatCost } from '../../format'
 import type { OfficeTask, OfficeTaskStats } from './model'
+import VendorMascot from './kit/VendorMascot'
 
 export type Activity = 'idle' | 'working' | 'awaiting' | 'error'
 
@@ -38,6 +39,8 @@ interface Props {
   position: [number, number, number]
   active: boolean
   brandColor?: string
+  /** 厂商键(deepseek/openai…),驱动桌面 3D 吉祥物造型 */
+  vendorKey?: string
   showBadge?: boolean
   liveliness?: number
   catEars?: boolean
@@ -55,6 +58,7 @@ export default function Workstation({
   position,
   active,
   brandColor,
+  vendorKey,
   showBadge = true,
   liveliness = 1,
   catEars = false,
@@ -378,6 +382,9 @@ export default function Workstation({
           toneMapped={false}
         />
       </points>
+
+      {/* 厂商 3D 吉祥物:漂浮在桌面上方,缓慢旋转(DeepSeek 鲸鱼等) */}
+      {vendorKey && <VendorMascot vendorKey={vendorKey} position={[0, 0.95, -0.35]} />}
 
       {/* 悬浮标签 */}
       <Html position={[0, 1.5, 0.15]} center distanceFactor={9} occlude={false}>
