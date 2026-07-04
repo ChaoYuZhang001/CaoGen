@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import type { RewindResult } from '../../../shared/types'
+import type { CheckpointRestoreMode, CheckpointRestoreResult } from '../../../shared/types'
 
-function previewLabel(preview: RewindResult): string {
-  const files = preview.filesChanged?.length ?? 0
-  return `将恢复 ${files} 个文件 · +${preview.insertions ?? 0}/-${preview.deletions ?? 0} 行`
+function previewLabel(preview: CheckpointRestoreResult): string {
+  const parts: string[] = []
+  if (preview.mode === 'code' || preview.mode === 'both') {
+    const files = preview.filesChanged?.length ?? preview.code?.filesChanged?.length ?? 0
+    parts.push(`将恢复 ${files} 个文件 · +${preview.insertions ?? preview.code?.insertions ?? 0}/-${preview.deletions ?? preview.code?.deletions ?? 0} 行`)
+  }
+  if (preview.mode === 'chat' || preview.mode === 'both') {
+    parts.push(`将移除 ${preview.chatRemovedEntries ?? preview.chat?.removedEntries ?? 0} 条对话事件`)
+  }
+  return parts.join(' · ')
 }
 
 export default function RewindPanel(): React.JSX.Element | null {
@@ -13,7 +20,9 @@ export default function RewindPanel(): React.JSX.Element | null {
   const activeId = useStore((s) => s.activeId)
   const { open, messageId, sourceText } = useStore((s) => s.rewindPanel)
   const close = useStore((s) => s.closeRewindPanel)
-  const [preview, setPreview] = useState<RewindResult | null>(null)
+  const restoreCheckpoint = useStore((s) => s.restoreCheckpoint)
+  const [mode, setMode] = useState<CheckpointRestoreMode>('code')
+  const [preview, setPreview] = useState<CheckpointRestoreResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
@@ -23,31 +32,39 @@ export default function RewindPanel(): React.JSX.Element | null {
     setPreview(null)
     setStatus('')
     setBusy(true)
-    void window.agentDesk.rewindFiles(activeId, messageId, true).then((res) => {
+    void restoreCheckpoint(messageId, mode, true).then((res) => {
       if (cancelled) return
-      setPreview(res)
+      setPreview(res ?? null)
       setBusy(false)
     })
     return () => {
       cancelled = true
     }
-  }, [open, activeId, messageId])
+  }, [open, activeId, messageId, mode, restoreCheckpoint])
 
-  const files = useMemo(() => preview?.filesChanged ?? [], [preview])
+  const files = useMemo(() => preview?.filesChanged ?? preview?.code?.filesChanged ?? [], [preview])
 
   if (!open) return null
 
   const apply = async (): Promise<void> => {
     if (!activeId || !messageId) return
     setBusy(true)
-    const res = await window.agentDesk.rewindFiles(activeId, messageId, false)
+    const res = await restoreCheckpoint(messageId, mode, false)
     setBusy(false)
+    if (!res) return
     if (res.error) {
       setStatus(res.error)
       return
     }
-    const n = res.filesChanged?.length ?? 0
-    setStatus(n > 0 ? `已回退 ${n} 个文件 (+${res.insertions ?? 0}/-${res.deletions ?? 0})` : '无需回退')
+    const n = res.filesChanged?.length ?? res.code?.filesChanged?.length ?? 0
+    const chatRemoved = res.chatRemovedEntries ?? res.chat?.removedEntries ?? 0
+    setStatus(
+      [
+        n > 0 ? `已回退 ${n} 个文件 (+${res.insertions ?? res.code?.insertions ?? 0}/-${res.deletions ?? res.code?.deletions ?? 0})` : '',
+        chatRemoved > 0 ? `已回退 ${chatRemoved} 条对话事件` : '',
+        res.note
+      ].filter(Boolean).join(' · ') || '无需回退'
+    )
     window.setTimeout(close, 1200)
   }
 
@@ -65,11 +82,13 @@ export default function RewindPanel(): React.JSX.Element | null {
         </header>
 
         <div className="rewind-mode-row" aria-label={t('rewindMode')}>
-          <button className="rewind-mode active">{t('rewindCode')}</button>
-          <button className="rewind-mode" disabled title={t('rewindComingSoon')}>
+          <button className={`rewind-mode ${mode === 'code' ? 'active' : ''}`} onClick={() => setMode('code')}>
+            {t('rewindCode')}
+          </button>
+          <button className={`rewind-mode ${mode === 'chat' ? 'active' : ''}`} onClick={() => setMode('chat')}>
             {t('rewindChat')}
           </button>
-          <button className="rewind-mode" disabled title={t('rewindComingSoon')}>
+          <button className={`rewind-mode ${mode === 'both' ? 'active' : ''}`} onClick={() => setMode('both')}>
             {t('rewindBoth')}
           </button>
         </div>
@@ -90,6 +109,7 @@ export default function RewindPanel(): React.JSX.Element | null {
         ) : preview ? (
           <>
             <div className="rewind-summary">{previewLabel(preview)}</div>
+            {preview.note && <div className="notice notice-info">{preview.note}</div>}
             <div className="rewind-file-list">
               {files.slice(0, 24).map((file) => (
                 <div key={file} className="rewind-file-row">
@@ -116,7 +136,7 @@ export default function RewindPanel(): React.JSX.Element | null {
             disabled={busy || !preview?.canRewind || Boolean(preview.error)}
             onClick={() => void apply()}
           >
-            {busy ? t('rewindApplying') : t('rewindApplyCode')}
+            {busy ? t('rewindApplying') : t(mode === 'code' ? 'rewindApplyCode' : mode === 'chat' ? 'rewindApplyChat' : 'rewindApplyBoth')}
           </button>
         </footer>
       </section>

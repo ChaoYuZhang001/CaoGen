@@ -1,6 +1,11 @@
-import type { AgentEvent, TranscriptEntry } from '../shared/types'
+import type {
+  AgentEvent,
+  CheckpointRestoreMode,
+  TranscriptEntry,
+  TranscriptRestorePlanView
+} from '../shared/types'
 
-export type CheckpointRestoreMode = 'code' | 'chat' | 'both'
+export type { CheckpointRestoreMode } from '../shared/types'
 
 export interface CheckpointTurn {
   checkpointId: string
@@ -10,21 +15,7 @@ export interface CheckpointTurn {
   userText?: string
 }
 
-export interface TranscriptRestorePlan {
-  ok: boolean
-  checkpointId: string
-  checkpointFound: boolean
-  checkpointSeq?: number
-  userSeq?: number
-  userMessageId?: string
-  userText?: string
-  keepThroughSeq: number
-  removeFromSeq?: number
-  keptEntries: number
-  removedEntries: number
-  removedKinds: AgentEvent['kind'][]
-  reason?: string
-}
+export type TranscriptRestorePlan = TranscriptRestorePlanView
 
 export interface CheckpointRestorePlan {
   ok: boolean

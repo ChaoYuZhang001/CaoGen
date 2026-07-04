@@ -2,12 +2,16 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   AgentDeskApi,
   AppSettings,
+  CheckpointRestoreMode,
   CreateSessionOptions,
+  MarkRunOptions,
   PermissionModeId,
+  PluginRegistryScanOptions,
   ProviderInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
-  SessionEventPayload
+  SessionEventPayload,
+  UpdateRoutineInput
 } from '../shared/types'
 
 const api: AgentDeskApi = {
@@ -19,6 +23,12 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('sessions:suggestFiles', sessionId, query),
   rewindFiles: (sessionId: string, messageId: string, dryRun: boolean) =>
     ipcRenderer.invoke('sessions:rewindFiles', sessionId, messageId, dryRun),
+  restoreCheckpoint: (
+    sessionId: string,
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ) => ipcRenderer.invoke('sessions:restoreCheckpoint', sessionId, messageId, mode, dryRun),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>
     ipcRenderer.invoke('attachments:copyImage', sessionId, sourcePath),
@@ -48,6 +58,15 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('providers:fetchModels', opts),
   listProviderHealth: () => ipcRenderer.invoke('providers:health'),
   listEngines: () => ipcRenderer.invoke('engines:list'),
+  scanPluginRegistry: (sessionId?: string, options?: PluginRegistryScanOptions) =>
+    ipcRenderer.invoke('plugins:scan', sessionId, options),
+  revealPluginRegistryItem: (path: string, sessionId?: string) =>
+    ipcRenderer.invoke('plugins:reveal', path, sessionId),
+  listRoutines: () => ipcRenderer.invoke('routines:list'),
+  updateRoutine: (id: string, patch: UpdateRoutineInput) =>
+    ipcRenderer.invoke('routines:update', id, patch),
+  markRoutineRun: (id: string, options?: MarkRunOptions) =>
+    ipcRenderer.invoke('routines:markRun', id, options),
   getWorkspaceDiff: (sessionId: string) => ipcRenderer.invoke('workspace:diff', sessionId),
   getWorktreeSummary: (sessionId: string) => ipcRenderer.invoke('worktrees:summary', sessionId),
   exportWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:exportPatch', sessionId),

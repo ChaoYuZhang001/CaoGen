@@ -1,5 +1,6 @@
-import { BrowserWindow, app, dialog, ipcMain } from 'electron'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
 import { listHistory } from './history'
@@ -26,15 +27,21 @@ import {
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
+import { scanPluginRegistry } from './pluginRegistry'
+import { listRoutines, markRun, updateRoutine } from './routineStore'
 import type {
   AppSettings,
   BrowserBounds,
+  CheckpointRestoreMode,
   CreateSessionOptions,
   ImageAttachmentView,
+  MarkRunOptions,
   PermissionModeId,
+  PluginRegistryScanOptions,
   ProviderInput,
   SaveImageAttachmentBytesInput,
-  SendMessagePayload
+  SendMessagePayload,
+  UpdateRoutineInput
 } from '../shared/types'
 
 let terminalEventsRegistered = false
@@ -82,6 +89,53 @@ function isImageAttachmentView(value: unknown): value is ImageAttachmentView {
   )
 }
 
+function pluginRegistryRoots(sessionId?: string): string[] {
+  const roots: string[] = []
+  const session = typeof sessionId === 'string' ? sessionManager.get(sessionId) : undefined
+  const projectCwds = [session?.meta.sourceCwd, session?.meta.cwd].filter(
+    (cwd): cwd is string => typeof cwd === 'string' && cwd.trim().length > 0
+  )
+  for (const cwd of projectCwds) roots.push(join(cwd, '.claude'))
+  roots.push(join(homedir(), '.claude'))
+  return roots
+}
+
+function normalizePluginScanOptions(options?: PluginRegistryScanOptions): PluginRegistryScanOptions {
+  return {
+    maxFiles: clampPositiveInt(options?.maxFiles, 1000, 5000),
+    maxDepth: clampPositiveInt(options?.maxDepth, 6, 12),
+    maxReadBytes: clampPositiveInt(options?.maxReadBytes, 256 * 1024, 1024 * 1024),
+    includeSiblingProjectMcp: options?.includeSiblingProjectMcp ?? true
+  }
+}
+
+function clampPositiveInt(value: number | undefined, fallback: number, max: number): number {
+  if (!Number.isFinite(value) || value === undefined) return fallback
+  return Math.min(max, Math.max(1, Math.floor(value)))
+}
+
+function routineStoreRoot(): string {
+  return join(app.getPath('userData'), 'routines')
+}
+
+function canRevealPluginPath(targetPath: string, sessionId?: string): boolean {
+  if (typeof targetPath !== 'string' || targetPath.trim().length === 0) return false
+  const target = resolve(targetPath)
+  for (const root of pluginRegistryRoots(sessionId)) {
+    const resolvedRoot = resolve(root)
+    if (isInsidePath(resolvedRoot, target)) return true
+    if (basename(resolvedRoot) === '.claude' && target === resolve(dirname(resolvedRoot), '.mcp.json')) {
+      return true
+    }
+  }
+  return false
+}
+
+function isInsidePath(root: string, target: string): boolean {
+  const rel = relative(root, target)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
 export function registerIpc(): void {
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -101,6 +155,34 @@ export function registerIpc(): void {
     if (!session?.rewindFiles) return { canRewind: false, error: '会话不存在或引擎不支持' }
     return session.rewindFiles(messageId, dryRun === true)
   })
+
+  ipcMain.handle(
+    'sessions:restoreCheckpoint',
+    async (_e, id: string, messageId: string, mode: CheckpointRestoreMode, dryRun: boolean) => {
+      const session = sessionManager.get(id)
+      const safeMode: CheckpointRestoreMode =
+        mode === 'chat' || mode === 'both' || mode === 'code' ? mode : 'code'
+      if (!session?.restoreCheckpoint) {
+        return {
+          mode: safeMode,
+          checkpointId: messageId,
+          canRewind: false,
+          applied: false,
+          error: '会话不存在或引擎不支持'
+        }
+      }
+      if (session.meta.status === 'running' || session.meta.status === 'starting') {
+        return {
+          mode: safeMode,
+          checkpointId: messageId,
+          canRewind: false,
+          applied: false,
+          error: '会话仍在运行,请停止后再回溯'
+        }
+      }
+      return session.restoreCheckpoint(messageId, safeMode, dryRun === true)
+    }
+  )
 
   ipcMain.handle('workspace:diff', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -321,6 +403,32 @@ export function registerIpc(): void {
   ipcMain.handle('providers:health', () => listHealth())
 
   ipcMain.handle('engines:list', () => listEngines())
+
+  ipcMain.handle(
+    'plugins:scan',
+    (_e, sessionId?: string, options?: PluginRegistryScanOptions) =>
+      scanPluginRegistry(pluginRegistryRoots(sessionId), normalizePluginScanOptions(options))
+  )
+
+  ipcMain.handle('plugins:reveal', (_e, targetPath: string, sessionId?: string) => {
+    if (!canRevealPluginPath(targetPath, sessionId)) {
+      return { ok: false, error: '插件路径不在允许的扫描范围内' }
+    }
+    shell.showItemInFolder(resolve(targetPath))
+    return { ok: true, path: resolve(targetPath) }
+  })
+
+  ipcMain.handle('routines:list', () => listRoutines(routineStoreRoot()))
+
+  ipcMain.handle('routines:update', (_e, id: string, patch: UpdateRoutineInput) => {
+    if (typeof id !== 'string' || id.trim().length === 0) return null
+    return updateRoutine(routineStoreRoot(), id, patch ?? {})
+  })
+
+  ipcMain.handle('routines:markRun', (_e, id: string, options?: MarkRunOptions) => {
+    if (typeof id !== 'string' || id.trim().length === 0) return null
+    return markRun(routineStoreRoot(), id, options ?? {})
+  })
 
   ipcMain.handle('migration:scan', (_e, cwd: string) => {
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')

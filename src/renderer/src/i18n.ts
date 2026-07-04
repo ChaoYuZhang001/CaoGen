@@ -146,20 +146,22 @@ const DICT: Dict = {
   noWorkspaceChanges: { zh: '当前工作区暂无改动', en: 'No workspace changes' },
   rewindPanelTitle: { zh: '回溯检查点', en: 'Rewind checkpoint' },
   rewindPanelSub: {
-    zh: '先预览将恢复的文件,确认后把代码回到此轮之前。',
-    en: 'Preview affected files first, then restore code to before this turn.'
+    zh: '先预览将恢复的代码/对话范围,确认后回到此轮之前。',
+    en: 'Preview affected code/chat scope first, then restore to before this turn.'
   },
   rewindMode: { zh: '回溯模式', en: 'Rewind mode' },
   rewindCode: { zh: '代码', en: 'Code' },
   rewindChat: { zh: '对话', en: 'Chat' },
   rewindBoth: { zh: '两者', en: 'Both' },
   rewindComingSoon: {
-    zh: '对话回溯需要 transcript restore,后续接入',
-    en: 'Chat rewind needs transcript restore; coming later'
+    zh: '对话回溯将恢复 CaoGen 聊天转录',
+    en: 'Chat rewind restores the CaoGen transcript'
   },
   rewindPreviewing: { zh: '正在预览回退范围…', en: 'Previewing rewind scope…' },
   rewindApplying: { zh: '回退中…', en: 'Rewinding…' },
   rewindApplyCode: { zh: '回退代码', en: 'Rewind code' },
+  rewindApplyChat: { zh: '回退对话', en: 'Rewind chat' },
+  rewindApplyBoth: { zh: '回退两者', en: 'Rewind both' },
   noCheckpointAvailable: {
     zh: '当前会话还没有可回退的检查点',
     en: 'No rewindable checkpoint in this session yet'
@@ -174,6 +176,8 @@ const DICT: Dict = {
   slashDiffHint: { zh: '打开当前工作区 Diff', en: 'Open current workspace diff' },
   slashBrowserHint: { zh: '打开内置浏览器并批注网页', en: 'Open built-in browser and annotate pages' },
   slashFilesHint: { zh: '打开内置文件编辑器', en: 'Open built-in file editor' },
+  slashPluginsHint: { zh: '扫描 Skills / Agents / MCP 插件生态', en: 'Scan Skills / Agents / MCP plugins' },
+  slashRoutineHint: { zh: '打开本地 Routines 面板', en: 'Open local Routines panel' },
   slashWorktreeHint: { zh: '查看隔离工作区,导出 patch 或丢弃', en: 'Inspect isolated worktree, export patch, or discard' },
   slashTerminalHint: { zh: '打开当前会话目录的内置终端', en: 'Open built-in terminal for this session' },
   slashThemeHint: { zh: '切换白天/夜晚/系统主题', en: 'Cycle light/dark/system theme' },
@@ -221,6 +225,8 @@ const DICT: Dict = {
   browserCapture: { zh: '保存批注', en: 'Save annotation' },
   browserNoAnnotations: { zh: '暂无网页批注', en: 'No browser annotations yet' },
   filesShort: { zh: '▣ 文件', en: '▣ Files' },
+  pluginsShort: { zh: '插件', en: 'Plugins' },
+  routinesShort: { zh: 'Routines', en: 'Routines' },
   filePanelTitle: { zh: '文件编辑器', en: 'File editor' },
   filesTruncated: { zh: '文件过多,已截断', en: 'File list truncated' },
   fileSearchPlaceholder: { zh: '搜索文件…', en: 'Search files…' },

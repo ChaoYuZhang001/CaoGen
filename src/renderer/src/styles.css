@@ -3161,6 +3161,17 @@ textarea {
   font-weight: 700;
 }
 
+.routine-panel-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.routine-panel-notice {
+  margin: 10px 12px 0;
+}
+
 .routine-panel-cloud-note {
   margin: 12px 12px 0;
   padding: 9px 10px;
@@ -3996,4 +4007,3 @@ textarea {
     justify-content: flex-end;
   }
 }
-

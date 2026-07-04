@@ -6,10 +6,15 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  unlinkSync
+  renameSync,
+  unlinkSync,
+  writeFileSync
 } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { AgentEvent, TranscriptEntry } from '../shared/types'
+import { applyTranscriptRestorePlan, planTranscriptRestore } from './checkpointRestorePlan'
+import type { TranscriptRestorePlan } from './checkpointRestorePlan'
 
 /** 只持久化构成对话内容的"耐久事件";deltas/status 是瞬态,meta 可从历史重建 */
 const PERSIST_KINDS = new Set<AgentEvent['kind']>([
@@ -80,9 +85,37 @@ export class TranscriptWriter {
 
   /** 已持久化 + 尚在缓冲的耐久事件,按 seq 有序,截取最近 MAX_REPLAY_ENTRIES 条 */
   read(): TranscriptEntry[] {
-    const persisted = this.sdkSessionId ? readEntries(fileFor(this.sdkSessionId)) : []
-    const all = [...persisted, ...this.buffer]
+    const all = this.readAll()
     return all.length > MAX_REPLAY_ENTRIES ? all.slice(-MAX_REPLAY_ENTRIES) : all
+  }
+
+  /** 完整转录,用于回溯规划/写回;不要用于首屏回放。 */
+  readAll(): TranscriptEntry[] {
+    const persisted = this.sdkSessionId ? readEntries(fileFor(this.sdkSessionId)) : []
+    return [...persisted, ...this.buffer]
+  }
+
+  planRestore(checkpointId: string): TranscriptRestorePlan {
+    return planTranscriptRestore(this.readAll(), checkpointId)
+  }
+
+  restore(
+    checkpointId: string,
+    restoreEvent?: AgentEvent | ((plan: TranscriptRestorePlan) => AgentEvent)
+  ): { plan: TranscriptRestorePlan; entries: TranscriptEntry[] } {
+    const current = this.readAll()
+    const plan = planTranscriptRestore(current, checkpointId)
+    if (!plan.ok) return { plan, entries: current }
+    const restored = applyTranscriptRestorePlan(current, plan)
+    if (restoreEvent) {
+      const maxSeq = current.reduce((max, entry) => Math.max(max, entry.seq), 0)
+      restored.push({
+        seq: maxSeq + 1,
+        event: typeof restoreEvent === 'function' ? restoreEvent(plan) : restoreEvent
+      })
+    }
+    this.replace(restored)
+    return { plan, entries: restored }
   }
 
   private bind(sdkSessionId: string): void {
@@ -115,6 +148,31 @@ export class TranscriptWriter {
       appendFileSync(fileFor(this.sdkSessionId), `${JSON.stringify(entry)}\n`)
     } catch (err) {
       console.error('[agent-desk] 写入转录失败:', err)
+    }
+  }
+
+  private replace(entries: TranscriptEntry[]): void {
+    if (!this.sdkSessionId) {
+      this.buffer = [...entries]
+      this.seq = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
+      return
+    }
+    const target = fileFor(this.sdkSessionId)
+    const temp = `${target}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      mkdirSync(transcriptsDir(), { recursive: true })
+      const body = entries.map((entry) => JSON.stringify(entry)).join('\n')
+      writeFileSync(temp, body ? `${body}\n` : '')
+      renameSync(temp, target)
+      this.buffer = []
+      this.seq = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
+    } catch (err) {
+      try {
+        unlinkSync(temp)
+      } catch {
+        // ignore temp cleanup failure
+      }
+      console.error('[agent-desk] 替换转录失败:', err)
     }
   }
 }

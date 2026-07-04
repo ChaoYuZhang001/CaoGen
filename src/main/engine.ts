@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
   PermissionModeId,
   PermissionRequestInfo,
   RewindResult,
@@ -29,6 +31,12 @@ export interface Engine {
   rename(title: string): void
   /** 文件检查点回退(引擎可选;不支持则返回 canRewind:false) */
   rewindFiles?(messageId: string, dryRun: boolean): Promise<RewindResult>
+  /** 代码/对话/两者检查点回退(引擎可选) */
+  restoreCheckpoint?(
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult>
   dispose(): void
 }
 

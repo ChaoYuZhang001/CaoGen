@@ -8,15 +8,20 @@ import type {
   BrowserBounds,
   BrowserEvent,
   BrowserViewState,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
   CreateSessionOptions,
   HistoryEntry,
   PermissionModeId,
+  PluginRegistryItem,
+  PluginRegistryView,
   ProjectFileEntry,
   PermissionRequestInfo,
   PreparedPreview,
   Project,
   ProviderInput,
   ProviderView,
+  Routine,
   WriteTextFileResult,
   SchedulerStrategy,
   SendMessagePayload,
@@ -64,6 +69,10 @@ function applyEvent(s: SessionState, seq: number, event: AgentEvent): SessionSta
 /** 批量回放转录(已按 seq 排序) */
 function replayTranscript(s: SessionState, entries: TranscriptEntry[]): SessionState {
   return entries.reduce((state, e) => applyEvent(state, e.seq, e.event), s)
+}
+
+function replaceTranscript(s: SessionState, entries: TranscriptEntry[]): SessionState {
+  return replayTranscript(newSessionState(s.meta), [...entries].sort((a, b) => a.seq - b.seq))
 }
 
 export interface ToolResultInfo {
@@ -339,6 +348,18 @@ export interface WorkbenchState {
   preview?: PreparedPreview
   previewPath?: string
   previewError?: string
+  pluginRegistryOpen: boolean
+  pluginRegistryLoading: boolean
+  pluginRegistry?: PluginRegistryView
+  pluginRegistryError?: string
+  pluginRegistryMessage?: string
+  selectedPluginRegistryItemId?: string
+  routineOpen: boolean
+  routineLoading: boolean
+  routines: Routine[]
+  routineError?: string
+  routineMessage?: string
+  selectedRoutineId?: string | null
 }
 
 export interface RewindPanelState {
@@ -373,6 +394,11 @@ interface AppStore {
   interrupt(): Promise<void>
   closeSession(id: string): Promise<void>
   respondPermission(sessionId: string, requestId: string, allow: boolean): Promise<void>
+  restoreCheckpoint(
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult | undefined>
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
   renameSession(id: string, title: string): Promise<void>
@@ -409,6 +435,17 @@ interface AppStore {
   setBrowserBounds(bounds: BrowserBounds): Promise<void>
   captureBrowserAnnotation(note: string): Promise<void>
   refreshBrowserAnnotations(): Promise<void>
+  openPluginRegistryPanel(): Promise<void>
+  closePluginRegistryPanel(): void
+  refreshPluginRegistryPanel(): Promise<void>
+  selectPluginRegistryItem(id: string): void
+  revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
+  openRoutinePanel(): Promise<void>
+  closeRoutinePanel(): void
+  refreshRoutinePanel(): Promise<void>
+  selectRoutine(id: string): void
+  toggleRoutine(id: string, enabled: boolean): Promise<void>
+  markRoutineRun(id: string): Promise<void>
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
@@ -464,7 +501,13 @@ export const useStore = create<AppStore>((set, get) => ({
     browserUrlDraft: '',
     browserAnnotations: [],
     previewOpen: false,
-    previewLoading: false
+    previewLoading: false,
+    pluginRegistryOpen: false,
+    pluginRegistryLoading: false,
+    routineOpen: false,
+    routineLoading: false,
+    routines: [],
+    selectedRoutineId: null
   },
   rewindPanel: { open: false },
   showNewSession: false,
@@ -748,6 +791,20 @@ export const useStore = create<AppStore>((set, get) => ({
     await window.agentDesk.respondPermission(sessionId, requestId, allow)
   },
 
+  async restoreCheckpoint(messageId, mode, dryRun) {
+    const id = get().activeId
+    if (!id) return undefined
+    const result = await window.agentDesk.restoreCheckpoint(id, messageId, mode, dryRun)
+    if (!dryRun && result.transcript) {
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return s
+        return { sessions: { ...s.sessions, [id]: replaceTranscript(session, result.transcript ?? []) } }
+      })
+    }
+    return result
+  },
+
   async setPermissionMode(mode) {
     const id = get().activeId
     if (id) await window.agentDesk.setPermissionMode(id, mode)
@@ -790,7 +847,9 @@ export const useStore = create<AppStore>((set, get) => ({
         terminalOpen: false,
         filesOpen: false,
         browserOpen: false,
-        previewOpen: false
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        routineOpen: false
       }
     }))
     await get().refreshDiffPanel()
@@ -835,7 +894,9 @@ export const useStore = create<AppStore>((set, get) => ({
         terminalOpen: false,
         filesOpen: false,
         browserOpen: false,
-        previewOpen: false
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        routineOpen: false
       }
     }))
     await get().refreshWorktreePanel()
@@ -935,7 +996,9 @@ export const useStore = create<AppStore>((set, get) => ({
         terminalOpen: true,
         filesOpen: false,
         browserOpen: false,
-        previewOpen: false
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        routineOpen: false
       }
     }))
     await get().startTerminal()
@@ -999,7 +1062,9 @@ export const useStore = create<AppStore>((set, get) => ({
         terminalOpen: false,
         filesOpen: true,
         browserOpen: false,
-        previewOpen: false
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        routineOpen: false
       }
     }))
     await get().refreshFilesPanel()
@@ -1147,6 +1212,8 @@ export const useStore = create<AppStore>((set, get) => ({
         filesOpen: false,
         browserOpen: false,
         previewOpen: true,
+        pluginRegistryOpen: false,
+        routineOpen: false,
         previewPath: nextPath,
         previewError: undefined
       }
@@ -1203,6 +1270,8 @@ export const useStore = create<AppStore>((set, get) => ({
         filesOpen: false,
         previewOpen: false,
         browserOpen: true,
+        pluginRegistryOpen: false,
+        routineOpen: false,
         browserLoading: true,
         browserError: undefined,
         browserMessage: undefined
@@ -1332,6 +1401,202 @@ export const useStore = create<AppStore>((set, get) => ({
     if (!id) return
     const annotations = await window.agentDesk.listBrowserAnnotations(id)
     set((s) => ({ workbench: { ...s.workbench, browserAnnotations: annotations } }))
+  },
+
+  async openPluginRegistryPanel() {
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        diffOpen: false,
+        worktreeOpen: false,
+        terminalOpen: false,
+        filesOpen: false,
+        browserOpen: false,
+        previewOpen: false,
+        pluginRegistryOpen: true,
+        routineOpen: false,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined
+      }
+    }))
+    await get().refreshPluginRegistryPanel()
+  },
+
+  closePluginRegistryPanel() {
+    set((s) => ({ workbench: { ...s.workbench, pluginRegistryOpen: false } }))
+  },
+
+  async refreshPluginRegistryPanel() {
+    const id = get().activeId ?? undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        pluginRegistryOpen: true,
+        pluginRegistryLoading: true,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined
+      }
+    }))
+    try {
+      const pluginRegistry = await window.agentDesk.scanPluginRegistry(id)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistry,
+          pluginRegistryLoading: false,
+          pluginRegistryError: undefined,
+          selectedPluginRegistryItemId:
+            s.workbench.selectedPluginRegistryItemId &&
+            pluginRegistry.items.some((item) => item.id === s.workbench.selectedPluginRegistryItemId)
+              ? s.workbench.selectedPluginRegistryItemId
+              : pluginRegistry.items[0]?.id
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryLoading: false,
+          pluginRegistryError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  selectPluginRegistryItem(id) {
+    set((s) => ({ workbench: { ...s.workbench, selectedPluginRegistryItemId: id } }))
+  },
+
+  async revealPluginRegistryItem(item) {
+    const id = get().activeId ?? undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        pluginRegistryError: undefined,
+        pluginRegistryMessage: undefined,
+        selectedPluginRegistryItemId: item.id
+      }
+    }))
+    const result = await window.agentDesk.revealPluginRegistryItem(item.path, id)
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        pluginRegistryMessage: result.ok ? `已定位 ${item.name}` : undefined,
+        pluginRegistryError: result.ok ? undefined : result.error
+      }
+    }))
+  },
+
+  async openRoutinePanel() {
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        diffOpen: false,
+        worktreeOpen: false,
+        terminalOpen: false,
+        filesOpen: false,
+        browserOpen: false,
+        previewOpen: false,
+        pluginRegistryOpen: false,
+        routineOpen: true,
+        routineError: undefined,
+        routineMessage: undefined
+      }
+    }))
+    await get().refreshRoutinePanel()
+  },
+
+  closeRoutinePanel() {
+    set((s) => ({ workbench: { ...s.workbench, routineOpen: false } }))
+  },
+
+  async refreshRoutinePanel() {
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        routineOpen: true,
+        routineLoading: true,
+        routineError: undefined,
+        routineMessage: undefined
+      }
+    }))
+    try {
+      const routines = await window.agentDesk.listRoutines()
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routines,
+          routineLoading: false,
+          routineError: undefined,
+          selectedRoutineId:
+            s.workbench.selectedRoutineId && routines.some((routine) => routine.id === s.workbench.selectedRoutineId)
+              ? s.workbench.selectedRoutineId
+              : (routines[0]?.id ?? null)
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineLoading: false,
+          routineError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  selectRoutine(id) {
+    set((s) => ({ workbench: { ...s.workbench, selectedRoutineId: id } }))
+  },
+
+  async toggleRoutine(id, enabled) {
+    set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
+    try {
+      const routine = await window.agentDesk.updateRoutine(id, { enabled })
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routines: routine
+            ? s.workbench.routines.map((item) => (item.id === id ? routine : item))
+            : s.workbench.routines,
+          routineError: routine ? undefined : '未找到 Routine',
+          routineMessage: routine ? `${routine.name} 已${routine.enabled ? '启用' : '停用'}` : undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async markRoutineRun(id) {
+    set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
+    try {
+      const routine = await window.agentDesk.markRoutineRun(id, { ranAt: Date.now() })
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routines: routine
+            ? s.workbench.routines.map((item) => (item.id === id ? routine : item))
+            : s.workbench.routines,
+          routineError: routine ? undefined : '未找到 Routine',
+          routineMessage: routine
+            ? `${routine.name} 已标记运行时间；当前尚未接入执行器`
+            : undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
   },
 
   openRewindPanel(messageId, sourceText, reason = 'button') {

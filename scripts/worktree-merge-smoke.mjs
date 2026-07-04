@@ -74,7 +74,16 @@ try {
   assert(canApply.canApply, `patch should apply cleanly: ${canApply.error ?? 'unknown error'}`)
   git(projectDir, ['apply', '--check', patch.path])
 
+  const emptyPatch = worktreeMerge.canFastApplyPatch(projectDir, ' \n\t\n')
+  assertOk(emptyPatch, 'canFastApplyPatch should accept an empty patch')
+  assert(emptyPatch.canApply, 'empty patch should be treated as a no-op')
+
   writeFileSync(path.join(projectDir, 'notes.txt'), 'alpha\nmain line\n', 'utf8')
+  const blockedApply = worktreeMerge.canFastApplyPatch(projectDir, patch.patchText)
+  assertOk(blockedApply, 'canFastApplyPatch should report apply-check failures')
+  assert(!blockedApply.canApply, 'patch should be blocked by conflicting main worktree content')
+  assert(blockedApply.error, 'blocked apply-check should include the git error')
+
   const conflictedInspect = worktreeMerge.inspectMerge(projectDir, worktreeDir, baseSha)
   assertOk(conflictedInspect, 'inspectMerge should not crash on conflict risk')
   assert(

@@ -261,9 +261,12 @@ export type AgentEvent =
   | {
       kind: 'checkpoint-restore'
       messageId: string
+      mode?: CheckpointRestoreMode
       filesChanged: string[]
       insertions?: number
       deletions?: number
+      chatRemovedEntries?: number
+      note?: string
     }
   | { kind: 'routing'; model: string; reason: string; providerId: string }
   | {
@@ -302,6 +305,143 @@ export interface RewindResult {
   filesChanged?: string[]
   insertions?: number
   deletions?: number
+}
+
+export type CheckpointRestoreMode = 'code' | 'chat' | 'both'
+
+export interface TranscriptRestorePlanView {
+  ok: boolean
+  checkpointId: string
+  checkpointFound: boolean
+  checkpointSeq?: number
+  userSeq?: number
+  userMessageId?: string
+  userText?: string
+  keepThroughSeq: number
+  removeFromSeq?: number
+  keptEntries: number
+  removedEntries: number
+  removedKinds: AgentEvent['kind'][]
+  reason?: string
+}
+
+export interface CheckpointRestoreResult {
+  mode: CheckpointRestoreMode
+  checkpointId: string
+  canRewind: boolean
+  applied?: boolean
+  code?: RewindResult
+  chat?: TranscriptRestorePlanView
+  transcript?: TranscriptEntry[]
+  filesChanged?: string[]
+  insertions?: number
+  deletions?: number
+  chatRemovedEntries?: number
+  error?: string
+  note?: string
+}
+
+export type PluginRegistryKind = 'skill' | 'agent' | 'mcp'
+
+export interface PluginRegistryItem {
+  id: string
+  name: string
+  kind: PluginRegistryKind
+  sourceRoot: string
+  path: string
+  enabled: boolean
+  summary?: string
+}
+
+export interface PluginRegistryDiagnostic {
+  code:
+    | 'root_missing'
+    | 'read_failed'
+    | 'json_parse_failed'
+    | 'json_shape_invalid'
+    | 'max_files_reached'
+  message: string
+  path: string
+}
+
+export interface PluginRegistryView {
+  roots: string[]
+  items: PluginRegistryItem[]
+  diagnostics: PluginRegistryDiagnostic[]
+  limits: {
+    maxFiles: number
+    maxDepth: number
+  }
+  scannedAt: string
+  truncated: boolean
+}
+
+export interface PluginRegistryScanOptions {
+  maxFiles?: number
+  maxDepth?: number
+  maxReadBytes?: number
+  includeSiblingProjectMcp?: boolean
+}
+
+export interface PluginRegistryRevealResult {
+  ok: boolean
+  path?: string
+  error?: string
+}
+
+export type RoutinePermissionMode = PermissionModeId
+
+export interface Routine extends Record<string, unknown> {
+  id: string
+  name: string
+  prompt: string
+  projectCwd: string
+  schedule: string
+  providerId: string
+  model: string
+  permissionMode: RoutinePermissionMode
+  budgetUsd: number
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+  lastRunAt: number | null
+  nextRunAt?: number
+}
+
+export type CreateRoutineInput = {
+  id?: string
+  name: string
+  prompt: string
+  projectCwd: string
+  schedule: string
+  providerId?: string
+  model?: string
+  permissionMode?: RoutinePermissionMode
+  budgetUsd?: number
+  enabled?: boolean
+  createdAt?: number
+  updatedAt?: number
+  lastRunAt?: number | null
+  nextRunAt?: number | null
+} & Record<string, unknown>
+
+export type UpdateRoutineInput = {
+  name?: string
+  prompt?: string
+  projectCwd?: string
+  schedule?: string
+  providerId?: string
+  model?: string
+  permissionMode?: RoutinePermissionMode
+  budgetUsd?: number
+  enabled?: boolean
+  lastRunAt?: number | null
+  nextRunAt?: number | null
+} & Record<string, unknown>
+
+export interface MarkRunOptions {
+  ranAt?: number
+  nextRunAt?: number | null
 }
 
 export interface WorkspaceDiffLine {
@@ -541,6 +681,12 @@ export interface AgentDeskApi {
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
   suggestFiles(sessionId: string, query: string): Promise<string[]>
   rewindFiles(sessionId: string, messageId: string, dryRun: boolean): Promise<RewindResult>
+  restoreCheckpoint(
+    sessionId: string,
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
   saveImageAttachmentBytes(
@@ -569,6 +715,14 @@ export interface AgentDeskApi {
   fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
   listEngines(): Promise<EngineInfo[]>
+  scanPluginRegistry(
+    sessionId?: string,
+    options?: PluginRegistryScanOptions
+  ): Promise<PluginRegistryView>
+  revealPluginRegistryItem(path: string, sessionId?: string): Promise<PluginRegistryRevealResult>
+  listRoutines(): Promise<Routine[]>
+  updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
+  markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
   getWorkspaceDiff(sessionId: string): Promise<WorkspaceDiff>
   getWorktreeSummary(sessionId: string): Promise<WorktreeSummary>
   exportWorktreePatch(sessionId: string): Promise<WorktreePatchResult>
