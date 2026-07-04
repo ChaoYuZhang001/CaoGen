@@ -1,5 +1,8 @@
 import { BrowserWindow } from 'electron'
-import { AgentSession, newSessionMeta } from './agentSession'
+import { newSessionMeta } from './agentSession'
+import { createEngine } from './engine'
+import type { Engine } from './engine'
+import { registerBuiltinEngines } from './engines'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { cleanupTranscripts } from './transcript'
@@ -13,13 +16,13 @@ import type {
 } from '../shared/types'
 
 class SessionManager {
-  private readonly sessions = new Map<string, AgentSession>()
+  private readonly sessions = new Map<string, Engine>()
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }))
   }
 
-  get(id: string): AgentSession | undefined {
+  get(id: string): Engine | undefined {
     return this.sessions.get(id)
   }
 
@@ -29,10 +32,12 @@ class SessionManager {
       cwd: opts.cwd,
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
+      engine: opts.engine,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
     })
-    const session = new AgentSession(
+    const session = createEngine(
+      opts.engine,
       meta,
       (event, seq) => this.dispatch(meta.id, event, seq),
       opts.resumeSdkSessionId
@@ -59,8 +64,9 @@ class SessionManager {
     return this.sessions.get(id)?.getTranscript() ?? []
   }
 
-  /** 启动时清理不可达转录文件 */
+  /** 启动时:注册内置引擎 + 清理不可达转录文件 */
   init(): void {
+    registerBuiltinEngines()
     const keep = new Set(listHistory().map((h) => h.sdkSessionId))
     cleanupTranscripts(keep)
   }

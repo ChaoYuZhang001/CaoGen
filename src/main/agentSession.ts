@@ -17,9 +17,11 @@ import {
 import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
 import { AUTO_MODEL } from '../shared/types'
+import type { Engine } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
+  EngineKind,
   PermissionModeId,
   PermissionRequestInfo,
   SessionMeta,
@@ -149,8 +151,9 @@ function toolResultText(content: unknown): string {
 /**
  * 一个桌面会话 = 一个持续存活的 Agent SDK query(流式输入模式)。
  * 通过 Pushable 推送用户消息,通过回调把 SDK 消息翻译成 AgentEvent 发往渲染进程。
+ * M6 起实现 Engine 接口(即"ClaudeEngine"),经 engines.ts 注册为默认引擎。
  */
-export class AgentSession {
+export class AgentSession implements Engine {
   readonly meta: SessionMeta
   private input = new Pushable<SDKUserMessage>()
   private query: Query | null = null
@@ -681,6 +684,7 @@ export function newSessionMeta(opts: {
   cwd: string
   model: string
   providerId: string
+  engine?: EngineKind
   permissionMode: PermissionModeId
   title?: string
 }): SessionMeta {
@@ -690,6 +694,7 @@ export function newSessionMeta(opts: {
     cwd: opts.cwd,
     model: opts.model,
     providerId: opts.providerId,
+    engine: opts.engine ?? 'claude',
     permissionMode: opts.permissionMode,
     status: 'starting',
     costUsd: 0,

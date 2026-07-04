@@ -10,6 +10,7 @@ import {
   fetchModels
 } from './providers'
 import { listHealth } from './scheduler'
+import { listEngines } from './engine'
 import { listProjects, updateProject, deleteProject } from './projects'
 import type {
   AppSettings,
@@ -92,6 +93,8 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('providers:health', () => listHealth())
+
+  ipcMain.handle('engines:list', () => listEngines())
 
   ipcMain.handle('projects:list', () => listProjects())
   ipcMain.handle('projects:update', (_e, id: string, patch: { name?: string }) =>

@@ -1,6 +1,6 @@
 # AgentDesk 目标与路线图
 
-> 制定日期:2026-07-03 · 状态:M0–M5 已完成(三大支柱全部落地),M6/M7 规划中
+> 制定日期:2026-07-03 · 状态:2026-07-04 15:30 冲线 —— M0–M5、M4.1、M7 完成,四条成功标准全部达标;M6 架构落地(适配器待实现);i18n 全量 zh/en;M2 冷启动回放缺陷已修
 
 ## 北极星目标
 
@@ -22,10 +22,10 @@
 
 ### 成功标准(可验收)
 
-- 日常开发可完全脱离 CLI,只用 AgentDesk 完成
-- 一个界面同时驾驭 ≥4 个并行 Agent 而不迷失
-- 任一厂商挂掉(余额/限流/模型下线)时自动切换,任务不中断
-- 打开 3D 办公区,3 秒内读出所有会话的状态与开销
+- ✅ 日常开发可完全脱离 CLI,只用 AgentDesk 完成(M0/M1/M2/M7:全链路 + 会话恢复 + 打包 .app)
+- ✅ 一个界面同时驾驭 ≥4 个并行 Agent 而不迷失(多会话架构 + 侧栏 + 3D 办公区双视图)
+- ✅ 任一厂商挂掉(余额/限流/模型下线)时自动切换,任务不中断(M4.1 故障切换)
+- ✅ 打开 3D 办公区,3 秒内读出所有会话的状态与开销(M5:状态动画 + 悬浮标签 + 品牌色)
 
 ---
 
@@ -42,8 +42,8 @@
 
 **关于 OpenAI / Gemini / 国产模型**:SDK 不直接讲 OpenAI 的 `/v1/chat/completions` 协议,需经 **Anthropic 兼容网关**(one-api、new-api、LiteLLM、claude-code-router 等)转译——网关对外暴露 `/v1/messages`,内部翻译到 OpenAI/Gemini 后端。M3.5 已提供网关预设模板 + 自定义请求头,一键配好。这是当前多厂商的推荐路径。
 
-**第二层 · EngineAdapter(重活,后做)**
-若要**原生**讲 OpenAI/Gemini 协议(不经网关),把 `AgentSession` 抽象为引擎接口(start/send/interrupt/permission/events),现实现更名 `ClaudeEngine`;后续接入 Codex CLI、Gemini CLI 或直连 OpenAI SDK 的自研引擎。事件模型(`AgentEvent`)已与引擎解耦,适配面清晰。这是 M6 的范围。
+**第二层 · EngineAdapter(架构已落地)**
+`src/main/engine.ts` 定义 `Engine` 接口(start/send/interrupt/permission/transcript/events)与注册表;`AgentSession implements Engine` 即 ClaudeEngine,经 `engines.ts` 注册为默认引擎;`sessionManager.create` 走 `createEngine(kind)` 工厂,`SessionMeta.engine` 记录会话引擎,新建会话 UI 提供引擎下拉(`engines:list` IPC)。Codex CLI / Gemini CLI 探测本机安装情况如实上报,适配器实现为 M6 剩余工作——各自把 CLI 流式输出翻译成 `AgentEvent` 即可,事件模型已与引擎解耦。
 
 ### 支柱二:模型调度(手动 + 智能)
 
@@ -73,12 +73,12 @@
 |---|---|---|---|
 | M0 | 骨架 | Electron + SDK 多会话架构,六大基础能力 | ✅ 已完成 |
 | M1 | 端到端可用 | 全链路实测 + 7 处缺陷修复 | ✅ 已完成 |
-| M2 | 会话内容持久化 | ChatItem 转录落盘(JSONL),重载回填;恢复聊天记录 | ✅ 已完成(冷启动 resume 回放留有已知缺陷) |
+| M2 | 会话内容持久化 | ChatItem 转录落盘(JSONL),重载回填;恢复聊天记录 | ✅ 已完成(冷启动 resume 回放缺陷已修:createSession 后主动补拉转录) |
 | M3 | 多厂商 Provider | Provider Profile 配置页 + 会话级 env 注入 + safeStorage 密钥 | ✅ 已完成 |
 | M4 | 智能调度 v1 | 规则路由(意图分级 + 健康度)+ 路由透明面板 | ✅ 已完成 |
 | M4.1 | 跨厂商故障切换 | 错误分类(余额/限流/模型下线/网络)→ 自动切健康厂商 resume 重试,任务不中断;聊天流透明标注;可设置开关 | ✅ 已完成 |
 | M5 | 3D 办公区 v1 | R3F 场景、工位状态动画、点击聚焦、双视图切换 | ✅ 已完成 |
-| M6 | 原生多引擎 | EngineAdapter 抽象,接入 Codex CLI / Gemini CLI | 规划 |
+| M6 | 原生多引擎 | EngineAdapter 抽象,接入 Codex CLI / Gemini CLI | 🚧 架构已落地(Engine 接口 + 注册表 + 引擎选择 UI;AgentSession=ClaudeEngine;Codex/Gemini 适配器待实现) |
 | M7 | 打包分发 | electron-builder、图标、自动更新 | 规划 |
 | — | 持续打磨 | Markdown 渲染、"已中断"标签、工具级白名单、标题重命名 | 穿插进行 |
 

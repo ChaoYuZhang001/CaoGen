@@ -4,12 +4,12 @@ import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
 import type { SessionStatus } from '../../../shared/types'
 
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  starting: '启动中',
-  running: '运行中',
-  idle: '空闲',
-  error: '错误',
-  closed: '已关闭'
+const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
+  starting: 'statusStarting',
+  running: 'statusRunning',
+  idle: 'statusIdle',
+  error: 'statusError',
+  closed: 'statusClosed'
 }
 
 export default function Sidebar(): React.JSX.Element {
@@ -124,7 +124,10 @@ export default function Sidebar(): React.JSX.Element {
               tabIndex={0}
               onClick={() => selectSession(id)}
             >
-              <span className={`status-dot status-${meta.status}`} title={STATUS_LABEL[meta.status]} />
+              <span
+                className={`status-dot status-${meta.status}`}
+                title={t(STATUS_LABEL_KEY[meta.status])}
+              />
               <span className="session-card-body">
                 <span className="session-card-title">{meta.title}</span>
                 <span className="session-card-sub">
@@ -132,7 +135,7 @@ export default function Sidebar(): React.JSX.Element {
                 </span>
               </span>
               {s.pendingPermissions.length > 0 && (
-                <span className="session-card-badge" title="等待授权">
+                <span className="session-card-badge" title={t('awaitingApproval')}>
                   {s.pendingPermissions.length}
                 </span>
               )}
@@ -169,7 +172,7 @@ export default function Sidebar(): React.JSX.Element {
               <button
                 key={h.id}
                 className="session-card history-card"
-                title={`恢复会话:${h.cwd}`}
+                title={t('resumeSessionTitle', { cwd: h.cwd })}
                 onClick={() => void resumeFromHistory(h)}
               >
                 <span className="history-icon">↻</span>

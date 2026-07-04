@@ -109,7 +109,7 @@ export default function SettingsModal(): React.JSX.Element {
                   value={draft.defaultProviderId}
                   onChange={(e) => set('defaultProviderId', e.target.value)}
                 >
-                  <option value="">官方 Anthropic</option>
+                  <option value="">{t('officialAnthropic')}</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -247,7 +247,7 @@ export default function SettingsModal(): React.JSX.Element {
                 </div>
                 <div className="provider-list">
                   {providers.length === 0 && (
-                    <div className="provider-empty">尚未配置额外 Provider,当前使用官方 Anthropic 登录。</div>
+                    <div className="provider-empty">{t('providerEmpty')}</div>
                   )}
                   {providers.map((p) => {
                     const h = healthOf(p.id)
@@ -256,20 +256,23 @@ export default function SettingsModal(): React.JSX.Element {
                         <div className="provider-row-body">
                           <div className="provider-row-name">
                             {p.name}
-                            {!p.hasToken && <span className="provider-tag-warn">未配置密钥</span>}
+                            {!p.hasToken && (
+                              <span className="provider-tag-warn">{t('noKeyConfigured')}</span>
+                            )}
                             {h && (
                               <span
                                 className={`health-dot ${h.healthy ? 'health-ok' : 'health-bad'}`}
                                 title={
                                   h.healthy
-                                    ? `健康 · 成功 ${h.successes} 失败 ${h.failures}`
-                                    : `异常 · 连续失败 ${h.consecutiveFailures}`
+                                    ? t('healthOkTip', { s: h.successes, f: h.failures })
+                                    : t('healthBadTip', { n: h.consecutiveFailures })
                                 }
                               />
                             )}
                           </div>
                           <div className="provider-row-sub">
-                            {p.baseUrl || '官方端点'} · {p.models.length} 个模型
+                            {p.baseUrl || t('officialEndpoint')} ·{' '}
+                            {t('modelsCount', { n: p.models.length })}
                           </div>
                         </div>
                         <div className="provider-row-actions">

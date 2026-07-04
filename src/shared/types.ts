@@ -24,6 +24,16 @@ export interface ProviderHealthView {
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 
+/** Agent 引擎标识:claude = Claude Agent SDK(默认);codex / gemini 经 EngineAdapter 接入 */
+export type EngineKind = 'claude' | 'codex' | 'gemini'
+
+export interface EngineInfo {
+  kind: string
+  label: string
+  /** 该引擎在本机是否可用(CLI 已安装等) */
+  available: boolean
+}
+
 export interface UsageTotals {
   input: number
   output: number
@@ -39,6 +49,8 @@ export interface SessionMeta {
   model: string
   /** 此会话绑定的 Provider ID;空字符串 = 官方 Anthropic */
   providerId: string
+  /** Agent 引擎;缺省 = 'claude' */
+  engine?: EngineKind
   permissionMode: PermissionModeId
   status: SessionStatus
   sdkSessionId?: string
@@ -66,6 +78,8 @@ export interface CreateSessionOptions {
   cwd: string
   model?: string
   providerId?: string
+  /** Agent 引擎;缺省 claude */
+  engine?: EngineKind
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
@@ -253,6 +267,7 @@ export interface AgentDeskApi {
   deleteProvider(id: string): Promise<void>
   fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
   listProviderHealth(): Promise<ProviderHealthView[]>
+  listEngines(): Promise<EngineInfo[]>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: { name?: string }): Promise<Project | null>
   deleteProject(id: string): Promise<void>

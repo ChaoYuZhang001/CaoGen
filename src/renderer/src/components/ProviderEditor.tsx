@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
+import { useT } from '../i18n'
 import type { ProviderView } from '../../../shared/types'
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
+  const t = useT()
   const createProvider = useStore((s) => s.createProvider)
   const updateProvider = useStore((s) => s.updateProvider)
 
@@ -38,7 +40,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         providerId: provider?.id
       })
       setModelsText(models.join('\n'))
-      setFetchNote(`已获取 ${models.length} 个模型`)
+      setFetchNote(t('fetchedModels', { n: models.length }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -58,7 +60,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
   const save = async (): Promise<void> => {
     if (!name.trim()) {
-      setError('请填写名称')
+      setError(t('errNameRequired'))
       return
     }
     const models = modelsText
@@ -98,14 +100,14 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   return (
     <div className="modal-backdrop modal-backdrop-nested" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">{isEdit ? '编辑 Provider' : '添加 Provider'}</h2>
+        <h2 className="modal-title">{isEdit ? t('providerEditTitle') : t('providerAddTitle')}</h2>
 
         {!isEdit && (
           <>
-            <label className="field-label">快速模板</label>
+            <label className="field-label">{t('quickTemplate')}</label>
             <select className="select select-block" defaultValue="" onChange={(e) => applyPreset(e.target.value)}>
               <option value="" disabled>
-                选择一个模板…
+                {t('pickTemplate')}
               </option>
               {PROVIDER_PRESETS.map((p) => (
                 <option key={p.key} value={p.key}>
@@ -114,23 +116,24 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
               ))}
             </select>
             <p className="provider-gateway-note">
-              底层引擎使用 Anthropic Messages API 协议。接入 <b>OpenAI / Gemini / 国产模型</b> 需经
-              Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译,填入网关地址即可。
+              {t('gatewayNote1')}
+              <b>{t('gatewayNoteBold')}</b>
+              {t('gatewayNote2')}
             </p>
           </>
         )}
 
         {presetHint && <div className="notice notice-info">{presetHint}</div>}
 
-        <label className="field-label">名称</label>
+        <label className="field-label">{t('nameLabel')}</label>
         <input
           className="input input-block"
           value={name}
-          placeholder="例如:公司网关 / OpenRouter"
+          placeholder={t('namePlaceholder')}
           onChange={(e) => setName(e.target.value)}
         />
 
-        <label className="field-label">Base URL(Anthropic 兼容端点)</label>
+        <label className="field-label">{t('baseUrlLabel')}</label>
         <input
           className="input input-block"
           value={baseUrl}
@@ -139,14 +142,16 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         />
 
         <label className="field-label">
-          API 密钥
-          {isEdit && provider.hasToken && !tokenTouched && <span className="field-hint">(已保存,留空不改)</span>}
+          {t('apiKeyLabel')}
+          {isEdit && provider.hasToken && !tokenTouched && (
+            <span className="field-hint">{t('savedKeepEmpty')}</span>
+          )}
         </label>
         <input
           className="input input-block"
           type="password"
           value={token}
-          placeholder={isEdit && provider.hasToken ? '••••••••(不改动请留空)' : 'sk-...'}
+          placeholder={isEdit && provider.hasToken ? t('tokenPlaceholderSaved') : 'sk-...'}
           onChange={(e) => {
             setToken(e.target.value)
             setTokenTouched(true)
@@ -154,14 +159,14 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         />
 
         <div className="field-label-row">
-          <label className="field-label">模型列表(每行一个)</label>
+          <label className="field-label">{t('modelListLabel')}</label>
           <button
             className="btn btn-ghost btn-sm"
             disabled={fetching}
             onClick={() => void fetchModels()}
-            title="用上面的 Base URL + 密钥调用 /v1/models 自动获取"
+            title={t('fetchModelsTitle')}
           >
-            {fetching ? '获取中…' : '⤓ 用密钥获取'}
+            {fetching ? t('fetching') : t('fetchWithKey')}
           </button>
         </div>
         <textarea
@@ -174,7 +179,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         {fetchNote && <div className="field-hint field-hint-ok">{fetchNote}</div>}
 
         <label className="field-label">
-          自定义请求头 <span className="field-hint">(可选,每行 Name: value)</span>
+          {t('customHeadersLabel')} <span className="field-hint">{t('customHeadersHint')}</span>
         </label>
         <textarea
           className="input input-block textarea"
@@ -184,7 +189,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           onChange={(e) => setCustomHeaders(e.target.value)}
         />
 
-        <label className="field-label">备注(可选)</label>
+        <label className="field-label">{t('noteOptional')}</label>
         <input
           className="input input-block"
           value={note}
@@ -195,10 +200,10 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         <div className="modal-actions">
           <button className="btn btn-ghost" onClick={onClose}>
-            取消
+            {t('cancel')}
           </button>
           <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
-            {busy ? '保存中…' : '保存'}
+            {busy ? t('saving') : t('save')}
           </button>
         </div>
       </div>

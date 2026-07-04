@@ -1,5 +1,6 @@
 import { memo, Suspense, lazy } from 'react'
 import type { ChatItem, ToolResultInfo } from '../store'
+import { useT } from '../i18n'
 import { formatCost, formatDuration, formatTokens } from '../format'
 import ToolCallCard from './ToolCallCard'
 
@@ -13,11 +14,13 @@ interface Props {
 }
 
 function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Element | null {
+  // useT 直接订阅 store 的语言字段,语言切换时即使 memo 也会触发重渲染
+  const t = useT()
   switch (item.kind) {
     case 'user':
       return (
         <div className="msg-user">
-          <div className="msg-user-label">你</div>
+          <div className="msg-user-label">{t('you')}</div>
           <div className="msg-user-text">{item.text}</div>
         </div>
       )
@@ -38,7 +41,7 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
             if (block.type === 'thinking') {
               return (
                 <details key={i} className="thinking-block">
-                  <summary>思考过程</summary>
+                  <summary>{t('thinkingProcess')}</summary>
                   <div className="thinking-text">{block.text}</div>
                 </details>
               )
@@ -60,17 +63,17 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
         <div className={`turn-result ${item.isError ? 'turn-result-error' : ''}`}>
           {item.isError ? (
             <>
-              <span className="turn-result-tag">本轮异常({item.subtype})</span>
+              <span className="turn-result-tag">{t('turnErrorTag', { subtype: item.subtype })}</span>
               {item.resultText && <span className="turn-result-text">{item.resultText}</span>}
             </>
           ) : (
             <span className="turn-result-tag">
-              本轮完成 · {formatDuration(item.durationMs)}
+              {t('turnDone')} · {formatDuration(item.durationMs)}
               {item.usage &&
                 ` · ↑${formatTokens(
                   item.usage.input + item.usage.cacheRead + item.usage.cacheCreation
                 )} ↓${formatTokens(item.usage.output)}`}
-              {item.costUsd !== undefined && ` · 累计 ${formatCost(item.costUsd)}`}
+              {item.costUsd !== undefined && ` · ${t('cumulative')} ${formatCost(item.costUsd)}`}
             </span>
           )}
         </div>
@@ -78,7 +81,7 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
 
     case 'routing':
       return (
-        <div className="routing-note" title="智能调度决策">
+        <div className="routing-note" title={t('routingTitle')}>
           <span className="routing-icon">🧭</span>
           <span className="routing-text">{item.reason}</span>
         </div>
@@ -86,11 +89,14 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
 
     case 'failover':
       return (
-        <div className="routing-note failover-note" title="厂商故障自动切换">
+        <div className="routing-note failover-note" title={t('failoverTitle')}>
           <span className="routing-icon">⚡</span>
           <span className="routing-text">
-            {item.fromName} 故障({item.reason}),已切换 → {item.toName}
-            {item.model ? ` · ${item.model}` : ''},自动重试中
+            {t('failoverText', {
+              from: item.fromName,
+              reason: item.reason,
+              to: item.model ? `${item.toName} · ${item.model}` : item.toName
+            })}
           </span>
         </div>
       )

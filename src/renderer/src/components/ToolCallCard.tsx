@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AssistantBlock } from '../../../shared/types'
 import type { ToolResultInfo } from '../store'
+import { useT } from '../i18n'
 import DiffView from './DiffView'
 
 type ToolUseBlock = Extract<AssistantBlock, { type: 'tool_use' }>
@@ -15,7 +16,11 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
 }
 
-function toolSummary(name: string, input: Record<string, unknown>): string {
+function toolSummary(
+  name: string,
+  input: Record<string, unknown>,
+  t: (key: string) => string
+): string {
   switch (name) {
     case 'Bash':
       return str(input.command)
@@ -35,7 +40,7 @@ function toolSummary(name: string, input: Record<string, unknown>): string {
     case 'Agent':
       return str(input.description)
     case 'TodoWrite':
-      return '更新任务清单'
+      return t('updateTodoList')
     default: {
       try {
         const json = JSON.stringify(input)
@@ -137,14 +142,21 @@ export default function ToolCallCard({
   result?: ToolResultInfo
   running: boolean
 }): React.JSX.Element {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
   const [showFullResult, setShowFullResult] = useState(false)
   const input = asRecord(block.input)
-  const summary = toolSummary(block.name, input)
+  const summary = toolSummary(block.name, input, t)
 
   const status = result ? (result.isError ? 'error' : 'done') : running ? 'running' : 'pending'
   const statusLabel =
-    status === 'running' ? '运行中' : status === 'done' ? '完成' : status === 'error' ? '失败' : '等待'
+    status === 'running'
+      ? t('statusRunning')
+      : status === 'done'
+        ? t('toolDone')
+        : status === 'error'
+          ? t('toolFailed')
+          : t('toolPending')
 
   const resultText = result?.content ?? ''
   const truncated = !showFullResult && resultText.length > RESULT_PREVIEW_CHARS
@@ -167,11 +179,11 @@ export default function ToolCallCard({
           <ToolBody block={block} />
           {result && (
             <div className={`tool-result ${result.isError ? 'tool-result-error' : ''}`}>
-              <div className="tool-result-label">{result.isError ? '错误输出' : '输出'}</div>
-              <pre className="code-block">{displayResult || '(无输出)'}</pre>
+              <div className="tool-result-label">{result.isError ? t('errorOutput') : t('output')}</div>
+              <pre className="code-block">{displayResult || t('noOutput')}</pre>
               {truncated && (
                 <button className="btn btn-ghost btn-sm" onClick={() => setShowFullResult(true)}>
-                  显示全部({resultText.length} 字符)
+                  {t('showAllChars', { n: resultText.length })}
                 </button>
               )}
             </div>

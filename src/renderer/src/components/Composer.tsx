@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
 import { useStore } from '../store'
+import { useT } from '../i18n'
 
 export default function Composer({ running }: { running: boolean }): React.JSX.Element {
+  const t = useT()
   const [text, setText] = useState('')
   const sendMessage = useStore((s) => s.sendMessage)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -33,7 +35,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       <textarea
         ref={textareaRef}
         className="composer-input"
-        placeholder={running ? '继续输入,消息将排队处理…' : '让 Agent 做点什么…(Enter 发送,Shift+Enter 换行)'}
+        placeholder={running ? t('composerQueuedPlaceholder') : t('composerPlaceholder')}
         value={text}
         rows={1}
         onChange={(e) => setText(e.target.value)}
@@ -41,7 +43,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         onInput={onInput}
       />
       <button className="btn btn-primary composer-send" onClick={submit} disabled={!text.trim()}>
-        发送
+        {t('send')}
       </button>
     </div>
   )

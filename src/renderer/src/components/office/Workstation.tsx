@@ -4,6 +4,7 @@ import { Html } from '@react-three/drei'
 import { Color } from 'three'
 import type { Group, Mesh, MeshStandardMaterial, Points } from 'three'
 import type { SessionState } from '../../store'
+import { useT } from '../../i18n'
 import { formatCost } from '../../format'
 
 export type Activity = 'idle' | 'working' | 'awaiting' | 'error'
@@ -22,11 +23,11 @@ const COLORS: Record<Activity, string> = {
   error: '#d8593c'
 }
 
-const STATUS_LABEL: Record<Activity, string> = {
-  idle: '空闲',
-  working: '工作中',
-  awaiting: '待授权',
-  error: '异常'
+const STATUS_LABEL_KEY: Record<Activity, string> = {
+  idle: 'statusIdle',
+  working: 'activityWorking',
+  awaiting: 'activityAwaiting',
+  error: 'activityError'
 }
 
 const PARTICLE_COUNT = 14
@@ -56,6 +57,8 @@ export default function Workstation({
   catEars = false,
   onSelect
 }: Props): React.JSX.Element {
+  // useT 基于 zustand(useSyncExternalStore),不依赖 React Context,R3F 树内可安全使用
+  const t = useT()
   const activity = activityOf(session)
   const targetColor = COLORS[activity]
   const bodyColor = brandColor ?? targetColor
@@ -376,7 +379,7 @@ export default function Workstation({
           <div className="ws-label-title">{session.meta.title}</div>
           <div className="ws-label-meta">
             <span className="ws-dot" style={{ background: targetColor }} />
-            {STATUS_LABEL[activity]} · {formatCost(session.meta.costUsd)}
+            {t(STATUS_LABEL_KEY[activity])} · {formatCost(session.meta.costUsd)}
           </div>
         </div>
       </Html>

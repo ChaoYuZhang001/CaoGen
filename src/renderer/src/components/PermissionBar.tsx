@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import { useT } from '../i18n'
 import type { PermissionRequestInfo } from '../../../shared/types'
 
 function summarize(input: unknown): string {
@@ -22,6 +23,7 @@ export default function PermissionBar({
   sessionId: string
   requests: PermissionRequestInfo[]
 }): React.JSX.Element | null {
+  const t = useT()
   const respondPermission = useStore((s) => s.respondPermission)
   if (requests.length === 0) return null
 
@@ -31,7 +33,7 @@ export default function PermissionBar({
         <div key={req.requestId} className="permission-card">
           <div className="permission-info">
             <div className="permission-title">
-              请求使用工具 <code>{req.toolName}</code>
+              {t('permissionRequest')} <code>{req.toolName}</code>
             </div>
             {summarize(req.input) && <div className="permission-detail">{summarize(req.input)}</div>}
             {req.decisionReason && <div className="permission-reason">{req.decisionReason}</div>}
@@ -41,13 +43,13 @@ export default function PermissionBar({
               className="btn btn-primary"
               onClick={() => void respondPermission(sessionId, req.requestId, true)}
             >
-              允许
+              {t('allow')}
             </button>
             <button
               className="btn btn-ghost"
               onClick={() => void respondPermission(sessionId, req.requestId, false)}
             >
-              拒绝
+              {t('deny')}
             </button>
           </div>
         </div>
