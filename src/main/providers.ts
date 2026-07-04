@@ -1,7 +1,8 @@
 import { app, safeStorage } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../shared/types'
 import type { Provider, ProviderInput, ProviderView } from '../shared/types'
 
 let cache: Provider[] | null = null
@@ -10,13 +11,28 @@ function providersFile(): string {
   return join(app.getPath('userData'), 'providers.json')
 }
 
+function defaultDeepSeekProvider(): Provider {
+  return {
+    id: DEEPSEEK_PROVIDER_ID,
+    name: 'DeepSeek(官方直连)',
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    encryptedToken: '',
+    models: [DEEPSEEK_DEFAULT_MODEL, 'deepseek-reasoner'],
+    note: '首启默认 Provider。请在设置里填写 DeepSeek API key 后使用。',
+    createdAt: Date.now()
+  }
+}
+
 function load(): Provider[] {
   if (cache) return cache
+  const file = providersFile()
+  const firstRun = !existsSync(file)
   try {
-    const raw = JSON.parse(readFileSync(providersFile(), 'utf8'))
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
     cache = Array.isArray(raw) ? (raw as Provider[]) : []
   } catch {
-    cache = []
+    cache = firstRun ? [defaultDeepSeekProvider()] : []
+    if (firstRun) persist()
   }
   return cache
 }

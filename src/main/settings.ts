@@ -1,12 +1,13 @@
 import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../shared/types'
 import type { AppSettings } from '../shared/types'
 
 const DEFAULTS: AppSettings = {
-  defaultModel: '',
+  defaultModel: DEEPSEEK_DEFAULT_MODEL,
   defaultPermissionMode: 'default',
-  defaultProviderId: '',
+  defaultProviderId: DEEPSEEK_PROVIDER_ID,
   schedulerStrategy: 'balanced',
   budgetUsdPerSession: 0,
   failoverEnabled: true,
