@@ -278,8 +278,10 @@ export function registerIpc(): void {
 
   ipcMain.handle('worktrees:applyPatch', (_e, id: string) => {
     const session = sessionManager.get(id)
-    if (session?.meta.status === 'running' || session?.meta.status === 'starting') {
-      return { ok: false, error: '会话仍在运行，停止后才能合并 worktree 改动' }
+    // 仅 running(agent 正在改文件)时拦截,避免边改边合并的竞态;
+    // starting(SDK 尚未真正开跑,可能因未配 provider 长期停留)不阻止合并。
+    if (session?.meta.status === 'running') {
+      return { ok: false, error: '会话正在运行，停止后才能合并 worktree 改动' }
     }
     return applyManagedWorktreePatch(id)
   })
@@ -288,8 +290,8 @@ export function registerIpc(): void {
     'worktrees:remove',
     (_e, id: string, opts?: { deleteBranch?: boolean; force?: boolean }) => {
       const session = sessionManager.get(id)
-      if (session?.meta.status === 'running' || session?.meta.status === 'starting') {
-        return { ok: false, error: '会话仍在运行，停止后才能丢弃 worktree' }
+      if (session?.meta.status === 'running') {
+        return { ok: false, error: '会话正在运行，停止后才能丢弃 worktree' }
       }
       const result = removeManagedWorktreeView(id, opts ?? {})
       if (result.ok) sessionManager.updateWorktreeState(id, result.record?.state ?? 'removed')
