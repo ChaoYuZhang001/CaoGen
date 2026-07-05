@@ -530,7 +530,7 @@ export class AgentSession implements Engine {
         deletions: code?.deletions,
         chatRemovedEntries: chat?.removedEntries,
         note: wantsChat
-          ? '对话回溯会恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
+          ? '对话回溯会恢复 CaoGen 聊天转录;若会话空闲将即时重建引擎截断 SDK 上下文,否则在下次 resume 时截断到该检查点。'
           : undefined
       }
     }
@@ -560,11 +560,20 @@ export class AgentSession implements Engine {
       }
     }
     if (!wantsChat) this.emit(restoreEvent())
+    let contextRewoundLive = false
     if (wantsChat) {
       this.resumeAtId = messageId
       this.meta.resumeSessionAt = messageId
       this.emit({ kind: 'meta', meta: { ...this.meta } })
+      // 立刻重建引擎让 SDK 上下文即时截断;失败/条件不满足则下次 resume 兜底
+      contextRewoundLive = await this.restartForContextRewind()
     }
+
+    const chatNote = wantsChat
+      ? contextRewoundLive
+        ? '已恢复 CaoGen 聊天转录,并已重建引擎——底层 Claude SDK 上下文已即时截断到该检查点。'
+        : '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
+      : undefined
 
     return {
       mode,
@@ -578,9 +587,55 @@ export class AgentSession implements Engine {
       insertions: code?.insertions,
       deletions: code?.deletions,
       chatRemovedEntries: restored?.plan.removedEntries ?? chat?.removedEntries,
-      note: wantsChat
-        ? '已恢复 CaoGen 聊天转录;底层 Claude SDK 上下文将在下次 resume 时截断到该检查点。'
-        : undefined
+      note: chatNote
+    }
+  }
+
+  /**
+   * chat/both 回退后,立刻让底层 SDK 上下文生效(而非拖到下次 resume)。
+   * 复用故障切换的引擎重建机制:作废旧代 → 关旧 query → 新建输入流 →
+   * 以 resume + resumeSessionAt 重启,新引擎从检查点截断处延续上下文。
+   * 仅在 query 存活且无在途轮次时执行;否则依赖 start() 时的 resumeSessionAt 兜底。
+   * 返回 true 表示已即时重建。
+   */
+  private async restartForContextRewind(): Promise<boolean> {
+    if (this.disposed) return false
+    if (this.failoverBusy || this.interrupting) return false
+    if (this.turnInFlight) return false // 有轮次在途,不打断;下次 resume 兜底
+    if (!this.query) return false // 引擎未起,start() 时 resumeSessionAt 自会生效
+    if (!this.resumeId || !this.resumeAtId) return false // 无 SDK 会话可截断
+
+    this.failoverBusy = true
+    try {
+      // 作废旧代:旧 consume 循环的残余消息/异常一律丢弃
+      this.generation++
+      // 旧引擎未决权限全部拒绝(其进程即将终止)
+      for (const [requestId, pending] of this.pending) {
+        pending.resolve({ behavior: 'deny', message: '会话已回退,操作作废' })
+        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      }
+      this.pending.clear()
+      this.input.end()
+      try {
+        this.query?.close()
+      } catch {
+        // 进程可能已退出
+      }
+      this.query = null
+      this.input = new Pushable<SDKUserMessage>()
+
+      // resumeId + resumeAtId 已在 restoreCheckpoint 设好;start() 会带上二者,
+      // 令新引擎从检查点截断处恢复上下文(丢弃其后的对话记忆)。
+      await this.start()
+      if (!this.query) return false // start 失败已置 error
+      // 回退后进入待命,不自动重发任何消息(与故障切换不同:这是用户主动回退)
+      if (this.meta.status === 'starting') this.setStatus('idle')
+      return true
+    } catch (err) {
+      console.error('[caogen] 回退重建引擎失败:', err)
+      return false
+    } finally {
+      this.failoverBusy = false
     }
   }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const outDir = path.join(repoRoot, 'test-results', 'caogen-deep')
@@ -21,6 +22,18 @@ if (!existsSync(mainEntry)) fail('Built Electron main entry not found. Run npm r
 mkdirSync(runDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Page smoke project\n')
+writeFileSync(
+  path.join(projectDir, 'browser-fixture.html'),
+  [
+    '<!doctype html>',
+    '<html>',
+    '<head><meta charset="utf-8"><title>CaoGen Browser Annotation Fixture</title></head>',
+    '<body>',
+    '<main id="fixture"><h1>Browser annotation target</h1><button class="cta">Fix spacing</button></main>',
+    '</body>',
+    '</html>'
+  ].join('\n')
+)
 writeFileSync(path.join(projectDir, 'sample.json'), '{"ok":true}\n')
 writeFileSync(
   path.join(projectDir, 'logo.png'),
@@ -52,6 +65,7 @@ writeFileSync(
     '%%EOF'
   ].join('\n')
 )
+initGitProject(projectDir)
 
 const app = spawn(electronBin, [`--remote-debugging-port=${port}`, mainEntry], {
   cwd: repoRoot,
@@ -113,10 +127,29 @@ try {
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await chooseSelectOptionByText(cdp, 'OpenAI Responses API')
     await clickByText(cdp, '创建')
-    await waitForText(cdp, projectDir, 10_000)
+    await waitForText(cdp, '⎇ Worktree', 10_000)
     await waitForText(cdp, 'OpenAI 引擎缺少 API Key', 10_000)
   })
   await screenshot(cdp, '03-session')
+
+  let worktreeRecord = null
+  await check(cdp, 'managed worktree registry is created for git projects', async () => {
+    worktreeRecord = await waitForWorktreeRecord(userDataDir)
+    assert(worktreeRecord.sourceCwd === projectDir, `wrong source cwd: ${JSON.stringify(worktreeRecord)}`)
+    writeFileSync(path.join(worktreeRecord.cwd, 'merge-ui.txt'), 'worktree merge ui smoke\n')
+  })
+
+  await check(cdp, 'worktree merge UI inspects an applyable patch', async () => {
+    await clickByText(cdp, '⎇ Worktree')
+    await waitForText(cdp, '隔离工作区', 10_000)
+    await waitForText(cdp, '改动\n1', 10_000)
+    await clickByText(cdp, '检查合并')
+    await waitForText(cdp, '合并检查通过，可应用到主工作区', 10_000)
+    await waitForText(cdp, 'merge-ui.txt', 10_000)
+    await waitForText(cdp, 'Patch 预览', 10_000)
+    await waitForText(cdp, 'git apply --check passed.', 10_000)
+  })
+  await screenshot(cdp, '04-worktree-merge')
 
   await check(cdp, 'workbench panels open from chat toolbar', async () => {
     const expected = [
@@ -132,17 +165,27 @@ try {
       await waitForText(cdp, marker, 10_000)
     }
   })
-  await screenshot(cdp, '04-workbench-panels')
+  await screenshot(cdp, '05-workbench-panels')
 
   await check(cdp, 'browser native view is removed when switching panels', async () => {
     await clickByText(cdp, '◉ 浏览器')
     await waitForText(cdp, '内置浏览器', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 1, 10_000)
+    await setInputByPlaceholder(cdp, '输入 URL 或域名', pathToFileURL(path.join(projectDir, 'browser-fixture.html')).href)
+    await press(cdp, 'Enter')
+    await waitForText(cdp, 'CaoGen Browser Annotation Fixture', 10_000)
+    await setInputByPlaceholder(cdp, '批注说明。先在网页中选中文本或区域附近内容。', '批注: CTA spacing needs a fix')
+    await clickByText(cdp, '保存批注')
+    await waitForText(cdp, '已保存网页批注', 10_000)
+    await waitForText(cdp, '批注: CTA spacing needs a fix', 10_000)
+    await clickByText(cdp, '发给 Agent')
+    await waitForText(cdp, '请基于这个 CaoGen 网页批注定位并修复问题。', 10_000)
+    await waitForText(cdp, 'CTA spacing needs a fix', 10_000)
     await clickByText(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 0, 10_000)
   })
-  await screenshot(cdp, '05-browser-switch')
+  await screenshot(cdp, '06-browser-switch')
 
   await check(cdp, 'image and PDF previews render from project files', async () => {
     await clickByText(cdp, '▣ 文件')
@@ -169,7 +212,7 @@ try {
     assert(pdf.data.startsWith('data:application/pdf;base64,'), `PDF preview did not use data URL: ${pdf.data.slice(0, 80)}`)
     assert(!pdf.placeholder, 'old PDF placeholder is still visible')
   })
-  await screenshot(cdp, '06-preview-assets')
+  await screenshot(cdp, '07-preview-assets')
 
   await check(cdp, 'slash command popup exposes key workbench commands', async () => {
     await focusComposer(cdp)
@@ -177,15 +220,15 @@ try {
     await waitForText(cdp, '/plugins')
     await press(cdp, 'Escape')
   })
-  await screenshot(cdp, '07-slash-popup')
+  await screenshot(cdp, '08-slash-popup')
 
   await check(cdp, 'office view loads without blank first screen', async () => {
-    await clickByText(cdp, '✕')
     await clickByText(cdp, '3D 办公区')
+    await waitForText(cdp, '办公区', 10_000)
     const canvasStats = await waitForCanvasPixels(cdp)
     report.officeCanvas = canvasStats
   })
-  await screenshot(cdp, '08-office')
+  await screenshot(cdp, '09-office')
 
   await cdp.close()
 } finally {
@@ -296,6 +339,41 @@ async function waitForImagePreview(cdp, timeout = 5000) {
     await sleep(150)
   }
   throw new Error(`image preview did not decode: ${JSON.stringify(last)}`)
+}
+
+function initGitProject(cwd) {
+  git(cwd, ['init', '-q', '-b', 'main'])
+  git(cwd, ['config', 'user.email', 'smoke@example.test'])
+  git(cwd, ['config', 'user.name', 'CaoGen Page Smoke'])
+  git(cwd, ['add', '.'])
+  git(cwd, ['commit', '-q', '-m', 'initial smoke fixture'])
+}
+
+function git(cwd, args) {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || `git ${args.join(' ')} failed`)
+  return result.stdout.trim()
+}
+
+async function waitForWorktreeRecord(userDataDir, timeout = 10_000) {
+  const registry = path.join(userDataDir, 'worktrees', 'index.json')
+  const start = Date.now()
+  let last = null
+  while (Date.now() - start < timeout) {
+    if (existsSync(registry)) {
+      const raw = JSON.parse(readFileSync(registry, 'utf8'))
+      const records = Array.isArray(raw) ? raw : Array.isArray(raw?.records) ? raw.records : []
+      last = records.find((record) => record?.state === 'active') ?? records[0] ?? null
+      if (last?.worktreePath && existsSync(last.worktreePath)) return last
+    }
+    await sleep(150)
+  }
+  throw new Error(`active worktree record not found: ${JSON.stringify(last)}`)
 }
 
 async function waitForBrowserViewTargets(remotePort, appTargetId, expectedCount, timeout = 5000) {

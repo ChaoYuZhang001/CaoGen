@@ -338,7 +338,8 @@ async function selectedNewSessionValues(cdp) {
   return evalValue(
     cdp,
     `(() => {
-      const selects = [...document.querySelectorAll('select')];
+      const modalSelects = [...document.querySelectorAll('.modal select')];
+      const selects = modalSelects.length > 0 ? modalSelects : [...document.querySelectorAll('select')];
       const provider = selects.find((select) => [...select.options].some((option) => option.value === 'deepseek-official'));
       const model = selects.find((select) => [...select.options].some((option) => option.value === 'deepseek-chat'));
       return {

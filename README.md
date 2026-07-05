@@ -61,6 +61,51 @@ npm run build      # 产物输出到 out/
 npm start          # 预览构建产物
 ```
 
+## 打包分发 / 发布
+
+CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
+
+```bash
+npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)
+npm run dist       # 按当前平台打包
+npm run dist:dir   # 只出未压缩 app 目录(调试打包用)
+```
+
+### macOS:签名与"首次打开"
+
+当前配置产出的是**未签名**包(`build.mac.identity: null`)。够用来自建分发,但用户首次打开会遇到 Gatekeeper 拦截。两种发布档位:
+
+**A · 未签名(当前默认,零成本)**
+产物可直接传 GitHub Releases。用户首次打开需绕行一次:
+
+> 下载 `.dmg` → 拖入「应用程序」→ **右键点 App 图标 → 打开** → 在弹窗里再点「打开」。
+> 或:双击被拦后,去 **系统设置 → 隐私与安全性**,在底部点「仍要打开」。
+> 之后每次正常双击即可,只需绕行第一次。
+
+把上面这段放进 Release 说明,能省掉大量"打不开"的反馈。
+
+**B · 签名 + 公证(推荐公开分发,需 Apple 凭据)**
+让用户**双击即开、零警告**,是不上架却公开分发的行业标准做法。需要:
+
+1. Apple Developer 账号($99/年),申请 **Developer ID Application** 证书并装入钥匙串。
+2. 一个用于公证的 **app-specific password**(或 App Store Connect API Key)。
+3. 改 `package.json` 的 `build.mac`:去掉 `identity: null`(或设为证书名),并加公证配置:
+   ```jsonc
+   "mac": {
+     "hardenedRuntime": true,
+     "gatekeeperAssess": false,
+     "notarize": { "teamId": "<你的 TeamID>" }
+   }
+   ```
+   公证凭据通过环境变量提供:`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`。
+4. 重新 `npm run dist:mac` 即产出已签名、已公证的 `.dmg`,无需改动任何代码。
+
+> 签名/公证与「上架 App Store」是两回事:公证只是让 Apple 盖一个"扫描过、无恶意软件"的章,分发渠道仍是你自己的 GitHub Releases。
+
+### 自动更新
+
+`src/main/updater.ts` 已接 `electron-updater`(运行时探测:未打包 / 未装依赖时降级为 no-op,绝不静默下载)。启用真实自动更新:把 `package.json` 的 `build.publish` 里占位 URL 换成真实发布地址(generic 静态服务器或 github provider),发版时用 `electron-builder --publish always` 上传 `latest-mac.yml` + 安装包即可。查到新版本只**通知**,下载/安装由用户在 UI 显式确认。
+
 ## 架构
 
 ```
