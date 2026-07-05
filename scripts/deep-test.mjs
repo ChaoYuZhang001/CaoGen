@@ -15,17 +15,21 @@ const commands = [
   { name: 'build', command: 'npm', args: ['run', 'build'], category: 'build' },
   { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
+  { name: 'integration wired modules', command: 'node', args: ['scripts/integration-test-3.cjs'], category: 'integration' },
   { name: 'attachmentOps smoke', command: 'node', args: ['scripts/attachment-ops-smoke.mjs'], category: 'smoke' },
   { name: 'browserAnnotations smoke', command: 'node', args: ['scripts/browser-annotations-smoke.mjs'], category: 'smoke' },
   { name: 'checkpointRestorePlan smoke', command: 'node', args: ['scripts/checkpoint-restore-plan-smoke.mjs'], category: 'smoke' },
   { name: 'fileOps smoke', command: 'node', args: ['scripts/file-ops-smoke.mjs'], category: 'smoke' },
   { name: 'memoryStore smoke', command: 'node', args: ['scripts/memory-store-smoke.mjs'], category: 'smoke' },
   { name: 'pluginRegistry smoke', command: 'node', args: ['scripts/plugin-registry-smoke.mjs'], category: 'smoke' },
+  { name: 'plugin slash smoke', command: 'node', args: ['scripts/plugin-slash-smoke.mjs'], category: 'smoke' },
   { name: 'previewOps smoke', command: 'node', args: ['scripts/preview-ops-smoke.mjs'], category: 'smoke' },
   { name: 'routineStore smoke', command: 'node', args: ['scripts/routine-store-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions smoke', command: 'node', args: ['scripts/start-suggestions-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
+  { name: 'Electron main IPC smoke', command: electronCommand(), args: ['scripts/electron-smoke.cjs'], category: 'system' },
+  { name: 'OpenAI mock e2e', command: 'node', args: ['scripts/openai-mock-e2e.mjs'], category: 'system' },
   { name: 'X1/S3 e2e', command: 'node', args: ['scripts/x1-s3-e2e.mjs'], category: 'ui' },
   { name: 'page operations smoke', command: 'node', args: ['scripts/page-operation-smoke.mjs'], category: 'ui' }
 ]
@@ -110,13 +114,15 @@ function buildRecommendations(items) {
   const recommendations = []
   const failed = items.filter((item) => item.status === 'fail')
   if (failed.length === 0 && items.length === commands.length) {
-    recommendations.push('本轮自动化与页面操作深测全绿,可进入人工提测前的真实模型/API key E2E 验收。')
-    recommendations.push('下一步应补预算闸门、逐 hunk diff、PDF 深渲染、浏览器截图批注和 worktree 合并 UI 的自动化断言。')
+    recommendations.push('本轮静态检查、构建、模块集成、真 Electron IPC、mock OpenAI 流式 E2E 与页面操作深测全绿。')
+    recommendations.push('下一步应补真实 API key/真实 Claude SDK 提测,用于覆盖外部账号/额度/网络不确定性。')
     return recommendations
   }
   for (const item of failed) {
     if (item.category === 'ui') {
       recommendations.push('页面操作 smoke 失败:优先查看截图与 JSON 报告,确认是否为选择器漂移、Electron 启动失败或真实 UI 回归。')
+    } else if (item.category === 'system') {
+      recommendations.push('真 Electron/IPC 系统冒烟失败:优先确认 build 产物、Electron runtime 与 ipcMain handler 注册是否一致。')
     } else if (item.category === 'build' || item.category === 'static') {
       recommendations.push('编译/类型检查失败:阻断提测,先修复 TS/build 输出再跑后续 smoke。')
     } else {
@@ -172,6 +178,16 @@ function summarize(stdout, stderr, error) {
 
 function slug(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'command'
+}
+
+function electronCommand() {
+  if (process.env.ELECTRON_BIN) return process.env.ELECTRON_BIN
+  return path.join(
+    repoRoot,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'electron.cmd' : 'electron'
+  )
 }
 
 function escapePipe(value) {

@@ -208,8 +208,15 @@ export default function WorkstationPro({
       {/* 转椅:面向 -Z(靠背在 +Z 侧) */}
       <OfficeChair position={[0, 0, 0.52]} />
 
-      {/* Agent 小人:身体色取厂商皮肤;默认朝 -Z 面向桌子 */}
-      <AvatarRig ref={rigRef} position={[0, 0, 0.44]} bodyColor={skin.bodyColor} catEars={catEars} />
+      {/* Agent 小人:身体色取厂商皮肤。rig 自身正面/敲击方向朝 +Z,
+          故绕 Y 转 180° 使其面向 -Z 的桌子与显示器(否则会背对桌子对着椅子敲)。 */}
+      <AvatarRig
+        ref={rigRef}
+        position={[0, 0, 0.44]}
+        rotation={[0, Math.PI, 0]}
+        bodyColor={skin.bodyColor}
+        catEars={catEars}
+      />
 
       {vendorKey && <VendorMascot vendorKey={vendorKey} position={[0.02, 1.18, -0.28]} scale={0.62} />}
 

@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
@@ -39,7 +40,8 @@ try {
     { cwd: repoRoot, stdio: 'inherit' }
   )
 
-  const startSuggestions = await import(pathToFileURL(path.join(outDir, 'startSuggestions.js')).href)
+  const compiledModule = findCompiledModule(outDir)
+  const startSuggestions = await import(pathToFileURL(compiledModule).href)
 
   mkdirSync(projectDir, { recursive: true })
   writeFileSync(
@@ -134,6 +136,20 @@ function git(cwd, args) {
     throw new Error(`git ${args.join(' ')} failed: ${output}`)
   }
   return result.stdout.trim()
+}
+
+function findCompiledModule(root) {
+  const entries = readdirSync(root, { withFileTypes: true })
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      const found = findCompiledModule(fullPath)
+      if (found) return found
+    } else if (entry.isFile() && entry.name === 'startSuggestions.js') {
+      return fullPath
+    }
+  }
+  throw new Error(`compiled startSuggestions.js not found under ${root}`)
 }
 
 function assertHasSource(suggestions, source) {

@@ -4,6 +4,7 @@ import { newSessionMeta } from './agentSession'
 import { createEngine } from './engine'
 import type { Engine } from './engine'
 import { registerBuiltinEngines } from './engines'
+import { fixPathForGuiLaunch } from './pathFix'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { getProvider } from './providers'
@@ -201,8 +202,11 @@ class SessionManager {
     return this.sessions.get(id)?.getTranscript() ?? []
   }
 
-  /** 启动时:注册内置引擎 + 清理不可达转录文件 */
+  /** 启动时:补全 GUI 启动缺失的 PATH → 注册内置引擎 → 清理不可达转录文件 */
   init(): void {
+    // 必须在引擎探测(codex/gemini CLI 是否在 PATH 上)之前补 PATH,
+    // 否则 Dock 启动的应用因 PATH 极简会误报 CLI"未安装"。
+    fixPathForGuiLaunch()
     registerBuiltinEngines()
     const keep = new Set(listHistory().map((h) => h.sdkSessionId))
     cleanupTranscripts(keep)

@@ -29,9 +29,11 @@ function cliExists(bin: string): boolean {
   }
 }
 
-const codexInstalled = cliExists('codex')
+const codexInstalled = (): boolean => cliExists('codex')
 
 export function registerBuiltinEngines(): void {
+  // 探测前先确保 PATH 已补全(GUI 启动缺路径的兜底);幂等,重复调用无副作用。
+  const installed = codexInstalled()
   registerEngine({
     kind: 'claude',
     label: 'Claude Agent SDK',
@@ -45,8 +47,8 @@ export function registerBuiltinEngines(): void {
   // Codex CLI 引擎(实验性):CLI 已装才可用,spawn `codex` 翻译事件
   registerEngine({
     kind: 'codex',
-    label: `Codex CLI${codexInstalled ? '(实验性)' : '(未安装)'}`,
-    available: () => codexInstalled,
+    label: `Codex CLI${installed ? '(实验性)' : '(未安装)'}`,
+    available: () => installed,
     create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
       new CodexEngine(meta, emit, resumeSdkSessionId)
   })

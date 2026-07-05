@@ -3002,7 +3002,7 @@ textarea {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #14161b;
+  background: var(--bg);
   position: relative;
 }
 
@@ -3012,7 +3012,7 @@ textarea {
   justify-content: space-between;
   padding: 10px 16px 10px 90px;
   border-bottom: 1px solid var(--border);
-  background: rgba(20, 22, 27, 0.9);
+  background: var(--bg-raised);
   z-index: 2;
 }
 
