@@ -152,6 +152,30 @@ function replaceTranscript(s: SessionState, entries: TranscriptEntry[]): Session
   return replayTranscript(newSessionState(s.meta), [...entries].sort((a, b) => a.seq - b.seq))
 }
 
+interface StreamDeltaBuffer {
+  text: string
+  thinking: string
+  maxSeq: number
+  frame: number | null
+}
+
+const streamDeltaBuffers = new Map<string, StreamDeltaBuffer>()
+
+function isStreamDelta(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text-delta' | 'thinking-delta' }> {
+  return event.kind === 'text-delta' || event.kind === 'thinking-delta'
+}
+
+function requestStreamFrame(cb: () => void): number {
+  return typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(cb)
+    : window.setTimeout(cb, 16)
+}
+
+function cancelStreamFrame(frame: number): void {
+  if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+  else window.clearTimeout(frame)
+}
+
 export interface ToolResultInfo {
   content: string
   isError: boolean
@@ -642,7 +666,64 @@ interface AppStore {
   setShowCommandPalette(v: boolean): void
 }
 
-export const useStore = create<AppStore>((set, get) => ({
+export const useStore = create<AppStore>((set, get) => {
+  const clearStreamBuffer = (sessionId: string): void => {
+    const buffer = streamDeltaBuffers.get(sessionId)
+    if (!buffer) return
+    if (buffer.frame !== null) cancelStreamFrame(buffer.frame)
+    streamDeltaBuffers.delete(sessionId)
+  }
+
+  const flushStreamBuffer = (sessionId: string): void => {
+    const buffer = streamDeltaBuffers.get(sessionId)
+    if (!buffer) return
+    if (buffer.frame !== null) cancelStreamFrame(buffer.frame)
+    streamDeltaBuffers.delete(sessionId)
+    if (!buffer.text && !buffer.thinking) return
+    set((s) => {
+      const session = s.sessions[sessionId]
+      if (!session || buffer.maxSeq <= session.lastSeq) return s
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...session,
+            streamText: session.streamText + buffer.text,
+            streamThinking: session.streamThinking + buffer.thinking,
+            lastSeq: Math.max(session.lastSeq, buffer.maxSeq)
+          }
+        }
+      }
+    })
+  }
+
+  const queueStreamDelta = (
+    sessionId: string,
+    seq: number,
+    event: Extract<AgentEvent, { kind: 'text-delta' | 'thinking-delta' }>
+  ): void => {
+    const session = get().sessions[sessionId]
+    if (!session) {
+      stashPendingEvent(sessionId, seq, event)
+      return
+    }
+    const current = streamDeltaBuffers.get(sessionId)
+    if (seq <= Math.max(session.lastSeq, current?.maxSeq ?? 0)) return
+    const buffer = current ?? { text: '', thinking: '', maxSeq: 0, frame: null }
+    if (event.kind === 'text-delta') buffer.text += event.text
+    else buffer.thinking += event.text
+    buffer.maxSeq = Math.max(buffer.maxSeq, seq)
+    if (buffer.frame === null) {
+      buffer.frame = requestStreamFrame(() => {
+        const scheduled = streamDeltaBuffers.get(sessionId)
+        if (scheduled) scheduled.frame = null
+        flushStreamBuffer(sessionId)
+      })
+    }
+    streamDeltaBuffers.set(sessionId, buffer)
+  }
+
+  return {
   ready: false,
   sessions: {},
   order: [],
@@ -768,6 +849,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
   handleEvent(sessionId, event, seq) {
     if (event.kind === 'subagent-result') {
+      flushStreamBuffer(sessionId)
       set((s) => {
         const session = s.sessions[sessionId]
         if (!session) return s
@@ -775,6 +857,11 @@ export const useStore = create<AppStore>((set, get) => ({
       })
       return
     }
+    if (isStreamDelta(event)) {
+      queueStreamDelta(sessionId, seq, event)
+      return
+    }
+    flushStreamBuffer(sessionId)
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) {
@@ -796,6 +883,13 @@ export const useStore = create<AppStore>((set, get) => ({
     }
     if (event.kind === 'turn-result' || event.kind === 'init') {
       void window.agentDesk.listHistory().then((history) => set({ history }))
+    }
+    if (
+      event.kind === 'assistant-message' ||
+      event.kind === 'turn-result' ||
+      (event.kind === 'status' && (event.status === 'error' || event.status === 'closed'))
+    ) {
+      clearStreamBuffer(sessionId)
     }
   },
 
@@ -2677,7 +2771,8 @@ export const useStore = create<AppStore>((set, get) => ({
   setShowCommandPalette(v) {
     set({ showCommandPalette: v })
   }
-}))
+  }
+})
 
 export const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: AUTO_MODEL, label: '🧭 自动调度' },
