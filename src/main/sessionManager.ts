@@ -55,9 +55,29 @@ function normalizeTaskId(value: string | undefined, fallback: string): string {
   return clean.replace(/[^A-Za-z0-9._-]/g, '-').replace(/-+/g, '-').slice(0, 80) || fallback
 }
 
+interface OrchestrationState {
+  parentSessionId: string
+  /** 尚未完成首轮的 child session id */
+  pending: Set<string>
+  /** 已完成 child 的结果(按完成顺序) */
+  results: Array<{
+    taskId?: string
+    role?: string
+    sessionId: string
+    ok: boolean
+    resultText?: string
+    costUsd?: number
+    branch?: string
+    worktreePath?: string
+  }>
+  startedAt: number
+}
+
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
   private readonly notificationStates = new Map<string, SessionNotificationState>()
+  /** 真编排事件总线:orchestrationId → 状态;全部 child 首轮完成后回灌父 Agent */
+  private readonly orchestrations = new Map<string, OrchestrationState>()
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }))
@@ -174,12 +194,79 @@ class SessionManager {
       children.push({ taskId, prompt, meta })
     })
 
+    // 登记编排:全部 child 首轮完成后,汇总结果回灌父 Agent(见 dispatch)
+    this.orchestrations.set(orchestrationId, {
+      parentSessionId,
+      pending: new Set(children.map((c) => c.meta.id)),
+      results: [],
+      startedAt: Date.now()
+    })
+
     return { orchestrationId, parentSessionId, children }
+  }
+
+  /**
+   * 真编排回灌:child 首轮 turn-result 到达时记录;全部完成后把
+   * 汇总(任务/状态/产物 worktree/分支/结果摘要)作为一条用户消息
+   * 发给父 Agent,让父 Agent 真正"知道"子任务结果并能继续编排
+   * (审查 diff、合并、追加任务)。此前结果只进 UI,父 Agent 全盲。
+   */
+  private recordOrchestrationResult(childMeta: SessionMeta, event: AgentEvent & { kind: 'turn-result' }): void {
+    const orchestrationId = childMeta.orchestrationId
+    if (!orchestrationId) return
+    const state = this.orchestrations.get(orchestrationId)
+    if (!state || !state.pending.has(childMeta.id)) return
+    state.pending.delete(childMeta.id)
+    state.results.push({
+      taskId: childMeta.childTaskId,
+      role: childMeta.childRole,
+      sessionId: childMeta.id,
+      ok: !event.isError,
+      resultText: event.resultText,
+      costUsd: childMeta.costUsd,
+      branch: childMeta.branch,
+      worktreePath: childMeta.worktreePath
+    })
+    if (state.pending.size > 0) return
+
+    this.orchestrations.delete(orchestrationId)
+    const parent = this.sessions.get(state.parentSessionId)
+    if (!parent || parent.meta.status === 'closed') return
+
+    const okCount = state.results.filter((r) => r.ok).length
+    const lines: string[] = [
+      `[子代理编排完成] ${okCount}/${state.results.length} 成功,耗时 ${Math.round((Date.now() - state.startedAt) / 1000)}s。各任务结果:`,
+      ''
+    ]
+    for (const r of state.results) {
+      lines.push(
+        `## ${r.taskId ?? r.sessionId}${r.role ? `(${r.role})` : ''} — ${r.ok ? '成功' : '失败'}`
+      )
+      if (r.branch) lines.push(`分支: ${r.branch}`)
+      if (r.worktreePath) lines.push(`worktree: ${r.worktreePath}`)
+      if (r.resultText) lines.push(`结果摘要:\n${r.resultText.slice(0, 1500)}`)
+      lines.push('')
+    }
+    lines.push(
+      '请汇总以上子任务结果:指出成功/失败与冲突风险,给出合并顺序建议;如需修复失败项或追加任务,说明具体做法。'
+    )
+    // 回灌走 send:预算闸门照常生效,防止编排递归烧穿预算
+    this.send(state.parentSessionId, lines.join('\n'))
   }
 
   close(id: string): void {
     const session = this.sessions.get(id)
     if (!session) return
+    // 编排中的 child 被手动关闭:按"失败"记账,避免整组编排永远等不齐
+    const orchestrationId = session.meta.orchestrationId
+    if (orchestrationId && this.orchestrations.get(orchestrationId)?.pending.has(id)) {
+      this.recordOrchestrationResult(session.meta, {
+        kind: 'turn-result',
+        subtype: 'closed',
+        isError: true,
+        resultText: '子会话被手动关闭,任务未完成'
+      })
+    }
     this.sessions.delete(id)
     this.notificationStates.delete(id)
     session.dispose()
@@ -236,6 +323,8 @@ class SessionManager {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('session:event', parentPayload)
       }
+      // 真编排:记录该 child 结果;整组完成后汇总回灌父 Agent
+      this.recordOrchestrationResult(session.meta, event)
     }
     this.handleNotification(sessionId, event)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
