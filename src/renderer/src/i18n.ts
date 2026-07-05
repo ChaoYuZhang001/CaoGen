@@ -276,6 +276,17 @@ const DICT: Dict = {
   browserStarting: { zh: '浏览器视图启动中…', en: 'Starting browser view…' },
   browserNotePlaceholder: { zh: '批注说明。先在网页中选中文本或区域附近内容。', en: 'Annotation note. Select text in the page first.' },
   browserCapture: { zh: '保存批注', en: 'Save annotation' },
+  browserPickElement: { zh: '圈选元素', en: 'Pick element' },
+  browserPicking: { zh: '圈选中…', en: 'Picking…' },
+  browserPickHint: {
+    zh: '在页面上悬停高亮并点击目标元素,自动截图保存批注(Esc 取消)',
+    en: 'Hover to highlight, click to pick an element; screenshot saved automatically (Esc to cancel)'
+  },
+  browserObserve: { zh: '发观测给 Agent', en: 'Observe → Agent' },
+  browserObserveHint: {
+    zh: '把当前页面快照(文本摘要+控制台错误+网络失败)只读发给 Agent 复验',
+    en: 'Send a read-only page snapshot (text, console errors, network failures) to the agent'
+  },
   browserNoAnnotations: { zh: '暂无网页批注', en: 'No browser annotations yet' },
   filesShort: { zh: '▣ 文件', en: '▣ Files' },
   subagentsShort: { zh: '子 Agent', en: 'Subagents' },
