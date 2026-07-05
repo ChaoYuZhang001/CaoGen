@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { RoundedBox } from '@react-three/drei'
 import { Color, Matrix4, Vector3 } from 'three'
 import type { InstancedMesh, WebGLProgramParametersWithUniforms } from 'three'
 
@@ -131,10 +132,9 @@ export default function ServerRack({
   return (
     <group position={position} rotation={rotation} scale={scale}>
       {/* 机柜主体外壳(黑) */}
-      <mesh position={[0, RACK_H / 2, 0]} castShadow receiveShadow>
-        <boxGeometry args={[RACK_W, RACK_H, RACK_D]} />
+      <RoundedBox args={[RACK_W, RACK_H, RACK_D]} radius={0.045} smoothness={4} position={[0, RACK_H / 2, 0]} castShadow receiveShadow>
         <meshStandardMaterial color="#141414" metalness={0.55} roughness={0.5} />
-      </mesh>
+      </RoundedBox>
 
       {/* 内腔凹陷设备井 */}
       <mesh position={[0, RACK_H / 2, RACK_D / 2 - 0.02]}>
@@ -143,18 +143,16 @@ export default function ServerRack({
       </mesh>
 
       {/* 底座 */}
-      <mesh position={[0, 0.03, 0]} receiveShadow>
-        <boxGeometry args={[RACK_W + 0.06, 0.06, RACK_D + 0.06]} />
+      <RoundedBox args={[RACK_W + 0.06, 0.06, RACK_D + 0.06]} radius={0.025} smoothness={3} position={[0, 0.03, 0]} receiveShadow>
         <meshStandardMaterial color="#1c1c1c" metalness={0.4} roughness={0.6} />
-      </mesh>
+      </RoundedBox>
 
       {/* 多层设备:金属面板 + 白高光条 + 通风缝 */}
       {shelfYs.map((y, s) => (
         <group key={s} position={[0, y, RACK_D / 2 - 0.01]}>
-          <mesh castShadow>
-            <boxGeometry args={[RACK_W - 0.1, SHELF_STEP * 0.62, 0.06]} />
+          <RoundedBox args={[RACK_W - 0.1, SHELF_STEP * 0.62, 0.06]} radius={0.018} smoothness={3} castShadow>
             <meshStandardMaterial color="#22262c" metalness={0.6} roughness={0.4} />
-          </mesh>
+          </RoundedBox>
           <mesh position={[0.24, 0, 0.032]}>
             <boxGeometry args={[0.06, SHELF_STEP * 0.4, 0.01]} />
             <meshStandardMaterial color="#f4f4f4" metalness={0.2} roughness={0.35} />
