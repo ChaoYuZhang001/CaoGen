@@ -562,6 +562,8 @@ interface AppStore {
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
   createSession(opts: CreateSessionOptions): Promise<void>
+  /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
+  startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   selectSession(id: string): void
@@ -1019,6 +1021,12 @@ export const useStore = create<AppStore>((set, get) => {
       }
     }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
+  },
+
+  async startSessionWithPrompt(opts, prompt) {
+    await get().createSession(opts) // 建完 activeId 已指向新会话
+    const text = prompt.trim()
+    if (text) await get().sendMessage(text)
   },
 
   async dispatchSubagents(input) {
