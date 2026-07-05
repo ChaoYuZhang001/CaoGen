@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerIpc } from './ipc'
@@ -55,6 +55,97 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+function sendMenuCommand(channel: string, value?: unknown): void {
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  if (!win || win.isDestroyed()) return
+  win.webContents.send(channel, value)
+}
+
+function installApplicationMenu(): void {
+  const sessionItems: MenuItemConstructorOptions[] = Array.from({ length: 9 }, (_, index) => ({
+    label: `切换到会话 ${index + 1}`,
+    accelerator: `CommandOrControl+${index + 1}`,
+    click: () => sendMenuCommand('menu:select-session', index)
+  }))
+  const settingsItem: MenuItemConstructorOptions = {
+    label: '设置',
+    accelerator: 'CommandOrControl+,',
+    click: () => sendMenuCommand('menu:settings')
+  }
+
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              settingsItem,
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' }
+            ]
+          } satisfies MenuItemConstructorOptions
+        ]
+      : []),
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '新建会话',
+          accelerator: 'CommandOrControl+N',
+          click: () => sendMenuCommand('menu:new-session')
+        },
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' as const }, settingsItem]),
+        { type: 'separator' },
+        { role: process.platform === 'darwin' ? 'close' : 'quit' }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: '搜索会话',
+          accelerator: 'CommandOrControl+F',
+          click: () => sendMenuCommand('menu:open-search')
+        }
+      ]
+    },
+    {
+      label: '会话',
+      submenu: [
+        {
+          label: '命令面板',
+          accelerator: 'CommandOrControl+K',
+          click: () => sendMenuCommand('menu:command-palette')
+        },
+        { type: 'separator' },
+        ...sessionItems
+      ]
+    },
+    {
+      label: '窗口',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }]
+    }
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 /** Routine 到点触发:起一个会话并自动发送 routine.prompt,随后记录本次运行并算下次 */
 function runRoutine(routine: Routine): void {
   try {
@@ -90,6 +181,7 @@ void app.whenReady().then(() => {
   sessionManager.init()
   registerIpc()
   createWindow()
+  installApplicationMenu()
   // Routine 定时调度:每 30s 轮询,到点起会话执行(补齐"定时自动执行"承诺)
   startRoutineScheduler({
     rootDir: join(app.getPath('userData'), 'routines'),

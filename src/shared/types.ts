@@ -883,6 +883,13 @@ export interface TranscriptEntry {
   event: AgentEvent
 }
 
+export type MenuCommand =
+  | { type: 'new-session' }
+  | { type: 'settings' }
+  | { type: 'command-palette' }
+  | { type: 'open-search' }
+  | { type: 'select-session'; index: number }
+
 /** 通过 contextBridge 暴露给渲染进程的 API */
 export interface AgentDeskApi {
   listSessions(): Promise<SessionMeta[]>
@@ -996,6 +1003,7 @@ export interface AgentDeskApi {
   acceptMemoryDraft(sessionId: string, draftId: string): Promise<ProjectMemoryEntry>
   deleteMemoryEntry(sessionId: string, entryId: string): Promise<{ id: string; deleted: boolean; deletedFrom: Array<'confirmed' | 'drafts'> }>
   pickDirectory(): Promise<string | null>
+  onMenuCommand(cb: (command: MenuCommand) => void): () => void
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
   onMemorySuggestion(cb: (event: MemorySuggestionEvent) => void): () => void
 }

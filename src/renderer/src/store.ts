@@ -530,6 +530,7 @@ interface AppStore {
   rewindPanel: RewindPanelState
   showNewSession: boolean
   showSettings: boolean
+  showCommandPalette: boolean
   sidebarQuery: string
   init(): Promise<void>
   handleEvent(sessionId: string, event: AgentEvent, seq: number): void
@@ -638,6 +639,7 @@ interface AppStore {
   deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean): void
   setShowSettings(v: boolean): void
+  setShowCommandPalette(v: boolean): void
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -706,6 +708,7 @@ export const useStore = create<AppStore>((set, get) => ({
   rewindPanel: { open: false },
   showNewSession: false,
   showSettings: false,
+  showCommandPalette: false,
 
   async init() {
     if (get().ready) return
@@ -2669,6 +2672,10 @@ export const useStore = create<AppStore>((set, get) => ({
 
   setShowSettings(v) {
     set({ showSettings: v })
+  },
+
+  setShowCommandPalette(v) {
+    set({ showCommandPalette: v })
   }
 }))
 
