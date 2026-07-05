@@ -4729,6 +4729,32 @@ textarea {
   padding: 8px 0 0;
 }
 
+.btn,
+.session-card,
+.project-chip,
+.settings-tab,
+.tool-header,
+.file-row,
+.ctx-menu-item,
+.sidebar-group-head,
+.sidebar-section-toggle {
+  transition: background 0.14s, border-color 0.14s, color 0.14s, transform 0.1s;
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (max-width: 980px) {
   .plugin-registry-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
