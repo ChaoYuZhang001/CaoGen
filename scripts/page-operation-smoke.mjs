@@ -125,7 +125,7 @@ try {
     await clickByText(cdp, '+ 新建会话')
     await waitForText(cdp, '新建会话')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await chooseSelectOptionByText(cdp, 'OpenAI Responses API')
+    await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
     await clickByText(cdp, '创建')
     await waitForText(cdp, '⎇ Worktree', 10_000)
     await waitForText(cdp, 'OpenAI 引擎缺少 API Key', 10_000)

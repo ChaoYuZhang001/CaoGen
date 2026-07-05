@@ -301,7 +301,8 @@ class BrowserViewManager {
         record.networkFailures = record.networkFailures.slice(-MAX_CONSOLE_ERRORS)
       }
     })
-    wc.session.webRequest.onCompleted({ urls: ['*://*/*'] }, (details) => {
+    // session 在测试 stub 里可能缺席;真 Electron 恒有。缺则退化为只记 did-fail-load。
+    wc.session?.webRequest?.onCompleted({ urls: ['*://*/*'] }, (details) => {
       if (details.statusCode >= 400 && details.webContentsId === wc.id) {
         record.networkFailures.push(`HTTP ${details.statusCode} ${details.method} ${details.url.slice(0, 200)}`)
         if (record.networkFailures.length > MAX_CONSOLE_ERRORS) {
