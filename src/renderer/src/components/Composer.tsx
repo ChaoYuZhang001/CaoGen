@@ -4,23 +4,16 @@ import { useT } from '../i18n'
 import type { ImageAttachmentView } from '../../../shared/types'
 import ImageAttachmentTray from './ImageAttachmentTray'
 import {
-  buildPluginSlashCommands,
-  pluginSlashCommandMatches,
-  shouldLoadPluginSlashRegistry
-} from '../pluginSlashCommands'
+  buildComposerSlashCommands,
+  buildPluginCommands,
+  filterCommandItems,
+  shouldLoadPluginSlashRegistry,
+  type CommandDescriptor
+} from '../commands'
 
 interface Mention {
   start: number
   query: string
-}
-
-interface SlashCommand {
-  id: string
-  title: string
-  hint: string
-  searchText?: string
-  insert?: string
-  run?: () => void
 }
 
 interface ComposerImageAttachment extends ImageAttachmentView {
@@ -120,114 +113,34 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
 
   const mentionOpen = mention !== null && suggestions.length > 0
   const slashQuery = text.startsWith('/') && !text.includes('\n') ? text.slice(1).trim().toLowerCase() : null
-  const pluginSlashCommands: SlashCommand[] =
+  const pluginSlashCommands: CommandDescriptor[] =
     slashQuery && slashQuery.length > 0
-      ? buildPluginSlashCommands(pluginRegistry?.items ?? []).map((cmd) => ({
-          id: cmd.id,
-          title: cmd.title,
-          hint: cmd.hint,
-          searchText: cmd.searchText,
-          run: () => {
-            if (cmd.action === 'dispatch-agent') {
-              void dispatchPluginAgent(cmd.item)
-            } else {
-              void sendPluginRegistryItemToAgent(cmd.item)
-            }
-          }
-        }))
-      : []
-  const slashCommands: SlashCommand[] = [
-    {
-      id: 'rewind',
-      title: '/rewind',
-      hint: t('slashRewindHint'),
-      run: () => openLatestRewindPanel('command')
-    },
-    {
-      id: 'diff',
-      title: '/diff',
-      hint: t('slashDiffHint'),
-      run: () => void openDiffPanel()
-    },
-    {
-      id: 'browser',
-      title: '/browser',
-      hint: t('slashBrowserHint'),
-      run: () => void openBrowserPanel()
-    },
-    {
-      id: 'files',
-      title: '/files',
-      hint: t('slashFilesHint'),
-      run: () => void openFilesPanel()
-    },
-    {
-      id: 'plugins',
-      title: '/plugins',
-      hint: t('slashPluginsHint'),
-      run: () => void openPluginRegistryPanel()
-    },
-    {
-      id: 'subagents',
-      title: '/subagents',
-      hint: t('slashSubagentsHint'),
-      run: () => void openSubagentPanel()
-    },
-    {
-      id: 'routine',
-      title: '/routine',
-      hint: t('slashRoutineHint'),
-      run: () => void openRoutinePanel()
-    },
-    {
-      id: 'memory',
-      title: '/memory',
-      hint: t('slashMemoryHint'),
-      run: () => openMemoryPanel()
-    },
-    {
-      id: 'worktree',
-      title: '/worktree',
-      hint: t('slashWorktreeHint'),
-      run: () => void openWorktreePanel()
-    },
-    {
-      id: 'terminal',
-      title: '/terminal',
-      hint: t('slashTerminalHint'),
-      run: () => void openTerminalPanel()
-    },
-    {
-      id: 'theme',
-      title: '/theme',
-      hint: t('slashThemeHint'),
-      run: () =>
-        void updateSettings({
-          theme: theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark'
+      ? buildPluginCommands(pluginRegistry?.items ?? [], {
+          sendPluginRegistryItemToAgent,
+          dispatchPluginAgent
         })
-    },
-    {
-      id: 'model-auto',
-      title: '/model auto',
-      hint: t('slashModelAutoHint'),
-      run: () => void setModel('auto')
-    },
-    ...MODEL_OPTIONS.filter((m) => m.value && m.value !== 'auto').map<SlashCommand>((m) => ({
-      id: `model-${m.value}`,
-      title: `/model ${m.value}`,
-      hint: t('slashModelHint', { model: m.label }),
-      run: () => void setModel(m.value)
-    })),
+      : []
+  const slashCommands: CommandDescriptor[] = [
+    ...buildComposerSlashCommands({
+      t,
+      modelOptions: MODEL_OPTIONS,
+      theme,
+      openLatestRewindPanel,
+      openDiffPanel,
+      openBrowserPanel,
+      openFilesPanel,
+      openWorktreePanel,
+      openTerminalPanel,
+      openPluginRegistryPanel,
+      openSubagentPanel,
+      openRoutinePanel,
+      openMemoryPanel,
+      updateSettings,
+      setModel
+    }),
     ...pluginSlashCommands
   ]
-  const slashMatches =
-    slashQuery === null
-      ? []
-      : slashCommands.filter((cmd) => {
-          if (cmd.searchText) return pluginSlashCommandMatches({ searchText: cmd.searchText }, slashQuery)
-          const haystack = `${cmd.title} ${cmd.hint}`.toLowerCase()
-          return slashQuery.length === 0 || haystack.includes(slashQuery)
-        })
+  const slashMatches = slashQuery === null ? [] : filterCommandItems(slashQuery, slashCommands)
   const slashOpen = slashQuery !== null && slashMatches.length > 0
 
   useEffect(() => {
@@ -246,7 +159,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     setMention(getMention(el.value, el.selectionStart ?? el.value.length))
   }
 
-  const runSlashCommand = (cmd: SlashCommand): void => {
+  const runSlashCommand = (cmd: CommandDescriptor): void => {
     setText('')
     setMention(null)
     setSuggestions([])

@@ -7,6 +7,7 @@ import WorkbenchRoot from './components/workbench/WorkbenchRoot'
 import WelcomeView from './components/WelcomeView'
 import NewSessionModal from './components/NewSessionModal'
 import SettingsModal from './components/SettingsModal'
+import CommandPalette from './components/CommandPalette'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(() => import('./components/office/OfficeView'))
@@ -19,6 +20,7 @@ export default function App(): React.JSX.Element {
   const view = useStore((s) => s.view)
   const showNewSession = useStore((s) => s.showNewSession)
   const showSettings = useStore((s) => s.showSettings)
+  const showCommandPalette = useStore((s) => s.showCommandPalette)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setShowCommandPalette = useStore((s) => s.setShowCommandPalette)
@@ -126,6 +128,7 @@ export default function App(): React.JSX.Element {
           <main className="main">{hasActive ? <WorkbenchRoot key={activeId} /> : <WelcomeView />}</main>
         </>
       )}
+      {showCommandPalette && <CommandPalette />}
       {showNewSession && <NewSessionModal />}
       {showSettings && <SettingsModal />}
     </div>
