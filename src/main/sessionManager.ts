@@ -68,6 +68,10 @@ class SessionManager {
 
   create(opts: CreateSessionOptions): SessionMeta {
     const settings = getSettings()
+    const resumeHistory = opts.resumeSdkSessionId
+      ? listHistory().find((entry) => entry.sdkSessionId === opts.resumeSdkSessionId)
+      : undefined
+    const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
     const baseMeta = newSessionMeta({
       cwd: opts.cwd,
       parentSessionId: opts.parentSessionId,
@@ -77,6 +81,7 @@ class SessionManager {
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
       budgetUsd: opts.budgetUsd,
+      resumeSessionAt,
       engine: opts.engine,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
@@ -103,6 +108,7 @@ class SessionManager {
       model: opts.model ?? settings.defaultModel,
       providerId: opts.providerId ?? settings.defaultProviderId,
       budgetUsd: opts.budgetUsd,
+      resumeSessionAt,
       engine: opts.engine,
       permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
       title: opts.title
@@ -368,7 +374,8 @@ class SessionManager {
       sdkSessionId: meta.sdkSessionId,
       createdAt: meta.createdAt,
       updatedAt: Date.now(),
-      costUsd: meta.costUsd
+      costUsd: meta.costUsd,
+      resumeSessionAt: meta.resumeSessionAt
     })
   }
 }
