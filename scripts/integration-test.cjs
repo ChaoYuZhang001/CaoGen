@@ -21,6 +21,10 @@ const buildDir = path.join(os.tmpdir(), 'caogen-itest-build')
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-itest-'))
 const userData = path.join(tmpRoot, 'userData')
 fs.mkdirSync(userData, { recursive: true })
+const fakeWindows = []
+const ipcHandlers = new Map()
+let fakeBrowserSelection = null
+let fakeBrowserScreenshot = null
 
 // ---------------------------------------------------------------- 断言与汇总
 const results = []
@@ -63,6 +67,7 @@ for (const dir of ['src/main', 'src/shared']) {
   }
 }
 files.push('src/renderer/src/store.ts')
+files.push('src/renderer/src/components/office/model.ts')
 const tsc = spawnSync(
   process.platform === 'win32' ? 'npx.cmd' : 'npx',
   ['tsc', ...files, '--outDir', buildDir, '--module', 'commonjs', '--target', 'es2022',
@@ -98,9 +103,41 @@ const electronStub = {
     show() { notifications.push(this.opts) }
     static isSupported() { return true }
   },
-  BrowserWindow: { getAllWindows: () => [] },
-  ipcMain: { handle() {} },
-  dialog: {}
+  BrowserWindow: {
+    getAllWindows: () => fakeWindows,
+    fromWebContents: (sender) => sender && sender.__owner ? sender.__owner : null
+  },
+  WebContentsView: class {
+    constructor() {
+      this._bounds = { x: 0, y: 0, width: 0, height: 0 }
+      this.webContents = {
+        setWindowOpenHandler() {},
+        on() {},
+        loadURL: async (url) => { this._url = url },
+        getURL: () => this._url || 'about:blank',
+        getTitle: () => 'Mock page',
+        isLoading: () => false,
+        isDestroyed: () => false,
+        close() {},
+        reload() {},
+        navigationHistory: { canGoBack: () => false, canGoForward: () => false, goBack() {}, goForward() {} },
+        executeJavaScript: async () => fakeBrowserSelection ?? {},
+        capturePage: async () => fakeBrowserScreenshot ?? mockNativeImage(false)
+      }
+    }
+    setBounds(bounds) { this._bounds = { ...bounds } }
+    getBounds() { return { ...this._bounds } }
+  },
+  ipcMain: { handle(name, fn) { ipcHandlers.set(name, fn) } },
+  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+  shell: { showItemInFolder() {}, openExternal: async () => {} }
+}
+
+function mockNativeImage(empty) {
+  return {
+    isEmpty: () => empty,
+    toPNG: () => Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  }
 }
 
 // mock SDK:行为由 env.ANTHROPIC_BASE_URL 控制
@@ -113,7 +150,12 @@ function mockQuery({ prompt, options }) {
   const base = (options && options.env && options.env.ANTHROPIC_BASE_URL) || ''
   const sessionId = 'mock-' + Math.random().toString(36).slice(2, 10)
   let closed = false
-  sdkLog.push({ create: base, model: options && options.model, resume: options && options.resume })
+  sdkLog.push({
+    create: base,
+    model: options && options.model,
+    resume: options && options.resume,
+    resumeSessionAt: options && options.resumeSessionAt
+  })
   return {
     async *[Symbol.asyncIterator]() {
       yield { type: 'system', subtype: 'init', session_id: sessionId, model: (options && options.model) || 'mock-default', tools: ['Bash'] }
@@ -121,7 +163,16 @@ function mockQuery({ prompt, options }) {
         if (closed) return
         const blocks = (user && user.message && user.message.content) || []
         const text = blocks.filter((b) => b && b.type === 'text').map((b) => b.text).join('')
+        yield { type: 'user', uuid: 'u-' + Math.random().toString(36).slice(2, 10), message: { content: blocks } }
         if (base.includes('slow429')) await new Promise((r) => setTimeout(r, 80))
+        if (text.includes('force-failover-after-restore')) {
+          yield {
+            type: 'result', subtype: 'error_during_execution', is_error: true,
+            result: 'API Error: 429 Too Many Requests after checkpoint restore',
+            total_cost_usd: 0, usage: {}, duration_ms: 5, num_turns: 1, session_id: sessionId
+          }
+          continue
+        }
         if (base.includes('always429') || base.includes('slow429')) {
           yield {
             type: 'result', subtype: 'error_during_execution', is_error: true,
@@ -147,7 +198,7 @@ function mockQuery({ prompt, options }) {
     async interrupt() { sdkLog.push({ interrupt: true }) },
     async setPermissionMode() {},
     async close() { closed = true; if (prompt && prompt.end) prompt.end() },
-    async rewindFiles() { return { canRewind: true, filesChanged: ['a.txt'], insertions: 1, deletions: 0 } },
+    async rewindFiles(id, opts) { sdkLog.push({ rewindFiles: id, dryRun: opts && opts.dryRun }); return { canRewind: true, filesChanged: ['a.txt'], insertions: 1, deletions: 0 } },
     async supportedCommands() { return [] },
     async backgroundTasks() { return false }
   }
@@ -158,6 +209,18 @@ const origLoad = Module._load
 Module._load = function (request, parent, isMain) {
   if (request === 'electron') return electronStub
   if (request === '@anthropic-ai/claude-agent-sdk') return sdkStub
+  if (request === './terminal' || request.endsWith('/terminal')) {
+    return {
+      terminalManager: {
+        subscribe: () => () => {},
+        list: () => [],
+        start: async () => ({ id: 'terminal-mock', cwd: tmpRoot, shell: '/bin/sh', backend: 'pipe', cols: 80, rows: 24, startedAt: Date.now() }),
+        write() {},
+        resize() {},
+        close() {}
+      }
+    }
+  }
   if (request === 'zustand') {
     const createImpl = (initializer) => {
       let state
@@ -319,6 +382,31 @@ async function main() {
     const events = []
     const s = new AS.AgentSession(meta, (event, seq) => events.push({ seq, event }))
     return { meta, events, s, kinds: () => events.map((e) => e.event.kind) }
+  }
+
+  function fakeWindow(bucket = []) {
+    const win = {
+      isDestroyed: () => false,
+      webContents: { send: (channel, payload) => bucket.push({ channel, payload }) },
+      contentView: { addChildView() {}, removeChildView() {} },
+      once() {}
+    }
+    win.webContents.__owner = win
+    return win
+  }
+
+  function storeSession(meta) {
+    return {
+      meta,
+      items: [],
+      streamText: '',
+      streamThinking: '',
+      toolResults: {},
+      runningTools: {},
+      pendingPermissions: [],
+      childResults: {},
+      lastSeq: 0
+    }
   }
 
   await test('T6 AgentSession:正常轮事件链与费用', async () => {
@@ -484,6 +572,209 @@ async function main() {
     assert(overLimit, '超过 33 个子代理应拒绝')
     for (const child of [...result.children, ...result33.children]) sm.close(child.meta.id)
     sm.close(parent.id)
+  })
+
+  // ---- PLAN T3 子代理结果回传 + 3D 真实任务流 ----
+  await test('PLAN T3 subagents:结果回父会话/store 聚合/3D 跨工位 packet', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    const store = M('renderer/src/store.js').useStore
+    const office = M('renderer/src/components/office/model.js')
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    try {
+      const repoDir = mkRepo('plan-t3-subagents')
+      const parent = sm.create({ cwd: repoDir, title: 'plan parent', isolated: false, providerId: 'prov-b', model: 'm-b' })
+      await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
+      const result = sm.dispatchSubagents(parent.id, {
+        tasks: [{ id: 'api', role: 'backend', prompt: '实现接口并返回结果' }]
+      })
+      const child = result.children[0].meta
+      await waitFor(
+        () => bucket.some((entry) => entry.channel === 'session:event' && entry.payload.sessionId === parent.id && entry.payload.event.kind === 'subagent-result'),
+        5000,
+        '等待父会话 subagent-result'
+      )
+      const payload = bucket.find((entry) => entry.channel === 'session:event' && entry.payload.sessionId === parent.id && entry.payload.event.kind === 'subagent-result').payload
+      eq(payload.event.childTaskId, 'api', '父事件 childTaskId')
+      eq(payload.event.status, 'done', '父事件状态')
+
+      store.setState({ sessions: { [parent.id]: storeSession(parent) }, order: [parent.id], activeId: parent.id })
+      store.getState().handleEvent(parent.id, payload.event, payload.seq)
+      const parentState = store.getState().sessions[parent.id]
+      assert(parentState.childResults.api, 'store 未聚合 childResults.api')
+      eq(parentState.childResults.api.childSessionId, child.id, 'store child session id')
+
+      const model = office.buildOfficeModel([parent.id, child.id], {
+        [parent.id]: storeSession(parent),
+        [child.id]: storeSession(child)
+      })
+      assert(model.packets.some((packet) => packet.kind === 'subtask' && packet.from === 0 && packet.to === 1), '3D office 未生成父子跨工位 packet')
+      sm.close(child.id)
+      sm.close(parent.id)
+    } finally {
+      fakeWindows.splice(fakeWindows.indexOf(win), 1)
+    }
+  })
+
+  // ---- PLAN T4 开工建议接线 ----
+  await test('PLAN T4 start suggestions:IPC 汇入 memory/history/routine/package 并支持本地忽略', async () => {
+    M('main/ipc.js').registerIpc()
+    const sm = M('main/sessionManager.js').sessionManager
+    const ms = M('main/memoryStore.js')
+    const rs = M('main/routineStore.js')
+    const hist = M('main/history.js')
+    const store = M('renderer/src/store.js').useStore
+    const projectDir = mkRepo('plan-t4-suggestions')
+    fs.writeFileSync(path.join(projectDir, 'package.json'), JSON.stringify({ name: 'plan-t4', scripts: { typecheck: 'tsc --noEmit' } }, null, 2))
+    fs.writeFileSync(path.join(projectDir, 'README.md'), '# plan t4\n\nTODO: failed validation branch\n')
+    const draft = await ms.proposeMemoryDraft(projectDir, path.join(userData, 'memory'), {
+      kind: 'failure', title: 'Last run failed', body: 'blocked by runtime error', source: 'itest', reason: 'failure smoke'
+    })
+    await ms.acceptMemoryDraft(projectDir, path.join(userData, 'memory'), draft.id)
+    hist.upsertHistory({
+      id: 'hist-plan-t4', title: 'Continue unfinished sidebar work', cwd: projectDir, model: 'm-b', providerId: 'prov-b', permissionMode: 'default', sdkSessionId: 'hist-sdk-plan-t4', createdAt: 1, updatedAt: Date.now(), costUsd: 0
+    })
+    await rs.createRoutine(path.join(userData, 'routines'), {
+      id: 'routine-plan-t4', name: 'Failed nightly routine', prompt: 'failed validation needs repair', projectCwd: projectDir, schedule: '@daily', enabled: true
+    })
+    const meta = sm.create({ cwd: projectDir, title: 'suggestions parent', isolated: false, providerId: 'prov-b', model: 'm-b' })
+    await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000)
+    const suggestions = await ipcHandlers.get('startSuggestions:get')({}, meta.id)
+    const ids = new Set(suggestions.map((item) => item.id))
+    assert(ids.has('memory-failure'), `缺 memory-failure:${suggestions.map((s) => s.id).join(',')}`)
+    assert(ids.has('routine-failure'), `缺 routine-failure:${suggestions.map((s) => s.id).join(',')}`)
+    assert(ids.has('history-continue'), `缺 history-continue:${suggestions.map((s) => s.id).join(',')}`)
+    assert(ids.has('package-verify') || ids.has('readme-todo'), '缺 package/readme 建议')
+
+    global.window.agentDesk = { ...(global.window.agentDesk || {}), getStartSuggestions: async () => suggestions, sendMessage: async () => {}, closeBrowser: async () => {} }
+    store.setState({ activeId: meta.id, workbench: { ...store.getState().workbench, startSuggestions: [], ignoredStartSuggestions: {}, laterStartSuggestions: {} } })
+    await store.getState().refreshStartSuggestions()
+    assert(store.getState().visibleStartSuggestions().length > 0, 'store 未加载 start suggestions')
+    const first = store.getState().visibleStartSuggestions()[0]
+    store.getState().ignoreStartSuggestion(first.id)
+    assert(!store.getState().visibleStartSuggestions().some((item) => item.id === first.id), 'ignore 未隐藏建议')
+    sm.close(meta.id)
+  })
+
+  // ---- PLAN T5 记忆自动提议 ----
+  await test('PLAN T5 memory suggestion:send 触发提示,接受只预填不落盘', async () => {
+    M('main/ipc.js').registerIpc()
+    const sm = M('main/sessionManager.js').sessionManager
+    const store = M('renderer/src/store.js').useStore
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    try {
+      const meta = sm.create({ cwd: tmpRoot, title: 'memory suggestion', isolated: false, providerId: 'prov-b', model: 'm-b' })
+      await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000)
+      await ipcHandlers.get('sessions:send')({}, meta.id, { text: '请记住以后默认使用 pnpm' })
+      await waitFor(() => bucket.some((entry) => entry.channel === 'memory:suggestion'), 2000, '等待 memory:suggestion')
+      const event = bucket.find((entry) => entry.channel === 'memory:suggestion').payload
+      eq(event.sessionId, meta.id, 'memory suggestion session')
+      store.setState({ activeId: meta.id, workbench: { ...store.getState().workbench, memorySuggestion: undefined, memoryOpen: false, memoryInitialForm: undefined } })
+      global.window.agentDesk = { ...(global.window.agentDesk || {}), closeBrowser: async () => {} }
+      store.getState().handleMemorySuggestion(event)
+      store.getState().acceptMemorySuggestion()
+      assert(store.getState().workbench.memoryOpen, '接受记忆提示后未打开 MemoryPanel')
+      eq(store.getState().workbench.memoryInitialForm.body, event.text, '记忆 draft 预填内容')
+      assert(!fs.existsSync(path.join(userData, 'memory', 'drafts')), '接受提示不应自动写入全局 draft')
+      sm.close(meta.id)
+    } finally {
+      fakeWindows.splice(fakeWindows.indexOf(win), 1)
+    }
+  })
+
+  // ---- PLAN T6 浏览器批注截图 ----
+  await test('PLAN T6 browser annotation:可见时写 PNG,隐藏 bounds 时不写空白截图', async () => {
+    const bv = M('main/browserView.js').browserViewManager
+    const owner = fakeWindow([])
+    fakeBrowserSelection = { url: 'https://example.test/page', title: 'Example', text: 'selected', viewport: { width: 800, height: 600, deviceScaleFactor: 1 } }
+    fakeBrowserScreenshot = mockNativeImage(false)
+    await bv.open(owner, 'browser-plan-t6', 'about:blank')
+    bv.setBounds('browser-plan-t6', { x: 0, y: 0, width: 640, height: 360 })
+    const annotation = await bv.captureAnnotation('browser-plan-t6', 'visible note')
+    assert(annotation.screenshotPath && fs.existsSync(annotation.screenshotPath), '可见批注未写入 screenshotPath/PNG')
+    bv.setBounds('browser-plan-t6', { x: 0, y: 0, width: 0, height: 0 })
+    const hidden = await bv.captureAnnotation('browser-plan-t6', 'hidden note')
+    assert(!hidden.screenshotPath, '隐藏 browser view 不应保存空白截图')
+    bv.close('browser-plan-t6')
+  })
+
+  // ---- PLAN T7 Routine 首帧 nextRunAt ----
+  await test('PLAN T7 routine:enabled 且未传 nextRunAt 时立即 seed', async () => {
+    const rs = M('main/routineStore.js')
+    const root = path.join(userData, 'routine-plan-t7')
+    const enabled = await rs.createRoutine(root, { id: 'rt-plan-t7', name: 'Seed next', prompt: 'run', projectCwd: tmpRoot, schedule: '@hourly', enabled: true })
+    assert(typeof enabled.nextRunAt === 'number' && enabled.nextRunAt > Date.now(), `enabled routine 未 seed nextRunAt:${JSON.stringify(enabled)}`)
+    const disabled = await rs.createRoutine(root, { id: 'rt-plan-t7-disabled', name: 'No seed', prompt: 'run', projectCwd: tmpRoot, schedule: '@hourly', enabled: false })
+    assert(!Object.prototype.hasOwnProperty.call(disabled, 'nextRunAt'), 'disabled routine 不应自动 seed nextRunAt')
+  })
+
+  // ---- PLAN T8 预算闸门 ----
+  await test('PLAN T8 budget:session > provider > global,0 表示不限,send 前拦截', async () => {
+    const providersMod = M('main/providers.js')
+    settingsMod.updateSettings({ failoverEnabled: true, budgetUsdPerSession: 0.5 })
+    providersMod.updateProvider('prov-b', { budgetUsd: 0.01 })
+    const blocked = newSession('prov-b', 'm-b')
+    blocked.meta.costUsd = 0.02
+    await blocked.s.start()
+    await waitFor(() => blocked.events.some((e) => e.event.kind === 'init'), 3000)
+    blocked.s.send('provider budget should block')
+    await waitFor(() => blocked.events.some((e) => e.event.kind === 'status' && e.event.status === 'error'), 2000)
+    assert(String(blocked.meta.lastError).includes('预算上限 $0.01'), `provider budget 错误不明确:${blocked.meta.lastError}`)
+    assert(!blocked.events.some((e) => e.event.kind === 'user-message'), '预算拦截必须发生在 user-message/send 前')
+    blocked.s.dispose()
+
+    const sessionWins = newSession('prov-b', 'm-b')
+    sessionWins.meta.budgetUsd = 1
+    sessionWins.meta.costUsd = 0.02
+    await sessionWins.s.start()
+    await waitFor(() => sessionWins.events.some((e) => e.event.kind === 'init'), 3000)
+    sessionWins.s.send('session budget allows')
+    await waitFor(() => sessionWins.events.some((e) => e.event.kind === 'turn-result'), 3000)
+    assert(sessionWins.events.some((e) => e.event.kind === 'user-message'), 'session budget 应覆盖 provider budget 允许发送')
+    sessionWins.s.dispose()
+
+    providersMod.updateProvider('prov-b', { budgetUsd: 0 })
+    const globalBlocks = newSession('prov-b', 'm-b')
+    globalBlocks.meta.costUsd = 0.6
+    await globalBlocks.s.start()
+    await waitFor(() => globalBlocks.events.some((e) => e.event.kind === 'init'), 3000)
+    globalBlocks.s.send('global budget should block')
+    await waitFor(() => globalBlocks.events.some((e) => e.event.kind === 'status' && e.event.status === 'error'), 2000)
+    assert(String(globalBlocks.meta.lastError).includes('预算上限 $0.50'), `global budget 错误不明确:${globalBlocks.meta.lastError}`)
+    globalBlocks.s.dispose()
+    settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+  })
+
+  // ---- PLAN T9 检查点 chat/both SDK 上下文回退 ----
+  await test('PLAN T9 checkpoint:chat restore 后下一次 start 注入 resumeSessionAt,both 先验 chat', async () => {
+    settingsMod.updateSettings({ failoverEnabled: true, budgetUsdPerSession: 0 })
+    fs.writeFileSync(path.join(userData, 'providers.json'), JSON.stringify([
+      { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), models: ['m-a'], createdAt: 1 },
+      { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), models: ['m-b'], createdAt: 2 }
+    ], null, 2))
+    const { events, s } = newSession('prov-b', 'm-b')
+    await s.start()
+    await waitFor(() => events.some((e) => e.event.kind === 'init'), 3000)
+    s.send('first checkpoint turn')
+    await waitFor(() => events.filter((e) => e.event.kind === 'turn-result').length >= 1, 3000)
+    const firstCheckpoint = events.find((e) => e.event.kind === 'checkpoint')?.event.messageId
+    assert(firstCheckpoint, '第一轮未产生 checkpoint')
+    s.send('second checkpoint turn')
+    await waitFor(() => events.filter((e) => e.event.kind === 'turn-result').length >= 2, 3000)
+    const beforeBoth = sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length
+    const badBoth = await s.restoreCheckpoint('missing-checkpoint', 'both', false)
+    assert(!badBoth.canRewind && badBoth.chat && !badBoth.chat.ok, 'both 模式应先失败在 chat 校验')
+    eq(sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length, beforeBoth, 'chat 校验失败时不应执行文件回退')
+
+    const restored = await s.restoreCheckpoint(firstCheckpoint, 'chat', false)
+    assert(restored.applied && restored.transcript, `chat restore 未应用:${JSON.stringify(restored)}`)
+    s.send('force-failover-after-restore')
+    await waitFor(() => sdkLog.some((entry) => entry.resumeSessionAt === firstCheckpoint), 5000, '等待 resumeSessionAt 注入')
+    assert(sdkLog.some((entry) => entry.resume && entry.resumeSessionAt === firstCheckpoint), '下一次 start 未携带 resume + resumeSessionAt')
+    s.dispose()
   })
 
   // ---- T13 OpenAI 原生引擎:Responses API SSE → CaoGen 事件 ----
