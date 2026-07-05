@@ -1,4 +1,5 @@
 import { listRoutines, markRun, updateRoutine, type Routine } from './routineStore'
+import { normalizeCronAlias } from './cronParse'
 
 /**
  * Routine 定时调度器(主进程内)。
@@ -159,7 +160,7 @@ export function computeNextRun(schedule: string, from: number): number | null {
     return from + interval
   }
 
-  return computeNextCron(trimmed, from)
+  return computeNextCron(normalizeCronAlias(trimmed), from)
 }
 
 /** 解析间隔式表达式,返回毫秒;非间隔式返回 null */
