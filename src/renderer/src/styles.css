@@ -701,6 +701,141 @@ textarea {
   overflow-y: auto;
 }
 
+/* ---------- 首屏"打开即输入"(对标 Codex) ---------- */
+
+.welcome-hero {
+  /* 卡K: 极柔和品牌色渐变光晕,替代纯黑死板 */
+  background:
+    radial-gradient(60% 50% at 30% 30%, rgba(90, 130, 255, 0.06), transparent 70%),
+    radial-gradient(50% 45% at 75% 70%, rgba(80, 220, 200, 0.05), transparent 70%);
+}
+
+.welcome-hero-inner {
+  width: min(680px, 90vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.welcome-ask {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-align: center;
+}
+
+.welcome-composer {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-raised);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  padding: 12px 14px;
+  transition: border-color 0.14s;
+}
+
+.welcome-composer:focus-within {
+  border-color: var(--text-faint);
+}
+
+.welcome-composer-input {
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--text);
+  resize: none;
+  outline: none;
+  font-size: 15px;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.welcome-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.welcome-chip {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.welcome-chip:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+.welcome-mini-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.welcome-send {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  transition: transform 0.1s, opacity 0.14s;
+}
+
+.welcome-send:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.welcome-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.welcome-recent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.welcome-recent-chip {
+  padding: 4px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.14s, color 0.14s;
+}
+
+.welcome-recent-chip:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.welcome-error {
+  width: 100%;
+}
+
 .welcome-inner {
   max-width: 640px;
   text-align: center;

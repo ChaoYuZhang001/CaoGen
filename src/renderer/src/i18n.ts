@@ -89,6 +89,11 @@ const DICT: Dict = {
   // 欢迎页
   welcomeSub: { zh: '多会话并行的桌面 AI 编码 Agent', en: 'Parallel multi-session desktop AI coding agent' },
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
+  welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
+  welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
+  welcomePickProject: { zh: '选择项目', en: 'Choose project' },
+  welcomeNeedProject: { zh: '请先选择项目目录', en: 'Pick a project folder first' },
+  welcomeBrowse: { zh: '浏览…', en: 'Browse…' },
   featParallel: { zh: '多会话并行', en: 'Parallel sessions' },
   featParallelDesc: {
     zh: '同时在多个项目上运行 Agent,互不阻塞',
