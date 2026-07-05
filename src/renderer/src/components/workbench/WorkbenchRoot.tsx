@@ -53,6 +53,9 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const togglePluginRegistryItem = useStore((s) => s.togglePluginRegistryItem)
   const sendPluginRegistryItemToAgent = useStore((s) => s.sendPluginRegistryItemToAgent)
   const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
+  const probeMcpRuntime = useStore((s) => s.probeMcpRuntime)
+  const mcpProbeResults = useStore((s) => s.workbench.mcpProbeResults)
+  const mcpProbing = useStore((s) => s.workbench.mcpProbing)
   const closeSubagentPanel = useStore((s) => s.closeSubagentPanel)
   const dispatchSubagentText = useStore((s) => s.dispatchSubagentText)
   const selectSession = useStore((s) => s.selectSession)
@@ -122,6 +125,9 @@ export default function WorkbenchRoot(): React.JSX.Element {
               onDispatchAgent={(item) => void dispatchPluginAgent(item)}
               onRevealItem={(item) => void revealPluginRegistryItem(item)}
               onToggleItem={(item, enabled) => void togglePluginRegistryItem(item, enabled)}
+              onProbeMcp={(items) => void probeMcpRuntime(items)}
+              mcpProbeResults={mcpProbeResults}
+              mcpProbing={mcpProbing}
             />
           ) : subagentOpen ? (
             <SubagentPanel

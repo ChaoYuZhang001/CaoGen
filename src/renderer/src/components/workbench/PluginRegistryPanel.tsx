@@ -91,6 +91,20 @@ export interface PluginRegistryPanelProps {
   onUseItem?: (item: PluginRegistryPanelItem) => void | Promise<void>
   onDispatchAgent?: (item: PluginRegistryPanelItem) => void | Promise<void>
   onToggleItem?: (item: PluginRegistryPanelItem, enabled: boolean) => void | Promise<void>
+  /** MCP 运行态:探测可见 mcp 条目的真实连接状态 */
+  onProbeMcp?: (items: PluginRegistryPanelItem[]) => void | Promise<void>
+  /** MCP 探测结果(id → 状态);进行中用 mcpProbing */
+  mcpProbeResults?: Record<string, McpProbeStatus>
+  mcpProbing?: boolean
+}
+
+/** 面板展示用的 MCP 探测状态(shared McpProbeResult 的展示投影) */
+export interface McpProbeStatus {
+  ok: boolean
+  serverName?: string
+  serverVersion?: string
+  latencyMs?: number
+  error?: string
 }
 
 type KindFilter = PluginRegistryKind | 'all'
@@ -266,7 +280,10 @@ export default function PluginRegistryPanel({
   onRevealItem,
   onUseItem,
   onDispatchAgent,
-  onToggleItem
+  onToggleItem,
+  onProbeMcp,
+  mcpProbeResults = {},
+  mcpProbing = false
 }: PluginRegistryPanelProps): React.JSX.Element {
   const labels = mergeLabels(labelOverrides)
   const [query, setQuery] = useState('')
@@ -324,6 +341,16 @@ export default function PluginRegistryPanel({
           <div className="plugin-registry-subtitle">{labels.subtitle}</div>
         </div>
         <div className="plugin-registry-actions">
+          {onProbeMcp && stats.byKind.mcp > 0 && (
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={mcpProbing}
+              title="真实连接测试:stdio 发 initialize 握手,http 测可达性"
+              onClick={() => void onProbeMcp(items.filter((item) => item.kind === 'mcp'))}
+            >
+              {mcpProbing ? '探测中…' : '探测 MCP 连接'}
+            </button>
+          )}
           {onRefresh && (
             <button className="btn btn-ghost btn-sm" disabled={loading} onClick={() => void onRefresh()}>
               {loading ? labels.loading : labels.refresh}
@@ -422,7 +449,35 @@ export default function PluginRegistryPanel({
                     {itemKindLabel(item.kind, labels)}
                   </span>
                   <span className="plugin-registry-row-content">
-                    <span className="plugin-registry-row-name">{item.name}</span>
+                    <span className="plugin-registry-row-name">
+                      {item.name}
+                      {item.kind === 'mcp' && mcpProbeResults[item.id] && (
+                        <span
+                          className={cx(
+                            'plugin-registry-probe',
+                            mcpProbeResults[item.id].ok
+                              ? 'plugin-registry-probe-ok'
+                              : 'plugin-registry-probe-fail'
+                          )}
+                          title={
+                            mcpProbeResults[item.id].ok
+                              ? [
+                                  mcpProbeResults[item.id].serverName &&
+                                    `server: ${mcpProbeResults[item.id].serverName} ${mcpProbeResults[item.id].serverVersion ?? ''}`,
+                                  mcpProbeResults[item.id].latencyMs !== undefined &&
+                                    `${mcpProbeResults[item.id].latencyMs}ms`
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')
+                              : mcpProbeResults[item.id].error
+                          }
+                        >
+                          {mcpProbeResults[item.id].ok
+                            ? `✓ 已连通${mcpProbeResults[item.id].latencyMs !== undefined ? ` ${mcpProbeResults[item.id].latencyMs}ms` : ''}`
+                            : '✕ 连接失败'}
+                        </span>
+                      )}
+                    </span>
                     <span className="plugin-registry-row-summary">
                       <span className={cx('plugin-registry-source', `plugin-registry-source-${item.sourceKind ?? 'other'}`)}>
                         {sourceLabel(item.sourceKind ?? 'other', labels)}

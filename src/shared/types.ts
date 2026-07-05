@@ -568,6 +568,17 @@ export interface PluginRegistrySetEnabledResult {
   error?: string
 }
 
+/** MCP 运行态探测结果(stdio initialize 握手 / http 可达) */
+export interface McpProbeResult {
+  id: string
+  ok: boolean
+  transport: 'stdio' | 'http' | 'unknown'
+  serverName?: string
+  serverVersion?: string
+  latencyMs?: number
+  error?: string
+}
+
 export type RoutinePermissionMode = PermissionModeId
 
 export interface Routine extends Record<string, unknown> {
@@ -1028,6 +1039,8 @@ export interface AgentDeskApi {
     enabled: boolean,
     sessionId?: string
   ): Promise<PluginRegistrySetEnabledResult>
+  /** MCP 运行态探测:stdio 真握手 / http 可达性(最多 20 项) */
+  probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<McpProbeResult[]>
   listRoutines(): Promise<Routine[]>
   createRoutine(input: CreateRoutineInput): Promise<Routine>
   deleteRoutine(id: string): Promise<boolean>
