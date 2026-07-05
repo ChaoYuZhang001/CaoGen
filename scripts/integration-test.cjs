@@ -487,6 +487,9 @@ async function main() {
   // ---- T11 store reducer:事件序列 + seq 去重 + stash/drain ----
   await test('T11 store:事件溯源、去重与迟注册补投', async () => {
     global.window = {
+      // store 的流式节流在无 requestAnimationFrame 时降级到 window.setTimeout
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (id) => clearTimeout(id),
       agentDesk: {
         onSessionEvent: () => () => {},
         listSessions: async () => [],
