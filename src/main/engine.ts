@@ -22,6 +22,7 @@ export interface Engine {
   readonly meta: SessionMeta
   start(): Promise<void>
   send(input: string | SendMessagePayload): void
+  rejectSend(message: string): void
   interrupt(): Promise<void>
   respondPermission(requestId: string, allow: boolean, message?: string): void
   pendingPermissions(): PermissionRequestInfo[]

@@ -510,7 +510,7 @@ export function registerIpc(): void {
         if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
       }
     }
-    sessionManager.get(id)?.send(payload)
+    sessionManager.send(id, payload)
   })
 
   ipcMain.handle('sessions:interrupt', async (_e, id: string) => {

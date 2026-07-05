@@ -714,38 +714,96 @@ async function main() {
   // ---- PLAN T8 预算闸门 ----
   await test('PLAN T8 budget:session > provider > global,0 表示不限,send 前拦截', async () => {
     const providersMod = M('main/providers.js')
+    const sm = M('main/sessionManager.js').sessionManager
+    sm.init()
     settingsMod.updateSettings({ failoverEnabled: true, budgetUsdPerSession: 0.5 })
     providersMod.updateProvider('prov-b', { budgetUsd: 0.01 })
-    const blocked = newSession('prov-b', 'm-b')
-    blocked.meta.costUsd = 0.02
-    await blocked.s.start()
-    await waitFor(() => blocked.events.some((e) => e.event.kind === 'init'), 3000)
-    blocked.s.send('provider budget should block')
-    await waitFor(() => blocked.events.some((e) => e.event.kind === 'status' && e.event.status === 'error'), 2000)
-    assert(String(blocked.meta.lastError).includes('预算上限 $0.01'), `provider budget 错误不明确:${blocked.meta.lastError}`)
-    assert(!blocked.events.some((e) => e.event.kind === 'user-message'), '预算拦截必须发生在 user-message/send 前')
-    blocked.s.dispose()
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    const createdIds = []
+    const eventsFor = (id) => bucket
+      .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
+      .map((entry) => entry.payload.event)
+    try {
+      const blocked = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-provider' })
+      createdIds.push(blocked.id)
+      const blockedSession = sm.get(blocked.id)
+      blockedSession.meta.costUsd = 0.02
+      await waitFor(() => blockedSession.meta.sdkSessionId, 3000)
+      const beforeBlockedUsers = eventsFor(blocked.id).filter((e) => e.kind === 'user-message').length
+      sm.send(blocked.id, 'provider budget should block')
+      await waitFor(() => eventsFor(blocked.id).some((e) => e.kind === 'status' && e.status === 'error'), 2000)
+      assert(String(blockedSession.meta.lastError).includes('预算上限 $0.01'), `provider budget 错误不明确:${blockedSession.meta.lastError}`)
+      eq(eventsFor(blocked.id).filter((e) => e.kind === 'user-message').length, beforeBlockedUsers, '预算拦截必须发生在 user-message/send 前')
 
-    const sessionWins = newSession('prov-b', 'm-b')
-    sessionWins.meta.budgetUsd = 1
-    sessionWins.meta.costUsd = 0.02
-    await sessionWins.s.start()
-    await waitFor(() => sessionWins.events.some((e) => e.event.kind === 'init'), 3000)
-    sessionWins.s.send('session budget allows')
-    await waitFor(() => sessionWins.events.some((e) => e.event.kind === 'turn-result'), 3000)
-    assert(sessionWins.events.some((e) => e.event.kind === 'user-message'), 'session budget 应覆盖 provider budget 允许发送')
-    sessionWins.s.dispose()
+      blockedSession.meta.budgetUsd = 1
+      sm.send(blocked.id, 'session budget allows after raise')
+      await waitFor(() => eventsFor(blocked.id).some((e) => e.kind === 'user-message' && e.text === 'session budget allows after raise'), 3000)
+      await waitFor(() => eventsFor(blocked.id).some((e) => e.kind === 'turn-result' && !e.isError), 3000)
 
-    providersMod.updateProvider('prov-b', { budgetUsd: 0 })
-    const globalBlocks = newSession('prov-b', 'm-b')
-    globalBlocks.meta.costUsd = 0.6
-    await globalBlocks.s.start()
-    await waitFor(() => globalBlocks.events.some((e) => e.event.kind === 'init'), 3000)
-    globalBlocks.s.send('global budget should block')
-    await waitFor(() => globalBlocks.events.some((e) => e.event.kind === 'status' && e.event.status === 'error'), 2000)
-    assert(String(globalBlocks.meta.lastError).includes('预算上限 $0.50'), `global budget 错误不明确:${globalBlocks.meta.lastError}`)
-    globalBlocks.s.dispose()
-    settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+      providersMod.updateProvider('prov-b', { budgetUsd: 0 })
+      const globalBlocks = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-global' })
+      createdIds.push(globalBlocks.id)
+      const globalSession = sm.get(globalBlocks.id)
+      globalSession.meta.costUsd = 0.6
+      await waitFor(() => globalSession.meta.sdkSessionId, 3000)
+      sm.send(globalBlocks.id, 'global budget should block')
+      await waitFor(() => eventsFor(globalBlocks.id).some((e) => e.kind === 'status' && e.status === 'error'), 2000)
+      assert(String(globalSession.meta.lastError).includes('预算上限 $0.50'), `global budget 错误不明确:${globalSession.meta.lastError}`)
+
+      settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+      const noBudget = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-off' })
+      createdIds.push(noBudget.id)
+      const noBudgetSession = sm.get(noBudget.id)
+      noBudgetSession.meta.costUsd = 999
+      await waitFor(() => noBudgetSession.meta.sdkSessionId, 3000)
+      sm.send(noBudget.id, 'budget zero should allow')
+      await waitFor(() => eventsFor(noBudget.id).some((e) => e.kind === 'turn-result' && !e.isError), 3000)
+
+      let openAiRequests = 0
+      const server = http.createServer((req, res) => {
+        openAiRequests++
+        req.resume()
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive'
+        })
+        res.write('event: response.output_text.delta\n')
+        res.write('data: {"type":"response.output_text.delta","delta":"ok"}\n\n')
+        res.write('event: response.completed\n')
+        res.write('data: {"type":"response.completed","response":{"usage":{"input_tokens":1000,"output_tokens":1000,"input_tokens_details":{"cached_tokens":0}}}}\n\n')
+        res.end('data: [DONE]\n\n')
+      })
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+      process.env.OPENAI_API_KEY = 'test-openai-key'
+      process.env.OPENAI_BASE_URL = `http://127.0.0.1:${server.address().port}`
+      try {
+        const openai = sm.create({ cwd: tmpRoot, isolated: false, providerId: '', engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai' })
+        createdIds.push(openai.id)
+        const openaiSession = sm.get(openai.id)
+        await waitFor(() => openaiSession.meta.sdkSessionId, 3000)
+        sm.send(openai.id, 'openai budget turn')
+        await waitFor(() => eventsFor(openai.id).some((e) => e.kind === 'turn-result' && typeof e.costUsd === 'number' && e.costUsd > 0), 3000)
+        const cost = openaiSession.meta.costUsd
+        assert(cost > 0, `OpenAI usage 未在公共层累计费用:${cost}`)
+        openaiSession.meta.budgetUsd = cost / 2
+        const beforeSecondRequest = openAiRequests
+        sm.send(openai.id, 'openai should block before fetch')
+        await waitFor(() => eventsFor(openai.id).some((e) => e.kind === 'status' && e.status === 'error' && String(e.error).includes('预算上限')), 2000)
+        eq(openAiRequests, beforeSecondRequest, 'OpenAI 超预算后不应再发起请求')
+      } finally {
+        await new Promise((resolve) => server.close(resolve))
+        delete process.env.OPENAI_API_KEY
+        delete process.env.OPENAI_BASE_URL
+      }
+    } finally {
+      for (const id of createdIds) sm.close(id)
+      fakeWindows.splice(fakeWindows.indexOf(win), 1)
+      providersMod.updateProvider('prov-b', { budgetUsd: 0 })
+      settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+    }
   })
 
   // ---- PLAN T9 检查点 chat/both SDK 上下文回退 ----

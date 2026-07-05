@@ -357,11 +357,6 @@ export class AgentSession implements Engine {
       this.setStatus('error', authError)
       return
     }
-    const budget = this.effectiveBudgetUsd()
-    if (budget > 0 && this.meta.costUsd >= budget) {
-      this.setStatus('error', `已达预算上限 $${budget.toFixed(2)},如需继续请调高预算`)
-      return
-    }
     // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
     if (this.failoverBusy) {
       this.emitUserMessage(displayText, payload.images)
@@ -369,7 +364,7 @@ export class AgentSession implements Engine {
       return
     }
     // query 创建前 Pushable 已可排队;仅已失败/已关闭时拒绝,避免初始任务竞态丢失。
-    if (this.meta.status === 'error' || this.meta.status === 'closed') {
+    if (this.meta.status === 'closed') {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
@@ -399,12 +394,8 @@ export class AgentSession implements Engine {
     return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
-  private effectiveBudgetUsd(): number {
-    const sessionBudget = normalizeBudget(this.meta.budgetUsd)
-    if (sessionBudget > 0) return sessionBudget
-    const providerBudget = this.meta.providerId ? normalizeBudget(getProvider(this.meta.providerId)?.budgetUsd) : 0
-    if (providerBudget > 0) return providerBudget
-    return normalizeBudget(getSettings().budgetUsdPerSession)
+  rejectSend(message: string): void {
+    this.setStatus('error', message)
   }
 
   private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
