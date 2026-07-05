@@ -284,7 +284,7 @@ function runPrTool(
   command: PullRequestTool,
   cwd: string,
   args: string[]
-): { ok: true; stdout: string } | { ok: false; error: string } {
+): { ok: boolean; stdout: string; error?: string } {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
@@ -294,10 +294,10 @@ function runPrTool(
   })
   const stdout = typeof result.stdout === 'string' ? result.stdout : ''
   const stderr = typeof result.stderr === 'string' ? result.stderr : ''
-  if (result.error) return { ok: false, error: result.error.message }
+  if (result.error) return { ok: false, stdout, error: result.error.message }
   if (result.status !== 0) {
     const output = stderr.trim() || stdout.trim()
-    return { ok: false, error: output || `${command} exited with ${result.status ?? 'null'}` }
+    return { ok: false, stdout, error: output || `${command} exited with ${result.status ?? 'null'}` }
   }
   return { ok: true, stdout }
 }
