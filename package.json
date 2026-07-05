@@ -36,6 +36,7 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/icon.icns",
+      "identity": null,
       "target": [
         {
           "target": "dmg",
@@ -54,6 +55,12 @@
     "dmg": {
       "title": "CaoGen ${version}"
     },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://example.com/caogen/"
+      }
+    ],
     "win": {
       "icon": "resources/icon.png",
       "target": [
@@ -73,6 +80,7 @@
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
     "@react-three/postprocessing": "^2.19.1",
+    "electron-updater": "^6.8.9",
     "highlight.js": "^11.11.1",
     "node-pty": "^1.1.0",
     "postprocessing": "^6.39.2",

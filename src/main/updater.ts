@@ -21,6 +21,8 @@ import { app } from 'electron'
  *        }
  *      或通用 S3 / 静态服务器:
  *        "publish": [{ "provider": "generic", "url": "https://example.com/caogen/" }]
+ *      注:package.json 已内置该 generic publish 占位配置,其中的 URL
+ *      (https://example.com/caogen/)为**占位符**,发版时须改成真实的更新分发地址。
  *   3) 发版时用 `electron-builder --publish always`(或 CI)上传 latest.yml + 安装包。
  *   4) 本模块探测到 electron-updater 后会自动接管,无需改调用点。
  */
