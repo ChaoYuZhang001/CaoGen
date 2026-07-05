@@ -1394,12 +1394,12 @@ textarea {
 
 .diff-old {
   background: rgba(229, 83, 75, 0.1);
-  color: #eba9a4;
+  color: var(--red);
 }
 
 .diff-new {
   background: rgba(127, 176, 105, 0.1);
-  color: #b4d3a5;
+  color: var(--green);
 }
 
 /* ---------- 工作区 Diff 面板 ---------- */
@@ -2163,7 +2163,7 @@ textarea {
 .notice-error {
   background: rgba(229, 83, 75, 0.12);
   border: 1px solid rgba(229, 83, 75, 0.4);
-  color: #eba9a4;
+  color: var(--red);
 }
 
 .notice-info {
@@ -2773,7 +2773,7 @@ textarea {
 .field-hint-ok {
   display: block;
   margin: 6px 0 0;
-  color: #4caf7d;
+  color: var(--green);
   opacity: 1;
 }
 
@@ -2871,7 +2871,7 @@ textarea {
   padding: 1px 7px;
   border-radius: 999px;
   background: rgba(220, 160, 60, 0.18);
-  color: #d8a23c;
+  color: var(--yellow);
   font-size: 10px;
   font-weight: 600;
 }
@@ -3561,7 +3561,7 @@ textarea {
 .worktree-merge-pill-blocked {
   border-color: rgba(220, 160, 60, 0.44);
   background: rgba(220, 160, 60, 0.14);
-  color: #d8a23c;
+  color: var(--yellow);
 }
 
 .worktree-merge-pill-unknown,
