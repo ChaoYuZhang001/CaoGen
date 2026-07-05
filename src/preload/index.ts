@@ -7,6 +7,7 @@ import type {
   CreateSessionOptions,
   DispatchSubagentsInput,
   MarkRunOptions,
+  MenuCommand,
   MemorySuggestionEvent,
   PermissionModeId,
   PluginRegistryScanOptions,
@@ -126,6 +127,25 @@ const api: AgentDeskApi = {
     ipcRenderer.on('browser:event', listener)
     return () => {
       ipcRenderer.removeListener('browser:event', listener)
+    }
+  },
+  onMenuCommand: (cb) => {
+    const listeners: Array<[string, (e: IpcRendererEvent, value?: unknown) => void]> = [
+      ['menu:new-session', () => cb({ type: 'new-session' })],
+      ['menu:settings', () => cb({ type: 'settings' })],
+      ['menu:command-palette', () => cb({ type: 'command-palette' })],
+      ['menu:open-search', () => cb({ type: 'open-search' })],
+      [
+        'menu:select-session',
+        (_e, value) => {
+          const index = typeof value === 'number' ? value : Number(value)
+          if (Number.isInteger(index) && index >= 0) cb({ type: 'select-session', index } satisfies MenuCommand)
+        }
+      ]
+    ]
+    for (const [channel, listener] of listeners) ipcRenderer.on(channel, listener)
+    return () => {
+      for (const [channel, listener] of listeners) ipcRenderer.removeListener(channel, listener)
     }
   },
   listTerminals: () => ipcRenderer.invoke('terminals:list'),
