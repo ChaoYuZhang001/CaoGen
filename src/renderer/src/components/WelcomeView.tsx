@@ -42,10 +42,7 @@ export default function WelcomeView(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     const prompt = text.trim()
     if (!prompt || busy) return
-    if (!cwd.trim()) {
-      setError(t('welcomeNeedProject'))
-      return
-    }
+    // 未选项目目录也可发起:走"对话分组"(主进程回退到用户主目录、不隔离)
     setBusy(true)
     setError('')
     try {
@@ -83,7 +80,7 @@ export default function WelcomeView(): React.JSX.Element {
             autoFocus
           />
           <div className="welcome-composer-bar">
-            <button className="welcome-chip" onClick={() => void browse()} title={cwd}>
+            <button className="welcome-chip" onClick={() => void browse()} title={cwd || t('welcomePickProject')}>
               📁 {projectName || t('welcomePickProject')}
             </button>
             {providers.length > 0 && (
