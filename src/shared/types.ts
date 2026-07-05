@@ -300,10 +300,19 @@ export interface Provider {
   customHeaders?: string
   /** Provider 级预算上限;0/undefined = 继承全局设置 */
   budgetUsd?: number
+  /**
+   * OpenAI 引擎协议:'responses'(OpenAI 官方 Responses API,默认)或
+   * 'chat'(通用 /v1/chat/completions,DeepSeek/Qwen/网关/自部署 vLLM 等)。
+   * 仅 openai 引擎读取;Claude 引擎忽略。
+   */
+  openaiProtocol?: OpenAIProtocol
   /** 用户备注 */
   note?: string
   createdAt: number
 }
+
+/** OpenAI 引擎可用的 API 协议 */
+export type OpenAIProtocol = 'responses' | 'chat'
 
 /** 渲染进程可见的 Provider:不含密钥,只标记是否已配置 token */
 export interface ProviderView {
@@ -313,6 +322,7 @@ export interface ProviderView {
   models: string[]
   customHeaders?: string
   budgetUsd: number
+  openaiProtocol?: OpenAIProtocol
   note?: string
   createdAt: number
   hasToken: boolean
@@ -353,6 +363,7 @@ export interface ProviderInput {
   models: string[]
   customHeaders?: string
   budgetUsd?: number
+  openaiProtocol?: OpenAIProtocol
   note?: string
   /** 明文 token,经 IPC 传入主进程后加密落盘 */
   token: string

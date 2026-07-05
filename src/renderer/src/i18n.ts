@@ -399,6 +399,19 @@ const DICT: Dict = {
   fetchedModels: { zh: '已获取 {n} 个模型', en: 'Fetched {n} models' },
   customHeadersLabel: { zh: '自定义请求头', en: 'Custom headers' },
   customHeadersHint: { zh: '(可选,每行 Name: value)', en: '(optional, one "Name: value" per line)' },
+  openaiProtocolLabel: { zh: 'OpenAI 引擎协议', en: 'OpenAI engine protocol' },
+  openaiProtocolHint: {
+    zh: '(仅 OpenAI 引擎会话生效;Claude 引擎忽略)',
+    en: '(only used by OpenAI-engine sessions; ignored by the Claude engine)'
+  },
+  openaiProtocolResponses: {
+    zh: 'Responses(OpenAI 官方)',
+    en: 'Responses (OpenAI official)'
+  },
+  openaiProtocolChat: {
+    zh: 'Chat Completions(DeepSeek/Qwen/网关/自部署通用)',
+    en: 'Chat Completions (DeepSeek/Qwen/gateways/self-hosted)'
+  },
   noteOptional: { zh: '备注(可选)', en: 'Note (optional)' },
   errNameRequired: { zh: '请填写名称', en: 'Please enter a name' },
   saving: { zh: '保存中…', en: 'Saving…' }

@@ -8,6 +8,7 @@ import type {
   AgentEvent,
   AssistantBlock,
   ImageAttachmentView,
+  OpenAIProtocol,
   PermissionModeId,
   PermissionRequestInfo,
   SendMessagePayload,
@@ -19,11 +20,22 @@ import type {
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
 
+/** Chat Completions 多轮历史消息(text 或 text+图片混合内容) */
+type ChatContent = string | Array<Record<string, unknown>>
+interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: ChatContent
+}
+
 /**
- * OpenAIEngine —— 原生 OpenAI Responses API 适配器。
+ * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
+ * - 'responses':OpenAI 官方 Responses API(/v1/responses,默认)
+ * - 'chat':通用 Chat Completions(/v1/chat/completions)——DeepSeek/Qwen/
+ *   new-api 网关/自部署 vLLM·Ollama 等几乎所有 OpenAI 兼容端点都讲这个协议。
+ * 协议按 Provider 的 openaiProtocol 字段选择。
  *
- * 这是 CaoGen 的 OpenAI 一等入口:不再要求把 OpenAI 放到 Anthropic 兼容
- * 网关后面。当前覆盖文本/图片输入、流式输出、中断、转录、模型切换。
+ * 多轮上下文:chat 协议在内存维护 user/assistant 历史并随每轮全量发送;
+ * resume 时从转录重建。(responses 路径沿用单轮行为,历史桥接待补。)
  * OpenAI 的工具调用与本地文件编辑权限模型暂未桥接,因此权限请求如实为空。
  */
 export class OpenAIEngine implements Engine {
@@ -35,6 +47,8 @@ export class OpenAIEngine implements Engine {
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
+  /** chat 协议的多轮历史(user/assistant 交替);responses 协议不使用 */
+  private chatHistory: ChatMessage[] = []
 
   constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -42,7 +56,29 @@ export class OpenAIEngine implements Engine {
     this.emitRaw = (event) => emit(event, this.transcript.next(event))
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
+      this.rebuildChatHistory()
       this.emit({ kind: 'init', sdkSessionId: resumeSdkSessionId, model: this.effectiveModel() })
+    }
+  }
+
+  /** resume 时从转录重建 chat 协议的多轮历史(仅文本;图片不回放) */
+  private rebuildChatHistory(): void {
+    try {
+      for (const entry of this.transcript.read()) {
+        const ev = entry.event
+        if (ev.kind === 'user-message' && typeof ev.text === 'string' && ev.text) {
+          this.chatHistory.push({ role: 'user', content: ev.text })
+        } else if (ev.kind === 'assistant-message' && Array.isArray(ev.blocks)) {
+          const text = ev.blocks
+            .map((b) => (b.type === 'text' ? b.text : ''))
+            .join('')
+            .trim()
+          if (text) this.chatHistory.push({ role: 'assistant', content: text })
+        }
+      }
+    } catch {
+      // 历史损坏时从空上下文开始,不阻塞会话
+      this.chatHistory = []
     }
   }
 
@@ -141,18 +177,62 @@ export class OpenAIEngine implements Engine {
       const auth = this.authConfig()
       if (!auth.token) throw new Error('OpenAI 引擎缺少 API Key:请选择 OpenAI Provider 或设置 OPENAI_API_KEY。')
 
+      if (this.protocol() === 'chat') {
+        await this.runChatCompletion(payload, controller, auth)
+      } else {
+        const body = {
+          model: this.effectiveModel(),
+          input: [
+            {
+              role: 'user',
+              content: buildInputContent(payload)
+            }
+          ],
+          stream: true
+        }
+
+        const res = await fetch(`${auth.baseUrl}/v1/responses`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${auth.token}`,
+            'content-type': 'application/json',
+            ...auth.headers
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        })
+
+        if (!res.ok) throw new Error(await formatOpenAIError(res))
+        await this.consumeResponse(res)
+      }
+      this.finishTurn(false)
+    } catch (err) {
+      const aborted = controller.signal.aborted
+      this.finishTurn(true, aborted ? '已中断' : errText(err), aborted ? 'interrupted' : 'error')
+    }
+  }
+
+  /**
+   * Chat Completions(/v1/chat/completions)一轮:
+   * 追加本轮 user 消息到历史 → 全量历史发送 → SSE 流式消费 →
+   * 成功后把 assistant 回复也入历史(失败/中断则回滚本轮 user)。
+   */
+  private async runChatCompletion(
+    payload: SendMessagePayload,
+    controller: AbortController,
+    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+  ): Promise<void> {
+    const userMessage: ChatMessage = { role: 'user', content: buildChatContent(payload) }
+    this.chatHistory.push(userMessage)
+
+    try {
       const body = {
         model: this.effectiveModel(),
-        input: [
-          {
-            role: 'user',
-            content: buildInputContent(payload)
-          }
-        ],
-        stream: true
+        messages: this.chatHistory,
+        stream: true,
+        stream_options: { include_usage: true }
       }
-
-      const res = await fetch(`${auth.baseUrl}/v1/responses`, {
+      const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${auth.token}`,
@@ -162,14 +242,88 @@ export class OpenAIEngine implements Engine {
         body: JSON.stringify(body),
         signal: controller.signal
       })
-
       if (!res.ok) throw new Error(await formatOpenAIError(res))
-      await this.consumeResponse(res)
-      this.finishTurn(false)
+      await this.consumeChatStream(res)
+      const text = this.assistantText.trim()
+      if (text) this.chatHistory.push({ role: 'assistant', content: text })
     } catch (err) {
-      const aborted = controller.signal.aborted
-      this.finishTurn(true, aborted ? '已中断' : errText(err), aborted ? 'interrupted' : 'error')
+      // 本轮失败:回滚 user 消息,避免下一轮重复发送半截上下文
+      if (this.chatHistory[this.chatHistory.length - 1] === userMessage) this.chatHistory.pop()
+      throw err
     }
+  }
+
+  /** 消费 Chat Completions SSE 流(choices[].delta.content + 末尾 usage 块) */
+  private async consumeChatStream(res: Response): Promise<void> {
+    if (!res.body) {
+      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      const choices = Array.isArray(json?.choices) ? (json?.choices as Array<Record<string, unknown>>) : []
+      const msg = choices[0]?.message as Record<string, unknown> | undefined
+      if (typeof msg?.content === 'string' && msg.content) this.appendText(msg.content)
+      this.applyChatUsage(json)
+      return
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+      for (const part of parts) this.handleChatSseEvent(part)
+    }
+    if (buffer.trim()) this.handleChatSseEvent(buffer)
+  }
+
+  private handleChatSseEvent(raw: string): void {
+    const dataLines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+    for (const data of dataLines) {
+      if (!data || data === '[DONE]') continue
+      let event: unknown
+      try {
+        event = JSON.parse(data)
+      } catch {
+        continue
+      }
+      const record = event as Record<string, unknown>
+      // 网关/端点即使在流里报错也走 error 字段
+      if (record.error) throw new Error(extractErrorMessage(record.error) || 'Chat Completions 流式响应报错')
+      const choices = Array.isArray(record.choices) ? (record.choices as Array<Record<string, unknown>>) : []
+      const delta = choices[0]?.delta as Record<string, unknown> | undefined
+      if (typeof delta?.content === 'string' && delta.content) this.appendText(delta.content)
+      // usage 通常出现在最后一个块(stream_options.include_usage)
+      if (record.usage) this.applyChatUsage(record)
+    }
+  }
+
+  /** Chat Completions 的 usage 命名(prompt/completion_tokens)转 CaoGen UsageTotals */
+  private applyChatUsage(value: unknown): void {
+    if (!value || typeof value !== 'object') return
+    const usage = (value as Record<string, unknown>).usage as Record<string, unknown> | undefined
+    if (!usage) return
+    const input = numberField(usage.prompt_tokens)
+    const output = numberField(usage.completion_tokens)
+    const details = usage.prompt_tokens_details as Record<string, unknown> | undefined
+    const cacheRead = numberField(details?.cached_tokens)
+    if (input + output + cacheRead === 0) return
+    const totals: UsageTotals = { input, output, cacheRead, cacheCreation: 0 }
+    this.turnUsage = totals
+    this.meta.usage = totals
+    this.meta.contextTokens = input + cacheRead
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+  }
+
+  /** 当前 Provider 选择的 OpenAI 协议;未配置默认 responses(官方 API) */
+  private protocol(): OpenAIProtocol {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    return provider?.openaiProtocol === 'chat' ? 'chat' : 'responses'
   }
 
   private async consumeResponse(res: Response): Promise<void> {
@@ -305,6 +459,19 @@ function buildInputContent(payload: SendMessagePayload): Array<Record<string, st
   return out.length > 0 ? out : [{ type: 'input_text', text: '' }]
 }
 
+/** Chat Completions 消息内容:纯文本直接用字符串;带图时用多模态数组 */
+function buildChatContent(payload: SendMessagePayload): ChatContent {
+  const images = payload.images ?? []
+  if (images.length === 0) return payload.text
+  const out: Array<Record<string, unknown>> = []
+  if (payload.text) out.push({ type: 'text', text: payload.text })
+  for (const image of images) {
+    const dataUrl = imageToDataUrl(image)
+    if (dataUrl) out.push({ type: 'image_url', image_url: { url: dataUrl } })
+  }
+  return out.length > 0 ? out : payload.text
+}
+
 function imageToDataUrl(image: ImageAttachmentView): string | null {
   try {
     const data = readFileSync(image.path).toString('base64')
@@ -384,7 +551,7 @@ function errText(err: unknown): string {
 
 export const openAIEngineFactory: EngineFactory = {
   kind: 'openai',
-  label: 'OpenAI Responses API',
+  label: 'OpenAI 协议(Responses / Chat Completions)',
   available: () => true,
   create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
     new OpenAIEngine(meta, emit, resumeSdkSessionId)
