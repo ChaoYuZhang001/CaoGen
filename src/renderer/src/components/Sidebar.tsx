@@ -351,6 +351,7 @@ export default function Sidebar(): React.JSX.Element {
 
   const totalVisible = pinnedEntries.length + ongoingEntries.length + recentHistory.length + archivedHistory.length
   const archiveExpanded = archiveOpen || query.trim().length > 0
+  const isInitialEmpty = totalVisible === 0 && query.trim().length === 0
 
   return (
     <aside className="sidebar">
@@ -377,58 +378,71 @@ export default function Sidebar(): React.JSX.Element {
       </div>
 
       <div className="sidebar-scroll">
-        {pinnedEntries.length > 0 && (
-          <section className="sidebar-section">
-            <div className="sidebar-section-title">{t('pinned')}</div>
-            {pinnedEntries.map((entry) =>
-              entry.kind === 'active' ? renderActiveEntry(entry) : renderHistoryEntry(entry.history)
+        {isInitialEmpty ? (
+          <div className="sidebar-empty-hero">
+            <div className="sidebar-empty-mark">◆</div>
+            <div className="sidebar-empty-title">{t('sidebarEmptyHeroTitle')}</div>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowNewSession(true)}>
+              {t('newSession')}
+            </button>
+          </div>
+        ) : (
+          <>
+            {pinnedEntries.length > 0 && (
+              <section className="sidebar-section">
+                <div className="sidebar-section-title">{t('pinned')}</div>
+                {pinnedEntries.map((entry) =>
+                  entry.kind === 'active' ? renderActiveEntry(entry) : renderHistoryEntry(entry.history)
+                )}
+              </section>
             )}
-          </section>
-        )}
 
-        <section className="sidebar-section">
-          <div className="sidebar-section-title">{t('ongoing')}</div>
-          {ongoingEntries.length === 0 && <div className="sidebar-empty">{t('noSessions')}</div>}
-          {ongoingEntries.map((entry) => renderActiveEntry(entry))}
-        </section>
+            {ongoingEntries.length > 0 && (
+              <section className="sidebar-section">
+                <div className="sidebar-section-title">{t('ongoing')}</div>
+                {ongoingEntries.map((entry) => renderActiveEntry(entry))}
+              </section>
+            )}
 
-        <section className="sidebar-section">
-          <div className="sidebar-section-title">{t('recent')}</div>
-          {projectGroups.length === 0 && <div className="sidebar-empty">{t('noRecentSessions')}</div>}
-          {projectGroups.map((group) => {
-            const collapsed = collapsedProjects[group.key] === true
-            return (
-              <div key={group.key} className="sidebar-project-group">
-                <button
-                  className="sidebar-group-head"
-                  title={group.path}
-                  onClick={() =>
-                    setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))
-                  }
-                >
-                  <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
-                  <span className="sidebar-group-title">{group.label}</span>
-                  <span className="sidebar-group-count">{group.entries.length}</span>
+            {projectGroups.length > 0 && (
+              <section className="sidebar-section">
+                <div className="sidebar-section-title">{t('recent')}</div>
+                {projectGroups.map((group) => {
+                  const collapsed = collapsedProjects[group.key] === true
+                  return (
+                    <div key={group.key} className="sidebar-project-group">
+                      <button
+                        className="sidebar-group-head"
+                        title={group.path}
+                        onClick={() =>
+                          setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))
+                        }
+                      >
+                        <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
+                        <span className="sidebar-group-title">{group.label}</span>
+                        <span className="sidebar-group-count">{group.entries.length}</span>
+                      </button>
+                      {!collapsed && group.entries.map((entry) => renderHistoryEntry(entry))}
+                    </div>
+                  )
+                })}
+              </section>
+            )}
+
+            {archivedHistory.length > 0 && (
+              <section className="sidebar-section">
+                <button className="sidebar-section-toggle" onClick={() => setArchiveOpen((value) => !value)}>
+                  <span>{archiveExpanded ? '▾' : '▸'}</span>
+                  <span>{t('archived')}</span>
+                  <span className="sidebar-group-count">{archivedHistory.length}</span>
                 </button>
-                {!collapsed && group.entries.map((entry) => renderHistoryEntry(entry))}
-              </div>
-            )
-          })}
-        </section>
+                {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
+              </section>
+            )}
 
-        <section className="sidebar-section">
-          <button className="sidebar-section-toggle" onClick={() => setArchiveOpen((value) => !value)}>
-            <span>{archiveExpanded ? '▾' : '▸'}</span>
-            <span>{t('archived')}</span>
-            <span className="sidebar-group-count">{archivedHistory.length}</span>
-          </button>
-          {archiveExpanded && archivedHistory.length === 0 && (
-            <div className="sidebar-empty">{t('noArchivedSessions')}</div>
-          )}
-          {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
-        </section>
-
-        {totalVisible === 0 && <div className="sidebar-empty">{t('noMatchingSessions')}</div>}
+            {totalVisible === 0 && <div className="sidebar-empty">{t('noMatchingSessions')}</div>}
+          </>
+        )}
       </div>
 
       <div className="sidebar-footer">
