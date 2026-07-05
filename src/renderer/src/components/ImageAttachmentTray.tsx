@@ -12,6 +12,10 @@ export interface ImageAttachment {
 export interface ImageAttachmentTrayProps {
   attachments: readonly ImageAttachment[]
   onRemove?: (id: string, attachment: ImageAttachment) => void
+  /** OCR 提取文字(可选;提供则每张图显示 OCR 按钮) */
+  onOcr?: (id: string, attachment: ImageAttachment) => void
+  /** 正在 OCR 的附件 id(该项按钮显示进行中) */
+  ocrBusyId?: string | null
   disabled?: boolean
   className?: string
 }
@@ -40,6 +44,8 @@ function attachmentPreviewUrl(attachment: ImageAttachment): string | undefined {
 export default function ImageAttachmentTray({
   attachments,
   onRemove,
+  onOcr,
+  ocrBusyId = null,
   disabled = false,
   className
 }: ImageAttachmentTrayProps): React.JSX.Element | null {
@@ -77,6 +83,18 @@ export default function ImageAttachmentTray({
               </div>
               <div className="image-attachment-size">{formatBytes(size)}</div>
             </div>
+            {onOcr && (
+              <button
+                type="button"
+                className="image-attachment-ocr"
+                onClick={() => onOcr(attachment.id, attachment)}
+                disabled={disabled || ocrBusyId === attachment.id}
+                aria-label={`OCR ${attachment.name}`}
+                title="提取图中文字插入输入框"
+              >
+                {ocrBusyId === attachment.id ? '…' : 'OCR'}
+              </button>
+            )}
             {onRemove && (
               <button
                 type="button"

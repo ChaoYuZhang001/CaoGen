@@ -18,6 +18,8 @@ const DEFAULTS: AppSettings = {
   disallowedTools: '',
   notificationsEnabled: true,
   preventDisplaySleep: true,
+  hookPostEditCommand: '',
+  hookTurnEndCommand: '',
   office: { showBadges: true, liveliness: 1, catEars: false }
 }
 

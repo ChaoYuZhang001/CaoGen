@@ -351,6 +351,16 @@ const DICT: Dict = {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
     en: 'Keep the display awake while a session runs; off = follow system power settings.'
   },
+  hookPostEdit: { zh: 'Hook:文件修改后执行', en: 'Hook: after file edits' },
+  hookPostEditHint: {
+    zh: 'Agent 用 Edit/Write 改完文件后,在会话目录执行此 shell 命令(如自动格式化/跑测试),输出回显到时间线。空 = 关闭。仅 Claude 引擎。',
+    en: 'Shell command run in the session cwd after the agent edits files (e.g. format/test). Output shows in the timeline. Empty = off. Claude engine only.'
+  },
+  hookTurnEnd: { zh: 'Hook:每轮结束后执行', en: 'Hook: after each turn' },
+  hookTurnEndHint: {
+    zh: '每轮对话结束(Stop)后执行此 shell 命令。空 = 关闭。仅 Claude 引擎。',
+    en: 'Shell command run when a turn ends (Stop hook). Empty = off. Claude engine only.'
+  },
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },

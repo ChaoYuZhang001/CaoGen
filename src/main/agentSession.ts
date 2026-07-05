@@ -296,6 +296,84 @@ export class AgentSession implements Engine {
     return env
   }
 
+  /**
+   * SDK Hooks 桥(M12/P4.15):
+   * - PostToolUse(Edit/Write/MultiEdit 成功后):发 hook-event 到时间线;
+   *   若用户配置了 hookPostEditCommand,在会话 cwd 执行并回报输出。
+   * - Stop(每轮结束):同上,对应 hookTurnEndCommand。
+   * 设计取舍:钩子失败绝不打断会话(catch-all);shell 输出截断 2000 字;
+   * 60s 超时防挂起。钩子仅在 Claude 引擎生效(SDK 能力)。
+   */
+  private buildHooks(settings: ReturnType<typeof getSettings>): Record<string, Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<Record<string, unknown>>> }>> {
+    const postEditCmd = (settings.hookPostEditCommand ?? '').trim()
+    const turnEndCmd = (settings.hookTurnEndCommand ?? '').trim()
+
+    const runShellHook = async (command: string, eventLabel: string, toolName?: string): Promise<void> => {
+      if (!command) return
+      try {
+        const { execFile } = await import('node:child_process')
+        const output = await new Promise<{ ok: boolean; out: string }>((resolve) => {
+          execFile(
+            process.platform === 'win32' ? 'cmd' : '/bin/sh',
+            process.platform === 'win32' ? ['/c', command] : ['-c', command],
+            { cwd: this.meta.cwd, timeout: 60_000, maxBuffer: 512 * 1024 },
+            (err, stdout, stderr) => {
+              const out = `${stdout ?? ''}${stderr ? `\n${stderr}` : ''}`.trim().slice(0, 2000)
+              resolve({ ok: !err, out })
+            }
+          )
+        })
+        this.emit({
+          kind: 'hook-event',
+          event: eventLabel,
+          toolName,
+          shellCommand: command,
+          shellOk: output.ok,
+          shellOutput: output.out
+        })
+      } catch (err) {
+        this.emit({
+          kind: 'hook-event',
+          event: eventLabel,
+          toolName,
+          shellCommand: command,
+          shellOk: false,
+          shellOutput: errText(err)
+        })
+      }
+    }
+
+    return {
+      PostToolUse: [
+        {
+          matcher: 'Edit|Write|MultiEdit|NotebookEdit',
+          hooks: [
+            async (input: unknown): Promise<Record<string, unknown>> => {
+              const record = (input ?? {}) as Record<string, unknown>
+              const toolName = typeof record.tool_name === 'string' ? record.tool_name : undefined
+              if (postEditCmd) {
+                void runShellHook(postEditCmd, 'post-edit', toolName)
+              } else {
+                this.emit({ kind: 'hook-event', event: 'post-edit', toolName })
+              }
+              return { continue: true }
+            }
+          ]
+        }
+      ],
+      Stop: [
+        {
+          hooks: [
+            async (): Promise<Record<string, unknown>> => {
+              if (turnEndCmd) void runShellHook(turnEndCmd, 'turn-end')
+              return { continue: true }
+            }
+          ]
+        }
+      ]
+    }
+  }
+
   async start(): Promise<void> {
     if (this.disposed) return
     const gen = ++this.generation
@@ -338,6 +416,8 @@ export class AgentSession implements Engine {
           ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
           ...(this.resumeId ? { resume: this.resumeId } : {}),
           ...(this.resumeId && this.resumeAtId ? { resumeSessionAt: this.resumeAtId } : {}),
+          // Hooks 桥:PostToolUse(文件写入后)+ Stop(轮结束),转发到时间线并可执行用户 shell 钩子
+          hooks: this.buildHooks(settings),
           canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
         }
       })

@@ -246,6 +246,24 @@ export default function SettingsModal(): React.JSX.Element {
                   onChange={(e) => setBudget(e.target.value)}
                 />
                 <p className="settings-hint">达到预算后会拦截下一轮发送；0 表示不限制。</p>
+
+                <label className="field-label">{t('hookPostEdit')}</label>
+                <input
+                  className="input input-block"
+                  value={draft.hookPostEditCommand}
+                  placeholder="npx prettier --write . && npm test"
+                  onChange={(e) => set('hookPostEditCommand', e.target.value)}
+                />
+                <p className="settings-hint">{t('hookPostEditHint')}</p>
+
+                <label className="field-label">{t('hookTurnEnd')}</label>
+                <input
+                  className="input input-block"
+                  value={draft.hookTurnEndCommand}
+                  placeholder="npm run lint"
+                  onChange={(e) => set('hookTurnEndCommand', e.target.value)}
+                />
+                <p className="settings-hint">{t('hookTurnEndHint')}</p>
               </>
             )}
 
