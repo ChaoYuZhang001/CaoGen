@@ -36,8 +36,16 @@ function safePaths(paths: unknown): string[] {
 }
 
 export function currentBranch(cwd: string): string {
+  // symbolic-ref 在"未出生 HEAD"(全新仓库尚无提交)时仍能返回分支名,
+  // 而 rev-parse --abbrev-ref HEAD 此时会 fatal 报错、导致分支徽章空白。
   try {
-    return runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']).trim()
+    const viaSymbolic = runGit(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']).trim()
+    if (viaSymbolic) return viaSymbolic
+  } catch {
+    // 分离头指针(detached HEAD)没有符号引用,回退到下面的短 SHA
+  }
+  try {
+    return runGit(cwd, ['rev-parse', '--short', 'HEAD']).trim()
   } catch {
     return ''
   }
