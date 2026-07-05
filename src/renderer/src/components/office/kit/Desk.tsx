@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { RoundedBox } from '@react-three/drei'
 import type { Group } from 'three'
 
 /** 视觉道具通用属性 */
@@ -51,15 +52,13 @@ export default function Desk({
   return (
     <group ref={groupRef} position={position} rotation={rotation} scale={scale}>
       {/* 桌面(木) */}
-      <mesh position={[0, TOP_Y - TOP_T / 2, 0]} castShadow receiveShadow>
-        <boxGeometry args={[W, TOP_T, D]} />
+      <RoundedBox args={[W, TOP_T, D]} radius={0.025} smoothness={3} position={[0, TOP_Y - TOP_T / 2, 0]} castShadow receiveShadow>
         <meshStandardMaterial color={TOP_WOOD} metalness={0.05} roughness={0.85} />
-      </mesh>
+      </RoundedBox>
       {/* 桌面封边(压在木色上方一薄层,做出实木封边观感) */}
-      <mesh position={[0, TOP_Y - TOP_T + 0.006, 0]} castShadow>
-        <boxGeometry args={[W + 0.01, 0.012, D + 0.01]} />
+      <RoundedBox args={[W + 0.01, 0.012, D + 0.01]} radius={0.022} smoothness={3} position={[0, TOP_Y - TOP_T + 0.006, 0]} castShadow>
         <meshStandardMaterial color={TOP_EDGE} metalness={0.1} roughness={0.7} />
-      </mesh>
+      </RoundedBox>
 
       {/* 四条金属方腿 */}
       {(
@@ -70,10 +69,9 @@ export default function Desk({
           [lx, lz]
         ] as Array<[number, number]>
       ).map(([x, z], i) => (
-        <mesh key={i} position={[x, legH / 2, z]} castShadow receiveShadow>
-          <boxGeometry args={[LEG, legH, LEG]} />
+        <RoundedBox key={i} args={[LEG, legH, LEG]} radius={0.012} smoothness={2} position={[x, legH / 2, z]} castShadow receiveShadow>
           <meshStandardMaterial color={METAL} metalness={0.8} roughness={0.4} />
-        </mesh>
+        </RoundedBox>
       ))}
 
       {/* 前后两根脚部横梁(稳定感 + 金属工业风) */}

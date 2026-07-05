@@ -1,4 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { RoundedBox } from '@react-three/drei'
 import type { Group, Object3D } from 'three'
 
 /** 视觉道具通用位姿 props(与其它 kit 组件一致) */
@@ -86,20 +87,20 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
     <group ref={rootRef} position={position} rotation={rotation} scale={scale}>
       {/* ===== 躯干 ===== */}
       <mesh position={[0, 0.85, 0]} castShadow>
-        <capsuleGeometry args={[0.15, 0.32, 6, 12]} />
-        <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+        <capsuleGeometry args={[0.15, 0.32, 8, 16]} />
+        <meshStandardMaterial color={body} roughness={0.92} metalness={0.02} />
       </mesh>
       {/* 颈 */}
       <mesh position={[0, 1.14, 0]} castShadow>
-        <cylinderGeometry args={[0.055, 0.07, 0.08, 12]} />
-        <meshStandardMaterial color={skin} roughness={0.8} />
+        <cylinderGeometry args={[0.055, 0.07, 0.08, 20]} />
+        <meshPhysicalMaterial color={skin} roughness={0.58} metalness={0} clearcoat={0.12} sheen={0.2} />
       </mesh>
 
       {/* ===== 头(点头/摇头枢轴在颈根 y≈1.18) ===== */}
       <group ref={headRef} position={[0, 1.18, 0]}>
         <mesh position={[0, 0.14, 0]} castShadow>
-          <sphereGeometry args={[0.15, 16, 16]} />
-          <meshStandardMaterial color={skin} roughness={0.8} />
+          <sphereGeometry args={[0.15, 24, 20]} />
+          <meshPhysicalMaterial color={skin} roughness={0.56} metalness={0} clearcoat={0.14} sheen={0.2} />
         </mesh>
         <mesh position={[-0.055, 0.16, 0.132]}>
           <sphereGeometry args={[0.018, 8, 8]} />
@@ -139,23 +140,23 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
       <group ref={armLRef} position={[-0.19, 1.02, 0]}>
         {/* 肩关节 */}
         <mesh castShadow>
-          <sphereGeometry args={[0.055, 12, 12]} />
-          <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+          <sphereGeometry args={[0.055, 20, 20]} />
+          <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
         </mesh>
         {/* 上臂(自肩向下) */}
         <mesh position={[0, -0.11, 0]} castShadow>
-          <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
-          <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+          <capsuleGeometry args={[0.045, 0.16, 8, 14]} />
+          <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
         </mesh>
         {/* 前臂枢轴(肘) y≈-0.22:整段前臂作为子节点,可绕肘独立弯曲 */}
         <group position={[0, -0.22, 0]}>
           <mesh castShadow>
-            <sphereGeometry args={[0.04, 12, 12]} />
-            <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+            <sphereGeometry args={[0.04, 20, 20]} />
+            <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
           </mesh>
           <mesh position={[0, -0.1, 0]} castShadow>
-            <capsuleGeometry args={[0.04, 0.14, 4, 8]} />
-            <meshStandardMaterial color={skin} roughness={0.8} />
+            <capsuleGeometry args={[0.04, 0.14, 8, 14]} />
+            <meshPhysicalMaterial color={skin} roughness={0.58} metalness={0} clearcoat={0.12} sheen={0.2} />
           </mesh>
         </group>
       </group>
@@ -163,21 +164,21 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
       {/* ===== 右臂:肩枢轴 y≈1.02 ===== */}
       <group ref={armRRef} position={[0.19, 1.02, 0]}>
         <mesh castShadow>
-          <sphereGeometry args={[0.055, 12, 12]} />
-          <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+          <sphereGeometry args={[0.055, 20, 20]} />
+          <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
         </mesh>
         <mesh position={[0, -0.11, 0]} castShadow>
-          <capsuleGeometry args={[0.045, 0.16, 4, 8]} />
-          <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+          <capsuleGeometry args={[0.045, 0.16, 8, 14]} />
+          <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
         </mesh>
         <group position={[0, -0.22, 0]}>
           <mesh castShadow>
-            <sphereGeometry args={[0.04, 12, 12]} />
-            <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+            <sphereGeometry args={[0.04, 20, 20]} />
+            <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
           </mesh>
           <mesh position={[0, -0.1, 0]} castShadow>
-            <capsuleGeometry args={[0.04, 0.14, 4, 8]} />
-            <meshStandardMaterial color={skin} roughness={0.8} />
+            <capsuleGeometry args={[0.04, 0.14, 8, 14]} />
+            <meshPhysicalMaterial color={skin} roughness={0.58} metalness={0} clearcoat={0.12} sheen={0.2} />
           </mesh>
         </group>
       </group>
@@ -185,46 +186,44 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
       {/* ===== 左腿:髋枢轴 y≈0.66 ===== */}
       <group ref={legLRef} position={[-0.08, 0.66, 0]}>
         <mesh castShadow>
-          <sphereGeometry args={[0.055, 12, 12]} />
-          <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+          <sphereGeometry args={[0.055, 20, 20]} />
+          <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
         </mesh>
         {/* 大腿 */}
         <mesh position={[0, -0.16, 0]} castShadow>
-          <capsuleGeometry args={[0.06, 0.2, 4, 8]} />
-          <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+          <capsuleGeometry args={[0.06, 0.2, 8, 14]} />
+          <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
         </mesh>
         {/* 膝枢轴 y≈-0.32:小腿 + 脚作为子节点 */}
         <group position={[0, -0.32, 0]}>
           <mesh position={[0, -0.14, 0]} castShadow>
-            <capsuleGeometry args={[0.05, 0.18, 4, 8]} />
-            <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+            <capsuleGeometry args={[0.05, 0.18, 8, 14]} />
+            <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
           </mesh>
-          <mesh position={[0, -0.27, 0.04]} castShadow>
-            <boxGeometry args={[0.09, 0.05, 0.16]} />
-            <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
-          </mesh>
+          <RoundedBox args={[0.1, 0.052, 0.17]} radius={0.018} smoothness={3} position={[0, -0.27, 0.04]} castShadow>
+            <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
+          </RoundedBox>
         </group>
       </group>
 
       {/* ===== 右腿:髋枢轴 y≈0.66 ===== */}
       <group ref={legRRef} position={[0.08, 0.66, 0]}>
         <mesh castShadow>
-          <sphereGeometry args={[0.055, 12, 12]} />
-          <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
+          <sphereGeometry args={[0.055, 20, 20]} />
+          <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
         </mesh>
         <mesh position={[0, -0.16, 0]} castShadow>
-          <capsuleGeometry args={[0.06, 0.2, 4, 8]} />
-          <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+          <capsuleGeometry args={[0.06, 0.2, 8, 14]} />
+          <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
         </mesh>
         <group position={[0, -0.32, 0]}>
           <mesh position={[0, -0.14, 0]} castShadow>
-            <capsuleGeometry args={[0.05, 0.18, 4, 8]} />
-            <meshStandardMaterial color={body} roughness={0.7} metalness={0.1} />
+            <capsuleGeometry args={[0.05, 0.18, 8, 14]} />
+            <meshStandardMaterial color={body} roughness={0.9} metalness={0.02} />
           </mesh>
-          <mesh position={[0, -0.27, 0.04]} castShadow>
-            <boxGeometry args={[0.09, 0.05, 0.16]} />
-            <meshStandardMaterial color={JOINT} roughness={0.6} metalness={0.2} />
-          </mesh>
+          <RoundedBox args={[0.1, 0.052, 0.17]} radius={0.018} smoothness={3} position={[0, -0.27, 0.04]} castShadow>
+            <meshStandardMaterial color={JOINT} roughness={0.38} metalness={0.7} />
+          </RoundedBox>
         </group>
       </group>
     </group>

@@ -33,6 +33,7 @@ export interface AnimOptions {
 
 // —— 复用常量,避免闭包内分配 —— //
 const TAU = Math.PI * 2
+const JOINT_LERP = 0.1
 
 function amp(opts: AnimOptions | undefined): number {
   return opts?.liveliness ?? 1
@@ -52,7 +53,25 @@ function neutralLimbs(refs: AvatarRefs): void {
 
 function applyFacing(refs: AvatarRefs, opts: AnimOptions | undefined): void {
   const root = refs.root
-  if (root && opts?.facing !== undefined) root.rotation.y = opts.facing
+  if (root && opts?.facing !== undefined) root.rotation.y = lerpAngle(root.rotation.y, opts.facing)
+}
+
+function lerpValue(current: number, target: number, factor = JOINT_LERP): number {
+  return current + (target - current) * factor
+}
+
+function lerpAngle(current: number, target: number, factor = JOINT_LERP): number {
+  let delta = target - current
+  while (delta > Math.PI) delta -= TAU
+  while (delta < -Math.PI) delta += TAU
+  return current + delta * factor
+}
+
+function lerpRotation(obj: Object3D | null | undefined, x: number, y: number, z: number): void {
+  if (!obj) return
+  obj.rotation.x = lerpAngle(obj.rotation.x, x)
+  obj.rotation.y = lerpAngle(obj.rotation.y, y)
+  obj.rotation.z = lerpAngle(obj.rotation.z, z)
 }
 
 /**
@@ -63,18 +82,14 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = Math.sin(tt * 1.6 * L) * 0.012
-    root.rotation.z = 0
+    root.position.y = lerpValue(root.position.y, Math.sin(tt * 1.6 * L) * 0.012)
+    root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
-  if (refs.head) {
-    refs.head.rotation.x = 0.04 + Math.sin(tt * 1.2 * L) * 0.03
-    refs.head.rotation.z = Math.sin(tt * 0.8 * L) * 0.05
-    refs.head.rotation.y = Math.sin(tt * 0.5 * L) * 0.12
-  }
-  if (refs.armL) refs.armL.rotation.set(Math.sin(tt * 1.6 * L) * 0.04, 0, 0.06)
-  if (refs.armR) refs.armR.rotation.set(Math.sin(tt * 1.6 * L + Math.PI) * 0.04, 0, -0.06)
-  if (refs.legL) refs.legL.rotation.set(0, 0, 0)
-  if (refs.legR) refs.legR.rotation.set(0, 0, 0)
+  lerpRotation(refs.head, 0.04 + Math.sin(tt * 1.2 * L) * 0.03, Math.sin(tt * 0.5 * L) * 0.12, Math.sin(tt * 0.8 * L) * 0.05)
+  lerpRotation(refs.armL, Math.sin(tt * 1.6 * L) * 0.04, 0, 0.06)
+  lerpRotation(refs.armR, Math.sin(tt * 1.6 * L + Math.PI) * 0.04, 0, -0.06)
+  lerpRotation(refs.legL, 0, 0, 0)
+  lerpRotation(refs.legR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -87,19 +102,15 @@ export function applyTyping(refs: AvatarRefs, t: number, opts?: AnimOptions): vo
   const beat = tt * 16 * L
   const root = refs.root
   if (root) {
-    root.position.y = Math.abs(Math.sin(tt * 8 * L)) * 0.02
-    root.rotation.z = 0
+    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(tt * 8 * L)) * 0.02)
+    root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
-  if (refs.head) {
-    refs.head.rotation.x = 0.22 + Math.sin(beat) * 0.05
-    refs.head.rotation.z = 0
-    refs.head.rotation.y = Math.sin(tt * 2 * L) * 0.06
-  }
+  lerpRotation(refs.head, 0.22 + Math.sin(beat) * 0.05, Math.sin(tt * 2 * L) * 0.06, 0)
   // 手臂前伸至桌面(rotation.x 负值抬向前方),小幅交替敲击
-  if (refs.armL) refs.armL.rotation.set(-1.15 + Math.sin(beat) * 0.28, 0, 0.12)
-  if (refs.armR) refs.armR.rotation.set(-1.15 + Math.cos(beat) * 0.28, 0, -0.12)
-  if (refs.legL) refs.legL.rotation.set(0, 0, 0)
-  if (refs.legR) refs.legR.rotation.set(0, 0, 0)
+  lerpRotation(refs.armL, -1.15 + Math.sin(beat) * 0.28, 0, 0.12)
+  lerpRotation(refs.armR, -1.15 + Math.cos(beat) * 0.28, 0, -0.12)
+  lerpRotation(refs.legL, 0, 0, 0)
+  lerpRotation(refs.legR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -114,19 +125,15 @@ export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   const root = refs.root
   if (root) {
     // 步伐落点时的双峰起伏
-    root.position.y = Math.abs(Math.sin(stride)) * 0.06
-    root.rotation.z = Math.sin(stride) * 0.03
+    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.06)
+    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(stride) * 0.03)
   }
-  if (refs.head) {
-    refs.head.rotation.x = 0.06
-    refs.head.rotation.z = Math.sin(stride) * 0.04
-    refs.head.rotation.y = 0
-  }
+  lerpRotation(refs.head, 0.06, 0, Math.sin(stride) * 0.04)
   // 对角摆动:左臂与右腿同相,右臂与左腿同相
-  if (refs.armL) refs.armL.rotation.set(swing * 0.6, 0, 0)
-  if (refs.armR) refs.armR.rotation.set(-swing * 0.6, 0, 0)
-  if (refs.legL) refs.legL.rotation.set(-swing * 0.7, 0, 0)
-  if (refs.legR) refs.legR.rotation.set(swing * 0.7, 0, 0)
+  lerpRotation(refs.armL, swing * 0.6, 0, 0)
+  lerpRotation(refs.armR, -swing * 0.6, 0, 0)
+  lerpRotation(refs.legL, -swing * 0.7, 0, 0)
+  lerpRotation(refs.legR, swing * 0.7, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -138,21 +145,17 @@ export function applyTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = Math.sin(tt * 2.4 * L) * 0.015
-    root.rotation.z = 0
+    root.position.y = lerpValue(root.position.y, Math.sin(tt * 2.4 * L) * 0.015)
+    root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
-  if (refs.head) {
-    // 叠加两个频率模拟说话时的自然点头/侧偏
-    refs.head.rotation.x = 0.05 + Math.sin(tt * 6 * L) * 0.05 + Math.sin(tt * 11 * L) * 0.02
-    refs.head.rotation.y = Math.sin(tt * 3 * L) * 0.14
-    refs.head.rotation.z = Math.sin(tt * 2 * L) * 0.04
-  }
+  // 叠加两个频率模拟说话时的自然点头/侧偏
+  lerpRotation(refs.head, 0.05 + Math.sin(tt * 6 * L) * 0.05 + Math.sin(tt * 11 * L) * 0.02, Math.sin(tt * 3 * L) * 0.14, Math.sin(tt * 2 * L) * 0.04)
   // 右手抬起比划(以正弦门控成"偶尔"的手势)
   const gesture = Math.max(0, Math.sin(tt * 1.3 * L))
-  if (refs.armR) refs.armR.rotation.set(-0.5 - gesture * 0.7, 0, -0.2 - gesture * 0.25)
-  if (refs.armL) refs.armL.rotation.set(-0.1, 0, 0.08)
-  if (refs.legL) refs.legL.rotation.set(0, 0, 0)
-  if (refs.legR) refs.legR.rotation.set(0, 0, 0)
+  lerpRotation(refs.armR, -0.5 - gesture * 0.7, 0, -0.2 - gesture * 0.25)
+  lerpRotation(refs.armL, -0.1, 0, 0.08)
+  lerpRotation(refs.legL, 0, 0, 0)
+  lerpRotation(refs.legR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -164,19 +167,15 @@ export function applyThinking(refs: AvatarRefs, t: number, opts?: AnimOptions): 
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = Math.sin(tt * 0.9 * L) * 0.008
-    root.rotation.z = Math.sin(tt * 0.4 * L) * 0.02
+    root.position.y = lerpValue(root.position.y, Math.sin(tt * 0.9 * L) * 0.008)
+    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.4 * L) * 0.02)
   }
-  if (refs.head) {
-    refs.head.rotation.x = -0.12 + Math.sin(tt * 0.7 * L) * 0.03
-    refs.head.rotation.z = 0.18
-    refs.head.rotation.y = 0.1 + Math.sin(tt * 0.5 * L) * 0.05
-  }
+  lerpRotation(refs.head, -0.12 + Math.sin(tt * 0.7 * L) * 0.03, 0.1 + Math.sin(tt * 0.5 * L) * 0.05, 0.18)
   // 右手托腮:大幅抬起并内收
-  if (refs.armR) refs.armR.rotation.set(-2.3, 0, -0.55)
-  if (refs.armL) refs.armL.rotation.set(-0.08, 0, 0.05)
-  if (refs.legL) refs.legL.rotation.set(0, 0, 0)
-  if (refs.legR) refs.legR.rotation.set(0, 0, 0)
+  lerpRotation(refs.armR, -2.3, 0, -0.55)
+  lerpRotation(refs.armL, -0.08, 0, 0.05)
+  lerpRotation(refs.legL, 0, 0, 0)
+  lerpRotation(refs.legR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
