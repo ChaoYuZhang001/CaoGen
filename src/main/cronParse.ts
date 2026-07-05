@@ -193,6 +193,21 @@ function matchParsed(p: ParsedCron, date: Date): boolean {
 /** 向后扫描的天数上限(含闰年余量)。 */
 const MAX_SCAN_DAYS = 366
 
+const CRON_ALIASES: Record<string, string> = {
+  '@hourly': '0 * * * *',
+  '@daily': '0 0 * * *',
+  '@midnight': '0 0 * * *',
+  '@weekly': '0 0 * * 0',
+  '@monthly': '0 0 1 * *',
+  '@yearly': '0 0 1 1 *',
+  '@annually': '0 0 1 1 *'
+}
+
+export function normalizeCronAlias(expr: string): string {
+  const trimmed = expr.trim()
+  return CRON_ALIASES[trimmed.toLowerCase()] ?? trimmed
+}
+
 /**
  * 求 `from`(毫秒时间戳)之后严格大于它的下一个匹配时刻(毫秒时间戳)。
  * 向后最多扫描 366 天;扫不到返回 null。cron 表达式非法也返回 null。
@@ -201,7 +216,7 @@ const MAX_SCAN_DAYS = 366
  * 用 ParsedCron 直接判定,命中即返回该分钟的 0 秒时间戳。
  */
 export function nextAfter(expr: string, from: number): number | null {
-  const parsed = parseCronInternal(expr)
+  const parsed = parseCronInternal(normalizeCronAlias(expr))
   if (!parsed) return null
   if (!Number.isFinite(from)) return null
 
