@@ -1,5 +1,6 @@
 import { useRef, useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { Vector2 } from 'three'
 import type { Group, Mesh, MeshStandardMaterial } from 'three'
 
 /**
@@ -28,49 +29,79 @@ const SKIN: Record<string, { body: string; accent: string }> = {
 
 /** DeepSeek 鲸鱼:身体(压扁球)+ 腹部 + 尾鳍 + 双侧鳍 + 眼 + 顶部喷水柱 */
 function Whale({ body, accent }: { body: string; accent: string }): React.JSX.Element {
+  const whaleRef = useRef<Group>(null)
+  const tailRef = useRef<Group>(null)
   const spoutRef = useRef<Mesh>(null)
+  const profile = useMemo(
+    () => [
+      new Vector2(0.02, -0.52),
+      new Vector2(0.18, -0.42),
+      new Vector2(0.31, -0.18),
+      new Vector2(0.35, 0.08),
+      new Vector2(0.28, 0.34),
+      new Vector2(0.11, 0.5),
+      new Vector2(0.02, 0.54)
+    ],
+    []
+  )
+  const bellyProfile = useMemo(
+    () => [
+      new Vector2(0.015, -0.36),
+      new Vector2(0.13, -0.28),
+      new Vector2(0.2, -0.02),
+      new Vector2(0.17, 0.24),
+      new Vector2(0.06, 0.38),
+      new Vector2(0.015, 0.4)
+    ],
+    []
+  )
   useFrame((s) => {
+    const t = s.clock.getElapsedTime()
+    if (whaleRef.current) whaleRef.current.rotation.z = Math.sin(t * 0.8) * 0.05
+    if (tailRef.current) tailRef.current.rotation.z = Math.sin(t * 2.2) * 0.28
     if (spoutRef.current) {
-      const t = s.clock.getElapsedTime()
       const grow = (Math.sin(t * 1.5) + 1) / 2 // 0..1 喷水起伏
       spoutRef.current.scale.set(1, 0.4 + grow * 1.1, 1)
       const m = spoutRef.current.material as MeshStandardMaterial
-      m.opacity = 0.35 + grow * 0.4
+      m.opacity = 0.28 + grow * 0.3
+      m.emissiveIntensity = 0.75 + grow * 0.25
     }
   })
   return (
-    <group>
-      {/* 身体:横向拉长的压扁球 */}
-      <mesh scale={[1.5, 0.85, 1]} castShadow>
-        <sphereGeometry args={[0.34, 20, 16]} />
+    <group ref={whaleRef}>
+      {/* 身体:LatheGeometry 流线剖面,避免压扁球观感 */}
+      <mesh rotation={[0, 0, Math.PI / 2]} scale={[1, 0.95, 1]} castShadow>
+        <latheGeometry args={[profile, 32]} />
         <meshStandardMaterial color={body} roughness={0.5} metalness={0.1} />
       </mesh>
       {/* 腹部(浅色) */}
-      <mesh position={[0, -0.14, 0.02]} scale={[1.3, 0.55, 0.9]}>
-        <sphereGeometry args={[0.3, 18, 14]} />
+      <mesh position={[0.04, -0.13, 0.01]} rotation={[0, 0, Math.PI / 2]} scale={[1, 0.55, 0.78]}>
+        <latheGeometry args={[bellyProfile, 28]} />
         <meshStandardMaterial color={accent} roughness={0.6} />
       </mesh>
       {/* 尾柄 + 尾鳍(两片) */}
-      <mesh position={[-0.5, 0.05, 0]} rotation={[0, 0, 0.3]} scale={[0.5, 0.3, 0.3]}>
-        <sphereGeometry args={[0.2, 10, 8]} />
-        <meshStandardMaterial color={body} />
-      </mesh>
-      <mesh position={[-0.72, 0.16, 0]} rotation={[0, 0.5, 0.7]}>
-        <coneGeometry args={[0.16, 0.28, 4]} />
-        <meshStandardMaterial color={body} />
-      </mesh>
-      <mesh position={[-0.72, -0.06, 0]} rotation={[0, -0.5, 2.4]}>
-        <coneGeometry args={[0.16, 0.28, 4]} />
-        <meshStandardMaterial color={body} />
-      </mesh>
+      <group ref={tailRef} position={[-0.52, 0.02, 0]}>
+        <mesh rotation={[0, 0, 0.3]} scale={[0.5, 0.3, 0.3]}>
+          <sphereGeometry args={[0.2, 16, 12]} />
+          <meshStandardMaterial color={body} roughness={0.55} />
+        </mesh>
+        <mesh position={[-0.22, 0.14, 0]} rotation={[0, 0.5, 0.7]}>
+          <coneGeometry args={[0.16, 0.28, 8]} />
+          <meshStandardMaterial color={body} roughness={0.55} />
+        </mesh>
+        <mesh position={[-0.22, -0.08, 0]} rotation={[0, -0.5, 2.4]}>
+          <coneGeometry args={[0.16, 0.28, 8]} />
+          <meshStandardMaterial color={body} roughness={0.55} />
+        </mesh>
+      </group>
       {/* 侧鳍 */}
       <mesh position={[0.05, -0.1, 0.28]} rotation={[0.6, 0, -0.3]}>
-        <coneGeometry args={[0.1, 0.24, 4]} />
-        <meshStandardMaterial color={body} />
+        <coneGeometry args={[0.1, 0.24, 8]} />
+        <meshStandardMaterial color={body} roughness={0.55} />
       </mesh>
       <mesh position={[0.05, -0.1, -0.28]} rotation={[-0.6, 0, -0.3]}>
-        <coneGeometry args={[0.1, 0.24, 4]} />
-        <meshStandardMaterial color={body} />
+        <coneGeometry args={[0.1, 0.24, 8]} />
+        <meshStandardMaterial color={body} roughness={0.55} />
       </mesh>
       {/* 眼睛(前方两颗) */}
       <mesh position={[0.42, 0.06, 0.14]}>
@@ -87,9 +118,9 @@ function Whale({ body, accent }: { body: string; accent: string }): React.JSX.El
         <meshStandardMaterial
           color={accent}
           emissive={accent}
-          emissiveIntensity={1.4}
+          emissiveIntensity={1.0}
           transparent
-          opacity={0.6}
+          opacity={0.52}
           toneMapped={false}
         />
       </mesh>
@@ -210,4 +241,3 @@ export default function VendorMascot({ vendorKey, position = [0, 1, 0], scale = 
     </group>
   )
 }
-

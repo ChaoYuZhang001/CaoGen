@@ -153,7 +153,7 @@ export default function WorkstationPro({
         <meshStandardMaterial
           color={screenColor}
           emissive={screenColor}
-          emissiveIntensity={activity === 'idle' ? 0.45 : 1.2}
+          emissiveIntensity={activity === 'idle' ? 0.35 : 0.95}
           transparent
           opacity={active ? 0.92 : 0.72}
           toneMapped={false}
@@ -165,7 +165,7 @@ export default function WorkstationPro({
           <meshStandardMaterial
             color={skin.accent}
             emissive={skin.accent}
-            emissiveIntensity={1.35}
+            emissiveIntensity={1.0}
             transparent
             opacity={0.85}
             toneMapped={false}
@@ -196,7 +196,7 @@ export default function WorkstationPro({
             <meshStandardMaterial
               color={skin.accent}
               emissive={skin.accent}
-              emissiveIntensity={0.45}
+              emissiveIntensity={0.35}
               roughness={0.45}
               metalness={0.35}
               toneMapped={false}

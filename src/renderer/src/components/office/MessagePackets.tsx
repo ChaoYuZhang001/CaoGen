@@ -79,7 +79,7 @@ export default function MessagePackets({
       <meshStandardMaterial
         color="#8fe9ff"
         emissive="#8fe9ff"
-        emissiveIntensity={3}
+        emissiveIntensity={1.2}
         toneMapped={false}
       />
     </instancedMesh>
