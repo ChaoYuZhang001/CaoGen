@@ -6,6 +6,7 @@ import type { Engine } from './engine'
 import { registerBuiltinEngines } from './engines'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
+import { getProvider } from './providers'
 import { cleanupTranscripts } from './transcript'
 import { touchProject } from './projects'
 import { prepareWorktree } from './worktrees'
@@ -17,6 +18,7 @@ import type {
   SubagentDispatchResult,
   SessionEventPayload,
   SessionMeta,
+  SendMessagePayload,
   TranscriptEntry
 } from '../shared/types'
 
@@ -118,6 +120,17 @@ class SessionManager {
     return { ...meta }
   }
 
+  send(id: string, input: string | SendMessagePayload): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    const budgetError = this.budgetError(session)
+    if (budgetError) {
+      session.rejectSend(budgetError)
+      return
+    }
+    session.send(input)
+  }
+
   dispatchSubagents(parentSessionId: string, input: DispatchSubagentsInput): SubagentDispatchResult {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
@@ -150,7 +163,7 @@ class SessionManager {
         childTaskId: taskId,
         childRole: role
       })
-      this.sessions.get(meta.id)?.send(prompt)
+      this.send(meta.id, prompt)
       children.push({ taskId, prompt, meta })
     })
 
@@ -189,12 +202,13 @@ class SessionManager {
     cleanupTranscripts(keep)
   }
 
-  private dispatch(sessionId: string, event: AgentEvent, seq: number): void {
+  private dispatch(sessionId: string, rawEvent: AgentEvent, seq: number): void {
+    const session = this.sessions.get(sessionId)
+    const event = session ? this.normalizeTurnResultCost(session, rawEvent) : rawEvent
     const payload: SessionEventPayload = { sessionId, seq, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
-    const session = this.sessions.get(sessionId)
     const parentSessionId = session?.meta.parentSessionId
     if (event.kind === 'turn-result' && parentSessionId && this.sessions.has(parentSessionId)) {
       const childResult: AgentEvent = {
@@ -217,6 +231,31 @@ class SessionManager {
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
     }
+  }
+
+  private budgetError(session: Engine): string | null {
+    const budget = effectiveBudgetUsd(session.meta)
+    if (budget <= 0) return null
+    if (!canTrackCost(session.meta)) {
+      return '当前引擎不提供费用回传,无法保证预算闸门;请关闭预算或切换到支持费用统计的引擎后继续。'
+    }
+    if (session.meta.costUsd >= budget) {
+      return `已达预算上限 $${budget.toFixed(2)},请调高预算后继续`
+    }
+    return null
+  }
+
+  private normalizeTurnResultCost(session: Engine, event: AgentEvent): AgentEvent {
+    if (event.kind !== 'turn-result') return event
+    const reportedCost = normalizePositiveNumber(event.costUsd)
+    const estimatedCost = reportedCost === undefined ? estimateTurnCostUsd(session.meta, event) : undefined
+    const turnCost = reportedCost ?? estimatedCost
+    if (turnCost === undefined) return event
+
+    const current = normalizePositiveNumber(session.meta.costUsd) ?? 0
+    const nextCost = reportedCost !== undefined && reportedCost >= current ? reportedCost : current + turnCost
+    session.meta.costUsd = nextCost
+    return { ...event, costUsd: nextCost }
   }
 
   private notificationState(sessionId: string): SessionNotificationState {
@@ -332,6 +371,61 @@ class SessionManager {
       costUsd: meta.costUsd
     })
   }
+}
+
+function normalizePositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function effectiveBudgetUsd(meta: SessionMeta): number {
+  const sessionBudget = normalizePositiveNumber(meta.budgetUsd)
+  if (sessionBudget !== undefined) return sessionBudget
+  const providerBudget = meta.providerId ? normalizePositiveNumber(getProvider(meta.providerId)?.budgetUsd) : undefined
+  if (providerBudget !== undefined) return providerBudget
+  return normalizePositiveNumber(getSettings().budgetUsdPerSession) ?? 0
+}
+
+function canTrackCost(meta: SessionMeta): boolean {
+  const engine = meta.engine ?? 'claude'
+  return engine === 'claude' || engine === 'openai'
+}
+
+function estimateTurnCostUsd(meta: SessionMeta, event: Extract<AgentEvent, { kind: 'turn-result' }>): number | undefined {
+  if ((meta.engine ?? 'claude') !== 'openai' || !event.usage) return undefined
+  const price = openAiPriceFor(meta.model)
+  const inputTokens = event.usage.input + event.usage.cacheCreation
+  const cachedInputTokens = event.usage.cacheRead
+  const outputTokens = event.usage.output
+  const cost =
+    (inputTokens * price.inputPerMillion +
+      cachedInputTokens * price.cachedInputPerMillion +
+      outputTokens * price.outputPerMillion) /
+    1_000_000
+  return cost > 0 ? cost : undefined
+}
+
+function openAiPriceFor(model: string | undefined): {
+  inputPerMillion: number
+  cachedInputPerMillion: number
+  outputPerMillion: number
+} {
+  const normalized = (model || '').toLowerCase()
+  if (normalized.includes('gpt-4o-mini')) {
+    return { inputPerMillion: 0.15, cachedInputPerMillion: 0.075, outputPerMillion: 0.6 }
+  }
+  if (normalized.includes('gpt-4o')) {
+    return { inputPerMillion: 2.5, cachedInputPerMillion: 1.25, outputPerMillion: 10 }
+  }
+  if (normalized.includes('gpt-4.1-mini')) {
+    return { inputPerMillion: 0.4, cachedInputPerMillion: 0.1, outputPerMillion: 1.6 }
+  }
+  if (normalized.includes('gpt-4.1-nano')) {
+    return { inputPerMillion: 0.1, cachedInputPerMillion: 0.025, outputPerMillion: 0.4 }
+  }
+  if (normalized.includes('gpt-4.1')) {
+    return { inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8 }
+  }
+  return { inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8 }
 }
 
 export const sessionManager = new SessionManager()

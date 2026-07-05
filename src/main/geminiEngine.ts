@@ -158,6 +158,10 @@ export class GeminiEngine implements Engine {
     this.runTurn(text)
   }
 
+  rejectSend(message: string): void {
+    this.setStatus('error', message)
+  }
+
   /** 起一个非交互 CLI 子进程跑一轮,流式翻译 stdout → AgentEvent。 */
   private runTurn(prompt: string): void {
     const gen = ++this.generation
@@ -347,6 +351,5 @@ export const geminiEngineFactory: EngineFactory = {
   create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
     new GeminiEngine(meta, emit, resumeSdkSessionId)
 }
-
 
 

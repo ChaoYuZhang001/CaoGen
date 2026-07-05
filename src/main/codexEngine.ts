@@ -114,6 +114,10 @@ export class CodexEngine implements Engine {
     this.spawnTurn(text)
   }
 
+  rejectSend(message: string): void {
+    this.setStatus('error', message)
+  }
+
   private spawnTurn(prompt: string): void {
     const args = ['exec', '--json']
     // 'auto' 是 CaoGen 调度哨兵,不透传给 CLI

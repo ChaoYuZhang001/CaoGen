@@ -33,6 +33,7 @@ export class OpenAIEngine implements Engine {
   private abort: AbortController | null = null
   private disposed = false
   private assistantText = ''
+  private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
 
   constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
@@ -83,9 +84,14 @@ export class OpenAIEngine implements Engine {
 
     this.turnStartedAt = Date.now()
     this.assistantText = ''
+    this.turnUsage = undefined
     this.abort = new AbortController()
     this.setStatus('running')
     void this.runResponse(payload, this.abort)
+  }
+
+  rejectSend(message: string): void {
+    this.setStatus('error', message)
   }
 
   async interrupt(): Promise<void> {
@@ -244,8 +250,7 @@ export class OpenAIEngine implements Engine {
       isError,
       durationMs,
       resultText: isError ? resultText : text || undefined,
-      usage: this.meta.usage,
-      costUsd: this.meta.costUsd
+      usage: this.turnUsage
     })
     if (isError && resultText) this.setStatus('error', resultText)
     else this.setStatus('idle')
@@ -254,6 +259,7 @@ export class OpenAIEngine implements Engine {
   private applyUsage(value: unknown): void {
     const usage = normalizeOpenAIUsage((value as Record<string, unknown> | null)?.usage)
     if (!usage) return
+    this.turnUsage = usage
     this.meta.usage = usage
     this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
     this.emit({ kind: 'meta', meta: { ...this.meta } })

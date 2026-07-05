@@ -70,7 +70,7 @@ function runRoutine(routine: Routine): void {
     const prompt = routine.prompt
     setTimeout(() => {
       try {
-        sessionManager.get(meta.id)?.send(prompt)
+        sessionManager.send(meta.id, prompt)
       } catch (err) {
         console.error('[caogen] routine 发送 prompt 失败:', err)
       }
