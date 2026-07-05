@@ -27,6 +27,7 @@ export type AvatarRefs = {
 type Props = OfficeProp & {
   bodyColor?: string
   skinColor?: string
+  catEars?: boolean
   /** 可选:把各部位 group 写入外部传入的引用对象(与转发 ref 二选一或并用) */
   refs?: AvatarRefs
 }
@@ -34,6 +35,8 @@ type Props = OfficeProp & {
 const DEFAULT_BODY = '#c9cdd4'
 const DEFAULT_SKIN = '#e8d9c4'
 const JOINT = '#9aa0aa'
+const EYE = '#141414'
+const BROW = '#3b332f'
 
 /**
  * 改进版低多边形人形装配(rig)。
@@ -44,7 +47,7 @@ const JOINT = '#9aa0aa'
  *   腿高 ~0.5,躯干中心 ~0.85,肩枢轴 ~1.02,头中心 ~1.32,总高约 1.5m。
  */
 const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
-  { position, rotation, scale = 1, bodyColor, skinColor, refs },
+  { position, rotation, scale = 1, bodyColor, skinColor, catEars = false, refs },
   ref
 ): React.JSX.Element {
   const body = bodyColor ?? DEFAULT_BODY
@@ -98,6 +101,38 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
           <sphereGeometry args={[0.15, 16, 16]} />
           <meshStandardMaterial color={skin} roughness={0.8} />
         </mesh>
+        <mesh position={[-0.055, 0.16, 0.132]}>
+          <sphereGeometry args={[0.018, 8, 8]} />
+          <meshStandardMaterial color={EYE} roughness={0.55} />
+        </mesh>
+        <mesh position={[0.055, 0.16, 0.132]}>
+          <sphereGeometry args={[0.018, 8, 8]} />
+          <meshStandardMaterial color={EYE} roughness={0.55} />
+        </mesh>
+        <mesh position={[-0.055, 0.205, 0.13]} rotation={[0, 0, 0.12]}>
+          <boxGeometry args={[0.052, 0.01, 0.008]} />
+          <meshStandardMaterial color={BROW} roughness={0.65} />
+        </mesh>
+        <mesh position={[0.055, 0.205, 0.13]} rotation={[0, 0, -0.12]}>
+          <boxGeometry args={[0.052, 0.01, 0.008]} />
+          <meshStandardMaterial color={BROW} roughness={0.65} />
+        </mesh>
+        <mesh position={[0, 0.105, 0.138]} rotation={[0, 0, 0]}>
+          <boxGeometry args={[0.05, 0.012, 0.008]} />
+          <meshStandardMaterial color={BROW} roughness={0.65} />
+        </mesh>
+        {catEars && (
+          <>
+            <mesh position={[-0.085, 0.285, 0.005]} rotation={[0.08, 0, 0.35]} castShadow>
+              <coneGeometry args={[0.048, 0.11, 4]} />
+              <meshStandardMaterial color={body} roughness={0.72} />
+            </mesh>
+            <mesh position={[0.085, 0.285, 0.005]} rotation={[0.08, 0, -0.35]} castShadow>
+              <coneGeometry args={[0.048, 0.11, 4]} />
+              <meshStandardMaterial color={body} roughness={0.72} />
+            </mesh>
+          </>
+        )}
       </group>
 
       {/* ===== 左臂:肩枢轴 y≈1.02 ===== */}
@@ -197,4 +232,3 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
 })
 
 export default AvatarRig
-

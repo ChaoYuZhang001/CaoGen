@@ -4,9 +4,9 @@ import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import Workstation, { activityOf } from './Workstation'
 import MessagePackets from './MessagePackets'
 import OfficeScene from './kit/OfficeScene'
+import WorkstationPro, { activityOf } from './kit/WorkstationPro'
 import Wanderers, { type WandererSpec } from './kit/Wanderers'
 import { brandFor } from './brand'
 import { vendorKeyFor } from './kit/VendorSkins'
@@ -169,12 +169,18 @@ export default function OfficeView(): React.JSX.Element {
 
           <Suspense fallback={null}>
             {ids.map((id, i) => (
-              <Workstation
+              <WorkstationPro
                 key={id}
-                session={sessions[id]}
                 position={positions[i]}
                 active={id === activeId}
-                brandColor={brandColorFor(sessions[id].meta.providerId)}
+                activity={activityOf(sessions[id])}
+                title={sessions[id].meta.title}
+                costUsd={sessions[id].meta.costUsd}
+                brandName={
+                  sessions[id].meta.providerId
+                    ? providers.find((p) => p.id === sessions[id].meta.providerId)?.name
+                    : undefined
+                }
                 vendorKey={vendorKeyOf(sessions[id].meta.providerId)}
                 showBadge={office.showBadges}
                 liveliness={office.liveliness}
