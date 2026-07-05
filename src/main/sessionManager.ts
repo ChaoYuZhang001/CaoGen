@@ -288,6 +288,8 @@ class SessionManager {
   }
 
   private notify(sessionId: string, title: string, body: string): void {
+    // 读取当前设置(而非缓存),用户随时可关闭桌面通知
+    if (!getSettings().notificationsEnabled) return
     showDesktopNotification({ title, body, sessionId })
   }
 

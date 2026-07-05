@@ -16,6 +16,8 @@ const DEFAULTS: AppSettings = {
   persona: '',
   allowedTools: '',
   disallowedTools: '',
+  notificationsEnabled: true,
+  preventDisplaySleep: true,
   office: { showBadges: true, liveliness: 1, catEars: false }
 }
 

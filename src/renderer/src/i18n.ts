@@ -328,6 +328,16 @@ const DICT: Dict = {
     zh: '当前厂商余额不足/限流/宕机时,自动切到健康厂商重试本轮任务。',
     en: 'On credit/rate-limit/outage errors, retry the turn on a healthy provider.'
   },
+  notificationsEnabled: { zh: '桌面通知', en: 'Desktop notifications' },
+  notificationsHint: {
+    zh: '任务完成、等待权限、任务失败时弹系统通知;关闭后全部静默。',
+    en: 'Notify on task completion, permission prompts, and failures; off = silent.'
+  },
+  preventDisplaySleep: { zh: '运行时防止显示器休眠', en: 'Prevent display sleep while running' },
+  preventDisplaySleepHint: {
+    zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
+    en: 'Keep the display awake while a session runs; off = follow system power settings.'
+  },
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },

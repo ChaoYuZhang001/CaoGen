@@ -215,6 +215,26 @@ export default function SettingsModal(): React.JSX.Element {
                 </label>
                 <p className="settings-hint">{t('failoverHint')}</p>
 
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.notificationsEnabled}
+                    onChange={(e) => set('notificationsEnabled', e.target.checked)}
+                  />
+                  {t('notificationsEnabled')}
+                </label>
+                <p className="settings-hint">{t('notificationsHint')}</p>
+
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={draft.preventDisplaySleep}
+                    onChange={(e) => set('preventDisplaySleep', e.target.checked)}
+                  />
+                  {t('preventDisplaySleep')}
+                </label>
+                <p className="settings-hint">{t('preventDisplaySleepHint')}</p>
+
                 <label className="field-label">单会话预算上限 ($)</label>
                 <input
                   className="input input-block"

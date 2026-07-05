@@ -276,6 +276,10 @@ export interface AppSettings {
   allowedTools: string
   /** 权限:工具黑名单(每行一个) */
   disallowedTools: string
+  /** 桌面通知:关闭后任务完成/权限/失败均不弹系统通知 */
+  notificationsEnabled: boolean
+  /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
+  preventDisplaySleep: boolean
   /** 3D 办公区 / 宠物设置 */
   office: OfficeSettings
 }
