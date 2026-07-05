@@ -41,6 +41,18 @@ export type WorktreeMergeApplyCheckResult =
   | { ok: true; canApply: false; error: string }
   | WorktreeMergeFailure
 
+export type WorktreeMergePullRequestResult =
+  | {
+      ok: true
+      created: true
+      tool: 'gh' | 'glab'
+      branch: string
+      url: string
+      pushed: boolean
+    }
+  | { ok: true; created: false; message: string }
+  | WorktreeMergeFailure
+
 export interface WorktreeMergeInspectorLabels {
   title?: string
   subtitle?: string
@@ -48,6 +60,8 @@ export interface WorktreeMergeInspectorLabels {
   inspecting?: string
   apply?: string
   applying?: string
+  createPr?: string
+  creatingPr?: string
   summary?: string
   patch?: string
   applyCheck?: string
@@ -60,14 +74,18 @@ export interface WorktreeMergeInspectorProps {
   summary?: WorktreeMergeSummaryResult
   patch?: WorktreeMergePatchResult
   applyCheck?: WorktreeMergeApplyCheckResult
+  prResult?: WorktreeMergePullRequestResult
   isInspecting?: boolean
   isApplying?: boolean
+  isCreatingPr?: boolean
   inspectDisabled?: boolean
   applyDisabled?: boolean
+  createPrDisabled?: boolean
   labels?: WorktreeMergeInspectorLabels
   className?: string
   onInspect?: () => void | Promise<void>
   onApply?: () => void | Promise<void>
+  onCreatePr?: () => void | Promise<void>
 }
 
 function cx(...classes: Array<string | false | undefined>): string {
@@ -89,6 +107,27 @@ function riskLabel(risk: WorktreeMergeConflictRisk): string {
   if (risk === 'low') return 'Low risk'
   if (risk === 'medium') return 'Conflict risk'
   return 'Unknown risk'
+}
+
+function riskWarning(
+  summary: WorktreeMergeSummaryResult | undefined,
+  applyCheck: WorktreeMergeApplyCheckResult | undefined
+): { tone: 'safe' | 'medium' | 'unknown'; message: string } | undefined {
+  // 优先看 apply --check 的硬结论:无法干净应用 = 明确冲突。
+  if (applyCheck?.ok && applyCheck.canApply === false) {
+    return { tone: 'medium', message: `Conflicts likely — git apply --check failed: ${applyCheck.error}` }
+  }
+  if (applyCheck && !applyCheck.ok) {
+    return { tone: 'unknown', message: `Cannot auto-apply — ${applyCheck.error}` }
+  }
+  if (!summary || !summary.ok) return undefined
+  if (summary.conflictRisk === 'medium') {
+    return { tone: 'medium', message: 'Conflicts likely — review the patch before applying to the main workspace.' }
+  }
+  if (summary.conflictRisk === 'unknown') {
+    return { tone: 'unknown', message: 'Cannot auto-apply — conflict risk could not be determined.' }
+  }
+  return { tone: 'safe', message: 'Safe — the patch applies cleanly to the main workspace.' }
 }
 
 function patchPreview(patchText: string | undefined): { text: string; truncated: boolean } | undefined {
@@ -291,22 +330,44 @@ function ApplyCheckSection({
   )
 }
 
+function PrResultBlock({ result }: { result: WorktreeMergePullRequestResult }): React.JSX.Element {
+  if (!result.ok) {
+    return <div className="notice notice-error worktree-merge-pr-result">{result.error}</div>
+  }
+  if (!result.created) {
+    return <div className="notice notice-info worktree-merge-pr-result">{result.message}</div>
+  }
+  return (
+    <div className="notice notice-info worktree-merge-pr-result">
+      {result.tool.toUpperCase()} · {result.branch} → <code className="worktree-merge-code">{result.url}</code>
+    </div>
+  )
+}
+
 export default function WorktreeMergeInspector({
   summary,
   patch,
   applyCheck,
+  prResult,
   isInspecting = false,
   isApplying = false,
+  isCreatingPr = false,
   inspectDisabled = false,
   applyDisabled = false,
+  createPrDisabled = false,
   labels,
   className,
   onInspect,
-  onApply
+  onApply,
+  onCreatePr
 }: WorktreeMergeInspectorProps): React.JSX.Element {
   const applyBlockedByCheck = applyCheck !== undefined && (!applyCheck.ok || !applyCheck.canApply)
   const inspectLabel = isInspecting ? (labels?.inspecting ?? 'Inspecting...') : (labels?.inspect ?? 'Inspect')
   const applyLabel = isApplying ? (labels?.applying ?? 'Applying...') : (labels?.apply ?? 'Apply')
+  const createPrLabel = isCreatingPr
+    ? (labels?.creatingPr ?? 'Creating PR...')
+    : (labels?.createPr ?? 'Create PR')
+  const warning = riskWarning(summary, applyCheck)
 
   return (
     <div className={cx('worktree-merge-inspector', className)}>
@@ -330,8 +391,31 @@ export default function WorktreeMergeInspector({
           >
             {applyLabel}
           </button>
+          <button
+            className="btn btn-ghost btn-sm worktree-merge-action"
+            disabled={!onCreatePr || createPrDisabled || isCreatingPr}
+            onClick={() => void onCreatePr?.()}
+          >
+            {createPrLabel}
+          </button>
         </div>
       </header>
+
+      {warning && (
+        <div
+          className={cx(
+            'worktree-merge-risk',
+            `worktree-merge-pill-${warning.tone}`,
+            'notice',
+            warning.tone === 'safe' ? 'notice-info' : 'notice-error'
+          )}
+          role={warning.tone === 'safe' ? undefined : 'alert'}
+        >
+          {warning.message}
+        </div>
+      )}
+
+      {prResult && <PrResultBlock result={prResult} />}
 
       <div className="worktree-merge-content">
         <SummarySection

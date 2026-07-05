@@ -235,6 +235,8 @@ const DICT: Dict = {
   worktreeInspectingMerge: { zh: '检查中…', en: 'Inspecting…' },
   worktreeApplyPatch: { zh: '应用到主工作区', en: 'Apply to main workspace' },
   worktreeApplyingPatch: { zh: '应用中…', en: 'Applying…' },
+  worktreeCreatePr: { zh: '创建 PR', en: 'Create PR' },
+  worktreeCreatingPr: { zh: '创建 PR 中…', en: 'Creating PR…' },
   worktreeMergeSummary: { zh: '摘要', en: 'Summary' },
   worktreeMergePatch: { zh: 'Patch 预览', en: 'Patch preview' },
   worktreeApplyCheck: { zh: '应用检查', en: 'Apply check' },

@@ -45,6 +45,7 @@ import type {
   WorktreeApplyResult,
   WorktreeMergeSummary,
   WorktreePatchResult,
+  WorktreePullRequestResult,
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../../shared/types'
@@ -470,8 +471,10 @@ export interface WorkbenchState {
   worktreeMergePatch?: WorktreePatchResult
   worktreeApplyCheck?: WorktreeApplyCheckResult
   worktreeApplyResult?: WorktreeApplyResult
+  worktreePrResult?: WorktreePullRequestResult
   worktreeMergeInspecting: boolean
   worktreeApplying: boolean
+  worktreeCreatingPr: boolean
   worktreeMessage?: string
   worktreeError?: string
   terminalOpen: boolean
@@ -602,6 +605,7 @@ interface AppStore {
   exportWorktreePatch(): Promise<WorktreePatchResult | undefined>
   inspectWorktreeMerge(): Promise<void>
   applyWorktreePatch(): Promise<WorktreeApplyResult | undefined>
+  createWorktreePullRequest(): Promise<WorktreePullRequestResult | undefined>
   removeWorktree(opts?: { deleteBranch?: boolean; force?: boolean }): Promise<WorktreeRemoveResult | undefined>
   openTerminalPanel(): Promise<void>
   closeTerminalPanel(): void
@@ -760,6 +764,7 @@ export const useStore = create<AppStore>((set, get) => {
     worktreeLoading: false,
     worktreeMergeInspecting: false,
     worktreeApplying: false,
+    worktreeCreatingPr: false,
     terminalOpen: false,
     terminalLoading: false,
     terminalBuffer: '',
@@ -1435,8 +1440,10 @@ export const useStore = create<AppStore>((set, get) => {
         worktreeMergePatch: undefined,
         worktreeApplyCheck: undefined,
         worktreeApplyResult: undefined,
+        worktreePrResult: undefined,
         worktreeMergeInspecting: false,
         worktreeApplying: false,
+        worktreeCreatingPr: false,
         terminalOpen: false,
         filesOpen: false,
         browserOpen: false,
@@ -1587,6 +1594,47 @@ export const useStore = create<AppStore>((set, get) => {
         workbench: {
           ...s.workbench,
           worktreeApplying: false,
+          worktreeError: message
+        }
+      }))
+      return { ok: false, error: message }
+    }
+  },
+
+  async createWorktreePullRequest() {
+    const id = get().activeId
+    if (!id) return undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        worktreeCreatingPr: true,
+        worktreePrResult: undefined,
+        worktreeError: undefined,
+        worktreeMessage: undefined
+      }
+    }))
+    try {
+      const result = await window.agentDesk.createWorktreePullRequest(id)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreePrResult: result,
+          worktreeCreatingPr: false,
+          worktreeError: result.ok ? undefined : result.error,
+          worktreeMessage: result.ok
+            ? result.created
+              ? `已创建 PR: ${result.url}`
+              : result.message
+            : undefined
+        }
+      }))
+      return result
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeCreatingPr: false,
           worktreeError: message
         }
       }))

@@ -40,6 +40,7 @@ import {
   applyManagedWorktreePatch,
   checkManagedWorktreeApply,
   createManagedWorktreeMergePatch,
+  createManagedWorktreePullRequest,
   exportManagedWorktreePatch,
   getManagedWorktreeSummary,
   inspectManagedWorktreeMerge,
@@ -346,6 +347,15 @@ export function registerIpc(): void {
       return { ok: false, error: '会话正在运行，停止后才能合并 worktree 改动' }
     }
     return applyManagedWorktreePatch(id)
+  })
+
+  ipcMain.handle('worktrees:createPr', (_e, id: string) => {
+    const session = sessionManager.get(id)
+    // 与 applyPatch 一致:running 时拦截,避免边改边推送/建 PR 的竞态。
+    if (session?.meta.status === 'running') {
+      return { ok: false, error: '会话正在运行，停止后才能创建 PR' }
+    }
+    return createManagedWorktreePullRequest(id)
   })
 
   ipcMain.handle(
