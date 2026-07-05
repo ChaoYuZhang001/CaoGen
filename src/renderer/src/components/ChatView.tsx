@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { formatCost, formatTokens } from '../format'
@@ -27,7 +27,9 @@ export default function ChatView(): React.JSX.Element | null {
   const openSubagentPanel = useStore((s) => s.openSubagentPanel)
   const openRoutinePanel = useStore((s) => s.openRoutinePanel)
   const openMemoryPanel = useStore((s) => s.openMemoryPanel)
-  const startSuggestions = useStore((s) => s.visibleStartSuggestions())
+  const allStartSuggestions = useStore((s) => s.workbench.startSuggestions)
+  const ignoredStartSuggestions = useStore((s) => s.workbench.ignoredStartSuggestions)
+  const laterStartSuggestions = useStore((s) => s.workbench.laterStartSuggestions)
   const startSuggestionsLoading = useStore((s) => s.workbench.startSuggestionsLoading)
   const startSuggestionsError = useStore((s) => s.workbench.startSuggestionsError)
   const memorySuggestion = useStore((s) => s.workbench.memorySuggestion)
@@ -40,6 +42,15 @@ export default function ChatView(): React.JSX.Element | null {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+
+  const startSuggestions = useMemo(() => {
+    if (!activeId) return []
+    const now = Date.now()
+    return allStartSuggestions.filter((suggestion) => {
+      const key = `${activeId}:${suggestion.id}`
+      return !ignoredStartSuggestions[key] && (laterStartSuggestions[key] ?? 0) <= now
+    })
+  }, [activeId, allStartSuggestions, ignoredStartSuggestions, laterStartSuggestions])
 
   const itemCount = session?.items.length ?? 0
   const streamLen = (session?.streamText.length ?? 0) + (session?.streamThinking.length ?? 0)
