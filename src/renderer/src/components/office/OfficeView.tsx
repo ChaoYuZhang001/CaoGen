@@ -1,7 +1,7 @@
 import { Suspense, useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
-import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing'
+import { EffectComposer, Bloom, N8AO, Vignette } from '@react-three/postprocessing'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import MessagePackets from './MessagePackets'
@@ -214,9 +214,16 @@ export default function OfficeView(): React.JSX.Element {
 
           {/* 后处理:辉光让发光材质/粒子"绚"起来 + 暗角聚焦 */}
           <EffectComposer>
+            <N8AO
+              aoRadius={0.9}
+              distanceFalloff={0.75}
+              intensity={isLight ? 0.45 : 0.8}
+              quality="medium"
+              halfRes
+            />
             <Bloom
-              intensity={isLight ? 0.6 : 1.3}
-              luminanceThreshold={isLight ? 0.5 : 0.25}
+              intensity={isLight ? 0.45 : 0.8}
+              luminanceThreshold={isLight ? 0.55 : 0.45}
               luminanceSmoothing={0.9}
               mipmapBlur
             />
