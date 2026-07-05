@@ -727,6 +727,20 @@ export interface WorktreeRemoveResult {
   error?: string
 }
 
+export type WorktreePullRequestTool = 'gh' | 'glab'
+
+export type WorktreePullRequestResult =
+  | {
+      ok: true
+      created: true
+      tool: WorktreePullRequestTool
+      branch: string
+      url: string
+      pushed: boolean
+    }
+  | { ok: true; created: false; message: string }
+  | { ok: false; error: string }
+
 export type ProjectFileKind = 'file' | 'directory'
 
 export interface ProjectFileEntry {
@@ -973,6 +987,7 @@ export interface AgentDeskApi {
   createWorktreeMergePatch(sessionId: string): Promise<WorktreePatchResult>
   checkWorktreeApply(sessionId: string): Promise<WorktreeApplyCheckResult>
   applyWorktreePatch(sessionId: string): Promise<WorktreeApplyResult>
+  createWorktreePullRequest(sessionId: string): Promise<WorktreePullRequestResult>
   removeWorktree(
     sessionId: string,
     opts?: { deleteBranch?: boolean; force?: boolean }

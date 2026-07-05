@@ -21,7 +21,9 @@ export default function WorktreePanel(): React.JSX.Element {
     worktreeMergePatch,
     worktreeMergeSummary,
     worktreeMessage,
-    worktreeApplyResult
+    worktreeApplyResult,
+    worktreePrResult,
+    worktreeCreatingPr
   } = useStore((s) => s.workbench)
   const refresh = useStore((s) => s.refreshWorktreePanel)
   const close = useStore((s) => s.closeWorktreePanel)
@@ -29,6 +31,7 @@ export default function WorktreePanel(): React.JSX.Element {
   const exportPatch = useStore((s) => s.exportWorktreePatch)
   const inspectMerge = useStore((s) => s.inspectWorktreeMerge)
   const applyPatch = useStore((s) => s.applyWorktreePatch)
+  const createPr = useStore((s) => s.createWorktreePullRequest)
   const removeWorktree = useStore((s) => s.removeWorktree)
   const [removing, setRemoving] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -61,6 +64,13 @@ export default function WorktreePanel(): React.JSX.Element {
     const ok = window.confirm(t('worktreeApplyConfirm'))
     if (!ok) return
     await applyPatch()
+  }
+
+  const onCreatePr = async (): Promise<void> => {
+    // 推送受管分支并创建 PR/MR;明确二次确认,避免误触发网络副作用。
+    const ok = window.confirm('推送当前 worktree 分支并创建 PR/MR？')
+    if (!ok) return
+    await createPr()
   }
 
   return (
@@ -141,10 +151,13 @@ export default function WorktreePanel(): React.JSX.Element {
               summary={worktreeMergeSummary}
               patch={worktreeMergePatch}
               applyCheck={worktreeApplyCheck}
+              prResult={worktreePrResult}
               isInspecting={worktreeMergeInspecting}
               isApplying={worktreeApplying}
+              isCreatingPr={worktreeCreatingPr}
               inspectDisabled={worktreeLoading || record.state !== 'active'}
               applyDisabled={!canApply || applied || record.state !== 'active'}
+              createPrDisabled={worktreeCreatingPr || record.state !== 'active'}
               labels={{
                 title: t('worktreeMergeTitle'),
                 subtitle: t('worktreeMergeSubtitle'),
@@ -152,6 +165,8 @@ export default function WorktreePanel(): React.JSX.Element {
                 inspecting: t('worktreeInspectingMerge'),
                 apply: t('worktreeApplyPatch'),
                 applying: t('worktreeApplyingPatch'),
+                createPr: t('worktreeCreatePr'),
+                creatingPr: t('worktreeCreatingPr'),
                 summary: t('worktreeMergeSummary'),
                 patch: t('worktreeMergePatch'),
                 applyCheck: t('worktreeApplyCheck'),
@@ -161,6 +176,7 @@ export default function WorktreePanel(): React.JSX.Element {
               }}
               onInspect={() => void inspectMerge()}
               onApply={() => void onApply()}
+              onCreatePr={() => void onCreatePr()}
             />
           </>
         ) : null}

@@ -9,10 +9,17 @@ import type {
   WorktreeApplyCheckResult,
   WorktreeMergeSummary,
   WorktreePatchResult,
+  WorktreePullRequestResult,
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../shared/types'
-import { applySquashPatch, canFastApplyPatch, createSquashPatch, inspectMerge } from './worktreeMerge'
+import {
+  applySquashPatch,
+  canFastApplyPatch,
+  createPullRequest,
+  createSquashPatch,
+  inspectMerge
+} from './worktreeMerge'
 
 const WORKTREE_BRANCH_PREFIX = 'caogen'
 const GIT_TIMEOUT_MS = 120_000
@@ -469,6 +476,33 @@ export function applyManagedWorktreePatch(sessionId: string): WorktreeApplyResul
       baseSha: patch.baseSha,
       worktreePath: patch.worktreePath
     }
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+export function createManagedWorktreePullRequest(sessionId: string): WorktreePullRequestResult {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
+    const title = `${record.branch}: CaoGen worktree changes`
+    const body = [
+      `Automated pull request for CaoGen managed worktree \`${record.branch}\`.`,
+      '',
+      `- Base: ${record.baseBranch ?? 'detached'} (${record.baseSha.slice(0, 12)})`,
+      `- Worktree: ${record.worktreePath}`
+    ].join('\n')
+    return createPullRequest({
+      repoRoot: record.repoRoot,
+      worktreePath: record.worktreePath,
+      branch: record.branch,
+      title,
+      body,
+      baseBranch: record.baseBranch
+    })
   } catch (err) {
     return { ok: false, error: errorText(err) }
   }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   mkdirSync,
   readFileSync,
@@ -61,6 +61,25 @@ export interface ApplySquashPatchSuccess {
 }
 
 export type ApplySquashPatchResult = ApplySquashPatchSuccess | WorktreeMergeFailure
+
+export type PullRequestTool = 'gh' | 'glab'
+
+export interface CreatePullRequestOptions {
+  repoRoot: string
+  worktreePath: string
+  branch: string
+  title: string
+  body?: string
+  baseBranch?: string | null
+}
+
+export type CreatePullRequestResult =
+  | { ok: true; created: true; tool: PullRequestTool; branch: string; url: string; pushed: boolean }
+  | { ok: true; created: false; message: string }
+  | WorktreeMergeFailure
+
+// 拒绝直接向这些分支推送/建 PR,遵守 git-safety(绝不直接动 main/master)。
+const PROTECTED_BRANCHES = new Set(['main', 'master', 'HEAD'])
 
 interface MergeContext {
   repoRoot: string
@@ -190,6 +209,102 @@ export function applySquashPatch(repoRoot: string, patchText: string): ApplySqua
   } catch (err) {
     return failure(errorMessage(err))
   }
+}
+
+export function detectPullRequestTool(): PullRequestTool | null {
+  for (const tool of ['gh', 'glab'] as const) {
+    if (commandExists(tool)) return tool
+  }
+  return null
+}
+
+/**
+ * 推送 managed worktree 分支并创建 PR/MR。
+ * git-safety:绝不直接推 main/master;推送目标即受管分支自身,并用 -u 建立 upstream;
+ * 无 force、无破坏性操作;全部走 execFile 数组参数,零字符串插值以避免注入。
+ */
+export function createPullRequest(options: CreatePullRequestOptions): CreatePullRequestResult {
+  try {
+    const root = normalizeDirectory('repoRoot', options.repoRoot)
+    assertGitWorktreeRoot(root, 'repoRoot')
+    const worktree = normalizeDirectory('worktreePath', options.worktreePath)
+    assertSameRepository(root, worktree)
+
+    const branch = typeof options.branch === 'string' ? options.branch.trim() : ''
+    if (!branch) return failure('分支名不能为空')
+    if (PROTECTED_BRANCHES.has(branch)) {
+      return failure(`拒绝直接向受保护分支创建 PR: ${branch}`)
+    }
+
+    const title = typeof options.title === 'string' ? options.title.trim() : ''
+    if (!title) return failure('PR 标题不能为空')
+    const body = typeof options.body === 'string' ? options.body : ''
+
+    const tool = detectPullRequestTool()
+    if (!tool) {
+      return {
+        ok: true,
+        created: false,
+        message: '未检测到可用的 PR 工具(gh / glab),已跳过创建 PR'
+      }
+    }
+
+    // 从 worktree 侧推送受管分支,设置上游;无 --force。
+    const push = runGit(worktree, ['push', '-u', 'origin', `${branch}:${branch}`])
+    if (!push.ok) return failure(push.error ?? `git push 失败: ${branch}`)
+
+    const created =
+      tool === 'gh'
+        ? runPrTool('gh', worktree, ['pr', 'create', '--head', branch, '--title', title, '--body', body])
+        : runPrTool('glab', worktree, ['mr', 'create', '--source-branch', branch, '--title', title, '--description', body, '--yes'])
+
+    if (!created.ok) return failure(created.error ?? `${tool} 创建 PR 失败`)
+
+    const url = extractUrl(created.stdout) ?? created.stdout.trim()
+    return { ok: true, created: true, tool, branch, url, pushed: true }
+  } catch (err) {
+    return failure(errorMessage(err))
+  }
+}
+
+function commandExists(command: string): boolean {
+  const probe = process.platform === 'win32' ? 'where' : 'which'
+  try {
+    execFileSync(probe, [command], {
+      stdio: 'ignore',
+      timeout: GIT_TIMEOUT_MS
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function runPrTool(
+  command: PullRequestTool,
+  cwd: string,
+  args: string[]
+): { ok: true; stdout: string } | { ok: false; error: string } {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: MAX_GIT_BUFFER
+  })
+  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
+  const stderr = typeof result.stderr === 'string' ? result.stderr : ''
+  if (result.error) return { ok: false, error: result.error.message }
+  if (result.status !== 0) {
+    const output = stderr.trim() || stdout.trim()
+    return { ok: false, error: output || `${command} exited with ${result.status ?? 'null'}` }
+  }
+  return { ok: true, stdout }
+}
+
+function extractUrl(text: string): string | null {
+  const match = /https?:\/\/\S+/.exec(text)
+  return match ? match[0].trim() : null
 }
 
 function resolveMergeContext(
