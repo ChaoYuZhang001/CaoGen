@@ -274,6 +274,30 @@ textarea {
   font-size: 12.5px;
 }
 
+.sidebar-empty-hero {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 18px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.sidebar-empty-mark {
+  color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sidebar-empty-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .session-card {
   display: flex;
   align-items: center;
