@@ -141,5 +141,31 @@
 - `styles.css`:给 .btn/.session-card/.project-chip/.settings-tab/.tool-header/.file-row/.ctx-menu-item/.sidebar-group-head 加 `transition: background .14s, border-color .14s, color .14s, transform .1s`;主按钮 :active `transform:scale(.98)`;末尾加 `@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}`
 - 验收:hover/点击平滑,无瞬跳;系统开"减少动态效果"时动画关闭
 
-**第一轮 = 卡 A→B→C→D→E**(全高影响、多数低成本,一轮直击"不如 Codex 好用")。完成交规划方 E2E check,再发第二轮(U2 三维提质 + U3.3/U4.2/U5)。
+**第一轮 = 卡 A→B→C→D→E**(全高影响、多数低成本,一轮直击"不如 Codex 好用")。✅ 已完成并经规划方逐卡 E2E check 通过(命令面板/快捷键/流式合帧完整/空态/微交互)。
+
+---
+
+## 给 Codex 的任务卡(第二轮,3D 提质,直击"3D 太 low")
+
+> 前置:第一轮 A-E 已 check 通过并推 main。通用约束同前(typecheck+build 过、独立提交、E2E 可验、不搬竞品代码)。
+> 背景:审计发现线上 `OfficeView→Workstation` 的小人是胶囊身+**空白球头、无脸无腿无脚**;而更精致的 `WorkstationPro/AvatarRig`(分段肢体)整套写好躺在 `office/kit/` 却**未接入**,是组织性死代码。这是"3D 太 low"的根因。
+
+### 卡 F(U2.1)· 接入精致小人,消死代码 [先做,impact high]
+- 决策统一为一套:让 `src/renderer/src/components/office/OfficeView.tsx` 改用 `kit/WorkstationPro`(有分段躯干/四肢/可加脸),把线上 `Workstation.tsx` 现有的 **VendorMascot(厂商吉祥物)、MessagePackets(协作消息包)、Wanderers(漫游)、task 标签、activity 状态色** 迁移进 WorkstationPro;删除或改造旧 `Workstation.tsx` 避免两套发散。
+- 给小人头部加简单五官(眼/眉,几何体即可),补脖子/腿脚,不再是空白球头。
+- 验收(E2E 截图):办公区小人有头脸躯干四肢,厂商吉祥物/协作动画/状态色都还在、不回退。
+
+### 卡 G(U2.2)· 小人细节与材质提质 [impact medium]
+- 几何:capsule capSegments 6→8、关节 sphere 12→20、脚 boxGeometry 换 drei `<RoundedBox>`;桌面/机架等硬件加轻微圆角。
+- 材质:皮肤用 meshPhysicalMaterial(微 clearcoat/sheen 暖色),身体哑光布料感,关节金属件 metalness 0.7 吃反射。
+- 动画平滑:activity 切换时关节 rotation 做 `lerp(cur, target, 0.1)` 而非直接 set(AvatarAnimations 现在直接 set 完整姿态导致硬跳)。
+- 验收(截图):近景无明显棱角、切状态无硬跳。
+
+### 卡 H(U2.3)· 场景光影提质 [impact medium]
+- 后处理加 AO(N8AO 或 postprocessing SSAO,放 Bloom **之前**):给桌腿/椅子/脚下自然暗部。
+- 收敛 Bloom:dark 下 intensity 1.3→0.8、luminanceThreshold 0.25→0.45;发光件(光环/工牌/喷水柱)emissiveIntensity 从 1.6/2.4 降到 ~1.0,避免过曝糊成光斑。
+- 吉祥物提质:鲸鱼 body 用 LatheGeometry 流线剖面替代压扁 sphere、鳍加段数、差异化动作(缓慢俯仰摆尾)。
+- 验收(截图):画面从"到处发光"回到"克制点睛",AO 让物体落地有体积感。
+
+**第二轮 = 卡 F→G→H**(F 先做,是根因)。完成交规划方 E2E check(重点截图对比前后)。之后第三轮:U3.3 聊天头工具栏图标化 + U4.2 3D 失焦省电 + U5.1 会话全文搜索。
 
