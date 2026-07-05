@@ -76,7 +76,7 @@ try {
     await clickByText(cdp, '+ 新建会话')
     await waitForText(cdp, '新建会话')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await chooseSelectOptionByText(cdp, 'OpenAI Responses API')
+    await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
     await chooseSelectOptionByText(cdp, 'CaoGen OpenAI Mock')
     await chooseSelectOptionByText(cdp, 'mock-responses')
     await screenshot(cdp, '01-new-session-openai-mock')
