@@ -466,8 +466,12 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
-    if (!opts || typeof opts.cwd !== 'string' || opts.cwd.length === 0) {
-      throw new Error('必须指定工作目录')
+    if (!opts || typeof opts.cwd !== 'string') {
+      throw new Error('创建会话参数无效')
+    }
+    // 未选项目目录 → 走"对话分组":用用户主目录作 cwd,强制不隔离(无 worktree)
+    if (opts.cwd.trim().length === 0) {
+      return sessionManager.create({ ...opts, cwd: app.getPath('home'), isolated: false })
     }
     return sessionManager.create(opts)
   })
