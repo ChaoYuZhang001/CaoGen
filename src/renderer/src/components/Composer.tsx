@@ -83,6 +83,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const [slashIndex, setSlashIndex] = useState(0)
   const [attachments, setAttachments] = useState<ComposerImageAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [ocrBusyId, setOcrBusyId] = useState<string | null>(null)
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [dragActive, setDragActive] = useState(false)
 
@@ -225,6 +226,31 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       }
     } finally {
       setUploadingAttachment(false)
+    }
+  }
+
+  /** OCR:提取附件文字,插到输入框光标处;失败时如实提示(不伪造) */
+  const runOcr = async (attachmentId: string): Promise<void> => {
+    if (!activeId) return
+    const target = attachments.find((item) => item.id === attachmentId)
+    if (!target) return
+    setOcrBusyId(attachmentId)
+    setAttachmentError(null)
+    try {
+      const result = await window.agentDesk.ocrImageAttachment(activeId, target.path)
+      if (!result.ok || !result.text) {
+        setAttachmentError(result.error || 'OCR 未识别到文字')
+        return
+      }
+      setText((current) =>
+        current
+          ? `${current}\n\n[图片 ${target.name} OCR]\n${result.text}`
+          : `[图片 ${target.name} OCR]\n${result.text}`
+      )
+    } catch (err) {
+      setAttachmentError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setOcrBusyId(null)
     }
   }
 
@@ -391,6 +417,8 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
           mimeType: attachment.mime
         }))}
         disabled={uploadingAttachment}
+        ocrBusyId={ocrBusyId}
+        onOcr={(id) => void runOcr(id)}
         onRemove={(id) =>
           setAttachments((current) => {
             const target = current.find((item) => item.id === id)

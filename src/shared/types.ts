@@ -280,6 +280,13 @@ export interface AppSettings {
   notificationsEnabled: boolean
   /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
   preventDisplaySleep: boolean
+  /**
+   * Hooks:文件写入类工具(Edit/Write)成功后执行的 shell 命令,
+   * 在会话 cwd 下运行,空 = 关闭。典型用法:自动格式化/测试。
+   */
+  hookPostEditCommand: string
+  /** Hooks:每轮结束(Stop)后执行的 shell 命令,空 = 关闭 */
+  hookTurnEndCommand: string
   /** 3D 办公区 / 宠物设置 */
   office: OfficeSettings
 }
@@ -340,6 +347,14 @@ export interface ImageAttachmentView {
 export type ImageAttachmentResult =
   | ({ ok: true } & ImageAttachmentView)
   | { ok: false; error: string }
+
+/** OCR 结果(引擎:macOS Vision 或 tesseract) */
+export interface ImageOcrResult {
+  ok: boolean
+  text?: string
+  engine?: 'vision' | 'tesseract'
+  error?: string
+}
 
 export interface UserMessageAttachmentView {
   id: string
@@ -439,6 +454,17 @@ export type AgentEvent =
       resultText?: string
     }
   | ({ kind: 'subagent-result' } & SubagentResult)
+  | {
+      /** SDK Hook 事件桥:把引擎生命周期钩子转发到时间线(可观测性) */
+      kind: 'hook-event'
+      event: string
+      toolName?: string
+      detail?: string
+      /** 用户 shell 钩子执行结果(配置了才有) */
+      shellCommand?: string
+      shellOk?: boolean
+      shellOutput?: string
+    }
 
 /** 文件回退结果(对应 SDK RewindFilesResult) */
 export interface RewindResult {
@@ -964,6 +990,8 @@ export interface AgentDeskApi {
     sessionId: string,
     input: SaveImageAttachmentBytesInput
   ): Promise<ImageAttachmentResult>
+  /** OCR 附件图片(Vision/tesseract 降级;无引擎时 ok=false 如实报告) */
+  ocrImageAttachment(sessionId: string, imagePath: string): Promise<ImageOcrResult>
   sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<void>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>

@@ -3440,6 +3440,31 @@ textarea {
   line-height: 1;
 }
 
+.image-attachment-ocr {
+  height: 24px;
+  padding: 0 7px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.image-attachment-ocr:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.image-attachment-ocr:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .image-attachment-remove:hover:not(:disabled) {
   border-color: var(--border);
   background: var(--accent-soft);

@@ -49,6 +49,7 @@ import {
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
+import { ocrImage } from './imageOcr'
 import {
   pluginRegistryItemKey,
   readPluginRegistryState,
@@ -528,6 +529,15 @@ export function registerIpc(): void {
       })
     }
   )
+
+  // OCR:提取附件图片文字(Vision/tesseract 逐级降级;路径必须在会话附件区内)
+  ipcMain.handle('attachments:ocr', async (_e, id: string, imagePath: string) => {
+    if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
+    if (typeof imagePath !== 'string' || !isInsideAttachmentRoot(id, imagePath)) {
+      return { ok: false, error: '仅允许识别当前会话附件区内的图片' }
+    }
+    return ocrImage(imagePath)
+  })
 
   ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)

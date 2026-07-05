@@ -41,6 +41,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('attachments:copyImage', sessionId, sourcePath),
   saveImageAttachmentBytes: (sessionId: string, input: SaveImageAttachmentBytesInput) =>
     ipcRenderer.invoke('attachments:saveImageBytes', sessionId, input),
+  ocrImageAttachment: (sessionId: string, imagePath: string) =>
+    ipcRenderer.invoke('attachments:ocr', sessionId, imagePath),
   sendMessage: (sessionId: string, payload: string | SendMessagePayload) =>
     ipcRenderer.invoke('sessions:send', sessionId, payload),
   interrupt: (sessionId: string) => ipcRenderer.invoke('sessions:interrupt', sessionId),

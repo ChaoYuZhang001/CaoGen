@@ -446,6 +446,24 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         }
       }
     }
+    case 'hook-event': {
+      // 只把"有信息量"的钩子进时间线:配置了 shell 的(有命令输出/结果),
+      // 或失败的;纯 post-edit 标记事件不刷屏。
+      if (!ev.shellCommand) return s
+      const text = [
+        `钩子 ${ev.event}${ev.toolName ? `(${ev.toolName})` : ''}: ${ev.shellCommand}`,
+        ev.shellOutput ? ev.shellOutput : ''
+      ]
+        .filter(Boolean)
+        .join('\n')
+      return {
+        ...s,
+        items: [
+          ...s.items,
+          { id: genId(), kind: 'notice', level: ev.shellOk === false ? 'error' : 'info', text }
+        ]
+      }
+    }
     default:
       return s
   }
@@ -756,6 +774,8 @@ export const useStore = create<AppStore>((set, get) => {
     disallowedTools: '',
     notificationsEnabled: true,
     preventDisplaySleep: true,
+    hookPostEditCommand: '',
+    hookTurnEndCommand: '',
     office: { showBadges: true, liveliness: 1, catEars: false }
   },
   providers: [],
