@@ -674,6 +674,34 @@ export function registerIpc(): void {
       updatedAt: routine.updatedAt,
       ok: true
     }))
+    // routineRuns:从已实际跑过的 routine(lastRunAt 非空)派生运行记录。
+    // 注意:routineStore 只持久化 lastRunAt/nextRunAt,不记录每次运行的成功/失败结果,
+    // 因此这里无法标记 failed,只提供"最近运行过"的时间信号,绝不臆造失败状态。
+    const routineRunSignals: StartSuggestionSignal[] = routines
+      .filter((routine) => typeof routine.lastRunAt === 'number' && routine.lastRunAt > 0)
+      .map((routine) => ({
+        id: `${routine.id}:run`,
+        title: routine.name,
+        body: routine.prompt,
+        source: 'routine-run',
+        status: 'ran',
+        updatedAt: routine.lastRunAt ?? undefined,
+        ok: true
+      }))
+    // recentFailures:用 Provider 健康度作为唯一可靠的失败来源。
+    // 不健康或带 lastError 的 Provider 表示近期确有失败的调用,可据此提示排查。
+    const recentFailureSignals: StartSuggestionSignal[] = listHealth()
+      .filter((h) => !h.healthy || (typeof h.lastError === 'string' && h.lastError.trim() !== ''))
+      .map((h) => ({
+        id: `provider-health:${h.providerId}`,
+        title: `Provider ${h.providerId}`,
+        body: h.lastError ?? `${h.consecutiveFailures} consecutive failures`,
+        source: 'provider-health',
+        error: h.lastError,
+        updatedAt: h.lastUsedAt,
+        failed: true,
+        ok: false
+      }))
     return getStartSuggestions(projectRoot, {
       memoryEntries: memory.entries.map((entry) => ({
         id: entry.id,
@@ -696,7 +724,9 @@ export function registerIpc(): void {
         }
       ],
       historySummaries: historySignals,
-      routineSummaries: routineSignals
+      routineSummaries: routineSignals,
+      routineRuns: routineRunSignals,
+      recentFailures: recentFailureSignals
     })
   })
 

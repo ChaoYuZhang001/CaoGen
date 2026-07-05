@@ -1025,6 +1025,8 @@ export class AgentSession implements Engine {
 
   private startPowerBlocker(): void {
     if (this.powerBlockerId !== null) return
+    // 读取当前设置(而非缓存),用户可关闭"运行时防休眠"
+    if (!getSettings().preventDisplaySleep) return
     try {
       this.powerBlockerId = powerSaveBlocker.start('prevent-display-sleep')
     } catch (err) {

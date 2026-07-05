@@ -743,6 +743,8 @@ export const useStore = create<AppStore>((set, get) => {
     persona: '',
     allowedTools: '',
     disallowedTools: '',
+    notificationsEnabled: true,
+    preventDisplaySleep: true,
     office: { showBadges: true, liveliness: 1, catEars: false }
   },
   providers: [],
