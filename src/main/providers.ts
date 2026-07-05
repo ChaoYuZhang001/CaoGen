@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../shared/types'
-import type { Provider, ProviderInput, ProviderView } from '../shared/types'
+import type { OpenAIProtocol, Provider, ProviderInput, ProviderView } from '../shared/types'
 
 let cache: Provider[] | null = null
 
@@ -98,9 +98,12 @@ const ANTHROPIC_SUBPATH_HOSTS = [
   'open.bigmodel.cn' // 智谱 GLM
 ]
 
-function normalizeBaseUrl(baseUrl: string): string {
+function normalizeBaseUrl(baseUrl: string, openaiProtocol?: OpenAIProtocol): string {
   const url = (baseUrl || '').trim().replace(/\/+$/, '')
   if (!url) return url
+  // chat 协议走 OpenAI 引擎的 /v1/chat/completions,裸域名才是对的;
+  // /anthropic 补全仅服务 Claude 引擎的 Anthropic 兼容路径。
+  if (openaiProtocol === 'chat') return url
   try {
     const parsed = new URL(url)
     const needsSubpath = ANTHROPIC_SUBPATH_HOSTS.some((h) => parsed.host === h)
@@ -117,11 +120,12 @@ export function createProvider(input: ProviderInput): ProviderView {
   const provider: Provider = {
     id: randomUUID(),
     name: input.name,
-    baseUrl: normalizeBaseUrl(input.baseUrl),
+    baseUrl: normalizeBaseUrl(input.baseUrl, input.openaiProtocol),
     encryptedToken: encryptToken(input.token),
     models: input.models,
     customHeaders: input.customHeaders,
     budgetUsd: normalizeBudget(input.budgetUsd),
+    openaiProtocol: input.openaiProtocol,
     note: input.note,
     createdAt: Date.now()
   }
@@ -138,10 +142,11 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
   const next: Provider = {
     ...prev,
     name: patch.name ?? prev.name,
-    baseUrl: patch.baseUrl === undefined ? prev.baseUrl : normalizeBaseUrl(patch.baseUrl),
+    baseUrl: patch.baseUrl === undefined ? prev.baseUrl : normalizeBaseUrl(patch.baseUrl, patch.openaiProtocol ?? prev.openaiProtocol),
     models: patch.models ?? prev.models,
     customHeaders: patch.customHeaders ?? prev.customHeaders,
     budgetUsd: patch.budgetUsd === undefined ? normalizeBudget(prev.budgetUsd) : normalizeBudget(patch.budgetUsd),
+    openaiProtocol: patch.openaiProtocol ?? prev.openaiProtocol,
     note: patch.note ?? prev.note,
     encryptedToken: patch.token === undefined ? prev.encryptedToken : encryptToken(patch.token)
   }

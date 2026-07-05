@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
-import type { ProviderView } from '../../../shared/types'
+import type { OpenAIProtocol, ProviderView } from '../../../shared/types'
 
 interface Props {
   /** null = 新建;否则编辑该 Provider */
@@ -19,6 +19,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
   const [budgetUsd, setBudgetUsd] = useState(provider?.budgetUsd ? String(provider.budgetUsd) : '')
+  const [openaiProtocol, setOpenaiProtocol] = useState<OpenAIProtocol>(provider?.openaiProtocol ?? 'responses')
   const [note, setNote] = useState(provider?.note ?? '')
   const [token, setToken] = useState('')
   const [tokenTouched, setTokenTouched] = useState(false)
@@ -57,6 +58,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     if (!name.trim()) setName(preset.label)
     setBaseUrl(preset.baseUrl)
     setModelsText(preset.models.join('\n'))
+    setOpenaiProtocol(preset.openaiProtocol ?? 'responses')
   }
 
   const save = async (): Promise<void> => {
@@ -79,6 +81,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           models,
           customHeaders: customHeaders.trim(),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
+          openaiProtocol,
           note: note.trim(),
           // token 未改动则不传,避免清空已存密钥
           ...(tokenTouched ? { token } : {})
@@ -90,6 +93,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           models,
           customHeaders: customHeaders.trim(),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
+          openaiProtocol,
           note: note.trim(),
           token
         })
@@ -192,6 +196,18 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           placeholder={'X-Gateway-Route: openai\nX-Custom: value'}
           onChange={(e) => setCustomHeaders(e.target.value)}
         />
+
+        <label className="field-label">
+          {t('openaiProtocolLabel')} <span className="field-hint">{t('openaiProtocolHint')}</span>
+        </label>
+        <select
+          className="select select-block"
+          value={openaiProtocol}
+          onChange={(e) => setOpenaiProtocol(e.target.value as OpenAIProtocol)}
+        >
+          <option value="responses">{t('openaiProtocolResponses')}</option>
+          <option value="chat">{t('openaiProtocolChat')}</option>
+        </select>
 
         <label className="field-label">{t('noteOptional')}</label>
         <input

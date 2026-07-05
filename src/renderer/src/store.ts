@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AppSettings,
   AssistantBlock,
+  OpenAIProtocol,
   BrowserAnnotation,
   BrowserBounds,
   BrowserEvent,
@@ -2855,7 +2856,8 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 
 /**
  * Provider 预设模板。Claude 引擎使用 Anthropic Messages API;OpenAI 引擎
- * 使用 OpenAI Responses API。模板预填 baseUrl 与常见模型名,降低配置成本。
+ * 支持 Responses(官方)与 Chat Completions(通用)两种协议,按预设的
+ * openaiProtocol 预填。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
   key: string
@@ -2863,6 +2865,8 @@ export interface ProviderPreset {
   baseUrl: string
   models: string[]
   hint: string
+  /** 该预设推荐的 OpenAI 引擎协议(undefined = responses) */
+  openaiProtocol?: OpenAIProtocol
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -2878,7 +2882,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'OpenAI(官方直连)',
     baseUrl: 'https://api.openai.com',
     models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
-    hint: '选择 OpenAI Responses API 引擎时可原生直连,填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
+    hint: '选择 OpenAI 引擎时原生直连(Responses 协议),填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
   },
   {
     key: 'deepseek',
@@ -2886,6 +2890,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: ['deepseek-chat', 'deepseek-reasoner'],
     hint: 'DeepSeek 官方 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
+  },
+  {
+    key: 'deepseek-chat',
+    label: 'DeepSeek(OpenAI 引擎 · Chat 协议)',
+    baseUrl: 'https://api.deepseek.com',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    hint: '走 OpenAI 引擎的 Chat Completions 协议直连 DeepSeek。新建会话时引擎选 OpenAI。',
+    openaiProtocol: 'chat'
   },
   {
     key: 'kimi',
@@ -2900,6 +2912,30 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: ['glm-4.5', 'glm-4.5-air'],
     hint: '智谱官方 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
+  },
+  {
+    key: 'grok',
+    label: 'Grok / xAI(官方直连)',
+    baseUrl: 'https://api.x.ai',
+    models: ['grok-4', 'grok-4-fast'],
+    hint: 'xAI 官方同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
+    openaiProtocol: 'chat'
+  },
+  {
+    key: 'qwen',
+    label: '通义千问 Qwen(DashScope)',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
+    models: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+    hint: '阿里 DashScope OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。bailian.console.aliyun.com 申请 Key。',
+    openaiProtocol: 'chat'
+  },
+  {
+    key: 'local-openai',
+    label: '本地 / 自部署(vLLM · Ollama · LM Studio)',
+    baseUrl: 'http://localhost:11434',
+    models: ['qwen3', 'llama3.3', 'deepseek-r1'],
+    hint: '任何自部署 OpenAI 兼容服务(vLLM/Ollama/LM Studio 等),配 OpenAI 引擎 Chat 协议。按你的服务地址改 baseUrl。',
+    openaiProtocol: 'chat'
   },
   {
     key: 'oneapi',
