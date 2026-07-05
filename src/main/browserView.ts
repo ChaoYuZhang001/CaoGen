@@ -11,6 +11,8 @@ import type {
   BrowserAnnotation,
   BrowserBounds,
   BrowserEvent,
+  BrowserObservation,
+  BrowserPickResult,
   BrowserViewState
 } from '../shared/types'
 
@@ -19,6 +21,8 @@ interface BrowserRecord {
   view: WebContentsView
   owner: BrowserWindow
   consoleErrors: string[]
+  /** 最近的网络失败(status>=400 或加载失败),供批注/只读观测 */
+  networkFailures: string[]
   state: BrowserViewState
 }
 
@@ -69,6 +73,7 @@ class BrowserViewManager {
       view,
       owner,
       consoleErrors: [],
+      networkFailures: [],
       state: {
         sessionId,
         url: DEFAULT_URL,
@@ -172,6 +177,84 @@ class BrowserViewManager {
     return listAnnotations(annotationsRoot(), sessionId)
   }
 
+  /**
+   * DOM 圈选:向页面注入一次性拾取器。用户悬停高亮、点击选定元素,
+   * Esc 取消。返回被选元素的 selector/文本/矩形;随后可用
+   * captureElementAnnotation 截图落批注。
+   */
+  async pickElement(sessionId: string): Promise<BrowserPickResult> {
+    const record = this.requireRecord(sessionId)
+    const result = await record.view.webContents.executeJavaScript(pickElementScript(), true)
+    const payload = (result && typeof result === 'object' ? result : {}) as BrowserPickResult
+    return {
+      cancelled: Boolean(payload.cancelled),
+      url: payload.url || record.state.url,
+      title: payload.title || record.state.title,
+      selector: payload.selector,
+      text: typeof payload.text === 'string' ? payload.text.slice(0, 400) : undefined,
+      boundingBox: payload.boundingBox,
+      viewport: payload.viewport
+    }
+  }
+
+  /**
+   * 圈选批注:按 pickElement 的结果截图(裁剪到元素区域,带 24px 上下文边距),
+   * 存为批注。与 captureAnnotation(选区)并存 —— 一个针对文字选区,一个针对元素。
+   */
+  async captureElementAnnotation(
+    sessionId: string,
+    pick: BrowserPickResult,
+    note: string
+  ): Promise<BrowserAnnotation> {
+    const record = this.requireRecord(sessionId)
+    const annotationId = randomUUID()
+    const screenshotPath = await captureAnnotationScreenshot(record, annotationId, pick.boundingBox).catch(
+      () => undefined
+    )
+    const annotationInput: BrowserAnnotationInput = {
+      id: annotationId,
+      sessionId,
+      url: pick.url || record.state.url,
+      title: pick.title || record.state.title,
+      selector: pick.selector,
+      boundingBox: pick.boundingBox,
+      screenshotPath,
+      note: note.trim() || pick.text || 'DOM 圈选批注',
+      consoleErrors: record.consoleErrors,
+      viewport: pick.viewport
+    }
+    const annotation = await saveAnnotation(annotationsRoot(), annotationInput)
+    await this.injectHighlight(record, annotation).catch(() => undefined)
+    this.emit({ kind: 'annotation', sessionId, annotation })
+    return annotation
+  }
+
+  /**
+   * Agent 只读观测:当前页面 URL/标题/选中文本摘要 + 控制台错误 + 网络失败。
+   * 只读 —— 不注入、不点击、不改页面;供 Agent 复验修复效果。
+   */
+  async observe(sessionId: string): Promise<BrowserObservation> {
+    const record = this.requireRecord(sessionId)
+    let pageText = ''
+    try {
+      pageText = await record.view.webContents.executeJavaScript(
+        `(() => (document.body ? document.body.innerText : '').slice(0, 4000))()`,
+        true
+      )
+    } catch {
+      // 页面可能禁 JS 执行;观测退化为元数据
+    }
+    return {
+      sessionId,
+      url: record.state.url,
+      title: record.state.title,
+      loading: record.state.loading,
+      pageTextSnippet: typeof pageText === 'string' ? pageText : '',
+      consoleErrors: record.consoleErrors.slice(-30),
+      networkFailures: record.networkFailures.slice(-30)
+    }
+  }
+
   private wireRecord(record: BrowserRecord): void {
     const wc = record.view.webContents
     wc.setWindowOpenHandler(({ url }) => {
@@ -208,6 +291,22 @@ class BrowserViewManager {
       record.consoleErrors.push(message)
       if (record.consoleErrors.length > MAX_CONSOLE_ERRORS) {
         record.consoleErrors = record.consoleErrors.slice(-MAX_CONSOLE_ERRORS)
+      }
+    })
+    // 网络失败观测:加载失败 + 4xx/5xx 主资源(供 Agent 只读复验)
+    wc.on('did-fail-load', (_event, code, desc, url, isMainFrame) => {
+      if (code === -3) return // ERR_ABORTED:导航打断,噪音
+      record.networkFailures.push(`${isMainFrame ? '[main]' : '[sub]'} ${desc}(${code}) ${url}`)
+      if (record.networkFailures.length > MAX_CONSOLE_ERRORS) {
+        record.networkFailures = record.networkFailures.slice(-MAX_CONSOLE_ERRORS)
+      }
+    })
+    wc.session.webRequest.onCompleted({ urls: ['*://*/*'] }, (details) => {
+      if (details.statusCode >= 400 && details.webContentsId === wc.id) {
+        record.networkFailures.push(`HTTP ${details.statusCode} ${details.method} ${details.url.slice(0, 200)}`)
+        if (record.networkFailures.length > MAX_CONSOLE_ERRORS) {
+          record.networkFailures = record.networkFailures.slice(-MAX_CONSOLE_ERRORS)
+        }
       }
     })
     wc.on('render-process-gone', (_event, details) => {
@@ -261,12 +360,31 @@ function annotationsRoot(): string {
 
 async function captureAnnotationScreenshot(
   record: BrowserRecord,
-  annotationId: string
+  annotationId: string,
+  cropBox?: { x: number; y: number; width: number; height: number }
 ): Promise<string | undefined> {
   const bounds = record.view.getBounds()
   if (bounds.width <= 0 || bounds.height <= 0) return undefined
-  const image = await record.view.webContents.capturePage()
+  let image = await record.view.webContents.capturePage()
   if (image.isEmpty()) return undefined
+  // 元素圈选:裁剪到元素区域 + 24px 上下文边距(clamp 到视口)
+  if (cropBox && Number.isFinite(cropBox.x) && cropBox.width > 0 && cropBox.height > 0) {
+    const size = image.getSize()
+    const scaleX = size.width / bounds.width
+    const scaleY = size.height / bounds.height
+    const margin = 24
+    const x = Math.max(0, Math.round((cropBox.x - margin) * scaleX))
+    const y = Math.max(0, Math.round((cropBox.y - margin) * scaleY))
+    const width = Math.min(size.width - x, Math.round((cropBox.width + margin * 2) * scaleX))
+    const height = Math.min(size.height - y, Math.round((cropBox.height + margin * 2) * scaleY))
+    if (width > 4 && height > 4) {
+      try {
+        image = image.crop({ x, y, width, height })
+      } catch {
+        // 裁剪失败退回整页截图
+      }
+    }
+  }
   const sessionDir = join(annotationsRoot(), record.sessionId)
   await mkdir(sessionDir, { recursive: true })
   const screenshotPath = join(sessionDir, `${annotationId}.png`)
@@ -333,6 +451,76 @@ function selectionScript(): string {
       }
     };
   })()`
+}
+
+/**
+ * 一次性 DOM 元素拾取器:注入覆盖层,mousemove 高亮元素、click 选定、Esc 取消。
+ * 返回 Promise,选定/取消后自动清理所有注入痕迹。
+ */
+function pickElementScript(): string {
+  return `new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #4a9eff;background:rgba(74,158,255,0.15);transition:all .05s;display:none';
+    document.documentElement.appendChild(overlay);
+    let current = null;
+    const cssPath = (el) => {
+      if (!(el instanceof Element)) return undefined;
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 6) {
+        let part = node.tagName.toLowerCase();
+        if (node.id) { parts.unshift(part + '#' + CSS.escape(node.id)); break; }
+        const cls = Array.from(node.classList).slice(0, 2).map((c) => CSS.escape(c));
+        if (cls.length) part += '.' + cls.join('.');
+        const parent = node.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+          if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+        }
+        parts.unshift(part);
+        node = parent;
+      }
+      return parts.join(' > ');
+    };
+    const cleanup = () => {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('click', onClick, true);
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+    };
+    const onMove = (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || el === overlay) return;
+      current = el;
+      const r = el.getBoundingClientRect();
+      overlay.style.display = 'block';
+      overlay.style.left = r.x + 'px'; overlay.style.top = r.y + 'px';
+      overlay.style.width = r.width + 'px'; overlay.style.height = r.height + 'px';
+    };
+    const onClick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const el = current || document.elementFromPoint(e.clientX, e.clientY);
+      cleanup();
+      if (!el) { resolve({ cancelled: true }); return; }
+      const r = el.getBoundingClientRect();
+      resolve({
+        cancelled: false,
+        url: location.href,
+        title: document.title,
+        selector: cssPath(el),
+        text: (el.innerText || el.textContent || '').trim().slice(0, 400),
+        boundingBox: { x: r.x, y: r.y, width: r.width, height: r.height },
+        viewport: { width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio || 1 }
+      });
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(); resolve({ cancelled: true }); }
+    };
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(() => { cleanup(); resolve({ cancelled: true }); }, 60000);
+  })`
 }
 
 function highlightScript(annotation: BrowserAnnotation): string {

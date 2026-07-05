@@ -60,6 +60,7 @@ import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } fr
 import type {
   AppSettings,
   BrowserBounds,
+  BrowserPickResult,
   CheckpointRestoreMode,
   CreateRoutineInput,
   CreateSessionOptions,
@@ -436,6 +437,18 @@ export function registerIpc(): void {
   ipcMain.handle('browser:listAnnotations', (_e, id: string) =>
     browserViewManager.listAnnotations(id)
   )
+
+  // DOM 圈选:注入拾取器等用户点选;随后按结果截图落批注
+  ipcMain.handle('browser:pickElement', (_e, id: string) => browserViewManager.pickElement(id))
+
+  ipcMain.handle(
+    'browser:captureElementAnnotation',
+    (_e, id: string, pick: BrowserPickResult, note: string) =>
+      browserViewManager.captureElementAnnotation(id, pick, typeof note === 'string' ? note : '')
+  )
+
+  // Agent 只读观测:页面快照 + 控制台错误 + 网络失败(不注入不点击)
+  ipcMain.handle('browser:observe', (_e, id: string) => browserViewManager.observe(id))
 
   if (!terminalEventsRegistered) {
     terminalEventsRegistered = true

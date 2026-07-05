@@ -505,6 +505,8 @@ export interface WorkbenchState {
   browserAnnotations: BrowserAnnotation[]
   browserError?: string
   browserMessage?: string
+  /** DOM 圈选进行中(拾取器已注入,等用户点选) */
+  browserPicking?: boolean
   previewOpen: boolean
   previewLoading: boolean
   preview?: PreparedPreview
@@ -631,6 +633,10 @@ interface AppStore {
   setBrowserBounds(bounds: BrowserBounds): Promise<void>
   captureBrowserAnnotation(note: string): Promise<void>
   refreshBrowserAnnotations(): Promise<void>
+  /** DOM 圈选:注入拾取器→用户点选→截图落批注 */
+  pickBrowserElementAnnotation(note: string): Promise<void>
+  /** 只读观测当前页面并发给 Agent 复验 */
+  observeBrowserForAgent(): Promise<void>
   openPluginRegistryPanel(): Promise<void>
   closePluginRegistryPanel(): void
   refreshPluginRegistryPanel(): Promise<void>
@@ -2103,6 +2109,80 @@ export const useStore = create<AppStore>((set, get) => {
     if (!id) return
     const annotations = await window.agentDesk.listBrowserAnnotations(id)
     set((s) => ({ workbench: { ...s.workbench, browserAnnotations: annotations } }))
+  },
+
+  async pickBrowserElementAnnotation(note) {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        browserError: undefined,
+        browserMessage: '圈选中:在页面上点击目标元素(Esc 取消)',
+        browserPicking: true
+      }
+    }))
+    try {
+      const pick = await window.agentDesk.pickBrowserElement(id)
+      if (pick.cancelled) {
+        set((s) => ({
+          workbench: { ...s.workbench, browserPicking: false, browserMessage: '已取消圈选' }
+        }))
+        return
+      }
+      const annotation = await window.agentDesk.captureBrowserElementAnnotation(id, pick, note)
+      set((s) => {
+        const known = new Set(s.workbench.browserAnnotations.map((item) => item.id))
+        return {
+          workbench: {
+            ...s.workbench,
+            browserPicking: false,
+            browserAnnotations: known.has(annotation.id)
+              ? s.workbench.browserAnnotations
+              : [annotation, ...s.workbench.browserAnnotations],
+            browserMessage: '已保存 DOM 圈选批注(含截图)'
+          }
+        }
+      })
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          browserPicking: false,
+          browserError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async observeBrowserForAgent() {
+    const id = get().activeId
+    if (!id) return
+    try {
+      const obs = await window.agentDesk.observeBrowser(id)
+      const lines = [
+        '以下是内置浏览器当前页面的只读观测快照(未做任何交互):',
+        '',
+        `URL: ${obs.url}`,
+        `标题: ${obs.title}`,
+        obs.pageTextSnippet ? `\n页面文本摘要:\n${obs.pageTextSnippet.slice(0, 2000)}` : '',
+        obs.consoleErrors.length ? `\n控制台错误(${obs.consoleErrors.length}):\n${obs.consoleErrors.join('\n')}` : '\n控制台错误: 无',
+        obs.networkFailures.length ? `\n网络失败(${obs.networkFailures.length}):\n${obs.networkFailures.join('\n')}` : '网络失败: 无',
+        '',
+        '请基于该快照复验/诊断当前页面。'
+      ]
+        .filter(Boolean)
+        .join('\n')
+      await get().sendMessage(lines)
+      set((s) => ({ workbench: { ...s.workbench, browserMessage: '页面观测已发给 Agent' } }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          browserError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
   },
 
   async openPluginRegistryPanel() {

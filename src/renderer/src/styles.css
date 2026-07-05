@@ -2064,6 +2064,12 @@ textarea {
   resize: vertical;
 }
 
+.browser-annotation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .browser-annotation-list {
   flex: 1;
   min-height: 0;

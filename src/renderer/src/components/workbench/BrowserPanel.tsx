@@ -13,6 +13,7 @@ function annotationPrompt(item: {
   note: string
   selector?: string
   boundingBox?: { x: number; y: number; width: number; height: number }
+  screenshotPath?: string
   consoleErrors?: string[]
 }): string {
   return [
@@ -24,6 +25,7 @@ function annotationPrompt(item: {
     item.boundingBox
       ? `区域: x=${Math.round(item.boundingBox.x)}, y=${Math.round(item.boundingBox.y)}, w=${Math.round(item.boundingBox.width)}, h=${Math.round(item.boundingBox.height)}`
       : '',
+    item.screenshotPath ? `截图文件(可用 Read 工具查看): ${item.screenshotPath}` : '',
     '',
     `用户批注: ${item.note}`,
     item.consoleErrors?.length ? `\n控制台错误:\n${item.consoleErrors.slice(-20).join('\n')}` : '',
@@ -53,6 +55,9 @@ export default function BrowserPanel(): React.JSX.Element {
   const reload = useStore((s) => s.reloadBrowser)
   const setBounds = useStore((s) => s.setBrowserBounds)
   const capture = useStore((s) => s.captureBrowserAnnotation)
+  const pickElement = useStore((s) => s.pickBrowserElementAnnotation)
+  const observeForAgent = useStore((s) => s.observeBrowserForAgent)
+  const browserPicking = useStore((s) => s.workbench.browserPicking)
   const sendMessage = useStore((s) => s.sendMessage)
   const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://example.com')
   const [note, setNote] = useState('')
@@ -157,9 +162,28 @@ export default function BrowserPanel(): React.JSX.Element {
               placeholder={t('browserNotePlaceholder')}
               onChange={(e) => setNote(e.target.value)}
             />
-            <button className="btn btn-primary btn-sm" onClick={() => void captureSelection()}>
-              {t('browserCapture')}
-            </button>
+            <div className="browser-annotation-actions">
+              <button className="btn btn-primary btn-sm" onClick={() => void captureSelection()}>
+                {t('browserCapture')}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={browserPicking}
+                title={t('browserPickHint')}
+                onClick={() => {
+                  void pickElement(note.trim()).then(() => setNote(''))
+                }}
+              >
+                {browserPicking ? t('browserPicking') : t('browserPickElement')}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                title={t('browserObserveHint')}
+                onClick={() => void observeForAgent()}
+              >
+                {t('browserObserve')}
+              </button>
+            </div>
           </div>
           <div className="browser-annotation-list">
             {browserAnnotations.length === 0 ? (

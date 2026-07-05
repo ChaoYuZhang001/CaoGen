@@ -881,6 +881,28 @@ export type BrowserEvent =
   | { kind: 'closed'; sessionId: string }
   | { kind: 'error'; sessionId?: string; message: string }
 
+/** DOM 圈选结果:pickElement 注入拾取器后用户选定的元素信息 */
+export interface BrowserPickResult {
+  cancelled: boolean
+  url?: string
+  title?: string
+  selector?: string
+  text?: string
+  boundingBox?: BrowserAnnotationBoundingBox
+  viewport?: BrowserAnnotationViewport
+}
+
+/** Agent 只读观测:当前页面状态快照(不注入不点击) */
+export interface BrowserObservation {
+  sessionId: string
+  url: string
+  title: string
+  loading: boolean
+  pageTextSnippet: string
+  consoleErrors: string[]
+  networkFailures: string[]
+}
+
 /** D11 迁移向导:检测到的他家 Agent 资产 */
 export interface MigrationAsset {
   /** 来源 Agent 名(Cursor / Codex / Cline …) */
@@ -1016,6 +1038,13 @@ export interface AgentDeskApi {
   closeBrowser(sessionId: string): Promise<void>
   captureBrowserAnnotation(sessionId: string, note: string): Promise<BrowserAnnotation>
   listBrowserAnnotations(sessionId: string): Promise<BrowserAnnotation[]>
+  pickBrowserElement(sessionId: string): Promise<BrowserPickResult>
+  captureBrowserElementAnnotation(
+    sessionId: string,
+    pick: BrowserPickResult,
+    note: string
+  ): Promise<BrowserAnnotation>
+  observeBrowser(sessionId: string): Promise<BrowserObservation>
   onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
   listTerminals(): Promise<TerminalInfo[]>
   startTerminal(sessionId: string, opts?: { cols?: number; rows?: number; reuse?: boolean }): Promise<TerminalInfo>

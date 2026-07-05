@@ -122,6 +122,10 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('browser:captureAnnotation', sessionId, note),
   listBrowserAnnotations: (sessionId: string) =>
     ipcRenderer.invoke('browser:listAnnotations', sessionId),
+  pickBrowserElement: (sessionId: string) => ipcRenderer.invoke('browser:pickElement', sessionId),
+  captureBrowserElementAnnotation: (sessionId: string, pick, note: string) =>
+    ipcRenderer.invoke('browser:captureElementAnnotation', sessionId, pick, note),
+  observeBrowser: (sessionId: string) => ipcRenderer.invoke('browser:observe', sessionId),
   onBrowserEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, event: Parameters<typeof cb>[0]): void => {
       cb(event)
