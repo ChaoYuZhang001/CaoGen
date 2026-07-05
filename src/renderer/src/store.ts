@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   AppSettings,
   AssistantBlock,
+  McpProbeResult,
   OpenAIProtocol,
   BrowserAnnotation,
   BrowserBounds,
@@ -536,6 +537,9 @@ export interface WorkbenchState {
   pluginRegistryError?: string
   pluginRegistryMessage?: string
   selectedPluginRegistryItemId?: string
+  /** MCP 运行态探测:id → 结果;probing = 进行中 */
+  mcpProbeResults: Record<string, McpProbeResult>
+  mcpProbing: boolean
   subagentOpen: boolean
   subagentBusy: boolean
   subagentError?: string
@@ -658,6 +662,8 @@ interface AppStore {
   openPluginRegistryPanel(): Promise<void>
   closePluginRegistryPanel(): void
   refreshPluginRegistryPanel(): Promise<void>
+  /** 探测 MCP server 运行态(真实连接测试) */
+  probeMcpRuntime(items: PluginRegistryItem[]): Promise<void>
   loadPluginRegistryForSlash(): Promise<void>
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
@@ -810,6 +816,8 @@ export const useStore = create<AppStore>((set, get) => {
     previewLoading: false,
     pluginRegistryOpen: false,
     pluginRegistryLoading: false,
+    mcpProbeResults: {},
+    mcpProbing: false,
     subagentOpen: false,
     subagentBusy: false,
     routineOpen: false,
@@ -2262,6 +2270,37 @@ export const useStore = create<AppStore>((set, get) => {
         workbench: {
           ...s.workbench,
           pluginRegistryLoading: false,
+          pluginRegistryError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async probeMcpRuntime(items) {
+    const id = get().activeId ?? undefined
+    const mcpItems = items.filter((item) => item.kind === 'mcp')
+    if (mcpItems.length === 0) return
+    set((s) => ({ workbench: { ...s.workbench, mcpProbing: true, pluginRegistryError: undefined } }))
+    try {
+      const results = await window.agentDesk.probeMcpServers(mcpItems, id)
+      set((s) => {
+        const merged = { ...s.workbench.mcpProbeResults }
+        for (const result of results) merged[result.id] = result
+        const okCount = results.filter((r) => r.ok).length
+        return {
+          workbench: {
+            ...s.workbench,
+            mcpProbing: false,
+            mcpProbeResults: merged,
+            pluginRegistryMessage: `MCP 探测完成:${okCount}/${results.length} 连通`
+          }
+        }
+      })
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          mcpProbing: false,
           pluginRegistryError: err instanceof Error ? err.message : String(err)
         }
       }))

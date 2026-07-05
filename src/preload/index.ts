@@ -79,6 +79,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('plugins:reveal', path, sessionId),
   setPluginRegistryItemEnabled: (item, enabled, sessionId?: string) =>
     ipcRenderer.invoke('plugins:setEnabled', item, enabled, sessionId),
+  probeMcpServers: (items, sessionId?: string) =>
+    ipcRenderer.invoke('plugins:probeMcp', items, sessionId),
   listRoutines: () => ipcRenderer.invoke('routines:list'),
   createRoutine: (input: CreateRoutineInput) => ipcRenderer.invoke('routines:create', input),
   deleteRoutine: (id: string) => ipcRenderer.invoke('routines:delete', id),
