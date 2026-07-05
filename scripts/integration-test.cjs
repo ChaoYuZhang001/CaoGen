@@ -809,30 +809,57 @@ async function main() {
   // ---- PLAN T9 检查点 chat/both SDK 上下文回退 ----
   await test('PLAN T9 checkpoint:chat restore 后下一次 start 注入 resumeSessionAt,both 先验 chat', async () => {
     settingsMod.updateSettings({ failoverEnabled: true, budgetUsdPerSession: 0 })
+    const sm = M('main/sessionManager.js').sessionManager
+    const hist = M('main/history.js')
+    sm.init()
     fs.writeFileSync(path.join(userData, 'providers.json'), JSON.stringify([
       { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), models: ['m-a'], createdAt: 1 },
       { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), models: ['m-b'], createdAt: 2 }
     ], null, 2))
-    const { events, s } = newSession('prov-b', 'm-b')
-    await s.start()
-    await waitFor(() => events.some((e) => e.event.kind === 'init'), 3000)
-    s.send('first checkpoint turn')
-    await waitFor(() => events.filter((e) => e.event.kind === 'turn-result').length >= 1, 3000)
-    const firstCheckpoint = events.find((e) => e.event.kind === 'checkpoint')?.event.messageId
-    assert(firstCheckpoint, '第一轮未产生 checkpoint')
-    s.send('second checkpoint turn')
-    await waitFor(() => events.filter((e) => e.event.kind === 'turn-result').length >= 2, 3000)
-    const beforeBoth = sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length
-    const badBoth = await s.restoreCheckpoint('missing-checkpoint', 'both', false)
-    assert(!badBoth.canRewind && badBoth.chat && !badBoth.chat.ok, 'both 模式应先失败在 chat 校验')
-    eq(sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length, beforeBoth, 'chat 校验失败时不应执行文件回退')
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    const eventsFor = (id) => bucket
+      .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
+      .map((entry) => entry.payload.event)
+    const createdIds = []
+    try {
+      const meta = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'checkpoint-history' })
+      createdIds.push(meta.id)
+      const session = sm.get(meta.id)
+      await waitFor(() => session.meta.sdkSessionId, 3000)
+      sm.send(meta.id, 'first checkpoint turn')
+      await waitFor(() => eventsFor(meta.id).filter((e) => e.kind === 'turn-result').length >= 1, 3000)
+      const firstCheckpoint = eventsFor(meta.id).find((e) => e.kind === 'checkpoint')?.messageId
+      assert(firstCheckpoint, '第一轮未产生 checkpoint')
+      sm.send(meta.id, 'second checkpoint turn')
+      await waitFor(() => eventsFor(meta.id).filter((e) => e.kind === 'turn-result').length >= 2, 3000)
+      const beforeBoth = sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length
+      const badBoth = await session.restoreCheckpoint('missing-checkpoint', 'both', false)
+      assert(!badBoth.canRewind && badBoth.chat && !badBoth.chat.ok, 'both 模式应先失败在 chat 校验')
+      eq(sdkLog.filter((item) => item.rewindFiles === 'missing-checkpoint').length, beforeBoth, 'chat 校验失败时不应执行文件回退')
 
-    const restored = await s.restoreCheckpoint(firstCheckpoint, 'chat', false)
-    assert(restored.applied && restored.transcript, `chat restore 未应用:${JSON.stringify(restored)}`)
-    s.send('force-failover-after-restore')
-    await waitFor(() => sdkLog.some((entry) => entry.resumeSessionAt === firstCheckpoint), 5000, '等待 resumeSessionAt 注入')
-    assert(sdkLog.some((entry) => entry.resume && entry.resumeSessionAt === firstCheckpoint), '下一次 start 未携带 resume + resumeSessionAt')
-    s.dispose()
+      const restored = await session.restoreCheckpoint(firstCheckpoint, 'chat', false)
+      assert(restored.applied && restored.transcript, `chat restore 未应用:${JSON.stringify(restored)}`)
+      const sdkSessionId = session.meta.sdkSessionId
+      assert(sdkSessionId, '缺 sdkSessionId')
+      await waitFor(() => hist.listHistory().some((entry) => entry.sdkSessionId === sdkSessionId && entry.resumeSessionAt === firstCheckpoint), 2000, '等待 history resumeSessionAt 持久化')
+      const persistedHistory = JSON.parse(fs.readFileSync(path.join(userData, 'sessions.json'), 'utf8'))
+      assert(persistedHistory.some((entry) => entry.sdkSessionId === sdkSessionId && entry.resumeSessionAt === firstCheckpoint), 'resumeSessionAt 未写入 sessions.json')
+
+      sm.close(meta.id)
+      const beforeResumeCreates = sdkLog.length
+      const resumed = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', resumeSdkSessionId: sdkSessionId, title: 'checkpoint-resumed' })
+      createdIds.push(resumed.id)
+      await waitFor(
+        () => sdkLog.slice(beforeResumeCreates).some((entry) => entry.resume === sdkSessionId && entry.resumeSessionAt === firstCheckpoint),
+        5000,
+        '等待 history 恢复后注入 resumeSessionAt'
+      )
+    } finally {
+      for (const id of createdIds) sm.close(id)
+      fakeWindows.splice(fakeWindows.indexOf(win), 1)
+    }
   })
 
   // ---- T13 OpenAI 原生引擎:Responses API SSE → CaoGen 事件 ----

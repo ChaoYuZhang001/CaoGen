@@ -77,6 +77,8 @@ export interface SessionMeta {
   providerId: string
   /** 本会话预算上限;0/undefined = 继承 Provider 或全局设置。 */
   budgetUsd?: number
+  /** 下次 resume SDK 会话时截断到此用户消息/检查点。 */
+  resumeSessionAt?: string
   /** Agent 引擎;缺省 = 'claude' */
   engine?: EngineKind
   permissionMode: PermissionModeId
@@ -113,6 +115,7 @@ export interface HistoryEntry {
   createdAt: number
   updatedAt: number
   costUsd: number
+  resumeSessionAt?: string
   /** 归档:从主列表收起到归档区(不删) */
   archived?: boolean
   /** 置顶:排在最前 */
@@ -130,6 +133,7 @@ export interface CreateSessionOptions {
   model?: string
   providerId?: string
   budgetUsd?: number
+  resumeSessionAt?: string
   /** Agent 引擎;缺省 claude */
   engine?: EngineKind
   permissionMode?: PermissionModeId

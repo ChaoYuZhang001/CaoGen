@@ -952,6 +952,7 @@ export const useStore = create<AppStore>((set, get) => ({
       engine: entry.engine,
       permissionMode: entry.permissionMode,
       resumeSdkSessionId: entry.sdkSessionId,
+      resumeSessionAt: entry.resumeSessionAt,
       title: entry.title
     })
   },

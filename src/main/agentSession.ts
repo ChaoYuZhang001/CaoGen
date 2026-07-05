@@ -254,6 +254,7 @@ export class AgentSession implements Engine {
     this.transcript = new TranscriptWriter(resumeSdkSessionId)
     this.emitRaw = (event) => emit(event, this.transcript.next(event))
     this.resumeId = resumeSdkSessionId
+    this.resumeAtId = meta.resumeSessionAt
     // resume 模式下 SDK 不会再发 system/init,手动设置并通知渲染进程
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
@@ -559,7 +560,11 @@ export class AgentSession implements Engine {
       }
     }
     if (!wantsChat) this.emit(restoreEvent())
-    if (wantsChat) this.resumeAtId = messageId
+    if (wantsChat) {
+      this.resumeAtId = messageId
+      this.meta.resumeSessionAt = messageId
+      this.emit({ kind: 'meta', meta: { ...this.meta } })
+    }
 
     return {
       mode,
@@ -867,6 +872,11 @@ export class AgentSession implements Engine {
             const uuid = latestUserTextUuid(this.meta.sdkSessionId)
             if (uuid) this.emitCheckpoint(uuid)
           }
+          if (!isError && this.resumeAtId) {
+            this.resumeAtId = undefined
+            this.meta.resumeSessionAt = undefined
+            this.emit({ kind: 'meta', meta: { ...this.meta } })
+          }
           this.emit({
             kind: 'turn-result',
             subtype,
@@ -996,6 +1006,7 @@ export function newSessionMeta(opts: {
   model: string
   providerId: string
   budgetUsd?: number
+  resumeSessionAt?: string
   engine?: EngineKind
   permissionMode: PermissionModeId
   title?: string
@@ -1019,6 +1030,7 @@ export function newSessionMeta(opts: {
     model: opts.model,
     providerId: opts.providerId,
     budgetUsd: normalizeBudget(opts.budgetUsd),
+    resumeSessionAt: opts.resumeSessionAt,
     engine: opts.engine ?? 'claude',
     permissionMode: opts.permissionMode,
     status: 'starting',
