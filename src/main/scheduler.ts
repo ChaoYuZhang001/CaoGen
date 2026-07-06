@@ -112,6 +112,94 @@ export function pickModel(
 /** 官方 Anthropic(无 Provider)时的候选模型档 */
 export const DEFAULT_AUTO_CANDIDATES = ['haiku', 'sonnet', 'opus']
 
+export interface CrossRouteDecision {
+  providerId: string
+  providerName: string
+  model: string
+  reason: string
+  complexity: Complexity
+  /** 是否跨到了另一家厂商(调用方据此决定是否重建引擎) */
+  switchedProvider: boolean
+}
+
+/**
+ * 跨厂商智能路由:在**所有健康厂商 × 各自模型**的全集里按策略挑最优,
+ * 而非局限在会话当前厂商的模型单里。打平时优先留在当前厂商
+ * (避免无谓的引擎重建),再比成本。
+ */
+export function pickModelAcrossProviders(opts: {
+  candidates: FailoverCandidate[]
+  text: string
+  strategy: SchedulerStrategy
+  currentProviderId: string
+}): CrossRouteDecision | null {
+  const complexity = classifyComplexity(opts.text)
+  const target = targetQuality(complexity)
+
+  interface Entry {
+    providerId: string
+    providerName: string
+    model: string
+    cap: ModelCap
+    isCurrent: boolean
+  }
+  const pool: Entry[] = []
+  for (const c of opts.candidates) {
+    if (!ensure(c.id).healthy) continue // 跳过不健康厂商(连续失败≥3)
+    for (const model of c.models) {
+      if (!model) continue
+      pool.push({
+        providerId: c.id,
+        providerName: c.name,
+        model,
+        cap: capOf(model),
+        isCurrent: c.id === opts.currentProviderId
+      })
+    }
+  }
+  if (pool.length === 0) return null
+
+  // 比较器:返回 true 表示 b 优于 a。各策略主排序后,统一打平顺序:
+  // 留在当前厂商 > 成本更低。
+  const tieBreak = (a: Entry, b: Entry): boolean => {
+    if (a.isCurrent !== b.isCurrent) return b.isCurrent
+    return b.cap.cost < a.cap.cost
+  }
+  let better: (a: Entry, b: Entry) => boolean
+  if (opts.strategy === 'quality') {
+    better = (a, b) => (b.cap.quality !== a.cap.quality ? b.cap.quality > a.cap.quality : tieBreak(a, b))
+  } else if (opts.strategy === 'cost') {
+    // 满足目标质量档的里面挑最便宜;无一达标则全量挑最便宜
+    const eligible = pool.filter((e) => e.cap.quality >= target)
+    const from = eligible.length > 0 ? eligible : pool
+    pool.length = 0
+    pool.push(...from)
+    better = (a, b) => (b.cap.cost !== a.cap.cost ? b.cap.cost < a.cap.cost : tieBreak(a, b))
+  } else {
+    better = (a, b) => {
+      const da = Math.abs(a.cap.quality - target)
+      const db = Math.abs(b.cap.quality - target)
+      if (db !== da) return db < da
+      return tieBreak(a, b)
+    }
+  }
+  const chosen = pool.reduce((a, b) => (better(a, b) ? b : a))
+
+  const cLabel = complexity === 'complex' ? '复杂' : complexity === 'medium' ? '中等' : '简单'
+  const sLabel = opts.strategy === 'quality' ? '质量优先' : opts.strategy === 'cost' ? '成本优先' : '均衡'
+  const switchedProvider = chosen.providerId !== opts.currentProviderId
+  return {
+    providerId: chosen.providerId,
+    providerName: chosen.providerName,
+    model: chosen.model,
+    complexity,
+    switchedProvider,
+    reason: switchedProvider
+      ? `${cLabel}任务 · ${sLabel} · 跨厂商 → ${chosen.providerName} / ${chosen.model}`
+      : `${cLabel}任务 · ${sLabel} → ${chosen.model}`
+  }
+}
+
 // ---------- Provider 健康度 ----------
 
 export interface ProviderHealth {

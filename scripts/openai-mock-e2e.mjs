@@ -140,6 +140,9 @@ function writeMockUserData(port) {
           baseUrl: `http://127.0.0.1:${port}`,
           encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
           models: ['mock-responses'],
+          // mock server 只实现 /v1/responses;非 api.openai.com 端点的智能默认
+          // 是 chat,故显式声明 responses(与真实用户在 UI 里选协议一致)
+          openaiProtocol: 'responses',
           note: 'Local system-test provider; no real API key required.',
           createdAt: Date.now()
         }

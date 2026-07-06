@@ -12,7 +12,7 @@ import { buildMemorySystemAppend } from './memoryInject'
 import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
 import {
-  pickModel,
+  pickModelAcrossProviders,
   recordSuccess,
   recordFailure,
   classifyFailure,
@@ -488,26 +488,31 @@ export class AgentSession implements Engine {
     ].join('|')
   }
 
-  /** 凭据变更后的引擎重建:关旧 query → 以 resume 延续上下文重启 → 推本轮消息 */
+  /** 引擎重建核心:作废旧代 → 关旧 query → 以 resume 延续上下文重启 */
+  private async rebuildEngine(): Promise<void> {
+    this.generation++
+    for (const [requestId, pending] of this.pending) {
+      pending.resolve({ behavior: 'deny', message: '引擎重建,操作作废' })
+      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+    }
+    this.pending.clear()
+    this.input.end()
+    try {
+      this.query?.close()
+    } catch {
+      // 进程可能已退出
+    }
+    this.query = null
+    this.input = new Pushable<SDKUserMessage>()
+    this.resumeId = this.meta.sdkSessionId || this.resumeId
+    await this.start()
+  }
+
+  /** 凭据变更后的引擎重建:重建 → 推本轮消息(auto 模式先路由) */
   private async rebuildEngineThenPush(payload: NormalizedSendPayload): Promise<void> {
     this.failoverBusy = true
     try {
-      this.generation++
-      for (const [requestId, pending] of this.pending) {
-        pending.resolve({ behavior: 'deny', message: '引擎重建,操作作废' })
-        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-      }
-      this.pending.clear()
-      this.input.end()
-      try {
-        this.query?.close()
-      } catch {
-        // 进程可能已退出
-      }
-      this.query = null
-      this.input = new Pushable<SDKUserMessage>()
-      this.resumeId = this.meta.sdkSessionId || this.resumeId
-      await this.start()
+      await this.rebuildEngine()
       if (!this.query) return // start 失败已置 error
       this.setStatus('running')
       if (this.meta.model === AUTO_MODEL) {
@@ -534,33 +539,44 @@ export class AgentSession implements Engine {
     this.setStatus('error', message)
   }
 
+  /**
+   * 跨厂商智能路由(auto 模式):在所有健康厂商 × 各自模型全集里挑最优,
+   * 不局限于会话当前厂商。选中别家时切 providerId 并重建引擎
+   * (resume 延续上下文),路由决策以 routing 事件透明呈现。
+   */
   private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
     try {
-      const candidates = this.candidateModels()
       const strategy = getSettings().schedulerStrategy
-      const decision = pickModel(candidates, userMessageText(payload), strategy)
+      const decision = pickModelAcrossProviders({
+        candidates: this.failoverCandidates(),
+        text: userMessageText(payload),
+        strategy,
+        currentProviderId: this.meta.providerId
+      })
       if (decision) {
-        await this.query?.setModel(decision.model)
         this.emit({
           kind: 'routing',
           model: decision.model,
           reason: decision.reason,
-          providerId: this.meta.providerId
+          providerId: decision.providerId
         })
+        if (decision.switchedProvider) {
+          // 跨厂商:换身份 → 重建引擎(env 换新家)→ 定模型 → 推消息
+          this.meta.providerId = decision.providerId
+          this.emit({ kind: 'meta', meta: { ...this.meta } })
+          await this.rebuildEngine()
+          if (!this.query) return // start 失败已置 error
+          this.setStatus('running')
+          await this.query.setModel(decision.model)
+          await this.pushUserMessage(payload)
+          return
+        }
+        await this.query?.setModel(decision.model)
       }
     } catch (err) {
       console.error('[agent-desk] 自动路由失败,回退默认模型:', err)
     }
     await this.pushUserMessage(payload)
-  }
-
-  /** 自动模式的候选模型:Provider 声明的列表,或官方默认三档 */
-  private candidateModels(): string[] {
-    if (this.meta.providerId) {
-      const provider = getProvider(this.meta.providerId)
-      if (provider && provider.models.length > 0) return provider.models
-    }
-    return DEFAULT_AUTO_CANDIDATES
   }
 
   private async pushUserMessage(payload: NormalizedSendPayload): Promise<void> {
@@ -839,7 +855,10 @@ export class AgentSession implements Engine {
     const out: FailoverCandidate[] = [
       { id: '', name: '官方 Anthropic', models: [...DEFAULT_AUTO_CANDIDATES] }
     ]
-    for (const p of listProviders()) out.push({ id: p.id, name: p.name, models: p.models })
+    // 只纳入已配 key 的厂商:没 key 的选中必失败(官方 Anthropic 走环境登录例外)
+    for (const p of listProviders()) {
+      if (p.hasToken) out.push({ id: p.id, name: p.name, models: p.models })
+    }
     return out
   }
 
