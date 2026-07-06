@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken } from './providers'
@@ -35,19 +38,38 @@ import type {
 /** 单次 CLI 探测结果缓存,避免每轮重复 spawn `which`。 */
 let cachedAvailable: boolean | undefined
 
-/** 探测 `gemini` 是否在 PATH 上(结果缓存)。 */
+/** 探测 `gemini` 是否可用:CLI 在 PATH 上 **且** 已配置认证方式(结果缓存)。 */
 export function geminiCliAvailable(): boolean {
   if (cachedAvailable !== undefined) return cachedAvailable
   try {
+    // 1) CLI 在 PATH 上
     const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['gemini'], {
       stdio: 'ignore',
       timeout: 3000
     })
-    cachedAvailable = probe.status === 0
+    // 2) 且已配置认证 —— 否则"装了但没登录",真对话必失败(外部验收踩坑:
+    //    UI 误报 gemini:可用)。认证来源:GEMINI_API_KEY / GOOGLE_API_KEY,
+    //    或 ~/.gemini/settings.json 里配了 auth 选择。
+    cachedAvailable = probe.status === 0 && geminiHasAuth()
   } catch {
     cachedAvailable = false
   }
   return cachedAvailable
+}
+
+/** Gemini 是否已配置认证方式(环境 key 或 settings.json 的 auth 选择) */
+function geminiHasAuth(): boolean {
+  if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) return true
+  try {
+    const settingsPath = join(homedir(), '.gemini', 'settings.json')
+    if (!existsSync(settingsPath)) return false
+    const cfg = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>
+    const security = (cfg.security ?? {}) as Record<string, unknown>
+    const auth = (security.auth ?? {}) as Record<string, unknown>
+    return Boolean(cfg.selectedAuthType || auth.selectedType || auth.selectedAuthType)
+  } catch {
+    return false
+  }
 }
 
 function errText(err: unknown): string {

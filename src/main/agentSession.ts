@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { app, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
@@ -91,6 +92,22 @@ interface PendingPermission {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * 是否存在"真实" Claude 登录凭据。只认三者之一:
+ * ANTHROPIC_API_KEY 环境变量 / 存在的 host-creds 文件 / ~/.claude/.credentials.json。
+ * 注意:~/.claude.json 是配置文件(人人都有,不含 token),绝不能当凭据。
+ */
+function hasRealClaudeAuth(): boolean {
+  if (process.env.ANTHROPIC_API_KEY) return true
+  const hostCreds = process.env.CLAUDE_CODE_HOST_CREDS_FILE
+  if (hostCreds && existsSync(hostCreds)) return true
+  try {
+    return existsSync(join(homedir(), '.claude', '.credentials.json'))
+  } catch {
+    return false
+  }
 }
 
 function normalizeBudget(value: unknown): number {
@@ -545,12 +562,14 @@ export class AgentSession implements Engine {
     const provider = getProvider(this.meta.providerId)
     if (!provider) return `Provider 不存在:${this.meta.providerId}`
     if (decryptToken(provider.encryptedToken)) return null
-    // 空 baseUrl 且无 token = 官方 Anthropic 预设:回落到宿主登录态(claude CLI /
-    // ANTHROPIC_API_KEY 环境变量),不拦截。buildEnv 已保留 host 托管鉴权。
-    if (!provider.baseUrl.trim() && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_HOST_CREDS_FILE)) {
-      return null
+    // 空 baseUrl 且无 token = 官方 Anthropic 预设:需要真实宿主登录态才放行。
+    // 只认"真实凭据":API key / 存在的 host-creds 文件 / .credentials.json。
+    // ~/.claude.json 是配置文件不算凭据(外部验收踩坑:误判致中途 Not logged in)。
+    if (!provider.baseUrl.trim()) {
+      if (this.meta.engine !== 'claude') return null // 非 Claude 引擎不走 Anthropic 登录
+      if (hasRealClaudeAuth()) return null
+      return '未检测到 Claude 登录态:请运行 claude 登录、设置 ANTHROPIC_API_KEY,或改用已配 key 的 Provider'
     }
-    if (!provider.baseUrl.trim()) return null // 无 baseUrl:交给 SDK 自身登录探测,不预先拦截
     return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
