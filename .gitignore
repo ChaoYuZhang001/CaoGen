@@ -6,4 +6,9 @@ test-results/
 .DS_Store
 
 .claude/settings.local.json
+.claude/worktrees/
 electron.vite.config.*.mjs
+
+# 运行时数据(测试/使用副产物,不入库)
+model-stats.json
+worktree-merges.json
