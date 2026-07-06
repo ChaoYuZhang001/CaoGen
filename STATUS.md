@@ -1,6 +1,6 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-06(第 6 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-06(第 7 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 
 # Context
 
@@ -16,7 +16,7 @@
 
 # Current Focus
 
-**P0/P1/P2 中所有可自动化项已全部完成并推送。** 迁移向导资产映射已深化(Roo/Continue/Cline-MCP/Aider)。仅剩两项硬阻塞:N1 真人 30 分钟计时实测、Gemini CLI 真验(等用户 `gemini` 登录)。辅线:用户日常真用报毛刺。
+**所有可自动化项已全部完成推送。** N1 已备好可复现演练(fixture 生成器 + 计时脚本 docs/N1-MIGRATION-DRILL.md,迁移向导实扫 9 资产验证)。真正剩余只差真人执行:N1 30 分钟计时、Gemini 本机登录真验。辅线:用户日常真用报毛刺。
 
 # Goal
 
@@ -51,16 +51,16 @@
 - ~~chat 历史自动压缩~~ ✅ 超 48k token 摘要旧段,不切断 tool_call 配对(e2e 4/4)
 - ~~Responses 协议接工具循环~~ ✅ 官方 OpenAI 模型也成真编码 Agent(e2e 5/5)
 - ~~路由能力表自学习~~ ✅ 按实测成败/延迟给同档模型打平降权(集成 T17 验证)
-- N1 迁移实测(真人计时,阻塞)+ ~~迁移向导补 Cursor/Cline/Aider 资产映射~~ ✅ 已补 Roo/Continue/Cline-MCP/Aider CONVENTIONS(T15 验证)
+- N1 迁移实测:向导映射✅、演练 fixture+计时脚本✅(docs/N1-MIGRATION-DRILL.md);仅剩**真人 30 分钟计时**(不可脚本替代,阻塞)
 
 # Blockers
 
 | 阻碍 | 等什么 |
 |---|---|
-| Gemini 真验(Codex 已✅) | 用户跑一次 `gemini` 完成 Google 登录(当前报 'set an Auth method') |
+| Gemini 真验(Codex 已✅) | 用户本机 `gemini` 登录(沙箱连不到 Google API,须在用户机跑) |
 | 签名公证 DMG | 用户 Apple Developer 账号($99/年) |
 | Grok / OpenAI 官方真实 E2E | 两家 key 均无额度,等充值 |
-| N1 外部验证 | 需要非项目相关的真实竞品用户 |
+| N1 30 分钟计时 | 备好 fixture+脚本(docs/N1-MIGRATION-DRILL.md);需真人按秒表跑并留证 |
 
 # Decisions
 
