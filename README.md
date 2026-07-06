@@ -13,27 +13,27 @@
 
 多会话并行的桌面 AI 编码 Agent。终极目标是让 **Codex、Claude Code、Gemini CLI、Marvis 以及其他主流 Agent 的深度用户丝滑转用 CaoGen**,把 CaoGen 做成中国原创、世界级第一梯队的桌面 AI 编码工作室:多厂商模型可配置、指定运行或智能自动调度、每个 Agent 用 Git worktree 隔离、并行会话以写实 3D 办公区呈现,并补齐深度用户迁移所需的检查点回溯、子代理编排、内置浏览器批注、插件生态、产物预览、自动化与主动建议——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
 
-当前以 Claude Agent SDK 为默认引擎(与 Claude Code 同源),并提供 OpenAI Responses API 原生引擎第一版,在桌面层提供 CLI 给不了的体验:
+当前以 Claude Agent SDK 为默认引擎(与 Claude Code 同源),OpenAI 引擎同时支持 **Responses** 与 **Chat Completions** 两种协议,在桌面层提供 CLI 给不了的体验:
 
-> **多厂商 / OpenAI 主流支持**:OpenAI 可选择 **OpenAI Responses API** 引擎直连官方或兼容端点;Claude 引擎仍讲 Anthropic Messages API 协议,要用 OpenAI/Gemini/其他模型可通过 one-api、new-api、LiteLLM 等 Anthropic 兼容网关。Provider 模板已内置 OpenAI 官方直连、国产官方 Anthropic 端点和常见网关。
-
+> **多厂商一把钥匙**:OpenAI 引擎的 **Chat Completions** 协议可直连几乎所有兼容端点 —— DeepSeek / 通义千问 DashScope / Grok(xAI)/ new-api·one-api·LiteLLM 网关 / vLLM·Ollama·LM Studio 自部署,全部内置 Provider 预设(已用 DeepSeek 与 new-api 网关真实 E2E 验证,含多轮上下文)。Claude 引擎走 Anthropic Messages 协议,DeepSeek/Kimi/智谱 GLM 官方 Anthropic 兼容端点亦可直连。
 
 - **多会话并行** — 同时在多个项目上运行 Agent,侧栏一键切换,互不阻塞
-- **Worktree 隔离** — 每个 Agent 默认在独立 Git worktree 工作,互不污染主工作区
+- **真子代理编排(闭环)** — 主 Agent 一次派发最多 33 个子 Agent 并行;全部完成后结果**自动汇总回灌父 Agent**,由其总结成败、评估冲突、给出合并顺序(32 并发实测:派发 655ms,全部完成 2s)
+- **Worktree 隔离 + PR** — 每个 Agent 默认独立 Git worktree;合并前冲突风险明示,可一键生成 patch / 应用回主工作区 / 创建 PR(gh/glab)
 - **跨厂商故障切换** — 厂商余额耗尽/限流/宕机时自动切到健康厂商重试,任务不中断,切换过程在聊天流透明标注
-- **多引擎架构** — Engine 接口 + 注册表(M6),Claude Agent SDK 为默认引擎,OpenAI Responses API 已接入,Codex/Gemini CLI 适配位已留好
-- **迁移级交互** — `@` 文件、图片输入、斜杠命令、`Esc Esc` / `/rewind` 检查点回溯
-- **真子代理编排** — 主 Agent 可派活给子 Agent 并行完成前端、后端、测试等任务
-- **工作台能力** — 拖拽分屏、内置终端/编辑器、HTML/PDF/表格/PPT 预览、可逐块处理的 Diff 查看器
-- **内置浏览器批注** — 用户可直接在网页上框选、标注、截图并把指令交给 Agent
-- **记忆与自动化** — 跨会话记忆、主动开工建议、本地/云端 Routines、完成通知与防休眠
-- **中英双语界面** — 全部 UI 文案 zh/en 可切换
-- **工具调用可视化** — Bash / 文件编辑 / 搜索每一步以卡片呈现,输入输出可展开
-- **Diff 审查** — Edit / Write 的文件修改以红绿差异块呈现
-- **权限掌控** — 敏感操作逐条审批(允许 / 拒绝),或随时切换权限模式(默认 / 自动接受编辑 / 规划 / 跳过)
+- **多引擎架构** — Engine 接口 + 注册表:Claude Agent SDK(默认)、OpenAI(Responses/Chat 双协议)、Codex CLI、Gemini CLI;Dock 启动的 PATH 缺失已修复,CLI 探测可靠
+- **迁移级交互** — `@` 文件、多图粘贴/拖拽、图片 OCR(macOS Vision 零依赖)、斜杠命令、`Esc Esc` / `/rewind` 检查点回溯(对话回退**即时**截断 SDK 上下文)
+- **内置浏览器批注** — 选区批注 + **DOM 圈选**(悬停高亮点选元素、按元素裁剪截图)+ 页面只读观测(文本/控制台错误/网络失败)一键发给 Agent 复验
+- **Hooks** — 文件修改后 / 每轮结束后自动执行自定义 shell 命令(如格式化/跑测试),输出回显时间线
+- **插件生态** — 扫描 Claude/Codex 的 plugin/skill/agent/MCP,启停持久化、一键投递给 Agent;**MCP 运行态探测**(stdio 真握手 / http 可达性)
+- **工作台能力** — 分屏、内置终端/编辑器、HTML/PDF/CSV/JSON/图片预览、可逐块 accept/reject 的 Diff 查看器、应用内 Git 提交
+- **记忆与自动化** — 跨会话记忆(确认制)、主动开工建议、本地 Routines 定时自执行、完成通知与防休眠(均可在设置开关)
+- **预算闸门** — 会话/Provider/全局三级预算,超限拦截发送,32 并发也烧不穿
+- **中英双语界面** — 全部 UI 文案 zh/en 可切换;白天/夜晚/跟随系统三主题
+- **权限掌控** — 敏感操作逐条审批,或随时切换权限模式(默认 / 自动接受编辑 / 规划 / 跳过)
 - **成本仪表盘** — 每轮 token 用量、上下文规模、累计费用实时显示
 - **会话恢复** — 历史会话持久化,一键恢复上下文继续工作
-- **流式输出** — 文本与思考过程逐字流式渲染,支持随时中断
+- **写实 3D 办公区** — 每个会话一个工位,小人动画/厂商配色/成本气泡由**真实会话状态**驱动,父子工位间飞行消息包呈现真实编排流
 
 ## 界面预览
 
@@ -41,10 +41,22 @@
 
 > 侧栏多项目并行、六大能力一览;切到 **🏢 3D 办公区**,每个会话是一个工位,一眼看出谁在写码、谁在等审批。
 
+## 下载安装
+
+从 [Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载对应平台安装包(macOS `.dmg` / Windows NSIS / Linux AppImage)。
+
+> **macOS 首次打开**:当前安装包未签名,下载后 **右键点 App 图标 → 打开 → 再点「打开」** 即可(只需绕行第一次);或在 系统设置 → 隐私与安全性 底部点「仍要打开」。
+
+也可以直接从源码运行,见下方「开发」。
+
 ## 运行前提
 
 - Node.js ≥ 20
-- 已登录 Claude Code(`claude` CLI 登录)或设置了 `ANTHROPIC_API_KEY` 环境变量
+- 至少一个可用的模型来源(任选其一):
+  - 已登录 Claude Code(`claude` CLI)或设置 `ANTHROPIC_API_KEY`(Claude 引擎)
+  - 任意厂商 API Key —— 设置页选预设(DeepSeek / Qwen / Grok / 网关 / 本地 Ollama 等),
+    OpenAI 引擎 Chat Completions 协议直连,无需 Claude 账号
+- 可选:安装 `codex` / `gemini` CLI 解锁对应原生引擎(应用会自动探测)
 
 ## 开发
 
@@ -53,12 +65,27 @@ npm install
 npm run dev        # 启动开发模式(HMR)
 ```
 
-## 构建 / 校验
+## 构建 / 校验 / 测试
 
 ```bash
 npm run typecheck  # TS 类型检查(主进程 + 渲染进程)
 npm run build      # 产物输出到 out/
 npm start          # 预览构建产物
+npm run test:deep  # 深度测试:typecheck/build/集成×3/模块冒烟×12/
+                   # Electron IPC/OpenAI mock E2E/页面操作冒烟(共 21 项)
+```
+
+需要真实厂商 Key 的端到端脚本(不入 CI,本机手动跑):
+
+```bash
+# Chat Completions 真对话 E2E(流式 + usage + 多轮上下文)
+CHAT_E2E_KEY=sk-... npx electron scripts/chat-protocol-e2e.cjs
+
+# 真子代理编排闭环 E2E(派发→子代理真实跑完→自动回灌→父 Agent 总结)
+CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
+
+# 32 子代理并发压测(吞吐/时延/成本统计 + 结果正确性抽查)
+CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
 ```
 
 ## 打包分发 / 发布
