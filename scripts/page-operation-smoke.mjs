@@ -128,7 +128,7 @@ try {
     await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
     await clickByText(cdp, '创建')
     await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
-    await waitForText(cdp, 'OpenAI 引擎缺少 API Key', 10_000)
+    await waitForText(cdp, '缺少 API Key', 10_000) // 文案改为按 Provider 名,断言宽松匹配
   })
   await screenshot(cdp, '03-session')
 
