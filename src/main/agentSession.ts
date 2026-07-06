@@ -231,6 +231,8 @@ export class AgentSession implements Engine {
   private resumeAtId?: string
   /** start() 时的 Provider 环境指纹;send 时若已变(如后填 key)则重建引擎 */
   private envFingerprint = ''
+  /** SDK 子进程 stderr 尾部(诊断用:超时/崩溃时附到错误信息) */
+  private stderrTail = ''
   /** auto 模式本轮路由选中的真实模型名(供结束时记模型实测统计) */
   private lastRoutedModel = ''
   private disposed = false
@@ -280,15 +282,18 @@ export class AgentSession implements Engine {
       console.warn('[agent-desk] Provider 不存在,回退默认:', this.meta.providerId)
       return env
     }
-    // 用户显式选了 Provider 时,剥离 host 托管鉴权,否则宿主(如 Claude 桌面)
-    // 的 host-creds 文件会盖过我们注入的凭据,导致 Provider 形同虚设。
-    delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
-    delete env.CLAUDE_CODE_HOST_CREDS_FILE
-    delete env.CLAUDE_CODE_HOST_AUTH_ENV_VAR
-    delete env.CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
-    delete env.CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH
-    if (provider.baseUrl) env.ANTHROPIC_BASE_URL = provider.baseUrl
     const token = decryptToken(provider.encryptedToken)
+    // 只有在我们真能注入替代凭据时,才剥离 host 托管鉴权 —— 否则(选了 Provider
+    // 但没配 key)既没了 host 登录、又没有自己的 token,SDK 子进程零凭据挂起。
+    // 这是"Claude 引擎默认挂 DeepSeek 但没填 key → 真对话超时"的根因。
+    if (token || provider.baseUrl) {
+      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
+      delete env.CLAUDE_CODE_HOST_CREDS_FILE
+      delete env.CLAUDE_CODE_HOST_AUTH_ENV_VAR
+      delete env.CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
+      delete env.CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH
+    }
+    if (provider.baseUrl) env.ANTHROPIC_BASE_URL = provider.baseUrl
     if (token) {
       env.ANTHROPIC_AUTH_TOKEN = token
       // 兼容以 API key 方式鉴权的网关;两者择一即可,一并覆写避免旧值干扰
@@ -424,6 +429,11 @@ export class AgentSession implements Engine {
           ...(this.resumeId && this.resumeAtId ? { resumeSessionAt: this.resumeAtId } : {}),
           // Hooks 桥:PostToolUse(文件写入后)+ Stop(轮结束),转发到时间线并可执行用户 shell 钩子
           hooks: this.buildHooks(settings),
+          // 诊断:捕获 SDK 子进程 stderr 尾部,超时/崩溃时附到错误信息(否则用户只见"无响应")
+          stderr: (data: string) => {
+            this.stderrTail = `${this.stderrTail}${data}`.slice(-4000)
+            if (data.trim()) console.error('[caogen][claude-sdk stderr]', data.trim().slice(0, 500))
+          },
           canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
         }
       })
@@ -535,6 +545,12 @@ export class AgentSession implements Engine {
     const provider = getProvider(this.meta.providerId)
     if (!provider) return `Provider 不存在:${this.meta.providerId}`
     if (decryptToken(provider.encryptedToken)) return null
+    // 空 baseUrl 且无 token = 官方 Anthropic 预设:回落到宿主登录态(claude CLI /
+    // ANTHROPIC_API_KEY 环境变量),不拦截。buildEnv 已保留 host 托管鉴权。
+    if (!provider.baseUrl.trim() && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_HOST_CREDS_FILE)) {
+      return null
+    }
+    if (!provider.baseUrl.trim()) return null // 无 baseUrl:交给 SDK 自身登录探测,不预先拦截
     return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
@@ -1003,7 +1019,9 @@ export class AgentSession implements Engine {
       if (!this.disposed && gen === this.generation) this.setStatus('closed')
     } catch (err) {
       if (this.disposed || gen !== this.generation) return
-      const text = errText(err)
+      // 附上 SDK stderr 尾部:否则子进程认证失败/崩溃时用户只见空洞错误
+      const tail = this.stderrTail.trim()
+      const text = tail ? `${errText(err)}\n[SDK stderr]\n${tail.slice(-1200)}` : errText(err)
       recordFailure(this.meta.providerId, text)
       // 流层崩溃(进程退出/网络断):仅当有轮次在途时值得切厂商重试
       if (this.turnInFlight && (await this.tryFailover(text))) return
