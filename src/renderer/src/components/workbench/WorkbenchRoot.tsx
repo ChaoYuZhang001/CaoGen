@@ -54,6 +54,8 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const sendPluginRegistryItemToAgent = useStore((s) => s.sendPluginRegistryItemToAgent)
   const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
   const probeMcpRuntime = useStore((s) => s.probeMcpRuntime)
+  const installPluginFromLocal = useStore((s) => s.installPluginFromLocal)
+  const uninstallManagedPlugin = useStore((s) => s.uninstallManagedPlugin)
   const mcpProbeResults = useStore((s) => s.workbench.mcpProbeResults)
   const mcpProbing = useStore((s) => s.workbench.mcpProbing)
   const closeSubagentPanel = useStore((s) => s.closeSubagentPanel)
@@ -126,6 +128,8 @@ export default function WorkbenchRoot(): React.JSX.Element {
               onRevealItem={(item) => void revealPluginRegistryItem(item)}
               onToggleItem={(item, enabled) => void togglePluginRegistryItem(item, enabled)}
               onProbeMcp={(items) => void probeMcpRuntime(items)}
+              onInstall={() => void installPluginFromLocal()}
+              onUninstall={(item) => void uninstallManagedPlugin(item)}
               mcpProbeResults={mcpProbeResults}
               mcpProbing={mcpProbing}
             />

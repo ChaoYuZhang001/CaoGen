@@ -16,6 +16,9 @@ export interface PluginRegistryPanelItem {
   enabledSource?: PluginRegistryEnabledSource
   enabledUpdatedAt?: string
   summary?: string
+  version?: string
+  permissions?: string[]
+  managed?: boolean
 }
 
 export interface PluginRegistryPanelDiagnostic {
@@ -93,6 +96,10 @@ export interface PluginRegistryPanelProps {
   onToggleItem?: (item: PluginRegistryPanelItem, enabled: boolean) => void | Promise<void>
   /** MCP 运行态:探测可见 mcp 条目的真实连接状态 */
   onProbeMcp?: (items: PluginRegistryPanelItem[]) => void | Promise<void>
+  /** 本地安装插件(从目录复制入 ~/.claude/plugins;市场分发不在本版范围) */
+  onInstall?: () => void | Promise<void>
+  /** 卸载托管插件(回收站式,仅 managed 条目) */
+  onUninstall?: (item: PluginRegistryPanelItem) => void | Promise<void>
   /** MCP 探测结果(id → 状态);进行中用 mcpProbing */
   mcpProbeResults?: Record<string, McpProbeStatus>
   mcpProbing?: boolean
@@ -282,6 +289,8 @@ export default function PluginRegistryPanel({
   onDispatchAgent,
   onToggleItem,
   onProbeMcp,
+  onInstall,
+  onUninstall,
   mcpProbeResults = {},
   mcpProbing = false
 }: PluginRegistryPanelProps): React.JSX.Element {
@@ -341,6 +350,15 @@ export default function PluginRegistryPanel({
           <div className="plugin-registry-subtitle">{labels.subtitle}</div>
         </div>
         <div className="plugin-registry-actions">
+          {onInstall && (
+            <button
+              className="btn btn-ghost btn-sm"
+              title="从本地目录安装(复制到 ~/.claude/plugins);市场分发不在本版范围"
+              onClick={() => void onInstall()}
+            >
+              安装插件
+            </button>
+          )}
           {onProbeMcp && stats.byKind.mcp > 0 && (
             <button
               className="btn btn-ghost btn-sm"
@@ -571,6 +589,24 @@ export default function PluginRegistryPanel({
                   {selectedItem.path}
                 </MetaRow>
                 <MetaRow label={labels.summary}>{selectedItem.summary || '-'}</MetaRow>
+                <MetaRow label="版本">{selectedItem.version || '未声明'}</MetaRow>
+                <div className="plugin-registry-perms">
+                  <div className="plugin-registry-perms-label">权限声明</div>
+                  {selectedItem.permissions && selectedItem.permissions.length > 0 ? (
+                    <>
+                      <div className="plugin-registry-perm-tags">
+                        {selectedItem.permissions.map((perm) => (
+                          <span key={perm} className="plugin-registry-perm-tag" title={perm}>
+                            {perm}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="plugin-registry-perms-hint">来自 manifest 自述,未经运行时验证</div>
+                    </>
+                  ) : (
+                    <div className="plugin-registry-perms-hint">未声明权限需求</div>
+                  )}
+                </div>
                 {onUseItem && (
                   <button
                     className="btn btn-primary btn-sm plugin-registry-use-selected"
@@ -587,6 +623,19 @@ export default function PluginRegistryPanel({
                     onClick={() => void onDispatchAgent(selectedItem)}
                   >
                     {labels.dispatchAgent}
+                  </button>
+                )}
+                {onUninstall && selectedItem.managed && (
+                  <button
+                    className="btn btn-danger btn-sm plugin-registry-use-selected"
+                    title="移入 ~/.claude/plugins/.trash 回收站,可手工恢复"
+                    onClick={() => {
+                      if (window.confirm(`卸载 ${selectedItem.name}?将移入回收站(可恢复)。`)) {
+                        void onUninstall(selectedItem)
+                      }
+                    }}
+                  >
+                    卸载(回收站)
                   </button>
                 )}
               </>

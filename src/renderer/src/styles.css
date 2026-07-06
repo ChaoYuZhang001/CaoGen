@@ -3486,6 +3486,42 @@ textarea {
   cursor: default;
 }
 
+/* 插件权限声明标签 */
+.plugin-registry-perms {
+  margin: 6px 0;
+}
+
+.plugin-registry-perms-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.plugin-registry-perm-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.plugin-registry-perm-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text-dim);
+  font-size: 10px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-registry-perms-hint {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
 /* MCP 运行态探测徽标 */
 .plugin-registry-probe {
   margin-left: 6px;
