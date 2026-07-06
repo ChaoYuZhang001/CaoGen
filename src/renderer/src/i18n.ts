@@ -246,6 +246,25 @@ const DICT: Dict = {
   worktreeEmptySummary: { zh: '尚未检查合并摘要。', en: 'No merge summary yet.' },
   worktreeEmptyPatch: { zh: '尚未生成 patch 预览。', en: 'No patch preview yet.' },
   worktreeEmptyApplyCheck: { zh: '尚未运行 apply-check。', en: 'No apply-check yet.' },
+  // 冲突三栏
+  worktreeViewConflicts: { zh: '查看冲突文件', en: 'View conflicted files' },
+  worktreeLoadingConflicts: { zh: '加载冲突文件中…', en: 'Loading conflicted files…' },
+  worktreeConflictTitle: { zh: '冲突文件', en: 'Conflicted files' },
+  worktreeConflictBase: { zh: '基线', en: 'Base' },
+  worktreeConflictWorktree: { zh: 'Worktree', en: 'Worktree' },
+  worktreeConflictMain: { zh: '主工作区', en: 'Main workspace' },
+  worktreeConflictMissing: { zh: '(文件不存在)', en: '(file missing)' },
+  worktreeConflictTruncated: { zh: '内容已截断(上限 200KB)', en: 'Content truncated (200KB cap)' },
+  worktreeConflictListTruncated: {
+    zh: '仅显示前 20 个冲突文件',
+    en: 'Only the first 20 conflicted files are shown'
+  },
+  worktreeConflictEmpty: { zh: '未检测到冲突文件。', en: 'No conflicted files detected.' },
+  // 合并回执
+  worktreeLastMerge: {
+    zh: '上次合并:{files} 文件 +{insertions}/-{deletions} · {time}',
+    en: 'Last merge: {files} files +{insertions}/-{deletions} · {time}'
+  },
   worktreeApplyConfirm: {
     zh: '确定把这个隔离 worktree 的 patch 应用到主工作区吗? 应用前会再次做 git apply --check。',
     en: 'Apply this isolated worktree patch to the main workspace? CaoGen will run git apply --check again first.'

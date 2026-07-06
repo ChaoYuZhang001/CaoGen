@@ -44,7 +44,9 @@ import {
   createManagedWorktreePullRequest,
   exportManagedWorktreePatch,
   getManagedWorktreeSummary,
+  getWorktreeConflictFiles,
   inspectManagedWorktreeMerge,
+  listWorktreeMergeReceipts,
   removeManagedWorktreeView
 } from './worktrees'
 import { terminalManager } from './terminal'
@@ -342,6 +344,12 @@ export function registerIpc(): void {
   ipcMain.handle('worktrees:mergePatch', (_e, id: string) => createManagedWorktreeMergePatch(id))
 
   ipcMain.handle('worktrees:applyCheck', (_e, id: string) => checkManagedWorktreeApply(id))
+
+  // 冲突三栏:apply-check 被拒时,取冲突文件的 基线/worktree/主工作区 三份内容。
+  ipcMain.handle('worktrees:conflictFiles', (_e, id: string) => getWorktreeConflictFiles(id))
+
+  // 合并回执列表(最新在前),验收"上次到底合了什么"。
+  ipcMain.handle('worktrees:mergeReceipts', () => listWorktreeMergeReceipts())
 
   ipcMain.handle('worktrees:applyPatch', (_e, id: string) => {
     const session = sessionManager.get(id)

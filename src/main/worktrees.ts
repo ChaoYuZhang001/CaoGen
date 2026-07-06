@@ -7,6 +7,8 @@ import type {
   ManagedWorktreeView,
   WorktreeApplyResult,
   WorktreeApplyCheckResult,
+  WorktreeConflictFilesResult,
+  WorktreeMergeReceipt,
   WorktreeMergeSummary,
   WorktreePatchResult,
   WorktreePullRequestResult,
@@ -14,11 +16,15 @@ import type {
   WorktreeSummary
 } from '../shared/types'
 import {
+  appendMergeReceipt,
   applySquashPatch,
   canFastApplyPatch,
   createPullRequest,
   createSquashPatch,
-  inspectMerge
+  getConflictFiles,
+  inspectMerge,
+  listMergeReceipts,
+  patchSha256
 } from './worktreeMerge'
 
 const WORKTREE_BRANCH_PREFIX = 'caogen'
@@ -71,6 +77,11 @@ function registryFile(): string {
 
 function patchesRoot(): string {
   return join(app.getPath('userData'), 'patches')
+}
+
+// 合并回执文件:验收"上次到底合了什么"(sessionId/分支/统计/patch sha256/时间)。
+function mergeReceiptsFile(): string {
+  return join(app.getPath('userData'), 'worktree-merges.json')
 }
 
 function git(cwd: string, args: string[]): string {
@@ -465,10 +476,30 @@ export function checkManagedWorktreeApply(sessionId: string): WorktreeApplyCheck
 
 export function applyManagedWorktreePatch(sessionId: string): WorktreeApplyResult {
   try {
+    const record = recordForSession(sessionId)
     const patch = createManagedWorktreeMergePatch(sessionId)
     if (!patch.ok) return { ok: false, error: patch.error ?? '无法生成 worktree patch' }
     const apply = applySquashPatch(patch.repoRoot ?? '', patch.patchText ?? '')
     if (!apply.ok) return apply
+    // 合并成功后落回执:文件数/增删行/patch sha256/时间,供事后验收。
+    // 回执写失败不影响合并结果(patch 已应用),静默忽略。
+    if (record && apply.applied) {
+      try {
+        const stats = diffStats(record)
+        appendMergeReceipt(mergeReceiptsFile(), {
+          sessionId: record.sessionId,
+          branch: record.branch,
+          baseSha: record.baseSha,
+          filesChanged: apply.changedFiles,
+          insertions: stats.insertions ?? 0,
+          deletions: stats.deletions ?? 0,
+          mergedAt: Date.now(),
+          patchSha256: patchSha256(patch.patchText ?? '')
+        })
+      } catch {
+        // 回执是附加验收信息,写盘失败不阻断合并主流程。
+      }
+    }
     return {
       ...apply,
       path: patch.path,
@@ -478,6 +509,29 @@ export function applyManagedWorktreePatch(sessionId: string): WorktreeApplyResul
     }
   } catch (err) {
     return { ok: false, error: errorText(err) }
+  }
+}
+
+/** 冲突三栏数据:apply-check 被拒时,取每个冲突文件的 基线/worktree/主工作区 三份内容。 */
+export function getWorktreeConflictFiles(sessionId: string): WorktreeConflictFilesResult {
+  try {
+    const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
+    return getConflictFiles(record.repoRoot, record.worktreePath, record.baseSha)
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+/** 合并回执列表(最新在前),供 UI 展示"上次合并:N 文件 +X/-Y · 时间"。 */
+export function listWorktreeMergeReceipts(): WorktreeMergeReceipt[] {
+  try {
+    return listMergeReceipts(mergeReceiptsFile()).sort((a, b) => b.mergedAt - a.mergedAt)
+  } catch {
+    return []
   }
 }
 

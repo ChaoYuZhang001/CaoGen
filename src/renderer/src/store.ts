@@ -46,6 +46,8 @@ import type {
   WorkspaceHunkResult,
   WorktreeApplyCheckResult,
   WorktreeApplyResult,
+  WorktreeConflictFilesResult,
+  WorktreeMergeReceipt,
   WorktreeMergeSummary,
   WorktreePatchResult,
   WorktreePullRequestResult,
@@ -497,6 +499,11 @@ export interface WorkbenchState {
   worktreeApplyCheck?: WorktreeApplyCheckResult
   worktreeApplyResult?: WorktreeApplyResult
   worktreePrResult?: WorktreePullRequestResult
+  /** 冲突三栏数据(apply-check 被拒时按需加载) */
+  worktreeConflictFiles?: WorktreeConflictFilesResult
+  worktreeConflictLoading: boolean
+  /** 当前会话最近一条合并回执("上次合并"验收展示) */
+  worktreeLastReceipt?: WorktreeMergeReceipt
   worktreeMergeInspecting: boolean
   worktreeApplying: boolean
   worktreeCreatingPr: boolean
@@ -640,6 +647,10 @@ interface AppStore {
   exportWorktreePatch(): Promise<WorktreePatchResult | undefined>
   inspectWorktreeMerge(): Promise<void>
   applyWorktreePatch(): Promise<WorktreeApplyResult | undefined>
+  /** 冲突三栏:拉取冲突文件的 基线/worktree/主工作区 三份内容 */
+  loadWorktreeConflictFiles(): Promise<void>
+  /** 刷新当前会话最近一条合并回执 */
+  refreshWorktreeMergeReceipt(): Promise<void>
   createWorktreePullRequest(): Promise<WorktreePullRequestResult | undefined>
   removeWorktree(opts?: { deleteBranch?: boolean; force?: boolean }): Promise<WorktreeRemoveResult | undefined>
   openTerminalPanel(): Promise<void>
@@ -807,6 +818,7 @@ export const useStore = create<AppStore>((set, get) => {
     gitBusy: false,
     worktreeOpen: false,
     worktreeLoading: false,
+    worktreeConflictLoading: false,
     worktreeMergeInspecting: false,
     worktreeApplying: false,
     worktreeCreatingPr: false,
@@ -1526,6 +1538,9 @@ export const useStore = create<AppStore>((set, get) => {
         worktreeApplyCheck: undefined,
         worktreeApplyResult: undefined,
         worktreePrResult: undefined,
+        worktreeConflictFiles: undefined,
+        worktreeConflictLoading: false,
+        worktreeLastReceipt: undefined,
         worktreeMergeInspecting: false,
         worktreeApplying: false,
         worktreeCreatingPr: false,
@@ -1568,6 +1583,8 @@ export const useStore = create<AppStore>((set, get) => {
           worktreeError: worktree.ok ? undefined : worktree.error
         }
       }))
+      // 顺带刷新最近一条合并回执(失败静默,不影响面板主数据)。
+      await get().refreshWorktreeMergeReceipt()
     } catch (err) {
       set((s) => ({
         workbench: {
@@ -1601,6 +1618,8 @@ export const useStore = create<AppStore>((set, get) => {
         ...s.workbench,
         worktreeMergeInspecting: true,
         worktreeApplyResult: undefined,
+        worktreeConflictFiles: undefined,
+        worktreeConflictLoading: false,
         worktreeError: undefined,
         worktreeMessage: undefined
       }
@@ -1672,6 +1691,8 @@ export const useStore = create<AppStore>((set, get) => {
             : undefined
         }
       }))
+      // 合并成功会写回执,刷新"上次合并"展示。
+      if (result.ok) await get().refreshWorktreeMergeReceipt()
       return result
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1683,6 +1704,41 @@ export const useStore = create<AppStore>((set, get) => {
         }
       }))
       return { ok: false, error: message }
+    }
+  },
+
+  async loadWorktreeConflictFiles() {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: { ...s.workbench, worktreeConflictLoading: true, worktreeConflictFiles: undefined }
+    }))
+    try {
+      const result = await window.agentDesk.getWorktreeConflictFiles(id)
+      set((s) => ({
+        workbench: { ...s.workbench, worktreeConflictFiles: result, worktreeConflictLoading: false }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeConflictFiles: { ok: false, error: err instanceof Error ? err.message : String(err) },
+          worktreeConflictLoading: false
+        }
+      }))
+    }
+  },
+
+  async refreshWorktreeMergeReceipt() {
+    const id = get().activeId
+    if (!id) return
+    try {
+      const receipts = await window.agentDesk.listWorktreeMergeReceipts()
+      // 回执按 mergedAt 倒序返回,取当前会话最近一条。
+      const last = receipts.find((item) => item.sessionId === id)
+      set((s) => ({ workbench: { ...s.workbench, worktreeLastReceipt: last } }))
+    } catch {
+      // 回执是附加验收信息,拉取失败静默即可。
     }
   },
 

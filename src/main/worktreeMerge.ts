@@ -62,6 +62,45 @@ export interface ApplySquashPatchSuccess {
 
 export type ApplySquashPatchResult = ApplySquashPatchSuccess | WorktreeMergeFailure
 
+// 冲突三栏:单文件三份内容(基线/worktree/主工作区)。
+// 缺失文件返回空串并置 missing 标记;超限内容截断并置 truncated 标记。
+export interface WorktreeConflictFileContent {
+  path: string
+  base: string
+  worktree: string
+  main: string
+  baseMissing?: boolean
+  worktreeMissing?: boolean
+  mainMissing?: boolean
+  truncated?: boolean
+}
+
+// 单对象可选字段形态(同 GitResult 模式),避免非严格 tsc 下判别联合收窄问题。
+export interface WorktreeConflictFilesResult {
+  ok: boolean
+  files?: WorktreeConflictFileContent[]
+  truncatedList?: boolean
+  error?: string
+}
+
+// 合并回执:applySquashPatch 成功后落盘,供事后验收"到底合了什么"。
+export interface WorktreeMergeReceipt {
+  sessionId: string
+  branch: string
+  baseSha: string
+  filesChanged: number
+  insertions: number
+  deletions: number
+  mergedAt: number
+  patchSha256: string
+}
+
+// 冲突文件上限与单文件内容上限(需求约定:20 个文件、200KB/文件)。
+const MAX_CONFLICT_FILES = 20
+const MAX_CONFLICT_FILE_BYTES = 200 * 1024
+// 回执文件只保留最近 N 条,避免无限增长。
+const MAX_MERGE_RECEIPTS = 200
+
 export type PullRequestTool = 'gh' | 'glab'
 
 export interface CreatePullRequestOptions {
@@ -209,6 +248,183 @@ export function applySquashPatch(repoRoot: string, patchText: string): ApplySqua
   } catch (err) {
     return failure(errorMessage(err))
   }
+}
+
+/**
+ * 冲突三栏数据源:当 patch 无法干净应用到主工作区时,找出冲突文件并返回三份内容:
+ * - base:merge 基线版本(git show <baseSha>:<path>)
+ * - worktree:agent 隔离副本里的当前内容
+ * - main:主工作区当前内容
+ * 冲突文件优先从 `git apply --check` 的 stderr 解析;解析不到时退化为
+ * "patch 涉及文件 ∩ 主工作区相对基线已改动文件" 的交集。
+ * 上限:20 个文件、单文件 200KB(超限截断并标记)。
+ */
+export function getConflictFiles(
+  repoRoot: string,
+  worktreePath: string,
+  baseSha?: string
+): WorktreeConflictFilesResult {
+  try {
+    const context = resolveMergeContext(repoRoot, worktreePath, baseSha)
+    const patch = buildSquashPatchText(context.worktreePath, context.baseSha)
+    if (patch.ok === false) return { ok: false, error: patch.error }
+
+    const patchText = ensureTrailingNewline(patch.patchText)
+    if (!patchText.trim()) return { ok: true, files: [] }
+
+    const check = runGit(context.repoRoot, ['apply', '--check', '--whitespace=nowarn', '-'], {
+      input: patchText
+    })
+    // 能干净应用 = 没有冲突文件,直接返回空列表。
+    if (check.ok) return { ok: true, files: [] }
+    if (check.status === null) return { ok: false, error: check.error ?? 'git apply --check 无法执行' }
+
+    const patchFiles = filesFromPatch(patchText)
+    let conflicted = conflictFilesFromApplyCheckStderr(check.stderr, patchFiles)
+    if (conflicted.length === 0) {
+      // stderr 没解析出文件时的兜底:patch 文件列表 ∩ 主工作区相对基线的改动文件。
+      const mainModified = new Set(modifiedFilesSinceBase(context.repoRoot, context.baseSha))
+      conflicted = patchFiles.filter((file) => mainModified.has(file))
+    }
+    if (conflicted.length === 0) conflicted = patchFiles
+
+    const truncatedList = conflicted.length > MAX_CONFLICT_FILES
+    const files: WorktreeConflictFileContent[] = []
+    for (const relPath of conflicted.slice(0, MAX_CONFLICT_FILES)) {
+      const base = readGitShowCapped(context.repoRoot, context.baseSha, relPath)
+      const worktree = readFileCapped(path.join(context.worktreePath, relPath))
+      const main = readFileCapped(path.join(context.repoRoot, relPath))
+      const entry: WorktreeConflictFileContent = {
+        path: relPath,
+        base: base.text,
+        worktree: worktree.text,
+        main: main.text
+      }
+      if (base.missing) entry.baseMissing = true
+      if (worktree.missing) entry.worktreeMissing = true
+      if (main.missing) entry.mainMissing = true
+      if (base.truncated || worktree.truncated || main.truncated) entry.truncated = true
+      files.push(entry)
+    }
+
+    const result: WorktreeConflictFilesResult = { ok: true, files }
+    if (truncatedList) result.truncatedList = true
+    return result
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) }
+  }
+}
+
+/** 计算 patch 文本的 sha256(回执用,校验"合并的到底是哪份 patch")。 */
+export function patchSha256(patchText: string): string {
+  return createHash('sha256').update(patchText, 'utf8').digest('hex')
+}
+
+/** 追加一条合并回执到指定 JSON 文件(数组格式,只保留最近 MAX_MERGE_RECEIPTS 条)。 */
+export function appendMergeReceipt(filePath: string, receipt: WorktreeMergeReceipt): void {
+  const receipts = listMergeReceipts(filePath)
+  receipts.push(receipt)
+  const trimmed = receipts.slice(-MAX_MERGE_RECEIPTS)
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeFileSync(filePath, JSON.stringify(trimmed, null, 2))
+}
+
+/** 读取合并回执列表;文件缺失/损坏时返回空数组(回执是附加验收信息,不阻断主流程)。 */
+export function listMergeReceipts(filePath: string): WorktreeMergeReceipt[] {
+  try {
+    const raw = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
+    if (!Array.isArray(raw)) return []
+    return raw.filter(isMergeReceipt)
+  } catch {
+    return []
+  }
+}
+
+function isMergeReceipt(value: unknown): value is WorktreeMergeReceipt {
+  if (!value || typeof value !== 'object') return false
+  const receipt = value as Partial<WorktreeMergeReceipt>
+  return (
+    typeof receipt.sessionId === 'string' &&
+    typeof receipt.branch === 'string' &&
+    typeof receipt.baseSha === 'string' &&
+    typeof receipt.filesChanged === 'number' &&
+    typeof receipt.insertions === 'number' &&
+    typeof receipt.deletions === 'number' &&
+    typeof receipt.mergedAt === 'number' &&
+    typeof receipt.patchSha256 === 'string'
+  )
+}
+
+/**
+ * 从 `git apply --check` stderr 解析冲突文件。常见格式:
+ *   error: patch failed: src/foo.ts:12
+ *   error: src/foo.ts: patch does not apply
+ *   error: new.txt: already exists in working directory
+ * 只保留 patch 文件列表里出现过的路径,避免把无关 error 文本误当文件名。
+ */
+function conflictFilesFromApplyCheckStderr(stderr: string, patchFiles: string[]): string[] {
+  const known = new Set(patchFiles)
+  const found = new Set<string>()
+  for (const line of stderr.split(/\r?\n/)) {
+    const failed = /^error: patch failed: (.+):\d+$/.exec(line.trim())
+    if (failed && known.has(failed[1])) {
+      found.add(failed[1])
+      continue
+    }
+    const generic = /^error: (.+?): .+$/.exec(line.trim())
+    if (generic && known.has(generic[1])) found.add(generic[1])
+  }
+  return [...found]
+}
+
+/** 从 patch 文本提取涉及文件(新旧路径都算,覆盖删除/新增/改名)。 */
+function filesFromPatch(patchText: string): string[] {
+  const files = new Set<string>()
+  for (const line of patchText.split(/\r?\n/)) {
+    const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
+    if (!match) continue
+    for (const target of [match[1], match[2]]) {
+      if (target && target !== '/dev/null' && !target.startsWith('dev/null')) files.add(target)
+    }
+  }
+  return [...files]
+}
+
+/** 主工作区相对基线的改动文件(含已提交 + 未提交,不含未跟踪;兜底交集用)。 */
+function modifiedFilesSinceBase(repoRoot: string, baseSha: string): string[] {
+  const result = runGit(repoRoot, ['diff', '--name-only', '-z', baseSha, '--'])
+  if (!result.ok) return []
+  return result.stdout.split('\0').filter(Boolean)
+}
+
+/** 读基线版本内容(git show <sha>:<path>),缺失 → missing,超 200KB → 截断。 */
+function readGitShowCapped(
+  repoRoot: string,
+  baseSha: string,
+  relPath: string
+): { text: string; missing: boolean; truncated: boolean } {
+  const result = runGit(repoRoot, ['show', `${baseSha}:${relPath}`])
+  if (!result.ok) return { text: '', missing: true, truncated: false }
+  return capText(result.stdout)
+}
+
+/** 读工作区文件内容,缺失 → missing,超 200KB → 截断。 */
+function readFileCapped(filePath: string): { text: string; missing: boolean; truncated: boolean } {
+  try {
+    const buffer = readFileSync(filePath)
+    return capText(buffer.toString('utf8'))
+  } catch {
+    return { text: '', missing: true, truncated: false }
+  }
+}
+
+function capText(text: string): { text: string; missing: boolean; truncated: boolean } {
+  if (Buffer.byteLength(text, 'utf8') <= MAX_CONFLICT_FILE_BYTES) {
+    return { text, missing: false, truncated: false }
+  }
+  // 按字节截断后转回字符串;末尾可能出现半个多字节字符,replace 掉替换符即可接受。
+  const sliced = Buffer.from(text, 'utf8').subarray(0, MAX_CONFLICT_FILE_BYTES).toString('utf8')
+  return { text: sliced, missing: false, truncated: true }
 }
 
 export function detectPullRequestTool(): PullRequestTool | null {

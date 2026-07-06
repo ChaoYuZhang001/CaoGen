@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
+import { formatTime } from '../../format'
 import WorktreeMergeInspector from './WorktreeMergeInspector'
 
 function shortSha(sha?: string): string {
@@ -23,7 +24,10 @@ export default function WorktreePanel(): React.JSX.Element {
     worktreeMessage,
     worktreeApplyResult,
     worktreePrResult,
-    worktreeCreatingPr
+    worktreeCreatingPr,
+    worktreeConflictFiles,
+    worktreeConflictLoading,
+    worktreeLastReceipt
   } = useStore((s) => s.workbench)
   const refresh = useStore((s) => s.refreshWorktreePanel)
   const close = useStore((s) => s.closeWorktreePanel)
@@ -33,6 +37,7 @@ export default function WorktreePanel(): React.JSX.Element {
   const applyPatch = useStore((s) => s.applyWorktreePatch)
   const createPr = useStore((s) => s.createWorktreePullRequest)
   const removeWorktree = useStore((s) => s.removeWorktree)
+  const loadConflictFiles = useStore((s) => s.loadWorktreeConflictFiles)
   const [removing, setRemoving] = useState(false)
   const [exporting, setExporting] = useState(false)
 
@@ -147,14 +152,30 @@ export default function WorktreePanel(): React.JSX.Element {
               </button>
             </div>
 
+            {worktreeLastReceipt && (
+              <div className="worktree-last-merge">
+                {t('worktreeLastMerge', {
+                  files: worktreeLastReceipt.filesChanged,
+                  insertions: worktreeLastReceipt.insertions,
+                  deletions: worktreeLastReceipt.deletions,
+                  time: formatTime(worktreeLastReceipt.mergedAt)
+                })}
+                <code className="worktree-last-merge-sha">
+                  sha256:{worktreeLastReceipt.patchSha256.slice(0, 12)}
+                </code>
+              </div>
+            )}
+
             <WorktreeMergeInspector
               summary={worktreeMergeSummary}
               patch={worktreeMergePatch}
               applyCheck={worktreeApplyCheck}
               prResult={worktreePrResult}
+              conflictFiles={worktreeConflictFiles}
               isInspecting={worktreeMergeInspecting}
               isApplying={worktreeApplying}
               isCreatingPr={worktreeCreatingPr}
+              isLoadingConflicts={worktreeConflictLoading}
               inspectDisabled={worktreeLoading || record.state !== 'active'}
               applyDisabled={!canApply || applied || record.state !== 'active'}
               createPrDisabled={worktreeCreatingPr || record.state !== 'active'}
@@ -172,11 +193,22 @@ export default function WorktreePanel(): React.JSX.Element {
                 applyCheck: t('worktreeApplyCheck'),
                 emptySummary: t('worktreeEmptySummary'),
                 emptyPatch: t('worktreeEmptyPatch'),
-                emptyApplyCheck: t('worktreeEmptyApplyCheck')
+                emptyApplyCheck: t('worktreeEmptyApplyCheck'),
+                viewConflicts: t('worktreeViewConflicts'),
+                loadingConflicts: t('worktreeLoadingConflicts'),
+                conflictTitle: t('worktreeConflictTitle'),
+                conflictColumnBase: t('worktreeConflictBase'),
+                conflictColumnWorktree: t('worktreeConflictWorktree'),
+                conflictColumnMain: t('worktreeConflictMain'),
+                conflictMissing: t('worktreeConflictMissing'),
+                conflictTruncated: t('worktreeConflictTruncated'),
+                conflictListTruncated: t('worktreeConflictListTruncated'),
+                conflictEmpty: t('worktreeConflictEmpty')
               }}
               onInspect={() => void inspectMerge()}
               onApply={() => void onApply()}
               onCreatePr={() => void onCreatePr()}
+              onLoadConflicts={() => void loadConflictFiles()}
             />
           </>
         ) : null}

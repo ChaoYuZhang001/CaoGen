@@ -777,6 +777,38 @@ export interface WorktreeRemoveResult {
 
 export type WorktreePullRequestTool = 'gh' | 'glab'
 
+/** 冲突三栏:单文件三份内容(基线/worktree/主工作区) */
+export interface WorktreeConflictFile {
+  path: string
+  base: string
+  worktree: string
+  main: string
+  baseMissing?: boolean
+  worktreeMissing?: boolean
+  mainMissing?: boolean
+  truncated?: boolean
+}
+
+/** 单对象可选字段形态(同 GitResult 模式),规避非严格 tsc 判别联合收窄问题 */
+export interface WorktreeConflictFilesResult {
+  ok: boolean
+  files?: WorktreeConflictFile[]
+  truncatedList?: boolean
+  error?: string
+}
+
+/** 合并回执:applyWorktreePatch 成功后落盘的验收记录 */
+export interface WorktreeMergeReceipt {
+  sessionId: string
+  branch: string
+  baseSha: string
+  filesChanged: number
+  insertions: number
+  deletions: number
+  mergedAt: number
+  patchSha256: string
+}
+
 export type WorktreePullRequestResult =
   | {
       ok: true
@@ -1081,6 +1113,10 @@ export interface AgentDeskApi {
   createWorktreeMergePatch(sessionId: string): Promise<WorktreePatchResult>
   checkWorktreeApply(sessionId: string): Promise<WorktreeApplyCheckResult>
   applyWorktreePatch(sessionId: string): Promise<WorktreeApplyResult>
+  /** 冲突三栏:apply-check 被拒时取冲突文件的 基线/worktree/主工作区 三份内容 */
+  getWorktreeConflictFiles(sessionId: string): Promise<WorktreeConflictFilesResult>
+  /** 合并回执列表(最新在前),验收"上次到底合了什么" */
+  listWorktreeMergeReceipts(): Promise<WorktreeMergeReceipt[]>
   createWorktreePullRequest(sessionId: string): Promise<WorktreePullRequestResult>
   removeWorktree(
     sessionId: string,

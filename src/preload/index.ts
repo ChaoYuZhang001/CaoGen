@@ -106,6 +106,9 @@ const api: AgentDeskApi = {
   createWorktreeMergePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:mergePatch', sessionId),
   checkWorktreeApply: (sessionId: string) => ipcRenderer.invoke('worktrees:applyCheck', sessionId),
   applyWorktreePatch: (sessionId: string) => ipcRenderer.invoke('worktrees:applyPatch', sessionId),
+  getWorktreeConflictFiles: (sessionId: string) =>
+    ipcRenderer.invoke('worktrees:conflictFiles', sessionId),
+  listWorktreeMergeReceipts: () => ipcRenderer.invoke('worktrees:mergeReceipts'),
   createWorktreePullRequest: (sessionId: string) =>
     ipcRenderer.invoke('worktrees:createPr', sessionId),
   removeWorktree: (sessionId: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
