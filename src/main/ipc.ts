@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
 import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
+import { searchTranscripts } from './transcriptSearch'
 import {
   listProviders,
   createProvider,
@@ -589,6 +590,20 @@ export function registerIpc(): void {
     if (typeof title === 'string') renameHistory(id, title)
   })
   ipcMain.handle('history:delete', (_e, id: string) => deleteHistory(id))
+
+  // 会话全文搜索:按历史列表顺序(最近优先)扫描转录文件;防抖在渲染进程做
+  ipcMain.handle('transcripts:search', (_e, query: string) => {
+    if (typeof query !== 'string' || query.trim().length === 0) return []
+    return searchTranscripts(
+      join(app.getPath('userData'), 'transcripts'),
+      listHistory().map((entry) => ({
+        sdkSessionId: entry.sdkSessionId,
+        title: entry.title,
+        cwd: entry.sourceCwd ?? entry.cwd
+      })),
+      query
+    )
+  })
 
   ipcMain.handle('settings:get', () => getSettings())
 

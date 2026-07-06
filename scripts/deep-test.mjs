@@ -27,6 +27,7 @@ const commands = [
   { name: 'routineStore smoke', command: 'node', args: ['scripts/routine-store-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions smoke', command: 'node', args: ['scripts/start-suggestions-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
+  { name: 'transcriptSearch smoke', command: 'node', args: ['scripts/transcript-search-smoke.mjs'], category: 'smoke' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
   { name: 'Electron main IPC smoke', command: electronCommand(), args: ['scripts/electron-smoke.cjs'], category: 'system' },
   { name: 'OpenAI mock e2e', command: 'node', args: ['scripts/openai-mock-e2e.mjs'], category: 'system' },

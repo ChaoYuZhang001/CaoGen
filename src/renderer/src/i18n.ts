@@ -23,6 +23,8 @@ const DICT: Dict = {
   noRecentSessions: { zh: '暂无最近会话', en: 'No recent sessions' },
   noArchivedSessions: { zh: '暂无归档会话', en: 'No archived sessions' },
   noMatchingSessions: { zh: '没有匹配的会话', en: 'No matching sessions' },
+  contentSearchSection: { zh: '消息内容', en: 'Message content' },
+  contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
   sidebarEmptyHeroTitle: { zh: '还没有会话', en: 'No sessions yet' },
   moreActions: { zh: '更多操作', en: 'More actions' },
   pinSession: { zh: '置顶', en: 'Pin' },
