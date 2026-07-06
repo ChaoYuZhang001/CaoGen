@@ -57,6 +57,33 @@ interface PendingToolCall {
 /** Agent 循环上限:防模型无限调工具烧穿 */
 const MAX_TOOL_ITERATIONS = 40
 
+/**
+ * 全局并发闸门:限制"同一时刻在途的模型请求数",防 32+ 子代理突发把
+ * Node 的连接/socket 层打爆(实测 32 并发出现大量 fetch failed)。
+ * 模块级共享 —— 所有 OpenAIEngine 实例(含子代理)排队通过同一个信号量。
+ * 上限可由 env CAOGEN_MAX_INFLIGHT 覆盖(默认 8,兼顾吞吐与稳定)。
+ */
+const MAX_INFLIGHT = Math.max(1, Number(process.env.CAOGEN_MAX_INFLIGHT) || 8)
+let inflight = 0
+const waitQueue: Array<() => void> = []
+
+function acquireSlot(): Promise<void> {
+  if (inflight < MAX_INFLIGHT) {
+    inflight++
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => waitQueue.push(resolve))
+}
+
+function releaseSlot(): void {
+  const next = waitQueue.shift()
+  if (next) {
+    next() // 队首直接接棒占用,inflight 不变
+  } else {
+    inflight = Math.max(0, inflight - 1)
+  }
+}
+
 /** 历史压缩触发阈值(估算 token);超过则把旧段摘要 */
 const COMPRESS_TRIGGER_TOKENS = 48_000
 /** 压缩时至少保留的最近消息条数(在此范围内找 user 边界) */
@@ -351,12 +378,16 @@ export class OpenAIEngine implements Engine {
         ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
         stream: true
       }
-      const res = await fetch(`${auth.baseUrl}/v1/responses`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      })
+      const res = await this.fetchWithRetry(
+        `${auth.baseUrl}/v1/responses`,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        },
+        controller.signal
+      )
       if (!res.ok) throw new Error(await formatOpenAIError(res))
       await this.consumeResponse(res)
 
@@ -474,16 +505,20 @@ export class OpenAIEngine implements Engine {
           stream: true,
           stream_options: { include_usage: true }
         }
-        const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${auth.token}`,
-            'content-type': 'application/json',
-            ...auth.headers
+        const res = await this.fetchWithRetry(
+          `${auth.baseUrl}/v1/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${auth.token}`,
+              'content-type': 'application/json',
+              ...auth.headers
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal
           },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        })
+          controller.signal
+        )
         if (!res.ok) throw new Error(await formatOpenAIError(res))
         await this.consumeChatStream(res)
 
@@ -836,6 +871,36 @@ export class OpenAIEngine implements Engine {
         const error = (record.response as Record<string, unknown> | undefined)?.error ?? record.error
         throw new Error(extractErrorMessage(error) || 'OpenAI response failed')
       }
+    }
+  }
+
+  /**
+   * 带退避重试的 fetch:瞬时网络错误(fetch failed / ECONNRESET / socket 等,
+   * 高并发下常见)重试最多 2 次(0.5s、1.5s 退避)。用户中断与 HTTP 错误不重试
+   * (HTTP 错误交给上层 failover/如实报错)。解决 32 并发突发下的偶发 fetch failed。
+   */
+  private async fetchWithRetry(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+    // 先过并发闸门:限制同时在途请求数,防突发打爆 socket 层
+    await acquireSlot()
+    try {
+      const delays = [500, 1500]
+      let lastErr: unknown
+      for (let attempt = 0; attempt <= delays.length; attempt++) {
+        if (signal.aborted) throw new Error('已中断')
+        try {
+          return await fetch(url, init)
+        } catch (err) {
+          // AbortError(用户中断)不重试
+          if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) throw err
+          lastErr = err
+          if (attempt < delays.length) {
+            await new Promise((r) => setTimeout(r, delays[attempt]))
+          }
+        }
+      }
+      throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+    } finally {
+      releaseSlot()
     }
   }
 
