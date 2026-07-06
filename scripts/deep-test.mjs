@@ -29,6 +29,8 @@ const commands = [
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptSearch smoke', command: 'node', args: ['scripts/transcript-search-smoke.mjs'], category: 'smoke' },
   { name: 'pluginInstall smoke', command: 'node', args: ['scripts/plugin-install-smoke.mjs'], category: 'smoke' },
+  { name: 'responses tools e2e', command: 'npx', args: ['electron', 'scripts/responses-tools-e2e.cjs'], category: 'system' },
+  { name: 'history compress e2e', command: 'npx', args: ['electron', 'scripts/history-compress-e2e.cjs'], category: 'system' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
   { name: 'Electron main IPC smoke', command: electronCommand(), args: ['scripts/electron-smoke.cjs'], category: 'system' },
   { name: 'OpenAI mock e2e', command: 'node', args: ['scripts/openai-mock-e2e.mjs'], category: 'system' },

@@ -115,6 +115,17 @@ export const READONLY_TOOLS = new Set(['read_file', 'list_dir'])
 /** 文件写入类(acceptEdits 模式自动放行) */
 export const EDIT_TOOLS = new Set(['write_file', 'edit_file'])
 
+/**
+ * Responses API 的工具 schema(扁平形态:type/name/description/parameters 平铺,
+ * 无 Chat Completions 的嵌套 function 对象)。由 OPENAI_CODING_TOOLS 派生,单一事实源。
+ */
+export const RESPONSES_CODING_TOOLS: Array<Record<string, unknown>> = OPENAI_CODING_TOOLS.map((t) => ({
+  type: 'function',
+  name: t.function.name,
+  description: t.function.description,
+  parameters: t.function.parameters
+}))
+
 /** 路径牢笼:解析到 cwd 内的绝对路径;逃逸则抛错 */
 function jail(cwd: string, rawPath: string): string {
   const target = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd, rawPath)
