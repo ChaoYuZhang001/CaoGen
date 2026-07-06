@@ -9,6 +9,7 @@ import {
   recordFailure,
   recordSuccess
 } from './scheduler'
+import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
 import {
   EDIT_TOOLS,
@@ -299,7 +300,9 @@ export class OpenAIEngine implements Engine {
       } else {
         await this.runResponsesLoop(payload, controller, auth)
       }
-      recordSuccess(this.meta.providerId, Date.now() - this.turnStartedAt)
+      const latency = Date.now() - this.turnStartedAt
+      recordSuccess(this.meta.providerId, latency)
+      recordModelSuccess(this.effectiveModel(), latency)
       this.finishTurn(false)
     } catch (err) {
       const aborted = controller.signal.aborted
@@ -309,6 +312,7 @@ export class OpenAIEngine implements Engine {
       }
       const text = errText(err)
       recordFailure(this.meta.providerId, text)
+      recordModelFailure(this.effectiveModel())
       // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
       if (await this.tryFailover(text, payload)) return
       this.finishTurn(true, text, 'error')
