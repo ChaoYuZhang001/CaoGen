@@ -33,7 +33,13 @@ async function invoke(channel, ...args) {
 }
 
 async function run() {
-  if (!KEY) { check('CHAT_E2E_KEY 已提供', false); return finish(1) }
+  if (!KEY) {
+    // 无 key(如 CI / deep-test 默认):如实跳过而非误判失败
+    console.log('[SKIP] 压力测试需真实厂商 key(CHAT_E2E_KEY);未提供,跳过')
+    console.log('\nstress-32: skipped (no key)')
+    app.exit(0)
+    return
+  }
   require(path.join(repoOut, 'index.js'))
   await new Promise((r) => setTimeout(r, 900))
 
@@ -55,9 +61,10 @@ async function run() {
   const dispatch = await invoke('sessions:dispatchSubagents', parent.id, { isolated: false, tasks })
   check(`一次派发 ${N} 个子代理`, dispatch.children?.length === N, `dispatch 耗时 ${Date.now() - t0}ms`)
 
-  // 等全部 child 完成 + 回灌 + 父总结
+  // 等全部 child 到达终态(idle 或 error 都算"结束",但两者分开统计 —— 关键修正:
+  // 旧脚本把 error 也算"完成",掩盖了失败;现在 idle=成功、error=失败,分别计数)
   const start = Date.now()
-  let doneCount = 0
+  let settledCount = 0
   let sawInject = false
   let sawParentReply = false
   let firstDone = 0
@@ -65,14 +72,15 @@ async function run() {
   while (Date.now() - start < TIMEOUT_MS) {
     const metas = await invoke('sessions:list')
     const children = metas.filter((m) => m.parentSessionId === parent.id)
-    const done = children.filter((m) => m.status === 'idle' || m.status === 'error')
-    if (done.length > doneCount) {
-      if (doneCount === 0 && done.length > 0) firstDone = Date.now() - start
-      doneCount = done.length
+    const settled = children.filter((m) => m.status === 'idle' || m.status === 'error')
+    if (settled.length > settledCount) {
+      if (settledCount === 0 && settled.length > 0) firstDone = Date.now() - start
+      settledCount = settled.length
       lastDone = Date.now() - start
-      console.log(`  进度: ${doneCount}/${N} 完成(${Math.round(lastDone / 1000)}s)`)
+      const err = children.filter((m) => m.status === 'error').length
+      console.log(`  进度: ${settledCount}/${N} 到终态(其中 error ${err})(${Math.round(lastDone / 1000)}s)`)
     }
-    if (doneCount >= N) {
+    if (settledCount >= N) {
       const entries = await invoke('sessions:transcript', parent.id)
       for (let i = 0; i < entries.length; i++) {
         const ev = entries[i].event
@@ -86,13 +94,31 @@ async function run() {
     await new Promise((r) => setTimeout(r, 1500))
   }
 
-  check(`${N} 个子代理全部完成`, doneCount >= N, `首个 ${Math.round(firstDone / 1000)}s / 最后 ${Math.round(lastDone / 1000)}s`)
+  // 终态分布:idle=成功,error=失败
+  const metas = await invoke('sessions:list')
+  const children = metas.filter((m) => m.parentSessionId === parent.id)
+  const idleCount = children.filter((m) => m.status === 'idle').length
+  const errorChildren = children.filter((m) => m.status === 'error')
+  const runningCount = children.filter((m) => m.status === 'running' || m.status === 'starting').length
+  console.log(`  终态分布: idle(成功) ${idleCount} · error(失败) ${errorChildren.length} · 仍运行 ${runningCount}`)
+
+  // 打印每个失败 child 的诊断(turn-result / resultText / lastError)
+  for (const child of errorChildren) {
+    const entries = await invoke('sessions:transcript', child.id).catch(() => [])
+    const turn = entries.filter((e) => e.event.kind === 'turn-result').pop()
+    console.log(
+      `  ✗ 失败 child ${child.childTaskId || child.id}: ${child.lastError || turn?.event?.resultText || '(无 turn-result)'}`.slice(0, 200)
+    )
+  }
+
+  check(`${N} 个子代理全部到达终态`, settledCount >= N, `首个 ${Math.round(firstDone / 1000)}s / 最后 ${Math.round(lastDone / 1000)}s`)
+  // 独立的硬断言:全部 child 必须成功(error=0)—— 这是压力达标的核心
+  check(`全部 ${N} 个 child 成功(error=0)`, errorChildren.length === 0, `error ${errorChildren.length} / idle ${idleCount}`)
   check('汇总自动回灌父会话', sawInject)
   check('父 Agent 产出编排总结', sawParentReply)
 
   // 结果正确性抽查:transcript 里工人 7 的答案应含 21
-  const metas = await invoke('sessions:list')
-  const child7 = metas.find((m) => m.parentSessionId === parent.id && m.childTaskId === 't7')
+  const child7 = children.find((m) => m.childTaskId === 't7')
   if (child7) {
     const entries = await invoke('sessions:transcript', child7.id)
     const text = entries
@@ -100,11 +126,10 @@ async function run() {
       .flatMap((e) => e.event.blocks ?? [])
       .map((b) => (b.type === 'text' ? b.text : ''))
       .join('')
-    check('抽查 t7 计算正确(7*3=21)', /21/.test(text), text.slice(0, 40))
+    check('抽查 t7 计算正确(7*3=21)', /21/.test(text), text.slice(0, 60))
   }
 
   // 成本统计
-  const children = metas.filter((m) => m.parentSessionId === parent.id)
   const totalCost = children.reduce((sum, m) => sum + (m.costUsd || 0), 0)
   console.log(`  总成本: $${totalCost.toFixed(4)} · 平均并发时延: 首完 ${Math.round(firstDone / 1000)}s → 全完 ${Math.round(lastDone / 1000)}s`)
 
