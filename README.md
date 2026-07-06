@@ -15,13 +15,14 @@
 
 当前以 Claude Agent SDK 为默认引擎(与 Claude Code 同源),OpenAI 引擎同时支持 **Responses** 与 **Chat Completions** 两种协议,在桌面层提供 CLI 给不了的体验:
 
-> **多厂商一把钥匙**:OpenAI 引擎的 **Chat Completions** 协议可直连几乎所有兼容端点 —— DeepSeek / 通义千问 DashScope / Grok(xAI)/ new-api·one-api·LiteLLM 网关 / vLLM·Ollama·LM Studio 自部署,全部内置 Provider 预设(已用 DeepSeek 与 new-api 网关真实 E2E 验证,含多轮上下文)。Claude 引擎走 Anthropic Messages 协议,DeepSeek/Kimi/智谱 GLM 官方 Anthropic 兼容端点亦可直连。
+> **任何厂商模型都是真编码 Agent,不只是聊天**:OpenAI 引擎内置原生工具调用循环(bash / 读写文件 / 精确编辑 / 列目录,带权限审批与路径牢笼)——选 DeepSeek / 通义千问 / Grok / 网关 / vLLM·Ollama 本地模型,**无需安装任何外部 CLI**,就能在 CaoGen 里改代码跑命令(已用 DeepSeek 真实 E2E:模型自主创建/编辑文件、执行命令,7/7 通过)。全部厂商内置 Provider 预设;Claude 引擎走 Anthropic 协议,DeepSeek/Kimi/智谱官方端点亦可直连。
 
 - **多会话并行** — 同时在多个项目上运行 Agent,侧栏一键切换,互不阻塞
 - **真子代理编排(闭环)** — 主 Agent 一次派发最多 33 个子 Agent 并行;全部完成后结果**自动汇总回灌父 Agent**,由其总结成败、评估冲突、给出合并顺序(32 并发实测:派发 655ms,全部完成 2s)
 - **Worktree 隔离 + PR** — 每个 Agent 默认独立 Git worktree;合并前冲突风险明示,可一键生成 patch / 应用回主工作区 / 创建 PR(gh/glab)
 - **跨厂商故障切换** — 厂商余额耗尽/限流/宕机时自动切到健康厂商重试,任务不中断,切换过程在聊天流透明标注
-- **多引擎架构** — Engine 接口 + 注册表:Claude Agent SDK(默认)、OpenAI(Responses/Chat 双协议)、Codex CLI、Gemini CLI;Dock 启动的 PATH 缺失已修复,CLI 探测可靠
+- **原生编码 Agent(零外部依赖)** — OpenAI 引擎内置工具调用循环:bash/read/write/edit/list 五工具、按权限模式审批(默认询问/自动接受编辑/规划只读/跳过)、文件操作路径牢笼、40 轮防失控;DeepSeek 真实 E2E 7/7
+- **多引擎架构** — Engine 接口 + 注册表:Claude Agent SDK(默认)、OpenAI(Responses/Chat 双协议 + 原生工具)、Codex CLI、Gemini CLI(可选外挂)
 - **迁移级交互** — `@` 文件、多图粘贴/拖拽、图片 OCR(macOS Vision 零依赖)、斜杠命令、`Esc Esc` / `/rewind` 检查点回溯(对话回退**即时**截断 SDK 上下文)
 - **内置浏览器批注** — 选区批注 + **DOM 圈选**(悬停高亮点选元素、按元素裁剪截图)+ 页面只读观测(文本/控制台错误/网络失败)一键发给 Agent 复验
 - **Hooks** — 文件修改后 / 每轮结束后自动执行自定义 shell 命令(如格式化/跑测试),输出回显时间线
@@ -56,7 +57,7 @@
   - 已登录 Claude Code(`claude` CLI)或设置 `ANTHROPIC_API_KEY`(Claude 引擎)
   - 任意厂商 API Key —— 设置页选预设(DeepSeek / Qwen / Grok / 网关 / 本地 Ollama 等),
     OpenAI 引擎 Chat Completions 协议直连,无需 Claude 账号
-- 可选:安装 `codex` / `gemini` CLI 解锁对应原生引擎(应用会自动探测)
+- 可选:装有 `codex` / `gemini` CLI 的用户,可额外选用这两个 CLI 作为会话引擎(复用其原生沙箱/账号);**不装也不影响任何功能**——CaoGen 自带完整编码 Agent 能力
 
 ## 开发
 
@@ -86,6 +87,9 @@ CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
 
 # 32 子代理并发压测(吞吐/时延/成本统计 + 结果正确性抽查)
 CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
+
+# 原生编码 Agent E2E(模型经工具调用真实创建/编辑文件、执行命令)
+CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
 ```
 
 ## 打包分发 / 发布
