@@ -13,7 +13,8 @@ import type {
   PermissionRequestInfo,
   SendMessagePayload,
   SessionMeta,
-  TranscriptEntry
+  TranscriptEntry,
+  UsageTotals
 } from '../shared/types'
 
 type CodexChildProcess = ChildProcessByStdio<null, Readable, Readable>
@@ -48,6 +49,8 @@ export class CodexEngine implements Engine {
   private interrupting = false
   /** 本轮累积的助手文本(汇成一条 assistant-message 落盘) */
   private assistantText = ''
+  /** turn.completed 上报的 token 用量(实测 schema) */
+  private turnUsage?: UsageTotals
   /** stdout 行缓冲,跨 data chunk 拼接 */
   private stdoutBuf = ''
   private stderrBuf = ''
@@ -119,7 +122,9 @@ export class CodexEngine implements Engine {
   }
 
   private spawnTurn(prompt: string): void {
-    const args = ['exec', '--json']
+    // --skip-git-repo-check:codex exec 默认拒绝在非 git 目录运行;
+    // CaoGen 自己管权限与 worktree 隔离,不需要 CLI 这层限制(实测必需)。
+    const args = ['exec', '--json', '--skip-git-repo-check']
     // 'auto' 是 CaoGen 调度哨兵,不透传给 CLI
     if (this.meta.model && this.meta.model !== AUTO_MODEL) {
       args.push('--model', this.meta.model)
@@ -201,7 +206,59 @@ export class CodexEngine implements Engine {
     const evt = parsed as Record<string, unknown>
     const type = typeof evt.type === 'string' ? evt.type : ''
 
-    // 助手文本增量:兼容 {type:'message'|'assistant'|'item.completed', text|delta|content}
+    // 实测 schema(codex-cli 0.142):{type:'item.completed', item:{type, text, id}}
+    // item.type: agent_message=正文 / reasoning=思考 / command_execution 等=工具
+    if (type === 'item.completed' && evt.item && typeof evt.item === 'object') {
+      const item = evt.item as Record<string, unknown>
+      const itemType = typeof item.type === 'string' ? item.type : ''
+      const itemText = typeof item.text === 'string' ? item.text : ''
+      if (itemType === 'agent_message' && itemText) {
+        this.emit({ kind: 'text-delta', text: itemText })
+        this.assistantText += itemText
+        return
+      }
+      if (itemType === 'reasoning' && itemText) {
+        this.emit({ kind: 'thinking-delta', text: itemText })
+        return
+      }
+      if (/command|tool|exec|patch|file/i.test(itemType)) {
+        const toolUseId = typeof item.id === 'string' ? item.id : randomUUID()
+        const name =
+          (typeof item.command === 'string' && item.command) ||
+          (typeof item.name === 'string' && item.name) ||
+          itemType
+        this.emit({ kind: 'tool-start', toolUseId, name })
+        const output =
+          (typeof item.aggregated_output === 'string' && item.aggregated_output) ||
+          (typeof item.output === 'string' && item.output) ||
+          itemText
+        if (output) {
+          this.emit({
+            kind: 'tool-result',
+            toolUseId,
+            content: output.slice(0, 20_000),
+            isError: item.status === 'failed'
+          })
+        }
+        return
+      }
+      return // 其余 item(如 todo_list)静默
+    }
+
+    // 实测 schema:{type:'turn.completed', usage:{input_tokens, cached_input_tokens, output_tokens}}
+    if (type === 'turn.completed' && evt.usage && typeof evt.usage === 'object') {
+      const u = evt.usage as Record<string, unknown>
+      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+      this.turnUsage = {
+        input: n(u.input_tokens),
+        output: n(u.output_tokens),
+        cacheRead: n(u.cached_input_tokens),
+        cacheCreation: 0
+      }
+      return
+    }
+
+    // 助手文本增量:兼容 {type:'message'|'assistant', text|delta|content}(旧 schema 防御)
     const textPiece = extractText(evt)
     if (textPiece) {
       this.emit({ kind: 'text-delta', text: textPiece })
@@ -256,8 +313,10 @@ export class CodexEngine implements Engine {
       subtype: isError ? (subtype === 'success' ? 'error' : subtype) : 'success',
       isError,
       durationMs,
+      usage: this.turnUsage,
       resultText: isError ? errorText : text || undefined
     })
+    this.turnUsage = undefined
     if (isError && errorText) {
       this.setStatus('error', errorText)
     } else {
