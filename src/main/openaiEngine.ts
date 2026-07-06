@@ -2,6 +2,13 @@ import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { TranscriptWriter } from './transcript'
 import { decryptToken, getProvider } from './providers'
+import { getSettings } from './settings'
+import {
+  EDIT_TOOLS,
+  OPENAI_CODING_TOOLS,
+  READONLY_TOOLS,
+  executeCodingTool
+} from './openaiTools'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
@@ -23,9 +30,23 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
 /** Chat Completions 多轮历史消息(text 或 text+图片混合内容) */
 type ChatContent = string | Array<Record<string, unknown>>
 interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: ChatContent
+  role: 'user' | 'assistant' | 'tool' | 'system'
+  content: ChatContent | null
+  /** assistant 消息的工具调用(原样回传给模型维持上下文) */
+  tool_calls?: Array<Record<string, unknown>>
+  /** tool 消息必带:对应的调用 id */
+  tool_call_id?: string
 }
+
+/** 流式累积中的一次工具调用 */
+interface PendingToolCall {
+  id: string
+  name: string
+  argsText: string
+}
+
+/** Agent 循环上限:防模型无限调工具烧穿 */
+const MAX_TOOL_ITERATIONS = 40
 
 /**
  * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
@@ -47,8 +68,15 @@ export class OpenAIEngine implements Engine {
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
-  /** chat 协议的多轮历史(user/assistant 交替);responses 协议不使用 */
+  /** chat 协议的多轮历史(user/assistant/tool);responses 协议不使用 */
   private chatHistory: ChatMessage[] = []
+  /** 挂起的权限审批(chat 协议工具调用) */
+  private readonly pendingPerms = new Map<
+    string,
+    { resolve: (r: { allow: boolean; message?: string }) => void; info: PermissionRequestInfo }
+  >()
+  /** 本轮流式累积的工具调用(SSE delta 分片拼装) */
+  private pendingToolCalls: PendingToolCall[] = []
 
   constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -131,16 +159,49 @@ export class OpenAIEngine implements Engine {
   }
 
   async interrupt(): Promise<void> {
+    // 先拒掉挂起的审批,否则 Agent 循环会永远等在 gateTool 上
+    this.rejectAllPendingPerms('已中断')
     if (!this.abort) return
     this.abort.abort()
   }
 
-  respondPermission(): void {
-    // OpenAI 原生引擎当前不产生 CaoGen 权限请求。
+  /** 中断/销毁时统一拒绝所有挂起审批,防 Agent 循环悬挂 */
+  private rejectAllPendingPerms(message: string): void {
+    for (const [requestId, pending] of this.pendingPerms) {
+      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      pending.resolve({ allow: false, message })
+    }
+    this.pendingPerms.clear()
+  }
+
+  respondPermission(requestId: string, allow: boolean, message?: string): void {
+    const pending = this.pendingPerms.get(requestId)
+    if (!pending) return
+    this.pendingPerms.delete(requestId)
+    this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
+    pending.resolve({ allow, message })
   }
 
   pendingPermissions(): PermissionRequestInfo[] {
-    return []
+    return [...this.pendingPerms.values()].map((p) => p.info)
+  }
+
+  /** 按 permissionMode 决定工具是否需要人工审批;需要则挂起等 UI 决定 */
+  private async gateTool(name: string, input: Record<string, unknown>, toolUseId: string): Promise<{ allow: boolean; message?: string }> {
+    const mode = this.meta.permissionMode
+    if (mode === 'bypassPermissions') return { allow: true }
+    if (READONLY_TOOLS.has(name)) return { allow: true }
+    if (mode === 'plan') {
+      return { allow: false, message: '规划模式:只允许只读工具(read_file/list_dir),不执行写入或命令' }
+    }
+    if (mode === 'acceptEdits' && EDIT_TOOLS.has(name)) return { allow: true }
+    // default 模式的写入/bash,以及 acceptEdits 模式的 bash → 人工审批
+    const requestId = randomUUID()
+    const info: PermissionRequestInfo = { requestId, toolName: name, input, toolUseId }
+    this.emit({ kind: 'permission-request', request: info })
+    return new Promise((resolve) => {
+      this.pendingPerms.set(requestId, { resolve, info })
+    })
   }
 
   getTranscript(): TranscriptEntry[] {
@@ -167,6 +228,7 @@ export class OpenAIEngine implements Engine {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.rejectAllPendingPerms('会话已关闭')
     this.abort?.abort()
     this.abort = null
     this.setStatus('closed')
@@ -213,9 +275,11 @@ export class OpenAIEngine implements Engine {
   }
 
   /**
-   * Chat Completions(/v1/chat/completions)一轮:
-   * 追加本轮 user 消息到历史 → 全量历史发送 → SSE 流式消费 →
-   * 成功后把 assistant 回复也入历史(失败/中断则回滚本轮 user)。
+   * Chat Completions(/v1/chat/completions)一轮 = 一个 Agent 循环:
+   * user 消息入历史 → 模型流式回复;若回工具调用(bash/read/write/edit/list),
+   * 按 permissionMode 审批后真实执行,结果作为 tool 消息回给模型,循环直到
+   * 模型给出最终文本或达 MAX_TOOL_ITERATIONS。这让任何 Chat 协议模型
+   * (DeepSeek/Qwen/Grok/网关/本地)在 CaoGen 里都是真编码 Agent。
    */
   private async runChatCompletion(
     payload: SendMessagePayload,
@@ -226,31 +290,111 @@ export class OpenAIEngine implements Engine {
     this.chatHistory.push(userMessage)
 
     try {
-      const body = {
-        model: this.effectiveModel(),
-        messages: this.chatHistory,
-        stream: true,
-        stream_options: { include_usage: true }
+      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        if (controller.signal.aborted) throw new Error('已中断')
+        this.pendingToolCalls = []
+        // 每次循环重置流式文本缓冲(assistantText 聚合本轮所有文本段)
+        const textBefore = this.assistantText
+
+        const body = {
+          model: this.effectiveModel(),
+          messages: [this.systemMessage(), ...this.chatHistory],
+          tools: OPENAI_CODING_TOOLS,
+          stream: true,
+          stream_options: { include_usage: true }
+        }
+        const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${auth.token}`,
+            'content-type': 'application/json',
+            ...auth.headers
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        })
+        if (!res.ok) throw new Error(await formatOpenAIError(res))
+        await this.consumeChatStream(res)
+
+        const segmentText = this.assistantText.slice(textBefore.length).trim()
+        // 部分端点省略 tool_call id / 空槽:补全 id、丢掉没有函数名的碎片
+        const toolCalls = this.pendingToolCalls
+          .filter((c) => c.name)
+          .map((c) => ({ ...c, id: c.id || `call_${randomUUID().slice(0, 12)}` }))
+        this.pendingToolCalls = []
+
+        if (toolCalls.length === 0) {
+          // 最终文本回复:入历史,循环结束
+          if (segmentText) this.chatHistory.push({ role: 'assistant', content: segmentText })
+          return
+        }
+
+        // assistant(含 tool_calls)入历史 —— 模型下一轮需要看到自己的调用
+        this.chatHistory.push({
+          role: 'assistant',
+          content: segmentText || null,
+          tool_calls: toolCalls.map((c) => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: c.argsText }
+          }))
+        })
+
+        // 逐个执行(审批 → 执行 → 事件 → tool 消息回灌)
+        for (const call of toolCalls) {
+          if (controller.signal.aborted) throw new Error('已中断')
+          let args: Record<string, unknown> = {}
+          try {
+            args = call.argsText ? (JSON.parse(call.argsText) as Record<string, unknown>) : {}
+          } catch {
+            // 参数不是合法 JSON:如实回给模型让它重试
+          }
+          this.emit({ kind: 'tool-start', toolUseId: call.id, name: call.name })
+          this.emit({
+            kind: 'assistant-message',
+            blocks: [{ type: 'tool_use', id: call.id, name: call.name, input: args }]
+          })
+
+          const gate = await this.gateTool(call.name, args, call.id)
+          let resultText: string
+          let isError: boolean
+          if (!gate.allow) {
+            resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
+            isError = true
+          } else {
+            const exec = await executeCodingTool(call.name, args, this.meta.cwd)
+            resultText = exec.output
+            isError = !exec.ok
+          }
+          this.emit({ kind: 'tool-result', toolUseId: call.id, content: resultText, isError })
+          this.chatHistory.push({ role: 'tool', tool_call_id: call.id, content: resultText })
+        }
       }
-      const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${auth.token}`,
-          'content-type': 'application/json',
-          ...auth.headers
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal
+      // 达迭代上限:如实告知(极少发生;防御无限循环)
+      this.appendText(`\n\n[已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次,任务可能未完成;请拆分任务后继续]`)
+      this.chatHistory.push({
+        role: 'assistant',
+        content: `已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次`
       })
-      if (!res.ok) throw new Error(await formatOpenAIError(res))
-      await this.consumeChatStream(res)
-      const text = this.assistantText.trim()
-      if (text) this.chatHistory.push({ role: 'assistant', content: text })
     } catch (err) {
-      // 本轮失败:回滚 user 消息,避免下一轮重复发送半截上下文
-      if (this.chatHistory[this.chatHistory.length - 1] === userMessage) this.chatHistory.pop()
+      // 本轮失败:回滚到本轮 user 消息之前,避免下一轮重复发送半截上下文
+      const idx = this.chatHistory.indexOf(userMessage)
+      if (idx !== -1) this.chatHistory.length = idx
       throw err
     }
+  }
+
+  /** 编码 Agent 系统提示:工作目录 + 人设(每请求现算,设置变更即时生效) */
+  private systemMessage(): ChatMessage {
+    const persona = getSettings().persona.trim()
+    const lines = [
+      '你是 CaoGen 桌面工作室里的编码 Agent。',
+      `当前工作目录: ${this.meta.cwd}`,
+      '你可以使用工具(bash/read_file/write_file/edit_file/list_dir)读写项目文件、执行命令。',
+      '修改文件前先读它;优先用 edit_file 做精确修改;完成后简要说明做了什么。',
+      persona
+    ].filter(Boolean)
+    return { role: 'system', content: lines.join('\n') }
   }
 
   /** 消费 Chat Completions SSE 流(choices[].delta.content + 末尾 usage 块) */
@@ -298,6 +442,20 @@ export class OpenAIEngine implements Engine {
       const choices = Array.isArray(record.choices) ? (record.choices as Array<Record<string, unknown>>) : []
       const delta = choices[0]?.delta as Record<string, unknown> | undefined
       if (typeof delta?.content === 'string' && delta.content) this.appendText(delta.content)
+      // 工具调用按 index 分片流式到达:逐片拼装 id/name/arguments
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const raw of delta.tool_calls as Array<Record<string, unknown>>) {
+          const index = typeof raw.index === 'number' ? raw.index : 0
+          while (this.pendingToolCalls.length <= index) {
+            this.pendingToolCalls.push({ id: '', name: '', argsText: '' })
+          }
+          const slot = this.pendingToolCalls[index]
+          if (typeof raw.id === 'string' && raw.id) slot.id = raw.id
+          const fn = raw.function as Record<string, unknown> | undefined
+          if (typeof fn?.name === 'string' && fn.name) slot.name += fn.name
+          if (typeof fn?.arguments === 'string') slot.argsText += fn.arguments
+        }
+      }
       // usage 通常出现在最后一个块(stream_options.include_usage)
       if (record.usage) this.applyChatUsage(record)
     }
