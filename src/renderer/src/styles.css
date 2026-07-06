@@ -950,6 +950,102 @@ textarea {
   flex-shrink: 0;
 }
 
+/* ---------- 聊天头图标按钮 ---------- */
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.icon-btn-active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid #569cd6;
+  outline-offset: 1px;
+}
+
+.header-icon-glyph {
+  display: block;
+}
+
+.header-more-glyph {
+  font-size: 17px;
+  line-height: 1;
+  transform: translateY(-2px);
+}
+
+.header-close-glyph {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.header-more {
+  position: relative;
+  display: inline-flex;
+}
+
+.header-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.32);
+}
+
+.header-more-item {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  border-radius: 6px;
+  padding: 0 9px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+  text-align: left;
+  transition: background 0.14s;
+}
+
+.header-more-item:hover {
+  background: var(--bg-card);
+}
+
+.header-more-item:focus-visible {
+  outline: 2px solid #569cd6;
+  outline-offset: -2px;
+}
+
+.header-more-item .header-icon-glyph {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
 .chat-scroll {
   flex: 1;
   overflow-y: auto;
