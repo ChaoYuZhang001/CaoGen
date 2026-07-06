@@ -524,6 +524,12 @@ export interface PluginRegistryItem {
   enabledSource?: PluginRegistryEnabledSource
   enabledUpdatedAt?: string
   summary?: string
+  /** manifest / frontmatter 声明的版本;未声明为空 */
+  version?: string
+  /** manifest 声明的权限/能力清单(mcp 为环境变量名);仅声明,未经运行时验证 */
+  permissions?: string[]
+  /** 位于 ~/.claude/plugins 下(CaoGen 托管,可卸载) */
+  managed?: boolean
 }
 
 export interface PluginRegistryDiagnostic {
@@ -554,6 +560,8 @@ export interface PluginRegistryScanOptions {
   maxDepth?: number
   maxReadBytes?: number
   includeSiblingProjectMcp?: boolean
+  /** CaoGen 托管插件根;位于其下的条目标记 managed 可卸载 */
+  managedRoot?: string
 }
 
 export interface PluginRegistryRevealResult {
@@ -565,6 +573,21 @@ export interface PluginRegistryRevealResult {
 export interface PluginRegistrySetEnabledResult {
   ok: boolean
   item?: PluginRegistryItem
+  error?: string
+}
+
+/** 本地插件安装结果 */
+export interface PluginInstallResult {
+  ok: boolean
+  installedPath?: string
+  name?: string
+  error?: string
+}
+
+/** 插件卸载结果(回收站式) */
+export interface PluginUninstallResult {
+  ok: boolean
+  trashedTo?: string
   error?: string
 }
 
@@ -1093,6 +1116,10 @@ export interface AgentDeskApi {
   ): Promise<PluginRegistrySetEnabledResult>
   /** MCP 运行态探测:stdio 真握手 / http 可达性(最多 20 项) */
   probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<McpProbeResult[]>
+  /** 本地安装插件:不传路径则弹目录选择器;仅复制入 ~/.claude/plugins */
+  installLocalPlugin(sourcePath?: string, overwrite?: boolean): Promise<PluginInstallResult>
+  /** 卸载托管插件:移入回收站(可恢复),仅限 ~/.claude/plugins 内 */
+  uninstallPlugin(targetPath: string): Promise<PluginUninstallResult>
   listRoutines(): Promise<Routine[]>
   createRoutine(input: CreateRoutineInput): Promise<Routine>
   deleteRoutine(id: string): Promise<boolean>

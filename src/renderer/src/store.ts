@@ -685,6 +685,10 @@ interface AppStore {
   refreshPluginRegistryPanel(): Promise<void>
   /** 探测 MCP server 运行态(真实连接测试) */
   probeMcpRuntime(items: PluginRegistryItem[]): Promise<void>
+  /** 本地安装插件(弹目录选择器);成功后重扫 */
+  installPluginFromLocal(): Promise<void>
+  /** 卸载托管插件(回收站式);成功后重扫 */
+  uninstallManagedPlugin(item: PluginRegistryItem): Promise<void>
   loadPluginRegistryForSlash(): Promise<void>
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
@@ -2409,6 +2413,47 @@ export const useStore = create<AppStore>((set, get) => {
           mcpProbing: false,
           pluginRegistryError: err instanceof Error ? err.message : String(err)
         }
+      }))
+    }
+  },
+
+  async installPluginFromLocal() {
+    set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
+    try {
+      const result = await window.agentDesk.installLocalPlugin()
+      if (!result.ok) {
+        // 用户取消不算错误
+        if (result.error !== 'canceled') {
+          set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
+        }
+        return
+      }
+      set((s) => ({
+        workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` }
+      }))
+      await get().refreshPluginRegistryPanel()
+    } catch (err) {
+      set((s) => ({
+        workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) }
+      }))
+    }
+  },
+
+  async uninstallManagedPlugin(item) {
+    set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
+    try {
+      const result = await window.agentDesk.uninstallPlugin(item.path)
+      if (!result.ok) {
+        set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
+        return
+      }
+      set((s) => ({
+        workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` }
+      }))
+      await get().refreshPluginRegistryPanel()
+    } catch (err) {
+      set((s) => ({
+        workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) }
       }))
     }
   },

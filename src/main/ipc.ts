@@ -54,6 +54,7 @@ import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
 import { ocrImage } from './imageOcr'
 import { probeMcpServers } from './mcpProbe'
+import { installLocalPlugin, uninstallPlugin } from './pluginInstall'
 import {
   pluginRegistryItemKey,
   readPluginRegistryState,
@@ -184,8 +185,14 @@ function normalizePluginScanOptions(options?: PluginRegistryScanOptions): Plugin
     maxFiles: clampPositiveInt(options?.maxFiles, 3000, 5000),
     maxDepth: clampPositiveInt(options?.maxDepth, 6, 12),
     maxReadBytes: clampPositiveInt(options?.maxReadBytes, 256 * 1024, 1024 * 1024),
-    includeSiblingProjectMcp: options?.includeSiblingProjectMcp ?? true
+    includeSiblingProjectMcp: options?.includeSiblingProjectMcp ?? true,
+    managedRoot: caogenPluginsRoot()
   }
+}
+
+/** CaoGen 托管插件目录:本地安装/卸载的唯一操作区 */
+function caogenPluginsRoot(): string {
+  return join(homedir(), '.claude', 'plugins')
 }
 
 function clampPositiveInt(value: number | undefined, fallback: number, max: number): number {
@@ -649,6 +656,27 @@ export function registerIpc(): void {
         readPluginRegistryState(pluginRegistryStateFile())
       )
   )
+
+  // 本地安装:目录选择器 → 校验形似插件 → 复制入 ~/.claude/plugins(路径牢笼)
+  ipcMain.handle('plugins:installLocal', async (e, sourcePath?: string, overwrite?: boolean) => {
+    let dir = typeof sourcePath === 'string' && sourcePath.trim() ? sourcePath : ''
+    if (!dir) {
+      const win = BrowserWindow.fromWebContents(e.sender)
+      const picked = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
+        title: '选择插件目录(需含 plugin.json / SKILL.md / agent .md)',
+        properties: ['openDirectory']
+      })
+      if (picked.canceled || picked.filePaths.length === 0) return { ok: false, error: 'canceled' }
+      dir = picked.filePaths[0]
+    }
+    return installLocalPlugin(dir, caogenPluginsRoot(), { overwrite: overwrite === true })
+  })
+
+  // 卸载:仅限托管目录内,移入回收站(可恢复),绝不 rm -rf
+  ipcMain.handle('plugins:uninstall', (_e, targetPath: string) => {
+    if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '路径无效' }
+    return uninstallPlugin(targetPath, caogenPluginsRoot())
+  })
 
   // MCP 运行态:对选中的 mcp 条目做真实连接探测(stdio 握手 / http 可达)
   ipcMain.handle('plugins:probeMcp', async (_e, items: unknown, sessionId?: string) => {

@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, type Dirent } from 'node:fs'
-import { basename, dirname, extname, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 
 export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
@@ -17,6 +17,12 @@ export interface PluginRegistryItem {
   enabledSource?: PluginRegistryEnabledSource
   enabledUpdatedAt?: string
   summary?: string
+  /** manifest / frontmatter 声明的版本 */
+  version?: string
+  /** manifest 声明的权限/能力(mcp 为环境变量名);仅声明,未经运行时验证 */
+  permissions?: string[]
+  /** 位于 ~/.claude/plugins 托管目录下,可卸载 */
+  managed?: boolean
 }
 
 export interface PluginRegistryDiagnostic {
@@ -57,6 +63,8 @@ export interface PluginRegistryScanOptions {
   maxDepth?: number
   maxReadBytes?: number
   includeSiblingProjectMcp?: boolean
+  /** CaoGen 托管插件根(~/.claude/plugins);位于其下的条目标记 managed 可卸载 */
+  managedRoot?: string
 }
 
 interface ScanLimits {
@@ -111,6 +119,14 @@ export function scanPluginRegistry(
   }
 
   const mergedItems = applyPluginRegistryState(dedupeItems(items), state).sort(compareItems)
+  // 托管标记:位于 managedRoot 下的条目可被 CaoGen 卸载(回收站式)
+  if (options.managedRoot) {
+    const root = resolve(options.managedRoot)
+    for (const item of mergedItems) {
+      const rel = relative(root, resolve(item.path))
+      if (rel && !rel.startsWith('..') && !isAbsolute(rel)) item.managed = true
+    }
+  }
 
   return {
     roots: sourceRoots,
@@ -241,7 +257,9 @@ function scanPluginManifest(sourceRoot: string, items: PluginRegistryItem[], ctx
     sourceRoot,
     path: sourceRoot,
     enabled: inferEnabled(parsed),
-    summary: meta.summary ?? pluginVersionSummary(parsed)
+    summary: meta.summary ?? pluginVersionSummary(parsed),
+    version: cleanOneLine(firstString(parsed.version)),
+    permissions: extractDeclaredPermissions(parsed)
   })
 }
 
@@ -279,7 +297,8 @@ function visitSkillDir(
       sourceRoot,
       path: dir,
       enabled: true,
-      summary: meta.summary
+      summary: meta.summary,
+      version: meta.version
     })
     return
   }
@@ -364,7 +383,8 @@ function scanMcpConfigFile(
       sourceRoot,
       path: normalized,
       enabled: inferEnabled(config),
-      summary: describeMcpServer(config)
+      summary: describeMcpServer(config),
+      permissions: mcpEnvKeyPermissions(config)
     })
   }
 }
@@ -439,14 +459,30 @@ function parseJson(path: string, text: string, ctx: ScanContext): JsonObject | n
   }
 }
 
-function extractTextMetadata(text: string): { name?: string; summary?: string } {
+function extractTextMetadata(text: string): { name?: string; summary?: string; version?: string } {
   const frontmatter = parseFrontmatter(text)
   const name = firstString(frontmatter.name, frontmatter.title)
   const summary = firstString(frontmatter.description, frontmatter.summary) ?? firstMarkdownSummary(text)
   return {
     name: cleanOneLine(name),
-    summary: cleanOneLine(summary)
+    summary: cleanOneLine(summary),
+    version: cleanOneLine(firstString(frontmatter.version))
   }
+}
+
+/**
+ * 从 plugin manifest 提取"声明的"权限/能力清单(permissions/allowedTools/
+ * capabilities 的字符串数组)。仅 manifest 自述,未经运行时验证 —— UI 已如实标注。
+ */
+function extractDeclaredPermissions(obj: JsonObject): string[] | undefined {
+  const out: string[] = []
+  for (const key of ['permissions', 'allowedTools', 'capabilities'] as const) {
+    const value = obj[key]
+    if (Array.isArray(value)) {
+      for (const v of value) if (typeof v === 'string' && v.trim()) out.push(v.trim().slice(0, 60))
+    }
+  }
+  return out.length > 0 ? out.slice(0, 20) : undefined
 }
 
 function extractJsonMetadata(obj: JsonObject): { name?: string; summary?: string } {
@@ -491,6 +527,13 @@ function firstMarkdownSummary(text: string): string | undefined {
   }
 
   return undefined
+}
+
+/** MCP 声明的环境变量名(只取名字,绝不取值)作为权限提示 */
+function mcpEnvKeyPermissions(config: unknown): string[] | undefined {
+  if (!isJsonObject(config) || !isJsonObject(config.env)) return undefined
+  const keys = Object.keys(config.env).filter(Boolean).slice(0, 20)
+  return keys.length > 0 ? keys.map((k) => `环境变量: ${k}`) : undefined
 }
 
 function describeMcpServer(config: unknown): string | undefined {
