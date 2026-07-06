@@ -1,6 +1,6 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-06(第 5 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-06(第 6 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 
 # Context
 
@@ -16,7 +16,7 @@
 
 # Current Focus
 
-**P2 收尾**:4/5 自可做项全完并推送(工具循环/压缩/自学习/图标化)。仅剩 N1 真人迁移实测(需真人计时,不可自动化)+ Gemini 真验(等用户登录)。辅线:用户日常真用报毛刺。
+**P0/P1/P2 中所有可自动化项已全部完成并推送。** 迁移向导资产映射已深化(Roo/Continue/Cline-MCP/Aider)。仅剩两项硬阻塞:N1 真人 30 分钟计时实测、Gemini CLI 真验(等用户 `gemini` 登录)。辅线:用户日常真用报毛刺。
 
 # Goal
 
@@ -51,7 +51,7 @@
 - ~~chat 历史自动压缩~~ ✅ 超 48k token 摘要旧段,不切断 tool_call 配对(e2e 4/4)
 - ~~Responses 协议接工具循环~~ ✅ 官方 OpenAI 模型也成真编码 Agent(e2e 5/5)
 - ~~路由能力表自学习~~ ✅ 按实测成败/延迟给同档模型打平降权(集成 T17 验证)
-- N1 迁移实测 + 迁移向导补 Cursor/Cline/Aider 资产映射
+- N1 迁移实测(真人计时,阻塞)+ ~~迁移向导补 Cursor/Cline/Aider 资产映射~~ ✅ 已补 Roo/Continue/Cline-MCP/Aider CONVENTIONS(T15 验证)
 
 # Blockers
 
