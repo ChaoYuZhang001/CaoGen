@@ -27,7 +27,7 @@
 
 1. 规划方连续 7 天日常使用,新毛刺 ≤1/天且当天修复
 2. ~~arm64 原生包发布~~ ✅ 2026-07-06(架构三重验证;M 系真机启动复验待用户)
-3. Codex + Gemini 原生引擎各 ≥1 次真实对话验证
+3. Codex + Gemini 原生引擎各 ≥1 次真实对话验证 —— **Codex ✅ 2026-07-06(真对话 3/3,修 3 个适配 bug);Gemini 阻塞:等用户完成 `gemini` 登录**
 4. N1 秒表实测 ≤30 分钟(真人,录屏留证)
 5. `test:deep` 全绿保持;新特性必配真实 E2E
 
@@ -55,7 +55,7 @@
 
 | 阻碍 | 等什么 |
 |---|---|
-| Codex/Gemini 真验 | 用户 `codex login` / `gemini` 登录一次 |
+| Gemini 真验(Codex 已✅) | 用户跑一次 `gemini` 完成 Google 登录(当前报 'set an Auth method') |
 | 签名公证 DMG | 用户 Apple Developer 账号($99/年) |
 | Grok / OpenAI 官方真实 E2E | 两家 key 均无额度,等充值 |
 | N1 外部验证 | 需要非项目相关的真实竞品用户 |
@@ -89,7 +89,7 @@
 2. **分发摩擦**:未签名(首开需右键);~~仅 x64~~ 双架构已解决
 3. **泄漏 token 未确认撤销**(对话记录含仓库写权限凭据)
 4. **长会话膨胀**:chat 历史无压缩;OpenAI 引擎工具声明每请求 ~700 token 固定开销
-5. **Codex/Gemini 适配器未经真对话检验**,协议漂移风险(CLI 版本迭代快)
+5. **Gemini 适配器未经真对话检验**(Codex 已实测通过);CLI schema 漂移风险仍在(已按 codex-cli 0.142 实测对齐)
 
 # Success Criteria
 
