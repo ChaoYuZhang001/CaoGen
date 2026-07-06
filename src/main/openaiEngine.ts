@@ -478,10 +478,24 @@ export class OpenAIEngine implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
-  /** 当前 Provider 选择的 OpenAI 协议;未配置默认 responses(官方 API) */
+  /**
+   * 当前 Provider 的 OpenAI 协议。显式配置优先;未配置时按端点智能默认:
+   * OpenAI 官方(或未配 Provider)→ responses;任何第三方端点 → chat
+   * (Chat Completions 是通用协议,第三方几乎都不实现 Responses ——
+   * 之前默认 responses 会让 DeepSeek/网关直接 404)。
+   */
   private protocol(): OpenAIProtocol {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
-    return provider?.openaiProtocol === 'chat' ? 'chat' : 'responses'
+    if (provider?.openaiProtocol === 'chat') return 'chat'
+    if (provider?.openaiProtocol === 'responses') return 'responses'
+    const baseUrl = (provider?.baseUrl ?? '').trim()
+    if (!baseUrl) return 'responses'
+    try {
+      const host = new URL(baseUrl).host
+      return host === 'api.openai.com' ? 'responses' : 'chat'
+    } catch {
+      return 'chat'
+    }
   }
 
   private async consumeResponse(res: Response): Promise<void> {
@@ -579,7 +593,11 @@ export class OpenAIEngine implements Engine {
 
   private authConfig(): { baseUrl: string; token: string; headers: Record<string, string> } {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
-    const baseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
+    let baseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
+    // 用户把为 Claude 引擎准备的 Anthropic 兼容 Provider(…/anthropic)用在
+    // OpenAI 引擎上时,剥掉子路径回到裸域 —— DeepSeek 等厂商在裸域同时提供
+    // /v1/chat/completions,直接可用而非 404。
+    if (this.protocol() === 'chat') baseUrl = baseUrl.replace(/\/anthropic$/, '')
     const token = provider ? decryptToken(provider.encryptedToken) : process.env.OPENAI_API_KEY || ''
     return { baseUrl, token, headers: parseHeaders(provider?.customHeaders) }
   }

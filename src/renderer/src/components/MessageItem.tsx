@@ -28,10 +28,12 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
     case 'user':
       return (
         <div className="msg-user">
-          <div className="msg-user-head">
-            <div className="msg-user-label">{t('you')}</div>
-            {item.checkpointId && <RewindButton messageId={item.checkpointId} sourceText={item.text} />}
-          </div>
+          {/* 右对齐气泡本身已表明是用户消息,不再冗余标注"你";头部仅在有回溯按钮时渲染 */}
+          {item.checkpointId && (
+            <div className="msg-user-head">
+              <RewindButton messageId={item.checkpointId} sourceText={item.text} />
+            </div>
+          )}
           {item.text && <div className="msg-user-text">{item.text}</div>}
           {item.attachments && item.attachments.length > 0 && (
             <div className="msg-user-attachments">
@@ -84,7 +86,12 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
         <div className={`turn-result ${item.isError ? 'turn-result-error' : ''}`}>
           {item.isError ? (
             <>
-              <span className="turn-result-tag">{t('turnErrorTag', { subtype: item.subtype })}</span>
+              {/* subtype 为 success/空时不显示——"本轮异常(success)"是自相矛盾的 */}
+              <span className="turn-result-tag">
+                {item.subtype && item.subtype !== 'success'
+                  ? t('turnErrorTag', { subtype: item.subtype })
+                  : t('turnErrorPlain')}
+              </span>
               {item.resultText && <span className="turn-result-text">{item.resultText}</span>}
             </>
           ) : (

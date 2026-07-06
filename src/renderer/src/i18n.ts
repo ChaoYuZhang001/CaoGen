@@ -65,6 +65,7 @@ const DICT: Dict = {
   thinkingProcess: { zh: '思考过程', en: 'Thinking' },
   turnDone: { zh: '本轮完成', en: 'Turn completed' },
   turnErrorTag: { zh: '本轮异常({subtype})', en: 'Turn error ({subtype})' },
+  turnErrorPlain: { zh: '本轮异常', en: 'Turn error' },
   cumulative: { zh: '累计', en: 'Total' },
   routingTitle: { zh: '智能调度决策', en: 'Smart routing decision' },
   failoverTitle: { zh: '厂商故障自动切换', en: 'Automatic provider failover' },

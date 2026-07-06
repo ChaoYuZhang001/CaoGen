@@ -228,6 +228,8 @@ export class AgentSession implements Engine {
   private resumeId?: string
   /** chat/both 回退后的 SDK resume 截断点;与 resumeId 一起传给 SDK。 */
   private resumeAtId?: string
+  /** start() 时的 Provider 环境指纹;send 时若已变(如后填 key)则重建引擎 */
+  private envFingerprint = ''
   private disposed = false
   private turnStartedAt = 0
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
@@ -378,6 +380,7 @@ export class AgentSession implements Engine {
     if (this.disposed) return
     const gen = ++this.generation
     this.setStatus('starting')
+    this.envFingerprint = this.providerEnvFingerprint()
     try {
       const sdk = await loadSdk()
       const settings = getSettings()
@@ -459,11 +462,63 @@ export class AgentSession implements Engine {
     // 新一轮:重置故障切换尝试记录(仅在本轮内防打转)
     this.lastUserPayload = payload
     this.triedProviders = new Set([this.meta.providerId])
+    // Provider 凭据在会话启动后变了(典型:先建会话后填 key)→ 旧 query 的
+    // env 已过期,SDK 会一直报 "Not logged in"。重建引擎再推,填 key 即生效。
+    if (this.query && !this.failoverBusy && this.envFingerprint !== this.providerEnvFingerprint()) {
+      void this.rebuildEngineThenPush(payload)
+      return
+    }
     // 自动调度:挑模型 → setModel → 透明事件,完成后再推消息保证顺序
     if (this.meta.model === AUTO_MODEL) {
       void this.autoRouteThenPush(payload)
     } else {
       void this.pushUserMessage(payload)
+    }
+  }
+
+  /** Provider 环境指纹:providerId + 是否有 token + baseUrl + 自定义头 */
+  private providerEnvFingerprint(): string {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    if (!provider) return `none:${this.meta.providerId ?? ''}`
+    return [
+      provider.id,
+      decryptToken(provider.encryptedToken) ? 'token' : 'no-token',
+      provider.baseUrl,
+      provider.customHeaders ?? ''
+    ].join('|')
+  }
+
+  /** 凭据变更后的引擎重建:关旧 query → 以 resume 延续上下文重启 → 推本轮消息 */
+  private async rebuildEngineThenPush(payload: NormalizedSendPayload): Promise<void> {
+    this.failoverBusy = true
+    try {
+      this.generation++
+      for (const [requestId, pending] of this.pending) {
+        pending.resolve({ behavior: 'deny', message: '引擎重建,操作作废' })
+        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      }
+      this.pending.clear()
+      this.input.end()
+      try {
+        this.query?.close()
+      } catch {
+        // 进程可能已退出
+      }
+      this.query = null
+      this.input = new Pushable<SDKUserMessage>()
+      this.resumeId = this.meta.sdkSessionId || this.resumeId
+      await this.start()
+      if (!this.query) return // start 失败已置 error
+      this.setStatus('running')
+      if (this.meta.model === AUTO_MODEL) {
+        void this.autoRouteThenPush(payload)
+      } else {
+        void this.pushUserMessage(payload)
+      }
+    } catch (err) {
+      this.setStatus('error', errText(err))
+    } finally {
+      this.failoverBusy = false
     }
   }
 
