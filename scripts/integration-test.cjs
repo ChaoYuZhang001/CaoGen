@@ -988,6 +988,22 @@ async function main() {
     eq(d.model, 'kimi-k2-0711-preview', '国产档位:复杂任务应选 k2(q3)')
   })
 
+  // ---- T17 路由自学习:同档模型按实测可靠性打平改判 ----
+  await test('T17 路由自学习:可靠性降权同档失败模型', async () => {
+    const stats = M('main/modelStats.js')
+    const s = M('main/scheduler.js')
+    const os = require('node:os'), fs = require('node:fs'), path = require('node:path')
+    stats.configureModelStatsDir(fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-t17-')))
+    // deepseek-chat 与 glm-4.5 同为 quality 档;让 glm 连续失败、deepseek 连续成功
+    for (let i = 0; i < 8; i++) { stats.recordModelSuccess('deepseek-chat', 800); stats.recordModelFailure('glm-4.5') }
+    // 会话当前在 A(glm);均衡策略下,自学习应让位给可靠的 deepseek(跨厂商)
+    const d = s.pickModelAcrossProviders({
+      candidates: [{ id: 'a', name: 'A', models: ['glm-4.5'] }, { id: 'b', name: 'B', models: ['deepseek-chat'] }],
+      text: '写个函数', strategy: 'balanced', currentProviderId: 'a'
+    })
+    eq(d.model, 'deepseek-chat', '自学习:可靠模型胜出(即便当前厂商是失败的 glm)')
+  })
+
   // ---------------------------------------------------------------- 汇总
   const pass = results.filter((r) => r.ok).length
   console.log('\n========== CaoGen 集成测试结果 ==========')

@@ -1,4 +1,5 @@
 import type { SchedulerStrategy } from '../shared/types'
+import { reliabilityScore } from './modelStats'
 
 /** 模型能力档:quality/cost/speed 各 1-3(3 最高)。tier 用于按复杂度匹配。 */
 interface ModelCap {
@@ -160,8 +161,13 @@ export function pickModelAcrossProviders(opts: {
   if (pool.length === 0) return null
 
   // 比较器:返回 true 表示 b 优于 a。各策略主排序后,统一打平顺序:
-  // 留在当前厂商 > 成本更低。
+  // 实测可靠性(自学习)> 留在当前厂商 > 成本更低。
+  // 可靠性按 0.15 档量化打平,避免微小波动频繁改判(仍以质量档为主排序)。
+  const relTier = (model: string): number => Math.round(reliabilityScore(model) / 0.15)
   const tieBreak = (a: Entry, b: Entry): boolean => {
+    const ra = relTier(a.model)
+    const rb = relTier(b.model)
+    if (ra !== rb) return rb > ra
     if (a.isCurrent !== b.isCurrent) return b.isCurrent
     return b.cap.cost < a.cap.cost
   }

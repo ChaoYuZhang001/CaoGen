@@ -11,6 +11,7 @@ import { readReferencedFiles } from './fileSuggest'
 import { buildMemorySystemAppend } from './memoryInject'
 import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
+import { recordModelFailure, recordModelSuccess } from './modelStats'
 import {
   pickModelAcrossProviders,
   recordSuccess,
@@ -230,6 +231,8 @@ export class AgentSession implements Engine {
   private resumeAtId?: string
   /** start() 时的 Provider 环境指纹;send 时若已变(如后填 key)则重建引擎 */
   private envFingerprint = ''
+  /** auto 模式本轮路由选中的真实模型名(供结束时记模型实测统计) */
+  private lastRoutedModel = ''
   private disposed = false
   private turnStartedAt = 0
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
@@ -554,6 +557,7 @@ export class AgentSession implements Engine {
         currentProviderId: this.meta.providerId
       })
       if (decision) {
+        this.lastRoutedModel = decision.model // 供本轮结束记模型实测统计
         this.emit({
           kind: 'routing',
           model: decision.model,
@@ -1098,16 +1102,21 @@ export class AgentSession implements Engine {
           })
           this.setStatus('idle')
         }
-        // Provider 健康度:成功记成功+延迟,异常记失败
+        // Provider 健康度 + 模型实测统计:成功记成功+延迟,异常记失败
+        // auto 模式记本轮路由选中的真实模型名,固定模式记 meta.model
+        const activeModel =
+          this.meta.model && this.meta.model !== AUTO_MODEL ? this.meta.model : this.lastRoutedModel
         if (isError) {
           const errorText = typeof msg.result === 'string' ? msg.result : subtype
           recordFailure(this.meta.providerId, errorText)
+          if (activeModel) recordModelFailure(activeModel)
           // 厂商侧故障:先尝试切换厂商续跑;不可切换或无处可切时按原样收尾
           void this.tryFailover(errorText).then((switched) => {
             if (!switched) finish()
           })
         } else {
           recordSuccess(this.meta.providerId, latency)
+          if (activeModel) recordModelSuccess(activeModel, latency)
           this.lastUserPayload = null // 本轮成功,清除重试凭据
           finish()
         }
