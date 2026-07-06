@@ -127,7 +127,7 @@ try {
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
     await clickByText(cdp, '创建')
-    await waitForText(cdp, '⎇ Worktree', 10_000)
+    await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
     await waitForText(cdp, 'OpenAI 引擎缺少 API Key', 10_000)
   })
   await screenshot(cdp, '03-session')
@@ -140,7 +140,7 @@ try {
   })
 
   await check(cdp, 'worktree merge UI inspects an applyable patch', async () => {
-    await clickByText(cdp, '⎇ Worktree')
+    await clickByAriaLabel(cdp, '⎇ Worktree') // 图标按钮
     await waitForText(cdp, '隔离工作区', 10_000)
     await waitForText(cdp, '改动\n1', 10_000)
     await clickByText(cdp, '检查合并')
@@ -152,23 +152,28 @@ try {
   await screenshot(cdp, '04-worktree-merge')
 
   await check(cdp, 'workbench panels open from chat toolbar', async () => {
-    const expected = [
+    // 常显图标(按 aria-label 点击):文件 / 终端
+    await clickByAriaLabel(cdp, '▣ 文件')
+    await waitForText(cdp, 'README.md', 10_000)
+    await clickByAriaLabel(cdp, '❯ 终端')
+    await waitForText(cdp, '终端', 10_000)
+    // 低频项在 '⋯ 更多' 下拉里:先展开菜单,菜单项按文本点击
+    const overflow = [
       ['插件', '插件生态'],
       ['Routines', 'Routines'],
       ['记忆', '项目记忆'],
-      ['▣ 文件', 'README.md'],
-      ['子 Agent', '子代理编排'],
-      ['❯ 终端', '终端']
+      ['子 Agent', '子代理编排']
     ]
-    for (const [button, marker] of expected) {
-      await clickByText(cdp, button)
+    for (const [item, marker] of overflow) {
+      await clickByAriaLabel(cdp, '更多操作') // 打开 ⋯ 更多下拉
+      await clickByText(cdp, item)
       await waitForText(cdp, marker, 10_000)
     }
   })
   await screenshot(cdp, '05-workbench-panels')
 
   await check(cdp, 'browser native view is removed when switching panels', async () => {
-    await clickByText(cdp, '◉ 浏览器')
+    await clickByAriaLabel(cdp, '◉ 浏览器')
     await waitForText(cdp, '内置浏览器', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 1, 10_000)
     await setInputByPlaceholder(cdp, '输入 URL 或域名', pathToFileURL(path.join(projectDir, 'browser-fixture.html')).href)
@@ -181,14 +186,14 @@ try {
     await clickByText(cdp, '发给 Agent')
     await waitForText(cdp, '请基于这个 CaoGen 网页批注定位并修复问题。', 10_000)
     await waitForText(cdp, 'CTA spacing needs a fix', 10_000)
-    await clickByText(cdp, '▣ 文件')
+    await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 0, 10_000)
   })
   await screenshot(cdp, '06-browser-switch')
 
   await check(cdp, 'image and PDF previews render from project files', async () => {
-    await clickByText(cdp, '▣ 文件')
+    await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'logo.png', 10_000)
     await clickFilePreview(cdp, 'logo.png')
     await waitForText(cdp, 'IMAGE Preview', 10_000)
@@ -196,7 +201,7 @@ try {
     assert(image.src.startsWith('data:image/png;base64,'), `image preview did not use data URL: ${image.src.slice(0, 60)}`)
     assert(image.naturalWidth > 0 && image.naturalHeight > 0, `image preview did not decode: ${JSON.stringify(image)}`)
 
-    await clickByText(cdp, '▣ 文件')
+    await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'report.pdf', 10_000)
     await clickFilePreview(cdp, 'report.pdf')
     await waitForText(cdp, 'PDF Preview', 10_000)
@@ -281,6 +286,21 @@ async function screenshot(cdp, name) {
   const file = path.join(runDir, `${name}.png`)
   writeFileSync(file, Buffer.from(shot.data, 'base64'))
   report.screenshots.push(file)
+}
+
+async function clickByAriaLabel(cdp, label) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('[aria-label=${JSON.stringify(label)}]');
+      if (!el) return { ok: false };
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      el.click();
+      return { ok: true };
+    })()`
+  )
+  assert(result?.ok, `aria-label button not found: ${label}`)
+  await sleep(250)
 }
 
 async function clickByText(cdp, text) {
@@ -468,6 +488,19 @@ async function waitForText(cdp, text, timeout = 5000) {
   }
   const body = await visibleText(cdp)
   throw new Error(`text not found: ${text}\nVisible text:\n${body.slice(0, 2000)}`)
+}
+
+async function waitForAriaLabel(cdp, label, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const found = await evalValue(
+      cdp,
+      `!!document.querySelector('[aria-label=${JSON.stringify(label)}]')`
+    )
+    if (found) return
+    await sleep(150)
+  }
+  throw new Error(`aria-label not found: ${label}`)
 }
 
 async function waitForCanvasPixels(cdp, timeout = 10_000) {
