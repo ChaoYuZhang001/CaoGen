@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { TranscriptWriter } from './transcript'
-import { decryptToken, getProvider } from './providers'
+import { decryptToken, getProvider, listProviders } from './providers'
+import {
+  classifyFailure,
+  pickFailoverTarget,
+  pickModelAcrossProviders,
+  recordFailure,
+  recordSuccess
+} from './scheduler'
 import { getSettings } from './settings'
 import {
   EDIT_TOOLS,
@@ -149,9 +156,41 @@ export class OpenAIEngine implements Engine {
     this.turnStartedAt = Date.now()
     this.assistantText = ''
     this.turnUsage = undefined
+    // 新一轮:重置故障切换防打转记录
+    this.triedProviders = new Set([this.meta.providerId])
+    // auto 模式:跨厂商路由(openai 引擎切 Provider 无需重建,authConfig 每请求现读)
+    if (this.meta.model === AUTO_MODEL) this.autoRoute(payload.text)
     this.abort = new AbortController()
     this.setStatus('running')
     void this.runResponse(payload, this.abort)
+  }
+
+  /** 本轮路由选中的模型(meta.model 保持 auto 哨兵,下一轮重新路由) */
+  private routedModel?: string
+
+  /** 跨厂商智能路由:候选 = 所有有 baseUrl 的 Provider(官方 Anthropic 空址不适配本引擎) */
+  private autoRoute(text: string): void {
+    try {
+      // 候选:有端点且已配 key 的厂商(没 key 的选中必失败,不进池)
+      const candidates = listProviders()
+        .filter((p) => p.baseUrl.trim().length > 0 && p.hasToken)
+        .map((p) => ({ id: p.id, name: p.name, models: p.models }))
+      const decision = pickModelAcrossProviders({
+        candidates,
+        text,
+        strategy: getSettings().schedulerStrategy,
+        currentProviderId: this.meta.providerId
+      })
+      if (!decision) return
+      this.routedModel = decision.model
+      if (decision.switchedProvider) {
+        this.meta.providerId = decision.providerId
+      }
+      this.emit({ kind: 'routing', model: decision.model, reason: decision.reason, providerId: decision.providerId })
+      this.emit({ kind: 'meta', meta: { ...this.meta } })
+    } catch (err) {
+      console.error('[caogen] openai 引擎自动路由失败,沿用当前配置:', err)
+    }
   }
 
   rejectSend(message: string): void {
@@ -250,6 +289,8 @@ export class OpenAIEngine implements Engine {
               content: buildInputContent(payload)
             }
           ],
+          // 多轮上下文:链上一轮 response id(Responses API 服务端续上下文)
+          ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
           stream: true
         }
 
@@ -267,11 +308,71 @@ export class OpenAIEngine implements Engine {
         if (!res.ok) throw new Error(await formatOpenAIError(res))
         await this.consumeResponse(res)
       }
+      recordSuccess(this.meta.providerId, Date.now() - this.turnStartedAt)
       this.finishTurn(false)
     } catch (err) {
       const aborted = controller.signal.aborted
-      this.finishTurn(true, aborted ? '已中断' : errText(err), aborted ? 'interrupted' : 'error')
+      if (aborted) {
+        this.finishTurn(true, '已中断', 'interrupted')
+        return
+      }
+      const text = errText(err)
+      recordFailure(this.meta.providerId, text)
+      // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
+      if (await this.tryFailover(text, payload)) return
+      this.finishTurn(true, text, 'error')
     }
+  }
+
+  /** 本轮已试过的厂商(防切换打转);send 时重置 */
+  private triedProviders = new Set<string>()
+  /** Responses 协议的上一轮 response id(服务端多轮上下文) */
+  private lastResponseId?: string
+  private static readonly MAX_FAILOVERS_PER_TURN = 3
+
+  /**
+   * OpenAI 引擎跨厂商故障切换:错误可切换时挑健康厂商换家重试。
+   * 比 Claude 引擎轻得多 —— 无需重建进程,authConfig 每请求现读,
+   * 换 providerId + 模型即可;chat 历史在内存里原样带走。
+   */
+  private async tryFailover(errorText: string, payload: SendMessagePayload): Promise<boolean> {
+    if (this.disposed || !getSettings().failoverEnabled) return false
+    if (this.triedProviders.size > OpenAIEngine.MAX_FAILOVERS_PER_TURN) return false
+    const failure = classifyFailure(errorText)
+    if (!failure.switchable) return false
+
+    const candidates = listProviders()
+      .filter((p) => p.baseUrl.trim().length > 0 && p.hasToken)
+      .map((p) => ({ id: p.id, name: p.name, models: p.models }))
+    const target = pickFailoverTarget({
+      candidates,
+      exclude: this.triedProviders,
+      desiredModel: this.effectiveModel()
+    })
+    if (!target) return false
+
+    const fromId = this.meta.providerId
+    const fromName = listProviders().find((p) => p.id === fromId)?.name ?? fromId ?? '当前厂商'
+    this.triedProviders.add(target.providerId)
+    this.meta.providerId = target.providerId
+    if (target.model) this.routedModel = target.model
+    // Responses 的 response id 不跨厂商;换家后重新开始服务端上下文链
+    this.lastResponseId = undefined
+    this.emit({
+      kind: 'failover',
+      fromProviderId: fromId,
+      toProviderId: target.providerId,
+      fromName,
+      toName: target.name,
+      model: target.model,
+      reason: failure.label
+    })
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+
+    const controller = new AbortController()
+    this.abort = controller
+    await this.runResponse(payload, controller)
+    return true
   }
 
   /**
@@ -544,6 +645,9 @@ export class OpenAIEngine implements Engine {
       }
       if (type === 'response.completed') {
         this.applyUsage(record.response)
+        // 记录 response id 供下一轮 previous_response_id 续上下文
+        const responseId = (record.response as Record<string, unknown> | undefined)?.id
+        if (typeof responseId === 'string' && responseId) this.lastResponseId = responseId
         const text = extractResponseText(record.response)
         if (text && !this.assistantText.includes(text)) this.appendText(text)
       }
@@ -604,6 +708,7 @@ export class OpenAIEngine implements Engine {
 
   private effectiveModel(): string {
     if (this.meta.model && this.meta.model !== AUTO_MODEL) return this.meta.model
+    if (this.routedModel) return this.routedModel // auto 模式:本轮路由结果
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     return provider?.models?.[0] || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
   }
