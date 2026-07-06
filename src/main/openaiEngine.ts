@@ -166,7 +166,7 @@ export class OpenAIEngine implements Engine {
     this.setStatus('starting')
     const auth = this.authConfig()
     if (!auth.token) {
-      this.setStatus('error', 'OpenAI 引擎缺少 API Key:请选择 OpenAI Provider 或设置 OPENAI_API_KEY。')
+      this.setStatus('error', this.missingKeyMessage())
       return
     }
     if (!this.meta.sdkSessionId) {
@@ -320,7 +320,7 @@ export class OpenAIEngine implements Engine {
   private async runResponse(payload: SendMessagePayload, controller: AbortController): Promise<void> {
     try {
       const auth = this.authConfig()
-      if (!auth.token) throw new Error('OpenAI 引擎缺少 API Key:请选择 OpenAI Provider 或设置 OPENAI_API_KEY。')
+      if (!auth.token) throw new Error(this.missingKeyMessage())
 
       if (this.protocol() === 'chat') {
         await this.runChatCompletion(payload, controller, auth)
@@ -947,6 +947,13 @@ export class OpenAIEngine implements Engine {
     this.meta.usage = usage
     this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
     this.emit({ kind: 'meta', meta: { ...this.meta } })
+  }
+
+  /** 缺 key 文案:用当前 Provider 名而非写死 'OpenAI'(DeepSeek 等场景不再误导) */
+  private missingKeyMessage(): string {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    const name = provider?.name || 'OpenAI'
+    return `${name} 缺少 API Key:请在设置里为该 Provider 填写密钥,或设置 OPENAI_API_KEY。`
   }
 
   private authConfig(): { baseUrl: string; token: string; headers: Record<string, string> } {
