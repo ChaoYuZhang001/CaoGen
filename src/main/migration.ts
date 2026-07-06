@@ -59,15 +59,26 @@ export function scanMigration(cwd: string): MigrationScan {
   assets.push(...dirAssets('Windsurf', 'rules', join(cwd, '.windsurf', 'rules')))
   push(fileAsset('Windsurf', 'rules', join(cwd, '.windsurfrules')))
   push(fileAsset('Cline', 'rules', join(cwd, '.clinerules')))
+  assets.push(...dirAssets('Cline', 'rules', join(cwd, '.clinerules')))
   assets.push(...dirAssets('Cline', 'rules', join(cwd, '.clinerules.d')))
+  // Roo Code:.roo/rules/ 目录 + .roorules 单文件
+  push(fileAsset('Roo Code', 'rules', join(cwd, '.roorules')))
+  assets.push(...dirAssets('Roo Code', 'rules', join(cwd, '.roo', 'rules')))
   push(fileAsset('Codex', 'rules', join(cwd, 'AGENTS.md')))
   push(fileAsset('Gemini CLI', 'rules', join(cwd, 'GEMINI.md')))
   push(fileAsset('GitHub Copilot', 'rules', join(cwd, '.github', 'copilot-instructions.md')))
+  assets.push(...dirAssets('GitHub Copilot', 'rules', join(cwd, '.github', 'instructions')))
   push(fileAsset('Aider', 'config', join(cwd, '.aider.conf.yml')))
+  // Aider 约定文件:CONVENTIONS.md(其推荐的 rules 载体)
+  push(fileAsset('Aider', 'rules', join(cwd, 'CONVENTIONS.md')))
+  // Continue:项目级 rules 目录
+  assets.push(...dirAssets('Continue', 'rules', join(cwd, '.continue', 'rules')))
 
   // ---- 项目级 MCP(他家格式) ----
   push(fileAsset('Cursor', 'mcp', join(cwd, '.cursor', 'mcp.json')))
   push(fileAsset('Windsurf', 'mcp', join(cwd, '.windsurf', 'mcp.json')))
+  push(fileAsset('Cline', 'mcp', join(cwd, '.cline', 'mcp.json')))
+  push(fileAsset('Roo Code', 'mcp', join(cwd, '.roo', 'mcp.json')))
 
   // ---- 用户级 ----
   push(fileAsset('Codex', 'rules', join(home, '.codex', 'AGENTS.md')))
@@ -75,6 +86,27 @@ export function scanMigration(cwd: string): MigrationScan {
   push(fileAsset('Cursor', 'mcp', join(home, '.cursor', 'mcp.json')))
   push(fileAsset('Aider', 'config', join(home, '.aider.conf.yml')))
   push(fileAsset('Gemini CLI', 'rules', join(home, '.gemini', 'GEMINI.md')))
+  // Continue 用户级配置(YAML/JSON 皆试)
+  push(fileAsset('Continue', 'config', join(home, '.continue', 'config.yaml')))
+  push(fileAsset('Continue', 'config', join(home, '.continue', 'config.json')))
+  // Cline / Roo 的 VS Code 全局 MCP 设置(macOS 路径;只读扫描)
+  push(
+    fileAsset(
+      'Cline',
+      'mcp',
+      join(
+        home,
+        'Library',
+        'Application Support',
+        'Code',
+        'User',
+        'globalStorage',
+        'saoudrizwan.claude-dev',
+        'settings',
+        'cline_mcp_settings.json'
+      )
+    )
+  )
 
   // Claude Code 本家资产已被引擎原生继承,只作提示不需导入
   const claudeNative =
