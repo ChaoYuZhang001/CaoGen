@@ -977,6 +977,28 @@ async function main() {
     assert(mcp.mcpServers.figma, '.mcp.json 合并失败')
     const second = mig.importAssets(proj, scan.assets.map((a) => a.path))
     assert(/跳过/.test(second), '幂等防护失效')
+
+    // 新覆盖:Roo Code / Continue / Cline MCP / Aider CONVENTIONS.md
+    const proj2 = path.join(tmpRoot, 'migproj2')
+    fs.mkdirSync(path.join(proj2, '.roo', 'rules'), { recursive: true })
+    fs.mkdirSync(path.join(proj2, '.continue', 'rules'), { recursive: true })
+    fs.mkdirSync(path.join(proj2, '.cline'), { recursive: true })
+    fs.writeFileSync(path.join(proj2, '.roorules'), 'roo 单文件规则')
+    fs.writeFileSync(path.join(proj2, '.roo', 'rules', 'a.md'), 'roo 目录规则')
+    fs.writeFileSync(path.join(proj2, '.continue', 'rules', 'c.md'), 'continue 规则')
+    fs.writeFileSync(path.join(proj2, 'CONVENTIONS.md'), 'aider 约定')
+    fs.writeFileSync(path.join(proj2, '.cline', 'mcp.json'), JSON.stringify({ mcpServers: { db: { command: 'node' } } }))
+    const scan2 = mig.scanMigration(proj2)
+    const agents = new Set(scan2.assets.map((a) => a.agent))
+    assert(agents.has('Roo Code'), 'Roo Code 未扫描到')
+    assert(agents.has('Continue'), 'Continue 未扫描到')
+    assert(agents.has('Aider'), 'Aider CONVENTIONS.md 未扫描到')
+    assert(scan2.assets.some((a) => a.agent === 'Cline' && a.kind === 'mcp'), 'Cline MCP 未扫描到')
+    mig.importAssets(proj2, scan2.assets.map((a) => a.path))
+    const cm2 = fs.readFileSync(path.join(proj2, 'CLAUDE.md'), 'utf8')
+    assert(cm2.includes('roo 单文件规则') && cm2.includes('continue 规则') && cm2.includes('aider 约定'), '新来源注入失败')
+    const mcp2 = JSON.parse(fs.readFileSync(path.join(proj2, '.mcp.json'), 'utf8'))
+    assert(mcp2.mcpServers.db, 'Cline MCP 合并失败')
   })
 
   // ---- T16 调度器回归 ----
