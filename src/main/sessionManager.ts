@@ -89,6 +89,12 @@ class SessionManager {
 
   create(opts: CreateSessionOptions): SessionMeta {
     const settings = getSettings()
+    // CLI 引擎(codex/gemini)有自己的账号体系与默认模型:
+    // 不继承全局 defaultModel/defaultProviderId(那是别家厂商的,
+    // 透传会让 CLI 打错端点/报模型不存在 —— 实测踩坑)。
+    const isCliEngine = opts.engine === 'codex' || opts.engine === 'gemini'
+    const defaultModel = isCliEngine ? '' : settings.defaultModel
+    const defaultProviderId = isCliEngine ? '' : settings.defaultProviderId
     const resumeHistory = opts.resumeSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === opts.resumeSdkSessionId)
       : undefined
@@ -99,8 +105,8 @@ class SessionManager {
       orchestrationId: opts.orchestrationId,
       childTaskId: opts.childTaskId,
       childRole: opts.childRole,
-      model: opts.model ?? settings.defaultModel,
-      providerId: opts.providerId ?? settings.defaultProviderId,
+      model: opts.model ?? defaultModel,
+      providerId: opts.providerId ?? defaultProviderId,
       budgetUsd: opts.budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
@@ -126,8 +132,8 @@ class SessionManager {
       baseBranch: worktree.record?.baseBranch,
       baseSha: worktree.record?.baseSha,
       worktreeState: worktree.record?.state,
-      model: opts.model ?? settings.defaultModel,
-      providerId: opts.providerId ?? settings.defaultProviderId,
+      model: opts.model ?? defaultModel,
+      providerId: opts.providerId ?? defaultProviderId,
       budgetUsd: opts.budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
