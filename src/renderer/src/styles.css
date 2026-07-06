@@ -519,6 +519,27 @@ textarea {
   flex-shrink: 0;
 }
 
+/* 会话全文搜索:内容命中卡片 */
+.search-hit-card .history-icon {
+  font-size: 11px;
+}
+
+.search-hit-snippet {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-hit-mark {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 600;
+}
+
 .sidebar-footer {
   padding: 10px 14px;
   border-top: 1px solid var(--border);

@@ -56,6 +56,7 @@ const api: AgentDeskApi = {
   renameSession: (sessionId: string, title: string) =>
     ipcRenderer.invoke('sessions:rename', sessionId, title),
   listHistory: () => ipcRenderer.invoke('history:list'),
+  searchTranscripts: (query: string) => ipcRenderer.invoke('transcripts:search', query),
   setHistoryArchived: (id: string, archived: boolean) =>
     ipcRenderer.invoke('history:setArchived', id, archived),
   setHistoryPinned: (id: string, pinned: boolean) =>

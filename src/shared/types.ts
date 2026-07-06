@@ -971,6 +971,24 @@ export interface TranscriptEntry {
   event: AgentEvent
 }
 
+/** 会话全文搜索:单条命中片段 */
+export interface TranscriptSearchHit {
+  seq: number
+  role: 'user' | 'assistant'
+  /** 命中词前后 ±60 字符的上下文片段 */
+  snippet: string
+}
+
+/** 会话全文搜索:按会话聚合的命中结果 */
+export interface TranscriptSearchResult {
+  sdkSessionId: string
+  title: string
+  cwd: string
+  hits: TranscriptSearchHit[]
+  /** 文件被跳过等异常说明(如转录超过大小上限) */
+  note?: string
+}
+
 export type MenuCommand =
   | { type: 'new-session' }
   | { type: 'settings' }
@@ -1016,6 +1034,8 @@ export interface AgentDeskApi {
   setModel(sessionId: string, model: string): Promise<void>
   renameSession(sessionId: string, title: string): Promise<void>
   listHistory(): Promise<HistoryEntry[]>
+  /** 会话全文搜索:跨历史会话检索转录中的消息内容 */
+  searchTranscripts(query: string): Promise<TranscriptSearchResult[]>
   setHistoryArchived(id: string, archived: boolean): Promise<void>
   setHistoryPinned(id: string, pinned: boolean): Promise<void>
   renameHistory(id: string, title: string): Promise<void>

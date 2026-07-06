@@ -38,6 +38,7 @@ import type {
   StartSuggestion,
   UserMessageAttachmentView,
   TranscriptEntry,
+  TranscriptSearchResult,
   TerminalEvent,
   TerminalInfo,
   UsageTotals,
@@ -163,6 +164,10 @@ interface StreamDeltaBuffer {
 }
 
 const streamDeltaBuffers = new Map<string, StreamDeltaBuffer>()
+
+// 会话全文搜索:防抖定时器 + 递增令牌(丢弃乱序返回的过期结果)
+let transcriptSearchTimer: number | null = null
+let transcriptSearchToken = 0
 
 function isStreamDelta(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text-delta' | 'thinking-delta' }> {
   return event.kind === 'text-delta' || event.kind === 'thinking-delta'
@@ -584,6 +589,9 @@ interface AppStore {
   showSettings: boolean
   showCommandPalette: boolean
   sidebarQuery: string
+  /** 会话全文搜索结果(随 sidebarQuery 防抖刷新;<2 字符时为空) */
+  transcriptSearchResults: TranscriptSearchResult[]
+  transcriptSearchLoading: boolean
   init(): Promise<void>
   handleEvent(sessionId: string, event: AgentEvent, seq: number): void
   handleMemorySuggestion(event: MemorySuggestionEvent): void
@@ -612,6 +620,8 @@ interface AppStore {
   renameHistoryEntry(id: string, title: string): Promise<void>
   deleteHistoryEntry(id: string): Promise<void>
   setSidebarQuery(q: string): void
+  /** 打开全文搜索命中的会话:已打开则切换,否则按 sdkSessionId 从历史恢复 */
+  openTranscriptSearchHit(result: TranscriptSearchResult): Promise<void>
   updateSettings(patch: Partial<AppSettings>): Promise<void>
   setView(view: AppView): void
   openDiffPanel(): Promise<void>
@@ -788,6 +798,8 @@ export const useStore = create<AppStore>((set, get) => {
   projects: [],
   view: 'list',
   sidebarQuery: '',
+  transcriptSearchResults: [],
+  transcriptSearchLoading: false,
   workbench: {
     diffOpen: false,
     diffLoading: false,
@@ -1258,6 +1270,44 @@ export const useStore = create<AppStore>((set, get) => {
 
   setSidebarQuery(q) {
     set({ sidebarQuery: q })
+    // 全文搜索防抖 300ms;<2 字符不搜,直接清空结果
+    if (transcriptSearchTimer !== null) window.clearTimeout(transcriptSearchTimer)
+    transcriptSearchTimer = null
+    const trimmed = q.trim()
+    if (trimmed.length < 2) {
+      set({ transcriptSearchResults: [], transcriptSearchLoading: false })
+      return
+    }
+    set({ transcriptSearchLoading: true })
+    const token = ++transcriptSearchToken
+    transcriptSearchTimer = window.setTimeout(() => {
+      transcriptSearchTimer = null
+      void window.agentDesk
+        .searchTranscripts(trimmed)
+        .then((results) => {
+          if (token !== transcriptSearchToken) return // 已有更新的搜索,丢弃过期结果
+          set({ transcriptSearchResults: results, transcriptSearchLoading: false })
+        })
+        .catch(() => {
+          if (token !== transcriptSearchToken) return
+          set({ transcriptSearchResults: [], transcriptSearchLoading: false })
+        })
+    }, 300)
+  },
+
+  async openTranscriptSearchHit(result) {
+    const state = get()
+    // 已打开的会话直接切换
+    const openId = state.order.find(
+      (id) => state.sessions[id]?.meta.sdkSessionId === result.sdkSessionId
+    )
+    if (openId) {
+      state.selectSession(openId)
+      return
+    }
+    // 未打开:找到对应历史条目,走既有恢复路径
+    const entry = state.history.find((item) => item.sdkSessionId === result.sdkSessionId)
+    if (entry) await state.resumeFromHistory(entry)
   },
 
   async updateSettings(patch) {

@@ -3,7 +3,7 @@ import type * as React from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
-import type { HistoryEntry, SessionMeta, SessionStatus } from '../../../shared/types'
+import type { HistoryEntry, SessionMeta, SessionStatus, TranscriptSearchResult } from '../../../shared/types'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
 
 const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
@@ -62,6 +62,19 @@ function activateByKeyboard(e: React.KeyboardEvent, action: () => void): void {
   action()
 }
 
+/** 片段内高亮命中词(大小写不敏感,只标注首个命中) */
+function highlightSnippet(snippet: string, query: string): React.ReactNode {
+  const idx = snippet.toLowerCase().indexOf(query.toLowerCase())
+  if (idx === -1) return snippet
+  return (
+    <>
+      {snippet.slice(0, idx)}
+      <mark className="search-hit-mark">{snippet.slice(idx, idx + query.length)}</mark>
+      {snippet.slice(idx + query.length)}
+    </>
+  )
+}
+
 export default function Sidebar(): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
@@ -71,6 +84,9 @@ export default function Sidebar(): React.JSX.Element {
   const projects = useStore((s) => s.projects)
   const query = useStore((s) => s.sidebarQuery)
   const setSidebarQuery = useStore((s) => s.setSidebarQuery)
+  const transcriptSearchResults = useStore((s) => s.transcriptSearchResults)
+  const transcriptSearchLoading = useStore((s) => s.transcriptSearchLoading)
+  const openTranscriptSearchHit = useStore((s) => s.openTranscriptSearchHit)
   const selectSession = useStore((s) => s.selectSession)
   const resumeFromHistory = useStore((s) => s.resumeFromHistory)
   const renameSession = useStore((s) => s.renameSession)
@@ -349,9 +365,33 @@ export default function Sidebar(): React.JSX.Element {
     )
   }
 
+  const renderSearchHit = (result: TranscriptSearchResult): React.ReactNode => {
+    const first = result.hits[0]
+    return (
+      <div
+        key={result.sdkSessionId}
+        className="session-card search-hit-card"
+        role="button"
+        tabIndex={0}
+        title={t('resumeSessionTitle', { cwd: result.cwd })}
+        onClick={() => void openTranscriptSearchHit(result)}
+        onKeyDown={(e) => activateByKeyboard(e, () => void openTranscriptSearchHit(result))}
+      >
+        <span className="history-icon">⌕</span>
+        <span className="session-card-body">
+          <span className="session-card-title">{result.title}</span>
+          <span className="search-hit-snippet">
+            {first ? highlightSnippet(first.snippet, query.trim()) : result.note}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
   const totalVisible = pinnedEntries.length + ongoingEntries.length + recentHistory.length + archivedHistory.length
   const archiveExpanded = archiveOpen || query.trim().length > 0
   const isInitialEmpty = totalVisible === 0 && query.trim().length === 0
+  const contentSearchActive = query.trim().length >= 2
 
   return (
     <aside className="sidebar">
@@ -437,6 +477,16 @@ export default function Sidebar(): React.JSX.Element {
                   <span className="sidebar-group-count">{archivedHistory.length}</span>
                 </button>
                 {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
+              </section>
+            )}
+
+            {contentSearchActive && (
+              <section className="sidebar-section">
+                <div className="sidebar-section-title">{t('contentSearchSection')}</div>
+                {transcriptSearchResults.map((result) => renderSearchHit(result))}
+                {transcriptSearchResults.length === 0 && !transcriptSearchLoading && (
+                  <div className="sidebar-empty">{t('contentSearchEmpty')}</div>
+                )}
               </section>
             )}
 
