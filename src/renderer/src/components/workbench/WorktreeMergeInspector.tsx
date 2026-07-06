@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 
 const PATCH_PREVIEW_LIMIT = 12_000
 
@@ -7,6 +7,26 @@ export type WorktreeMergeConflictRisk = 'low' | 'medium' | 'unknown'
 export interface WorktreeMergeFailure {
   ok: false
   error: string
+}
+
+/** 冲突三栏:单文件的 基线/worktree/主工作区 三份内容 */
+export interface WorktreeMergeConflictFile {
+  path: string
+  base: string
+  worktree: string
+  main: string
+  baseMissing?: boolean
+  worktreeMissing?: boolean
+  mainMissing?: boolean
+  truncated?: boolean
+}
+
+/** 单对象可选字段形态,与主进程 WorktreeConflictFilesResult 对齐 */
+export interface WorktreeMergeConflictFilesResult {
+  ok: boolean
+  files?: WorktreeMergeConflictFile[]
+  truncatedList?: boolean
+  error?: string
 }
 
 export interface WorktreeMergeSummarySuccess {
@@ -68,6 +88,16 @@ export interface WorktreeMergeInspectorLabels {
   emptySummary?: string
   emptyPatch?: string
   emptyApplyCheck?: string
+  viewConflicts?: string
+  loadingConflicts?: string
+  conflictTitle?: string
+  conflictColumnBase?: string
+  conflictColumnWorktree?: string
+  conflictColumnMain?: string
+  conflictMissing?: string
+  conflictTruncated?: string
+  conflictListTruncated?: string
+  conflictEmpty?: string
 }
 
 export interface WorktreeMergeInspectorProps {
@@ -75,9 +105,11 @@ export interface WorktreeMergeInspectorProps {
   patch?: WorktreeMergePatchResult
   applyCheck?: WorktreeMergeApplyCheckResult
   prResult?: WorktreeMergePullRequestResult
+  conflictFiles?: WorktreeMergeConflictFilesResult
   isInspecting?: boolean
   isApplying?: boolean
   isCreatingPr?: boolean
+  isLoadingConflicts?: boolean
   inspectDisabled?: boolean
   applyDisabled?: boolean
   createPrDisabled?: boolean
@@ -86,6 +118,7 @@ export interface WorktreeMergeInspectorProps {
   onInspect?: () => void | Promise<void>
   onApply?: () => void | Promise<void>
   onCreatePr?: () => void | Promise<void>
+  onLoadConflicts?: () => void | Promise<void>
 }
 
 function cx(...classes: Array<string | false | undefined>): string {
@@ -293,11 +326,13 @@ function PatchSection({
 function ApplyCheckSection({
   result,
   title,
-  emptyLabel
+  emptyLabel,
+  conflictAction
 }: {
   result?: WorktreeMergeApplyCheckResult
   title: string
   emptyLabel: string
+  conflictAction?: ReactNode
 }): React.JSX.Element {
   if (!result) {
     return (
@@ -319,6 +354,7 @@ function ApplyCheckSection({
     return (
       <Section title={title} tone="blocked" status="Blocked">
         <ErrorBlock error={result.error} />
+        {conflictAction}
       </Section>
     )
   }
@@ -327,6 +363,105 @@ function ApplyCheckSection({
     <Section title={title} tone="clean" status="Clean">
       <div className="worktree-merge-check-message">git apply --check passed.</div>
     </Section>
+  )
+}
+
+/**
+ * 冲突三栏视图:每个冲突文件展示 基线/Worktree/主工作区 三列纯文本。
+ * 多文件时顶部提供文件选择列表;非合并编辑器,只做只读对照。
+ */
+function ConflictThreePane({
+  result,
+  labels
+}: {
+  result: WorktreeMergeConflictFilesResult
+  labels?: WorktreeMergeInspectorLabels
+}): React.JSX.Element {
+  const files = useMemo(() => result.files ?? [], [result.files])
+  const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
+  const selected = files.find((file) => file.path === selectedPath) ?? files[0]
+
+  if (!result.ok) {
+    return <ErrorBlock error={result.error ?? 'unknown error'} />
+  }
+  if (files.length === 0) {
+    return <EmptyBlock>{labels?.conflictEmpty ?? 'No conflicted files detected.'}</EmptyBlock>
+  }
+
+  const missingLabel = labels?.conflictMissing ?? '(missing)'
+  const columns: Array<{ key: string; title: string; text: string; missing: boolean }> = selected
+    ? [
+        {
+          key: 'base',
+          title: labels?.conflictColumnBase ?? 'Base',
+          text: selected.base,
+          missing: selected.baseMissing === true
+        },
+        {
+          key: 'worktree',
+          title: labels?.conflictColumnWorktree ?? 'Worktree',
+          text: selected.worktree,
+          missing: selected.worktreeMissing === true
+        },
+        {
+          key: 'main',
+          title: labels?.conflictColumnMain ?? 'Main workspace',
+          text: selected.main,
+          missing: selected.mainMissing === true
+        }
+      ]
+    : []
+
+  return (
+    <div className="worktree-conflict">
+      {files.length > 1 && (
+        <div className="worktree-conflict-files" role="tablist">
+          {files.map((file) => (
+            <button
+              key={file.path}
+              role="tab"
+              aria-selected={file.path === selected?.path}
+              className={cx(
+                'worktree-conflict-file',
+                file.path === selected?.path && 'worktree-conflict-file-active'
+              )}
+              onClick={() => setSelectedPath(file.path)}
+            >
+              {file.path}
+            </button>
+          ))}
+        </div>
+      )}
+      {result.truncatedList && (
+        <div className="worktree-conflict-note">
+          {labels?.conflictListTruncated ?? 'Only the first 20 conflicted files are shown.'}
+        </div>
+      )}
+      {selected && (
+        <>
+          <div className="worktree-conflict-path">
+            <code className="worktree-merge-code">{selected.path}</code>
+            {selected.truncated && (
+              <span className="worktree-conflict-note">
+                {labels?.conflictTruncated ?? 'Content truncated (200KB cap).'}
+              </span>
+            )}
+          </div>
+          <div className="worktree-conflict-columns">
+            {columns.map((column) => (
+              <div key={column.key} className="worktree-conflict-column">
+                <div className="worktree-conflict-column-title">{column.title}</div>
+                {column.missing ? (
+                  <div className="worktree-conflict-missing">{missingLabel}</div>
+                ) : (
+                  <pre className="worktree-conflict-pre">{column.text}</pre>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -349,9 +484,11 @@ export default function WorktreeMergeInspector({
   patch,
   applyCheck,
   prResult,
+  conflictFiles,
   isInspecting = false,
   isApplying = false,
   isCreatingPr = false,
+  isLoadingConflicts = false,
   inspectDisabled = false,
   applyDisabled = false,
   createPrDisabled = false,
@@ -359,15 +496,33 @@ export default function WorktreeMergeInspector({
   className,
   onInspect,
   onApply,
-  onCreatePr
+  onCreatePr,
+  onLoadConflicts
 }: WorktreeMergeInspectorProps): React.JSX.Element {
   const applyBlockedByCheck = applyCheck !== undefined && (!applyCheck.ok || !applyCheck.canApply)
+  // 仅在 apply-check 明确 Blocked(有冲突)时提供"查看冲突文件"入口。
+  const conflictBlocked = applyCheck?.ok === true && applyCheck.canApply === false
   const inspectLabel = isInspecting ? (labels?.inspecting ?? 'Inspecting...') : (labels?.inspect ?? 'Inspect')
   const applyLabel = isApplying ? (labels?.applying ?? 'Applying...') : (labels?.apply ?? 'Apply')
   const createPrLabel = isCreatingPr
     ? (labels?.creatingPr ?? 'Creating PR...')
     : (labels?.createPr ?? 'Create PR')
+  const viewConflictsLabel = isLoadingConflicts
+    ? (labels?.loadingConflicts ?? 'Loading conflicts...')
+    : (labels?.viewConflicts ?? 'View conflicted files')
   const warning = riskWarning(summary, applyCheck)
+
+  const conflictAction = conflictBlocked ? (
+    <div className="worktree-conflict-launch">
+      <button
+        className="btn btn-ghost btn-sm"
+        disabled={!onLoadConflicts || isLoadingConflicts}
+        onClick={() => void onLoadConflicts?.()}
+      >
+        {viewConflictsLabel}
+      </button>
+    </div>
+  ) : undefined
 
   return (
     <div className={cx('worktree-merge-inspector', className)}>
@@ -432,7 +587,17 @@ export default function WorktreeMergeInspector({
           result={applyCheck}
           title={labels?.applyCheck ?? 'Apply check'}
           emptyLabel={labels?.emptyApplyCheck ?? 'No apply check result.'}
+          conflictAction={conflictAction}
         />
+        {conflictBlocked && conflictFiles && (
+          <Section
+            title={labels?.conflictTitle ?? 'Conflicted files'}
+            tone={conflictFiles.ok ? 'blocked' : 'error'}
+            status={conflictFiles.ok ? String(conflictFiles.files?.length ?? 0) : 'Failed'}
+          >
+            <ConflictThreePane result={conflictFiles} labels={labels} />
+          </Section>
+        )}
       </div>
     </div>
   )

@@ -74,6 +74,11 @@ try {
   assert(canApply.canApply, `patch should apply cleanly: ${canApply.error ?? 'unknown error'}`)
   git(projectDir, ['apply', '--check', patch.path])
 
+  // 冲突三栏:干净可应用时应返回空冲突列表。
+  const noConflicts = worktreeMerge.getConflictFiles(projectDir, worktreeDir, baseSha)
+  assertOk(noConflicts, 'getConflictFiles should succeed when patch applies cleanly')
+  assertEqual(noConflicts.files.length, 0)
+
   const apply = worktreeMerge.applySquashPatch(projectDir, patch.patchText)
   assertOk(apply, 'applySquashPatch should apply a clean patch')
   assert(apply.applied, 'non-empty patch should report applied=true')
@@ -106,6 +111,53 @@ try {
     conflictedInspect.conflictRisk === 'medium' || conflictedInspect.conflictRisk === 'unknown',
     `expected medium/unknown conflict risk, got ${conflictedInspect.conflictRisk}`
   )
+
+  // 冲突三栏:主工作区改了 notes.txt(与 worktree 的编辑冲突),
+  // getConflictFiles 应返回该文件的 基线/worktree/主工作区 三份内容。
+  const conflicts = worktreeMerge.getConflictFiles(projectDir, worktreeDir, baseSha)
+  assertOk(conflicts, 'getConflictFiles should succeed on a conflicted repo')
+  assert(conflicts.files.length >= 1, 'at least one conflicted file expected')
+  const notesConflict = conflicts.files.find((file) => file.path === 'notes.txt')
+  assert(notesConflict, 'notes.txt should be reported as conflicted')
+  assertEqual(notesConflict.base, 'alpha\nbeta\n')
+  assertEqual(notesConflict.worktree, 'alpha\nbeta\nworktree line\n')
+  assertEqual(notesConflict.main, 'alpha\nmain line\n')
+  assert(!notesConflict.baseMissing, 'base version should exist')
+  assert(!notesConflict.worktreeMissing, 'worktree version should exist')
+  assert(!notesConflict.mainMissing, 'main version should exist')
+
+  // 基线里不存在的新增文件:baseMissing 应为 true、base 内容为空串。
+  const freshConflict = conflicts.files.find((file) => file.path === 'new-file.txt')
+  if (freshConflict) {
+    assert(freshConflict.baseMissing === true, 'new file should be missing at base')
+    assertEqual(freshConflict.base, '')
+  }
+
+  // 合并回执:sha256 稳定、追加/读取往返一致。
+  const sha = worktreeMerge.patchSha256(patch.patchText)
+  assertEqual(sha, worktreeMerge.patchSha256(patch.patchText))
+  assertEqual(sha.length, 64)
+  const receiptsFile = path.join(tempRoot, 'worktree-merges.json')
+  const receipt = {
+    sessionId: 'smoke-session',
+    branch: 'caogen/smoke-session',
+    baseSha,
+    filesChanged: 2,
+    insertions: 2,
+    deletions: 0,
+    mergedAt: Date.now(),
+    patchSha256: sha
+  }
+  worktreeMerge.appendMergeReceipt(receiptsFile, receipt)
+  worktreeMerge.appendMergeReceipt(receiptsFile, { ...receipt, mergedAt: receipt.mergedAt + 1 })
+  const receipts = worktreeMerge.listMergeReceipts(receiptsFile)
+  assertEqual(receipts.length, 2)
+  assertEqual(receipts[0].sessionId, 'smoke-session')
+  assertEqual(receipts[0].patchSha256, sha)
+  assertEqual(receipts[1].mergedAt, receipt.mergedAt + 1)
+  // 损坏文件应安全返回空数组。
+  writeFileSync(receiptsFile, '{not json', 'utf8')
+  assertEqual(worktreeMerge.listMergeReceipts(receiptsFile).length, 0)
 
   console.log('worktreeMerge smoke ok')
 } finally {
