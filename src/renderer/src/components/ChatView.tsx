@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
+import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { formatCost, formatTokens } from '../format'
 import MessageItem from './MessageItem'
 import PermissionBar from './PermissionBar'
@@ -42,6 +43,25 @@ export default function ChatView(): React.JSX.Element | null {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!moreOpen) return
+    const onPointerDown = (event: MouseEvent): void => {
+      if (moreRef.current?.contains(event.target as Node)) return
+      setMoreOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [moreOpen])
 
   const startSuggestions = useMemo(() => {
     if (!activeId) return []
@@ -139,37 +159,80 @@ export default function ChatView(): React.JSX.Element | null {
             </button>
           )}
           {meta.isolated && (
-            <button className="btn btn-ghost" onClick={() => void openWorktreePanel()}>
-              {t('worktreeShort')}
-            </button>
+            <IconButton
+              icon="worktree"
+              label={t('worktreeShort')}
+              onClick={() => void openWorktreePanel()}
+            />
           )}
-          <button className="btn btn-ghost" onClick={() => void openSubagentPanel()}>
-            {t('subagentsShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void openFilesPanel()}>
-            {t('filesShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void openPluginRegistryPanel()}>
-            {t('pluginsShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void openRoutinePanel()}>
-            {t('routinesShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={openMemoryPanel}>
-            {t('memoryShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void openBrowserPanel()}>
-            {t('browserShort')}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void openTerminalPanel()}>
-            {t('terminalShort')}
-          </button>
+          <IconButton icon="files" label={t('filesShort')} onClick={() => void openFilesPanel()} />
+          <IconButton
+            icon="terminal"
+            label={t('terminalShort')}
+            onClick={() => void openTerminalPanel()}
+          />
+          <IconButton
+            icon="browser"
+            label={t('browserShort')}
+            onClick={() => void openBrowserPanel()}
+          />
+          <div className="header-more" ref={moreRef}>
+            <button
+              type="button"
+              className={`icon-btn ${moreOpen ? 'icon-btn-active' : ''}`}
+              aria-label={t('moreActions')}
+              aria-haspopup="menu"
+              aria-expanded={moreOpen}
+              title={t('moreActions')}
+              onClick={() => setMoreOpen((v) => !v)}
+            >
+              <span className="header-more-glyph">⋯</span>
+            </button>
+            {moreOpen && (
+              <div className="header-more-menu" role="menu">
+                <MenuItem
+                  icon="subagents"
+                  label={t('subagentsShort')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    void openSubagentPanel()
+                  }}
+                />
+                <MenuItem
+                  icon="plugins"
+                  label={t('pluginsShort')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    void openPluginRegistryPanel()
+                  }}
+                />
+                <MenuItem
+                  icon="routines"
+                  label={t('routinesShort')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    void openRoutinePanel()
+                  }}
+                />
+                <MenuItem
+                  icon="memory"
+                  label={t('memoryShort')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    openMemoryPanel()
+                  }}
+                />
+              </div>
+            )}
+          </div>
           <button
-            className="btn btn-ghost"
+            type="button"
+            className="icon-btn"
+            aria-label={t('closeSession')}
             title={t('closeSession')}
             onClick={() => void closeSession(activeId)}
           >
-            ✕
+            <span className="header-close-glyph">✕</span>
           </button>
         </div>
       </header>
@@ -261,5 +324,34 @@ export default function ChatView(): React.JSX.Element | null {
         <span className="status-item status-cost">{formatCost(meta.costUsd)}</span>
       </footer>
     </div>
+  )
+}
+
+interface IconButtonProps {
+  icon: HeaderIconName
+  label: string
+  onClick: () => void
+}
+
+function IconButton({ icon, label, onClick }: IconButtonProps): React.JSX.Element {
+  return (
+    <button type="button" className="icon-btn" aria-label={label} title={label} onClick={onClick}>
+      <HeaderIcon name={icon} />
+    </button>
+  )
+}
+
+interface MenuItemProps {
+  icon: HeaderIconName
+  label: string
+  onSelect: () => void
+}
+
+function MenuItem({ icon, label, onSelect }: MenuItemProps): React.JSX.Element {
+  return (
+    <button type="button" className="header-more-item" role="menuitem" onClick={onSelect}>
+      <HeaderIcon name={icon} />
+      <span>{label}</span>
+    </button>
   )
 }
