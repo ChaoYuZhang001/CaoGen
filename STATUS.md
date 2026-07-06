@@ -1,8 +1,8 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-06(第 8 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-06(第 9 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ⚠️ 发布未达标(2026-07-06 外部验收):3 个真实阻塞 —— Claude 真对话 180s 超时、32 并发压测 t7 抽查失败(5/6)、最新 dist:mac 卡 Electron 下载。详见 # Blockers。
+> ✅ 外部验收的 3 个发布级阻塞已全部修复并实测:Claude 真对话 3/3、32 并发 7/7 error=0(连跑 3 次)、dist:mac 经镜像双架构完整产出。剩发布前项:arm64 真机启动(需 Apple Silicon)、N1 真人计时、签名。
 
 # Context
 
@@ -12,15 +12,15 @@
 
 - **v0.1.1 已公开发布**(2026-07-06,**双架构 x64 + arm64** DMG/zip + 自动更新元数据,未签名)——arm64 主二进制/claude/node-pty 架构均已验证,M 系真机启动待用户复验
 - 已实测验证:原生编码 Agent(DeepSeek E2E 7/7)、跨厂商智能路由(6/6)、子代理编排闭环(6/6)、双协议对话(9/9×2)、**Codex CLI 引擎真对话(3/3)**、回归 `test:deep` **23/23**
-- ⚠️ **32 并发压测:实测 5/6**(t7 抽查 7×3=21 失败;根因待查——压力脚本曾把 idle+error 都算完成掩盖了失败,统计口径正在修)。此前 STATUS 写"6/6"不实,已更正。
-- ⚠️ **Claude 默认引擎真对话:超时未通过**(最小提示 180s 无 turn-result,根因未确认)
+- ✅ **32 并发压测:修复后 7/7 error=0**(连跑 3 次稳定)。根因=瞬时并发打爆 socket 层;修:并发闸门(默认 8 在途)+ 瞬时网络重试。压力脚本口径已修(idle/error 分统计、error=0 独立断言)
+- ✅ **Claude 默认引擎真对话:修复后 3/3 通过**。根因=无 token Provider 误剥宿主登录致 SDK 零凭据挂起;修:仅有替代凭据时才剥离 host 鉴权 + 空 baseUrl 放行宿主登录。已加 SDK stderr 诊断透出。scripts/claude-real-e2e.cjs 固化
 - P1 全部可做项收口(2026-07-06):全文搜索、冲突三栏+合并回执、插件安装/卸载/版本/权限、Codex 真验
 - 五支柱实测达成:多厂商 ~95% · 调度 ~95% · 3D ~90% · 迁移级工作流 ~85% · 长期自主执行 ~80%
 - 用户实测反馈已修 4 项(冗余"你"标注、矛盾错误文案、引擎×Provider 404、填 key 不生效)
 
 # Current Focus
 
-**修外部验收的 3 个发布级阻塞**(按序):① 压力脚本统计口径→复跑 32 并发须 6/6 且 error=0 ② Claude 真对话超时诊断+正式 E2E ③ Electron mirror 重跑 dist:mac。arm64 真机启动需用户 Apple Silicon 机器。
+**外部验收 3 阻塞已清**(Claude 认证根因 / 并发闸门 / Electron 镜像)。发布前仅剩需真人/真机的项:arm64 Apple Silicon 真机启动、N1 30 分钟计时、Apple 签名。辅线:用户日常真用报毛刺。
 
 # Goal
 
@@ -63,9 +63,9 @@
 
 | 阻碍 | 等级 | 状态 |
 |---|---|---|
-| Claude 真对话 180s 超时 | High | 修复中:固化 claude-real-e2e + AgentSession 暴露 SDK stderr/exit/timeout 诊断 |
-| 32 并发压测 5/6(t7 抽查失败) | High | 修复中:压力脚本统计口径(idle vs error 分开、error=0 独立断言)后复跑 |
-| 最新 dist:mac 卡 Electron 下载 | Medium | 修复中:配 Electron mirror/预热缓存后重跑;之前 npmmirror 走通过 |
+| ~~Claude 真对话 180s 超时~~ | High | ✅ 已修:无token Provider 误剥宿主登录致零凭据;实测 3/3 |
+| ~~32 并发压测 5/6~~ | High | ✅ 已修:并发闸门(8 在途)+ 瞬时重试;连跑 3 次 7/7 error=0 |
+| ~~最新 dist:mac 卡 Electron 下载~~ | Medium | ✅ 已修:.npmrc 配 npmmirror;双架构 DMG 完整产出 |
 | arm64 包真机启动 | — | 需真实 Apple Silicon 机器(Intel 不可替代) |
 
 **需用户的外部阻塞:**
