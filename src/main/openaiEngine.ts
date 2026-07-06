@@ -14,6 +14,7 @@ import {
   EDIT_TOOLS,
   OPENAI_CODING_TOOLS,
   READONLY_TOOLS,
+  RESPONSES_CODING_TOOLS,
   executeCodingTool
 } from './openaiTools'
 import { AUTO_MODEL } from '../shared/types'
@@ -54,6 +55,21 @@ interface PendingToolCall {
 
 /** Agent 循环上限:防模型无限调工具烧穿 */
 const MAX_TOOL_ITERATIONS = 40
+
+/** 历史压缩触发阈值(估算 token);超过则把旧段摘要 */
+const COMPRESS_TRIGGER_TOKENS = 48_000
+/** 压缩时至少保留的最近消息条数(在此范围内找 user 边界) */
+const KEEP_RECENT_MSGS = 12
+
+/** 粗估消息 token 数:中英混排按 ~3 字符/token 保守估计 */
+function estimateTokens(messages: ChatMessage[]): number {
+  let chars = 0
+  for (const m of messages) {
+    chars += typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length
+    if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length
+  }
+  return Math.ceil(chars / 3)
+}
 
 /**
  * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
@@ -281,32 +297,7 @@ export class OpenAIEngine implements Engine {
       if (this.protocol() === 'chat') {
         await this.runChatCompletion(payload, controller, auth)
       } else {
-        const body = {
-          model: this.effectiveModel(),
-          input: [
-            {
-              role: 'user',
-              content: buildInputContent(payload)
-            }
-          ],
-          // 多轮上下文:链上一轮 response id(Responses API 服务端续上下文)
-          ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
-          stream: true
-        }
-
-        const res = await fetch(`${auth.baseUrl}/v1/responses`, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${auth.token}`,
-            'content-type': 'application/json',
-            ...auth.headers
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        })
-
-        if (!res.ok) throw new Error(await formatOpenAIError(res))
-        await this.consumeResponse(res)
+        await this.runResponsesLoop(payload, controller, auth)
       }
       recordSuccess(this.meta.providerId, Date.now() - this.turnStartedAt)
       this.finishTurn(false)
@@ -328,7 +319,80 @@ export class OpenAIEngine implements Engine {
   private triedProviders = new Set<string>()
   /** Responses 协议的上一轮 response id(服务端多轮上下文) */
   private lastResponseId?: string
+  /** 本轮流式累积的 Responses 函数调用(按 output_index 拼装) */
+  private pendingResponseCalls: Array<{ callId: string; name: string; argsText: string }> = []
   private static readonly MAX_FAILOVERS_PER_TURN = 3
+
+  /**
+   * Responses 协议的 Agent 循环:与 chat 对等地接编码工具。
+   * 首轮 input=用户消息;若返回 function_call,执行后以 function_call_output
+   * 作为下一轮 input 回灌,并用 previous_response_id 续服务端上下文,直到
+   * 无函数调用或达上限。工具的审批/执行复用与 chat 相同的 gateTool/executeCodingTool。
+   */
+  private async runResponsesLoop(
+    payload: SendMessagePayload,
+    controller: AbortController,
+    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+  ): Promise<void> {
+    let input: unknown[] = [{ role: 'user', content: buildInputContent(payload) }]
+
+    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      if (controller.signal.aborted) throw new Error('已中断')
+      this.pendingResponseCalls = []
+
+      const body = {
+        model: this.effectiveModel(),
+        input,
+        tools: RESPONSES_CODING_TOOLS,
+        ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
+        stream: true
+      }
+      const res = await fetch(`${auth.baseUrl}/v1/responses`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+      if (!res.ok) throw new Error(await formatOpenAIError(res))
+      await this.consumeResponse(res)
+
+      const calls = this.pendingResponseCalls.filter((c) => c.name && c.callId)
+      this.pendingResponseCalls = []
+      if (calls.length === 0) return // 最终文本回复,循环结束
+
+      // 执行工具,结果作为下一轮 input(function_call_output);服务端已存住调用本身
+      const outputs: unknown[] = []
+      for (const call of calls) {
+        if (controller.signal.aborted) throw new Error('已中断')
+        let args: Record<string, unknown> = {}
+        try {
+          args = call.argsText ? (JSON.parse(call.argsText) as Record<string, unknown>) : {}
+        } catch {
+          // 参数非法 JSON:如实回给模型重试
+        }
+        this.emit({ kind: 'tool-start', toolUseId: call.callId, name: call.name })
+        this.emit({
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: call.callId, name: call.name, input: args }]
+        })
+        const gate = await this.gateTool(call.name, args, call.callId)
+        let resultText: string
+        let isError: boolean
+        if (!gate.allow) {
+          resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
+          isError = true
+        } else {
+          const exec = await executeCodingTool(call.name, args, this.meta.cwd)
+          resultText = exec.output
+          isError = !exec.ok
+        }
+        this.emit({ kind: 'tool-result', toolUseId: call.callId, content: resultText, isError })
+        outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
+      }
+      input = outputs // 下一轮只发工具结果(previous_response_id 续上文)
+    }
+    this.appendText(`\n\n[已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次,任务可能未完成;请拆分任务后继续]`)
+  }
 
   /**
    * OpenAI 引擎跨厂商故障切换:错误可切换时挑健康厂商换家重试。
@@ -391,6 +455,8 @@ export class OpenAIEngine implements Engine {
     this.chatHistory.push(userMessage)
 
     try {
+      // 轮次开始前压缩过长历史(仅在轮边界压,不打断进行中的 tool_call 配对)
+      await this.compressHistoryIfNeeded(auth)
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         if (controller.signal.aborted) throw new Error('已中断')
         this.pendingToolCalls = []
@@ -483,6 +549,86 @@ export class OpenAIEngine implements Engine {
       if (idx !== -1) this.chatHistory.length = idx
       throw err
     }
+  }
+
+  /**
+   * chat 历史压缩:估算 token 超阈值时,把"较旧的一段"摘要成一条 system 便签,
+   * 保留最近若干轮原文。关键约束 —— 绝不切断 tool_call 配对:切点必须落在
+   * 一条 user 消息之前(user 一定是干净的轮边界)。摘要失败则跳过压缩(不阻塞对话)。
+   */
+  private async compressHistoryIfNeeded(auth: {
+    baseUrl: string
+    token: string
+    headers: Record<string, string>
+  }): Promise<void> {
+    const estimate = estimateTokens(this.chatHistory)
+    if (estimate < COMPRESS_TRIGGER_TOKENS) return
+
+    // 找切点:保留末尾 KEEP_RECENT_MSGS 条内、最靠前的一个 user 边界。
+    // 切点之前的消息被摘要;之后(含该 user)保留原文。
+    const keepFrom = this.findUserBoundary(Math.max(0, this.chatHistory.length - KEEP_RECENT_MSGS))
+    if (keepFrom <= 1) return // 没有可压缩的旧段(全是近期轮次)
+
+    const older = this.chatHistory.slice(0, keepFrom)
+    const recent = this.chatHistory.slice(keepFrom)
+    const summary = await this.summarize(older, auth).catch(() => null)
+    if (!summary) return // 摘要失败:保持原样,下轮再试
+
+    this.chatHistory = [
+      { role: 'system', content: `[早期对话摘要 · 由 CaoGen 自动压缩]\n${summary}` },
+      ...recent
+    ]
+    this.emit({
+      kind: 'hook-event',
+      event: 'context-compressed',
+      detail: `压缩 ${older.length} 条历史为摘要,保留最近 ${recent.length} 条`
+    })
+  }
+
+  /** 从 index 起向后找第一条 user 消息的下标(轮边界);找不到返回原 index */
+  private findUserBoundary(from: number): number {
+    for (let i = from; i < this.chatHistory.length; i++) {
+      if (this.chatHistory[i].role === 'user') return i
+    }
+    return from
+  }
+
+  /** 用当前模型把一段历史压成简洁中文摘要(非流式,低温度,不带工具) */
+  private async summarize(
+    messages: ChatMessage[],
+    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+  ): Promise<string | null> {
+    const transcript = messages
+      .map((m) => {
+        const role = m.role === 'user' ? '用户' : m.role === 'assistant' ? '助手' : m.role === 'tool' ? '工具' : '系统'
+        const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+        return `${role}: ${text.slice(0, 2000)}`
+      })
+      .join('\n')
+      .slice(0, 40_000)
+    const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+      body: JSON.stringify({
+        model: this.effectiveModel(),
+        messages: [
+          {
+            role: 'system',
+            content:
+              '把下面的编码会话历史压成要点摘要:保留关键决策、已完成的改动、待办、重要文件路径与结论,丢弃寒暄与冗余。用简洁中文,不超过 400 字。'
+          },
+          { role: 'user', content: transcript }
+        ],
+        stream: false,
+        max_tokens: 800
+      })
+    })
+    if (!res.ok) return null
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    const choices = Array.isArray(json?.choices) ? (json?.choices as Array<Record<string, unknown>>) : []
+    const msg = choices[0]?.message as Record<string, unknown> | undefined
+    const text = typeof msg?.content === 'string' ? msg.content.trim() : ''
+    return text || null
   }
 
   /** 编码 Agent 系统提示:工作目录 + 人设(每请求现算,设置变更即时生效) */
@@ -643,6 +789,37 @@ export class OpenAIEngine implements Engine {
         if (delta) this.appendText(delta)
         continue
       }
+      // 函数调用参数流式分片:response.function_call_arguments.delta
+      if (type === 'response.function_call_arguments.delta') {
+        const idx = typeof record.output_index === 'number' ? record.output_index : 0
+        const slot = this.ensureResponseCall(idx)
+        if (typeof record.delta === 'string') slot.argsText += record.delta
+        continue
+      }
+      // 函数调用条目登场:response.output_item.added,item={type:'function_call',call_id,name}
+      if (type === 'response.output_item.added' && record.item && typeof record.item === 'object') {
+        const item = record.item as Record<string, unknown>
+        if (item.type === 'function_call') {
+          const idx = typeof record.output_index === 'number' ? record.output_index : 0
+          const slot = this.ensureResponseCall(idx)
+          if (typeof item.call_id === 'string') slot.callId = item.call_id
+          if (typeof item.name === 'string') slot.name = item.name
+          if (typeof item.arguments === 'string') slot.argsText += item.arguments
+        }
+        continue
+      }
+      // 函数调用条目完成:补全终值(部分实现只在 done 给全量 arguments)
+      if (type === 'response.output_item.done' && record.item && typeof record.item === 'object') {
+        const item = record.item as Record<string, unknown>
+        if (item.type === 'function_call') {
+          const idx = typeof record.output_index === 'number' ? record.output_index : 0
+          const slot = this.ensureResponseCall(idx)
+          if (typeof item.call_id === 'string') slot.callId = item.call_id
+          if (typeof item.name === 'string') slot.name = item.name
+          if (typeof item.arguments === 'string' && item.arguments) slot.argsText = item.arguments
+        }
+        continue
+      }
       if (type === 'response.completed') {
         this.applyUsage(record.response)
         // 记录 response id 供下一轮 previous_response_id 续上下文
@@ -656,6 +833,14 @@ export class OpenAIEngine implements Engine {
         throw new Error(extractErrorMessage(error) || 'OpenAI response failed')
       }
     }
+  }
+
+  /** 按 output_index 取/建一个 Responses 函数调用累积槽 */
+  private ensureResponseCall(index: number): { callId: string; name: string; argsText: string } {
+    while (this.pendingResponseCalls.length <= index) {
+      this.pendingResponseCalls.push({ callId: '', name: '', argsText: '' })
+    }
+    return this.pendingResponseCalls[index]
   }
 
   private appendText(text: string): void {
