@@ -15,8 +15,9 @@
     "test:deep": "node scripts/deep-test.mjs",
     "test:deep:install-hourly": "node scripts/install-hourly-deep-test.mjs",
     "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:dir": "npm run build && electron-builder --dir"
+    "dist:mac": "npm run build && npm run prepare:mac-binaries && electron-builder --mac",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "prepare:mac-binaries": "node scripts/prepare-mac-binaries.cjs"
   },
   "build": {
     "appId": "com.caogen.app",
@@ -41,13 +42,15 @@
         {
           "target": "dmg",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ]
@@ -73,7 +76,8 @@
       "target": [
         "AppImage"
       ]
-    }
+    },
+    "afterPack": "scripts/after-pack.cjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
