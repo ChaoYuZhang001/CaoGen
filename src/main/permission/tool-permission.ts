@@ -88,6 +88,15 @@ export function classifyToolRisk(
   } else if (toolName === 'task_dispatch_dag' || toolName === 'task_decompose_and_dispatch_dag') {
     level = 'high'
     reasons.push('多 Agent DAG 调度会创建子会话和 worktree')
+  } else if (toolName === 'code_forge_delivery') {
+    const mode = stringField(input.mode)
+    if (mode === 'commit' || mode === 'pr') {
+      level = 'high'
+      reasons.push('Code Forge 会提交或发布工程交付产物')
+    } else {
+      level = 'medium'
+      reasons.push('Code Forge 会运行验证并生成交付报告或补丁')
+    }
   } else {
     level = 'medium'
     reasons.push('未知或扩展工具')

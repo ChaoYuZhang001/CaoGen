@@ -13,7 +13,7 @@ import {
 } from './gitee-tools'
 import type { ProviderView, SchedulerStrategy } from '../../../shared/types'
 import type { ModelTaskKind } from '../../model/model-profile'
-import type { ToolDefinition } from '../../openaiTools'
+import type { ToolDefinition } from './tool-types'
 
 export const P2_TOOL_NAMES = ['draft_skill', 'optimize_skill', 'route_model', 'china_notify', 'gitee_prepare'] as const
 export type P2ToolName = (typeof P2_TOOL_NAMES)[number]

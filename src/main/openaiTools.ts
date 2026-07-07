@@ -22,6 +22,7 @@ import { GIT_TOOLS, executeGitTool, isGitToolName } from './agent/tools/git-tool
 import { BROWSER_TOOLS, executeBrowserTool, isBrowserToolName } from './agent/tools/browser-tools'
 import { P2_TOOLS, executeP2Tool, isP2ToolName } from './agent/tools/p2-tools'
 import { clipToolOutput } from './agent/tool-output'
+import type { CodeForgeWorktreeContext } from './code-forge/delivery'
 import { resolveExistingProjectPathSync, resolveWritableProjectPathSync } from './utils/safe-project-path'
 import { SkillManager } from './skill/skill-manager'
 import { addMemory, searchMemories, type MemoryLayer } from './memory/memory-manager'
@@ -81,6 +82,7 @@ export interface ToolExecutionOptions {
   pipIndexUrl?: string
   dockerRegistryMirror?: string
   sessionId?: string
+  worktreeContext?: CodeForgeWorktreeContext
 }
 
 const READ_MAX_BYTES = 200 * 1024
@@ -705,7 +707,12 @@ export async function executeCodingTool(
   try {
     if (isBrowserToolName(name)) return clipExecResult(await executeBrowserTool(name, args, options.sessionId))
     if (isGuiToolName(name)) return clipExecResult(await executeGuiTool(name, args, cwd))
-    if (isGitToolName(name)) return clipExecResult(await executeGitTool(name, args, cwd))
+    if (isGitToolName(name)) {
+      return clipExecResult(await executeGitTool(name, args, cwd, {
+        sessionId: options.sessionId,
+        worktreeContext: options.worktreeContext
+      }))
+    }
     if (isP2ToolName(name)) return clipExecResult(await executeP2Tool(name, args, cwd))
     switch (name) {
       case 'bash':
