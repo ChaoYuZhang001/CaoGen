@@ -5,17 +5,22 @@ import type {
   AppLanguage,
   AppTheme,
   CaoGenDriveMode,
+  EngineInfo,
+  McpProbeResult,
   MigrationScan,
   PermissionModeId,
+  PluginRegistryItem,
+  PluginRegistryView,
   ProviderHealthView,
   ProviderView,
   SandboxMode,
   SchedulerStrategy
 } from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
+import ControlCenter from './ControlCenter'
 import ProjectSettings from '../pages/ProjectSettings'
 
-type Tab = 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
+type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
 
 export default function SettingsModal(): React.JSX.Element {
   const t = useT()
@@ -23,15 +28,23 @@ export default function SettingsModal(): React.JSX.Element {
   const providers = useStore((s) => s.providers)
   const updateSettings = useStore((s) => s.updateSettings)
   const deleteProvider = useStore((s) => s.deleteProvider)
+  const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
 
-  const [tab, setTab] = useState<Tab>('general')
+  const [tab, setTab] = useState<Tab>('control')
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
+  const [engines, setEngines] = useState<EngineInfo[]>([])
+  const [pluginRegistry, setPluginRegistry] = useState<PluginRegistryView | undefined>(undefined)
+  const [mcpProbeResults, setMcpProbeResults] = useState<Record<string, McpProbeResult>>({})
+  const [controlLoading, setControlLoading] = useState(false)
+  const [controlMcpProbing, setControlMcpProbing] = useState(false)
+  const [controlError, setControlError] = useState('')
   // 迁移向导状态
   const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
+  const activeId = useStore((s) => s.activeId)
   const projects = useStore((s) => s.projects)
   const [migrateDir, setMigrateDir] = useState('')
   const [scan, setScan] = useState<MigrationScan | null>(null)
@@ -43,6 +56,10 @@ export default function SettingsModal(): React.JSX.Element {
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
   }, [])
+
+  useEffect(() => {
+    if (tab === 'control') void refreshControlCenter()
+  }, [tab, activeId])
 
   // 打开迁移页时,默认用当前会话 cwd 或最近项目
   useEffect(() => {
@@ -94,6 +111,8 @@ export default function SettingsModal(): React.JSX.Element {
 
   const set = <K extends keyof typeof draft>(key: K, val: (typeof draft)[K]): void =>
     setDraft((d) => ({ ...d, [key]: val }))
+  const patchDraft = (patch: Partial<typeof draft>): void =>
+    setDraft((d) => ({ ...d, ...patch }))
   const setBudget = (value: string): void => {
     const budget = Number(value)
     set('budgetUsdPerSession', Number.isFinite(budget) && budget > 0 ? budget : 0)
@@ -113,11 +132,49 @@ export default function SettingsModal(): React.JSX.Element {
     setShowSettings(false)
   }
 
+  const refreshControlCenter = async (): Promise<void> => {
+    setControlLoading(true)
+    setControlError('')
+    try {
+      await refreshProviders()
+      const [nextHealth, nextEngines, nextPluginRegistry] = await Promise.all([
+        window.agentDesk.listProviderHealth(),
+        window.agentDesk.listEngines(),
+        window.agentDesk.scanPluginRegistry(activeId ?? undefined)
+      ])
+      setHealth(nextHealth)
+      setEngines(nextEngines)
+      setPluginRegistry(nextPluginRegistry)
+    } catch (err) {
+      setControlError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setControlLoading(false)
+    }
+  }
+
+  const probeControlMcp = async (items: PluginRegistryItem[]): Promise<void> => {
+    setControlMcpProbing(true)
+    setControlError('')
+    try {
+      const results = await window.agentDesk.probeMcpServers(items, activeId ?? undefined)
+      setMcpProbeResults((prev) => {
+        const merged = { ...prev }
+        for (const result of results) merged[result.id] = result
+        return merged
+      })
+    } catch (err) {
+      setControlError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setControlMcpProbing(false)
+    }
+  }
+
   const remove = async (p: ProviderView): Promise<void> => {
     await deleteProvider(p.id)
   }
 
   const TABS: Array<{ id: Tab; label: string }> = [
+    { id: 'control', label: t('tabControlCenter') },
     { id: 'general', label: t('tabGeneral') },
     { id: 'permissions', label: t('tabPermissions') },
     { id: 'project', label: t('tabProject') },
@@ -147,6 +204,25 @@ export default function SettingsModal(): React.JSX.Element {
           </nav>
 
           <div className="settings-pane">
+            {tab === 'control' && (
+              <ControlCenter
+                settings={draft}
+                providers={providers}
+                health={health}
+                engines={engines}
+                pluginRegistry={pluginRegistry}
+                mcpProbeResults={mcpProbeResults}
+                loading={controlLoading}
+                mcpProbing={controlMcpProbing}
+                error={controlError}
+                onRefresh={() => void refreshControlCenter()}
+                onProbeMcp={(items) => void probeControlMcp(items)}
+                onSettingsPatch={patchDraft}
+                onAddProvider={() => setEditing('new')}
+                onEditProvider={(provider) => setEditing(provider)}
+              />
+            )}
+
             {tab === 'general' && (
               <>
                 <label className="field-label">{t('language')}</label>

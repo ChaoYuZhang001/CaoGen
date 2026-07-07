@@ -341,6 +341,7 @@ const DICT: Dict = {
   filePickHint: { zh: '从左侧选择一个文本文件。保存会写入当前会话目录或隔离 worktree。', en: 'Pick a text file on the left. Saves write to this session cwd or isolated worktree.' },
   // 设置中心
   settingsTitle: { zh: '设置', en: 'Settings' },
+  tabControlCenter: { zh: '控制中心', en: 'Control' },
   tabGeneral: { zh: '通用', en: 'General' },
   tabPermissions: { zh: '权限', en: 'Permissions' },
   tabProject: { zh: '项目', en: 'Project' },

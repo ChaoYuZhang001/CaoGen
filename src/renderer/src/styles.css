@@ -3211,6 +3211,217 @@ textarea {
   box-shadow: 0 0 6px rgba(216, 89, 60, 0.6);
 }
 
+/* ---------- Control Center ---------- */
+
+.control-center {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.control-center-head,
+.control-center-actions,
+.control-summary-top,
+.control-switch-row,
+.control-route-note,
+.control-provider-stats,
+.control-mini-row,
+.control-capability-row {
+  display: flex;
+  align-items: center;
+}
+
+.control-center-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.control-center-actions {
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.control-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.control-summary-card {
+  min-width: 0;
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.control-summary-top {
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.control-summary-value {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.control-summary-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.control-section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.control-form-grid,
+.control-tool-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.control-switch-row {
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 2px;
+}
+
+.control-switch-row .settings-check {
+  margin: 4px 0;
+}
+
+.control-route-note,
+.control-provider-stats {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.control-route-note span,
+.control-provider-stats span {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.control-provider-row {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.control-row-selected {
+  border-color: var(--text-faint);
+}
+
+.control-row-detail {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.control-subhead {
+  margin: 4px 0 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.control-mini-list,
+.control-capability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-mini-row,
+.control-capability-row {
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12px;
+}
+
+.control-mini-row span:first-child,
+.control-capability-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-capability-row {
+  align-items: flex-start;
+}
+
+.control-capability-row > div:first-child {
+  min-width: 0;
+}
+
+.control-capability-title {
+  font-weight: 650;
+}
+
+.control-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  max-width: 190px;
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.control-pill-available {
+  border-color: rgba(109, 176, 107, 0.4);
+  background: rgba(109, 176, 107, 0.14);
+  color: var(--green);
+}
+
+.control-pill-needs-config,
+.control-pill-external-required {
+  border-color: rgba(217, 169, 74, 0.42);
+  background: rgba(217, 169, 74, 0.14);
+  color: var(--yellow);
+}
+
+.control-pill-disabled,
+.control-pill-unknown {
+  border-color: var(--border);
+  background: var(--bg-card);
+  color: var(--text-dim);
+}
+
 /* ---------- 路由标注(智能调度透明) ---------- */
 
 .routing-note {
@@ -5958,6 +6169,21 @@ button.task-dag-node:hover {
 
   .settings-grid-2 {
     grid-template-columns: 1fr;
+  }
+
+  .control-summary-grid,
+  .control-form-grid,
+  .control-tool-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .control-center-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .control-center-actions {
+    flex-wrap: wrap;
   }
 
   .status-item {
