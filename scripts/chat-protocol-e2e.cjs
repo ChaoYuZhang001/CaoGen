@@ -6,7 +6,7 @@
  *   4) 验证 assistant 文本 + usage + 多轮上下文(第二轮引用第一轮)
  *
  * 运行(key 不入仓库,由调用方注入):
- *   CHAT_E2E_BASE_URL=https://api.deepseek.com CHAT_E2E_KEY=sk-... CHAT_E2E_MODEL=deepseek-chat \
+ *   CHAT_E2E_BASE_URL=https://api.deepseek.com CHAT_E2E_KEY=<your-api-key> CHAT_E2E_MODEL=deepseek-chat \
  *     npx electron scripts/chat-protocol-e2e.cjs
  */
 const path = require('node:path')

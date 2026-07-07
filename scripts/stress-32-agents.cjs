@@ -3,7 +3,7 @@
  * 验证:一次 dispatchSubagents 派 32 个真实 child session 并发跑,
  * 后端不崩、事件不丢、全部回灌、父 Agent 汇总,统计吞吐/时延/成本。
  *
- * 运行: CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
+ * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/stress-32-agents.cjs
  */
 const path = require('node:path')
 const os = require('node:os')

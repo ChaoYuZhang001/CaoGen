@@ -159,7 +159,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           className="input input-block"
           type="password"
           value={token}
-          placeholder={isEdit && provider.hasToken ? t('tokenPlaceholderSaved') : 'sk-...'}
+          placeholder={isEdit && provider.hasToken ? t('tokenPlaceholderSaved') : '<your-api-key>'}
           onChange={(e) => {
             setToken(e.target.value)
             setTokenTouched(true)

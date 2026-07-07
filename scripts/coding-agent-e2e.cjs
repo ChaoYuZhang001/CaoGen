@@ -1,7 +1,7 @@
 /**
  * OpenAI 引擎原生编码 Agent E2E:验证任何 Chat 协议模型在 CaoGen 里
  * 能真编码 —— 模型经工具调用真实创建/编辑/读取文件、执行命令。
- * 运行: CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
+ * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
  */
 const path = require('node:path')
 const os = require('node:os')

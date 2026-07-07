@@ -1,6 +1,6 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-07(第 15 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-08(第 16 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
 > ⚠️ **未达发布标准**(第 2 轮外部验收)。已通过:DeepSeek 全链路、Codex CLI、32 并发 7/7、双架构打包、Intel x64 启动、npm audit 0 漏洞、窄屏响应式 Electron QA。未通过/条件性:Claude 真对话仅在有真实登录态时通过(无凭据环境须跳过,已修检测)、Gemini 装了 CLI 不等于可用(已修 available 探测)。阻塞:arm64 真机启动需 Apple Silicon(Intel 不可替代)。
 >
@@ -18,6 +18,7 @@
 - ⚠️ **Claude 默认引擎真对话:仅在有真实登录态的环境通过(条件性)**。有 `ANTHROPIC_API_KEY` / 存在的 host-creds / `~/.claude/.credentials.json` 时 claude-real-e2e 3/3;**无凭据环境应干净跳过而非通过**(此前误把 `~/.claude.json` 配置文件当凭据,致外部验收环境 Not logged in)。已修:auth 检测只认真实凭据,无凭据时 E2E 跳过、产品给明确登录提示。**发布不得声称"Claude 开箱即用",须声明需登录。**
 - ⚠️ **Gemini 引擎:装了 CLI ≠ 可用**。available() 现要求 CLI + 已配认证(GEMINI_API_KEY/GOOGLE_API_KEY 或 settings.json auth);无认证时如实报"不可用",不再误报可用
 - P1 全部可做项收口(2026-07-06):全文搜索、冲突三栏+合并回执、插件安装/卸载/版本/权限、Codex 真验
+- Work OS 第一波已进入 main:A1 Drive、A2 Quickbar、A3 Desktop Control、A4 Code Forge、A5 Skill Fabric、A6 Memory Loop、A7 Control Center、A8 Personal OS。A9 Genesis 待合并。
 - 五支柱实测达成:多厂商 ~95% · 调度 ~95% · 3D ~90% · 迁移级工作流 ~85% · 长期自主执行 ~80%
 - 用户实测反馈已修 4 项(冗余"你"标注、矛盾错误文案、引擎×Provider 404、填 key 不生效)
 
@@ -44,7 +45,7 @@
 **P0**
 - 用户反馈快修循环(常设)
 - ~~arm64 / universal 打包~~ ✅ 已发布至 v0.1.1
-- 撤销泄漏的 GitHub token(用户,安全)——**仍未撤销,token 实测仍有效**
+- 凭据安全:所有疑似泄漏或曾经外发的个人/仓库 token 必须在对应平台轮换或撤销;仓库内不得保存真实密钥、webhook、证书或签名材料
 
 **P1**(2026-07-06 收口:4/4 可做项全完,唯 Gemini 等用户登录)
 - ~~Codex 引擎真对话验证~~ ✅ 3/3(修 3 个适配 bug);Gemini 等用户登录
@@ -109,7 +110,7 @@
 
 1. **零外部用户数据**:所有"可用"结论出自 E2E 与自测,N1 从未真人验证 —— 最大未知
 2. **分发摩擦**:未签名(首开需右键);~~仅 x64~~ 双架构已解决
-3. **泄漏 token 未确认撤销**(对话记录含仓库写权限凭据)
+3. **外部凭据轮换状态不可由仓库验证**:疑似外泄 token 必须由持有人在对应平台撤销/重建;仓库只保留占位符、环境变量名和脱敏状态
 4. **长会话膨胀**:~~chat 历史无压缩~~ 已加自动摘要压缩(超 48k token);OpenAI 引擎工具声明每请求固定开销仍在
 5. **Gemini 适配器未经真对话检验**(Codex 已实测通过);CLI schema 漂移风险仍在(已按 codex-cli 0.142 实测对齐)
 
