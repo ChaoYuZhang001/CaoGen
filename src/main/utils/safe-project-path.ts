@@ -25,8 +25,9 @@ export function normalizeProjectRootSync(projectRoot: string): string {
 }
 
 export async function resolveExistingProjectPath(projectRoot: string, rawPath: string): Promise<SafeProjectPath> {
+  const inputRoot = resolve(projectRoot)
   const root = await normalizeProjectRoot(projectRoot)
-  const candidate = candidatePath(root, rawPath)
+  const candidate = candidatePath(root, rawPath, inputRoot)
   ensureInsideRoot(root, candidate)
   await assertNoSymlinkInExistingPath(root, candidate)
   const realTarget = await realpath(candidate)
@@ -35,8 +36,9 @@ export async function resolveExistingProjectPath(projectRoot: string, rawPath: s
 }
 
 export function resolveExistingProjectPathSync(projectRoot: string, rawPath: string): SafeProjectPath {
+  const inputRoot = resolve(projectRoot)
   const root = normalizeProjectRootSync(projectRoot)
-  const candidate = candidatePath(root, rawPath)
+  const candidate = candidatePath(root, rawPath, inputRoot)
   ensureInsideRoot(root, candidate)
   assertNoSymlinkInExistingPathSync(root, candidate)
   const realTarget = realpathSync(candidate)
@@ -45,8 +47,9 @@ export function resolveExistingProjectPathSync(projectRoot: string, rawPath: str
 }
 
 export async function resolveWritableProjectPath(projectRoot: string, rawPath: string): Promise<SafeProjectPath> {
+  const inputRoot = resolve(projectRoot)
   const root = await normalizeProjectRoot(projectRoot)
-  const candidate = candidatePath(root, rawPath)
+  const candidate = candidatePath(root, rawPath, inputRoot)
   ensureInsideRoot(root, candidate)
   await assertNoSymlinkInExistingPath(root, candidate, false)
   const targetInfo = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
@@ -61,8 +64,9 @@ export async function resolveWritableProjectPath(projectRoot: string, rawPath: s
 }
 
 export function resolveWritableProjectPathSync(projectRoot: string, rawPath: string): SafeProjectPath {
+  const inputRoot = resolve(projectRoot)
   const root = normalizeProjectRootSync(projectRoot)
-  const candidate = candidatePath(root, rawPath)
+  const candidate = candidatePath(root, rawPath, inputRoot)
   ensureInsideRoot(root, candidate)
   assertNoSymlinkInExistingPathSync(root, candidate, false)
   try {
@@ -87,10 +91,17 @@ export function toProjectRelative(root: string, fullPath: string): string {
   return relative(root, fullPath).split(sep).join('/')
 }
 
-function candidatePath(root: string, rawPath: string): string {
+function candidatePath(root: string, rawPath: string, inputRoot: string): string {
   if (!rawPath.trim()) throw new Error('文件路径不能为空')
   if (rawPath.includes('\0')) throw new Error('文件路径包含非法字符')
-  return isAbsolute(rawPath) ? resolve(rawPath) : resolve(root, rawPath)
+  if (!isAbsolute(rawPath)) return resolve(root, rawPath)
+
+  const requested = resolve(rawPath)
+  for (const rootAlias of rootAliases(root, inputRoot)) {
+    const rel = relative(rootAlias, requested)
+    if (isInsideRelative(rel)) return resolve(root, rel)
+  }
+  return requested
 }
 
 async function assertNoSymlinkInExistingPath(
@@ -153,4 +164,26 @@ function pathPartsInsideRoot(root: string, target: string): string[] {
   ensureInsideRoot(root, target)
   const rel = relative(root, target)
   return rel ? rel.split(/[\\/]+/).filter(Boolean) : []
+}
+
+function rootAliases(root: string, inputRoot: string): string[] {
+  const aliases = new Set<string>([root, inputRoot])
+  for (const value of [root, inputRoot]) {
+    addDarwinPrivateAlias(aliases, value, '/private/var', '/var')
+    addDarwinPrivateAlias(aliases, value, '/private/tmp', '/tmp')
+  }
+  return Array.from(aliases)
+}
+
+function addDarwinPrivateAlias(aliases: Set<string>, value: string, privatePrefix: string, publicPrefix: string): void {
+  if (value === privatePrefix || value.startsWith(`${privatePrefix}/`)) {
+    aliases.add(`${publicPrefix}${value.slice(privatePrefix.length)}`)
+  }
+  if (value === publicPrefix || value.startsWith(`${publicPrefix}/`)) {
+    aliases.add(`${privatePrefix}${value.slice(publicPrefix.length)}`)
+  }
+}
+
+function isInsideRelative(rel: string): boolean {
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
