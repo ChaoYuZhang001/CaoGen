@@ -12,7 +12,6 @@ import { getProvider } from './providers'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import {
   driveDefaultModel,
-  driveSessionBudgetUsd,
   getCaoGenDrivePolicy,
   settingsForCaoGenDrive
 } from './model/drive'
@@ -178,7 +177,7 @@ class SessionManager {
     const defaultModel = isCliEngine ? '' : driveDefaultModel(driveMode)
     const defaultProviderId = isCliEngine ? '' : settings.defaultProviderId
     const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
-    const budgetUsd = driveSessionBudgetUsd(driveMode, opts.budgetUsd)
+    const budgetUsd = normalizePositiveNumber(opts.budgetUsd)
     const permissionMode = opts.permissionMode ?? drivePolicy.defaultPermissionMode
     const baseMeta = newSessionMeta({
       cwd: opts.cwd,
@@ -750,6 +749,9 @@ class SessionManager {
     for (const snapshot of recoverable) {
       const sdkSessionId = snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
       if (sdkSessionId) keep.add(sdkSessionId)
+    }
+    for (const session of this.sessions.values()) {
+      if (session.meta.sdkSessionId) keep.add(session.meta.sdkSessionId)
     }
     cleanupTranscripts(keep)
     if (recoverable.length > 0 && getSettings().notificationsEnabled) {

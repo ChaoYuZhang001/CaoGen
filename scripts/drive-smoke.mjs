@@ -57,16 +57,21 @@ try {
   const forge = drive.settingsForCaoGenDrive(baseSettings, 'forge')
   const command = drive.settingsForCaoGenDrive(baseSettings, 'command')
   const genesis = drive.settingsForCaoGenDrive(baseSettings, 'genesis')
+  const sparkPolicy = drive.getCaoGenDrivePolicy('spark')
+  const corePolicy = drive.getCaoGenDrivePolicy('core')
+  const commandPolicy = drive.getCaoGenDrivePolicy('command')
+  const genesisPolicy = drive.getCaoGenDrivePolicy('genesis')
 
   assert(spark.schedulerStrategy === 'cost', 'Spark should force cost routing')
   assert(spark.permissionDenylist.includes('risk>=high'), 'Spark should deny high-risk tools')
   assert(!spark.modelCrossValidationAutoRunEnabled, 'Spark should not auto-run model review')
-  assert(core.budgetUsdPerSession > spark.budgetUsdPerSession, 'Core budget should exceed Spark')
+  assert(spark.budgetUsdPerSession === 0, 'settingsForCaoGenDrive must preserve explicit unlimited session budget')
+  assert(corePolicy.sessionBudgetUsd > sparkPolicy.sessionBudgetUsd, 'Core policy budget should exceed Spark')
   assert(forge.defaultPermissionMode === 'acceptEdits', 'Forge should auto-accept edits')
   assert(forge.sandboxMode === 'standardSystem', 'Forge should raise sandbox discipline')
   assert(command.modelCrossValidationAutoRunEnabled, 'Command should auto-run model review')
   assert(command.guiAutomationEnabled, 'Command should enable GUI tools behind approval')
-  assert(genesis.budgetUsdPerSession > command.budgetUsdPerSession, 'Genesis budget should exceed Command')
+  assert(genesisPolicy.sessionBudgetUsd > commandPolicy.sessionBudgetUsd, 'Genesis policy budget should exceed Command')
 
   const providers = [
     {
