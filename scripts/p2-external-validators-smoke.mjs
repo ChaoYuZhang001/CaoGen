@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -19,8 +19,16 @@ const weakRecorderPath = path.join(fixtureDir, 'jetbrains-recorder-weak.jsonl')
 const artifactPath = path.join(fixtureDir, 'jetbrains-evidence.log')
 const fakeIdePath = path.join(fixtureDir, 'idea64.exe')
 const pluginDistributionPath = path.join(repoRoot, 'plugins', 'jetbrains', 'build', 'distributions', 'caogen-jetbrains-bridge-0.0.1.zip')
+const createdPluginDistribution = !existsSync(pluginDistributionPath)
 
 mkdirSync(fixtureDir, { recursive: true })
+if (createdPluginDistribution) {
+  mkdirSync(path.dirname(pluginDistributionPath), { recursive: true })
+  writeFileSync(pluginDistributionPath, `JetBrains plugin distribution fixture ${runId}\n`, 'utf8')
+  process.on('exit', () => {
+    rmSync(pluginDistributionPath, { force: true })
+  })
+}
 
 writeFileSync(providerPath, `\uFEFF${JSON.stringify(providerFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(chinaOnlyProviderPath, `${JSON.stringify(chinaOnlyProviderFixture(), null, 2)}\n`, 'utf8')
