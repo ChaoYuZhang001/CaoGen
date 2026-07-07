@@ -70,7 +70,7 @@ export const CAOGEN_DRIVE_POLICIES: readonly CaoGenDrivePolicyView[] = [
     validationDepth: 'basic',
     smartModelRoutingEnabled: true,
     modelCrossValidationAutoRunEnabled: false,
-    toolPolicySummary: '常规读写按权限模式执行，阻止 critical 风险动作'
+    toolPolicySummary: '常规读写按权限模式执行，阻止 critical 风险与 Genesis 编排动作'
   },
   {
     mode: 'forge',
@@ -84,7 +84,7 @@ export const CAOGEN_DRIVE_POLICIES: readonly CaoGenDrivePolicyView[] = [
     validationDepth: 'local',
     smartModelRoutingEnabled: true,
     modelCrossValidationAutoRunEnabled: false,
-    toolPolicySummary: '自动接受编辑，命令和高风险动作仍走审批'
+    toolPolicySummary: '自动接受编辑，命令和高风险动作仍走审批；Genesis 编排需升级到 Command/Genesis'
   },
   {
     mode: 'command',
