@@ -42,6 +42,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     permissionDenylistRules: [
       'risk>=high',
       'tool=gui_*',
+      'tool=genesis_orchestrate',
       'tool=task_dispatch_dag',
       'tool=task_decompose_and_dispatch_dag',
       'tool=code_forge_delivery',
@@ -55,7 +56,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     requestedTasks: [],
     crossValidation: { enabled: true, minRiskLevel: 'high', maxValidators: 1 },
     permissionAllowlistRules: ['risk<=low'],
-    permissionDenylistRules: ['risk=critical']
+    permissionDenylistRules: ['risk=critical', 'tool=genesis_orchestrate']
   },
   forge: {
     riskFloor: 'medium',
@@ -63,7 +64,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     requestedTasks: ['coding', 'reasoning', 'review', 'toolUse'],
     crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 1 },
     permissionAllowlistRules: ['risk<=low'],
-    permissionDenylistRules: ['risk=critical'],
+    permissionDenylistRules: ['risk=critical', 'tool=genesis_orchestrate'],
     sandboxMode: 'standardSystem'
   },
   command: {

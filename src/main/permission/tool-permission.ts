@@ -88,6 +88,9 @@ export function classifyToolRisk(
   } else if (toolName === 'task_dispatch_dag' || toolName === 'task_decompose_and_dispatch_dag') {
     level = 'high'
     reasons.push('多 Agent DAG 调度会创建子会话和 worktree')
+  } else if (toolName === 'genesis_orchestrate') {
+    level = 'high'
+    reasons.push('Genesis 编排会规划多 Agent、隔离执行、验证 gate 和交付策略')
   } else if (toolName === 'code_forge_delivery') {
     const mode = stringField(input.mode)
     if (mode === 'commit' || mode === 'pr') {
@@ -157,7 +160,12 @@ function extractPath(toolName: string, input: Record<string, unknown>): string |
     const pathFromUrl = extractFileUrlPath(input.url)
     if (pathFromUrl) return pathFromUrl
   }
-  if (toolName === 'task_decompose' || toolName === 'task_dispatch_dag' || toolName === 'task_decompose_and_dispatch_dag') {
+  if (
+    toolName === 'task_decompose' ||
+    toolName === 'task_dispatch_dag' ||
+    toolName === 'task_decompose_and_dispatch_dag' ||
+    toolName === 'genesis_orchestrate'
+  ) {
     if (typeof input.cwd === 'string' && input.cwd.trim()) return input.cwd
   }
   const candidates = toolName === 'search_replace' || toolName === 'view'

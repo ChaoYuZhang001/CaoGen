@@ -15,6 +15,23 @@
 3. A0 本轮未修改功能代码, 未修改 `scripts/claude-real-e2e.cjs`, 未提交 `test-results`。
 4. P2 Truth Gate 仍不能宣称关闭: audit/preflight 命令能运行, 但报告状态明确为 `failed`。
 
+## A9 Genesis 增量边界
+
+A9 Genesis v1 已新增核心编排/交付协议, 但只进入可测试的计划层, 不宣称真实外部 Agent 控制闭环。
+
+当前可声明:
+
+- `src/main/genesis/orchestrator.ts` 可以生成结构化 Genesis 报告: DAG 任务拆解、worker lanes、计划中的隔离 worktree 策略、validation gates、风险判断、人工确认点和 Code Forge 交付策略。
+- OpenAI 工具 `genesis_orchestrate` 已注册到 Chat Completions / Responses 工具 schema。该工具只返回计划 JSON, 不启动 `task_dispatch_dag`, 不创建 child session, 不执行 `git worktree add`, 不调用 `code_forge_delivery`。
+- 权限边界: `genesis_orchestrate` 被归类为 high risk; Spark/Core/Forge 默认 deny, Command/Genesis 可进入计划层, 后续真实调度、写入、验证命令和交付仍需各自权限 gate。
+- `scripts/genesis-smoke.mjs` 覆盖模式策略、计划结构、隔离/验证字段、风险判断、OpenAI 工具注册/权限边界, 以及不会声称已真实控制外部子 Agent。
+
+当前不可声明:
+
+- 不能宣称 Genesis 已真实控制外部子 Agent。
+- 不能宣称 Genesis 已自动创建隔离 worktree、自动合并、自动提交、自动推送或自动发布。
+- 不能把 `genesis_orchestrate` 的计划报告等同于真实 DAG 执行结果或 Code Forge 交付结果。
+
 ## 第一波合并与验证
 
 | Wave | 当前状态 | 证据 | A0 复核命令 |

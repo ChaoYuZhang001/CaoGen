@@ -23,6 +23,12 @@ import { BROWSER_TOOLS, executeBrowserTool, isBrowserToolName } from './agent/to
 import { P2_TOOLS, executeP2Tool, isP2ToolName } from './agent/tools/p2-tools'
 import { clipToolOutput } from './agent/tool-output'
 import type { CodeForgeWorktreeContext } from './code-forge/delivery'
+import {
+  GENESIS_ORCHESTRATE_TOOL_NAME,
+  buildGenesisOrchestration,
+  formatGenesisOrchestrationReport,
+  type GenesisOrchestrationInput
+} from './genesis/orchestrator'
 import { resolveExistingProjectPathSync, resolveWritableProjectPathSync } from './utils/safe-project-path'
 import { SkillManager } from './skill/skill-manager'
 import { addMemory, searchMemories, type MemoryLayer } from './memory/memory-manager'
@@ -295,6 +301,36 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: GENESIS_ORCHESTRATE_TOOL_NAME,
+      description:
+        '生成 Genesis 编排计划/执行报告:任务拆解、worker lanes、隔离 worktree 策略、验证 gates、风险/人工确认点和 Code Forge 交付策略。第一版只规划,不启动外部 Agent、不创建 worktree、不提交/推送。',
+      parameters: {
+        type: 'object',
+        properties: {
+          request: { type: 'string', description: '用户原始复杂任务或需要 Genesis 编排的目标' },
+          cwd: { type: 'string', description: '可选项目目录;默认当前会话项目' },
+          driveMode: { type: 'string', enum: ['spark', 'core', 'forge', 'command', 'genesis'] },
+          validationCommands: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '计划中的验证命令;未传时从 package.json 推断 typecheck/build/test gates'
+          },
+          deliveryMode: {
+            type: 'string',
+            enum: ['report', 'patch', 'commit', 'pr'],
+            description: '计划推荐的 Code Forge 交付模式;默认 report。只写入计划,不执行交付。'
+          },
+          maxWorkerLanes: { type: 'number', description: '计划生成的 worker lane 上限,默认 8,最大 12' },
+          isolationRoot: { type: 'string', description: '计划中的隔离 worktree 根目录;不会实际创建' },
+          requireHumanConfirmation: { type: 'boolean', description: '是否强制在报告中列出人工确认 gate' }
+        },
+        required: ['request']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'task_dispatch_dag',
       description:
         '按给定 DAG 启动多 Agent 依赖调度。会创建 child sessions/worktrees 并开始执行;需要用户授权后再调用。',
@@ -506,6 +542,7 @@ export const READONLY_TOOLS = new Set([
   'find_file',
   'get_dependencies',
   'task_decompose',
+  GENESIS_ORCHESTRATE_TOOL_NAME,
   'list_skills',
   'load_skill',
   'run_skill',
@@ -672,6 +709,37 @@ function dagDispatchInputArgs(args: Record<string, unknown>, dag: TaskDag, cwd: 
   return input
 }
 
+function genesisInputArgs(args: Record<string, unknown>, cwd: string): GenesisOrchestrationInput {
+  const input: GenesisOrchestrationInput = {
+    request: stringArg(args, 'request'),
+    cwd: optionalStringArg(args.cwd) ?? cwd
+  }
+  const driveMode = genesisDriveModeArg(args.driveMode)
+  if (driveMode) input.driveMode = driveMode
+  const validationCommands = stringArrayArg(args.validationCommands)
+  if (validationCommands) input.validationCommands = validationCommands
+  const deliveryMode = genesisDeliveryModeArg(args.deliveryMode)
+  if (deliveryMode) input.deliveryMode = deliveryMode
+  const maxWorkerLanes = numberArg(args.maxWorkerLanes)
+  if (maxWorkerLanes !== undefined) input.maxWorkerLanes = maxWorkerLanes
+  const isolationRoot = optionalStringArg(args.isolationRoot)
+  if (isolationRoot) input.isolationRoot = isolationRoot
+  if (typeof args.requireHumanConfirmation === 'boolean') {
+    input.requireHumanConfirmation = args.requireHumanConfirmation
+  }
+  return input
+}
+
+function genesisDriveModeArg(value: unknown): GenesisOrchestrationInput['driveMode'] | undefined {
+  return value === 'spark' || value === 'core' || value === 'forge' || value === 'command' || value === 'genesis'
+    ? value
+    : undefined
+}
+
+function genesisDeliveryModeArg(value: unknown): GenesisOrchestrationInput['deliveryMode'] | undefined {
+  return value === 'report' || value === 'patch' || value === 'commit' || value === 'pr' ? value : undefined
+}
+
 async function loadSessionManager() {
   const specifier = './sessionManager.js'
   return (await import(specifier) as { sessionManager: {
@@ -818,6 +886,10 @@ export async function executeCodingTool(
         const manager = await loadSessionManager()
         const result = await manager.decomposeTask(parentSessionId, decomposeInputArgs(args, cwd))
         return { ok: true, output: clip(JSON.stringify(result, null, 2)) }
+      }
+      case GENESIS_ORCHESTRATE_TOOL_NAME: {
+        const result = await buildGenesisOrchestration(genesisInputArgs(args, cwd))
+        return { ok: true, output: clip(formatGenesisOrchestrationReport(result)) }
       }
       case 'task_dispatch_dag': {
         const parentSessionId = sessionIdArg(options)
