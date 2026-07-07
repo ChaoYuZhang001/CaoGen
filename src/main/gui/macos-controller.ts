@@ -321,8 +321,8 @@ export async function macosClick(input: MacosClickInput): Promise<MacosActionRes
   }
 
   const target = hasElementSelector(input) ? await findElementTarget(input) : undefined
-  if (target && !target.ok) return { ok: false, error: target.error }
-  const matched = target?.target
+  if (target?.ok === false) return { ok: false, error: target.error }
+  const matched = target?.ok === true ? target.target : undefined
   const point = matched && (typeof input.x !== 'number' || typeof input.y !== 'number')
     ? centerOf(matched.element.bounds)
     : { x: input.x, y: input.y }
@@ -357,8 +357,8 @@ export async function macosClick(input: MacosClickInput): Promise<MacosActionRes
 export async function macosTypeText(input: MacosTypeTextInput): Promise<MacosActionResult> {
   if (process.platform !== 'darwin') return { ok: false, error: 'macOS GUI 主路径仅支持 darwin 平台' }
   const target = hasElementSelector(input) ? await findElementTarget(input) : undefined
-  if (target && !target.ok) return { ok: false, error: target.error }
-  const matched = target?.target
+  if (target?.ok === false) return { ok: false, error: target.error }
+  const matched = target?.ok === true ? target.target : undefined
 
   if (matched) {
     const activated = await macosActivateWindow({ windowId: matched.window.id })
