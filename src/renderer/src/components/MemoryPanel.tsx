@@ -7,6 +7,16 @@ import type {
 } from '../../../shared/types'
 
 const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
+type LoopOutcome = 'success' | 'partial' | 'failure'
+const EMPTY_REVIEW_FORM = {
+  outcome: 'success' as LoopOutcome,
+  title: '',
+  summary: '',
+  failure: '',
+  rootCause: '',
+  verification: '',
+  preference: ''
+}
 
 interface Props {
   sessionId: string
@@ -35,6 +45,8 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
 
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ ...EMPTY_FORM })
+  const [reviewForm, setReviewForm] = useState({ ...EMPTY_REVIEW_FORM })
+  const [reviewNotice, setReviewNotice] = useState('')
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -149,6 +161,111 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     }
   }
 
+  const submitReview = async (): Promise<void> => {
+    const title = reviewForm.title.trim()
+    const summary = reviewForm.summary.trim()
+    const failure = reviewForm.failure.trim()
+    const rootCause = reviewForm.rootCause.trim()
+    const verification = splitReviewLines(reviewForm.verification)
+    const preference = reviewForm.preference.trim()
+
+    if (!title) {
+      setError('复盘标题不能为空')
+      return
+    }
+    if (!summary && !failure && !preference) {
+      setError('复盘内容不能为空')
+      return
+    }
+    if (reviewForm.outcome !== 'success' && !failure) {
+      setError('部分完成或失败时必须填写失败信号')
+      return
+    }
+
+    setActing(true)
+    setError('')
+    setReviewNotice('')
+    try {
+      let drafts = 0
+      let memories = 0
+      const label = outcomeLabel(reviewForm.outcome)
+
+      if (summary) {
+        const body = renderTaskReviewBody({
+          outcome: reviewForm.outcome,
+          summary,
+          failure,
+          rootCause,
+          verification
+        })
+        await window.agentDesk.proposeMemoryDraft(sessionId, {
+          kind: 'task-retrospective',
+          title: `任务复盘: ${title}`,
+          body,
+          source: 'memory-loop',
+          reason: reviewForm.outcome === 'success' ? '任务完成后沉淀可复用上下文' : '任务结束后沉淀当前真实状态'
+        })
+        drafts++
+        await window.agentDesk.addLayeredMemory(sessionId, {
+          layer: 'working',
+          title: `任务复盘: ${title}`,
+          body,
+          source: 'memory-loop',
+          tags: ['任务复盘', label]
+        })
+        memories++
+      }
+
+      if (reviewForm.outcome !== 'success' || failure) {
+        const body = renderFailureReviewBody({ failure, rootCause, verification })
+        await window.agentDesk.proposeMemoryDraft(sessionId, {
+          kind: 'failure-retrospective',
+          title: `失败复盘: ${title}`,
+          body,
+          source: 'memory-loop',
+          reason: '失败或未完成任务需要形成下次开工前可检索的复盘建议'
+        })
+        drafts++
+        await window.agentDesk.addLayeredMemory(sessionId, {
+          layer: 'project',
+          title: `失败复盘: ${title}`,
+          body,
+          source: 'memory-loop',
+          tags: ['失败复盘', '踩坑']
+        })
+        memories++
+      }
+
+      if (preference) {
+        const titleText = preferenceTitle(preference)
+        await window.agentDesk.proposeMemoryDraft(sessionId, {
+          kind: 'preference',
+          title: titleText,
+          body: preference,
+          source: 'memory-loop',
+          reason: '用户偏好或长期约定,需要确认后进入项目记忆'
+        })
+        drafts++
+        await window.agentDesk.addLayeredMemory(sessionId, {
+          layer: 'project',
+          title: titleText,
+          body: preference,
+          source: 'memory-loop',
+          tags: ['偏好学习']
+        })
+        memories++
+      }
+
+      setReviewForm({ ...EMPTY_REVIEW_FORM })
+      setReviewNotice(`已生成 ${drafts} 条待确认草稿,沉淀 ${memories} 条分层记忆`)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setActing(false)
+    }
+  }
+
   const drafts: ProjectMemoryDraft[] = data?.drafts ?? []
   const entries: ProjectMemoryEntry[] = data?.entries ?? []
 
@@ -174,6 +291,88 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
       <p className="settings-hint">
         记忆按项目隔离,采纳后写入项目记忆文件,供后续会话读取。草稿需确认后生效。
       </p>
+
+      <div className="memory-group">
+        <h4 className="settings-h3">任务复盘</h4>
+        <div className="memory-form" data-memory-loop-form="true">
+          <label className="field-label">结果</label>
+          <select
+            className="input input-block"
+            data-memory-loop-field="outcome"
+            value={reviewForm.outcome}
+            onChange={(e) =>
+              setReviewForm((draft) => ({ ...draft, outcome: e.target.value as LoopOutcome }))
+            }
+          >
+            <option value="success">成功</option>
+            <option value="partial">部分完成</option>
+            <option value="failure">失败</option>
+          </select>
+          <label className="field-label">标题</label>
+          <input
+            className="input input-block"
+            data-memory-loop-field="title"
+            value={reviewForm.title}
+            placeholder="任务或问题名称"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, title: e.target.value }))}
+          />
+          <label className="field-label">摘要</label>
+          <textarea
+            className="input input-block textarea"
+            data-memory-loop-field="summary"
+            rows={3}
+            value={reviewForm.summary}
+            placeholder="实际完成或当前状态"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, summary: e.target.value }))}
+          />
+          <label className="field-label">失败信号</label>
+          <textarea
+            className="input input-block textarea"
+            data-memory-loop-field="failure"
+            rows={2}
+            value={reviewForm.failure}
+            placeholder="报错、阻塞、超时或未完成点"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, failure: e.target.value }))}
+          />
+          <label className="field-label">根因</label>
+          <input
+            className="input input-block"
+            data-memory-loop-field="rootCause"
+            value={reviewForm.rootCause}
+            placeholder="已确认则填写"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, rootCause: e.target.value }))}
+          />
+          <label className="field-label">验证</label>
+          <textarea
+            className="input input-block textarea"
+            data-memory-loop-field="verification"
+            rows={2}
+            value={reviewForm.verification}
+            placeholder="每行一个命令或证据"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, verification: e.target.value }))}
+          />
+          <label className="field-label">偏好</label>
+          <textarea
+            className="input input-block textarea"
+            data-memory-loop-field="preference"
+            rows={2}
+            value={reviewForm.preference}
+            placeholder="用户偏好、长期约定或踩坑规则"
+            onChange={(e) => setReviewForm((draft) => ({ ...draft, preference: e.target.value }))}
+          />
+          <div className="modal-actions">
+            <button
+              className="btn btn-primary btn-sm"
+              data-memory-loop-action="submit"
+              disabled={acting}
+              onClick={() => void submitReview()}
+            >
+              {acting ? '生成中…' : '生成复盘'}
+            </button>
+          </div>
+          {reviewNotice && <div className="notice notice-info">{reviewNotice}</div>}
+        </div>
+      </div>
 
       {showForm && (
         <div className="memory-form" data-memory-form="true">
@@ -362,4 +561,57 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
       )}
     </div>
   )
+}
+
+function outcomeLabel(outcome: LoopOutcome): string {
+  if (outcome === 'success') return '成功'
+  if (outcome === 'failure') return '失败'
+  return '部分完成'
+}
+
+function splitReviewLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function renderTaskReviewBody(input: {
+  outcome: LoopOutcome
+  summary: string
+  failure: string
+  rootCause: string
+  verification: string[]
+}): string {
+  return [
+    `结果: ${outcomeLabel(input.outcome)}`,
+    `摘要: ${input.summary}`,
+    renderReviewList('验证', input.verification),
+    input.failure ? `失败信号: ${input.failure}` : '',
+    input.rootCause ? `根因: ${input.rootCause}` : ''
+  ].filter(Boolean).join('\n')
+}
+
+function renderFailureReviewBody(input: {
+  failure: string
+  rootCause: string
+  verification: string[]
+}): string {
+  return [
+    `现象: ${input.failure || '未提供具体失败文本'}`,
+    input.rootCause ? `根因: ${input.rootCause}` : '根因: 未确认',
+    '下次建议: 先复现第一个可观察失败,再做最小修复。',
+    renderReviewList('验证', input.verification)
+  ].join('\n')
+}
+
+function renderReviewList(label: string, values: string[]): string {
+  if (values.length === 0) return `${label}: 未提供`
+  if (values.length === 1) return `${label}: ${values[0]}`
+  return `${label}:\n${values.map((value) => `- ${value}`).join('\n')}`
+}
+
+function preferenceTitle(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length <= 80 ? normalized : `${normalized.slice(0, 79)}…`
 }
