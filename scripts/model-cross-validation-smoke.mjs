@@ -125,7 +125,9 @@ try {
     read('scripts/integration-test.cjs').includes('T18 P2 cross-validation: routing event creates review and arbitration child sessions'),
     'behavior-level cross-validation integration test missing'
   )
-  assert(read('src/main/model/session-routing.ts').includes('maxValidators: 2'), 'session route should keep backup validator for arbitration')
+  assert(read('src/main/model/session-routing.ts').includes('crossValidation: drive.crossValidation'), 'session route should use Drive cross-validation policy')
+  assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 2 }"), 'Command Drive policy should keep backup validator for arbitration')
+  assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'low', maxValidators: 2 }"), 'Genesis Drive policy should keep backup validator for arbitration')
 
   assert(read('src/shared/types.ts').includes('modelCrossValidationAutoRunEnabled: boolean'), 'AppSettings type missing')
   assert(read('src/main/settings.ts').includes('modelCrossValidationAutoRunEnabled: false'), 'main default must be off')

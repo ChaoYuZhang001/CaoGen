@@ -45,9 +45,10 @@ try {
 const failed = report.checks.filter((item) => item.status === 'fail')
 if (failed.length > 0) {
   console.error(`x1/s3 e2e failed: ${failed.map((item) => item.name).join(', ')}`)
-  process.exitCode = 1
+  process.exit(1)
 } else {
   console.log(`x1/s3 e2e ok: ${runDir}`)
+  process.exit(0)
 }
 
 async function runX1Scenario() {
@@ -76,7 +77,7 @@ async function runX1Scenario() {
         assert(deepSeek.models?.includes('deepseek-reasoner'), 'deepseek-reasoner missing')
       })
 
-      await check(cdp, 'X1 new session modal selects DeepSeek and deepseek-chat by default', async () => {
+      await check(cdp, 'X1 new session modal selects DeepSeek and auto dispatch by default', async () => {
         await clickByText(cdp, '+ 新建会话')
         await waitForText(cdp, '新建会话')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
@@ -84,7 +85,8 @@ async function runX1Scenario() {
         assert(selected.providerValue === 'deepseek-official', `wrong provider value: ${JSON.stringify(selected)}`)
         assert(selected.providerText.includes('DeepSeek'), `provider label missing DeepSeek: ${JSON.stringify(selected)}`)
         assert(selected.providerText.includes('未配置密钥'), `provider should show no-key label: ${JSON.stringify(selected)}`)
-        assert(selected.modelValue === 'deepseek-chat', `wrong model value: ${JSON.stringify(selected)}`)
+        assert(selected.modelValue === 'auto', `wrong model value: ${JSON.stringify(selected)}`)
+        assert(selected.modelText.includes('自动调度'), `model label missing auto dispatch: ${JSON.stringify(selected)}`)
       })
 
       await check(cdp, 'X1 DeepSeek without key shows explicit settings prompt on send', async () => {
@@ -328,10 +330,14 @@ async function installErrorCapture(cdp) {
 }
 
 async function screenshot(cdp, name) {
-  const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true })
-  const file = path.join(runDir, `${name}.png`)
-  writeFileSync(file, Buffer.from(shot.data, 'base64'))
-  report.screenshots.push(file)
+  try {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true })
+    const file = path.join(runDir, `${name}.png`)
+    writeFileSync(file, Buffer.from(shot.data, 'base64'))
+    report.screenshots.push(file)
+  } catch (error) {
+    report.warnings.push(`screenshot ${name} skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function selectedNewSessionValues(cdp) {

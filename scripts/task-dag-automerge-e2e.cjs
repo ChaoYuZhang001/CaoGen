@@ -236,6 +236,7 @@ async function run() {
   check('mock saw both child tool loops', requests.includes('alpha-output') && requests.includes('beta-output'), requests.join(', '))
 
   await invoke('sessions:close', parent.id)
+  await new Promise((resolve) => setTimeout(resolve, 300))
   finalExitCode = results.every((result) => result.ok) ? 0 : 1
   finish(finalExitCode)
 }
@@ -268,7 +269,16 @@ app.whenReady().then(() => run().catch((err) => {
 
 function samePath(left, right) {
   if (!left || !right) return false
-  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+  return canonicalPath(left).toLowerCase() === canonicalPath(right).toLowerCase()
+}
+
+function canonicalPath(value) {
+  const resolved = path.resolve(value)
+  try {
+    return fs.realpathSync.native(resolved)
+  } catch {
+    return resolved
+  }
 }
 
 function readText(filePath) {

@@ -119,7 +119,7 @@ try {
     'generateProjectContextTemplate'
   ])
   assertSourceContains('src/renderer/src/components/SettingsModal.tsx', [
-    "type Tab = 'general' | 'permissions' | 'project'",
+    "type Tab = 'control' | 'general' | 'permissions' | 'project'",
     '<ProjectSettings />'
   ])
 
