@@ -13,8 +13,9 @@ const COMPLEXITY_SIGNALS = [
   /完整|全流程|端到端|跨模块|多模块|多个文件|三.*文件|3\s*个文件/i,
   /前端|UI|界面|组件|React|Tailwind/i,
   /后端|API|IPC|数据库|服务|接口/i,
-  /测试|验收|QA|E2E|smoke|typecheck|构建/i,
-  /登录|认证|权限|注册|会话|token/i
+  /测试|验证|验收|QA|E2E|smoke|typecheck|构建/i,
+  /登录|认证|权限|注册|会话|token/i,
+  /Genesis|DAG|编排|多\s*Agent|子\s*Agent|worktree|隔离执行/i
 ]
 
 interface TaskTemplate {
