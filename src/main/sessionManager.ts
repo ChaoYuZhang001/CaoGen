@@ -10,6 +10,12 @@ import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { getProvider } from './providers'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import {
+  driveDefaultModel,
+  driveSessionBudgetUsd,
+  getCaoGenDrivePolicy,
+  settingsForCaoGenDrive
+} from './model/drive'
 import { cleanupTranscripts, restoreTranscriptIfMissing } from './transcript'
 import { touchProject } from './projects'
 import { prepareWorktree } from './worktrees'
@@ -164,24 +170,29 @@ class SessionManager {
     // 不继承全局 defaultModel/defaultProviderId(那是别家厂商的,
     // 透传会让 CLI 打错端点/报模型不存在 —— 实测踩坑)。
     const isCliEngine = opts.engine === 'codex' || opts.engine === 'gemini'
-    const defaultModel = isCliEngine ? '' : settings.defaultModel
-    const defaultProviderId = isCliEngine ? '' : settings.defaultProviderId
     const resumeHistory = opts.resumeSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === opts.resumeSdkSessionId)
       : undefined
+    const driveMode = opts.driveMode ?? resumeHistory?.driveMode ?? settings.driveMode
+    const drivePolicy = getCaoGenDrivePolicy(driveMode)
+    const defaultModel = isCliEngine ? '' : driveDefaultModel(driveMode)
+    const defaultProviderId = isCliEngine ? '' : settings.defaultProviderId
     const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
+    const budgetUsd = driveSessionBudgetUsd(driveMode, opts.budgetUsd)
+    const permissionMode = opts.permissionMode ?? drivePolicy.defaultPermissionMode
     const baseMeta = newSessionMeta({
       cwd: opts.cwd,
+      driveMode,
       parentSessionId: opts.parentSessionId,
       orchestrationId: opts.orchestrationId,
       childTaskId: opts.childTaskId,
       childRole: opts.childRole,
       model: opts.model ?? defaultModel,
       providerId: opts.providerId ?? defaultProviderId,
-      budgetUsd: opts.budgetUsd,
+      budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
-      permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
+      permissionMode,
       title: opts.title
     })
     const worktree =
@@ -191,6 +202,7 @@ class SessionManager {
     if (!worktree.ok) throw new Error(worktree.error)
     const meta = newSessionMeta({
       cwd: worktree.cwd,
+      driveMode,
       parentSessionId: opts.parentSessionId,
       orchestrationId: opts.orchestrationId,
       childTaskId: opts.childTaskId,
@@ -205,10 +217,10 @@ class SessionManager {
       worktreeState: worktree.record?.state,
       model: opts.model ?? defaultModel,
       providerId: opts.providerId ?? defaultProviderId,
-      budgetUsd: opts.budgetUsd,
+      budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
-      permissionMode: opts.permissionMode ?? settings.defaultPermissionMode,
+      permissionMode,
       title: opts.title
     })
     meta.id = baseMeta.id
@@ -270,6 +282,7 @@ class SessionManager {
       const meta = this.create({
         cwd: task.cwd ?? input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
         isolated: task.isolated ?? input.isolated ?? true,
+        driveMode: task.driveMode ?? input.driveMode ?? parent.meta.driveMode,
         model: task.model ?? input.model ?? parent.meta.model,
         providerId: task.providerId ?? input.providerId ?? parent.meta.providerId,
         engine: task.engine ?? input.engine ?? parent.meta.engine,
@@ -312,6 +325,7 @@ class SessionManager {
         const meta = this.create({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
           isolated: input.isolated ?? true,
+          driveMode: input.driveMode ?? parent.meta.driveMode,
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
@@ -362,6 +376,7 @@ class SessionManager {
         const meta = this.create({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
           isolated: input.isolated ?? true,
+          driveMode: input.driveMode ?? parent.meta.driveMode,
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
@@ -792,6 +807,7 @@ class SessionManager {
       dag: execution.dag,
       cwd: runtime.dispatchOptions.cwd,
       isolated: runtime.dispatchOptions.isolated,
+      driveMode: runtime.dispatchOptions.driveMode,
       model: runtime.dispatchOptions.model,
       providerId: runtime.dispatchOptions.providerId,
       engine: runtime.dispatchOptions.engine,
@@ -897,10 +913,10 @@ class SessionManager {
 
   private handleModelCrossValidation(sessionId: string, event: AgentEvent, seq: number): void {
     if (event.kind !== 'turn-result' || event.isError) return
-    const settings = getSettings()
-    if (!settings.smartModelRoutingEnabled || !settings.modelCrossValidationAutoRunEnabled) return
     const session = this.sessions.get(sessionId)
     if (!session) return
+    const settings = settingsForCaoGenDrive(getSettings(), session.meta.driveMode)
+    if (!settings.smartModelRoutingEnabled || !settings.modelCrossValidationAutoRunEnabled) return
     if (session.meta.parentSessionId || session.meta.childRole === 'model-review') return
     const routePlan = this.routePlans.get(sessionId)
     if (!routePlan?.enabled) return
@@ -1373,6 +1389,7 @@ class SessionManager {
       id: meta.id,
       title: meta.title,
       cwd: meta.cwd,
+      driveMode: meta.driveMode,
       parentSessionId: meta.parentSessionId,
       orchestrationId: meta.orchestrationId,
       childTaskId: meta.childTaskId,
@@ -1452,7 +1469,7 @@ function effectiveBudgetUsd(meta: SessionMeta): number {
   if (sessionBudget !== undefined) return sessionBudget
   const providerBudget = meta.providerId ? normalizePositiveNumber(getProvider(meta.providerId)?.budgetUsd) : undefined
   if (providerBudget !== undefined) return providerBudget
-  return normalizePositiveNumber(getSettings().budgetUsdPerSession) ?? 0
+  return normalizePositiveNumber(settingsForCaoGenDrive(getSettings(), meta.driveMode).budgetUsdPerSession) ?? 0
 }
 
 function canTrackCost(meta: SessionMeta): boolean {

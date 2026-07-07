@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
-import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
-import type { PermissionModeId } from '../../../shared/types'
+import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
+import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
 
 /**
  * 首屏"打开即输入"(对标 Codex Desktop):居中引导语 + 中央大输入框,
@@ -16,9 +17,12 @@ export default function WelcomeView(): React.JSX.Element {
 
   const [text, setText] = useState('')
   const [cwd, setCwd] = useState('')
+  const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
   const [providerId, setProviderId] = useState(settings.defaultProviderId)
-  const [model, setModel] = useState(settings.defaultModel)
-  const [permissionMode, setPermissionMode] = useState<PermissionModeId>(settings.defaultPermissionMode)
+  const [model, setModel] = useState(caogenDrivePolicyView(settings.driveMode).defaultModel)
+  const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
+    caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -26,10 +30,21 @@ export default function WelcomeView(): React.JSX.Element {
   const modelOptions = useMemo(() => {
     const p = providers.find((x) => x.id === providerId)
     if (p && p.models.length > 0) {
-      return [{ value: '', label: t('defaultModel') }, ...p.models.map((m) => ({ value: m, label: m }))]
+      return [
+        { value: AUTO_MODEL, label: t('autoRoute') },
+        { value: '', label: t('defaultModel') },
+        ...p.models.map((m) => ({ value: m, label: m }))
+      ]
     }
     return MODEL_OPTIONS
   }, [providers, providerId, t])
+
+  const onDriveChange = (mode: CaoGenDriveMode): void => {
+    const policy = caogenDrivePolicyView(mode)
+    setDriveMode(mode)
+    setModel(policy.defaultModel)
+    setPermissionMode(policy.defaultPermissionMode)
+  }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
@@ -46,7 +61,7 @@ export default function WelcomeView(): React.JSX.Element {
     setBusy(true)
     setError('')
     try {
-      await startSessionWithPrompt({ cwd: cwd.trim(), model, providerId, permissionMode }, prompt)
+      await startSessionWithPrompt({ cwd: cwd.trim(), driveMode, model, providerId, permissionMode }, prompt)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -100,6 +115,17 @@ export default function WelcomeView(): React.JSX.Element {
                 ))}
               </select>
             )}
+            <select
+              className="welcome-mini-select"
+              value={driveMode}
+              onChange={(e) => onDriveChange(e.target.value as CaoGenDriveMode)}
+            >
+              {DRIVE_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
             <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
               {modelOptions.map((o) => (
                 <option key={o.value} value={o.value}>

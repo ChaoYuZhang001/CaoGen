@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { AUTO_MODEL, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../../shared/types'
+import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../../shared/types'
 import type {
   AgentEvent,
   AppSettings,
@@ -839,6 +839,7 @@ export const useStore = create<AppStore>((set, get) => {
   activeId: null,
   history: [],
   settings: {
+    driveMode: 'core',
     defaultModel: DEEPSEEK_DEFAULT_MODEL,
     defaultPermissionMode: 'default',
     defaultProviderId: DEEPSEEK_PROVIDER_ID,
@@ -3431,6 +3432,17 @@ export const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'haiku', label: 'Haiku' }
 ]
+
+export const DRIVE_MODE_OPTIONS = CAOGEN_DRIVE_POLICIES.map((policy) => ({
+  value: policy.mode,
+  label: `${policy.label} · ${policy.zhLabel}`,
+  summary: policy.summary,
+  budgetUsd: policy.sessionBudgetUsd,
+  defaultModel: policy.defaultModel,
+  defaultPermissionMode: policy.defaultPermissionMode,
+  validationDepth: policy.validationDepth,
+  toolPolicySummary: policy.toolPolicySummary
+}))
 
 export const STRATEGY_OPTIONS: Array<{ value: SchedulerStrategy; label: string }> = [
   { value: 'balanced', label: '均衡' },

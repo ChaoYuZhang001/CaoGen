@@ -219,6 +219,7 @@ export class TaskDagScheduler {
         dag: execution.dag,
         cwd: runtime.dispatchOptions.cwd,
         isolated: runtime.dispatchOptions.isolated,
+        driveMode: runtime.dispatchOptions.driveMode,
         model: runtime.dispatchOptions.model,
         providerId: runtime.dispatchOptions.providerId,
         engine: runtime.dispatchOptions.engine,
@@ -267,6 +268,7 @@ export class TaskDagScheduler {
       dispatchOptions: {
         cwd: this.input.cwd,
         isolated: this.input.isolated,
+        driveMode: this.input.driveMode,
         model: this.input.model,
         providerId: this.input.providerId,
         engine: this.input.engine,

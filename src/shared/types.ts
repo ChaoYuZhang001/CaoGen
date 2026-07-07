@@ -11,6 +11,25 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
 export type SchedulerStrategy = 'quality' | 'cost' | 'balanced'
 
+export type CaoGenDriveMode = 'spark' | 'core' | 'forge' | 'command' | 'genesis'
+
+export type CaoGenDriveValidationDepth = 'light' | 'basic' | 'local' | 'guarded' | 'closedLoop'
+
+export interface CaoGenDrivePolicyView {
+  mode: CaoGenDriveMode
+  label: string
+  zhLabel: string
+  summary: string
+  schedulerStrategy: SchedulerStrategy
+  defaultModel: string
+  defaultPermissionMode: PermissionModeId
+  sessionBudgetUsd: number
+  validationDepth: CaoGenDriveValidationDepth
+  smartModelRoutingEnabled: boolean
+  modelCrossValidationAutoRunEnabled: boolean
+  toolPolicySummary: string
+}
+
 export interface ModelRoutePlanView {
   enabled: boolean
   primary: { providerId: string; providerName?: string; model: string }
@@ -23,6 +42,90 @@ export interface ModelRoutePlanView {
 export const AUTO_MODEL = 'auto'
 export const DEEPSEEK_PROVIDER_ID = 'deepseek-official'
 export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-chat'
+
+export const CAOGEN_DRIVE_POLICIES: readonly CaoGenDrivePolicyView[] = [
+  {
+    mode: 'spark',
+    label: 'Spark',
+    zhLabel: '星火',
+    summary: '快速模型、低推理、少工具、轻验证',
+    schedulerStrategy: 'cost',
+    defaultModel: AUTO_MODEL,
+    defaultPermissionMode: 'default',
+    sessionBudgetUsd: 0.05,
+    validationDepth: 'light',
+    smartModelRoutingEnabled: true,
+    modelCrossValidationAutoRunEnabled: false,
+    toolPolicySummary: '低风险工具优先，阻止高风险、GUI、DAG 和发布类动作'
+  },
+  {
+    mode: 'core',
+    label: 'Core',
+    zhLabel: '中枢',
+    summary: '默认日用，均衡模型、常规工具、基础验证',
+    schedulerStrategy: 'balanced',
+    defaultModel: AUTO_MODEL,
+    defaultPermissionMode: 'default',
+    sessionBudgetUsd: 0.25,
+    validationDepth: 'basic',
+    smartModelRoutingEnabled: true,
+    modelCrossValidationAutoRunEnabled: false,
+    toolPolicySummary: '常规读写按权限模式执行，阻止 critical 风险动作'
+  },
+  {
+    mode: 'forge',
+    label: 'Forge',
+    zhLabel: '熔铸',
+    summary: '多文件工程、强推理、局部测试、diff/review',
+    schedulerStrategy: 'quality',
+    defaultModel: AUTO_MODEL,
+    defaultPermissionMode: 'acceptEdits',
+    sessionBudgetUsd: 1.5,
+    validationDepth: 'local',
+    smartModelRoutingEnabled: true,
+    modelCrossValidationAutoRunEnabled: false,
+    toolPolicySummary: '自动接受编辑，命令和高风险动作仍走审批'
+  },
+  {
+    mode: 'command',
+    label: 'Command',
+    zhLabel: '指挥',
+    summary: '高风险任务、强模型、GUI/IDE/Git/权限强管控',
+    schedulerStrategy: 'quality',
+    defaultModel: AUTO_MODEL,
+    defaultPermissionMode: 'default',
+    sessionBudgetUsd: 5,
+    validationDepth: 'guarded',
+    smartModelRoutingEnabled: true,
+    modelCrossValidationAutoRunEnabled: true,
+    toolPolicySummary: '强模型与自动复核，GUI 可逐次审批，critical 风险仍阻止'
+  },
+  {
+    mode: 'genesis',
+    label: 'Genesis',
+    zhLabel: '创生',
+    summary: '多 Agent、DAG、worktree、交叉复核、自动验证、交付闭环',
+    schedulerStrategy: 'quality',
+    defaultModel: AUTO_MODEL,
+    defaultPermissionMode: 'acceptEdits',
+    sessionBudgetUsd: 12,
+    validationDepth: 'closedLoop',
+    smartModelRoutingEnabled: true,
+    modelCrossValidationAutoRunEnabled: true,
+    toolPolicySummary: '允许多 Agent/DAG 底座，编辑自动化，命令、GUI 和发布动作保留审批'
+  }
+]
+
+export function normalizeCaoGenDriveMode(value: unknown): CaoGenDriveMode {
+  return CAOGEN_DRIVE_POLICIES.some((policy) => policy.mode === value)
+    ? (value as CaoGenDriveMode)
+    : 'core'
+}
+
+export function caogenDrivePolicyView(mode: unknown): CaoGenDrivePolicyView {
+  const normalized = normalizeCaoGenDriveMode(mode)
+  return CAOGEN_DRIVE_POLICIES.find((policy) => policy.mode === normalized) ?? CAOGEN_DRIVE_POLICIES[1]
+}
 
 export interface ProviderHealthView {
   /** '' / 'official' = 官方 Anthropic;否则 Provider id */
@@ -61,6 +164,8 @@ export interface SessionMeta {
   id: string
   title: string
   cwd: string
+  /** CaoGen Drive 档位:控制默认模型路由、预算、验证深度和工具权限策略。 */
+  driveMode?: CaoGenDriveMode
   /** 父会话 ID;存在时此会话是主会话派出的真实子 Agent。 */
   parentSessionId?: string
   /** 一次子代理编排批次 ID,用于聚合同一轮派活。 */
@@ -113,6 +218,7 @@ export interface HistoryEntry {
   id: string
   title: string
   cwd: string
+  driveMode?: CaoGenDriveMode
   parentSessionId?: string
   orchestrationId?: string
   childTaskId?: string
@@ -142,6 +248,7 @@ export interface HistoryEntry {
 
 export interface CreateSessionOptions {
   cwd: string
+  driveMode?: CaoGenDriveMode
   parentSessionId?: string
   orchestrationId?: string
   childTaskId?: string
@@ -167,6 +274,7 @@ export interface DispatchSubagentTaskInput {
   prompt: string
   cwd?: string
   isolated?: boolean
+  driveMode?: CaoGenDriveMode
   model?: string
   providerId?: string
   engine?: EngineKind
@@ -177,6 +285,7 @@ export interface DispatchSubagentsInput {
   tasks: DispatchSubagentTaskInput[]
   cwd?: string
   isolated?: boolean
+  driveMode?: CaoGenDriveMode
   model?: string
   providerId?: string
   engine?: EngineKind
@@ -278,6 +387,7 @@ export interface TaskDagExecutionView {
 export interface TaskDagRuntimeDispatchOptions {
   cwd?: string
   isolated?: boolean
+  driveMode?: CaoGenDriveMode
   model?: string
   providerId?: string
   engine?: EngineKind
@@ -319,6 +429,7 @@ export interface TaskDagDispatchInput {
   dag: TaskDag
   cwd?: string
   isolated?: boolean
+  driveMode?: CaoGenDriveMode
   model?: string
   providerId?: string
   engine?: EngineKind
@@ -629,6 +740,8 @@ export interface OfficeSettings {
 }
 
 export interface AppSettings {
+  /** CaoGen Drive 默认档位;新会话默认继承此档位。 */
+  driveMode: CaoGenDriveMode
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
   defaultPermissionMode: PermissionModeId

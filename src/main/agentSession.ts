@@ -42,11 +42,13 @@ import {
 } from './scheduler'
 import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
+import { settingsForCaoGenDrive } from './model/drive'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
+  CaoGenDriveMode,
   CheckpointRestoreMode,
   CheckpointRestoreResult,
   EngineKind,
@@ -457,7 +459,7 @@ export class AgentSession implements Engine {
     this.envFingerprint = this.providerEnvFingerprint()
     try {
       const sdk = await loadSdk()
-      const settings = getSettings()
+      const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
       const persona = settings.persona.trim()
       const allowed = splitList(settings.allowedTools)
       const disallowed = splitList(settings.disallowedTools)
@@ -647,8 +649,8 @@ export class AgentSession implements Engine {
    */
   private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
     try {
-      const strategy = getSettings().schedulerStrategy
-      const settings = getSettings()
+      const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+      const strategy = settings.schedulerStrategy
       if (settings.smartModelRoutingEnabled) {
         const monthlyBudget = calculateMonthlyBudgetSnapshot({
           settings,
@@ -661,6 +663,7 @@ export class AgentSession implements Engine {
           providerId: this.meta.providerId,
           providers: listProviders(),
           engine: this.meta.engine,
+          driveMode: this.meta.driveMode,
           payload,
           strategy: settings.schedulerStrategy,
           sessionCostUsd: this.meta.costUsd,
@@ -1366,7 +1369,7 @@ export class AgentSession implements Engine {
     input: Record<string, unknown>,
     opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string } | undefined
   ): Promise<PermissionResult> {
-    const settings = getSettings()
+    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policyToolName = normalizeClaudeToolName(toolName)
     const policyInput = normalizeClaudeToolInput(toolName, input)
     const policy = evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd })
@@ -1543,6 +1546,7 @@ export class AgentSession implements Engine {
 
 export function newSessionMeta(opts: {
   cwd: string
+  driveMode?: CaoGenDriveMode
   parentSessionId?: string
   orchestrationId?: string
   childTaskId?: string
@@ -1567,6 +1571,7 @@ export function newSessionMeta(opts: {
     id: randomUUID(),
     title: opts.title || '新会话',
     cwd: opts.cwd,
+    driveMode: opts.driveMode,
     parentSessionId: opts.parentSessionId,
     orchestrationId: opts.orchestrationId,
     childTaskId: opts.childTaskId,

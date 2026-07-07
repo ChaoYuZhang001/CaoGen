@@ -1,5 +1,6 @@
 import { AUTO_MODEL } from '../../shared/types'
 import type {
+  CaoGenDriveMode,
   ModelRoutePlanView,
   EngineKind,
   ProviderView,
@@ -8,6 +9,7 @@ import type {
 } from '../../shared/types'
 import { routeModel } from './model-router'
 import type { ManualModelOverride } from './model-router'
+import { driveModeLabel, driveRiskAtLeast, driveRouteTuning } from './drive'
 
 export interface SessionRouteInput {
   enabled: boolean
@@ -15,6 +17,7 @@ export interface SessionRouteInput {
   providerId: string
   providers: ProviderView[]
   engine?: EngineKind
+  driveMode?: CaoGenDriveMode
   payload: SendMessagePayload
   strategy: SchedulerStrategy
   sessionCostUsd: number
@@ -40,19 +43,18 @@ export function resolveSessionModelRoute(input: SessionRouteInput): SessionRoute
   const providers = routeableProviders(input.providers, input.engine)
   if (providers.length === 0) return { kind: 'disabled' }
   const prompt = input.payload.text
+  const drive = driveRouteTuning(input.driveMode)
   const decision = routeModel({
     providers,
     prompt,
     attachments: input.payload.images?.map((image) => ({ mime: image.mime })),
-    strategy: input.strategy,
+    requestedTasks: drive.requestedTasks,
+    expectedOutputTokens: drive.expectedOutputTokens,
+    strategy: drive.strategy,
     manualOverride: input.manualOverride,
     budget: budgetForRoute(input),
-    crossValidation: {
-      enabled: true,
-      minRiskLevel: 'medium',
-      maxValidators: 2
-    },
-    riskLevel: inferRouteRisk(prompt),
+    crossValidation: drive.crossValidation,
+    riskLevel: driveRiskAtLeast(inferRouteRisk(prompt), drive.riskFloor),
     requiresTools: true
   })
   const selected = decision.selected.profile
@@ -62,7 +64,7 @@ export function resolveSessionModelRoute(input: SessionRouteInput): SessionRoute
     model: selected.model,
     switchedProvider: selected.providerId !== input.providerId,
     crossValidationPlan: decision.crossValidationPlan,
-    reason: formatRouteReason(decision)
+    reason: formatRouteReason(decision, drive.mode)
   }
 }
 
@@ -95,10 +97,11 @@ function inferRouteRisk(prompt: string): 'low' | 'medium' | 'high' {
   return 'low'
 }
 
-function formatRouteReason(decision: ReturnType<typeof routeModel>): string {
+function formatRouteReason(decision: ReturnType<typeof routeModel>, driveMode: CaoGenDriveMode): string {
   const selected = decision.selected.profile
   const parts = [
-    `P2-003 智能调度选择 ${selected.providerName ?? selected.providerId}/${selected.model}`,
+    `Drive=${driveModeLabel(driveMode)}`,
+    `智能调度选择 ${selected.providerName ?? selected.providerId}/${selected.model}`,
     `任务=${decision.task.taskKinds.join('+')}`,
     `策略=${decision.task.strategy}`,
     `估算=$${decision.selected.estimatedCostUsd.toFixed(4)}`
