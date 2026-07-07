@@ -50,7 +50,7 @@
 | Memory Loop | 已合入 | 任务复盘、失败复盘、偏好学习和工作流建议草稿 |
 | Personal OS | 已合入 | 本地常驻助理、Routines、主动建议和个人工作流入口 |
 | Control Center | 已合入 | Provider、模型、密钥状态、MCP、Skills、CLI 工具统一管理视图 |
-| Genesis | 进行中 | 目标是多 Agent 编排、隔离执行、审查、验证、交付;未合入前不对外声明完成 |
+| Genesis | 已合入(计划层) | 可生成结构化多 Agent 编排、worker lanes、隔离策略、验证门禁和交付报告;尚不宣称真实创建子会话、自动合并、推送或发布 |
 
 这些能力的定位是 **Native Integration**,不是导入 Claude、Codex、OpenClaw、Hermes 或 ccswitch 的配置。CaoGen 会吸收它们的用户价值,但不复制竞品代码,也不伪造外部工具已经完成的能力。
 

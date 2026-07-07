@@ -72,7 +72,6 @@ try {
     target: 'node22',
     external: [
       'chokidar',
-      'ripgrep-js',
       'sql.js',
       'tree-sitter',
       'tree-sitter-typescript',

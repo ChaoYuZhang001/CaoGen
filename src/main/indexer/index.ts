@@ -6,7 +6,6 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node
 import { TextDecoder } from 'node:util'
 import chokidar, { type FSWatcher } from 'chokidar'
 import initSqlJs from 'sql.js'
-import { ripGrep, type Match as RipgrepMatch } from 'ripgrep-js'
 import { languageForFile, parseCodeFile, type CodeSymbolKind } from './parsers/languages'
 
 type SqlValue = number | string | Uint8Array | null
@@ -257,15 +256,6 @@ export class ProjectIndexer {
     const clean = query.trim()
     if (!clean) return []
     const capped = clampLimit(limit)
-    const globs = glob?.trim() ? [glob.trim()] : undefined
-    if (process.platform !== 'win32') {
-      try {
-        const matches = await withTimeout(ripGrep(this.root, { string: clean, globs }), 3_000)
-        return matches.slice(0, capped).map((match) => formatRipgrepMatch(this.root, match))
-      } catch {
-        // ripgrep-js 在部分环境会因 shell/glob 行为失败,继续走 rg 二进制或内置降级。
-      }
-    }
     try {
       const matches = await runRipgrepBinary(this.root, clean, glob, capped)
       return matches.length > 0 ? matches : this.fallbackSearchCode(clean, glob, capped)
@@ -644,14 +634,6 @@ function clampLimit(value: number): number {
   return Number.isFinite(value) ? Math.min(100, Math.max(1, Math.floor(value))) : DEFAULT_LIMIT
 }
 
-function formatRipgrepMatch(root: string, match: RipgrepMatch): CodeSearchMatch {
-  return {
-    filePath: toProjectRelative(root, resolve(root, match.path.text)),
-    line: match.line_number,
-    snippet: match.lines.text.trim()
-  }
-}
-
 function runRipgrepBinary(root: string, query: string, glob: string | undefined, limit: number): Promise<CodeSearchMatch[]> {
   const args = ['--json', '-F', query]
   if (glob?.trim()) args.push('-g', glob.trim())
@@ -687,18 +669,6 @@ function runRipgrepBinary(root: string, query: string, glob: string | undefined,
       }
       resolvePromise(matches)
     })
-  })
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`operation timed out after ${ms}ms`)), ms)
-    })
-  ]).finally(() => {
-    if (timer) clearTimeout(timer)
   })
 }
 

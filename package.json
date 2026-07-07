@@ -153,7 +153,6 @@
     "react-markdown": "^9.1.0",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
-    "ripgrep-js": "^3.0.0",
     "sql.js": "^1.14.1",
     "three": "^0.169.0",
     "tree-sitter": "^0.21.1",
