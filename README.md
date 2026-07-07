@@ -9,9 +9,9 @@
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>
 
-> 🐳 国产原创 · 多厂商 AI 编码桌面工作室 · 开源(MIT)
+> 🐳 国产原创 · Agent Work OS · 多厂商 AI 编码桌面工作室 · 开源(MIT)
 
-多会话并行的桌面 AI 编码 Agent。终极目标是让 **Codex、Claude Code、Gemini CLI、Marvis 以及其他主流 Agent 的深度用户丝滑转用 CaoGen**,把 CaoGen 做成中国原创、世界级第一梯队的桌面 AI 编码工作室:多厂商模型可配置、指定运行或智能自动调度、每个 Agent 用 Git worktree 隔离、并行会话以写实 3D 办公区呈现,并补齐深度用户迁移所需的检查点回溯、子代理编排、内置浏览器批注、插件生态、产物预览、自动化与主动建议——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
+多会话并行的桌面 AI 编码 Agent,正在升级为 **原生 Agent Work OS**。CaoGen 不做 Agent 启动器,不做配置搬运工具;目标是把桌面控制、代码执行、多模型调度、Skills/MCP、长期记忆、多 Agent 交付集成进一个 CaoGen 任务系统。完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
 
 当前以 Claude Agent SDK 为默认引擎(与 Claude Code 同源),OpenAI 引擎同时支持 **Responses** 与 **Chat Completions** 两种协议,在桌面层提供 CLI 给不了的体验:
 
@@ -35,6 +35,24 @@
 - **成本仪表盘** — 每轮 token 用量、上下文规模、累计费用实时显示
 - **会话恢复** — 历史会话持久化,一键恢复上下文继续工作
 - **写实 3D 办公区** — 每个会话一个工位,小人动画/厂商配色/成本气泡由**真实会话状态**驱动,父子工位间飞行消息包呈现真实编排流
+
+## Agent Work OS 主线
+
+当前 `main` 已合入第一波原生 Work OS 能力:
+
+| 模块 | 状态 | 说明 |
+|---|---|---|
+| CaoGen Drive | 已合入 | `Spark / Core / Forge / Command / Genesis` 五档任务驾驶模式,统一模型路由、预算、权限、沙箱和验证策略 |
+| Quickbar | 已合入 | 全局入口的主进程/预加载/渲染链路,面向截图、文件投递、剪贴板和窗口上下文 |
+| Desktop Control | 已合入 | macOS System Events / AXUIElement 路径,带权限边界和 GUI 工具 schema |
+| Code Forge | 已合入 | worktree/repo diff 汇总、验证命令、patch、commit、PR 尝试和结构化交付报告 |
+| Skill Fabric | 已合入 | Skills/MCP 能力视图、匹配和调用边界,兼容本地技能库 |
+| Memory Loop | 已合入 | 任务复盘、失败复盘、偏好学习和工作流建议草稿 |
+| Personal OS | 已合入 | 本地常驻助理、Routines、主动建议和个人工作流入口 |
+| Control Center | 已合入 | Provider、模型、密钥状态、MCP、Skills、CLI 工具统一管理视图 |
+| Genesis | 进行中 | 目标是多 Agent 编排、隔离执行、审查、验证、交付;未合入前不对外声明完成 |
+
+这些能力的定位是 **Native Integration**,不是导入 Claude、Codex、OpenClaw、Hermes 或 ccswitch 的配置。CaoGen 会吸收它们的用户价值,但不复制竞品代码,也不伪造外部工具已经完成的能力。
 
 ## 界面预览
 
@@ -72,29 +90,40 @@ npm run dev        # 启动开发模式(HMR)
 npm run typecheck  # TS 类型检查(主进程 + 渲染进程)
 npm run build      # 产物输出到 out/
 npm start          # 预览构建产物
-npm run test:deep  # 深度测试:typecheck/build/集成×3/模块冒烟×12/
-                   # Electron IPC/OpenAI mock E2E/页面操作冒烟(共 21 项)
+npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
+                   # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
 ```
 
 需要真实厂商 Key 的端到端脚本(不入 CI,本机手动跑):
 
 ```bash
 # Chat Completions 真对话 E2E(流式 + usage + 多轮上下文)
-CHAT_E2E_KEY=sk-... npx electron scripts/chat-protocol-e2e.cjs
+CHAT_E2E_KEY=<your-api-key> npx electron scripts/chat-protocol-e2e.cjs
 
 # 真子代理编排闭环 E2E(派发→子代理真实跑完→自动回灌→父 Agent 总结)
-CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
+CHAT_E2E_KEY=<your-api-key> npx electron scripts/orchestration-e2e.cjs
 
 # 32 子代理并发压测(吞吐/时延/成本统计 + 结果正确性抽查)
-CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
+CHAT_E2E_KEY=<your-api-key> npx electron scripts/stress-32-agents.cjs
 
 # 原生编码 Agent E2E(模型经工具调用真实创建/编辑文件、执行命令)
-CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
+CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
 ```
+
+## 密钥与公开仓库纪律
+
+真实密钥、webhook、证书、签名材料、`.env`、私钥和平台 token **不得提交**。本仓库只允许出现环境变量名、脱敏占位符和测试专用假值。
+
+- 在设置页输入的 Provider 密钥由主进程加密/脱敏保存,渲染进程只看到 `hasToken` 状态。
+- 本地开发密钥放在 shell 环境、系统钥匙串或未跟踪的 `.env.local` 中。
+- 发布前至少运行一次密钥扫描,并人工复核 `git status --short` 与即将提交的 diff。
+- 如果任何真实 token 曾经外发或推送,必须在对应平台撤销/轮换;仅从 Git 删除不足以让旧凭据失效。
 
 ## 打包分发 / 发布
 
 CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
+
+最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、打包产物和真实外部门禁完成后再创建 Release。
 
 ```bash
 npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)

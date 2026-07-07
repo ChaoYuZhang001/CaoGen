@@ -3,7 +3,7 @@
  * 验证闭环:父会话派发 2 个子代理 → 子代理真实跑完首轮 →
  * 汇总自动回灌父 Agent → 父 Agent 真实产出编排总结。
  *
- * 运行: CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
+ * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/orchestration-e2e.cjs
  */
 const path = require('node:path')
 const os = require('node:os')

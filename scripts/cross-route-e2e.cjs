@@ -3,7 +3,7 @@
  * 场景:会话挂在"弱厂商"(只有低档模型、且是无效端点)上,auto 模式发复杂任务,
  * 验证路由器跨厂商选中 DeepSeek(质量更匹配)并真实完成对话。
  *
- * 运行: CHAT_E2E_KEY=sk-... npx electron scripts/cross-route-e2e.cjs
+ * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/cross-route-e2e.cjs
  */
 const path = require('node:path')
 const os = require('node:os')
@@ -36,7 +36,7 @@ async function run() {
   // 厂商 A:弱(只有低档 mini 模型;端点无效,若路由错选它会直接失败)
   const weak = await invoke('providers:create', {
     name: '弱厂商', baseUrl: 'https://invalid.example.com', models: ['gpt-4o-mini'],
-    openaiProtocol: 'chat', token: 'sk-fake'
+    openaiProtocol: 'chat', token: 'fixture-api-key'
   })
   // 厂商 B:DeepSeek(deepseek-reasoner 质量档 3,复杂任务应选它)
   const strong = await invoke('providers:create', {

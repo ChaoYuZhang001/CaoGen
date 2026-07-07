@@ -10,6 +10,20 @@ plugins/jetbrains/.kotlin/
 *.log
 .DS_Store
 
+# 本地凭据与签名材料,绝不入库
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+*.mobileprovision
+id_rsa
+id_ed25519
+GoogleService-Info.plist
+firebase-service-account*.json
+
 .claude/settings.local.json
 .claude/worktrees/
 electron.vite.config.*.mjs

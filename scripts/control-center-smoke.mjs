@@ -29,7 +29,7 @@ try {
   )
 
   const controlCenter = await import(pathToFileURL(findCompiled(buildDir, 'controlCenter.js')).href)
-  const secretProbe = 'sk-live-secret-value-that-must-not-render'
+  const secretProbe = 'REDACTED_TOKEN_PLACEHOLDER_THAT_MUST_NOT_RENDER'
   const settings = {
     driveMode: 'command',
     defaultModel: 'auto',
