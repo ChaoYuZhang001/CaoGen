@@ -1,10 +1,11 @@
 import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../shared/types'
+import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID, normalizeCaoGenDriveMode } from '../shared/types'
 import type { AppSettings } from '../shared/types'
 
 const DEFAULTS: AppSettings = {
+  driveMode: 'core',
   defaultModel: DEEPSEEK_DEFAULT_MODEL,
   defaultPermissionMode: 'default',
   defaultProviderId: DEEPSEEK_PROVIDER_ID,
@@ -53,7 +54,12 @@ export function getSettings(): AppSettings {
   if (cache) return cache
   try {
     const raw = JSON.parse(readFileSync(settingsFile(), 'utf8')) as Partial<AppSettings>
-    cache = { ...DEFAULTS, ...raw, office: { ...DEFAULTS.office, ...(raw.office ?? {}) } }
+    cache = {
+      ...DEFAULTS,
+      ...raw,
+      driveMode: normalizeCaoGenDriveMode(raw.driveMode),
+      office: { ...DEFAULTS.office, ...(raw.office ?? {}) }
+    }
   } catch {
     cache = { ...DEFAULTS }
   }
@@ -62,7 +68,12 @@ export function getSettings(): AppSettings {
 
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const prev = getSettings()
-  const next = { ...prev, ...patch, office: { ...prev.office, ...(patch.office ?? {}) } }
+  const next = {
+    ...prev,
+    ...patch,
+    driveMode: patch.driveMode === undefined ? prev.driveMode : normalizeCaoGenDriveMode(patch.driveMode),
+    office: { ...prev.office, ...(patch.office ?? {}) }
+  }
   cache = next
   try {
     mkdirSync(dirname(settingsFile()), { recursive: true })

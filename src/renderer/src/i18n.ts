@@ -373,6 +373,7 @@ const DICT: Dict = {
   themeLight: { zh: '白天(主白副黑)', en: 'Light' },
   themeDark: { zh: '夜晚(主黑副白)', en: 'Dark' },
   themeSystem: { zh: '跟随系统', en: 'System' },
+  driveMode: { zh: 'CaoGen Drive 档位', en: 'CaoGen Drive mode' },
   defaultProvider: { zh: '默认 Provider', en: 'Default Provider' },
   defaultModel: { zh: '默认模型', en: 'Default Model' },
   schedulerStrategy: { zh: '自动调度策略', en: 'Scheduler Strategy' },

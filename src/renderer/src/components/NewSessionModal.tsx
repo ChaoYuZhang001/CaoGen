@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
-import { AUTO_MODEL } from '../../../shared/types'
-import type { EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
+import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
+import type { CaoGenDriveMode, EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
 
 export default function NewSessionModal(): React.JSX.Element {
   const t = useT()
@@ -13,12 +13,13 @@ export default function NewSessionModal(): React.JSX.Element {
   const setShowNewSession = useStore((s) => s.setShowNewSession)
 
   const [cwd, setCwd] = useState('')
+  const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
   const [providerId, setProviderId] = useState(settings.defaultProviderId)
-  const [model, setModel] = useState(settings.defaultModel)
+  const [model, setModel] = useState(caogenDrivePolicyView(settings.driveMode).defaultModel)
   const [engine, setEngine] = useState<EngineKind>('claude')
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
-    settings.defaultPermissionMode
+    caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -47,6 +48,13 @@ export default function NewSessionModal(): React.JSX.Element {
     if (model !== AUTO_MODEL) setModel('')
   }
 
+  const onDriveChange = (mode: CaoGenDriveMode): void => {
+    const policy = caogenDrivePolicyView(mode)
+    setDriveMode(mode)
+    setModel(policy.defaultModel)
+    setPermissionMode(policy.defaultPermissionMode)
+  }
+
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (dir) setCwd(dir)
@@ -60,7 +68,7 @@ export default function NewSessionModal(): React.JSX.Element {
     setBusy(true)
     setError('')
     try {
-      await createSession({ cwd: cwd.trim(), model, providerId, engine, permissionMode })
+      await createSession({ cwd: cwd.trim(), driveMode, model, providerId, engine, permissionMode })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -89,6 +97,19 @@ export default function NewSessionModal(): React.JSX.Element {
             </div>
           </>
         )}
+
+        <label className="field-label">{t('driveMode')}</label>
+        <select
+          className="select select-block"
+          value={driveMode}
+          onChange={(e) => onDriveChange(e.target.value as CaoGenDriveMode)}
+        >
+          {DRIVE_MODE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
 
         <label className="field-label">{t('projectDir')}</label>
         <div className="field-row">

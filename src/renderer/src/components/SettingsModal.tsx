@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
+import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import type {
   AppLanguage,
   AppTheme,
+  CaoGenDriveMode,
   MigrationScan,
   PermissionModeId,
   ProviderHealthView,
@@ -37,6 +38,7 @@ export default function SettingsModal(): React.JSX.Element {
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [migrateBusy, setMigrateBusy] = useState(false)
   const [migrateResult, setMigrateResult] = useState('')
+  const selectedDrive = DRIVE_MODE_OPTIONS.find((option) => option.value === draft.driveMode) ?? DRIVE_MODE_OPTIONS[1]
 
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
@@ -171,6 +173,22 @@ export default function SettingsModal(): React.JSX.Element {
                   <option value="dark">{t('themeDark')}</option>
                   <option value="system">{t('themeSystem')}</option>
                 </select>
+
+                <label className="field-label">{t('driveMode')}</label>
+                <select
+                  className="select select-block"
+                  value={draft.driveMode}
+                  onChange={(e) => set('driveMode', e.target.value as CaoGenDriveMode)}
+                >
+                  {DRIVE_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="settings-hint">
+                  {selectedDrive.summary} · ${selectedDrive.budgetUsd}/session · {selectedDrive.toolPolicySummary}
+                </p>
 
                 <label className="field-label">{t('defaultProvider')}</label>
                 <select

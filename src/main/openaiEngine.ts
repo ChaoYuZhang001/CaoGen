@@ -14,6 +14,7 @@ import {
 import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
 import { resolveSessionModelRoute } from './model/session-routing'
+import { settingsForCaoGenDrive } from './model/drive'
 import {
   EDIT_TOOLS,
   OPENAI_CODING_TOOLS,
@@ -229,7 +230,7 @@ export class OpenAIEngine implements Engine {
   /** 跨厂商智能路由:候选 = 所有有 baseUrl 的 Provider(官方 Anthropic 空址不适配本引擎) */
   private autoRoute(payload: SendMessagePayload): void {
     try {
-      const settings = getSettings()
+      const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
       if (settings.smartModelRoutingEnabled) {
         const smart = resolveSessionModelRoute({
           enabled: true,
@@ -237,6 +238,7 @@ export class OpenAIEngine implements Engine {
           providerId: this.meta.providerId,
           providers: listProviders(),
           engine: this.meta.engine,
+          driveMode: this.meta.driveMode,
           payload,
           strategy: settings.schedulerStrategy,
           sessionCostUsd: this.meta.costUsd,
@@ -323,7 +325,7 @@ export class OpenAIEngine implements Engine {
 
   /** 按 permissionMode 决定工具是否需要人工审批;需要则挂起等 UI 决定 */
   private async gateTool(name: string, input: Record<string, unknown>, toolUseId: string): Promise<{ allow: boolean; message?: string }> {
-    const settings = getSettings()
+    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
     if (policy.kind === 'deny') {
       writeAuditLog(this.meta.cwd, {
@@ -413,7 +415,7 @@ export class OpenAIEngine implements Engine {
   }
 
   private async executeAllowedTool(name: string, input: Record<string, unknown>): Promise<ToolExecResult> {
-    const settings = getSettings()
+    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const exec = await executeCodingTool(name, input, this.meta.cwd, {
       sandboxMode: settings.sandboxMode,
       dockerImage: settings.sandboxDockerImage,

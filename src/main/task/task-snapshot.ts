@@ -631,6 +631,7 @@ function isTaskDagRuntimeDispatchOptions(value: unknown): boolean {
     !!record &&
     isOptionalString(record.cwd) &&
     (record.isolated === undefined || typeof record.isolated === 'boolean') &&
+    isOptionalString(record.driveMode) &&
     isOptionalString(record.model) &&
     isOptionalString(record.providerId) &&
     (record.engine === undefined || isEngineKind(record.engine)) &&
