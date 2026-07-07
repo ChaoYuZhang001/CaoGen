@@ -2,6 +2,11 @@ node_modules/
 out/
 dist/
 test-results/
+plugins/vscode/out/
+plugins/jetbrains/build/
+plugins/jetbrains/.gradle/
+plugins/jetbrains/.intellijPlatform/
+plugins/jetbrains/.kotlin/
 *.log
 .DS_Store
 
@@ -12,3 +17,6 @@ electron.vite.config.*.mjs
 # 运行时数据(测试/使用副产物,不入库)
 model-stats.json
 worktree-merges.json
+.caogen/index.db
+.caogen/tmp/
+.caogen/audit.log

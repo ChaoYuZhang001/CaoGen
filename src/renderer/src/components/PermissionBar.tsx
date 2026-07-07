@@ -2,6 +2,8 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import type { PermissionRequestInfo } from '../../../shared/types'
 
+const GUI_TEMPORARY_GRANT_MESSAGE = 'gui-temporary-grant:5m'
+
 function summarize(input: unknown): string {
   if (!input || typeof input !== 'object') return ''
   const obj = input as Record<string, unknown>
@@ -45,6 +47,16 @@ export default function PermissionBar({
             >
               {t('allow')}
             </button>
+            {req.toolName.startsWith('gui_') && (
+              <button
+                className="btn btn-ghost"
+                onClick={() =>
+                  void respondPermission(sessionId, req.requestId, true, GUI_TEMPORARY_GRANT_MESSAGE)
+                }
+              >
+                {t('allowTemporary')}
+              </button>
+            )}
             <button
               className="btn btn-ghost"
               onClick={() => void respondPermission(sessionId, req.requestId, false)}

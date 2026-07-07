@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { nextAfter } from './cronParse'
-import type { PermissionModeId } from '../shared/types'
+import type { EngineKind, PermissionModeId, RoutineNotificationOptions } from '../shared/types'
 
 export type RoutinePermissionMode = PermissionModeId
 
@@ -10,12 +10,16 @@ export interface Routine extends Record<string, unknown> {
   id: string
   name: string
   prompt: string
+  content?: string
   projectCwd: string
   schedule: string
+  frequency?: string
   providerId: string
   model: string
+  engine?: EngineKind
   permissionMode: RoutinePermissionMode
   budgetUsd: number
+  notification: RoutineNotificationOptions
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -26,13 +30,17 @@ export interface Routine extends Record<string, unknown> {
 export type CreateRoutineInput = {
   id?: string
   name: string
-  prompt: string
+  prompt?: string
+  content?: string
   projectCwd: string
-  schedule: string
+  schedule?: string
+  frequency?: string
   providerId?: string
   model?: string
+  engine?: EngineKind
   permissionMode?: RoutinePermissionMode
   budgetUsd?: number
+  notification?: RoutineNotificationOptions
   enabled?: boolean
   createdAt?: number
   updatedAt?: number
@@ -43,12 +51,16 @@ export type CreateRoutineInput = {
 export type UpdateRoutineInput = {
   name?: string
   prompt?: string
+  content?: string
   projectCwd?: string
   schedule?: string
+  frequency?: string
   providerId?: string
   model?: string
+  engine?: EngineKind
   permissionMode?: RoutinePermissionMode
   budgetUsd?: number
+  notification?: RoutineNotificationOptions
   enabled?: boolean
   lastRunAt?: number | null
   nextRunAt?: number | null
@@ -80,16 +92,26 @@ const PERMISSION_MODES = new Set<RoutinePermissionMode>([
   'plan',
   'bypassPermissions'
 ])
+const ENGINE_KINDS = new Set<EngineKind>(['claude', 'openai', 'codex', 'gemini'])
+const DEFAULT_NOTIFICATION: RoutineNotificationOptions = {
+  enabled: false,
+  onSuccess: true,
+  onFailure: true
+}
 const SCHEMA_KEYS = new Set([
   'id',
   'name',
   'prompt',
+  'content',
   'projectCwd',
   'schedule',
+  'frequency',
   'providerId',
   'model',
+  'engine',
   'permissionMode',
   'budgetUsd',
+  'notification',
   'enabled',
   'createdAt',
   'updatedAt',
@@ -117,17 +139,23 @@ export async function createRoutine(rootDir: string, input: CreateRoutineInput):
 
   const createdAt = normalizeOptionalTimestamp(input.createdAt, 'createdAt') ?? now
   const updatedAt = normalizeOptionalTimestamp(input.updatedAt, 'updatedAt') ?? createdAt
+  const prompt = normalizeRequiredString(input.prompt ?? input.content, 'prompt')
+  const schedule = normalizeRequiredString(input.schedule ?? input.frequency, 'schedule')
   const routine: Routine = {
     ...copyUnknownFields(input),
     id,
     name: normalizeRequiredString(input.name, 'name'),
-    prompt: normalizeRequiredString(input.prompt, 'prompt'),
+    prompt,
+    content: normalizeOptionalString(input.content, 'content') ?? prompt,
     projectCwd: normalizeRequiredString(input.projectCwd, 'projectCwd'),
-    schedule: normalizeRequiredString(input.schedule, 'schedule'),
+    schedule,
+    frequency: normalizeOptionalString(input.frequency, 'frequency') ?? schedule,
     providerId: normalizeOptionalString(input.providerId, 'providerId') ?? '',
     model: normalizeOptionalString(input.model, 'model') ?? '',
+    engine: normalizeOptionalEngine(input.engine),
     permissionMode: normalizePermissionMode(input.permissionMode ?? 'default'),
     budgetUsd: normalizeBudget(input.budgetUsd ?? 0),
+    notification: normalizeNotificationOptions(input.notification),
     enabled: normalizeOptionalBoolean(input.enabled, 'enabled') ?? true,
     createdAt,
     updatedAt,
@@ -155,26 +183,48 @@ export async function updateRoutine(
   if (index === -1) return null
 
   const current = file.routines[index]
+  const prompt = hasOwn(patch, 'prompt')
+    ? normalizeRequiredString(patch.prompt, 'prompt')
+    : hasOwn(patch, 'content')
+      ? normalizeRequiredString(patch.content, 'content')
+      : current.prompt
+  const schedule = hasOwn(patch, 'schedule')
+    ? normalizeRequiredString(patch.schedule, 'schedule')
+    : hasOwn(patch, 'frequency')
+      ? normalizeRequiredString(patch.frequency, 'frequency')
+      : current.schedule
   const routine: Routine = {
     ...copyUnknownFields(current),
     ...copyUnknownFields(patch),
     id: current.id,
     name: hasOwn(patch, 'name') ? normalizeRequiredString(patch.name, 'name') : current.name,
-    prompt: hasOwn(patch, 'prompt') ? normalizeRequiredString(patch.prompt, 'prompt') : current.prompt,
+    prompt,
+    content: hasOwn(patch, 'content')
+      ? normalizeOptionalString(patch.content, 'content')
+      : hasOwn(patch, 'prompt')
+        ? prompt
+        : (current.content ?? current.prompt),
     projectCwd: hasOwn(patch, 'projectCwd')
       ? normalizeRequiredString(patch.projectCwd, 'projectCwd')
       : current.projectCwd,
-    schedule: hasOwn(patch, 'schedule')
-      ? normalizeRequiredString(patch.schedule, 'schedule')
-      : current.schedule,
+    schedule,
+    frequency: hasOwn(patch, 'frequency')
+      ? normalizeOptionalString(patch.frequency, 'frequency')
+      : hasOwn(patch, 'schedule')
+        ? schedule
+        : (current.frequency ?? current.schedule),
     providerId: hasOwn(patch, 'providerId')
       ? (normalizeOptionalString(patch.providerId, 'providerId') ?? '')
       : current.providerId,
     model: hasOwn(patch, 'model') ? (normalizeOptionalString(patch.model, 'model') ?? '') : current.model,
+    engine: hasOwn(patch, 'engine') ? normalizeOptionalEngine(patch.engine) : current.engine,
     permissionMode: hasOwn(patch, 'permissionMode')
       ? normalizePermissionMode(patch.permissionMode)
       : current.permissionMode,
     budgetUsd: hasOwn(patch, 'budgetUsd') ? normalizeBudget(patch.budgetUsd) : current.budgetUsd,
+    notification: hasOwn(patch, 'notification')
+      ? normalizeNotificationOptions(patch.notification, current.notification)
+      : (current.notification ?? DEFAULT_NOTIFICATION),
     enabled: hasOwn(patch, 'enabled') ? normalizeBoolean(patch.enabled, 'enabled') : current.enabled,
     createdAt: current.createdAt,
     updatedAt: Date.now(),
@@ -263,13 +313,17 @@ function normalizeStoredRoutine(value: unknown): Routine | null {
       ...copyUnknownFields(value),
       id,
       name: normalizeRequiredString(value.name, 'name'),
-      prompt: normalizeRequiredString(value.prompt, 'prompt'),
+      prompt: normalizeRequiredString(value.prompt ?? value.content, 'prompt'),
+      content: normalizeOptionalString(value.content, 'content') ?? normalizeRequiredString(value.prompt ?? value.content, 'prompt'),
       projectCwd: normalizeRequiredString(value.projectCwd, 'projectCwd'),
-      schedule: normalizeRequiredString(value.schedule, 'schedule'),
+      schedule: normalizeRequiredString(value.schedule ?? value.frequency, 'schedule'),
+      frequency: normalizeOptionalString(value.frequency, 'frequency') ?? normalizeRequiredString(value.schedule ?? value.frequency, 'schedule'),
       providerId: normalizeOptionalString(value.providerId, 'providerId') ?? '',
       model: normalizeOptionalString(value.model, 'model') ?? '',
+      engine: normalizeOptionalEngine(value.engine),
       permissionMode: isPermissionMode(value.permissionMode) ? value.permissionMode : 'default',
       budgetUsd: isNonNegativeNumber(value.budgetUsd) ? value.budgetUsd : 0,
+      notification: normalizeNotificationOptions(value.notification),
       enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
       createdAt: normalizeOptionalTimestamp(value.createdAt, 'createdAt') ?? 0,
       updatedAt: normalizeOptionalTimestamp(value.updatedAt, 'updatedAt') ?? 0,
@@ -320,11 +374,34 @@ function normalizePermissionMode(value: unknown): RoutinePermissionMode {
   return value
 }
 
+function normalizeOptionalEngine(value: unknown): EngineKind | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (!isEngineKind(value)) {
+    throw new RoutineStoreValidationError('engine must be one of: claude, openai, codex, gemini')
+  }
+  return value
+}
+
 function normalizeBudget(value: unknown): number {
   if (!isNonNegativeNumber(value)) {
     throw new RoutineStoreValidationError('budgetUsd must be a non-negative number')
   }
   return value
+}
+
+function normalizeNotificationOptions(
+  value: unknown,
+  fallback: RoutineNotificationOptions = DEFAULT_NOTIFICATION
+): RoutineNotificationOptions {
+  if (value === undefined || value === null) return { ...fallback }
+  if (!isRecord(value)) {
+    throw new RoutineStoreValidationError('notification must be an object')
+  }
+  return {
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : fallback.enabled,
+    onSuccess: typeof value.onSuccess === 'boolean' ? value.onSuccess : fallback.onSuccess,
+    onFailure: typeof value.onFailure === 'boolean' ? value.onFailure : fallback.onFailure
+  }
 }
 
 function computeInitialNextRun(schedule: string, from: number): number | null {
@@ -374,6 +451,10 @@ function normalizeNullableTimestamp(value: unknown, field: string): number | nul
 
 function isPermissionMode(value: unknown): value is RoutinePermissionMode {
   return typeof value === 'string' && PERMISSION_MODES.has(value as RoutinePermissionMode)
+}
+
+function isEngineKind(value: unknown): value is EngineKind {
+  return typeof value === 'string' && ENGINE_KINDS.has(value as EngineKind)
 }
 
 function isNonNegativeNumber(value: unknown): value is number {

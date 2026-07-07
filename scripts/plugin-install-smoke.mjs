@@ -5,11 +5,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-plugininstall-build-'))
-execFileSync('npx', ['tsc', 'src/main/pluginInstall.ts', '--outDir', buildDir, '--target', 'ES2022', '--module', 'commonjs', '--esModuleInterop', '--skipLibCheck'], { cwd: repoRoot, stdio: 'inherit' })
-const { installLocalPlugin, uninstallPlugin } = await import(path.join(buildDir, 'pluginInstall.js'))
+execFileSync(process.execPath, [path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), 'src/main/pluginInstall.ts', '--outDir', buildDir, '--target', 'ES2022', '--module', 'commonjs', '--esModuleInterop', '--skipLibCheck'], { cwd: repoRoot, stdio: 'inherit' })
+const { installLocalPlugin, uninstallPlugin } = await import(pathToFileURL(path.join(buildDir, 'pluginInstall.js')).href)
 
 function assert(cond, msg) { if (!cond) { console.error('ASSERT FAIL:', msg); process.exit(1) } }
 

@@ -32,9 +32,9 @@ Codex 已提交 T1–T6、在做 T7。这段的关键不是写新代码,而是**
 
 - **A1 check T1 应用内 Git 提交** —— ✅ 已完成(实测:stage/commit 落地、守卫齐全、防注入)
 - **A2 check T2 逐块 diff** —— ✅ 已完成(实测:接受一 hunk 暂存、丢弃一 hunk 还原,精确)
-- **A3 check T3 子代理结果回传 + 3D 真实任务流** —— 待做。验收:派发子会话 → 父会话收到 subagent-result 汇总 → 3D 出现父子工位连线;重点查跨会话 seq 顺序、父工位缺失处理。
-- **A4 check T4 开工建议** —— 待做。验收:会话激活时面板出建议;重点查 memory/worktree/history 输入源字段映射对不对、失败建议分支是否触发、git 2s 扫描不卡主进程。
-- **A5 check T5 记忆自动提议** —— 待做。验收:发含"记住/约定"的消息 → 弹"记住?"提示;重点查同会话去重节流、不自动落 draft。
+- **A3 check T3 子代理结果回传 + 3D 真实任务流** —— ✅ 已完成(实测:Electron mock E2E 派发真实 parent/child sessions,父会话收到 2 个 subagent-result 与编排汇总,3D office 生成 Subagent packets 且 WebGL 非空;证据:`test-results/orchestration-mock-e2e/2026-07-06T18-19-20-667Z/orchestration-mock-e2e.json`,`test-results/caogen-deep/2026-07-06T18-19-39-919Z/deep-test-report.md`)。
+- **A4 check T4 开工建议** —— ✅ 已完成(实测:Electron mock E2E 会话激活后渲染开工建议面板,memory/routine/history/worktree/git/package 来源映射正确,失败建议分支触发,忽略/发送建议写入真实 transcript;git timeout 降级由 smoke 覆盖;证据:`test-results/start-suggestions-e2e/2026-07-06T18-42-20-712Z/start-suggestions-e2e.json`,`test-results/caogen-deep/2026-07-06T18-40-44-540Z/deep-test-report.md`)。
+- **A5 check T5 记忆自动提议** —— ✅ 已完成(实测:Electron mock E2E 发送含"记住/约定"消息后渲染"记住这条约定?"提示;同会话同文本 30s 内节流去重;接受后只打开 MemoryPanel 并预填 convention 表单,项目 drafts 仍为 0;证据:`test-results/memory-suggestion-e2e/2026-07-06T18-53-18-912Z/memory-suggestion-e2e.json`,`test-results/caogen-deep/2026-07-06T18-52-22-641Z/deep-test-report.md`)。
 - **A6 check T6 浏览器批注截图** —— 待做。验收:网页批注 → screenshotPath 有真实 PNG;重点查 view 不可见时不截空白图。
 - **A7 check T7 Routine 首帧下次运行** —— 待做(小改进)。
 - **门槛**:每条 E2E 实测通过或修复;发现的 bug 记录并让 Codex(或规划方)修。段 A 完成 = T1–T7 全部实测可用。
@@ -74,5 +74,5 @@ Codex 已提交 T1–T6、在做 T7。这段的关键不是写新代码,而是**
 
 ## 现在的下一步
 
-Codex 做完 T7 后,规划方执行**段 A 剩余 check(A3–A7)** —— 这是当前投入产出比最高的动作:把"已提交 78%"坐实为"已验证 85%",同时揪出并修掉并行产出的运行时隐患。之后进入段 B(T8/T9)。
+Codex 做完 T7 后,规划方执行**段 A 剩余 check(A6–A7)** —— 这是当前投入产出比最高的动作:把"已提交 78%"坐实为"已验证 85%",同时揪出并修掉并行产出的运行时隐患。之后进入段 B(T8/T9)。
 

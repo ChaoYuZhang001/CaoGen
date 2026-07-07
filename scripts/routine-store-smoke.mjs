@@ -14,9 +14,9 @@ const legacyRoot = path.join(tempRoot, 'legacy-json')
 
 try {
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/routineStore.ts',
       '--outDir',
       outDir,
@@ -53,6 +53,7 @@ try {
     schedule: '0 9 * * *',
     providerId: 'provider-a',
     model: 'model-a',
+    engine: 'openai',
     permissionMode: 'plan',
     budgetUsd: 1.25,
     createdAt: 1000,
@@ -69,6 +70,7 @@ try {
   assertEqual(created.updatedAt, 1000)
   assertEqual(created.lastRunAt, null)
   assertEqual(created.nextRunAt, 1500)
+  assertEqual(created.engine, 'openai')
   assertEqual(created.tags.length, 1)
   assertEqual(created.metadata.owner, 'smoke')
   assert(!existsSync(sentinelRunOutput), 'createRoutine should persist only; it must not execute the prompt')
@@ -98,6 +100,7 @@ try {
     name: 'Morning review updated',
     prompt: 'Summarize open work.',
     schedule: '@hourly',
+    engine: 'gemini',
     permissionMode: 'acceptEdits',
     budgetUsd: 2,
     nextRunAt: null,
@@ -110,6 +113,7 @@ try {
   assertEqual(updated.projectCwd, projectRoot)
   assertEqual(updated.schedule, '@hourly')
   assertEqual(updated.permissionMode, 'acceptEdits')
+  assertEqual(updated.engine, 'gemini')
   assertEqual(updated.createdAt, 1000)
   assert(updated.updatedAt >= created.updatedAt, 'updateRoutine should advance updatedAt')
   assert(!hasOwn(updated, 'nextRunAt'), 'nextRunAt: null should clear the persisted schedule boundary')
@@ -221,6 +225,17 @@ try {
         permissionMode: 'danger'
       }),
     'invalid permissionMode should fail validation'
+  )
+  await assertRejects(
+    () =>
+      routineStore.createRoutine(storeRoot, {
+        name: 'Bad engine',
+        prompt: 'x',
+        projectCwd: projectRoot,
+        schedule: '0 9 * * *',
+        engine: 'unknown-engine'
+      }),
+    'invalid engine should fail validation'
   )
   await assertRejects(
     () =>

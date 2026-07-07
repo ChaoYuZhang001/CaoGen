@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
+  LayeredMemoryEntry,
   ProjectMemoryDraft,
   ProjectMemoryEntry,
   ReadProjectMemoryResult
@@ -25,9 +26,12 @@ interface Props {
  */
 export default function MemoryPanel({ sessionId, onClose, initialForm }: Props): React.JSX.Element {
   const [data, setData] = useState<ReadProjectMemoryResult | null>(null)
+  const [layered, setLayered] = useState<LayeredMemoryEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [acting, setActing] = useState(false)
+  const [editingLayeredId, setEditingLayeredId] = useState<string | null>(null)
+  const [layeredDraft, setLayeredDraft] = useState({ title: '', body: '' })
 
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ ...EMPTY_FORM })
@@ -36,8 +40,12 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     setLoading(true)
     setError('')
     try {
-      const result = await window.agentDesk.readProjectMemory(sessionId)
+      const [result, layeredEntries] = await Promise.all([
+        window.agentDesk.readProjectMemory(sessionId),
+        window.agentDesk.listLayeredMemories()
+      ])
       setData(result)
+      setLayered(layeredEntries)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -106,11 +114,46 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     }
   }
 
+  const startLayeredEdit = (entry: LayeredMemoryEntry): void => {
+    setEditingLayeredId(entry.id)
+    setLayeredDraft({ title: entry.title, body: entry.body })
+  }
+
+  const saveLayered = async (entry: LayeredMemoryEntry): Promise<void> => {
+    setActing(true)
+    setError('')
+    try {
+      await window.agentDesk.updateLayeredMemory(entry.id, {
+        title: layeredDraft.title.trim(),
+        body: layeredDraft.body.trim()
+      })
+      setEditingLayeredId(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setActing(false)
+    }
+  }
+
+  const removeLayered = async (entryId: string): Promise<void> => {
+    setActing(true)
+    setError('')
+    try {
+      await window.agentDesk.deleteLayeredMemory(entryId)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setActing(false)
+    }
+  }
+
   const drafts: ProjectMemoryDraft[] = data?.drafts ?? []
   const entries: ProjectMemoryEntry[] = data?.entries ?? []
 
   return (
-    <div className="memory-panel">
+    <div className="memory-panel" data-memory-panel="true">
       <div className="settings-section-head">
         <h3 className="settings-h3">项目记忆</h3>
         <div className="memory-panel-actions">
@@ -133,10 +176,11 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
       </p>
 
       {showForm && (
-        <div className="memory-form">
+        <div className="memory-form" data-memory-form="true">
           <label className="field-label">类型</label>
           <input
             className="input input-block"
+            data-memory-form-field="kind"
             value={form.kind}
             placeholder="note / convention / gotcha …"
             onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}
@@ -144,6 +188,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           <label className="field-label">标题</label>
           <input
             className="input input-block"
+            data-memory-form-field="title"
             value={form.title}
             placeholder="一句话概括"
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -151,6 +196,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           <label className="field-label">内容</label>
           <textarea
             className="input input-block textarea"
+            data-memory-form-field="body"
             rows={3}
             value={form.body}
             placeholder="记忆正文"
@@ -161,6 +207,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           </label>
           <input
             className="input input-block"
+            data-memory-form-field="reason"
             value={form.reason}
             placeholder="为什么值得记住"
             onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
@@ -168,6 +215,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           <div className="modal-actions">
             <button
               className="btn btn-primary btn-sm"
+              data-memory-form-action="propose"
               disabled={acting}
               onClick={() => void propose()}
             >
@@ -246,6 +294,67 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="memory-group">
+            <h4 className="settings-h3">分层记忆 · {layered.length}</h4>
+            {layered.length === 0 ? (
+              <div className="provider-empty">暂无分层记忆</div>
+            ) : (
+              <div className="provider-list">
+                {layered.map((entry) => {
+                  const editing = editingLayeredId === entry.id
+                  return (
+                    <div key={entry.id} className="provider-row memory-row">
+                      <div className="provider-row-body">
+                        <div className="provider-row-name">
+                          {entry.title}
+                          <span className="migrate-kind">{entry.layer}</span>
+                        </div>
+                        {editing ? (
+                          <div className="memory-form">
+                            <input
+                              className="input input-block"
+                              value={layeredDraft.title}
+                              onChange={(e) => setLayeredDraft((draft) => ({ ...draft, title: e.target.value }))}
+                            />
+                            <textarea
+                              className="input input-block textarea"
+                              rows={3}
+                              value={layeredDraft.body}
+                              onChange={(e) => setLayeredDraft((draft) => ({ ...draft, body: e.target.value }))}
+                            />
+                          </div>
+                        ) : (
+                          <div className="provider-row-sub memory-body">{entry.body}</div>
+                        )}
+                      </div>
+                      <div className="provider-row-actions">
+                        {editing ? (
+                          <>
+                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => void saveLayered(entry)}>
+                              保存
+                            </button>
+                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => setEditingLayeredId(null)}>
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => startLayeredEdit(entry)}>
+                              编辑
+                            </button>
+                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => void removeLayered(entry.id)}>
+                              删除
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

@@ -40,7 +40,11 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const subagentError = useStore((s) => s.workbench.subagentError)
   const subagentMessage = useStore((s) => s.workbench.subagentMessage)
   const lastSubagentDispatch = useStore((s) => s.workbench.lastSubagentDispatch)
+  const taskDagExecution = useStore((s) =>
+    s.activeId ? s.sessions[s.activeId]?.taskDagExecution : undefined
+  )
   const routines = useStore((s) => s.workbench.routines)
+  const routineRuns = useStore((s) => s.workbench.routineRuns)
   const routineLoading = useStore((s) => s.workbench.routineLoading)
   const routineError = useStore((s) => s.workbench.routineError)
   const routineMessage = useStore((s) => s.workbench.routineMessage)
@@ -60,6 +64,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const mcpProbing = useStore((s) => s.workbench.mcpProbing)
   const closeSubagentPanel = useStore((s) => s.closeSubagentPanel)
   const dispatchSubagentText = useStore((s) => s.dispatchSubagentText)
+  const decomposeAndDispatchTaskDag = useStore((s) => s.decomposeAndDispatchTaskDag)
   const selectSession = useStore((s) => s.selectSession)
   const refreshRoutinePanel = useStore((s) => s.refreshRoutinePanel)
   const closeRoutinePanel = useStore((s) => s.closeRoutinePanel)
@@ -141,13 +146,16 @@ export default function WorkbenchRoot(): React.JSX.Element {
               error={subagentError}
               message={subagentMessage}
               lastResult={lastSubagentDispatch}
+              dagExecution={taskDagExecution}
               onClose={closeSubagentPanel}
               onSelectChild={selectSession}
               onDispatch={dispatchSubagentText}
+              onDecomposeAndDispatch={decomposeAndDispatchTaskDag}
             />
           ) : routineOpen ? (
             <RoutinePanel
               routines={routines}
+              runs={routineRuns}
               loading={routineLoading}
               error={routineError}
               message={routineMessage}

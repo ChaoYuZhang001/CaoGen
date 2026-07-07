@@ -13,6 +13,7 @@ export interface ParseCsvOptions {
   maxRows?: number
   maxColumns?: number
   maxCellChars?: number
+  delimiter?: CsvDelimiter
 }
 
 export interface ParsedCsv {
@@ -21,6 +22,8 @@ export interface ParsedCsv {
   truncated: boolean
   error?: string
 }
+
+export type CsvDelimiter = ',' | '\t' | ';'
 
 export function truncate(value: string, maxChars = 20_000, options: TruncateOptions = {}): string {
   const limit = safePositiveInt(maxChars, 20_000)
@@ -53,6 +56,7 @@ export function parseCsv(value: string, options: ParseCsvOptions = {}): ParsedCs
   const maxColumns = safePositiveInt(options.maxColumns, 80)
   const maxCellChars = safePositiveInt(options.maxCellChars, 500)
   const source = value.length > maxChars ? value.slice(0, maxChars) : value
+  const delimiter = options.delimiter ?? detectDelimiter(source)
   const rows: string[][] = []
   let row: string[] = []
   let cell = ''
@@ -102,7 +106,7 @@ export function parseCsv(value: string, options: ParseCsvOptions = {}): ParsedCs
       continue
     }
 
-    if (char === ',') {
+    if (char === delimiter) {
       pushCell()
       continue
     }
@@ -127,6 +131,24 @@ export function parseCsv(value: string, options: ParseCsvOptions = {}): ParsedCs
   }
 
   return { rows, rowCount, truncated, error }
+}
+
+function detectDelimiter(value: string): CsvDelimiter {
+  const firstLine = value.split(/\r?\n/, 1)[0] ?? ''
+  const scores: Array<{ delimiter: CsvDelimiter; count: number }> = [
+    { delimiter: ',', count: countChars(firstLine, ',') },
+    { delimiter: '\t', count: countChars(firstLine, '\t') },
+    { delimiter: ';', count: countChars(firstLine, ';') }
+  ]
+  return scores.sort((a, b) => b.count - a.count)[0]?.delimiter ?? ','
+}
+
+function countChars(value: string, needle: string): number {
+  let count = 0
+  for (const char of value) {
+    if (char === needle) count += 1
+  }
+  return count
 }
 
 function stringifyJson(value: unknown, spaces: number): string {

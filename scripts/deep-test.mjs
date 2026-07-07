@@ -11,31 +11,69 @@ const runDir = path.join(outRoot, runId)
 mkdirSync(runDir, { recursive: true })
 
 const commands = [
-  { name: 'typecheck', command: 'npm', args: ['run', 'typecheck'], category: 'static' },
-  { name: 'build', command: 'npm', args: ['run', 'build'], category: 'build' },
+  { name: 'typecheck', ...commandSpec('npm', ['run', 'typecheck']), category: 'static' },
+  { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
+  { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
   { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
   { name: 'integration wired modules', command: 'node', args: ['scripts/integration-test-3.cjs'], category: 'integration' },
+  { name: 'taskDag smoke', command: 'node', args: ['scripts/task-dag-smoke.cjs'], category: 'smoke' },
+  { name: 'taskDag recovery smoke', command: 'node', args: ['scripts/task-dag-recovery-smoke.cjs'], category: 'smoke' },
   { name: 'attachmentOps smoke', command: 'node', args: ['scripts/attachment-ops-smoke.mjs'], category: 'smoke' },
   { name: 'browserAnnotations smoke', command: 'node', args: ['scripts/browser-annotations-smoke.mjs'], category: 'smoke' },
   { name: 'checkpointRestorePlan smoke', command: 'node', args: ['scripts/checkpoint-restore-plan-smoke.mjs'], category: 'smoke' },
   { name: 'fileOps smoke', command: 'node', args: ['scripts/file-ops-smoke.mjs'], category: 'smoke' },
+  { name: 'searchReplace/view smoke', command: 'node', args: ['scripts/search-replace-smoke.mjs'], category: 'smoke' },
+  { name: 'indexer smoke', command: 'node', args: ['scripts/indexer-smoke.mjs'], category: 'smoke' },
+  { name: 'context loader smoke', command: 'node', args: ['scripts/context-loader-smoke.mjs'], category: 'smoke' },
+  { name: 'sandbox permission smoke', command: 'node', args: ['scripts/p0-004-sandbox-permission-smoke.mjs'], category: 'smoke' },
+  { name: 'gui permission smoke', command: 'node', args: ['scripts/gui-permission-smoke.mjs'], category: 'smoke' },
+  { name: 'gui windows smoke', command: 'node', args: ['scripts/gui-windows-smoke.mjs'], category: 'smoke' },
+  { name: 'gui macos smoke', command: 'node', args: ['scripts/gui-macos-smoke.mjs'], category: 'smoke' },
+  { name: 'gui nutjs smoke', command: 'node', args: ['scripts/gui-nutjs-smoke.mjs'], category: 'smoke' },
+  { name: 'task snapshot smoke', command: 'node', args: ['scripts/task-snapshot-smoke.mjs'], category: 'smoke' },
+  { name: 'git tools smoke', command: 'node', args: ['scripts/git-tools-smoke.mjs'], category: 'smoke' },
+  { name: 'context compressor smoke', command: 'node', args: ['scripts/context-compressor-smoke.mjs'], category: 'smoke' },
   { name: 'memoryStore smoke', command: 'node', args: ['scripts/memory-store-smoke.mjs'], category: 'smoke' },
+  { name: 'layeredMemory smoke', command: 'node', args: ['scripts/layered-memory-smoke.mjs'], category: 'smoke' },
+  { name: 'memorySuggestion e2e', command: 'node', args: ['scripts/memory-suggestion-e2e.mjs'], category: 'ui' },
   { name: 'pluginRegistry smoke', command: 'node', args: ['scripts/plugin-registry-smoke.mjs'], category: 'smoke' },
+  { name: 'skillManager smoke', command: 'node', args: ['scripts/skill-manager-smoke.mjs'], category: 'smoke' },
+  { name: 'skillLearner smoke', command: 'node', args: ['scripts/skill-learner-smoke.mjs'], category: 'smoke' },
+  { name: 'autoSkillReview smoke', command: 'node', args: ['scripts/auto-skill-review-smoke.mjs'], category: 'smoke' },
+  { name: 'skillOptimizer smoke', command: 'node', args: ['scripts/skill-optimizer-smoke.mjs'], category: 'smoke' },
+  { name: 'skillInvocation smoke', command: 'node', args: ['scripts/skill-invocation-smoke.mjs'], category: 'smoke' },
+  { name: 'mcpClient smoke', command: 'node', args: ['scripts/mcp-client-smoke.mjs'], category: 'smoke' },
   { name: 'plugin slash smoke', command: 'node', args: ['scripts/plugin-slash-smoke.mjs'], category: 'smoke' },
   { name: 'previewOps smoke', command: 'node', args: ['scripts/preview-ops-smoke.mjs'], category: 'smoke' },
+  { name: 'previewUtils smoke', command: 'node', args: ['scripts/preview-utils-smoke.mjs'], category: 'smoke' },
+  { name: 'previewAnnotations smoke', command: 'node', args: ['scripts/preview-annotations-smoke.mjs'], category: 'smoke' },
   { name: 'routineStore smoke', command: 'node', args: ['scripts/routine-store-smoke.mjs'], category: 'smoke' },
+  { name: 'routineRunner smoke', command: 'node', args: ['scripts/routine-runner-smoke.mjs'], category: 'smoke' },
+  { name: 'openai P1 tools smoke', command: 'node', args: ['scripts/openai-p1-tools-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions smoke', command: 'node', args: ['scripts/start-suggestions-smoke.mjs'], category: 'smoke' },
+  { name: 'startSuggestions e2e', command: 'node', args: ['scripts/start-suggestions-e2e.mjs'], category: 'ui' },
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptSearch smoke', command: 'node', args: ['scripts/transcript-search-smoke.mjs'], category: 'smoke' },
   { name: 'pluginInstall smoke', command: 'node', args: ['scripts/plugin-install-smoke.mjs'], category: 'smoke' },
   { name: 'modelStats smoke', command: 'node', args: ['scripts/model-stats-smoke.mjs'], category: 'smoke' },
-  { name: 'responses tools e2e', command: 'npx', args: ['electron', 'scripts/responses-tools-e2e.cjs'], category: 'system' },
-  { name: 'history compress e2e', command: 'npx', args: ['electron', 'scripts/history-compress-e2e.cjs'], category: 'system' },
-  { name: 'claude real e2e', command: 'npx', args: ['electron', 'scripts/claude-real-e2e.cjs'], category: 'system' },
+  { name: 'modelRouter smoke', command: 'node', args: ['scripts/model-router-smoke.mjs'], category: 'smoke' },
+  { name: 'modelOptimization smoke', command: 'node', args: ['scripts/model-optimization-smoke.mjs'], category: 'smoke' },
+  { name: 'modelCrossValidation smoke', command: 'node', args: ['scripts/model-cross-validation-smoke.mjs'], category: 'smoke' },
+  { name: 'chinaEcosystem smoke', command: 'node', args: ['scripts/china-ecosystem-smoke.mjs'], category: 'smoke' },
+  { name: 'chinaModelProvider smoke', command: 'node', args: ['scripts/china-model-provider-smoke.mjs'], category: 'smoke' },
+  { name: 'chinaRealNetwork smoke', command: 'node', args: ['scripts/china-real-network-smoke.mjs'], category: 'smoke' },
+  { name: 'chinaToolCallParity smoke', command: 'node', args: ['scripts/china-tool-call-parity.mjs'], category: 'smoke' },
+  { name: 'ideBridge smoke', command: 'node', args: ['scripts/ide-bridge-smoke.mjs'], category: 'smoke' },
+  { name: 'openai P2 tools smoke', command: 'node', args: ['scripts/openai-p2-tools-smoke.mjs'], category: 'smoke' },
+  { name: 'responses tools e2e', ...commandSpec('npx', ['electron', 'scripts/responses-tools-e2e.cjs']), category: 'system' },
+  { name: 'history compress e2e', ...commandSpec('npx', ['electron', 'scripts/history-compress-e2e.cjs']), category: 'system' },
+  { name: 'claude real e2e', ...commandSpec('npx', ['electron', 'scripts/claude-real-e2e.cjs']), category: 'system' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
-  { name: 'Electron main IPC smoke', command: electronCommand(), args: ['scripts/electron-smoke.cjs'], category: 'system' },
+  { name: 'taskDag autoMerge e2e', ...commandSpec('npx', ['electron', 'scripts/task-dag-automerge-e2e.cjs']), category: 'system' },
+  { name: 'Electron main IPC smoke', ...commandSpec('npx', ['electron', 'scripts/electron-smoke.cjs']), category: 'system' },
   { name: 'OpenAI mock e2e', command: 'node', args: ['scripts/openai-mock-e2e.mjs'], category: 'system' },
+  { name: 'orchestration mock e2e', command: 'node', args: ['scripts/orchestration-mock-e2e.mjs'], category: 'ui' },
   { name: 'X1/S3 e2e', command: 'node', args: ['scripts/x1-s3-e2e.mjs'], category: 'ui' },
   { name: 'page operations smoke', command: 'node', args: ['scripts/page-operation-smoke.mjs'], category: 'ui' }
 ]
@@ -194,6 +232,12 @@ function electronCommand() {
     '.bin',
     process.platform === 'win32' ? 'electron.cmd' : 'electron'
   )
+}
+
+function commandSpec(command, args) {
+  return process.platform === 'win32'
+    ? { command: 'cmd', args: ['/c', command, ...args] }
+    : { command, args }
 }
 
 function escapePipe(value) {

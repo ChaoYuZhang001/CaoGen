@@ -1,12 +1,28 @@
-import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+﻿import {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  nativeImage,
+  shell,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
-import { startRoutineScheduler, stopRoutineScheduler, computeNextRun } from './routineScheduler'
-import { markRun } from './routineStore'
+import { disposeProjectIndexers } from './indexer'
+import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
+import { executeRoutine } from './routines/routine-executor'
+import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { initAutoUpdater } from './updater'
 import type { Routine } from '../shared/types'
+
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let quitting = false
+let quitCleanupStarted = false
+let trayTimer: NodeJS.Timeout | null = null
 
 // 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录。
 // 测试脚本可通过 CAOGEN_USER_DATA_DIR 指向临时目录,避免污染真实 CaoGen 配置。
@@ -28,8 +44,8 @@ function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 920,
-    minHeight: 600,
+    minWidth: 360,
+    minHeight: 520,
     title: 'CaoGen',
     backgroundColor: '#0d0d0d',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -38,7 +54,8 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   })
 
@@ -52,7 +69,64 @@ function createWindow(): BrowserWindow {
   } else {
     void win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  mainWindow = win
+  win.on('close', (event) => {
+    if (quitting || !hasRunningSessions()) return
+    event.preventDefault()
+    win.hide()
+    updateTray()
+  })
   return win
+}
+
+function hasRunningSessions(): boolean {
+  return sessionManager.list().some((meta) => meta.status === 'starting' || meta.status === 'running')
+}
+
+function showMainWindow(): void {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow()
+  win.show()
+  win.focus()
+}
+
+function updateTray(): void {
+  if (!tray) return
+  const runningCount = sessionManager
+    .list()
+    .filter((meta) => meta.status === 'starting' || meta.status === 'running').length
+  tray.setToolTip(runningCount > 0 ? `CaoGen · ${runningCount} running` : 'CaoGen')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: runningCount > 0 ? `Running tasks: ${runningCount}` : 'No running tasks', enabled: false },
+      { type: 'separator' },
+      { label: 'Show CaoGen', click: showMainWindow },
+      {
+        label: 'New Session',
+        click: () => {
+          showMainWindow()
+          sendMenuCommand('menu:new-session')
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          quitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+}
+
+function installTray(): void {
+  if (tray) return
+  const icon = iconPath()
+  const image = icon ? nativeImage.createFromPath(icon) : nativeImage.createEmpty()
+  tray = new Tray(image)
+  tray.on('click', showMainWindow)
+  updateTray()
+  trayTimer = setInterval(updateTray, 5000)
 }
 
 function sendMenuCommand(channel: string, value?: unknown): void {
@@ -146,42 +220,21 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-/** Routine 到点触发:起一个会话并自动发送 routine.prompt,随后记录本次运行并算下次 */
-function runRoutine(routine: Routine): void {
-  try {
-    const meta = sessionManager.create({
-      cwd: routine.projectCwd,
-      model: routine.model || undefined,
-      providerId: routine.providerId || undefined,
-      budgetUsd: routine.budgetUsd,
-      permissionMode: routine.permissionMode,
-      title: `⏱ ${routine.name}`
-    })
-    // 起会话是异步 start();稍等 SDK init 后再发首条 prompt
-    const prompt = routine.prompt
-    setTimeout(() => {
-      try {
-        sessionManager.send(meta.id, prompt)
-      } catch (err) {
-        console.error('[caogen] routine 发送 prompt 失败:', err)
-      }
-    }, 1200)
-  } catch (err) {
-    console.error('[caogen] routine 触发起会话失败:', err)
-  }
-  const now = Date.now()
-  const next = computeNextRun(routine.schedule, now)
-  void markRun(join(app.getPath('userData'), 'routines'), routine.id, {
-    ranAt: now,
-    nextRunAt: next ?? undefined
+/** Routine 到点触发:统一走 executor,由 runner 写运行历史并推进 nextRunAt。 */
+function runRoutine(routine: Routine, nextRunAt: number | null): void {
+  void executeRoutine(join(app.getPath('userData'), 'routines'), routine, { nextRunAt }).catch((err) => {
+    console.error('[caogen] routine execute failed:', err)
   })
 }
-
-void app.whenReady().then(() => {
-  sessionManager.init()
+void app.whenReady().then(async () => {
+  await sessionManager.init()
   registerIpc()
   createWindow()
+  installTray()
   installApplicationMenu()
+  await syncIdeBridgeFromSettings().catch((error) => {
+    console.error('[caogen] IDE bridge start failed:', error)
+  })
   // Routine 定时调度:每 30s 轮询,到点起会话执行(补齐"定时自动执行"承诺)
   startRoutineScheduler({
     rootDir: join(app.getPath('userData'), 'routines'),
@@ -195,13 +248,27 @@ void app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin' && !hasRunningSessions()) app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  quitting = true
+  if (quitCleanupStarted) return
+  quitCleanupStarted = true
+  event.preventDefault()
+  if (trayTimer) {
+    clearInterval(trayTimer)
+    trayTimer = null
+  }
   stopRoutineScheduler()
-})
-
-app.on('before-quit', () => {
-  sessionManager.disposeAll()
+  // 退出前等待任务快照落盘,再释放项目索引 watcher/SQLite 句柄。
+  void (async () => {
+    await sessionManager.disposeAll()
+    await stopIdeBridge()
+    await disposeProjectIndexers()
+  })()
+    .catch((error) => {
+      console.error('[caogen] quit cleanup failed:', error)
+    })
+    .finally(() => app.quit())
 })

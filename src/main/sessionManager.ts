@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, powerSaveBlocker } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { newSessionMeta } from './agentSession'
 import { createEngine } from './engine'
@@ -9,18 +9,54 @@ import { configureModelStatsDir } from './modelStats'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { getProvider } from './providers'
-import { cleanupTranscripts } from './transcript'
+import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { cleanupTranscripts, restoreTranscriptIfMissing } from './transcript'
 import { touchProject } from './projects'
 import { prepareWorktree } from './worktrees'
 import { showDesktopNotification } from './desktopNotify'
+import { scheduleAutoSkillReview } from './skill/auto-skill-review'
+import { clearIdeDocumentContext } from './ide/ide-document-context'
+import {
+  buildTaskSnapshot,
+  deleteTaskSnapshot,
+  getTaskSnapshot,
+  listTaskSnapshots,
+  saveTaskSnapshot,
+  flushTaskSnapshotMutations,
+  TASK_SNAPSHOT_EVENT_INTERVAL
+} from './task/task-snapshot'
+import { decomposeTask } from './agent/task-decomposer'
+import { createModelDagDecomposer } from './agent/model-dag-decomposer'
+import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
+import { runTaskDagAutoMerge, type TaskDagAutoMergeSession } from './git/auto-merger'
+import {
+  arbitrationCrossValidationTarget,
+  buildCrossValidationArbitrationPrompt,
+  buildCrossValidationReviewPrompt,
+  firstCrossValidationTarget,
+  needsCrossValidationArbitration
+} from './model/cross-validation'
 import type {
   AgentEvent,
   CreateSessionOptions,
   DispatchSubagentsInput,
+  ModelRoutePlanView,
   SubagentDispatchResult,
+  TaskDagDispatchInput,
+  TaskDagDispatchResult,
+  TaskDagExecutionView,
+  TaskDagRuntimeMergeSession,
+  TaskDagRuntimeSnapshot,
+  TaskDecomposeInput,
+  TaskDecomposeResult,
   SessionEventPayload,
   SessionMeta,
+  SdkAgentInfo,
   SendMessagePayload,
+  TaskDagAutoMergeView,
+  TaskSnapshotRecord,
+  TaskSnapshotReason,
+  TaskSnapshotSubtaskState,
   TranscriptEntry
 } from '../shared/types'
 
@@ -58,6 +94,8 @@ function normalizeTaskId(value: string | undefined, fallback: string): string {
 
 interface OrchestrationState {
   parentSessionId: string
+  /** dispatchSubagents 仍在创建 child 时不触发最终汇总,避免极快 child 让编排过早收口。 */
+  acceptingChildren: boolean
   /** 尚未完成首轮的 child session id */
   pending: Set<string>
   /** 已完成 child 的结果(按完成顺序) */
@@ -76,9 +114,34 @@ interface OrchestrationState {
 
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly sessionEventListeners = new Set<(payload: SessionEventPayload) => void>()
   private readonly notificationStates = new Map<string, SessionNotificationState>()
   /** 真编排事件总线:orchestrationId → 状态;全部 child 首轮完成后回灌父 Agent */
   private readonly orchestrations = new Map<string, OrchestrationState>()
+  /** DAG 编排:executionId → 调度器;按依赖层释放 child sessions。 */
+  private readonly dagSchedulers = new Map<string, TaskDagScheduler>()
+  /** DAG 最新执行视图:用于恢复/快照保留已经完成或已从调度器移除的 DAG 状态。 */
+  private readonly dagExecutionSnapshots = new Map<string, TaskDagExecutionView>()
+  /** DAG 完成后执行的显式自动合并配置;默认不写主工作区。 */
+  private readonly dagAutoMergeOptions = new Map<string, { enabled: boolean; verificationCommand?: string }>()
+  private readonly dagRuntimeMergeSessions = new Map<string, TaskDagRuntimeMergeSession[]>()
+  private readonly snapshotCounts = new Map<string, { total: number; sinceSave: number; lastSeq: number }>()
+  /** 非 Claude 引擎由 SessionManager 统一托管防休眠;Claude AgentSession 内部已有同等保护。 */
+  private readonly enginePowerBlockers = new Map<string, number>()
+  /** P2-003 路由事件生成的复核计划，等待本轮 turn-result 成功后执行。 */
+  private readonly routePlans = new Map<string, ModelRoutePlanView>()
+  /** 防止同一轮 turn-result 重复派发第二模型复核。 */
+  private readonly crossValidationStarted = new Set<string>()
+  /** 记录复核 child 与主输出的关联，用于复核分歧时自动仲裁。 */
+  private readonly crossValidationReviews = new Map<string, {
+    parentSessionId: string
+    parentMeta: SessionMeta
+    routePlan: ModelRoutePlanView
+    primaryResultText: string
+    transcript: TranscriptEntry[]
+    turnSeq: number
+  }>()
+  private preservingSnapshotsOnDispose = false
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }))
@@ -86,6 +149,13 @@ class SessionManager {
 
   get(id: string): Engine | undefined {
     return this.sessions.get(id)
+  }
+
+  subscribe(listener: (payload: SessionEventPayload) => void): () => void {
+    this.sessionEventListeners.add(listener)
+    return () => {
+      this.sessionEventListeners.delete(listener)
+    }
   }
 
   create(opts: CreateSessionOptions): SessionMeta {
@@ -149,6 +219,7 @@ class SessionManager {
       opts.resumeSdkSessionId
     )
     this.sessions.set(meta.id, session)
+    void this.writeTaskSnapshot(meta.id, 'created', 0)
     void session.start()
     touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
@@ -175,8 +246,7 @@ class SessionManager {
     const orchestrationId = randomUUID()
     const children: SubagentDispatchResult['children'] = []
     const usedTaskIds = new Set<string>()
-
-    tasks.forEach((task, index) => {
+    const plannedTasks = tasks.map((task, index) => {
       const prompt = typeof task.prompt === 'string' ? task.prompt.trim() : ''
       if (!prompt) throw new Error(`子代理任务 ${index + 1} 缺少 prompt`)
       let taskId = normalizeTaskId(task.id, `task-${index + 1}`)
@@ -184,6 +254,19 @@ class SessionManager {
       usedTaskIds.add(taskId)
       const role = cleanOneLine(task.role ?? '', '', 40) || undefined
       const title = cleanOneLine(task.title ?? role ?? prompt, `子代理 ${index + 1}`, 42)
+      return { task, taskId, prompt, role, title }
+    })
+
+    const state: OrchestrationState = {
+      parentSessionId,
+      acceptingChildren: true,
+      pending: new Set(),
+      results: [],
+      startedAt: Date.now()
+    }
+    this.orchestrations.set(orchestrationId, state)
+
+    for (const { task, taskId, prompt, role, title } of plannedTasks) {
       const meta = this.create({
         cwd: task.cwd ?? input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
         isolated: task.isolated ?? input.isolated ?? true,
@@ -197,19 +280,252 @@ class SessionManager {
         childTaskId: taskId,
         childRole: role
       })
-      this.send(meta.id, prompt)
+      state.pending.add(meta.id)
       children.push({ taskId, prompt, meta })
-    })
-
-    // 登记编排:全部 child 首轮完成后,汇总结果回灌父 Agent(见 dispatch)
-    this.orchestrations.set(orchestrationId, {
-      parentSessionId,
-      pending: new Set(children.map((c) => c.meta.id)),
-      results: [],
-      startedAt: Date.now()
-    })
+      this.send(meta.id, prompt)
+    }
+    state.acceptingChildren = false
+    this.completeOrchestrationIfReady(orchestrationId, state)
 
     return { orchestrationId, parentSessionId, children }
+  }
+
+  async decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult> {
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent) throw new Error('父会话不存在')
+    const request: TaskDecomposeInput = {
+      ...input,
+      cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
+      providerId: input.providerId ?? parent.meta.providerId,
+      model: input.model ?? parent.meta.model
+    }
+    return decomposeTask(request, { modelDecomposer: createModelDagDecomposer(request) })
+  }
+
+  dispatchTaskDag(parentSessionId: string, input: TaskDagDispatchInput): TaskDagDispatchResult {
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent) throw new Error('父会话不存在')
+    const children: SubagentDispatchResult['children'] = []
+    const scheduler = new TaskDagScheduler(parentSessionId, input, {
+      runTask: (task, context) => {
+        const prompt = buildDagTaskPrompt(task, context)
+        const meta = this.create({
+          cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
+          isolated: input.isolated ?? true,
+          model: input.model ?? parent.meta.model,
+          providerId: input.providerId ?? parent.meta.providerId,
+          engine: input.engine ?? parent.meta.engine,
+          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          title: `${task.title}${context.attempt > 1 ? ` · 重试 ${context.attempt - 1}` : ''}`,
+          parentSessionId,
+          orchestrationId: input.dag.id,
+          childTaskId: task.id,
+          childRole: task.role
+        })
+        this.send(meta.id, prompt)
+        const item = { taskId: task.id, prompt, meta }
+        children.push(item)
+        return { sessionId: meta.id, dispatchItem: item }
+      },
+      onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
+      onComplete: (execution) => this.finishTaskDag(parentSessionId, execution),
+      onTaskTimeout: (sessionId, taskId, error) => this.handleDagTaskTimeout(parentSessionId, sessionId, taskId, error)
+    })
+    this.dagExecutionSnapshots.delete(input.dag.id)
+    this.dagSchedulers.set(input.dag.id, scheduler)
+    this.dagAutoMergeOptions.set(input.dag.id, {
+      enabled: input.autoMerge === true,
+      verificationCommand: input.verificationCommand
+    })
+    const launched = scheduler.start()
+    if (launched.length > 0) {
+      const known = new Set(children.map((child) => child.meta.id))
+      for (const item of launched) {
+        if (!known.has(item.meta.id)) children.push(item)
+      }
+    }
+    const execution = scheduler.view()
+    this.emitTaskDagUpdate(parentSessionId, execution)
+    return { execution, children }
+  }
+
+  private createTaskDagSchedulerCallbacks(
+    parentSessionId: string,
+    input: TaskDagDispatchInput,
+    children?: SubagentDispatchResult['children']
+  ): TaskDagSchedulerCallbacks {
+    return {
+      runTask: (task, context) => {
+        const parent = this.sessions.get(parentSessionId)
+        if (!parent) throw new Error('Parent session no longer exists for recovered DAG')
+        const prompt = buildDagTaskPrompt(task, context)
+        const meta = this.create({
+          cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
+          isolated: input.isolated ?? true,
+          model: input.model ?? parent.meta.model,
+          providerId: input.providerId ?? parent.meta.providerId,
+          engine: input.engine ?? parent.meta.engine,
+          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          title: `${task.title}${context.attempt > 1 ? ` retry ${context.attempt - 1}` : ''}`,
+          parentSessionId,
+          orchestrationId: input.dag.id,
+          childTaskId: task.id,
+          childRole: task.role
+        })
+        this.send(meta.id, prompt)
+        const item = { taskId: task.id, prompt, meta }
+        children?.push(item)
+        return { sessionId: meta.id, dispatchItem: item }
+      },
+      onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
+      onComplete: (execution) => this.finishTaskDag(parentSessionId, execution),
+      onTaskTimeout: (sessionId, taskId, error) =>
+        this.handleDagTaskTimeout(parentSessionId, sessionId, taskId, error)
+    }
+  }
+
+  async supportedAgents(sessionId: string): Promise<SdkAgentInfo[]> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.supportedAgents) return []
+    return session.supportedAgents()
+  }
+
+  private emitTaskDagUpdate(parentSessionId: string, execution: TaskDagExecutionView): void {
+    this.dagExecutionSnapshots.set(execution.id, execution)
+    const event: AgentEvent = { kind: 'task-dag-update', execution }
+    const parent = this.sessions.get(parentSessionId)
+    if (parent?.emitSyntheticEvent) {
+      parent.emitSyntheticEvent(event)
+    } else {
+      this.dispatch(parentSessionId, event, 0)
+    }
+  }
+
+  private handleDagTaskTimeout(parentSessionId: string, childSessionId: string, taskId: string, error: string): void {
+    const child = this.sessions.get(childSessionId)
+    if (child) {
+      void child.interrupt().catch((err) => {
+        console.error('[caogen] DAG 子任务超时后中断 child session 失败:', err)
+      })
+    }
+    this.dispatch(
+      parentSessionId,
+      {
+        kind: 'hook-event',
+        event: 'task-dag-timeout',
+        detail: `${taskId}: ${error}`
+      },
+      0
+    )
+  }
+
+  private finishTaskDag(parentSessionId: string, execution: TaskDagExecutionView): void {
+    this.dagSchedulers.delete(execution.id)
+    const parent = this.sessions.get(parentSessionId)
+    if (!parent || parent.meta.status === 'closed') {
+      this.dagAutoMergeOptions.delete(execution.id)
+      this.dagRuntimeMergeSessions.delete(execution.id)
+      return
+    }
+    const finalExecution = this.applyDagAutoMerge(parentSessionId, execution)
+    this.dagRuntimeMergeSessions.delete(execution.id)
+    const lines = [
+      `[DAG 编排完成] ${finalExecution.summary ?? finalExecution.status}`,
+      '',
+      `需求: ${finalExecution.dag.source}`,
+      '',
+      ...finalExecution.tasks.map((task) =>
+        [
+          `## ${task.task.id}(${task.task.role}) — ${task.status}`,
+          `尝试次数: ${task.attempts}`,
+          task.sessionIds.length > 0 ? `子会话: ${task.sessionIds.join(', ')}` : '',
+          task.error ? `错误: ${task.error}` : '',
+          task.resultText ? `结果摘要:\n${task.resultText.slice(0, 1500)}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n')
+      ),
+      ...this.dagAutoMergeLines(finalExecution.autoMerge),
+      '',
+      '请接管 DAG 汇总:确认成功项、处理失败项,并给出下一步合并/验证顺序。'
+    ]
+    this.send(parentSessionId, lines.join('\n\n'))
+  }
+
+  private applyDagAutoMerge(parentSessionId: string, execution: TaskDagExecutionView): TaskDagExecutionView {
+    const options = this.dagAutoMergeOptions.get(execution.id)
+    this.dagAutoMergeOptions.delete(execution.id)
+    if (!options?.enabled) return execution
+    const autoMerge =
+      execution.status === 'success'
+        ? runTaskDagAutoMerge({
+            execution,
+            sessions: this.collectDagAutoMergeSessions(execution),
+            verificationCommand: options.verificationCommand
+          })
+        : this.skippedDagAutoMerge('DAG 存在失败任务,自动合并已跳过。')
+    const next = { ...execution, autoMerge }
+    this.emitTaskDagUpdate(parentSessionId, next)
+    return next
+  }
+
+  private collectDagAutoMergeSessions(execution: TaskDagExecutionView): TaskDagAutoMergeSession[] {
+    const fallback = new Map(
+      (this.dagRuntimeMergeSessions.get(execution.id) ?? []).map((session) => [session.sessionId, session])
+    )
+    return execution.tasks.flatMap((task) =>
+      task.sessionIds
+        .map((sessionId): TaskDagAutoMergeSession | null => {
+          const meta = this.sessions.get(sessionId)?.meta
+          if (meta) {
+            return {
+              sessionId,
+              taskId: task.task.id,
+              repoRoot: meta.repoRoot,
+              worktreePath: meta.worktreePath,
+              baseSha: meta.baseSha,
+              branch: meta.branch,
+              resultText: task.resultText
+            }
+          }
+          const restored = fallback.get(sessionId)
+          if (!restored) return null
+          return {
+            ...restored,
+            taskId: restored.taskId ?? task.task.id,
+            resultText: task.resultText ?? restored.resultText
+          }
+        })
+        .filter((session): session is TaskDagAutoMergeSession => session !== null)
+    )
+  }
+
+  private skippedDagAutoMerge(error: string): TaskDagAutoMergeView {
+    const now = Date.now()
+    return {
+      enabled: true,
+      status: 'failed',
+      startedAt: now,
+      completedAt: now,
+      entries: [],
+      mergedCount: 0,
+      blockedCount: 0,
+      skippedCount: 0,
+      verification: { status: 'not-run', error },
+      summary: error,
+      error
+    }
+  }
+
+  private dagAutoMergeLines(autoMerge: TaskDagAutoMergeView | undefined): string[] {
+    if (!autoMerge) return []
+    return [
+      '',
+      '## DAG 自动合并',
+      autoMerge.summary ?? autoMerge.status,
+      autoMerge.verification?.command ? `验收命令: ${autoMerge.verification.command}` : '',
+      autoMerge.error ? `错误: ${autoMerge.error}` : ''
+    ].filter(Boolean)
   }
 
   /**
@@ -235,6 +551,11 @@ class SessionManager {
       worktreePath: childMeta.worktreePath
     })
     if (state.pending.size > 0) return
+    this.completeOrchestrationIfReady(orchestrationId, state)
+  }
+
+  private completeOrchestrationIfReady(orchestrationId: string, state: OrchestrationState): void {
+    if (state.acceptingChildren || state.pending.size > 0) return
 
     this.orchestrations.delete(orchestrationId)
     const parent = this.sessions.get(state.parentSessionId)
@@ -266,6 +587,14 @@ class SessionManager {
     if (!session) return
     // 编排中的 child 被手动关闭:按"失败"记账,避免整组编排永远等不齐
     const orchestrationId = session.meta.orchestrationId
+    const dag = orchestrationId ? this.dagSchedulers.get(orchestrationId) : undefined
+    if (dag?.hasSession(id)) {
+      dag.completeSession(id, {
+        ok: false,
+        resultText: '子会话被手动关闭,任务未完成',
+        error: '子会话被手动关闭'
+      })
+    }
     if (orchestrationId && this.orchestrations.get(orchestrationId)?.pending.has(id)) {
       this.recordOrchestrationResult(session.meta, {
         kind: 'turn-result',
@@ -274,8 +603,10 @@ class SessionManager {
         resultText: '子会话被手动关闭,任务未完成'
       })
     }
+    this.stopEnginePowerBlocker(id)
     this.sessions.delete(id)
     this.notificationStates.delete(id)
+    clearIdeDocumentContext(id)
     session.dispose()
   }
 
@@ -286,25 +617,199 @@ class SessionManager {
     this.persist(id)
   }
 
-  disposeAll(): void {
-    for (const session of this.sessions.values()) session.dispose()
-    this.sessions.clear()
-    this.notificationStates.clear()
+  async disposeAll(): Promise<void> {
+    this.preservingSnapshotsOnDispose = true
+    const pendingWrites: Array<Promise<void>> = []
+    try {
+      for (const session of this.sessions.values()) {
+        pendingWrites.push(this.writeTaskSnapshot(session.meta.id, 'shutdown', 0, 'status'))
+        session.dispose()
+        this.stopEnginePowerBlocker(session.meta.id)
+        clearIdeDocumentContext(session.meta.id)
+      }
+      this.sessions.clear()
+      this.notificationStates.clear()
+    } finally {
+      this.preservingSnapshotsOnDispose = false
+    }
+    await Promise.all(pendingWrites)
+    await flushTaskSnapshotMutations()
   }
 
   getTranscript(id: string): TranscriptEntry[] {
     return this.sessions.get(id)?.getTranscript() ?? []
   }
 
+  listTaskSnapshots(): Promise<TaskSnapshotRecord[]> {
+    return listTaskSnapshots()
+  }
+
+  deleteTaskSnapshot(id: string): Promise<boolean> {
+    this.snapshotCounts.delete(id)
+    return deleteTaskSnapshot(id)
+  }
+
+  async recoverTaskSnapshot(id: string): Promise<SessionMeta> {
+    const snapshot = await getTaskSnapshot(id)
+    if (!snapshot) throw new Error('未找到可恢复的任务快照')
+    const active = this.sessions.get(snapshot.sessionId)
+    if (active) return { ...active.meta }
+    const { lastError: _lastError, ...restMeta } = snapshot.meta
+    const meta: SessionMeta = {
+      ...restMeta,
+      status: 'starting',
+      sdkSessionId: snapshot.execution.sdkSessionId,
+      resumeSessionAt: snapshot.execution.resumeSessionAt
+    }
+    restoreTranscriptIfMissing(snapshot.execution.sdkSessionId, snapshot.transcript)
+    const session = createEngine(
+      meta.engine,
+      meta,
+      (event, seq) => this.dispatch(meta.id, event, seq),
+      snapshot.execution.sdkSessionId
+    )
+    this.sessions.set(meta.id, session)
+    this.snapshotCounts.set(meta.id, {
+      total: snapshot.eventCount,
+      sinceSave: 0,
+      lastSeq: snapshot.execution.lastSeq
+    })
+    const restoredDagRuntimeCount = this.restoreDagRuntimesFromSnapshot(meta.id, snapshot)
+    void this.writeTaskSnapshot(meta.id, 'recovered', snapshot.execution.lastSeq)
+    this.startRecoveredSession(session, snapshot, restoredDagRuntimeCount > 0)
+    touchProject(meta.sourceCwd ?? meta.cwd)
+    return { ...meta }
+  }
+
+  private startRecoveredSession(
+    session: Engine,
+    snapshot: TaskSnapshotRecord,
+    resumeDagRuntime = false
+  ): void {
+    void session
+      .start()
+      .then(() => {
+        const replay = snapshot.replayCandidate
+        const active = this.sessions.get(snapshot.sessionId)
+        if (active !== session) return
+        if (resumeDagRuntime) {
+          this.dispatch(
+            snapshot.sessionId,
+            {
+              kind: 'hook-event',
+              event: 'task-dag-recovered',
+              detail: 'Recovered DAG scheduler runtime from task snapshot; continuing dependency scheduling.'
+            },
+            0
+          )
+          this.resumeRecoveredDagRuntimes(snapshot.sessionId)
+          return
+        }
+        if (!replay) return
+        if (active.meta.status === 'error' || active.meta.status === 'closed') return
+        this.dispatch(
+          snapshot.sessionId,
+          {
+            kind: 'hook-event',
+            event: 'task-snapshot-replay',
+            detail: `已从快照恢复,准备续跑用户请求 seq ${replay.seq}。`
+          },
+          0
+        )
+        this.send(snapshot.sessionId, buildTaskSnapshotReplayPrompt(snapshot))
+      })
+      .catch((err) => {
+        console.error('[caogen] 恢复任务快照启动失败:', err)
+      })
+  }
+
   /** 启动时:补全 GUI 启动缺失的 PATH → 注册内置引擎 → 清理不可达转录文件 */
-  init(): void {
+  async init(): Promise<void> {
     // 必须在引擎探测(codex/gemini CLI 是否在 PATH 上)之前补 PATH,
     // 否则 Dock 启动的应用因 PATH 极简会误报 CLI"未安装"。
     fixPathForGuiLaunch()
     configureModelStatsDir(app.getPath('userData'))
     registerBuiltinEngines()
     const keep = new Set(listHistory().map((h) => h.sdkSessionId))
+    const recoverable = await this.listTaskSnapshots()
+    for (const snapshot of recoverable) {
+      const sdkSessionId = snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
+      if (sdkSessionId) keep.add(sdkSessionId)
+    }
     cleanupTranscripts(keep)
+    if (recoverable.length > 0 && getSettings().notificationsEnabled) {
+      showDesktopNotification({
+        title: 'CaoGen: 检测到未完成任务',
+        body: `发现 ${recoverable.length} 个任务快照，可从恢复入口继续。`,
+        sessionId: 'task-snapshot'
+      })
+    }
+  }
+
+  private restoreDagRuntimesFromSnapshot(parentSessionId: string, snapshot: TaskSnapshotRecord): number {
+    const executionById = new Map(snapshot.dagExecutions.map((execution) => [execution.id, execution]))
+    for (const execution of snapshot.dagExecutions) {
+      if (execution.parentSessionId === parentSessionId) this.dagExecutionSnapshots.set(execution.id, execution)
+    }
+
+    let restored = 0
+    for (const runtime of snapshot.dagRuntimes ?? []) {
+      if (runtime.parentSessionId !== parentSessionId) continue
+      const execution = executionById.get(runtime.executionId)
+      if (!execution) continue
+      this.dagExecutionSnapshots.set(execution.id, execution)
+      if (runtime.mergeSessions) this.dagRuntimeMergeSessions.set(execution.id, runtime.mergeSessions)
+      if (execution.status === 'success' || execution.status === 'failed') continue
+
+      const input = this.taskDagDispatchInputFromRuntime(runtime, execution)
+      try {
+        const scheduler = TaskDagScheduler.fromRuntimeSnapshot(
+          runtime,
+          execution,
+          this.createTaskDagSchedulerCallbacks(parentSessionId, input),
+          new Set(this.sessions.keys())
+        )
+        this.dagSchedulers.set(execution.id, scheduler)
+        if (runtime.autoMerge) {
+          this.dagAutoMergeOptions.set(execution.id, {
+            enabled: runtime.autoMerge.enabled,
+            verificationCommand: runtime.autoMerge.verificationCommand
+          })
+        }
+        restored += 1
+      } catch (err) {
+        console.error('[caogen] restore DAG runtime snapshot failed:', err)
+      }
+    }
+    return restored
+  }
+
+  private taskDagDispatchInputFromRuntime(
+    runtime: TaskDagRuntimeSnapshot,
+    execution: TaskDagExecutionView
+  ): TaskDagDispatchInput {
+    return {
+      dag: execution.dag,
+      cwd: runtime.dispatchOptions.cwd,
+      isolated: runtime.dispatchOptions.isolated,
+      model: runtime.dispatchOptions.model,
+      providerId: runtime.dispatchOptions.providerId,
+      engine: runtime.dispatchOptions.engine,
+      permissionMode: runtime.dispatchOptions.permissionMode,
+      maxRetries: execution.maxRetries,
+      taskTimeoutMs: runtime.dispatchOptions.taskTimeoutMs,
+      autoMerge: runtime.autoMerge?.enabled,
+      verificationCommand: runtime.autoMerge?.verificationCommand
+    }
+  }
+
+  private resumeRecoveredDagRuntimes(parentSessionId: string): void {
+    for (const scheduler of this.dagSchedulers.values()) {
+      const execution = scheduler.view()
+      if (execution.parentSessionId !== parentSessionId) continue
+      if (execution.status === 'success' || execution.status === 'failed') continue
+      scheduler.resume()
+    }
   }
 
   private dispatch(sessionId: string, rawEvent: AgentEvent, seq: number): void {
@@ -314,6 +819,8 @@ class SessionManager {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
+    this.emitToSubscribers(payload)
+    this.handleModelRoutePlan(sessionId, event)
     const parentSessionId = session?.meta.parentSessionId
     if (event.kind === 'turn-result' && parentSessionId && this.sessions.has(parentSessionId)) {
       const childResult: AgentEvent = {
@@ -327,26 +834,434 @@ class SessionManager {
         costUsd: event.costUsd,
         durationMs: event.durationMs
       }
-      const parentPayload: SessionEventPayload = { sessionId: parentSessionId, seq: 0, event: childResult }
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('session:event', parentPayload)
+      const parent = this.sessions.get(parentSessionId)
+      if (parent?.emitSyntheticEvent) {
+        parent.emitSyntheticEvent(childResult)
+      } else {
+        this.dispatch(parentSessionId, childResult, 0)
       }
       // 真编排:记录该 child 结果;整组完成后汇总回灌父 Agent
       this.recordOrchestrationResult(session.meta, event)
+      const dag = session.meta.orchestrationId
+        ? this.dagSchedulers.get(session.meta.orchestrationId)
+        : undefined
+      if (dag?.hasSession(sessionId)) {
+        dag.completeSession(sessionId, {
+          ok: !event.isError,
+          resultText: event.resultText,
+          error: event.isError ? event.resultText ?? event.subtype : undefined
+        })
+      }
     }
+    this.handleEnginePowerBlocker(sessionId, event)
     this.handleNotification(sessionId, event)
+    this.handleAutoSkillReview(sessionId, event)
+    this.handleModelCrossValidation(sessionId, event, seq)
+    this.handleModelReviewArbitration(sessionId, event, seq)
+    this.handleTaskSnapshot(sessionId, event, seq)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
     }
   }
 
+  private handleAutoSkillReview(sessionId: string, event: AgentEvent): void {
+    if (event.kind !== 'turn-result' || event.isError) return
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    if (session.meta.parentSessionId || session.meta.childRole) return
+    scheduleAutoSkillReview(
+      {
+        meta: { ...session.meta },
+        transcript: session.getTranscript(),
+        event
+      },
+      { enabled: getSettings().autoSkillLearningEnabled }
+    )
+  }
+
+  private handleModelRoutePlan(sessionId: string, event: AgentEvent): void {
+    if (event.kind === 'status' && event.status === 'closed') {
+      this.routePlans.delete(sessionId)
+      this.deleteCrossValidationKeys(sessionId)
+      this.crossValidationReviews.delete(sessionId)
+      return
+    }
+    if (event.kind !== 'routing') return
+    const plan = event.crossValidationPlan
+    if (plan?.enabled) {
+      this.routePlans.set(sessionId, plan)
+    } else {
+      this.routePlans.delete(sessionId)
+    }
+  }
+
+  private handleModelCrossValidation(sessionId: string, event: AgentEvent, seq: number): void {
+    if (event.kind !== 'turn-result' || event.isError) return
+    const settings = getSettings()
+    if (!settings.smartModelRoutingEnabled || !settings.modelCrossValidationAutoRunEnabled) return
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    if (session.meta.parentSessionId || session.meta.childRole === 'model-review') return
+    const routePlan = this.routePlans.get(sessionId)
+    if (!routePlan?.enabled) return
+    const validator = firstCrossValidationTarget(routePlan)
+    const resultText = event.resultText?.trim()
+    if (!validator || !resultText) return
+
+    const key = `${sessionId}:${seq}:${validator.providerId}:${validator.model}`
+    if (this.crossValidationStarted.has(key)) return
+    this.crossValidationStarted.add(key)
+
+    const reviewMeta = this.create({
+      cwd: session.meta.sourceCwd ?? session.meta.cwd,
+      isolated: false,
+      model: validator.model,
+      providerId: validator.providerId,
+      engine: session.meta.engine,
+      permissionMode: 'plan',
+      parentSessionId: sessionId,
+      childTaskId: `cross-validation-${seq}`,
+      childRole: 'model-review',
+      title: `模型复核: ${cleanOneLine(session.meta.title, session.meta.id, 48)}`
+    })
+    this.crossValidationReviews.set(reviewMeta.id, {
+      parentSessionId: sessionId,
+      parentMeta: { ...session.meta },
+      routePlan,
+      primaryResultText: resultText,
+      transcript: session.getTranscript(),
+      turnSeq: seq
+    })
+    const reviewer = `${validator.providerName ?? validator.providerId}/${validator.model}`
+    this.dispatch(
+      sessionId,
+      {
+        kind: 'hook-event',
+        event: 'model-cross-validation',
+        detail: `已启动第二模型复核: ${reviewer}`
+      },
+      0
+    )
+    this.send(
+      reviewMeta.id,
+      buildCrossValidationReviewPrompt({
+        parentMeta: { ...session.meta },
+        routePlan,
+        resultText,
+        transcript: session.getTranscript(),
+        turnSeq: seq
+      })
+    )
+  }
+
+  private deleteCrossValidationKeys(sessionId: string): void {
+    const prefix = `${sessionId}:`
+    for (const key of this.crossValidationStarted) {
+      if (key.startsWith(prefix)) this.crossValidationStarted.delete(key)
+    }
+  }
+
+  private handleModelReviewArbitration(sessionId: string, event: AgentEvent, seq: number): void {
+    if (event.kind !== 'turn-result') return
+    const review = this.crossValidationReviews.get(sessionId)
+    if (!review) return
+    this.crossValidationReviews.delete(sessionId)
+    const parent = this.sessions.get(review.parentSessionId)
+    const reviewerResultText = event.resultText?.trim() ?? ''
+    if (event.isError || !needsCrossValidationArbitration(reviewerResultText)) return
+    const target = arbitrationCrossValidationTarget(review.routePlan)
+    if (!parent || !target) {
+      this.dispatch(
+        review.parentSessionId,
+        {
+          kind: 'hook-event',
+          event: 'model-cross-validation-arbitration-required',
+          detail: '第二模型复核要求仲裁，但当前复核计划没有可用第三模型；需要人工仲裁。'
+        },
+        0
+      )
+      return
+    }
+    const arbitrationMeta = this.create({
+      cwd: parent.meta.sourceCwd ?? parent.meta.cwd,
+      isolated: false,
+      model: target.model,
+      providerId: target.providerId,
+      engine: parent.meta.engine,
+      permissionMode: 'plan',
+      parentSessionId: review.parentSessionId,
+      childTaskId: `cross-validation-arbitration-${review.turnSeq}`,
+      childRole: 'model-arbitration',
+      title: `模型仲裁: ${cleanOneLine(parent.meta.title, parent.meta.id, 48)}`
+    })
+    const arbitrator = `${target.providerName ?? target.providerId}/${target.model}`
+    this.dispatch(
+      review.parentSessionId,
+      {
+        kind: 'hook-event',
+        event: 'model-cross-validation-arbitration',
+        detail: `第二模型复核存在分歧，已启动仲裁模型: ${arbitrator}`
+      },
+      0
+    )
+    this.send(
+      arbitrationMeta.id,
+      buildCrossValidationArbitrationPrompt({
+        parentMeta: review.parentMeta,
+        routePlan: review.routePlan,
+        primaryResultText: review.primaryResultText,
+        reviewerResultText,
+        transcript: review.transcript,
+        turnSeq: seq
+      })
+    )
+  }
+
+  private handleEnginePowerBlocker(sessionId: string, event: AgentEvent): void {
+    if (event.kind !== 'status') return
+    const engine = this.sessions.get(sessionId)?.meta.engine ?? 'claude'
+    if (engine === 'claude') return
+    if (event.status === 'running') {
+      this.startEnginePowerBlocker(sessionId)
+    } else if (event.status === 'idle' || event.status === 'error' || event.status === 'closed') {
+      this.stopEnginePowerBlocker(sessionId)
+    }
+  }
+
+  private startEnginePowerBlocker(sessionId: string): void {
+    if (this.enginePowerBlockers.has(sessionId)) return
+    if (!getSettings().preventDisplaySleep) return
+    try {
+      const blockerId = powerSaveBlocker.start('prevent-display-sleep')
+      this.enginePowerBlockers.set(sessionId, blockerId)
+    } catch (err) {
+      console.error('[caogen] 启动非 Claude 引擎防休眠失败:', err)
+    }
+  }
+
+  private stopEnginePowerBlocker(sessionId: string): void {
+    const blockerId = this.enginePowerBlockers.get(sessionId)
+    if (blockerId === undefined) return
+    this.enginePowerBlockers.delete(sessionId)
+    try {
+      if (powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId)
+    } catch (err) {
+      console.error('[caogen] 释放非 Claude 引擎防休眠失败:', err)
+    }
+  }
+
+  private handleTaskSnapshot(sessionId: string, event: AgentEvent, seq: number): void {
+    if (this.isSnapshotCleanupEvent(event)) {
+      if (!this.preservingSnapshotsOnDispose) {
+        this.snapshotCounts.delete(sessionId)
+        void deleteTaskSnapshot(sessionId)
+      }
+      return
+    }
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    const state = this.snapshotCounts.get(sessionId) ?? { total: 0, sinceSave: 0, lastSeq: 0 }
+    if (this.isSnapshotCountedEvent(event)) {
+      state.total += 1
+      state.sinceSave += 1
+      state.lastSeq = Math.max(state.lastSeq, seq)
+    }
+    const reason = this.snapshotReason(event, state.sinceSave)
+    if (reason) {
+      this.snapshotCounts.set(sessionId, { ...state, sinceSave: 0 })
+      void this.writeTaskSnapshot(sessionId, reason, seq, event.kind)
+      return
+    }
+    this.snapshotCounts.set(sessionId, state)
+  }
+
+  private snapshotReason(event: AgentEvent, sinceSave: number): TaskSnapshotReason | null {
+    if (event.kind === 'turn-result' && event.isError) return 'important-event'
+    if (event.kind === 'status' && event.status === 'error') return 'important-event'
+    if (
+      event.kind === 'init' ||
+      event.kind === 'meta' ||
+      event.kind === 'user-message' ||
+      event.kind === 'checkpoint' ||
+      event.kind === 'checkpoint-restore' ||
+      event.kind === 'permission-request' ||
+      event.kind === 'subagent-result' ||
+      event.kind === 'task-dag-update'
+    ) {
+      return 'important-event'
+    }
+    return sinceSave >= TASK_SNAPSHOT_EVENT_INTERVAL ? 'event-batch' : null
+  }
+
+  private isSnapshotCountedEvent(event: AgentEvent): boolean {
+    return event.kind !== 'text-delta' && event.kind !== 'thinking-delta'
+  }
+
+  private isSnapshotCleanupEvent(event: AgentEvent): boolean {
+    return (
+      (event.kind === 'turn-result' && event.isError === false) ||
+      (event.kind === 'status' && event.status === 'closed')
+    )
+  }
+
+  private async writeTaskSnapshot(
+    sessionId: string,
+    reason: TaskSnapshotReason,
+    seq: number,
+    eventKind?: AgentEvent['kind']
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    const state = this.snapshotCounts.get(sessionId) ?? { total: 0, sinceSave: 0, lastSeq: seq }
+    try {
+      await saveTaskSnapshot(
+        buildTaskSnapshot({
+          meta: session.meta,
+          transcript: session.getTranscript(),
+          lastSeq: Math.max(seq, state.lastSeq),
+          lastEventKind: eventKind,
+          eventCount: state.total,
+          reason,
+          subtasks: this.snapshotSubtasksFor(sessionId),
+          dagExecutions: this.snapshotDagExecutionsFor(sessionId),
+          dagRuntimes: this.snapshotDagRuntimesFor(sessionId)
+        })
+      )
+    } catch (err) {
+      console.error('[caogen] 写入任务快照失败:', err)
+    }
+  }
+
+  private snapshotSubtasksFor(sessionId: string): TaskSnapshotSubtaskState[] {
+    const subtasks: TaskSnapshotSubtaskState[] = []
+    for (const state of this.orchestrations.values()) {
+      if (state.parentSessionId !== sessionId) continue
+      for (const childSessionId of state.pending) {
+        const child = this.sessions.get(childSessionId)?.meta
+        subtasks.push({
+          taskId: child?.childTaskId,
+          role: child?.childRole,
+          sessionId: childSessionId,
+          status: subtaskStatusFromSession(child?.status),
+          branch: child?.branch,
+          worktreePath: child?.worktreePath,
+          costUsd: child?.costUsd
+        })
+      }
+      for (const result of state.results) {
+        subtasks.push({
+          taskId: result.taskId,
+          role: result.role,
+          sessionId: result.sessionId,
+          status: result.ok ? 'success' : 'failed',
+          resultText: result.resultText,
+          costUsd: result.costUsd,
+          branch: result.branch,
+          worktreePath: result.worktreePath
+        })
+      }
+    }
+    for (const execution of this.snapshotDagExecutionsFor(sessionId)) {
+      if (execution.parentSessionId !== sessionId) continue
+      for (const task of execution.tasks) {
+        subtasks.push({
+          taskId: task.task.id,
+          role: task.task.role,
+          sessionId: task.sessionIds[task.sessionIds.length - 1] ?? `${execution.id}:${task.task.id}`,
+          status: subtaskStatusFromDag(task.status),
+          resultText: task.resultText,
+          branch: undefined,
+          worktreePath: undefined
+        })
+      }
+    }
+    return subtasks
+  }
+
+  private snapshotDagExecutionsFor(sessionId: string): TaskDagExecutionView[] {
+    const executions = new Map<string, TaskDagExecutionView>()
+    for (const scheduler of this.dagSchedulers.values()) {
+      const execution = scheduler.view()
+      executions.set(execution.id, execution)
+    }
+    for (const execution of this.dagExecutionSnapshots.values()) {
+      executions.set(execution.id, execution)
+    }
+    return [...executions.values()].filter(
+      (execution) =>
+        execution.parentSessionId === sessionId ||
+        execution.tasks.some((task) => task.sessionIds.includes(sessionId))
+    )
+  }
+
+  private snapshotDagRuntimesFor(sessionId: string): TaskDagRuntimeSnapshot[] {
+    const runtimes: TaskDagRuntimeSnapshot[] = []
+    for (const [executionId, scheduler] of this.dagSchedulers.entries()) {
+      const execution = scheduler.view()
+      if (
+        execution.parentSessionId !== sessionId &&
+        !execution.tasks.some((task) => task.sessionIds.includes(sessionId))
+      ) {
+        continue
+      }
+      runtimes.push(
+        scheduler.runtimeSnapshot({
+          autoMerge: this.dagAutoMergeOptions.get(executionId),
+          mergeSessions: this.snapshotDagMergeSessionsFor(execution)
+        })
+      )
+    }
+    return runtimes
+  }
+
+  private snapshotDagMergeSessionsFor(execution: TaskDagExecutionView): TaskDagRuntimeMergeSession[] {
+    const fallback = new Map(
+      (this.dagRuntimeMergeSessions.get(execution.id) ?? []).map((session) => [session.sessionId, session])
+    )
+    const sessions: TaskDagRuntimeMergeSession[] = []
+    for (const task of execution.tasks) {
+      for (const sessionId of task.sessionIds) {
+        const meta = this.sessions.get(sessionId)?.meta
+        if (meta) {
+          sessions.push({
+            sessionId,
+            taskId: task.task.id,
+            repoRoot: meta.repoRoot,
+            worktreePath: meta.worktreePath,
+            baseSha: meta.baseSha,
+            branch: meta.branch,
+            resultText: task.resultText
+          })
+          continue
+        }
+        const restored = fallback.get(sessionId)
+        if (restored) {
+          sessions.push({
+            ...restored,
+            taskId: restored.taskId ?? task.task.id,
+            resultText: task.resultText ?? restored.resultText
+          })
+        }
+      }
+    }
+    return sessions
+  }
+
   private budgetError(session: Engine): string | null {
     const budget = effectiveBudgetUsd(session.meta)
-    if (budget <= 0) return null
+    const monthlyBudget = calculateMonthlyBudgetSnapshot({
+      settings: getSettings(),
+      history: listHistory(),
+      currentSession: session.meta
+    })
+    if (budget <= 0 && monthlyBudget.limitUsd <= 0) return null
     if (!canTrackCost(session.meta)) {
       return '当前引擎不提供费用回传,无法保证预算闸门;请关闭预算或切换到支持费用统计的引擎后继续。'
     }
-    if (session.meta.costUsd >= budget) {
+    if (monthlyBudget.exceeded) {
+      return `已达本月预算上限 $${monthlyBudget.limitUsd.toFixed(2)} (${monthlyBudget.monthKey}),请调高月度预算后继续`
+    }
+    if (budget > 0 && session.meta.costUsd >= budget) {
       return `已达预算上限 $${budget.toFixed(2)},请调高预算后继续`
     }
     return null
@@ -481,6 +1396,51 @@ class SessionManager {
       resumeSessionAt: meta.resumeSessionAt
     })
   }
+
+  private emitToSubscribers(payload: SessionEventPayload): void {
+    for (const listener of this.sessionEventListeners) {
+      try {
+        listener(payload)
+      } catch (error) {
+        console.error('[caogen] session event subscriber failed:', error)
+      }
+    }
+  }
+}
+
+function subtaskStatusFromSession(
+  status: SessionMeta['status'] | undefined
+): TaskSnapshotSubtaskState['status'] {
+  if (status === 'starting' || status === 'running') return 'running'
+  if (status === 'error') return 'failed'
+  if (status === 'closed') return 'closed'
+  return 'pending'
+}
+
+function buildTaskSnapshotReplayPrompt(snapshot: TaskSnapshotRecord): string {
+  const replay = snapshot.replayCandidate
+  if (!replay) return '请继续恢复后的未完成任务。'
+  return [
+    '【CaoGen 断点续跑】程序从任务快照恢复。请继续完成上一条未完成的用户请求。',
+    '',
+    `原始用户请求(messageId=${replay.messageId}, seq=${replay.seq}):`,
+    replay.text,
+    '',
+    '续跑要求:',
+    '1. 先检查当前文件状态、git diff 和已有工具结果,判断哪些步骤已经完成。',
+    '2. 不要重复执行已经完成且可能产生副作用的文件修改、依赖安装、提交、推送或外部调用。',
+    '3. 如果发现外部修改、冲突或无法确认的状态,先停止并向用户说明需要确认的点。',
+    '4. 只继续执行原始请求剩余部分,不要扩大任务范围。'
+  ].join('\n')
+}
+
+function subtaskStatusFromDag(
+  status: TaskDagExecutionView['tasks'][number]['status']
+): TaskSnapshotSubtaskState['status'] {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'failed'
+  if (status === 'running') return 'running'
+  return 'pending'
 }
 
 function normalizePositiveNumber(value: unknown): number | undefined {

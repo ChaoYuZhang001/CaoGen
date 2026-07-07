@@ -1,6 +1,14 @@
 import { useMemo, useState } from 'react'
 import { formatCost, formatTime } from '../../format'
-import type { SessionMeta, SessionStatus, SubagentDispatchResult, SubagentResult } from '../../../../shared/types'
+import TaskDagGraph from '../TaskDagGraph'
+import type {
+  SessionMeta,
+  SessionStatus,
+  SubagentDispatchResult,
+  SubagentResult,
+  TaskDagDispatchResult,
+  TaskDagExecutionView
+} from '../../../../shared/types'
 
 interface SubagentPanelProps {
   childSessions?: SessionMeta[]
@@ -8,10 +16,15 @@ interface SubagentPanelProps {
   error?: string
   message?: string
   lastResult?: SubagentDispatchResult
+  dagExecution?: TaskDagExecutionView
   childResults?: Record<string, SubagentResult>
   onClose?: () => void
   onSelectChild?: (sessionId: string) => void
   onDispatch: (tasksText: string) => Promise<SubagentDispatchResult | undefined>
+  onDecomposeAndDispatch: (
+    request: string,
+    options?: { autoMerge?: boolean; verificationCommand?: string }
+  ) => Promise<TaskDagDispatchResult | undefined>
 }
 
 const EXAMPLE_TASKS = [
@@ -19,6 +32,8 @@ const EXAMPLE_TASKS = [
   'backend: 实现 IPC / API / 数据模型',
   'tester: 补 smoke 与集成测试'
 ].join('\n')
+
+const DAG_EXAMPLE_REQUEST = '实现完整登录功能，含前端表单、后端认证接口、会话状态和全流程测试'
 
 const ULTIMATE_TASKS = [
   'm12-sdk-agents: 接入 supportedAgents()/agents,让主 Agent 能按 SDK 能力派发专职子 Agent',
@@ -91,15 +106,21 @@ export default function SubagentPanel({
   busy = false,
   error,
   childResults = {},
+  dagExecution,
   lastResult,
   message,
   onClose,
   onSelectChild,
-  onDispatch
+  onDispatch,
+  onDecomposeAndDispatch
 }: SubagentPanelProps): React.JSX.Element {
   const [tasksText, setTasksText] = useState(EXAMPLE_TASKS)
+  const [requestText, setRequestText] = useState(DAG_EXAMPLE_REQUEST)
+  const [autoMerge, setAutoMerge] = useState(false)
+  const [verificationCommand, setVerificationCommand] = useState('npm.cmd run test:dag')
   const taskCount = useMemo(() => parseCount(tasksText), [tasksText])
   const invalid = taskCount === 0 || taskCount > 33
+  const requestInvalid = requestText.trim().length === 0
 
   return (
     <section className="subagent-panel">
@@ -122,6 +143,53 @@ export default function SubagentPanel({
       {message && <div className="notice notice-info subagent-panel-notice">{message}</div>}
 
       <div className="subagent-panel-body">
+        <section className="subagent-panel-result">
+          <div className="subagent-panel-result-head">
+            <span>DAG 自动拆解</span>
+            <b>可选</b>
+          </div>
+          <div className="subagent-dag-form">
+            <textarea
+              className="subagent-panel-textarea subagent-dag-textarea"
+              value={requestText}
+              spellCheck={false}
+              onChange={(event) => setRequestText(event.target.value)}
+            />
+            <div className="subagent-dag-options">
+              <label className="subagent-dag-toggle">
+                <input
+                  type="checkbox"
+                  checked={autoMerge}
+                  disabled={busy}
+                  onChange={(event) => setAutoMerge(event.currentTarget.checked)}
+                />
+                <span>DAG 完成后自动合并</span>
+              </label>
+              <input
+                className="subagent-dag-command"
+                value={verificationCommand}
+                disabled={busy || !autoMerge}
+                spellCheck={false}
+                placeholder="验收命令，例如 npm.cmd run test:dag"
+                onChange={(event) => setVerificationCommand(event.target.value)}
+              />
+            </div>
+            <button
+              className="btn btn-primary subagent-panel-dispatch"
+              disabled={busy || requestInvalid}
+              onClick={() =>
+                void onDecomposeAndDispatch(requestText, {
+                  autoMerge,
+                  verificationCommand
+                })
+              }
+            >
+              {busy ? '调度中...' : '拆解为 DAG 并调度'}
+            </button>
+          </div>
+          <TaskDagGraph execution={dagExecution} onSelectSession={onSelectChild} />
+        </section>
+
         <label className="subagent-panel-label" htmlFor="subagent-tasks">
           每行一个任务,可写成 role: prompt
         </label>

@@ -12,9 +12,9 @@ const transcriptsDir = path.join(tempRoot, 'transcripts')
 
 try {
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/transcriptSearch.ts',
       '--outDir',
       outDir,

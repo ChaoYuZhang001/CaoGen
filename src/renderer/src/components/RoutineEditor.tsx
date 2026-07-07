@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
-import type { CreateRoutineInput, Routine, RoutinePermissionMode } from '../../../shared/types'
+import type {
+  CreateRoutineInput,
+  EngineInfo,
+  EngineKind,
+  Routine,
+  RoutinePermissionMode,
+  RoutineTemplate
+} from '../../../shared/types'
 
 interface Props {
   /** null / undefined = 新建;否则编辑该 Routine */
@@ -30,12 +37,22 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
   const [schedule, setSchedule] = useState(routine?.schedule ?? '')
   const [providerId, setProviderId] = useState(routine?.providerId ?? '')
   const [model, setModel] = useState(routine?.model ?? '')
+  const [engine, setEngine] = useState<EngineKind | ''>(routine?.engine ?? '')
+  const [engines, setEngines] = useState<EngineInfo[]>([])
+  const [budgetUsd, setBudgetUsd] = useState(routine?.budgetUsd ? String(routine.budgetUsd) : '')
   const [permissionMode, setPermissionMode] = useState<RoutinePermissionMode>(
     routine?.permissionMode ?? 'default'
   )
+  const [notificationEnabled, setNotificationEnabled] = useState(routine?.notification?.enabled ?? true)
   const [enabled, setEnabled] = useState(routine?.enabled ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [templates, setTemplates] = useState<RoutineTemplate[]>([])
+
+  useEffect(() => {
+    void window.agentDesk.listEngines().then(setEngines)
+    void window.agentDesk.listRoutineTemplates().then(setTemplates).catch(() => undefined)
+  }, [])
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
@@ -44,6 +61,15 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
 
   const applyCron = (expr: string): void => {
     if (expr) setSchedule(expr)
+  }
+
+  const applyTemplate = (templateId: string): void => {
+    const template = templates.find((item) => item.id === templateId)
+    if (!template) return
+    if (!name.trim()) setName(template.name)
+    setPrompt(template.content)
+    setSchedule(template.frequency)
+    setPermissionMode(template.permissionMode)
   }
 
   const save = async (): Promise<void> => {
@@ -67,6 +93,8 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
     setBusy(true)
     setError('')
     try {
+      const budget = Number(budgetUsd)
+      const normalizedBudget = Number.isFinite(budget) && budget > 0 ? budget : 0
       if (isEdit && routine) {
         await window.agentDesk.updateRoutine(routine.id, {
           name: name.trim(),
@@ -75,18 +103,28 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
           schedule: schedule.trim(),
           providerId: providerId.trim(),
           model: model.trim(),
+          engine: engine || undefined,
+          budgetUsd: normalizedBudget,
           permissionMode,
+          content: prompt.trim(),
+          frequency: schedule.trim(),
+          notification: { enabled: notificationEnabled, onSuccess: true, onFailure: true },
           enabled
         })
       } else {
         const input: CreateRoutineInput = {
           name: name.trim(),
           prompt: prompt.trim(),
+          content: prompt.trim(),
           projectCwd: projectCwd.trim(),
           schedule: schedule.trim(),
+          frequency: schedule.trim(),
           providerId: providerId.trim(),
           model: model.trim(),
+          engine: engine || undefined,
+          budgetUsd: normalizedBudget,
           permissionMode,
+          notification: { enabled: notificationEnabled, onSuccess: true, onFailure: true },
           enabled
         }
         await window.agentDesk.createRoutine(input)
@@ -104,6 +142,22 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
         <h2 className="modal-title">
           {isEdit ? t('routineEditTitle') : t('routineAddTitle')}
         </h2>
+
+        {!isEdit && templates.length > 0 && (
+          <>
+            <label className="field-label">Routine 模板</label>
+            <select className="select select-block" defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
+              <option value="" disabled>
+                选择模板
+              </option>
+              {templates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name} · {template.frequency}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label className="field-label">{t('nameLabel')}</label>
         <input
@@ -183,6 +237,36 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
           onChange={(e) => setModel(e.target.value)}
         />
 
+        {engines.length > 1 && (
+          <>
+            <label className="field-label">{t('engineLabel')}</label>
+            <select
+              className="select select-block"
+              value={engine}
+              onChange={(e) => setEngine(e.target.value as EngineKind | '')}
+            >
+              <option value="">{t('routineEngineDefault')}</option>
+              {engines.map((en) => (
+                <option key={en.kind} value={en.kind} disabled={!en.available}>
+                  {en.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <label className="field-label">{t('routineBudgetLabel')}</label>
+        <input
+          className="input input-block"
+          type="number"
+          min="0"
+          step="0.01"
+          value={budgetUsd}
+          placeholder="0"
+          onChange={(e) => setBudgetUsd(e.target.value)}
+        />
+        <p className="field-hint">{t('routineBudgetHint')}</p>
+
         <label className="field-label">{t('permissionMode')}</label>
         <select
           className="select select-block"
@@ -203,6 +287,15 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
             onChange={(e) => setEnabled(e.target.checked)}
           />
           {t('routineEnabledLabel')}
+        </label>
+
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={notificationEnabled}
+            onChange={(e) => setNotificationEnabled(e.target.checked)}
+          />
+          执行完成后发送通知
         </label>
 
         {error && <div className="notice notice-error">{error}</div>}

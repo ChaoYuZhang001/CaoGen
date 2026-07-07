@@ -1,4 +1,4 @@
-import { listRoutines, markRun, updateRoutine, type Routine } from './routineStore'
+﻿import { listRoutines, markRun, updateRoutine, type Routine } from './routineStore'
 import { normalizeCronAlias } from './cronParse'
 
 /**
@@ -12,7 +12,7 @@ import { normalizeCronAlias } from './cronParse'
  * 触发回调由 index.ts 注入,用于起会话跑 `routine.prompt`。
  */
 
-export type RoutineTriggerCallback = (routine: Routine) => void
+export type RoutineTriggerCallback = (routine: Routine, nextRunAt: number | null) => void | Promise<void>
 
 export interface StartRoutineSchedulerOptions {
   /** routine store 的根目录(同 ipc.ts 的 routineStoreRoot(),即 userData/routines) */
@@ -100,32 +100,17 @@ async function runTick(local: SchedulerState): Promise<void> {
 
       // 到点:先触发回调,再排下一次
       try {
-        local.onTrigger(routine)
+        const upcoming = computeNextRun(routine.schedule, now)
+        await local.onTrigger(routine, upcoming)
       } catch (err) {
         console.error('[caogen] routine 触发回调异常:', routine.id, err)
       }
 
-      const upcoming = computeNextRun(routine.schedule, now)
-      await safeMarkRun(local.rootDir, routine.id, now, upcoming)
     }
   } catch (err) {
     console.error('[caogen] routine 调度轮询失败:', err)
   } finally {
     local.ticking = false
-  }
-}
-
-async function safeMarkRun(
-  rootDir: string,
-  id: string,
-  ranAt: number,
-  nextRunAt: number | null
-): Promise<void> {
-  try {
-    // nextRunAt === null:无法再排期(如一次性/非法表达式),清空排期避免反复触发
-    await markRun(rootDir, id, { ranAt, nextRunAt: nextRunAt ?? null })
-  } catch (err) {
-    console.error('[caogen] routine markRun 失败:', id, err)
   }
 }
 

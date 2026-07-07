@@ -277,14 +277,26 @@ export default function ChatView(): React.JSX.Element | null {
 
       <PermissionBar sessionId={activeId} requests={session.pendingPermissions} />
       {activeMemorySuggestion && (
-        <div className="memory-suggestion-bar">
-          <div className="memory-suggestion-text" title={activeMemorySuggestion.text}>
+        <div className="memory-suggestion-bar" data-memory-suggestion-bar="true">
+          <div
+            className="memory-suggestion-text"
+            title={activeMemorySuggestion.text}
+            data-memory-suggestion-text
+          >
             记住这条约定? {activeMemorySuggestion.text}
           </div>
-          <button className="btn btn-primary btn-sm" onClick={acceptMemorySuggestion}>
+          <button
+            className="btn btn-primary btn-sm"
+            data-memory-suggestion-action="accept"
+            onClick={acceptMemorySuggestion}
+          >
             记住
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={dismissMemorySuggestion}>
+          <button
+            className="btn btn-ghost btn-sm"
+            data-memory-suggestion-action="dismiss"
+            onClick={dismissMemorySuggestion}
+          >
             忽略
           </button>
         </div>

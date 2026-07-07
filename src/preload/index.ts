@@ -6,16 +6,22 @@ import type {
   CreateRoutineInput,
   CreateSessionOptions,
   DispatchSubagentsInput,
+  LayeredMemorySearchInput,
+  LayeredMemoryUpdateInput,
+  LayeredMemoryWriteInput,
   MarkRunOptions,
   MenuCommand,
   MemorySuggestionEvent,
   PermissionModeId,
+  PreviewAnnotationInput,
   PluginRegistryScanOptions,
   ProjectMemoryDraftInput,
   ProviderInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
   SessionEventPayload,
+  TaskDagDispatchInput,
+  TaskDecomposeInput,
   UpdateRoutineInput
 } from '../shared/types'
 
@@ -35,8 +41,18 @@ const api: AgentDeskApi = {
     dryRun: boolean
   ) => ipcRenderer.invoke('sessions:restoreCheckpoint', sessionId, messageId, mode, dryRun),
   createSession: (opts: CreateSessionOptions) => ipcRenderer.invoke('sessions:create', opts),
+  decomposeTask: (parentSessionId: string, input: TaskDecomposeInput) =>
+    ipcRenderer.invoke('sessions:decomposeTask', parentSessionId, input),
   dispatchSubagents: (parentSessionId: string, input: DispatchSubagentsInput) =>
     ipcRenderer.invoke('sessions:dispatchSubagents', parentSessionId, input),
+  dispatchTaskDag: (parentSessionId: string, input: TaskDagDispatchInput) =>
+    ipcRenderer.invoke('sessions:dispatchTaskDag', parentSessionId, input),
+  listSupportedAgents: (sessionId: string) => ipcRenderer.invoke('sessions:supportedAgents', sessionId),
+  listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
+  recoverTaskSnapshot: (snapshotId: string) =>
+    ipcRenderer.invoke('taskSnapshots:recover', snapshotId),
+  deleteTaskSnapshot: (snapshotId: string) =>
+    ipcRenderer.invoke('taskSnapshots:delete', snapshotId),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>
     ipcRenderer.invoke('attachments:copyImage', sessionId, sourcePath),
   saveImageAttachmentBytes: (sessionId: string, input: SaveImageAttachmentBytesInput) =>
@@ -92,6 +108,9 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('routines:update', id, patch),
   markRoutineRun: (id: string, options?: MarkRunOptions) =>
     ipcRenderer.invoke('routines:markRun', id, options),
+  runRoutineNow: (id: string) => ipcRenderer.invoke('routines:runNow', id),
+  listRoutineRuns: (routineId?: string) => ipcRenderer.invoke('routines:listRuns', routineId),
+  listRoutineTemplates: () => ipcRenderer.invoke('routines:listTemplates'),
   getStartSuggestions: (sessionId: string) => ipcRenderer.invoke('startSuggestions:get', sessionId),
   gitStatus: (sessionId: string) => ipcRenderer.invoke('git:status', sessionId),
   stageFiles: (sessionId: string, paths: string[]) => ipcRenderer.invoke('git:stage', sessionId, paths),
@@ -121,6 +140,10 @@ const api: AgentDeskApi = {
   writeTextFile: (sessionId: string, path: string, content: string) =>
     ipcRenderer.invoke('files:write', sessionId, path, content),
   preparePreview: (sessionId: string, path: string) => ipcRenderer.invoke('preview:prepare', sessionId, path),
+  savePreviewAnnotation: (sessionId: string, input: PreviewAnnotationInput) =>
+    ipcRenderer.invoke('preview:saveAnnotation', sessionId, input),
+  listPreviewAnnotations: (sessionId: string, path?: string) =>
+    ipcRenderer.invoke('preview:listAnnotations', sessionId, path),
   openBrowser: (sessionId: string, url?: string) => ipcRenderer.invoke('browser:open', sessionId, url),
   navigateBrowser: (sessionId: string, url: string) =>
     ipcRenderer.invoke('browser:navigate', sessionId, url),
@@ -188,6 +211,12 @@ const api: AgentDeskApi = {
   updateProject: (id: string, patch: { name?: string }) =>
     ipcRenderer.invoke('projects:update', id, patch),
   deleteProject: (id: string) => ipcRenderer.invoke('projects:delete', id),
+  readProjectContext: (projectPath: string) =>
+    ipcRenderer.invoke('projectContext:read', projectPath),
+  writeProjectContext: (projectPath: string, content: string) =>
+    ipcRenderer.invoke('projectContext:write', projectPath, content),
+  generateProjectContextTemplate: (projectPath: string) =>
+    ipcRenderer.invoke('projectContext:template', projectPath),
   readProjectMemory: (sessionId: string) => ipcRenderer.invoke('memory:read', sessionId),
   proposeMemoryDraft: (sessionId: string, input: ProjectMemoryDraftInput) =>
     ipcRenderer.invoke('memory:propose', sessionId, input),
@@ -195,6 +224,17 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('memory:accept', sessionId, draftId),
   deleteMemoryEntry: (sessionId: string, entryId: string) =>
     ipcRenderer.invoke('memory:delete', sessionId, entryId),
+  listLayeredMemories: () => ipcRenderer.invoke('memory:layeredList'),
+  searchLayeredMemories: (sessionId: string | undefined, input: LayeredMemorySearchInput) =>
+    ipcRenderer.invoke('memory:layeredSearch', sessionId, input),
+  addLayeredMemory: (sessionId: string | undefined, input: LayeredMemoryWriteInput) =>
+    ipcRenderer.invoke('memory:layeredAdd', sessionId, input),
+  archiveLayeredMemories: (olderThanDays?: number) =>
+    ipcRenderer.invoke('memory:layeredArchive', olderThanDays),
+  exportLayeredMemories: () => ipcRenderer.invoke('memory:layeredExport'),
+  updateLayeredMemory: (entryId: string, input: LayeredMemoryUpdateInput) =>
+    ipcRenderer.invoke('memory:layeredUpdate', entryId, input),
+  deleteLayeredMemory: (entryId: string) => ipcRenderer.invoke('memory:layeredDelete', entryId),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {

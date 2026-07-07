@@ -347,6 +347,11 @@ export class CodexEngine implements Engine {
     return this.transcript.read()
   }
 
+  emitSyntheticEvent(event: AgentEvent): void {
+    if (this.disposed) return
+    this.emit(event)
+  }
+
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
     this.meta.permissionMode = mode
     this.emit({ kind: 'meta', meta: { ...this.meta } })

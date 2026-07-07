@@ -1,0 +1,117 @@
+{
+  "name": "caogen-vscode-bridge",
+  "displayName": "CaoGen Bridge",
+  "description": "CaoGen IDE bridge prototype for VS Code.",
+  "version": "0.0.1",
+  "publisher": "caogen",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:caogen.chatView",
+    "onCommand:caogen.connectBridge",
+    "onCommand:caogen.createSession",
+    "onCommand:caogen.listSessions",
+    "onCommand:caogen.sendSelection",
+    "onCommand:caogen.requestSelectionEdit",
+    "onCommand:caogen.previewSelectionDiff",
+    "onCommand:caogen.applySelectionEdit",
+    "onCommand:caogen.previewAndApplySelectionEdit",
+    "onCommand:caogen.openDesktop",
+    "onCommand:caogen.toggleRealtimeSync"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "caogen.connectBridge",
+        "title": "CaoGen: Connect IDE Bridge"
+      },
+      {
+        "command": "caogen.listSessions",
+        "title": "CaoGen: List Sessions"
+      },
+      {
+        "command": "caogen.createSession",
+        "title": "CaoGen: Create Session"
+      },
+      {
+        "command": "caogen.sendSelection",
+        "title": "CaoGen: Send Selection"
+      },
+      {
+        "command": "caogen.requestSelectionEdit",
+        "title": "CaoGen: Edit Selection"
+      },
+      {
+        "command": "caogen.previewSelectionDiff",
+        "title": "CaoGen: Preview Selection Diff"
+      },
+      {
+        "command": "caogen.applySelectionEdit",
+        "title": "CaoGen: Apply Selection Edit"
+      },
+      {
+        "command": "caogen.previewAndApplySelectionEdit",
+        "title": "CaoGen: Preview Diff and Merge Selection Edit"
+      },
+      {
+        "command": "caogen.openDesktop",
+        "title": "CaoGen: Open Desktop"
+      },
+      {
+        "command": "caogen.toggleRealtimeSync",
+        "title": "CaoGen: Toggle Realtime Sync"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "caogen",
+          "title": "CaoGen",
+          "icon": "media/caogen.svg"
+        }
+      ]
+    },
+    "views": {
+      "caogen": [
+      {
+        "id": "caogen.chatView",
+        "name": "Chat",
+        "type": "webview"
+      }
+      ]
+    },
+    "configuration": {
+      "title": "CaoGen",
+      "properties": {
+        "caogen.bridgeUrl": {
+          "type": "string",
+          "default": "ws://127.0.0.1:17365/ide-bridge",
+          "description": "CaoGen IDE bridge WebSocket URL. CaoGen must start the bridge explicitly."
+        },
+        "caogen.bridgeToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional CaoGen IDE bridge token."
+        },
+        "caogen.realtimeSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, send debounced active file snapshots to the active CaoGen session. Disabled by default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^3.0.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,8 +1,8 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-06(第 11 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-07(第 15 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ⚠️ **未达发布标准**(第 2 轮外部验收)。已通过:DeepSeek 全链路、Codex CLI、32 并发 7/7、双架构打包、Intel x64 启动、npm audit 0 漏洞。未通过/条件性:Claude 真对话仅在有真实登录态时通过(无凭据环境须跳过,已修检测)、Gemini 装了 CLI 不等于可用(已修 available 探测)、窄屏响应式布局未过人眼复核(待修)。阻塞:arm64 真机启动需 Apple Silicon(Intel 不可替代)。
+> ⚠️ **未达发布标准**(第 2 轮外部验收)。已通过:DeepSeek 全链路、Codex CLI、32 并发 7/7、双架构打包、Intel x64 启动、npm audit 0 漏洞、窄屏响应式 Electron QA。未通过/条件性:Claude 真对话仅在有真实登录态时通过(无凭据环境须跳过,已修检测)、Gemini 装了 CLI 不等于可用(已修 available 探测)。阻塞:arm64 真机启动需 Apple Silicon(Intel 不可替代)。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
 
@@ -13,7 +13,7 @@
 # Current Status
 
 - **v0.1.2 已公开发布**(2026-07-06,双架构 x64+arm64 DMG,含外部验收 3 阻塞修复;x64 打包 app 启动冒烟通过)——arm64 主二进制架构已验证,M 系真机启动待用户复验
-- 已实测验证:原生编码 Agent(DeepSeek E2E 7/7)、跨厂商智能路由(6/6)、子代理编排闭环(6/6)、双协议对话(9/9×2)、**Codex CLI 引擎真对话(3/3)**、回归 `test:deep` **23/23**
+- 已实测验证:原生编码 Agent(DeepSeek E2E 7/7)、跨厂商智能路由(6/6)、子代理编排闭环(6/6)、双协议对话(9/9×2)、**Codex CLI 引擎真对话(3/3)**、A3 子代理结果回传 + 3D 真实任务流(Electron mock E2E)、A4 开工建议真实渲染/交互(Electron mock E2E)、A5 记忆自动提议真实渲染/预填(Electron mock E2E)、回归 `test:deep` **56/56**
 - ✅ **32 并发压测:修复后 7/7 error=0**(连跑 3 次稳定)。根因=瞬时并发打爆 socket 层;修:并发闸门(默认 8 在途)+ 瞬时网络重试。压力脚本口径已修(idle/error 分统计、error=0 独立断言)
 - ⚠️ **Claude 默认引擎真对话:仅在有真实登录态的环境通过(条件性)**。有 `ANTHROPIC_API_KEY` / 存在的 host-creds / `~/.claude/.credentials.json` 时 claude-real-e2e 3/3;**无凭据环境应干净跳过而非通过**(此前误把 `~/.claude.json` 配置文件当凭据,致外部验收环境 Not logged in)。已修:auth 检测只认真实凭据,无凭据时 E2E 跳过、产品给明确登录提示。**发布不得声称"Claude 开箱即用",须声明需登录。**
 - ⚠️ **Gemini 引擎:装了 CLI ≠ 可用**。available() 现要求 CLI + 已配认证(GEMINI_API_KEY/GOOGLE_API_KEY 或 settings.json auth);无认证时如实报"不可用",不再误报可用
@@ -23,7 +23,7 @@
 
 # Current Focus
 
-**修第 2 轮外部验收**:Claude auth 误判 ✅、Gemini 可用性误报 ✅、STATUS 不实状态 ✅(改为条件性声明)已修;窄屏响应式布局待修(加侧栏折叠断点)。arm64 真机启动/Claude 无凭据环境需用户侧。
+**修第 2 轮外部验收 + 段 A 收口**:Claude auth 误判 ✅、Gemini 可用性误报 ✅、STATUS 不实状态 ✅(改为条件性声明)、窄屏响应式布局 ✅(侧栏抽屉断点 + Electron 390/540px QA)、A3 子代理结果回传 + 3D 真实任务流 ✅(父会话 subagent-result/汇总注入/3D packets/WebGL 非空)、A4 开工建议 ✅(会话激活渲染,memory/routine/history/worktree/git/package 来源映射,忽略/发送 transcript 闭环)、A5 记忆自动提议 ✅(提示条、同会话同文本节流、接受仅预填不落项目 draft)已修。arm64 真机启动/Claude 无凭据环境需用户侧。
 
 # Goal
 
@@ -37,7 +37,7 @@
 2. ~~arm64 原生包发布~~ ✅ 2026-07-06(架构三重验证;M 系真机启动复验待用户)
 3. Codex + Gemini 原生引擎各 ≥1 次真实对话验证 —— **Codex ✅ 2026-07-06(真对话 3/3,修 3 个适配 bug);Gemini 阻塞:等用户完成 `gemini` 登录**
 4. N1 秒表实测 ≤30 分钟(真人,录屏留证)
-5. `test:deep` 全绿保持(现 27 项);新特性必配真实 E2E
+5. `test:deep` 全绿保持(现 56 项);新特性必配真实 E2E
 
 # Priority Tasks
 
@@ -69,7 +69,7 @@
 | ~~32 并发压测 5/6~~ | High | ✅ 已修:并发闸门(8 在途)+ 瞬时重试;连跑 3 次 7/7 error=0 |
 | ~~最新 dist:mac 卡 Electron 下载~~ | Medium | ✅ 已修:.npmrc 配 npmmirror;双架构 DMG 完整产出 |
 | ~~Claude auth 误判 / Gemini 可用性误报~~ | High | ✅ 已修:auth 检测只认真实凭据;Gemini available 加认证探测;无凭据干净跳过/明确提示 |
-| 窄屏响应式布局未过人眼复核 | Medium | 待修:侧栏占宽、主面板标题/输入被裁、横向滚动;需加窄屏断点(侧栏折叠/抽屉) |
+| ~~窄屏响应式布局未过人眼复核~~ | Medium | ✅ 已修:Electron 原生窗口 390/540px 侧栏抽屉、标题、controls、composer、overflow 全 PASS;证据:`test-results/caogen-responsive/2026-07-06T17-46-27-342Z/responsive-qa.json` |
 | arm64 包真机启动 | — | 需真实 Apple Silicon 机器(Intel 不可替代) |
 | Claude 真对话(无凭据环境) | — | 需用户提供 ANTHROPIC_API_KEY 或 claude 登录;有凭据时 3/3 |
 

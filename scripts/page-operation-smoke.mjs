@@ -13,7 +13,10 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-page-smoke-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const port = await findFreePort(9400)
-const electronBin = path.join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron')
+const electronBin =
+  process.platform === 'win32'
+    ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+    : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
 
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
@@ -67,7 +70,8 @@ writeFileSync(
 )
 initGitProject(projectDir)
 
-const app = spawn(electronBin, [`--remote-debugging-port=${port}`, mainEntry], {
+const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
+const app = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
   cwd: repoRoot,
   env: {
     ...process.env,
@@ -101,7 +105,22 @@ try {
   const appTargetId = target.id
   const cdp = await connectCdp(target.webSocketDebuggerUrl)
   await cdp.send('Runtime.enable')
+  await cdp.send('Console.enable')
+  await cdp.send('Log.enable')
   await cdp.send('Page.enable')
+  await bringPageToFront(cdp)
+  cdp.on('Runtime.consoleAPICalled', (params) => {
+    report.warnings.push(`renderer console ${params.type}: ${formatConsoleArgs(params.args)}`)
+  })
+  cdp.on('Runtime.exceptionThrown', (params) => {
+    report.warnings.push(`renderer exception: ${params.exceptionDetails?.text || JSON.stringify(params.exceptionDetails)}`)
+  })
+  cdp.on('Log.entryAdded', (params) => {
+    const entry = params.entry ?? {}
+    if (entry.level === 'error' || entry.level === 'warning') {
+      report.warnings.push(`renderer log ${entry.level}: ${entry.text || JSON.stringify(entry)}`)
+    }
+  })
   await sleep(1200)
 
   await check(cdp, 'welcome screen renders CaoGen brand', async () => {
@@ -228,8 +247,10 @@ try {
   await screenshot(cdp, '08-slash-popup')
 
   await check(cdp, 'office view loads without blank first screen', async () => {
+    await bringPageToFront(cdp)
     await clickByText(cdp, '3D 办公区')
     await waitForText(cdp, '办公区', 10_000)
+    await bringPageToFront(cdp)
     const canvasStats = await waitForCanvasPixels(cdp)
     report.officeCanvas = canvasStats
   })
@@ -249,7 +270,7 @@ try {
     })
   }
   writeFileSync(path.join(runDir, 'page-operation-smoke.json'), JSON.stringify(report, null, 2))
-  rmSync(tempRoot, { recursive: true, force: true })
+  cleanupTempRoot(tempRoot)
 }
 
 const failed = report.checks.filter((item) => item.status === 'fail')
@@ -510,13 +531,33 @@ async function waitForCanvasPixels(cdp, timeout = 10_000) {
     lastStats = await evalValue(
       cdp,
       `(() => {
-        const canvas = document.querySelector('canvas');
+        const canvas = document.querySelector('.office canvas');
         if (!canvas) return { canvas: false };
         const width = canvas.width;
         const height = canvas.height;
+        const rect = canvas.getBoundingClientRect();
+        const parents = [];
+        let node = canvas;
+        for (let i = 0; i < 4 && node; i++) {
+          const nodeRect = node.getBoundingClientRect?.();
+          const style = window.getComputedStyle(node);
+          parents.push({
+            tag: node.tagName,
+            className: node.className || '',
+            width: nodeRect?.width ?? 0,
+            height: nodeRect?.height ?? 0,
+            offsetWidth: node.offsetWidth ?? 0,
+            offsetHeight: node.offsetHeight ?? 0,
+            styleWidth: style.width,
+            styleHeight: style.height,
+            display: style.display,
+            position: style.position
+          });
+          node = node.parentElement;
+        }
         const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-        if (!gl || width < 100 || height < 100) {
-          return { canvas: true, gl: Boolean(gl), width, height, colorSum: 0, alphaSum: 0, dataUrlLength: canvas.toDataURL('image/png').length };
+        if (!gl || width < 100 || height < 100 || rect.width < 300 || rect.height < 200) {
+          return { canvas: true, hidden: document.hidden, hasFocus: document.hasFocus(), gl: Boolean(gl), width, height, rectWidth: rect.width, rectHeight: rect.height, parents, colorSum: 0, alphaSum: 0, dataUrlLength: canvas.toDataURL('image/png').length };
         }
         const xs = [0.18, 0.33, 0.5, 0.67, 0.82];
         const ys = [0.2, 0.38, 0.55, 0.72, 0.88];
@@ -534,10 +575,16 @@ async function waitForCanvasPixels(cdp, timeout = 10_000) {
             samples += 1;
           }
         }
-        return { canvas: true, gl: true, width, height, colorSum, alphaSum, samples, dataUrlLength: canvas.toDataURL('image/png').length };
+        return { canvas: true, hidden: document.hidden, hasFocus: document.hasFocus(), gl: true, width, height, rectWidth: rect.width, rectHeight: rect.height, parents, colorSum, alphaSum, samples, dataUrlLength: canvas.toDataURL('image/png').length };
       })()`
     )
-    if (lastStats?.canvas && lastStats.width >= 100 && lastStats.height >= 100) {
+    if (
+      lastStats?.canvas &&
+      lastStats.width >= 100 &&
+      lastStats.height >= 100 &&
+      (lastStats.rectWidth ?? 0) >= 300 &&
+      (lastStats.rectHeight ?? 0) >= 200
+    ) {
       if ((lastStats.colorSum ?? 0) > 500 || (lastStats.dataUrlLength ?? 0) > 10_000) return lastStats
     }
     await sleep(300)
@@ -545,20 +592,39 @@ async function waitForCanvasPixels(cdp, timeout = 10_000) {
   throw new Error(`3D office canvas did not become visibly nonblank: ${JSON.stringify(lastStats)}`)
 }
 
+async function bringPageToFront(cdp) {
+  await cdp.send('Page.bringToFront').catch(() => undefined)
+  await evalValue(cdp, `(() => { window.focus(); return true; })()`).catch(() => undefined)
+  await sleep(100)
+}
+
 async function visibleText(cdp) {
   return evalValue(cdp, 'document.body.innerText')
 }
 
 async function evalValue(cdp, expression) {
-  const response = await cdp.send('Runtime.evaluate', {
-    expression,
-    awaitPromise: true,
-    returnByValue: true
-  })
-  if (response.exceptionDetails) {
-    throw new Error(response.exceptionDetails.text || 'Runtime.evaluate failed')
+  let lastError = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await cdp.send('Runtime.evaluate', {
+        expression,
+        awaitPromise: true,
+        returnByValue: true
+      })
+      if (response.exceptionDetails) {
+        throw new Error(response.exceptionDetails.text || 'Runtime.evaluate failed')
+      }
+      return response.result?.value
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('CDP timeout') || attempt > 0) break
+      report.warnings.push(`Runtime.evaluate timeout, retrying once: ${expression.slice(0, 120)}`)
+      await cdp.send('Page.bringToFront').catch(() => undefined)
+      await sleep(500)
+    }
   }
-  return response.result?.value
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 async function waitForTarget(remotePort, timeout) {
@@ -635,8 +701,36 @@ function fail(message) {
   process.exit(1)
 }
 
+function cleanupTempRoot(target) {
+  try {
+    rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (error) {
+    console.warn(`temporary cleanup skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function electronSpawnCommand() {
+  return electronBin
+}
+
+function electronSpawnArgs(args) {
+  return args
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function formatConsoleArgs(args = []) {
+  return args
+    .map((arg) => {
+      if (typeof arg.value === 'string') return arg.value
+      if (arg.value !== undefined) return JSON.stringify(arg.value)
+      return arg.description || arg.type || ''
+    })
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, 1000)
 }
 
 function connectCdp(url) {
@@ -644,9 +738,15 @@ function connectCdp(url) {
     const ws = new WebSocket(url)
     let nextId = 1
     const pending = new Map()
+    const listeners = new Map()
 
     ws.addEventListener('message', (event) => {
       const data = JSON.parse(event.data)
+      if (!data.id && data.method) {
+        const callbacks = listeners.get(data.method) ?? []
+        for (const callback of callbacks) callback(data.params ?? {})
+        return
+      }
       if (!data.id || !pending.has(data.id)) return
       const item = pending.get(data.id)
       pending.delete(data.id)
@@ -660,13 +760,19 @@ function connectCdp(url) {
           ws.send(JSON.stringify({ id, method, params }))
           return new Promise((resolveSend, rejectSend) => {
             pending.set(id, { resolve: resolveSend, reject: rejectSend })
+            const timeoutMs = method === 'Runtime.evaluate' ? 30_000 : 15_000
             setTimeout(() => {
               if (pending.has(id)) {
                 pending.delete(id)
                 rejectSend(new Error(`CDP timeout: ${method}`))
               }
-            }, 10_000)
+            }, timeoutMs)
           })
+        },
+        on(method, callback) {
+          const callbacks = listeners.get(method) ?? []
+          callbacks.push(callback)
+          listeners.set(method, callbacks)
         },
         close() {
           ws.close()

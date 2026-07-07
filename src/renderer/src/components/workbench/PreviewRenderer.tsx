@@ -1,5 +1,5 @@
-import { lazy, Suspense, useMemo, type CSSProperties } from 'react'
-import { parseCsv, prettyJson, truncate } from './previewUtils'
+import { lazy, Suspense, useMemo, useState, type CSSProperties } from 'react'
+import { parseCsv, prettyJson, truncate, type CsvDelimiter } from './previewUtils'
 
 const Markdown = lazy(() => import('../Markdown'))
 
@@ -101,7 +101,7 @@ function PreviewBody({
 }): React.JSX.Element {
   if (type === 'markdown') return <MarkdownPreview content={content} maxTextChars={maxTextChars} />
   if (type === 'json') return <JsonPreview content={content} maxTextChars={maxTextChars} />
-  if (type === 'csv') return <CsvPreview content={content} maxRows={maxCsvRows} />
+  if (type === 'csv') return <CsvPreview content={content} maxRows={maxCsvRows} preview={preview} />
   if (type === 'html') return <HtmlPreview content={content} maxTextChars={maxTextChars} />
   if (type === 'image') return <ImagePreview preview={preview} />
   if (type === 'pdf') return <PdfPreview preview={preview} />
@@ -213,8 +213,19 @@ function JsonPreview({
   )
 }
 
-function CsvPreview({ content, maxRows }: { content: string; maxRows: number }): React.JSX.Element {
-  const parsed = useMemo(() => parseCsv(content, { maxRows }), [content, maxRows])
+function CsvPreview({
+  content,
+  maxRows,
+  preview
+}: {
+  content: string
+  maxRows: number
+  preview: PreviewRendererValue
+}): React.JSX.Element {
+  const [filterText, setFilterText] = useState('')
+  const delimiter = useMemo(() => previewDelimiter(preview), [preview])
+  const parsed = useMemo(() => parseCsv(content, { maxRows, delimiter }), [content, delimiter, maxRows])
+  const visibleRows = useMemo(() => filterCsvRows(parsed.rows, filterText), [filterText, parsed.rows])
 
   if (parsed.rows.length === 0) {
     return (
@@ -236,10 +247,22 @@ function CsvPreview({ content, maxRows }: { content: string; maxRows: number }):
           Showing {parsed.rows.length} of {parsed.rowCount} parsed rows.
         </div>
       )}
+      <div style={styles.tableToolbar}>
+        <input
+          className="input"
+          value={filterText}
+          placeholder="Filter rows"
+          style={styles.tableFilter}
+          onChange={(e) => setFilterText(e.target.value)}
+        />
+        <span style={styles.tableSummary}>
+          {visibleRows.length} / {parsed.rows.length} rows
+        </span>
+      </div>
       <div style={styles.tableWrap}>
         <table style={styles.table}>
           <tbody>
-            {parsed.rows.map((row, rowIndex) => (
+            {visibleRows.map((row, rowIndex) => (
               <tr key={rowIndex}>
                 {row.map((cell, cellIndex) => {
                   const Cell = rowIndex === 0 ? 'th' : 'td'
@@ -256,6 +279,22 @@ function CsvPreview({ content, maxRows }: { content: string; maxRows: number }):
       </div>
     </>
   )
+}
+
+function filterCsvRows(rows: string[][], filterText: string): string[][] {
+  const query = filterText.trim().toLowerCase()
+  if (!query) return rows
+  const header = rows[0]
+  const body = rows.slice(1).filter((row) => row.some((cell) => cell.toLowerCase().includes(query)))
+  return header ? [header, ...body] : body
+}
+
+function previewDelimiter(preview: PreviewRendererValue): CsvDelimiter {
+  const mime = stringValue(preview.mime).toLowerCase()
+  const path = stringValue(preview.path || preview.fullPath).toLowerCase()
+  if (mime.includes('tab-separated') || path.endsWith('.tsv')) return '\t'
+  if (mime.includes('semicolon-separated')) return ';'
+  return ','
 }
 
 function HtmlPreview({
@@ -484,6 +523,23 @@ const styles = {
   },
   inlineNotice: {
     marginBottom: 10
+  },
+  tableToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10
+  },
+  tableFilter: {
+    flex: '1 1 220px',
+    minWidth: 0,
+    maxWidth: 360
+  },
+  tableSummary: {
+    color: 'var(--text-dim)',
+    fontFamily: 'var(--mono)',
+    fontSize: 11,
+    whiteSpace: 'nowrap'
   },
   tableWrap: {
     overflow: 'auto',

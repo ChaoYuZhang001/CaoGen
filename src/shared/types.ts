@@ -5,7 +5,19 @@
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 
+export type SandboxMode = 'strictDocker' | 'standardSystem' | 'loose'
+
+export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+
 export type SchedulerStrategy = 'quality' | 'cost' | 'balanced'
+
+export interface ModelRoutePlanView {
+  enabled: boolean
+  primary: { providerId: string; providerName?: string; model: string }
+  validators: Array<{ providerId: string; providerName?: string; model: string }>
+  policy: 'compare-answer' | 'review-primary' | 'skip'
+  reason: string
+}
 
 /** 会话 model 字段取此哨兵值 = 启用智能自动调度 */
 export const AUTO_MODEL = 'auto'
@@ -42,6 +54,8 @@ export interface UsageTotals {
   cacheRead: number
   cacheCreation: number
 }
+
+export type ContextPressureLevel = 'normal' | 'warning' | 'critical'
 
 export interface SessionMeta {
   id: string
@@ -87,6 +101,10 @@ export interface SessionMeta {
   costUsd: number
   usage: UsageTotals
   contextTokens: number
+  contextWindowTokens?: number
+  contextRemainingTokens?: number
+  contextUsageRatio?: number
+  contextPressure?: ContextPressureLevel
   createdAt: number
   lastError?: string
 }
@@ -188,6 +206,287 @@ export interface SubagentResult {
   durationMs?: number
 }
 
+export type TaskDagRole = 'frontend' | 'backend' | 'qa' | 'docs' | 'devops' | 'review' | 'general'
+
+export type TaskDagComplexity = 'single' | 'multi'
+
+export interface TaskDagTask {
+  id: string
+  title: string
+  description: string
+  dependencies: string[]
+  role: TaskDagRole
+  prompt: string
+}
+
+export interface TaskDag {
+  id: string
+  title: string
+  source: string
+  complexity: TaskDagComplexity
+  createdAt: number
+  tasks: TaskDagTask[]
+}
+
+export interface TaskDecomposeInput {
+  request: string
+  cwd?: string
+  /** 强推理模型拆解开关;false 时只使用本地启发式拆解。 */
+  useModel?: boolean
+  /** 可选:覆盖用于 DAG 拆解的 Provider。 */
+  providerId?: string
+  /** 可选:覆盖用于 DAG 拆解的模型。 */
+  model?: string
+}
+
+export interface TaskDecomposeResult {
+  dag: TaskDag
+  strategy: 'local-heuristic' | 'model'
+  reason: string
+  warnings: string[]
+}
+
+export type TaskDagTaskStatus = 'waiting' | 'running' | 'success' | 'failed'
+export type TaskDagExecutionStatus = 'waiting' | 'running' | 'success' | 'failed'
+
+export interface TaskDagExecutionTask {
+  task: TaskDagTask
+  status: TaskDagTaskStatus
+  attempts: number
+  sessionIds: string[]
+  startedAt?: number
+  completedAt?: number
+  resultText?: string
+  error?: string
+}
+
+export interface TaskDagExecutionView {
+  id: string
+  parentSessionId: string
+  dag: TaskDag
+  status: TaskDagExecutionStatus
+  maxRetries: number
+  startedAt: number
+  completedAt?: number
+  layers: string[][]
+  tasks: TaskDagExecutionTask[]
+  summary?: string
+  error?: string
+  autoMerge?: TaskDagAutoMergeView
+}
+
+export interface TaskDagRuntimeDispatchOptions {
+  cwd?: string
+  isolated?: boolean
+  model?: string
+  providerId?: string
+  engine?: EngineKind
+  permissionMode?: PermissionModeId
+  taskTimeoutMs: number
+}
+
+export interface TaskDagRuntimeRunningTask {
+  taskId: string
+  sessionId: string
+}
+
+export interface TaskDagRuntimeAutoMergeOptions {
+  enabled: boolean
+  verificationCommand?: string
+}
+
+export interface TaskDagRuntimeMergeSession {
+  sessionId: string
+  taskId?: string
+  repoRoot?: string
+  worktreePath?: string
+  baseSha?: string
+  branch?: string
+  resultText?: string
+}
+
+export interface TaskDagRuntimeSnapshot {
+  executionId: string
+  parentSessionId: string
+  capturedAt: number
+  dispatchOptions: TaskDagRuntimeDispatchOptions
+  runningTasks: TaskDagRuntimeRunningTask[]
+  mergeSessions?: TaskDagRuntimeMergeSession[]
+  autoMerge?: TaskDagRuntimeAutoMergeOptions
+}
+
+export interface TaskDagDispatchInput {
+  dag: TaskDag
+  cwd?: string
+  isolated?: boolean
+  model?: string
+  providerId?: string
+  engine?: EngineKind
+  permissionMode?: PermissionModeId
+  maxRetries?: number
+  /** Per-child timeout in milliseconds. Omit for the default watchdog; <=0 disables it. */
+  taskTimeoutMs?: number
+  /** 自动合并默认关闭；显式开启后才会把成功子任务 worktree 合回主工作区。 */
+  autoMerge?: boolean
+  /** 覆盖 caogen.md 中的验收命令，主要用于测试和临时调度。 */
+  verificationCommand?: string
+}
+
+export interface TaskDagDispatchResult {
+  execution: TaskDagExecutionView
+  /** 当前调度调用已经启动的 child sessions;后续依赖层通过 task-dag-update 同步。 */
+  children: SubagentDispatchItem[]
+}
+
+export type TaskDagAutoMergeStatus = 'running' | 'success' | 'partial' | 'failed' | 'rolled-back'
+export type TaskDagAutoMergeEntryStatus =
+  | 'merged'
+  | 'skipped'
+  | 'blocked'
+  | 'failed'
+  | 'rolled-back'
+export type TaskDagAutoMergeVerificationStatus = 'passed' | 'failed' | 'skipped' | 'not-run'
+
+export interface TaskDagAutoMergeVerification {
+  status: TaskDagAutoMergeVerificationStatus
+  command?: string
+  cwd?: string
+  exitCode?: number | null
+  durationMs?: number
+  output?: string
+  error?: string
+}
+
+export interface TaskDagAutoMergeConflict {
+  path: string
+  base: string
+  worktree: string
+  main: string
+  baseMissing?: boolean
+  worktreeMissing?: boolean
+  mainMissing?: boolean
+  truncated?: boolean
+}
+
+export interface TaskDagAutoMergeEntry {
+  taskId: string
+  sessionId?: string
+  branch?: string
+  worktreePath?: string
+  status: TaskDagAutoMergeEntryStatus
+  changedFiles?: number
+  insertions?: number
+  deletions?: number
+  conflictRisk?: WorktreeConflictRisk
+  patchSha256?: string
+  patchPath?: string
+  commitSha?: string
+  error?: string
+  conflicts?: TaskDagAutoMergeConflict[]
+  resolverPrompt?: string
+}
+
+export interface TaskDagAutoMergeRollback {
+  attempted: boolean
+  ok: boolean
+  error?: string
+}
+
+export interface TaskDagAutoMergeView {
+  enabled: true
+  status: TaskDagAutoMergeStatus
+  startedAt: number
+  completedAt?: number
+  repoRoot?: string
+  entries: TaskDagAutoMergeEntry[]
+  mergedCount: number
+  blockedCount: number
+  skippedCount: number
+  verification?: TaskDagAutoMergeVerification
+  rollback?: TaskDagAutoMergeRollback
+  summary?: string
+  error?: string
+}
+
+export interface SdkAgentInfo {
+  name: string
+  description: string
+  model?: string
+}
+
+export type TaskSnapshotReason =
+  | 'created'
+  | 'important-event'
+  | 'event-batch'
+  | 'shutdown'
+  | 'recovered'
+
+export interface TaskSnapshotWorktreeInfo {
+  isolated?: boolean
+  sourceCwd?: string
+  repoRoot?: string
+  worktreePath?: string
+  branch?: string
+  baseBranch?: string | null
+  baseSha?: string
+  state?: 'active' | 'removed'
+}
+
+export interface TaskSnapshotExecutionPosition {
+  status: SessionStatus
+  lastSeq: number
+  lastEventKind?: AgentEvent['kind']
+  lastEventAt: number
+  sdkSessionId?: string
+  resumeSessionAt?: string
+  lastCheckpointMessageId?: string
+  lastUserMessageId?: string
+}
+
+export interface TaskSnapshotReplayCandidate {
+  messageId: string
+  text: string
+  seq: number
+  capturedAt: number
+  reason: 'running-user-message'
+}
+
+export type TaskSnapshotSubtaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'closed'
+
+export interface TaskSnapshotSubtaskState {
+  taskId?: string
+  role?: string
+  sessionId: string
+  status: TaskSnapshotSubtaskStatus
+  resultText?: string
+  costUsd?: number
+  branch?: string
+  worktreePath?: string
+}
+
+export interface TaskSnapshotRecord {
+  id: string
+  taskId: string
+  sessionId: string
+  title: string
+  projectPath: string
+  engine?: EngineKind
+  model: string
+  providerId: string
+  createdAt: number
+  updatedAt: number
+  eventCount: number
+  reason: TaskSnapshotReason
+  meta: SessionMeta
+  execution: TaskSnapshotExecutionPosition
+  replayCandidate?: TaskSnapshotReplayCandidate
+  worktree?: TaskSnapshotWorktreeInfo
+  transcript: TranscriptEntry[]
+  subtasks: TaskSnapshotSubtaskState[]
+  dagExecutions: TaskDagExecutionView[]
+  dagRuntimes?: TaskDagRuntimeSnapshot[]
+}
+
 export type AppLanguage = 'zh' | 'en'
 
 /** 主题偏好:白天(主白副黑)/ 夜晚(主黑副白)/ 跟随系统 */
@@ -199,6 +498,35 @@ export interface Project {
   name: string
   path: string
   lastUsedAt: number
+}
+
+export type ProjectContextFileName = 'caogen.md' | '.caogen.md' | 'README.md'
+
+export interface ProjectContextSource {
+  fileName: ProjectContextFileName
+  path: string
+  bytes: number
+  truncated: boolean
+}
+
+export interface ProjectDetectedStack {
+  packageName?: string
+  packageManager?: string
+  nodeScripts: Array<{ name: string; command: string }>
+  dependencies: Array<{ name: string; version: string; scope: 'runtime' | 'dev' }>
+  techStack: string[]
+  python?: { projectName?: string; dependencies: string[] }
+  go?: { module?: string; version?: string; requirements: string[] }
+  rust?: { packageName?: string; dependencies: string[] }
+}
+
+export interface ProjectContextReadResult {
+  projectRoot: string
+  source?: ProjectContextSource
+  content: string
+  detected: ProjectDetectedStack
+  template: string
+  prompt: string
 }
 
 /** 项目记忆:确认制条目(agent 提议 → 用户批准)。按项目隔离 */
@@ -227,6 +555,52 @@ export interface ReadProjectMemoryResult {
   markdown: string
   entries: ProjectMemoryEntry[]
   drafts: ProjectMemoryDraft[]
+}
+
+export type MemoryLayer = 'working' | 'project' | 'user'
+
+export interface LayeredMemoryEntry {
+  id: string
+  layer: MemoryLayer
+  projectHash?: string
+  title: string
+  body: string
+  source: string
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+  lastUsedAt: string
+  archivedAt?: string
+  vector: Record<string, number>
+}
+
+export interface LayeredMemoryWriteInput {
+  layer: MemoryLayer
+  projectRoot?: string
+  title: string
+  body: string
+  source: string
+  tags?: string[]
+}
+
+export interface LayeredMemoryUpdateInput {
+  title?: string
+  body?: string
+  tags?: string[]
+  archivedAt?: string | null
+}
+
+export interface LayeredMemorySearchInput {
+  query: string
+  projectRoot?: string
+  layers?: MemoryLayer[]
+  includeArchived?: boolean
+  limit?: number
+}
+
+export interface LayeredMemorySearchHit {
+  entry: LayeredMemoryEntry
+  score: number
 }
 
 export interface MemorySuggestionEvent {
@@ -262,8 +636,14 @@ export interface AppSettings {
   defaultProviderId: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
+  /** 多模型智能混合调度: 默认关闭, 开启后 auto 会话按任务/预算/覆盖路由 */
+  smartModelRoutingEnabled: boolean
+  /** P2-003 自动交叉验证执行开关；默认关闭，仅在智能调度生成复核计划后派发第二模型 */
+  modelCrossValidationAutoRunEnabled: boolean
   /** 单会话全局预算上限;0 = 不限制 */
   budgetUsdPerSession: number
+  /** 月度总预算上限;0 = 不限制,用于 P2-003 成本管控和自动降级 */
+  budgetUsdPerMonth: number
   /** 厂商故障时自动切换到其他 Provider 重试(M4.1) */
   failoverEnabled: boolean
   /** 界面语言 */
@@ -276,10 +656,42 @@ export interface AppSettings {
   allowedTools: string
   /** 权限:工具黑名单(每行一个) */
   disallowedTools: string
+  /** 沙箱模式:strictDocker 优先 Docker,standardSystem 使用系统 shell,loose 保持最宽松兼容 */
+  sandboxMode: SandboxMode
+  /** Docker 沙箱镜像;strictDocker 模式使用,为空时使用内置默认镜像 */
+  sandboxDockerImage: string
+  /** 国产生态镜像:默认关闭;开启后才向沙箱命令注入 npm/pip/docker 镜像配置 */
+  chinaEcosystemMirrorEnabled: boolean
+  /** 国产生态镜像:npm registry,仅 chinaEcosystemMirrorEnabled=true 时生效 */
+  chinaNpmRegistry: string
+  /** 国产生态镜像:pip index-url,仅 chinaEcosystemMirrorEnabled=true 时生效 */
+  chinaPipIndexUrl: string
+  /** 国产生态镜像:Docker registry 前缀,仅 chinaEcosystemMirrorEnabled=true 时生效 */
+  chinaDockerRegistryMirror: string
+  /** 权限白名单规则:支持 tool/path/risk 组合;空表示不额外放行 */
+  permissionAllowlist: string
+  /** 权限黑名单规则:支持 tool/path/risk 组合;空表示不额外拒绝 */
+  permissionDenylist: string
+  /** 临时允许规则:同白名单,可追加 until=<ms 时间戳> */
+  permissionTemporaryAllowlist: string
+  /** 权限:GUI 自动化总开关;默认关闭,避免 Agent 直接操作真实桌面。 */
+  guiAutomationEnabled: boolean
+  /** 权限:GUI 自动化临时授权过期时间戳(ms);0 = 无临时授权。 */
+  guiAutomationTemporaryGrantUntil: number
   /** 桌面通知:关闭后任务完成/权限/失败均不弹系统通知 */
   notificationsEnabled: boolean
   /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
   preventDisplaySleep: boolean
+  /** Claude SDK agents 桥接:默认关闭,避免老会话系统提示词/Agent 工具上下文变化 */
+  sdkAgentsEnabled: boolean
+  /** IDE Bridge:默认关闭,开启后 VS Code/JetBrains 插件可通过本机 WebSocket 连接桌面端。 */
+  ideBridgeEnabled: boolean
+  /** IDE Bridge 监听地址,默认仅本机。 */
+  ideBridgeHost: string
+  /** IDE Bridge 监听端口,默认 17365。 */
+  ideBridgePort: number
+  /** IDE Bridge 可选 token,为空表示本机连接无需 token。 */
+  ideBridgeToken: string
   /**
    * Hooks:文件写入类工具(Edit/Write)成功后执行的 shell 命令,
    * 在会话 cwd 下运行,空 = 关闭。典型用法:自动格式化/测试。
@@ -287,6 +699,8 @@ export interface AppSettings {
   hookPostEditCommand: string
   /** Hooks:每轮结束(Stop)后执行的 shell 命令,空 = 关闭 */
   hookTurnEndCommand: string
+  /** 自动 Skill 沉淀:任务成功完成后后台复盘、验证并写入项目本地 Skill 库。默认关闭。 */
+  autoSkillLearningEnabled: boolean
   /** 3D 办公区 / 宠物设置 */
   office: OfficeSettings
 }
@@ -424,7 +838,13 @@ export type AgentEvent =
       chatRemovedEntries?: number
       note?: string
     }
-  | { kind: 'routing'; model: string; reason: string; providerId: string }
+  | {
+      kind: 'routing'
+      model: string
+      reason: string
+      providerId: string
+      crossValidationPlan?: ModelRoutePlanView
+    }
   | {
       /** 跨厂商故障切换:旧 Provider 失败,已自动切到新 Provider 重试 */
       kind: 'failover'
@@ -454,6 +874,7 @@ export type AgentEvent =
       resultText?: string
     }
   | ({ kind: 'subagent-result' } & SubagentResult)
+  | { kind: 'task-dag-update'; execution: TaskDagExecutionView }
   | {
       /** SDK Hook 事件桥:把引擎生命周期钩子转发到时间线(可观测性) */
       kind: 'hook-event'
@@ -604,16 +1025,29 @@ export interface McpProbeResult {
 
 export type RoutinePermissionMode = PermissionModeId
 
+export interface RoutineNotificationOptions {
+  /** 是否为该 Routine 发送桌面通知 */
+  enabled: boolean
+  /** 执行成功后通知 */
+  onSuccess: boolean
+  /** 执行失败后通知 */
+  onFailure: boolean
+}
+
 export interface Routine extends Record<string, unknown> {
   id: string
   name: string
   prompt: string
+  content?: string
   projectCwd: string
   schedule: string
+  frequency?: string
   providerId: string
   model: string
+  engine?: EngineKind
   permissionMode: RoutinePermissionMode
   budgetUsd: number
+  notification: RoutineNotificationOptions
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -624,13 +1058,17 @@ export interface Routine extends Record<string, unknown> {
 export type CreateRoutineInput = {
   id?: string
   name: string
-  prompt: string
+  prompt?: string
+  content?: string
   projectCwd: string
-  schedule: string
+  schedule?: string
+  frequency?: string
   providerId?: string
   model?: string
+  engine?: EngineKind
   permissionMode?: RoutinePermissionMode
   budgetUsd?: number
+  notification?: RoutineNotificationOptions
   enabled?: boolean
   createdAt?: number
   updatedAt?: number
@@ -641,12 +1079,16 @@ export type CreateRoutineInput = {
 export type UpdateRoutineInput = {
   name?: string
   prompt?: string
+  content?: string
   projectCwd?: string
   schedule?: string
+  frequency?: string
   providerId?: string
   model?: string
+  engine?: EngineKind
   permissionMode?: RoutinePermissionMode
   budgetUsd?: number
+  notification?: RoutineNotificationOptions
   enabled?: boolean
   lastRunAt?: number | null
   nextRunAt?: number | null
@@ -655,6 +1097,31 @@ export type UpdateRoutineInput = {
 export interface MarkRunOptions {
   ranAt?: number
   nextRunAt?: number | null
+}
+
+export type RoutineRunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export interface RoutineRunRecord {
+  id: string
+  routineId: string
+  routineName: string
+  projectCwd: string
+  startedAt: number
+  finishedAt?: number
+  status: RoutineRunStatus
+  sessionId?: string
+  nextRunAt?: number | null
+  error?: string
+}
+
+export interface RoutineTemplate {
+  id: string
+  name: string
+  description: string
+  content: string
+  frequency: string
+  permissionMode: RoutinePermissionMode
+  tags: string[]
 }
 
 export interface GitFileStatus {
@@ -895,6 +1362,40 @@ export interface PreparedPreview {
   error?: string
 }
 
+export interface PreviewAnnotationLocator {
+  page?: number
+  row?: number
+  column?: number
+  quote?: string
+  selector?: string
+}
+
+export interface PreviewAnnotation {
+  id: string
+  sessionId: string
+  path: string
+  type?: PreviewType
+  mime?: string
+  note: string
+  locator?: PreviewAnnotationLocator
+  boundingBox?: BrowserAnnotationBoundingBox
+  screenshotPath?: string
+  createdAt: string
+}
+
+export interface PreviewAnnotationInput {
+  id?: string
+  sessionId: string
+  path: string
+  type?: PreviewType | null
+  mime?: string | null
+  note: string
+  locator?: PreviewAnnotationLocator | null
+  boundingBox?: BrowserAnnotationBoundingBox | null
+  screenshotPath?: string | null
+  createdAt?: string
+}
+
 export type TerminalBackend = 'pty' | 'pipe'
 
 export interface TerminalExitInfo {
@@ -1064,11 +1565,20 @@ export interface AgentDeskApi {
     mode: CheckpointRestoreMode,
     dryRun: boolean
   ): Promise<CheckpointRestoreResult>
+  listTaskSnapshots(): Promise<TaskSnapshotRecord[]>
+  recoverTaskSnapshot(snapshotId: string): Promise<SessionMeta>
+  deleteTaskSnapshot(snapshotId: string): Promise<boolean>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
+  decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult>
   dispatchSubagents(
     parentSessionId: string,
     input: DispatchSubagentsInput
   ): Promise<SubagentDispatchResult>
+  dispatchTaskDag(
+    parentSessionId: string,
+    input: TaskDagDispatchInput
+  ): Promise<TaskDagDispatchResult>
+  listSupportedAgents(sessionId: string): Promise<SdkAgentInfo[]>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
   saveImageAttachmentBytes(
     sessionId: string,
@@ -1125,6 +1635,9 @@ export interface AgentDeskApi {
   deleteRoutine(id: string): Promise<boolean>
   updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
+  runRoutineNow(id: string): Promise<RoutineRunRecord | null>
+  listRoutineRuns(routineId?: string): Promise<RoutineRunRecord[]>
+  listRoutineTemplates(): Promise<RoutineTemplate[]>
   getStartSuggestions(sessionId: string): Promise<StartSuggestion[]>
   gitStatus(sessionId: string): Promise<GitStatus>
   stageFiles(sessionId: string, paths: string[]): Promise<GitOperationResult>
@@ -1153,6 +1666,8 @@ export interface AgentDeskApi {
   readTextFile(sessionId: string, path: string): Promise<ReadTextFileResult>
   writeTextFile(sessionId: string, path: string, content: string): Promise<WriteTextFileResult>
   preparePreview(sessionId: string, path: string): Promise<PreparedPreview>
+  savePreviewAnnotation(sessionId: string, input: PreviewAnnotationInput): Promise<PreviewAnnotation>
+  listPreviewAnnotations(sessionId: string, path?: string): Promise<PreviewAnnotation[]>
   openBrowser(sessionId: string, url?: string): Promise<BrowserViewState>
   navigateBrowser(sessionId: string, url: string): Promise<BrowserViewState>
   setBrowserBounds(sessionId: string, bounds: BrowserBounds): Promise<void>
@@ -1181,10 +1696,26 @@ export interface AgentDeskApi {
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: { name?: string }): Promise<Project | null>
   deleteProject(id: string): Promise<void>
+  readProjectContext(projectPath: string): Promise<ProjectContextReadResult>
+  writeProjectContext(projectPath: string, content: string): Promise<ProjectContextReadResult>
+  generateProjectContextTemplate(projectPath: string): Promise<string>
   readProjectMemory(sessionId: string): Promise<ReadProjectMemoryResult>
   proposeMemoryDraft(sessionId: string, input: ProjectMemoryDraftInput): Promise<ProjectMemoryDraft>
   acceptMemoryDraft(sessionId: string, draftId: string): Promise<ProjectMemoryEntry>
   deleteMemoryEntry(sessionId: string, entryId: string): Promise<{ id: string; deleted: boolean; deletedFrom: Array<'confirmed' | 'drafts'> }>
+  listLayeredMemories(): Promise<LayeredMemoryEntry[]>
+  searchLayeredMemories(
+    sessionId: string | undefined,
+    input: LayeredMemorySearchInput
+  ): Promise<LayeredMemorySearchHit[]>
+  addLayeredMemory(
+    sessionId: string | undefined,
+    input: LayeredMemoryWriteInput
+  ): Promise<LayeredMemoryEntry>
+  archiveLayeredMemories(olderThanDays?: number): Promise<number>
+  exportLayeredMemories(): Promise<string>
+  updateLayeredMemory(entryId: string, input: LayeredMemoryUpdateInput): Promise<LayeredMemoryEntry | null>
+  deleteLayeredMemory(entryId: string): Promise<boolean>
   pickDirectory(): Promise<string | null>
   onMenuCommand(cb: (command: MenuCommand) => void): () => void
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void

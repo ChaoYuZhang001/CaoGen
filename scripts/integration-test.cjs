@@ -17,6 +17,8 @@ const http = require('node:http')
 const Module = require('node:module')
 
 const repo = path.resolve(__dirname, '..')
+process.env.NODE_PATH = [path.join(repo, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter)
+Module._initPaths()
 const buildDir = path.join(os.tmpdir(), 'caogen-itest-build')
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-itest-'))
 const userData = path.join(tmpRoot, 'userData')
@@ -68,10 +70,11 @@ for (const dir of ['src/main', 'src/shared']) {
 }
 files.push('src/renderer/src/store.ts')
 files.push('src/renderer/src/components/office/model.ts')
+const tscArgs = ['tsc', ...files, '--outDir', buildDir, '--module', 'commonjs', '--target', 'es2022',
+  '--moduleResolution', 'node', '--skipLibCheck', '--esModuleInterop']
 const tsc = spawnSync(
-  process.platform === 'win32' ? 'npx.cmd' : 'npx',
-  ['tsc', ...files, '--outDir', buildDir, '--module', 'commonjs', '--target', 'es2022',
-    '--moduleResolution', 'node', '--skipLibCheck', '--esModuleInterop'],
+  npxCommand(),
+  npxArgs(tscArgs),
   { cwd: repo, encoding: 'utf8' }
 )
 if (!fs.existsSync(path.join(buildDir, 'main', 'agentSession.js'))) {
@@ -81,6 +84,7 @@ if (!fs.existsSync(path.join(buildDir, 'main', 'agentSession.js'))) {
 
 // ---------------------------------------------------------------- 2. 替身注入
 const notifications = []
+const powerBlockerState = { next: 0, starts: 0, stops: 0, active: new Set() }
 const electronStub = {
   app: {
     getPath: (k) => (k === 'userData' ? userData : tmpRoot),
@@ -91,10 +95,16 @@ const electronStub = {
   },
   safeStorage: { isEncryptionAvailable: () => false },
   powerSaveBlocker: {
-    _n: 0,
-    start() { return ++this._n },
-    stop() {},
-    isStarted: () => true
+    start() {
+      const id = ++powerBlockerState.next
+      powerBlockerState.starts += 1
+      powerBlockerState.active.add(id)
+      return id
+    },
+    stop(id) {
+      if (powerBlockerState.active.delete(id)) powerBlockerState.stops += 1
+    },
+    isStarted: (id) => powerBlockerState.active.has(id)
   },
   Notification: class {
     constructor(opts) { this.opts = opts }
@@ -154,7 +164,8 @@ function mockQuery({ prompt, options }) {
     create: base,
     model: options && options.model,
     resume: options && options.resume,
-    resumeSessionAt: options && options.resumeSessionAt
+    resumeSessionAt: options && options.resumeSessionAt,
+    agents: options && options.agents ? Object.keys(options.agents) : []
   })
   return {
     async *[Symbol.asyncIterator]() {
@@ -163,6 +174,7 @@ function mockQuery({ prompt, options }) {
         if (closed) return
         const blocks = (user && user.message && user.message.content) || []
         const text = blocks.filter((b) => b && b.type === 'text').map((b) => b.text).join('')
+        sdkLog.push({ promptText: text, sessionId })
         yield { type: 'user', uuid: 'u-' + Math.random().toString(36).slice(2, 10), message: { content: blocks } }
         if (base.includes('slow429')) await new Promise((r) => setTimeout(r, 80))
         if (text.includes('force-failover-after-restore')) {
@@ -200,6 +212,13 @@ function mockQuery({ prompt, options }) {
     async close() { closed = true; if (prompt && prompt.end) prompt.end() },
     async rewindFiles(id, opts) { sdkLog.push({ rewindFiles: id, dryRun: opts && opts.dryRun }); return { canRewind: true, filesChanged: ['a.txt'], insertions: 1, deletions: 0 } },
     async supportedCommands() { return [] },
+    async supportedAgents() {
+      return Object.entries((options && options.agents) || {}).map(([name, definition]) => ({
+        name,
+        description: definition.description,
+        model: definition.model
+      }))
+    },
     async backgroundTasks() { return false }
   }
 }
@@ -426,6 +445,37 @@ async function main() {
     s.dispose()
   })
 
+  await test('P0 SDK agents:默认关闭,显式开启后注入 .claude/agents 并可查询 supportedAgents', async () => {
+    const agentsDir = path.join(tmpRoot, '.claude', 'agents')
+    fs.mkdirSync(agentsDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(agentsDir, 'reviewer.md'),
+      ['---', 'name: reviewer', 'description: Review patches', 'tools: [Read, Grep]', '---', '你负责审查补丁。'].join('\n'),
+      'utf8'
+    )
+
+    settingsMod.updateSettings({ sdkAgentsEnabled: false })
+    const beforeDisabled = sdkLog.length
+    const disabled = newSession('prov-b', 'm-b')
+    await disabled.s.start()
+    await waitFor(() => disabled.events.some((e) => e.event.kind === 'init'), 3000, '等待 disabled sdk agents init')
+    const disabledCreate = sdkLog.slice(beforeDisabled).find((entry) => Array.isArray(entry.agents))
+    assert(disabledCreate && disabledCreate.agents.length === 0, `默认关闭时不应注入 agents:${JSON.stringify(disabledCreate)}`)
+    disabled.s.dispose()
+
+    settingsMod.updateSettings({ sdkAgentsEnabled: true })
+    const beforeEnabled = sdkLog.length
+    const enabled = newSession('prov-b', 'm-b')
+    await enabled.s.start()
+    await waitFor(() => enabled.events.some((e) => e.event.kind === 'init'), 3000, '等待 enabled sdk agents init')
+    const enabledCreate = sdkLog.slice(beforeEnabled).find((entry) => Array.isArray(entry.agents))
+    assert(enabledCreate && enabledCreate.agents.includes('reviewer'), `开启后未注入 reviewer:${JSON.stringify(enabledCreate)}`)
+    const supported = await enabled.s.supportedAgents()
+    assert(supported.some((agent) => agent.name === 'reviewer' && agent.description === 'Review patches'), 'supportedAgents 未返回 reviewer')
+    enabled.s.dispose()
+    settingsMod.updateSettings({ sdkAgentsEnabled: false })
+  })
+
   // ---- T7 故障切换:429 → 自动换厂商 → 重发成功 ----
   await test('T7 故障切换:429 触发换厂商且任务不中断', async () => {
     settingsMod.updateSettings({ failoverEnabled: true })
@@ -531,50 +581,147 @@ async function main() {
     assert(sess.items.some((i) => i.kind === 'failover'), 'failover 未入聊天流')
   })
 
+  // ---- P0 task snapshot:renderer store 恢复/删除入口 ----
+  await test('P0 task snapshot:store 加载、恢复并删除可恢复任务', async () => {
+    const store = M('renderer/src/store.js').useStore
+    const meta = AS.newSessionMeta({
+      cwd: tmpRoot,
+      model: 'm-b',
+      providerId: 'prov-b',
+      permissionMode: 'default',
+      title: 'snapshot task'
+    })
+    const snapshot = {
+      id: meta.id,
+      taskId: meta.id,
+      sessionId: meta.id,
+      title: meta.title,
+      projectPath: meta.cwd,
+      engine: meta.engine,
+      model: meta.model,
+      providerId: meta.providerId,
+      createdAt: 1,
+      updatedAt: 2,
+      eventCount: 2,
+      reason: 'shutdown',
+      meta,
+      execution: {
+        status: 'running',
+        lastSeq: 2,
+        lastEventAt: 2,
+        sdkSessionId: 'sdk-snapshot'
+      },
+      worktree: undefined,
+      transcript: [],
+      subtasks: [],
+      dagExecutions: []
+    }
+    const transcript = [
+      { seq: 1, event: { kind: 'user-message', text: '继续未完成任务' } },
+      { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'text', text: '收到' }] } }
+    ]
+    let snapshots = [snapshot]
+    global.window = {
+      ...(global.window || {}),
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (id) => clearTimeout(id),
+      agentDesk: {
+        ...(global.window && global.window.agentDesk ? global.window.agentDesk : {}),
+        listTaskSnapshots: async () => snapshots,
+        recoverTaskSnapshot: async (id) => {
+          eq(id, snapshot.id, '恢复快照 id')
+          return { ...meta, status: 'starting', sdkSessionId: 'sdk-snapshot' }
+        },
+        deleteTaskSnapshot: async (id) => {
+          eq(id, snapshot.id, '删除快照 id')
+          snapshots = snapshots.filter((item) => item.id !== id)
+          return true
+        },
+        getTranscript: async (id) => {
+          eq(id, meta.id, '恢复后转录 session id')
+          return transcript
+        },
+        closeBrowser: async () => {}
+      }
+    }
+    store.setState({
+      sessions: {},
+      order: [],
+      activeId: null,
+      taskSnapshots: [],
+      taskSnapshotsLoading: false,
+      taskSnapshotsError: undefined
+    })
+
+    await store.getState().refreshTaskSnapshots()
+    eq(store.getState().taskSnapshots.length, 1, '快照列表未加载')
+    await store.getState().recoverTaskSnapshot(snapshot.id)
+    const recovered = store.getState().sessions[meta.id]
+    assert(recovered, '快照恢复后未注册会话')
+    eq(store.getState().activeId, meta.id, '恢复后未激活会话')
+    assert(store.getState().order.includes(meta.id), '恢复后未加入侧栏顺序')
+    assert(recovered.items.some((item) => item.kind === 'user'), '恢复后未回放转录')
+    await store.getState().deleteTaskSnapshot(snapshot.id)
+    eq(store.getState().taskSnapshots.length, 0, '快照删除后仍留在 store')
+  })
+
   // ---- T12 真子代理编排:父会话派出真实 child sessions + 独立 worktree ----
   await test('T12 subagents:父会话派出真实子会话并独立 worktree', async () => {
     const sm = M('main/sessionManager.js').sessionManager
     sm.init()
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    const createdIds = []
+    const eventsFor = (id) => bucket
+      .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
+      .map((entry) => entry.payload.event)
     const repoDir = mkRepo('subagents-repo')
-    const parent = sm.create({ cwd: repoDir, title: 'parent', isolated: true, providerId: 'prov-b', model: 'm-b' })
-    await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
-    const result = sm.dispatchSubagents(parent.id, {
-      tasks: [
-        { id: 'front', role: 'frontend', prompt: '实现前端面板' },
-        { id: 'api', role: 'backend', prompt: '实现后端 API' },
-        { id: 'test', role: 'tester', prompt: '补充测试验证' }
-      ]
-    })
-    eq(result.children.length, 3, '子代理数量')
-    eq(new Set(result.children.map((child) => child.meta.id)).size, 3, '子会话 id 应唯一')
-    eq(new Set(result.children.map((child) => child.meta.worktreePath)).size, 3, '子会话 worktree 应唯一')
-    for (const child of result.children) {
-      const session = sm.get(child.meta.id)
-      assert(session, `缺子会话 ${child.meta.id}`)
-      eq(child.meta.parentSessionId, parent.id, '父会话关联')
-      eq(child.meta.orchestrationId, result.orchestrationId, '编排批次')
-      assert(child.meta.isolated && child.meta.worktreePath, '子代理必须独立 worktree')
-      assert(child.meta.sourceCwd === repoDir, '子代理 sourceCwd 应指向原仓库')
-      assert(child.meta.cwd !== repoDir, '子代理 cwd 不能污染主仓')
-      await waitFor(() => session.getTranscript().some((entry) => entry.event.kind === 'turn-result'), 5000, `等待 ${child.taskId} 完成`)
-      assert(
-        session.getTranscript().some((entry) => entry.event.kind === 'user-message' && entry.event.text === child.prompt),
-        `子代理 ${child.taskId} 未收到自己的 prompt`
-      )
-    }
-
-    const batch33 = Array.from({ length: 33 }, (_, i) => ({ id: `b${i}`, prompt: `noop ${i}` }))
-    const result33 = sm.dispatchSubagents(parent.id, { tasks: batch33, isolated: false })
-    eq(result33.children.length, 33, '应允许一次派发 33 个子代理')
-    let overLimit = false
     try {
-      sm.dispatchSubagents(parent.id, { tasks: [...batch33, { id: 'too-many', prompt: 'x' }] })
-    } catch (err) {
-      overLimit = /33/.test(String(err.message))
+      const parent = sm.create({ cwd: repoDir, title: 'parent', isolated: true, providerId: 'prov-b', model: 'm-b' })
+      createdIds.push(parent.id)
+      await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
+      const result = sm.dispatchSubagents(parent.id, {
+        tasks: [
+          { id: 'front', role: 'frontend', prompt: '实现前端面板' },
+          { id: 'api', role: 'backend', prompt: '实现后端 API' },
+          { id: 'test', role: 'tester', prompt: '补充测试验证' }
+        ]
+      })
+      createdIds.push(...result.children.map((child) => child.meta.id))
+      eq(result.children.length, 3, '子代理数量')
+      eq(new Set(result.children.map((child) => child.meta.id)).size, 3, '子会话 id 应唯一')
+      eq(new Set(result.children.map((child) => child.meta.worktreePath)).size, 3, '子会话 worktree 应唯一')
+      for (const child of result.children) {
+        const session = sm.get(child.meta.id)
+        assert(session, `缺子会话 ${child.meta.id}`)
+        eq(child.meta.parentSessionId, parent.id, '父会话关联')
+        eq(child.meta.orchestrationId, result.orchestrationId, '编排批次')
+        assert(child.meta.isolated && child.meta.worktreePath, '子代理必须独立 worktree')
+        assert(child.meta.sourceCwd === repoDir, '子代理 sourceCwd 应指向原仓库')
+        assert(child.meta.cwd !== repoDir, '子代理 cwd 不能污染主仓')
+        await waitFor(() => eventsFor(child.meta.id).some((event) => event.kind === 'turn-result'), 5000, `等待 ${child.taskId} 完成`)
+        assert(
+          eventsFor(child.meta.id).some((event) => event.kind === 'user-message' && event.text === child.prompt),
+          `子代理 ${child.taskId} 未收到自己的 prompt`
+        )
+      }
+
+      const batch33 = Array.from({ length: 33 }, (_, i) => ({ id: `b${i}`, prompt: `noop ${i}` }))
+      const result33 = sm.dispatchSubagents(parent.id, { tasks: batch33, isolated: false })
+      createdIds.push(...result33.children.map((child) => child.meta.id))
+      eq(result33.children.length, 33, '应允许一次派发 33 个子代理')
+      let overLimit = false
+      try {
+        sm.dispatchSubagents(parent.id, { tasks: [...batch33, { id: 'too-many', prompt: 'x' }] })
+      } catch (err) {
+        overLimit = /33/.test(String(err.message))
+      }
+      assert(overLimit, '超过 33 个子代理应拒绝')
+    } finally {
+      for (const id of createdIds.reverse()) sm.close(id)
+      fakeWindows.splice(fakeWindows.indexOf(win), 1)
     }
-    assert(overLimit, '超过 33 个子代理应拒绝')
-    for (const child of [...result.children, ...result33.children]) sm.close(child.meta.id)
-    sm.close(parent.id)
   })
 
   // ---- PLAN T3 子代理结果回传 + 3D 真实任务流 ----
@@ -673,6 +820,12 @@ async function main() {
       await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000)
       await ipcHandlers.get('sessions:send')({}, meta.id, { text: '请记住以后默认使用 pnpm' })
       await waitFor(() => bucket.some((entry) => entry.channel === 'memory:suggestion'), 2000, '等待 memory:suggestion')
+      await ipcHandlers.get('sessions:send')({}, meta.id, { text: '请记住以后默认使用 pnpm' })
+      eq(
+        bucket.filter((entry) => entry.channel === 'memory:suggestion').length,
+        1,
+        '同会话同文本 memory suggestion 应节流去重'
+      )
       const event = bucket.find((entry) => entry.channel === 'memory:suggestion').payload
       eq(event.sessionId, meta.id, 'memory suggestion session')
       store.setState({ activeId: meta.id, workbench: { ...store.getState().workbench, memorySuggestion: undefined, memoryOpen: false, memoryInitialForm: undefined } })
@@ -712,6 +865,67 @@ async function main() {
     assert(typeof enabled.nextRunAt === 'number' && enabled.nextRunAt > Date.now(), `enabled routine 未 seed nextRunAt:${JSON.stringify(enabled)}`)
     const disabled = await rs.createRoutine(root, { id: 'rt-plan-t7-disabled', name: 'No seed', prompt: 'run', projectCwd: tmpRoot, schedule: '@hourly', enabled: false })
     assert(!Object.prototype.hasOwnProperty.call(disabled, 'nextRunAt'), 'disabled routine 不应自动 seed nextRunAt')
+  })
+
+  await test('PLAN T7 routine:scheduler 到 executor 到 run history 闭环', async () => {
+    const rs = M('main/routineStore.js')
+    const scheduler = M('main/routineScheduler.js')
+    const executor = M('main/routines/routine-executor.js')
+    const runner = M('main/routines/routine-runner.js')
+    const sm = M('main/sessionManager.js').sessionManager
+    const root = path.join(userData, 'routine-plan-t7-scheduler')
+    const projectDir = mkRepo('routine-scheduler-project')
+    const now = Date.now()
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    await sm.init()
+    try {
+      await rs.createRoutine(root, {
+        id: 'rt-plan-t7-scheduler',
+        name: 'Scheduled run',
+        prompt: 'routine scheduler prompt',
+        projectCwd: projectDir,
+        schedule: 'every 1h',
+        providerId: 'prov-b',
+        model: 'm-b',
+        engine: 'claude',
+        permissionMode: 'default',
+        budgetUsd: 1,
+        enabled: true,
+        nextRunAt: now - 1000
+      })
+      scheduler.startRoutineScheduler({
+        rootDir: root,
+        intervalMs: 60_000,
+        now: () => now,
+        onTrigger: (routine, nextRunAt) => executor.executeRoutine(root, routine, { nextRunAt, sendDelayMs: 0 })
+      })
+
+      await waitFor(() => sm.list().some((meta) => meta.title === 'Routine: Scheduled run'), 3000, '等待 routine 创建会话')
+      const meta = sm.list().find((item) => item.title === 'Routine: Scheduled run')
+      assert(meta, 'scheduler 未创建 routine 会话')
+      eq(meta.engine, 'claude', 'routine engine 未传入会话')
+      await waitFor(() => bucket.some((entry) =>
+        entry.channel === 'session:event' &&
+        entry.payload.sessionId === meta.id &&
+        entry.payload.event.kind === 'user-message' &&
+        entry.payload.event.text === 'routine scheduler prompt'
+      ), 3000, '等待 routine prompt 发送')
+
+      const runs = await runner.listRoutineRuns(root, 'rt-plan-t7-scheduler')
+      eq(runs.length, 1, 'routine run history 数量')
+      eq(runs[0].status, 'succeeded', 'routine run history 状态')
+      eq(runs[0].sessionId, meta.id, 'routine run history sessionId')
+      const [stored] = await rs.listRoutines(root)
+      assert(stored.lastRunAt && stored.lastRunAt <= Date.now(), 'routine 未写 lastRunAt')
+      assert(stored.nextRunAt && stored.nextRunAt > now, `routine 未推进 nextRunAt:${JSON.stringify(stored)}`)
+      sm.close(meta.id)
+    } finally {
+      scheduler.stopRoutineScheduler()
+      const index = fakeWindows.indexOf(win)
+      if (index !== -1) fakeWindows.splice(index, 1)
+    }
   })
 
   // ---- PLAN T8 预算闸门 ----
@@ -755,7 +969,7 @@ async function main() {
       await waitFor(() => eventsFor(globalBlocks.id).some((e) => e.kind === 'status' && e.status === 'error'), 2000)
       assert(String(globalSession.meta.lastError).includes('预算上限 $0.50'), `global budget 错误不明确:${globalSession.meta.lastError}`)
 
-      settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+      settingsMod.updateSettings({ budgetUsdPerSession: 0, preventDisplaySleep: true })
       const noBudget = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-off' })
       createdIds.push(noBudget.id)
       const noBudgetSession = sm.get(noBudget.id)
@@ -787,10 +1001,23 @@ async function main() {
         createdIds.push(openai.id)
         const openaiSession = sm.get(openai.id)
         await waitFor(() => openaiSession.meta.sdkSessionId, 3000)
+        const openAiPowerStarts = powerBlockerState.starts
+        const openAiPowerStops = powerBlockerState.stops
         sm.send(openai.id, 'openai budget turn')
+        await waitFor(() => powerBlockerState.starts > openAiPowerStarts, 2000, 'OpenAI running should start prevent-display-sleep')
         await waitFor(() => eventsFor(openai.id).some((e) => e.kind === 'turn-result' && typeof e.costUsd === 'number' && e.costUsd > 0), 3000)
+        await waitFor(() => powerBlockerState.stops > openAiPowerStops, 2000, 'OpenAI idle should release prevent-display-sleep')
         const cost = openaiSession.meta.costUsd
         assert(cost > 0, `OpenAI usage 未在公共层累计费用:${cost}`)
+        settingsMod.updateSettings({ preventDisplaySleep: false })
+        const disabledPowerStarts = powerBlockerState.starts
+        const openaiNoSleep = sm.create({ cwd: tmpRoot, isolated: false, providerId: '', engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai-no-sleep' })
+        createdIds.push(openaiNoSleep.id)
+        await waitFor(() => sm.get(openaiNoSleep.id)?.meta.sdkSessionId, 3000)
+        sm.send(openaiNoSleep.id, 'openai should not start sleep blocker')
+        await waitFor(() => eventsFor(openaiNoSleep.id).some((e) => e.kind === 'turn-result'), 3000)
+        eq(powerBlockerState.starts, disabledPowerStarts, 'preventDisplaySleep=false should not start prevent-display-sleep')
+        settingsMod.updateSettings({ preventDisplaySleep: true })
         openaiSession.meta.budgetUsd = cost / 2
         const beforeSecondRequest = openAiRequests
         sm.send(openai.id, 'openai should block before fetch')
@@ -805,7 +1032,7 @@ async function main() {
       for (const id of createdIds) sm.close(id)
       fakeWindows.splice(fakeWindows.indexOf(win), 1)
       providersMod.updateProvider('prov-b', { budgetUsd: 0 })
-      settingsMod.updateSettings({ budgetUsdPerSession: 0 })
+      settingsMod.updateSettings({ budgetUsdPerSession: 0, preventDisplaySleep: true })
     }
   })
 
@@ -1027,6 +1254,207 @@ async function main() {
   })
 
   // ---------------------------------------------------------------- 汇总
+  await test('T18 P2 cross-validation: routing event creates review and arbitration child sessions', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    const engineMod = M('main/engine.js')
+    const previousSettings = { ...settingsMod.getSettings() }
+    const sentInputs = []
+    class CrossValidationMockEngine {
+      constructor(meta, emit) {
+        this.meta = meta
+        this.emit = emit
+        this.seq = 0
+        this.transcript = []
+      }
+      async start() {
+        this.meta.status = 'idle'
+        this.meta.sdkSessionId = `p2-cross-${this.meta.id}`
+        this.emit({ kind: 'init', sdkSessionId: this.meta.sdkSessionId, model: this.meta.model, tools: [] }, ++this.seq)
+        this.emit({ kind: 'status', status: 'idle' }, ++this.seq)
+      }
+      send(input) {
+        const text = typeof input === 'string' ? input : input.text
+        sentInputs.push({ sessionId: this.meta.id, childRole: this.meta.childRole, text })
+        const userEvent = { kind: 'user-message', text }
+        this.transcript.push({ seq: ++this.seq, event: userEvent })
+        this.emit(userEvent, this.seq)
+        if (this.meta.childRole === 'model-review') {
+          this.finish('Conclusion: ARBITRATION_REQUIRED. Primary output needs third-model arbitration.')
+          return
+        }
+        if (this.meta.childRole === 'model-arbitration') {
+          this.finish('Conclusion: FINAL. Arbitration finished.')
+          return
+        }
+        this.emit({
+          kind: 'routing',
+          model: this.meta.model,
+          providerId: this.meta.providerId,
+          reason: 'behavior smoke route plan',
+          crossValidationPlan: {
+            enabled: true,
+            primary: { providerId: 'primary-provider', providerName: 'Primary', model: 'primary-model' },
+            validators: [
+              { providerId: 'review-provider', providerName: 'Reviewer', model: 'review-model' },
+              { providerId: 'arb-provider', providerName: 'Arbitrator', model: 'arb-model' }
+            ],
+            policy: 'review-primary',
+            reason: 'critical behavior smoke'
+          }
+        }, ++this.seq)
+        this.finish('Primary implementation done.')
+      }
+      finish(resultText) {
+        const event = { kind: 'turn-result', subtype: 'success', isError: false, resultText, durationMs: 1 }
+        this.transcript.push({ seq: ++this.seq, event })
+        this.emit(event, this.seq)
+      }
+      rejectSend(message) { this.finish(message) }
+      async interrupt() {}
+      respondPermission() {}
+      pendingPermissions() { return [] }
+      getTranscript() { return [...this.transcript] }
+      async setPermissionMode(mode) { this.meta.permissionMode = mode }
+      async setModel(model) { this.meta.model = model }
+      rename(title) { this.meta.title = title }
+      dispose() { this.meta.status = 'closed' }
+    }
+    engineMod.registerEngine({
+      kind: 'p2-cross-validation-mock',
+      label: 'P2 cross-validation mock',
+      available: () => true,
+      create: (meta, emit) => new CrossValidationMockEngine(meta, emit)
+    })
+    settingsMod.updateSettings({
+      smartModelRoutingEnabled: true,
+      modelCrossValidationAutoRunEnabled: true,
+      autoSkillLearningEnabled: false,
+      budgetUsdPerSession: 0
+    })
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    const createdIds = []
+    const eventsFor = (id) => bucket
+      .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
+      .map((entry) => entry.payload.event)
+    try {
+      const meta = sm.create({
+        cwd: tmpRoot,
+        isolated: false,
+        providerId: 'primary-provider',
+        model: 'primary-model',
+        engine: 'p2-cross-validation-mock',
+        title: 'p2 cross validation behavior'
+      })
+      createdIds.push(meta.id)
+      await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000, 'wait cross-validation parent init')
+      sm.send(meta.id, 'implement critical migration')
+      await waitFor(() => sm.list().some((item) => item.parentSessionId === meta.id && item.childRole === 'model-review'), 3000, 'wait model-review child')
+      await waitFor(() => sm.list().some((item) => item.parentSessionId === meta.id && item.childRole === 'model-arbitration'), 3000, 'wait model-arbitration child')
+      const review = sm.list().find((item) => item.parentSessionId === meta.id && item.childRole === 'model-review')
+      const arbitration = sm.list().find((item) => item.parentSessionId === meta.id && item.childRole === 'model-arbitration')
+      assert(review, 'model-review child missing')
+      assert(arbitration, 'model-arbitration child missing')
+      createdIds.push(review.id, arbitration.id)
+      eq(review.permissionMode, 'plan', 'model-review child must be plan-only')
+      eq(arbitration.permissionMode, 'plan', 'model-arbitration child must be plan-only')
+      eq(review.providerId, 'review-provider', 'review provider')
+      eq(review.model, 'review-model', 'review model')
+      eq(arbitration.providerId, 'arb-provider', 'arbitration provider')
+      eq(arbitration.model, 'arb-model', 'arbitration model')
+      assert(eventsFor(meta.id).some((event) => event.kind === 'hook-event' && event.event === 'model-cross-validation'), 'parent missing model-cross-validation hook event')
+      assert(eventsFor(meta.id).some((event) => event.kind === 'hook-event' && event.event === 'model-cross-validation-arbitration'), 'parent missing arbitration hook event')
+      const reviewPrompt = sentInputs.find((item) => item.childRole === 'model-review')?.text || ''
+      const arbitrationPrompt = sentInputs.find((item) => item.childRole === 'model-arbitration')?.text || ''
+      assert(reviewPrompt.includes('Primary implementation done.'), 'review prompt missing primary result')
+      assert(arbitrationPrompt.includes('ARBITRATION_REQUIRED'), 'arbitration prompt missing review disagreement')
+    } finally {
+      for (const id of createdIds.reverse()) sm.close(id)
+      const index = fakeWindows.indexOf(win)
+      if (index !== -1) fakeWindows.splice(index, 1)
+      settingsMod.updateSettings({
+        smartModelRoutingEnabled: previousSettings.smartModelRoutingEnabled,
+        modelCrossValidationAutoRunEnabled: previousSettings.modelCrossValidationAutoRunEnabled,
+        autoSkillLearningEnabled: previousSettings.autoSkillLearningEnabled,
+        budgetUsdPerSession: previousSettings.budgetUsdPerSession
+      })
+    }
+  })
+
+  await test('T19 P2 auto skill loop: completed turn stores skill and next similar turn injects it', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    const previousSettings = { ...settingsMod.getSettings() }
+    settingsMod.updateSettings({
+      autoSkillLearningEnabled: true,
+      failoverEnabled: false,
+      budgetUsdPerSession: 0
+    })
+    const projectDir = mkRepo('p2-auto-skill-loop')
+    const bucket = []
+    const win = fakeWindow(bucket)
+    fakeWindows.push(win)
+    const createdIds = []
+    const skillFiles = () => {
+      const root = path.join(projectDir, '.caogen', 'skills')
+      const out = []
+      const stack = fs.existsSync(root) ? [root] : []
+      while (stack.length > 0) {
+        const current = stack.pop()
+        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+          const full = path.join(current, entry.name)
+          if (entry.isDirectory()) stack.push(full)
+          else if (entry.isFile() && entry.name === 'SKILL.md') out.push(full)
+        }
+      }
+      return out
+    }
+    try {
+      const meta = sm.create({
+        cwd: projectDir,
+        isolated: false,
+        providerId: 'prov-b',
+        model: 'm-b',
+        title: 'Tailwind Config Learning Loop'
+      })
+      createdIds.push(meta.id)
+      await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000, 'wait auto skill session init')
+      sm.send(
+        meta.id,
+        [
+          'Add Tailwind configuration to a TypeScript frontend project.',
+          'Reusable workflow: inspect package.json, create tailwind.config.ts, create postcss.config.js, run npm.cmd run typecheck, then run npm.cmd run build.',
+          'Persist this as a reusable Tailwind configuration workflow after the task succeeds.'
+        ].join('\n')
+      )
+      await waitFor(() => skillFiles().length > 0, 5000, 'wait auto skill file')
+      const skillPath = skillFiles()[0]
+      const skillText = fs.readFileSync(skillPath, 'utf8')
+      assert(skillText.includes('Tailwind Config Learning Loop'), 'stored skill should keep task title')
+      assert(skillPath.startsWith(path.join(projectDir, '.caogen', 'skills')), 'stored skill must stay under project skill root')
+
+      const beforeSecond = sdkLog.length
+      sm.send(meta.id, 'Please add Tailwind config to another frontend project and reuse the local workflow.')
+      await waitFor(() => sdkLog.slice(beforeSecond).some((entry) => typeof entry.promptText === 'string'), 3000, 'wait second prompt')
+      const secondPrompt = sdkLog
+        .slice(beforeSecond)
+        .filter((entry) => typeof entry.promptText === 'string')
+        .map((entry) => entry.promptText)
+        .join('\n')
+      assert(secondPrompt.includes('Tailwind Config Learning Loop'), 'next similar turn should inject generated skill')
+      assert(secondPrompt.includes('## Current User Request'), 'injected skill prompt should preserve user request boundary')
+    } finally {
+      for (const id of createdIds.reverse()) sm.close(id)
+      const index = fakeWindows.indexOf(win)
+      if (index !== -1) fakeWindows.splice(index, 1)
+      settingsMod.updateSettings({
+        autoSkillLearningEnabled: previousSettings.autoSkillLearningEnabled,
+        failoverEnabled: previousSettings.failoverEnabled,
+        budgetUsdPerSession: previousSettings.budgetUsdPerSession
+      })
+    }
+  })
+
   const pass = results.filter((r) => r.ok).length
   console.log('\n========== CaoGen 集成测试结果 ==========')
   for (const r of results) {
@@ -1038,3 +1466,11 @@ async function main() {
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1 })
+
+function npxCommand() {
+  return process.platform === 'win32' ? 'cmd' : 'npx'
+}
+
+function npxArgs(args) {
+  return process.platform === 'win32' ? ['/c', 'npx', ...args] : args
+}
