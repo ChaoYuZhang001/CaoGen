@@ -49,6 +49,7 @@ export interface MacosListWindowsResult extends MacosBaseResult {
 
 export interface MacosActionResult extends MacosBaseResult {
   window?: MacosWindowInfo
+  element?: MacosElementInfo
 }
 
 interface MacosWindowSelector {
@@ -318,25 +319,54 @@ export async function macosClick(input: MacosClickInput): Promise<MacosActionRes
   if (input.button !== 'left') {
     return { ok: false, error: 'macOS System Events 主路径当前仅支持 left click；right/middle 需 nut.js 兜底或原生扩展' }
   }
-  if (typeof input.x !== 'number' || typeof input.y !== 'number') {
-    return { ok: false, error: 'macOS System Events 主路径当前仅支持坐标点击；元素级点击需后续 AXUIElement 原生扩展' }
+
+  const target = hasElementSelector(input) ? await findElementTarget(input) : undefined
+  if (target && !target.ok) return { ok: false, error: target.error }
+  const matched = target?.target
+  const point = matched && (typeof input.x !== 'number' || typeof input.y !== 'number')
+    ? centerOf(matched.element.bounds)
+    : { x: input.x, y: input.y }
+
+  if (typeof point.x !== 'number' || typeof point.y !== 'number') {
+    return { ok: false, error: 'macOS System Events 主路径需要屏幕坐标，或可由 includeElements 返回的元素 selector 解析出坐标' }
   }
-  if (hasWindowSelector(input)) {
+
+  if (matched) {
+    const activated = await macosActivateWindow({ windowId: matched.window.id })
+    if (!activated.ok) return activated
+  } else if (hasWindowSelector(input)) {
     const activated = await macosActivateWindow(input)
     if (!activated.ok) return activated
   }
 
-  const result = await runOsascript([
-    'tell application "System Events"',
-    `  click at {${Math.round(input.x)}, ${Math.round(input.y)}}`,
-    'end tell'
-  ])
-  return result.ok ? { ok: true } : { ok: false, error: result.error }
+  const result = await clickAt(point.x, point.y)
+  return result.ok
+    ? {
+        ok: true,
+        ...(matched
+          ? {
+              detail: `已点击元素:${matched.element.name || matched.element.id} (${matched.element.controlType || 'AXElement'})`,
+              window: matched.window,
+              element: matched.element
+            }
+          : {})
+      }
+    : { ok: false, error: result.error, ...(matched ? { window: matched.window, element: matched.element } : {}) }
 }
 
 export async function macosTypeText(input: MacosTypeTextInput): Promise<MacosActionResult> {
   if (process.platform !== 'darwin') return { ok: false, error: 'macOS GUI 主路径仅支持 darwin 平台' }
-  if (hasWindowSelector(input)) {
+  const target = hasElementSelector(input) ? await findElementTarget(input) : undefined
+  if (target && !target.ok) return { ok: false, error: target.error }
+  const matched = target?.target
+
+  if (matched) {
+    const activated = await macosActivateWindow({ windowId: matched.window.id })
+    if (!activated.ok) return activated
+    const point = centerOf(matched.element.bounds)
+    const focused = await clickAt(point.x, point.y)
+    if (!focused.ok) return { ok: false, error: focused.error, window: matched.window, element: matched.element }
+  } else if (hasWindowSelector(input)) {
     const activated = await macosActivateWindow(input)
     if (!activated.ok) return activated
   }
@@ -346,7 +376,18 @@ export async function macosTypeText(input: MacosTypeTextInput): Promise<MacosAct
     `  keystroke ${appleScriptString(input.text)}`,
     'end tell'
   ])
-  return result.ok ? { ok: true } : { ok: false, error: result.error }
+  return result.ok
+    ? {
+        ok: true,
+        ...(matched
+          ? {
+              detail: `已聚焦并输入元素:${matched.element.name || matched.element.id} (${matched.element.controlType || 'AXElement'})`,
+              window: matched.window,
+              element: matched.element
+            }
+          : {})
+      }
+    : { ok: false, error: result.error, ...(matched ? { window: matched.window, element: matched.element } : {}) }
 }
 
 export async function macosScroll(input: MacosScrollInput): Promise<MacosActionResult> {
@@ -569,6 +610,54 @@ function normalizeMaxElements(value: number | undefined): number {
   return Math.max(1, Math.min(200, Math.round(value)))
 }
 
+type ElementTargetResult =
+  | { ok: true; target: { window: MacosWindowInfo; element: MacosElementInfo } | null }
+  | { ok: false; error: string }
+
+async function findElementTarget(selector: MacosElementSelector): Promise<ElementTargetResult> {
+  const result = await macosListWindows({
+    windowId: selector.windowId ?? windowIdFromElementId(selector.elementId),
+    title: selector.title,
+    processName: selector.processName,
+    pid: selector.pid,
+    includeElements: true,
+    maxElements: normalizeMaxElements(selector.maxElements)
+  })
+  if (!result.ok) return { ok: false, error: result.error ?? 'macOS 元素枚举失败' }
+
+  for (const windowInfo of result.windows) {
+    const element = findBestElement(windowInfo.elements ?? [], selector)
+    if (element) return { ok: true, target: { window: windowInfo, element } }
+  }
+  return { ok: true, target: null }
+}
+
+function findBestElement(
+  elements: MacosElementInfo[],
+  selector: MacosElementSelector
+): MacosElementInfo | null {
+  if (selector.elementId) {
+    const exact = elements.find((element) => element.id === selector.elementId)
+    if (exact) return exact
+  }
+  if (typeof selector.elementIndex === 'number') {
+    const exact = elements.find((element) => element.index === selector.elementIndex)
+    if (exact) return exact
+  }
+
+  let matches = elements
+  const elementName = selector.elementName
+  const automationId = selector.automationId
+  const className = selector.className
+  const controlType = selector.controlType
+  if (elementName) matches = matches.filter((element) => includesText(element.name, elementName))
+  if (automationId) matches = matches.filter((element) => includesText(element.automationId, automationId))
+  if (className) matches = matches.filter((element) => includesText(element.className, className))
+  if (controlType) matches = matches.filter((element) => includesText(element.controlType, controlType))
+
+  return matches.find((element) => element.enabled && !element.offscreen) ?? matches[0] ?? null
+}
+
 function matchesSelector(windowInfo: MacosWindowInfo, selector: MacosWindowSelector): boolean {
   if (selector.windowId && windowInfo.id !== selector.windowId) return false
   if (typeof selector.pid === 'number' && windowInfo.pid !== selector.pid) return false
@@ -589,6 +678,42 @@ async function findWindow(selector: MacosWindowSelector): Promise<MacosWindowInf
 
 function hasWindowSelector(selector: MacosWindowSelector): boolean {
   return Boolean(selector.windowId || selector.title || selector.processName || typeof selector.pid === 'number')
+}
+
+function hasElementSelector(selector: MacosElementSelector): boolean {
+  return Boolean(
+    selector.elementId ||
+      selector.elementName ||
+      selector.automationId ||
+      selector.className ||
+      selector.controlType ||
+      typeof selector.elementIndex === 'number'
+  )
+}
+
+function windowIdFromElementId(elementId: string | undefined): string | undefined {
+  const marker = ':element:'
+  const index = elementId?.indexOf(marker) ?? -1
+  return index > 0 ? elementId?.slice(0, index) : undefined
+}
+
+function centerOf(bounds: MacosBounds): { x: number; y: number } {
+  return {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  }
+}
+
+function includesText(value: string, needle: string): boolean {
+  return value.toLowerCase().includes(needle.toLowerCase())
+}
+
+function clickAt(x: number, y: number): Promise<OsascriptResult> {
+  return runOsascript([
+    'tell application "System Events"',
+    `  click at {${Math.round(x)}, ${Math.round(y)}}`,
+    'end tell'
+  ])
 }
 
 function appleScriptString(value: string): string {
