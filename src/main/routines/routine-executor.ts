@@ -6,6 +6,7 @@ import { listRoutines, type Routine } from '../routineStore'
 import { sessionManager } from '../sessionManager'
 import { getSettings } from '../settings'
 import {
+  buildRoutineRunNotification,
   runWithPersonalOsPowerBlocker,
   type PowerSaveBlockerAdapter
 } from './personal-os'
@@ -83,17 +84,7 @@ export async function runRoutineNow(rootDir: string, routineId: string): Promise
 }
 
 function notifyRoutineResult(routine: Routine, record: RoutineRunRecord): void {
-  if (!getSettings().notificationsEnabled) return
-  const notification = routine.notification
-  if (!notification?.enabled) return
-  if (record.status === 'succeeded' && !notification.onSuccess) return
-  if (record.status === 'failed' && !notification.onFailure) return
-
-  showDesktopNotification({
-    title: record.status === 'succeeded' ? `Routine 已完成: ${routine.name}` : `Routine 失败: ${routine.name}`,
-    body: record.status === 'succeeded'
-      ? `已创建会话${record.sessionId ? ` ${record.sessionId}` : ''}，并投递定时任务内容。`
-      : (record.error ?? '执行失败'),
-    sessionId: record.sessionId ?? routine.id
-  })
+  const payload = buildRoutineRunNotification(routine, record, getSettings())
+  if (!payload) return
+  showDesktopNotification(payload)
 }

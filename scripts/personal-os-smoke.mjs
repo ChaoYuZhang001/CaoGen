@@ -47,6 +47,37 @@ try {
   assertEqual(snapshot.powerPlan.active, true)
   assertEqual(snapshot.routines.find((item) => item.id === 'paused')?.state, 'paused')
 
+  const successNotification = personalOs.buildRoutineRunNotification(
+    routines[0],
+    run({ id: 'notify-success', routineId: 'due', status: 'succeeded', startedAt: now, sessionId: 'session-1' }),
+    { notificationsEnabled: true }
+  )
+  assert(successNotification, 'succeeded routine should build a notification when enabled')
+  assertEqual(successNotification.sessionId, 'session-1')
+  assert(successNotification.title.includes('Routine 已完成'), 'success notification title should be explicit')
+
+  const failureNotification = personalOs.buildRoutineRunNotification(
+    routines[0],
+    run({ id: 'notify-failure', routineId: 'due', status: 'failed', startedAt: now, error: 'planned failure' }),
+    { notificationsEnabled: true }
+  )
+  assert(failureNotification, 'failed routine should build a notification when enabled')
+  assert(failureNotification.body.includes('planned failure'), 'failure notification should carry the concrete error')
+  assertEqual(
+    personalOs.buildRoutineRunNotification(routines[0], failureNotificationRecord(now), {
+      notificationsEnabled: false
+    }),
+    null
+  )
+  assertEqual(
+    personalOs.buildRoutineRunNotification(
+      { ...routines[0], notification: { enabled: true, onSuccess: false, onFailure: true } },
+      run({ id: 'notify-muted-success', routineId: 'due', status: 'succeeded', startedAt: now }),
+      { notificationsEnabled: true }
+    ),
+    null
+  )
+
   const muted = personalOs.buildPersonalOsSnapshot({
     routines,
     routineRuns: runs,
@@ -131,6 +162,10 @@ function run(overrides) {
     status: overrides.status,
     ...overrides
   }
+}
+
+function failureNotificationRecord(now) {
+  return run({ id: 'notify-muted-global', routineId: 'due', status: 'failed', startedAt: now, error: 'muted' })
 }
 
 function fakePowerAdapter() {
