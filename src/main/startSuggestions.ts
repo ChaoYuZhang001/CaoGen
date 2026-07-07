@@ -122,6 +122,7 @@ export function buildStartSuggestions(input: StartSuggestionInput): StartSuggest
     (file): file is RootFileStat => file !== null
   )
   suggestions.push(...packageSuggestions(packageJson, lockfiles))
+  suggestions.push(...routinePersonalOsSuggestions(input))
 
   return limitSuggestions(dedupeSuggestions(suggestions), input.maxSuggestions ?? DEFAULT_MAX_SUGGESTIONS)
 }
@@ -210,6 +211,43 @@ function failureSuggestions(input: StartSuggestionInput): StartSuggestion[] {
       source: 'routine',
       priority: 'high',
       prompt: 'Inspect the failed routine summary, reproduce the failing command if possible, and fix or narrow the failure with evidence.'
+    })
+  }
+
+  return suggestions
+}
+
+function routinePersonalOsSuggestions(input: StartSuggestionInput): StartSuggestion[] {
+  const routines = input.routineSummaries ?? []
+  if (routines.length === 0) return []
+
+  const runs = input.routineRuns ?? []
+  const suggestions: StartSuggestion[] = []
+  const enabled = routines.filter(isEnabledRoutineSignal)
+  const disabled = routines.filter(isDisabledRoutineSignal)
+
+  if (enabled.length > 0 && runs.length === 0) {
+    const sample = summarizeSignal(enabled[0], 'An enabled routine has not reported a completed run yet.')
+    const verb = enabled.length === 1 ? 'has' : 'have'
+    suggestions.push({
+      id: 'routine-first-run',
+      title: 'Verify the first routine run',
+      body: `${enabled.length} enabled routine${enabled.length === 1 ? '' : 's'} ${verb} no run record yet. First routine: ${sample}`,
+      source: 'routine',
+      priority: 'medium',
+      prompt: 'Open the routine list, run one enabled routine manually, and verify that it creates a session, records a run, and reports only evidence-backed status.'
+    })
+  }
+
+  if (disabled.length > 0) {
+    const sample = summarizeSignal(disabled[0], 'A disabled routine may need review.')
+    suggestions.push({
+      id: 'routine-disabled-review',
+      title: 'Review paused routines',
+      body: `${disabled.length} routine${disabled.length === 1 ? '' : 's'} are disabled. First routine: ${sample}`,
+      source: 'routine',
+      priority: 'low',
+      prompt: 'Review disabled routines, confirm whether each still matters, and only re-enable routines whose schedule, project path, and permission mode are still valid.'
     })
   }
 
@@ -483,6 +521,18 @@ function isFailedSignal(signal: StartSuggestionSignal): boolean {
   if (typeof signal.status === 'string' && FAILURE_RE.test(signal.status)) return true
   if (typeof signal.error === 'string' && signal.error.trim()) return true
   return FAILURE_RE.test(signalText(signal))
+}
+
+function isEnabledRoutineSignal(signal: StartSuggestionSignal): boolean {
+  const status = typeof signal.status === 'string' ? signal.status.toLowerCase() : ''
+  if (status === 'enabled') return true
+  if (status === 'disabled') return false
+  return signal.source === 'routine' && signal.ok !== false
+}
+
+function isDisabledRoutineSignal(signal: StartSuggestionSignal): boolean {
+  const status = typeof signal.status === 'string' ? signal.status.toLowerCase() : ''
+  return status === 'disabled'
 }
 
 function summarizeSignal(signal: StartSuggestionSignal, fallback: string): string {
