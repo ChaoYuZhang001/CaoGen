@@ -54,6 +54,8 @@
 
 这些能力的定位是 **Native Integration**,不是导入 Claude、Codex、OpenClaw、Hermes 或 ccswitch 的配置。CaoGen 会吸收它们的用户价值,但不复制竞品代码,也不伪造外部工具已经完成的能力。
 
+下一阶段并行执行表见 [Work OS Phase 2 Parallel Plan](./docs/WORKOS-PHASE2-PARALLEL-PLAN.md)。当前边界:本地 `test:deep` 已全绿;`v0.2.0` 仍需 P2 required 外部证据、N1 真人迁移记录和发布打包门禁。
+
 ## 界面预览
 
 ![CaoGen 主界面](./docs/screenshot-app.jpg)
@@ -92,6 +94,8 @@ npm run build      # 产物输出到 out/
 npm start          # 预览构建产物
 npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
                    # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
+npm run test:p2    # P2 本地 smoke:技能、模型、国内生态本地桩、IDE bridge、OpenAI P2 工具
+npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预期失败并给出缺口
 ```
 
 需要真实厂商 Key 的端到端脚本(不入 CI,本机手动跑):
