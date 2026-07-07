@@ -19,7 +19,7 @@ try {
     process.execPath,
     [
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
-      'src/main/openaiTools.ts',
+      'src/main/agent/tools/git-tools.ts',
       '--outDir',
       outDir,
       '--rootDir',
@@ -37,15 +37,22 @@ try {
     { cwd: repoRoot, stdio: 'inherit' }
   )
 
-  const tools = await import(pathToFileURL(path.join(outDir, 'main/openaiTools.js')).href)
   const gitTools = await import(pathToFileURL(path.join(outDir, 'main/agent/tools/git-tools.js')).href)
   const gitHelper = await import(pathToFileURL(path.join(outDir, 'main/git/git-helper.js')).href)
 
-  assert(tools.OPENAI_CODING_TOOLS.some((item) => item.function?.name === 'git_status'), 'git_status schema missing')
-  assert(tools.OPENAI_CODING_TOOLS.some((item) => item.function?.name === 'git_create_pr'), 'git_create_pr schema missing')
-  assert(tools.READONLY_TOOLS.has('git_status'), 'git_status should be readonly')
-  assert(tools.READONLY_TOOLS.has('git_diff'), 'git_diff should be readonly')
-  assert(!tools.EDIT_TOOLS.has('git_commit'), 'git_commit should still require explicit permission outside readonly/edit allowlists')
+  assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_status'), 'git_status schema missing')
+  assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_create_pr'), 'git_create_pr schema missing')
+  assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'code_forge_delivery'), 'code_forge_delivery schema missing')
+  const openaiToolsSource = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
+  const readonlyBlock = openaiToolsSource.slice(
+    openaiToolsSource.indexOf('export const READONLY_TOOLS'),
+    openaiToolsSource.indexOf('/** 文件写入类')
+  )
+  assert(openaiToolsSource.includes('...GIT_TOOLS'), 'OpenAI coding tools should include GIT_TOOLS')
+  assert(readonlyBlock.includes("'git_status'"), 'git_status should be readonly')
+  assert(readonlyBlock.includes("'git_diff'"), 'git_diff should be readonly')
+  assert(!readonlyBlock.includes("'code_forge_delivery'"), 'code_forge_delivery should not be readonly')
+  assert(openaiToolsSource.includes("export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])"), 'git tools should not be acceptEdits-only')
 
   initRepo(projectDir)
   writePassingContext(projectDir)
@@ -56,23 +63,23 @@ try {
   writeFileSync(path.join(projectDir, 'app.txt'), 'hello\nchanged\n', 'utf8')
   writeFileSync(path.join(projectDir, 'notes.txt'), 'untracked\n', 'utf8')
 
-  const statusResult = await tools.executeCodingTool('git_status', {}, projectDir)
+  const statusResult = await gitTools.executeGitTool('git_status', {}, projectDir)
   assert(statusResult.ok, statusResult.output)
   const statusJson = parseJson(statusResult.output)
   assert(statusJson.files.some((file) => file.path === 'app.txt' && file.kind === 'modified'), 'modified file missing')
   assert(statusJson.files.some((file) => file.path === 'notes.txt' && file.untracked), 'untracked file missing')
 
-  const diffResult = await tools.executeCodingTool('git_diff', { file: 'app.txt' }, projectDir)
+  const diffResult = await gitTools.executeGitTool('git_diff', { file: 'app.txt' }, projectDir)
   assert(diffResult.ok, diffResult.output)
   const diffJson = parseJson(diffResult.output)
   assert(diffJson.unstagedDiff.includes('+changed'), 'unstaged diff should include changed line')
 
-  const noStageCommit = await tools.executeCodingTool('git_commit', { message: 'should not commit unstaged' }, projectDir)
+  const noStageCommit = await gitTools.executeGitTool('git_commit', { message: 'should not commit unstaged' }, projectDir)
   assert(!noStageCommit.ok, 'commit should fail without staged changes')
   assert(noStageCommit.output.includes('不会自动 git add'), 'commit failure should explain no auto add')
 
   git(projectDir, ['add', 'app.txt'])
-  const commitResult = await tools.executeCodingTool('git_commit', { message: 'commit staged change' }, projectDir)
+  const commitResult = await gitTools.executeGitTool('git_commit', { message: 'commit staged change' }, projectDir)
   assert(commitResult.ok, commitResult.output)
   const commitJson = parseJson(commitResult.output)
   assert(commitJson.sha && commitJson.checks.length === 2, 'commit should return sha and two checks')
@@ -81,12 +88,12 @@ try {
   writeFileSync(path.join(projectDir, 'app.txt'), 'hello\nchanged\nblocked\n', 'utf8')
   git(projectDir, ['add', 'app.txt'])
   writeFailingContext(projectDir)
-  const blockedCommit = await tools.executeCodingTool('git_commit', { message: 'blocked by checks' }, projectDir)
+  const blockedCommit = await gitTools.executeGitTool('git_commit', { message: 'blocked by checks' }, projectDir)
   assert(!blockedCommit.ok, `commit should be blocked by failing caogen command: ${blockedCommit.output}`)
   assert(blockedCommit.output.includes('提交前检查失败'), 'blocked commit should mention pre-commit checks')
 
   git(projectDir, ['remote', 'add', 'origin', 'git@gitee.com:owner/repo.git'])
-  const prResult = await tools.executeCodingTool('git_create_pr', { title: 'Smoke PR' }, projectDir)
+  const prResult = await gitTools.executeGitTool('git_create_pr', { title: 'Smoke PR' }, projectDir)
   assert(!prResult.ok, 'gitee PR should be recognized but not created in the basic version')
   assert(prResult.output.toLowerCase().includes('gitee'), 'PR result should mention gitee')
 

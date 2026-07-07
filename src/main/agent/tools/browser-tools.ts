@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolExecResult } from '../../openaiTools'
+import type { ToolDefinition, ToolExecResult } from './tool-types'
 
 export const BROWSER_TOOLS: ToolDefinition[] = [
   {
