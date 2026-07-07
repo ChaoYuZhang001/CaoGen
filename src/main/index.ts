@@ -16,6 +16,7 @@ import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
 import { executeRoutine } from './routines/routine-executor'
 import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { initAutoUpdater } from './updater'
+import { configureQuickbar, disposeQuickbar, registerQuickbarGlobalShortcut } from './quickbar'
 import type { Routine } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -230,6 +231,11 @@ void app.whenReady().then(async () => {
   await sessionManager.init()
   registerIpc()
   createWindow()
+  configureQuickbar({ getMainWindow: () => mainWindow, showMainWindow })
+  const quickbarState = registerQuickbarGlobalShortcut()
+  if (!quickbarState.registered) {
+    console.warn('[caogen] quickbar shortcut unavailable:', quickbarState.registrationError)
+  }
   installTray()
   installApplicationMenu()
   await syncIdeBridgeFromSettings().catch((error) => {
@@ -249,6 +255,10 @@ void app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && !hasRunningSessions()) app.quit()
+})
+
+app.on('will-quit', () => {
+  disposeQuickbar()
 })
 
 app.on('before-quit', (event) => {

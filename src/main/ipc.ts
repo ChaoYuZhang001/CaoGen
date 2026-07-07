@@ -86,6 +86,7 @@ import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } fr
 import { runRoutineNow } from './routines/routine-executor'
 import { listRoutineRuns } from './routines/routine-runner'
 import { listRoutineTemplates } from './routines/routine-templates'
+import { registerQuickbarIpc } from './quickbar'
 import type {
   AppSettings,
   BrowserBounds,
@@ -282,6 +283,8 @@ function isInsidePath(root: string, target: string): boolean {
 }
 
 export function registerIpc(): void {
+  registerQuickbarIpc()
+
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
   ipcMain.handle('sessions:pendingPermissions', (_e, id: string) =>
