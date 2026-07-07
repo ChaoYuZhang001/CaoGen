@@ -105,6 +105,22 @@ await check('macOS controller marks prototype-only capability boundaries', () =>
   }
 })
 
+await check('macOS controller resolves AX element selectors for click and type', () => {
+  const text = source('src/main/gui/macos-controller.ts')
+  for (const marker of [
+    'findElementTarget(input)',
+    'hasElementSelector(input)',
+    'includeElements: true',
+    'findBestElement',
+    'windowIdFromElementId',
+    'centerOf(matched.element.bounds)',
+    'clickAt(point.x, point.y)',
+    '已聚焦并输入元素'
+  ]) {
+    assert(text.includes(marker), `missing ${marker}`)
+  }
+})
+
 await check('gui controller routes macOS before nut.js fallback', () => {
   const text = source('src/main/gui/gui-controller.ts')
   for (const marker of [
@@ -121,6 +137,32 @@ await check('gui controller routes macOS before nut.js fallback', () => {
     text.indexOf('macosClick(input)') < text.indexOf('nutClick(input.x, input.y, input.button)'),
     'macOS click path must run before nut.js fallback'
   )
+})
+
+await check('gui controller exposes macOS elements and screenshot permission diagnostics', () => {
+  const text = source('src/main/gui/gui-controller.ts')
+  for (const marker of [
+    'elements: item.elements',
+    'screenCapturePermissionStatus',
+    "getMediaAccessStatus('screen')",
+    'source.thumbnail.isEmpty()',
+    'sourceCount: all.length',
+    '截图源缩略图为空'
+  ]) {
+    assert(text.includes(marker), `missing ${marker}`)
+  }
+})
+
+await check('gui tool schema advertises macOS selector support without relaxing permission wording', () => {
+  const text = source('src/main/agent/tools/gui-tools.ts')
+  for (const marker of [
+    'Windows/macOS 可选 includeElements=true',
+    'Windows/macOS 上按窗口/元素 selector 定位后点击',
+    'Windows/macOS 可先按元素 selector 聚焦目标元素',
+    'GUI 自动化属于高风险能力，调用前必须获得用户审批'
+  ]) {
+    assert(text.includes(marker), `missing ${marker}`)
+  }
 })
 
 await check('macOS APIs fail closed on non-darwin hosts', async () => {
