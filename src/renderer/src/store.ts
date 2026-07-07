@@ -34,6 +34,8 @@ import type {
   Project,
   ProviderInput,
   ProviderView,
+  QuickbarDispatchOptions,
+  QuickbarDispatchResult,
   Routine,
   RoutineRunRecord,
   WriteTextFileResult,
@@ -127,6 +129,40 @@ function pluginRegistryAgentDispatchPrompt(item: PluginRegistryItem): string {
 function closeNativeBrowserView(sessionId: string | null | undefined): void {
   if (!sessionId) return
   void window.agentDesk.closeBrowser(sessionId).catch(() => undefined)
+}
+
+function quickbarCwd(state: AppStore, requested?: string): string {
+  const clean = requested?.trim()
+  if (clean) return clean
+  const activeCwd = state.activeId ? state.sessions[state.activeId]?.meta.cwd : undefined
+  return activeCwd || state.projects[0]?.path || ''
+}
+
+async function ensureQuickbarSession(
+  getState: () => AppStore,
+  options: QuickbarDispatchOptions
+): Promise<{ sessionId: string; cwd: string }> {
+  const state = getState()
+  const currentId = state.activeId && state.sessions[state.activeId] ? state.activeId : null
+  if (options.target === 'current' && currentId) {
+    return { sessionId: currentId, cwd: state.sessions[currentId].meta.cwd }
+  }
+
+  const cwd = quickbarCwd(state, options.cwd)
+  if (!cwd) throw new Error('Quickbar 创建新会话需要工作目录')
+  await state.createSession({ cwd, title: 'Quickbar' })
+  const sessionId = getState().activeId
+  if (!sessionId) throw new Error('Quickbar 新会话创建失败')
+  return { sessionId, cwd: getState().sessions[sessionId]?.meta.cwd ?? cwd }
+}
+
+async function sendQuickbarPayload(
+  getState: () => AppStore,
+  sessionId: string,
+  payload: SendMessagePayload
+): Promise<void> {
+  if (getState().activeId !== sessionId) getState().selectSession(sessionId)
+  await getState().sendMessage(payload)
 }
 
 /**
@@ -654,6 +690,9 @@ interface AppStore {
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   selectSession(id: string): void
   sendMessage(input: string | SendMessagePayload): Promise<void>
+  sendQuickbarClipboard(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
+  sendQuickbarScreenshot(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
+  sendQuickbarFiles(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
   interrupt(): Promise<void>
   closeSession(id: string): Promise<void>
   respondPermission(sessionId: string, requestId: string, allow: boolean, message?: string): Promise<void>
@@ -1381,6 +1420,57 @@ export const useStore = create<AppStore>((set, get) => {
       }
     })
     await window.agentDesk.sendMessage(id, payload)
+  },
+
+  async sendQuickbarClipboard(options) {
+    try {
+      const target = await ensureQuickbarSession(get, options)
+      const result = await window.agentDesk.quickbarReadClipboard({
+        cwd: target.cwd,
+        note: options.note,
+        includeWindowContext: true
+      })
+      if (!result.ok || !result.payload) return { ok: false, sessionId: target.sessionId, error: result.error }
+      await sendQuickbarPayload(get, target.sessionId, result.payload)
+      return { ok: true, sessionId: target.sessionId }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  async sendQuickbarScreenshot(options) {
+    try {
+      const target = await ensureQuickbarSession(get, options)
+      const result = await window.agentDesk.quickbarCaptureScreenshot({
+        sessionId: target.sessionId,
+        cwd: target.cwd,
+        sourceId: options.sourceId,
+        note: options.note,
+        includeWindowContext: true
+      })
+      if (!result.ok || !result.payload) return { ok: false, sessionId: target.sessionId, error: result.error }
+      await sendQuickbarPayload(get, target.sessionId, result.payload)
+      return { ok: true, sessionId: target.sessionId }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  },
+
+  async sendQuickbarFiles(options) {
+    try {
+      const target = await ensureQuickbarSession(get, options)
+      const result = await window.agentDesk.quickbarPrepareFiles({
+        cwd: target.cwd,
+        paths: options.paths ?? [],
+        note: options.note,
+        includeWindowContext: true
+      })
+      if (!result.ok || !result.payload) return { ok: false, sessionId: target.sessionId, error: result.error }
+      await sendQuickbarPayload(get, target.sessionId, result.payload)
+      return { ok: true, sessionId: target.sessionId }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   },
 
   async interrupt() {

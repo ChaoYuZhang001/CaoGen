@@ -11,6 +11,7 @@ import NewSessionModal from './components/NewSessionModal'
 import SettingsModal from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
+import Quickbar from './components/Quickbar'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(() => import('./components/office/OfficeView'))
@@ -158,6 +159,7 @@ export default function App(): React.JSX.Element {
       )}
       {showCommandPalette && <CommandPalette />}
       <TaskRecoveryModal />
+      <Quickbar />
       {showNewSession && <NewSessionModal />}
       {showSettings && <SettingsModal />}
     </div>

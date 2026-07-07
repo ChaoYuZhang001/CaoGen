@@ -899,6 +899,93 @@ export interface SendMessagePayload {
   images?: ImageAttachmentView[]
 }
 
+export type QuickbarTargetMode = 'current' | 'new'
+export type QuickbarEventSource = 'global-shortcut' | 'renderer' | 'menu'
+
+export interface QuickbarState {
+  visible: boolean
+  accelerator: string
+  registered: boolean
+  registrationError?: string
+}
+
+export interface QuickbarEvent {
+  kind: 'visibility'
+  visible: boolean
+  source: QuickbarEventSource
+}
+
+export interface QuickbarWindowContext {
+  id: string
+  name: string
+  kind: 'screen' | 'window'
+  title?: string
+  processName?: string
+  pid?: number
+  platform?: string
+  minimized?: boolean
+}
+
+export interface QuickbarContextResult {
+  ok: boolean
+  cwd: string
+  capturedAt: number
+  current?: QuickbarWindowContext
+  windows: QuickbarWindowContext[]
+  error?: string
+}
+
+export interface QuickbarClipboardInput {
+  cwd?: string
+  note?: string
+  includeWindowContext?: boolean
+}
+
+export interface QuickbarScreenshotInput {
+  sessionId: string
+  cwd?: string
+  sourceId?: string
+  note?: string
+  maxWidth?: number
+  includeWindowContext?: boolean
+}
+
+export interface QuickbarFileInput {
+  cwd?: string
+  paths: string[]
+  note?: string
+  includeWindowContext?: boolean
+}
+
+export interface QuickbarPayloadResult {
+  ok: boolean
+  payload?: SendMessagePayload
+  context?: QuickbarContextResult
+  screenshotPath?: string
+  files?: Array<{
+    path: string
+    kind: 'file' | 'directory' | 'other'
+    exists: boolean
+    bytes?: number
+    error?: string
+  }>
+  error?: string
+}
+
+export interface QuickbarDispatchOptions {
+  target: QuickbarTargetMode
+  cwd?: string
+  sourceId?: string
+  paths?: string[]
+  note?: string
+}
+
+export interface QuickbarDispatchResult {
+  ok: boolean
+  sessionId?: string
+  error?: string
+}
+
 export interface ProviderInput {
   name: string
   baseUrl: string
@@ -1830,7 +1917,15 @@ export interface AgentDeskApi {
   updateLayeredMemory(entryId: string, input: LayeredMemoryUpdateInput): Promise<LayeredMemoryEntry | null>
   deleteLayeredMemory(entryId: string): Promise<boolean>
   pickDirectory(): Promise<string | null>
+  quickbarGetState(): Promise<QuickbarState>
+  quickbarSetVisible(visible: boolean): Promise<QuickbarState>
+  quickbarGetWindowContext(cwd?: string, sourceId?: string): Promise<QuickbarContextResult>
+  quickbarReadClipboard(input?: QuickbarClipboardInput): Promise<QuickbarPayloadResult>
+  quickbarCaptureScreenshot(input: QuickbarScreenshotInput): Promise<QuickbarPayloadResult>
+  quickbarPickFiles(): Promise<string[]>
+  quickbarPrepareFiles(input: QuickbarFileInput): Promise<QuickbarPayloadResult>
   onMenuCommand(cb: (command: MenuCommand) => void): () => void
+  onQuickbarEvent(cb: (event: QuickbarEvent) => void): () => void
   onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
   onMemorySuggestion(cb: (event: MemorySuggestionEvent) => void): () => void
 }
