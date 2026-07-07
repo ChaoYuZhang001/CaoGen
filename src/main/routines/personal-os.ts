@@ -45,6 +45,12 @@ export interface PersonalOsNotificationPlan {
   overdueRoutines: number
 }
 
+export interface RoutineRunNotificationPayload {
+  title: string
+  body: string
+  sessionId: string
+}
+
 export interface PersonalOsPowerPlan {
   enabled: boolean
   active: boolean
@@ -149,6 +155,26 @@ export function startPersonalOsPowerBlocker(options: PersonalOsPowerBlockerOptio
     } catch (error) {
       options.onError?.(error)
     }
+  }
+}
+
+export function buildRoutineRunNotification(
+  routine: Routine,
+  record: RoutineRunRecord,
+  settings: PersonalOsSettings = {}
+): RoutineRunNotificationPayload | null {
+  if (settings.notificationsEnabled === false) return null
+  const notification = routine.notification
+  if (!notification?.enabled) return null
+  if (record.status === 'succeeded' && !notification.onSuccess) return null
+  if (record.status === 'failed' && !notification.onFailure) return null
+
+  return {
+    title: record.status === 'succeeded' ? `Routine 已完成: ${routine.name}` : `Routine 失败: ${routine.name}`,
+    body: record.status === 'succeeded'
+      ? `已创建会话${record.sessionId ? ` ${record.sessionId}` : ''}，并投递定时任务内容。`
+      : (record.error ?? '执行失败'),
+    sessionId: record.sessionId ?? routine.id
   }
 }
 
