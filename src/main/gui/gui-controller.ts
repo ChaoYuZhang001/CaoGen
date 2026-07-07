@@ -1,4 +1,4 @@
-import { desktopCapturer } from 'electron'
+import { desktopCapturer, systemPreferences } from 'electron'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { ocrImage, type OcrResult } from '../imageOcr'
@@ -23,6 +23,7 @@ import {
 } from './macos-controller'
 
 type MouseButton = 'left' | 'right' | 'middle'
+type ScreenCapturePermissionStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
 
 interface WindowSelector {
   windowId?: string
@@ -100,6 +101,8 @@ interface GuiScreenshotResult extends GuiBaseResult {
   path?: string
   sourceId?: string
   sourceName?: string
+  sourceCount?: number
+  screenCapturePermission?: ScreenCapturePermissionStatus
   width?: number
   height?: number
   ocr?: OcrResult
@@ -175,6 +178,11 @@ function preferNativeWindows(windows: GuiWindowInfo[]): GuiWindowInfo[] {
   return [...screens, ...electronWindows]
 }
 
+function screenCapturePermissionStatus(): ScreenCapturePermissionStatus | undefined {
+  if (process.platform !== 'darwin') return undefined
+  return systemPreferences.getMediaAccessStatus('screen')
+}
+
 export function createGuiController(cwd: string): GuiController {
   return {
     async listWindows(input: ListWindowsInput = {}): Promise<GuiListWindowsResult> {
@@ -218,7 +226,8 @@ export function createGuiController(cwd: string): GuiController {
             processName: item.processName,
             pid: item.pid,
             bounds: item.bounds,
-            minimized: item.minimized
+            minimized: item.minimized,
+            elements: item.elements
           }))
           return { ok: true, windows: [...nativeWindows, ...captureWindows] }
         }
@@ -253,13 +262,41 @@ export function createGuiController(cwd: string): GuiController {
     async screenshot(input: ScreenshotInput): Promise<GuiScreenshotResult> {
       try {
         const all = await sources()
+        const screenCapturePermission = screenCapturePermissionStatus()
         const source = input.sourceId
           ? all.find((item) => item.id === input.sourceId)
           : all.find((item) => sourceKind(item) === 'screen') ?? all[0]
-        if (!source) return { ok: false, error: '未找到可截图源' }
+        if (!source) {
+          return {
+            ok: false,
+            error: '未找到可截图源',
+            sourceCount: all.length,
+            ...(screenCapturePermission ? { screenCapturePermission } : {})
+          }
+        }
+        if (source.thumbnail.isEmpty()) {
+          return {
+            ok: false,
+            error: '截图源缩略图为空；请确认系统 Screen Recording/屏幕录制权限已授予 CaoGen，并重新打开应用后再试。',
+            sourceId: source.id,
+            sourceName: source.name,
+            sourceCount: all.length,
+            ...(screenCapturePermission ? { screenCapturePermission } : {})
+          }
+        }
 
         const width = normalizeMaxWidth(input.maxWidth)
         const image = source.thumbnail.resize({ width })
+        if (image.isEmpty()) {
+          return {
+            ok: false,
+            error: '截图缩放后为空；请降低 maxWidth 或重新选择截图源。',
+            sourceId: source.id,
+            sourceName: source.name,
+            sourceCount: all.length,
+            ...(screenCapturePermission ? { screenCapturePermission } : {})
+          }
+        }
         const outPath = safeOutputPath(cwd, input.savePath)
         mkdirSync(dirname(outPath), { recursive: true })
         writeFileSync(outPath, image.toPNG())
@@ -270,6 +307,8 @@ export function createGuiController(cwd: string): GuiController {
           path: outPath,
           sourceId: source.id,
           sourceName: source.name,
+          sourceCount: all.length,
+          ...(screenCapturePermission ? { screenCapturePermission } : {}),
           width: size.width,
           height: size.height,
           ...(ocr ? { ocr } : {})
