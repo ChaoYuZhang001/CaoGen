@@ -1,9 +1,10 @@
-import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
+﻿import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { getSettings, updateSettings } from './settings'
+import { syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
 import { searchTranscripts } from './transcriptSearch'
 import {
@@ -18,16 +19,35 @@ import { listEngines } from './engine'
 import { scanMigration, importAssets } from './migration'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
+  generateProjectContextTemplate,
+  readProjectContext,
+  writeProjectContext
+} from './agent/context-loader'
+import {
   readProjectMemory,
   proposeMemoryDraft,
   acceptMemoryDraft,
   deleteMemoryEntry,
   type ProjectMemoryDraftInput
 } from './memoryStore'
+import {
+  addMemory,
+  archiveStaleMemories,
+  deleteMemory as deleteLayeredMemoryEntry,
+  exportMemories,
+  listMemories,
+  searchMemories,
+  updateMemory as updateLayeredMemoryEntry,
+  type MemorySearchInput,
+  type MemoryUpdateInput,
+  type MemoryWriteInput
+} from './memory/memory-manager'
+import { writeExtractedMemory } from './memory/memory-writer'
 import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
 import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
+import { listPreviewAnnotations, savePreviewAnnotation } from './previewAnnotations'
 import {
   commit as gitCommit,
   gitStatus,
@@ -63,6 +83,9 @@ import {
   writePluginRegistryState
 } from './pluginRegistry'
 import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
+import { runRoutineNow } from './routines/routine-executor'
+import { listRoutineRuns } from './routines/routine-runner'
+import { listRoutineTemplates } from './routines/routine-templates'
 import type {
   AppSettings,
   BrowserBounds,
@@ -74,16 +97,37 @@ import type {
   ImageAttachmentView,
   MarkRunOptions,
   PermissionModeId,
+  PreviewAnnotationInput,
   PluginRegistryItem,
   PluginRegistryScanOptions,
   ProviderInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
+  TaskDagDispatchInput,
+  TaskDecomposeInput,
   UpdateRoutineInput
 } from '../shared/types'
 
 let terminalEventsRegistered = false
 let browserEventsRegistered = false
+const MEMORY_SUGGESTION_COOLDOWN_MS = 30_000
+const MEMORY_SUGGESTION_MAX_RECENT = 500
+const recentMemorySuggestions = new Map<string, number>()
+
+function shouldEmitMemorySuggestion(sessionId: string, text: string, now = Date.now()): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().slice(0, 500)
+  if (!normalized) return false
+  if (recentMemorySuggestions.size > MEMORY_SUGGESTION_MAX_RECENT) {
+    for (const [key, at] of recentMemorySuggestions) {
+      if (now - at > MEMORY_SUGGESTION_COOLDOWN_MS) recentMemorySuggestions.delete(key)
+    }
+  }
+  const key = `${sessionId}\n${normalized}`
+  const lastAt = recentMemorySuggestions.get(key)
+  if (lastAt !== undefined && now - lastAt < MEMORY_SUGGESTION_COOLDOWN_MS) return false
+  recentMemorySuggestions.set(key, now)
+  return true
+}
 
 function attachmentRoot(sessionId: string): string {
   return join(app.getPath('userData'), 'attachments', sessionId)
@@ -204,6 +248,10 @@ function routineStoreRoot(): string {
   return join(app.getPath('userData'), 'routines')
 }
 
+function previewAnnotationRoot(): string {
+  return join(app.getPath('userData'), 'preview-annotations')
+}
+
 function pluginRegistryStateFile(): string {
   return join(app.getPath('userData'), 'plugin-registry-state.json')
 }
@@ -241,6 +289,20 @@ export function registerIpc(): void {
   )
 
   ipcMain.handle('sessions:transcript', (_e, id: string) => sessionManager.getTranscript(id))
+
+  ipcMain.handle('taskSnapshots:list', () => sessionManager.listTaskSnapshots())
+
+  ipcMain.handle('taskSnapshots:recover', (_e, snapshotId: string) => {
+    if (typeof snapshotId !== 'string' || snapshotId.trim().length === 0) {
+      throw new Error('必须指定任务快照 ID')
+    }
+    return sessionManager.recoverTaskSnapshot(snapshotId)
+  })
+
+  ipcMain.handle('taskSnapshots:delete', (_e, snapshotId: string) => {
+    if (typeof snapshotId !== 'string' || snapshotId.trim().length === 0) return false
+    return sessionManager.deleteTaskSnapshot(snapshotId)
+  })
 
   ipcMain.handle('sessions:suggestFiles', (_e, id: string, query: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -414,6 +476,20 @@ export function registerIpc(): void {
     return preparePreview(cwd, typeof relPath === 'string' ? relPath : '')
   })
 
+  ipcMain.handle('preview:saveAnnotation', (_e, id: string, input: PreviewAnnotationInput) => {
+    if (!sessionManager.get(id)) throw new Error('会话不存在')
+    return savePreviewAnnotation(previewAnnotationRoot(), id, input)
+  })
+
+  ipcMain.handle('preview:listAnnotations', (_e, id: string, relPath?: string) => {
+    if (!sessionManager.get(id)) return []
+    return listPreviewAnnotations(
+      previewAnnotationRoot(),
+      id,
+      typeof relPath === 'string' && relPath.trim() ? relPath : undefined
+    )
+  })
+
   if (!browserEventsRegistered) {
     browserEventsRegistered = true
     browserViewManager.subscribe((event) => {
@@ -525,6 +601,29 @@ export function registerIpc(): void {
     return sessionManager.dispatchSubagents(parentSessionId, input)
   })
 
+  ipcMain.handle('sessions:decomposeTask', (_e, parentSessionId: string, input: TaskDecomposeInput) => {
+    if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
+      throw new Error('必须指定父会话')
+    }
+    if (!input || typeof input.request !== 'string' || input.request.trim().length === 0) {
+      throw new Error('必须提供需求文本')
+    }
+    return sessionManager.decomposeTask(parentSessionId, input)
+  })
+
+  ipcMain.handle('sessions:dispatchTaskDag', (_e, parentSessionId: string, input: TaskDagDispatchInput) => {
+    if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
+      throw new Error('必须指定父会话')
+    }
+    if (!input?.dag || !Array.isArray(input.dag.tasks)) throw new Error('必须提供 DAG 任务')
+    return sessionManager.dispatchTaskDag(parentSessionId, input)
+  })
+
+  ipcMain.handle('sessions:supportedAgents', (_e, sessionId: string) => {
+    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) return []
+    return sessionManager.supportedAgents(sessionId)
+  })
+
   ipcMain.handle('attachments:copyImage', async (_e, id: string, sourcePath: string) => {
     if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
     if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
@@ -559,10 +658,23 @@ export function registerIpc(): void {
   ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
     if (!payload) return
-    if (payload.text && shouldProposeMemory(payload.text)) {
+    if (payload.text && shouldProposeMemory(payload.text) && shouldEmitMemorySuggestion(id, payload.text)) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
       }
+    }
+    if (payload.text) {
+      const meta = sessionManager.get(id)?.meta
+      const projectRoot = meta ? (meta.sourceCwd ?? meta.cwd) : undefined
+      void writeExtractedMemory({
+        rootDir: memoryRoot(),
+        text: payload.text,
+        projectRoot,
+        source: 'session:auto-extract',
+        defaultLayer: projectRoot ? 'project' : 'user'
+      }).catch((error) => {
+        console.error('[caogen] layered memory auto-extract failed:', error)
+      })
     }
     sessionManager.send(id, payload)
   })
@@ -622,9 +734,11 @@ export function registerIpc(): void {
 
   ipcMain.handle('settings:get', () => getSettings())
 
-  ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) =>
-    updateSettings(patch ?? {})
-  )
+  ipcMain.handle('settings:update', async (_e, patch: Partial<AppSettings>) => {
+    const next = updateSettings(patch ?? {})
+    await syncIdeBridgeFromSettings()
+    return next
+  })
 
   ipcMain.handle('providers:list', () => listProviders())
 
@@ -760,6 +874,17 @@ export function registerIpc(): void {
     return markRun(routineStoreRoot(), id, options ?? {})
   })
 
+  ipcMain.handle('routines:runNow', (_e, id: string) => {
+    if (typeof id !== 'string' || id.trim().length === 0) return null
+    return runRoutineNow(routineStoreRoot(), id)
+  })
+
+  ipcMain.handle('routines:listRuns', (_e, id?: string) =>
+    listRoutineRuns(routineStoreRoot(), typeof id === 'string' && id.trim() ? id : undefined)
+  )
+
+  ipcMain.handle('routines:listTemplates', () => listRoutineTemplates())
+
   ipcMain.handle('startSuggestions:get', async (_e, id: string) => {
     const session = sessionManager.get(id)
     if (!session) return []
@@ -858,6 +983,18 @@ export function registerIpc(): void {
   ipcMain.handle('projects:delete', (_e, id: string) => {
     deleteProject(id)
   })
+  ipcMain.handle('projectContext:read', (_e, projectPath: string) => {
+    if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
+    return readProjectContext(projectPath)
+  })
+  ipcMain.handle('projectContext:write', (_e, projectPath: string, content: string) => {
+    if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
+    return writeProjectContext(projectPath, typeof content === 'string' ? content : '')
+  })
+  ipcMain.handle('projectContext:template', (_e, projectPath: string) => {
+    if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
+    return generateProjectContextTemplate(projectPath)
+  })
 
   // 项目记忆:草稿→确认制,按项目隔离。projectRoot 取会话源目录(worktree 前的原仓库)
   const memoryRoot = (): string => join(app.getPath('userData'), 'memory')
@@ -885,6 +1022,30 @@ export function registerIpc(): void {
     if (!root) throw new Error('会话不存在')
     return deleteMemoryEntry(root, memoryRoot(), entryId)
   })
+
+  ipcMain.handle('memory:layeredList', () => listMemories(memoryRoot()))
+  ipcMain.handle('memory:layeredSearch', (_e, sessionId: string | undefined, input: MemorySearchInput) => {
+    const projectRoot = sessionId ? projectRootFor(sessionId) : null
+    return searchMemories(memoryRoot(), {
+      ...(input ?? {}),
+      projectRoot: projectRoot ?? input?.projectRoot
+    })
+  })
+  ipcMain.handle('memory:layeredAdd', (_e, sessionId: string | undefined, input: MemoryWriteInput) => {
+    const projectRoot = sessionId ? projectRootFor(sessionId) : null
+    return addMemory(memoryRoot(), {
+      ...(input ?? {}),
+      projectRoot: projectRoot ?? input?.projectRoot
+    })
+  })
+  ipcMain.handle('memory:layeredArchive', (_e, olderThanDays?: number) =>
+    archiveStaleMemories(memoryRoot(), olderThanDays)
+  )
+  ipcMain.handle('memory:layeredExport', () => exportMemories(memoryRoot()))
+  ipcMain.handle('memory:layeredUpdate', (_e, entryId: string, input: MemoryUpdateInput) =>
+    updateLayeredMemoryEntry(memoryRoot(), entryId, input ?? {})
+  )
+  ipcMain.handle('memory:layeredDelete', (_e, entryId: string) => deleteLayeredMemoryEntry(memoryRoot(), entryId))
 
   ipcMain.handle(
     'providers:fetchModels',

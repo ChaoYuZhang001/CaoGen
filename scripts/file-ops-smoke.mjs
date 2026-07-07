@@ -13,9 +13,9 @@ try {
   mkdirSync(projectDir)
 
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/fileOps.ts',
       '--outDir',
       outDir,
@@ -52,10 +52,11 @@ try {
   const outsideWrite = await fileOps.writeTextFile(projectDir, '../outside.txt', 'nope')
   assert(!outsideWrite.ok, 'writeTextFile should reject parent traversal')
 
-  writeFileSync(path.join(tempRoot, 'outside-real.txt'), 'secret')
-  symlinkSync(path.join(tempRoot, 'outside-real.txt'), path.join(projectDir, 'leak.txt'))
-  const symlinkRead = await fileOps.readTextFile(projectDir, 'leak.txt')
-  assert(!symlinkRead.ok, 'readTextFile should reject symlinks escaping project root')
+  const symlinkCase = createEscapingLink(tempRoot, projectDir)
+  if (symlinkCase) {
+    const symlinkRead = await fileOps.readTextFile(projectDir, symlinkCase.relativePath)
+    assert(!symlinkRead.ok, 'readTextFile should reject symlinks escaping project root')
+  }
 
   console.log('fileOps smoke ok')
 } finally {
@@ -73,5 +74,28 @@ function assertEqual(actual, expected) {
 function assert(condition, message = 'assertion failed') {
   if (!condition) {
     throw new Error(message)
+  }
+}
+
+function createEscapingLink(tempRoot, projectDir) {
+  const outsideFile = path.join(tempRoot, 'outside-real.txt')
+  writeFileSync(outsideFile, 'secret')
+  try {
+    symlinkSync(outsideFile, path.join(projectDir, 'leak.txt'))
+    return { relativePath: 'leak.txt' }
+  } catch (err) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(err?.code)) throw err
+  }
+
+  const outsideDir = path.join(tempRoot, 'outside-dir')
+  mkdirSync(outsideDir, { recursive: true })
+  writeFileSync(path.join(outsideDir, 'secret.txt'), 'secret')
+  try {
+    symlinkSync(outsideDir, path.join(projectDir, 'leak-dir'), 'junction')
+    return { relativePath: 'leak-dir/secret.txt' }
+  } catch (err) {
+    if (!['EPERM', 'EACCES'].includes(err?.code)) throw err
+    console.warn('fileOps smoke: skip symlink escape check because this Windows process cannot create symlinks/junctions')
+    return null
   }
 }

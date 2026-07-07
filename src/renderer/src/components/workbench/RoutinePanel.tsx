@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { RoutineRunRecord } from '../../../../shared/types'
 
 export type RoutinePanelRunState = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed'
 export type RoutinePanelTimestamp = Date | number | string | null | undefined
@@ -35,6 +36,7 @@ export interface RoutinePanelProps {
   disabled?: boolean
   error?: ReactNode
   message?: ReactNode
+  runs?: readonly RoutineRunRecord[]
   selectedRoutineId?: string | null
   now?: RoutinePanelTimestamp
   showCloudSchedulingNote?: boolean
@@ -180,6 +182,19 @@ function stateLabel(state: string): string {
       return '已成功'
     default:
       return '已启用'
+  }
+}
+
+function runStatusLabel(status: RoutineRunRecord['status']): string {
+  switch (status) {
+    case 'failed':
+      return '失败'
+    case 'running':
+      return '运行中'
+    case 'queued':
+      return '排队中'
+    default:
+      return '成功'
   }
 }
 
@@ -350,6 +365,7 @@ export default function RoutinePanel({
   onRunRoutine,
   onSelectRoutine,
   onToggleRoutine,
+  runs = [],
   routines,
   selectedRoutineId,
   showCloudSchedulingNote = true,
@@ -358,6 +374,7 @@ export default function RoutinePanel({
 }: RoutinePanelProps): React.JSX.Element {
   const nowDate = toDate(now) ?? new Date()
   const rootClassName = ['routine-panel', className].filter(Boolean).join(' ')
+  const visibleRuns = (selectedRoutineId ? runs.filter((run) => run.routineId === selectedRoutineId) : runs).slice(0, 6)
 
   return (
     <section className={rootClassName}>
@@ -415,6 +432,25 @@ export default function RoutinePanel({
           ))
         )}
       </div>
+
+      {visibleRuns.length > 0 && (
+        <section className="routine-panel-history">
+          <div className="routine-panel-result-head">
+            <span>运行历史</span>
+            <b>{visibleRuns.length}</b>
+          </div>
+          <div className="routine-panel-history-list">
+            {visibleRuns.map((run) => (
+              <div key={run.id} className={`routine-panel-history-item routine-panel-history-${run.status}`}>
+                <span>{runStatusLabel(run.status)}</span>
+                <strong>{run.routineName}</strong>
+                <time title={formatFull(new Date(run.startedAt))}>{formatRelative(new Date(run.startedAt), nowDate)}</time>
+                {run.error && <small title={run.error}>{run.error}</small>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </section>
   )
 }

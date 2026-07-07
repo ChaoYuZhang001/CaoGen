@@ -9,6 +9,7 @@ import {
 } from './browserAnnotations'
 import type {
   BrowserAnnotation,
+  BrowserAnnotationBoundingBox,
   BrowserBounds,
   BrowserEvent,
   BrowserObservation,
@@ -102,6 +103,34 @@ class BrowserViewManager {
     await record.view.webContents.loadURL(url)
     this.refreshState(record)
     return { ...record.state }
+  }
+
+  async click(sessionId: string, selector: string): Promise<void> {
+    const record = this.requireRecord(sessionId)
+    await record.view.webContents.executeJavaScript(clickSelectorScript(selector), true)
+  }
+
+  async typeText(sessionId: string, selector: string, text: string): Promise<void> {
+    const record = this.requireRecord(sessionId)
+    await record.view.webContents.executeJavaScript(typeTextScript(selector, text), true)
+  }
+
+  async screenshot(sessionId: string, selector?: string): Promise<string | undefined> {
+    const record = this.requireRecord(sessionId)
+    const cropBox = selector
+      ? normalizeCropBox(await record.view.webContents.executeJavaScript(selectorBoundsScript(selector), true))
+      : undefined
+    return captureAnnotationScreenshot(record, `browser-tool-${randomUUID()}`, cropBox)
+  }
+
+  async waitFor(sessionId: string, selector: string, timeoutMs: number): Promise<void> {
+    const record = this.requireRecord(sessionId)
+    await record.view.webContents.executeJavaScript(waitForSelectorScript(selector, timeoutMs), true)
+  }
+
+  async evaluate(sessionId: string, script: string): Promise<unknown> {
+    const record = this.requireRecord(sessionId)
+    return record.view.webContents.executeJavaScript(script, true)
   }
 
   async goBack(sessionId: string): Promise<BrowserViewState> {
@@ -418,6 +447,83 @@ function normalizeBounds(bounds: BrowserBounds): BrowserBounds {
 
 function normalizeSelectionPayload(value: unknown): SelectionPayload {
   return value && typeof value === 'object' ? (value as SelectionPayload) : {}
+}
+
+function normalizeCropBox(value: unknown): BrowserAnnotationBoundingBox | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const x = typeof record.x === 'number' ? record.x : NaN
+  const y = typeof record.y === 'number' ? record.y : NaN
+  const width = typeof record.width === 'number' ? record.width : NaN
+  const height = typeof record.height === 'number' ? record.height : NaN
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return undefined
+  return { x, y, width, height }
+}
+
+function selectorBoundsScript(selector: string): string {
+  return `(() => {
+    const selector = ${JSON.stringify(selector)};
+    const el = document.querySelector(selector);
+    if (!el) throw new Error('selector not found: ' + selector);
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const box = el.getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width, height: box.height };
+  })()`
+}
+
+function clickSelectorScript(selector: string): string {
+  return `(() => {
+    const selector = ${JSON.stringify(selector)};
+    const el = document.querySelector(selector);
+    if (!el) throw new Error('selector not found: ' + selector);
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    if (typeof el.focus === 'function') el.focus();
+    if (typeof el.click === 'function') el.click();
+    else el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    return true;
+  })()`
+}
+
+function typeTextScript(selector: string, text: string): string {
+  return `(() => {
+    const selector = ${JSON.stringify(selector)};
+    const text = ${JSON.stringify(text)};
+    const el = document.querySelector(selector);
+    if (!el) throw new Error('selector not found: ' + selector);
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    if (typeof el.focus === 'function') el.focus();
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea') {
+      el.value = text;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    if (el.isContentEditable) {
+      el.textContent = text;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      return true;
+    }
+    throw new Error('selector is not a text input: ' + selector);
+  })()`
+}
+
+function waitForSelectorScript(selector: string, timeoutMs: number): string {
+  return `new Promise((resolve, reject) => {
+    const selector = ${JSON.stringify(selector)};
+    const timeoutMs = ${Math.max(0, Math.min(60_000, Math.round(timeoutMs)))};
+    const startedAt = Date.now();
+    const tick = () => {
+      const el = document.querySelector(selector);
+      if (el) { resolve(true); return; }
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error('selector timeout: ' + selector));
+        return;
+      }
+      setTimeout(tick, 100);
+    };
+    tick();
+  })`
 }
 
 function selectionScript(): string {

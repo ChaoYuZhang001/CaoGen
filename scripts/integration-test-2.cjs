@@ -32,9 +32,9 @@ const files = []
 for (const dir of ['src/main', 'src/shared']) {
   for (const f of fs.readdirSync(path.join(repo, dir))) if (f.endsWith('.ts')) files.push(path.join(dir, f))
 }
-const tsc = spawnSync(process.platform === 'win32' ? 'npx.cmd' : 'npx',
-  ['tsc', ...files, '--outDir', buildDir, '--module', 'commonjs', '--target', 'es2022',
-    '--moduleResolution', 'node', '--skipLibCheck', '--esModuleInterop'],
+const tscArgs = ['tsc', ...files, '--outDir', buildDir, '--module', 'commonjs', '--target', 'es2022',
+  '--moduleResolution', 'node', '--skipLibCheck', '--esModuleInterop']
+const tsc = spawnSync(npxCommand(), npxArgs(tscArgs),
   { cwd: repo, encoding: 'utf8' })
 if (!fs.existsSync(path.join(buildDir, 'main', 'fileOps.js'))) {
   console.error(tsc.stdout, tsc.stderr); throw new Error('编译失败')
@@ -184,3 +184,11 @@ async function main() {
   process.exitCode = pass === results.length ? 0 : 1
 }
 main().catch((e) => { console.error(e); process.exitCode = 1 })
+
+function npxCommand() {
+  return process.platform === 'win32' ? 'cmd' : 'npx'
+}
+
+function npxArgs(args) {
+  return process.platform === 'win32' ? ['/c', 'npx', ...args] : args
+}

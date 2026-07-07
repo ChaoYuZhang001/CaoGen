@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom, N8AO, Vignette } from '@react-three/postprocessing'
@@ -51,21 +51,6 @@ export default function OfficeView(): React.JSX.Element {
 
   // 省电:窗口失焦/页面隐藏(最小化、切他窗、熄屏)时暂停 3D 渲染循环
   // (切回列表视图时 OfficeView 整体卸载,无需在此处理)
-  const [renderActive, setRenderActive] = useState(
-    () => !document.hidden && document.hasFocus()
-  )
-  useEffect(() => {
-    const update = (): void => setRenderActive(!document.hidden && document.hasFocus())
-    document.addEventListener('visibilitychange', update)
-    window.addEventListener('blur', update)
-    window.addEventListener('focus', update)
-    return () => {
-      document.removeEventListener('visibilitychange', update)
-      window.removeEventListener('blur', update)
-      window.removeEventListener('focus', update)
-    }
-  }, [])
-
   // 办公区场景色随主题切换
   const isLight =
     themePref === 'light' ||
@@ -77,6 +62,7 @@ export default function OfficeView(): React.JSX.Element {
   const ids = order.filter((id) => sessions[id])
   const positions = gridPositions(ids.length)
   const officeModel = useMemo(() => buildOfficeModel(ids, sessions), [ids, sessions])
+  const subagentPacketCount = officeModel.packets.filter((packet) => packet.toolName === 'Subagent').length
 
   // 会话 → 厂商品牌色(providerId 映射到 Provider 名称,空则官方)
   const brandColorFor = (providerId: string): string => {
@@ -142,12 +128,18 @@ export default function OfficeView(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <Canvas
-          shadows
-          camera={{ position: [7, 7, 9], fov: 42 }}
-          dpr={[1, 1.5]}
-          frameloop={renderActive ? 'always' : 'never'}
+        <div
+          className="office-canvas-wrap"
+          data-office-packets={officeModel.packets.length}
+          data-office-subagent-packets={subagentPacketCount}
         >
+          <Canvas
+            shadows
+            camera={{ position: [7, 7, 9], fov: 42 }}
+            dpr={[1, 1.5]}
+            frameloop="always"
+            resize={{ offsetSize: true }}
+          >
           <color attach="background" args={[scene.bg]} />
           <fog attach="fog" args={[scene.bg, 16, 38]} />
           <ambientLight intensity={isLight ? 0.95 : 0.7} />
@@ -251,7 +243,8 @@ export default function OfficeView(): React.JSX.Element {
             />
             <Vignette eskil={false} offset={0.15} darkness={isLight ? 0.4 : 0.75} />
           </EffectComposer>
-        </Canvas>
+          </Canvas>
+        </div>
       )}
     </div>
   )

@@ -1,4 +1,5 @@
 import type { SessionState, ToolResultInfo } from '../../store'
+import type { TaskDagAutoMergeStatus, TaskDagTaskStatus } from '../../../../shared/types'
 
 export type OfficeTaskKind = 'subtask' | 'tool'
 export type OfficeTaskStatus = 'pending' | 'running' | 'awaiting' | 'done' | 'error'
@@ -41,6 +42,20 @@ function childStatus(status: string): OfficeTaskStatus {
   if (status === 'error') return 'error'
   if (status === 'running' || status === 'starting') return 'running'
   return 'done'
+}
+
+function dagStatus(status: TaskDagTaskStatus): OfficeTaskStatus {
+  if (status === 'failed') return 'error'
+  if (status === 'running') return 'running'
+  if (status === 'success') return 'done'
+  return 'pending'
+}
+
+function autoMergeStatus(status: TaskDagAutoMergeStatus): OfficeTaskStatus {
+  if (status === 'running') return 'running'
+  if (status === 'success') return 'done'
+  if (status === 'partial') return 'awaiting'
+  return 'error'
 }
 
 export interface OfficeSessionModel {
@@ -245,6 +260,33 @@ function collectSessionTasks(sessionId: string, session: SessionState): OfficeTa
       status: 'awaiting',
       order: order++
     })
+  }
+
+  if (session.taskDagExecution) {
+    for (const dagTask of session.taskDagExecution.tasks) {
+      tasks.push({
+        id: `${sessionId}:dag:${session.taskDagExecution.id}:${dagTask.task.id}:${dagTask.status}`,
+        sessionId,
+        kind: 'subtask',
+        toolName: 'DAG',
+        title: dagTask.task.title,
+        status: dagStatus(dagTask.status),
+        order: order++
+      })
+    }
+
+    const autoMerge = session.taskDagExecution.autoMerge
+    if (autoMerge) {
+      tasks.push({
+        id: `${sessionId}:dag:${session.taskDagExecution.id}:auto-merge:${autoMerge.status}`,
+        sessionId,
+        kind: 'subtask',
+        toolName: 'AutoMerge',
+        title: autoMerge.summary || 'DAG 自动合并',
+        status: autoMergeStatus(autoMerge.status),
+        order: order++
+      })
+    }
   }
 
   return tasks

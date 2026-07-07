@@ -19,23 +19,29 @@ import type {
   GitStatus,
   SubagentDispatchResult,
   SubagentResult,
+  TaskDagDispatchResult,
+  TaskDagExecutionView,
   HistoryEntry,
   MemorySuggestionEvent,
+  ModelRoutePlanView,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
   ProjectFileEntry,
   PermissionRequestInfo,
   PreparedPreview,
+  PreviewAnnotation,
   Project,
   ProviderInput,
   ProviderView,
   Routine,
+  RoutineRunRecord,
   WriteTextFileResult,
   SchedulerStrategy,
   SendMessagePayload,
   SessionMeta,
   StartSuggestion,
+  TaskSnapshotRecord,
   UserMessageAttachmentView,
   TranscriptEntry,
   TranscriptSearchResult,
@@ -212,7 +218,13 @@ export type ChatItem =
       durationMs?: number
       resultText?: string
     }
-  | { id: string; kind: 'routing'; model: string; reason: string }
+  | {
+      id: string
+      kind: 'routing'
+      model: string
+      reason: string
+      crossValidationPlan?: ModelRoutePlanView
+    }
   | {
       id: string
       kind: 'failover'
@@ -232,6 +244,7 @@ export interface SessionState {
   runningTools: Record<string, true>
   pendingPermissions: PermissionRequestInfo[]
   childResults: Record<string, SubagentResult>
+  taskDagExecution?: TaskDagExecutionView
   effectiveModel?: string
   tools?: string[]
   /** 已处理的最大 seq,供去重(转录回放 + 实时事件) */
@@ -248,6 +261,7 @@ function newSessionState(meta: SessionMeta): SessionState {
     runningTools: {},
     pendingPermissions: [],
     childResults: {},
+    taskDagExecution: undefined,
     lastSeq: 0
   }
 }
@@ -329,7 +343,10 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
     case 'routing':
       return {
         ...s,
-        items: [...s.items, { id: genId(), kind: 'routing', model: ev.model, reason: ev.reason }],
+        items: [
+          ...s.items,
+          { id: genId(), kind: 'routing', model: ev.model, reason: ev.reason, crossValidationPlan: ev.crossValidationPlan }
+        ],
         effectiveModel: ev.model
       }
     case 'failover':
@@ -454,10 +471,26 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         }
       }
     }
+    case 'task-dag-update':
+      return { ...s, taskDagExecution: ev.execution }
     case 'hook-event': {
       // 只把"有信息量"的钩子进时间线:配置了 shell 的(有命令输出/结果),
       // 或失败的;纯 post-edit 标记事件不刷屏。
-      if (!ev.shellCommand) return s
+      if (!ev.shellCommand) {
+        if (ev.event !== 'context-warning' && ev.event !== 'context-compressed') return s
+        return {
+          ...s,
+          items: [
+            ...s.items,
+            {
+              id: genId(),
+              kind: 'notice',
+              level: ev.event === 'context-warning' ? 'error' : 'info',
+              text: ev.detail ?? ev.event
+            }
+          ]
+        }
+      }
       const text = [
         `钩子 ${ev.event}${ev.toolName ? `(${ev.toolName})` : ''}: ${ev.shellCommand}`,
         ev.shellOutput ? ev.shellOutput : ''
@@ -542,6 +575,7 @@ export interface WorkbenchState {
   previewLoading: boolean
   preview?: PreparedPreview
   previewPath?: string
+  previewAnnotations: PreviewAnnotation[]
   previewError?: string
   pluginRegistryOpen: boolean
   pluginRegistryLoading: boolean
@@ -560,6 +594,7 @@ export interface WorkbenchState {
   routineOpen: boolean
   routineLoading: boolean
   routines: Routine[]
+  routineRuns: RoutineRunRecord[]
   routineError?: string
   routineMessage?: string
   selectedRoutineId?: string | null
@@ -589,6 +624,9 @@ interface AppStore {
   settings: AppSettings
   providers: ProviderView[]
   projects: Project[]
+  taskSnapshots: TaskSnapshotRecord[]
+  taskSnapshotsLoading: boolean
+  taskSnapshotsError?: string
   view: AppView
   workbench: WorkbenchState
   rewindPanel: RewindPanelState
@@ -607,13 +645,18 @@ interface AppStore {
   createSession(opts: CreateSessionOptions): Promise<void>
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
   startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
+  recoverTaskSnapshot(snapshotId: string): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
+  decomposeAndDispatchTaskDag(
+    request: string,
+    options?: { autoMerge?: boolean; verificationCommand?: string }
+  ): Promise<TaskDagDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   selectSession(id: string): void
   sendMessage(input: string | SendMessagePayload): Promise<void>
   interrupt(): Promise<void>
   closeSession(id: string): Promise<void>
-  respondPermission(sessionId: string, requestId: string, allow: boolean): Promise<void>
+  respondPermission(sessionId: string, requestId: string, allow: boolean, message?: string): Promise<void>
   restoreCheckpoint(
     messageId: string,
     mode: CheckpointRestoreMode,
@@ -667,6 +710,8 @@ interface AppStore {
   openPreviewPanel(path?: string): Promise<void>
   closePreviewPanel(): void
   refreshPreviewPanel(): Promise<void>
+  savePreviewAnnotation(note: string): Promise<void>
+  refreshPreviewAnnotations(): Promise<void>
   openBrowserPanel(url?: string): Promise<void>
   closeBrowserPanel(): Promise<void>
   navigateBrowser(url: string): Promise<void>
@@ -710,6 +755,8 @@ interface AppStore {
   ignoreStartSuggestion(id: string): void
   laterStartSuggestion(id: string): void
   visibleStartSuggestions(): StartSuggestion[]
+  refreshTaskSnapshots(): Promise<void>
+  deleteTaskSnapshot(snapshotId: string): Promise<void>
   openMemoryPanel(): void
   acceptMemorySuggestion(): void
   dismissMemorySuggestion(): void
@@ -796,21 +843,43 @@ export const useStore = create<AppStore>((set, get) => {
     defaultPermissionMode: 'default',
     defaultProviderId: DEEPSEEK_PROVIDER_ID,
     schedulerStrategy: 'balanced',
+    smartModelRoutingEnabled: false,
+    modelCrossValidationAutoRunEnabled: false,
     budgetUsdPerSession: 0,
+    budgetUsdPerMonth: 0,
     failoverEnabled: true,
     language: 'zh',
     theme: 'dark',
     persona: '',
     allowedTools: '',
     disallowedTools: '',
+    sandboxMode: 'loose',
+    sandboxDockerImage: 'caogen-sandbox:latest',
+    chinaEcosystemMirrorEnabled: false,
+    chinaNpmRegistry: '',
+    chinaPipIndexUrl: '',
+    chinaDockerRegistryMirror: '',
+    permissionAllowlist: '',
+    permissionDenylist: '',
+    permissionTemporaryAllowlist: '',
+    guiAutomationEnabled: false,
+    guiAutomationTemporaryGrantUntil: 0,
     notificationsEnabled: true,
     preventDisplaySleep: true,
+    sdkAgentsEnabled: false,
+    ideBridgeEnabled: false,
+    ideBridgeHost: '127.0.0.1',
+    ideBridgePort: 17365,
+    ideBridgeToken: '',
     hookPostEditCommand: '',
     hookTurnEndCommand: '',
+    autoSkillLearningEnabled: false,
     office: { showBadges: true, liveliness: 1, catEars: false }
   },
   providers: [],
   projects: [],
+  taskSnapshots: [],
+  taskSnapshotsLoading: false,
   view: 'list',
   sidebarQuery: '',
   transcriptSearchResults: [],
@@ -842,6 +911,7 @@ export const useStore = create<AppStore>((set, get) => {
     browserAnnotations: [],
     previewOpen: false,
     previewLoading: false,
+    previewAnnotations: [],
     pluginRegistryOpen: false,
     pluginRegistryLoading: false,
     mcpProbeResults: {},
@@ -851,6 +921,7 @@ export const useStore = create<AppStore>((set, get) => {
     routineOpen: false,
     routineLoading: false,
     routines: [],
+    routineRuns: [],
     selectedRoutineId: null,
     memoryOpen: false,
     startSuggestions: [],
@@ -870,12 +941,13 @@ export const useStore = create<AppStore>((set, get) => {
     window.agentDesk.onMemorySuggestion((event) => get().handleMemorySuggestion(event))
     window.agentDesk.onTerminalEvent((event) => get().handleTerminalEvent(event))
     window.agentDesk.onBrowserEvent((event) => get().handleBrowserEvent(event))
-    const [metas, history, settings, providers, projects] = await Promise.all([
+    const [metas, history, settings, providers, projects, taskSnapshots] = await Promise.all([
       window.agentDesk.listSessions(),
       window.agentDesk.listHistory(),
       window.agentDesk.getSettings(),
       window.agentDesk.listProviders(),
-      window.agentDesk.listProjects()
+      window.agentDesk.listProjects(),
+      window.agentDesk.listTaskSnapshots()
     ])
     set((s) => {
       const sessions = { ...s.sessions }
@@ -893,6 +965,7 @@ export const useStore = create<AppStore>((set, get) => {
         settings,
         providers,
         projects,
+        taskSnapshots,
         activeId: s.activeId ?? order[0] ?? null
       }
     })
@@ -920,13 +993,28 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   handleEvent(sessionId, event, seq) {
-    if (event.kind === 'subagent-result') {
+    if (event.kind === 'subagent-result' || event.kind === 'task-dag-update') {
       flushStreamBuffer(sessionId)
       set((s) => {
         const session = s.sessions[sessionId]
         if (!session) return s
         return { sessions: { ...s.sessions, [sessionId]: reduceSession(session, event) } }
       })
+      if (event.kind === 'task-dag-update') {
+        void window.agentDesk.listSessions().then((metas) => {
+          set((s) => {
+            const sessions = { ...s.sessions }
+            const order = [...s.order]
+            for (const meta of metas) {
+              sessions[meta.id] = sessions[meta.id]
+                ? { ...sessions[meta.id], meta }
+                : drainPendingEvents(meta.id, newSessionState(meta))
+              if (!order.includes(meta.id)) order.push(meta.id)
+            }
+            return { sessions, order }
+          })
+        })
+      }
       return
     }
     if (isStreamDelta(event)) {
@@ -1099,6 +1187,46 @@ export const useStore = create<AppStore>((set, get) => {
     if (text) await get().sendMessage(text)
   },
 
+  async recoverTaskSnapshot(snapshotId) {
+    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
+    try {
+      const previousId = get().activeId
+      const meta = await window.agentDesk.recoverTaskSnapshot(snapshotId)
+      if (previousId && previousId !== meta.id) closeNativeBrowserView(previousId)
+      set((s) => {
+        const current = s.sessions[meta.id]
+        const base = current ? { ...current, meta } : newSessionState(meta)
+        return {
+          sessions: {
+            ...s.sessions,
+            [meta.id]: drainPendingEvents(meta.id, base)
+          },
+          order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
+          activeId: meta.id
+        }
+      })
+      const transcript = await window.agentDesk.getTranscript(meta.id)
+      if (transcript.length > 0) {
+        set((s) => {
+          const session = s.sessions[meta.id]
+          if (!session) return s
+          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+        })
+      }
+      const [history, projects, taskSnapshots] = await Promise.all([
+        window.agentDesk.listHistory(),
+        window.agentDesk.listProjects(),
+        window.agentDesk.listTaskSnapshots()
+      ])
+      set({ history, projects, taskSnapshots, taskSnapshotsLoading: false, taskSnapshotsError: undefined })
+    } catch (err) {
+      set({
+        taskSnapshotsLoading: false,
+        taskSnapshotsError: err instanceof Error ? err.message : String(err)
+      })
+    }
+  },
+
   async dispatchSubagents(input) {
     const parentId = get().activeId
     if (!parentId) return undefined
@@ -1117,6 +1245,67 @@ export const useStore = create<AppStore>((set, get) => {
     })
     void get().refreshProjects()
     return result
+  },
+
+  async decomposeAndDispatchTaskDag(request, options) {
+    const parentId = get().activeId
+    const text = request.trim()
+    if (!parentId || !text) return undefined
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        subagentBusy: true,
+        subagentError: undefined,
+        subagentMessage: undefined
+      }
+    }))
+    try {
+      const decompose = await window.agentDesk.decomposeTask(parentId, { request: text })
+      const verificationCommand = options?.verificationCommand?.trim()
+      const result = await window.agentDesk.dispatchTaskDag(parentId, {
+        dag: decompose.dag,
+        autoMerge: options?.autoMerge === true,
+        ...(verificationCommand ? { verificationCommand } : {})
+      })
+      set((s) => {
+        const sessions = { ...s.sessions }
+        const order = [...s.order]
+        for (const child of result.children) {
+          sessions[child.meta.id] = drainPendingEvents(
+            child.meta.id,
+            sessions[child.meta.id] ?? newSessionState(child.meta)
+          )
+          if (!order.includes(child.meta.id)) order.push(child.meta.id)
+        }
+        if (sessions[parentId]) {
+          sessions[parentId] = {
+            ...sessions[parentId],
+            taskDagExecution: result.execution
+          }
+        }
+        return {
+          sessions,
+          order,
+          workbench: {
+            ...s.workbench,
+            subagentBusy: false,
+            subagentMessage: `已拆解为 ${result.execution.tasks.length} 个 DAG 子任务`,
+            subagentError: undefined
+          }
+        }
+      })
+      void get().refreshProjects()
+      return result
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          subagentBusy: false,
+          subagentError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+      return undefined
+    }
   },
 
   async resumeFromHistory(entry) {
@@ -1214,10 +1403,15 @@ export const useStore = create<AppStore>((set, get) => {
     })
     const history = await window.agentDesk.listHistory()
     set({ history })
+    void get().refreshTaskSnapshots()
   },
 
-  async respondPermission(sessionId, requestId, allow) {
-    await window.agentDesk.respondPermission(sessionId, requestId, allow)
+  async respondPermission(sessionId, requestId, allow, message) {
+    await window.agentDesk.respondPermission(sessionId, requestId, allow, message)
+    if (message === 'gui-temporary-grant:5m') {
+      const settings = await window.agentDesk.getSettings()
+      set({ settings })
+    }
   },
 
   async restoreCheckpoint(messageId, mode, dryRun) {
@@ -2082,11 +2276,13 @@ export const useStore = create<AppStore>((set, get) => {
     }))
     try {
       const preview = await window.agentDesk.preparePreview(id, path)
+      const annotations = await window.agentDesk.listPreviewAnnotations(id, path).catch(() => [])
       set((s) => ({
         workbench: {
           ...s.workbench,
           previewOpen: true,
           preview,
+          previewAnnotations: annotations,
           previewLoading: false,
           previewError: preview.ok ? undefined : preview.error
         }
@@ -2100,6 +2296,50 @@ export const useStore = create<AppStore>((set, get) => {
         }
       }))
     }
+  },
+
+  async savePreviewAnnotation(note) {
+    const id = get().activeId
+    const { preview, previewPath } = get().workbench
+    const cleanNote = note.trim()
+    const path = preview?.path ?? previewPath
+    if (!id || !path || !cleanNote) return
+    try {
+      const annotation = await window.agentDesk.savePreviewAnnotation(id, {
+        sessionId: id,
+        path,
+        type: preview?.type ?? null,
+        mime: preview?.mime ?? null,
+        note: cleanNote
+      })
+      set((s) => {
+        const known = new Set(s.workbench.previewAnnotations.map((item) => item.id))
+        return {
+          workbench: {
+            ...s.workbench,
+            previewAnnotations: known.has(annotation.id)
+              ? s.workbench.previewAnnotations
+              : [annotation, ...s.workbench.previewAnnotations],
+            previewError: undefined
+          }
+        }
+      })
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          previewError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+  },
+
+  async refreshPreviewAnnotations() {
+    const id = get().activeId
+    const path = get().workbench.previewPath
+    if (!id) return
+    const annotations = await window.agentDesk.listPreviewAnnotations(id, path)
+    set((s) => ({ workbench: { ...s.workbench, previewAnnotations: annotations } }))
   },
 
   async openBrowserPanel(url) {
@@ -2796,11 +3036,15 @@ export const useStore = create<AppStore>((set, get) => {
       }
     }))
     try {
-      const routines = await window.agentDesk.listRoutines()
+      const [routines, routineRuns] = await Promise.all([
+        window.agentDesk.listRoutines(),
+        window.agentDesk.listRoutineRuns()
+      ])
       set((s) => ({
         workbench: {
           ...s.workbench,
           routines,
+          routineRuns,
           routineLoading: false,
           routineError: undefined,
           selectedRoutineId:
@@ -2850,6 +3094,31 @@ export const useStore = create<AppStore>((set, get) => {
 
   async markRoutineRun(id) {
     set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
+    try {
+      const run = await window.agentDesk.runRoutineNow(id)
+      const [routines, routineRuns] = await Promise.all([
+        window.agentDesk.listRoutines(),
+        window.agentDesk.listRoutineRuns()
+      ])
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routines,
+          routineRuns,
+          routineError: run ? undefined : '未找到 Routine',
+          routineMessage: run ? `${run.routineName} 已启动手动运行` : undefined
+        }
+      }))
+    } catch (err) {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineError: err instanceof Error ? err.message : String(err)
+        }
+      }))
+    }
+    return
+
     try {
       const routine = await window.agentDesk.markRoutineRun(id, { ranAt: Date.now() })
       set((s) => ({
@@ -2975,6 +3244,38 @@ export const useStore = create<AppStore>((set, get) => {
       const key = `${activeId}:${suggestion.id}`
       return !ignoredStartSuggestions[key] && (laterStartSuggestions[key] ?? 0) <= now
     })
+  },
+
+  async refreshTaskSnapshots() {
+    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
+    try {
+      const taskSnapshots = await window.agentDesk.listTaskSnapshots()
+      set({ taskSnapshots, taskSnapshotsLoading: false, taskSnapshotsError: undefined })
+    } catch (err) {
+      set({
+        taskSnapshotsLoading: false,
+        taskSnapshotsError: err instanceof Error ? err.message : String(err)
+      })
+    }
+  },
+
+  async deleteTaskSnapshot(snapshotId) {
+    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
+    try {
+      const ok = await window.agentDesk.deleteTaskSnapshot(snapshotId)
+      set((s) => ({
+        taskSnapshots: ok
+          ? s.taskSnapshots.filter((snapshot) => snapshot.id !== snapshotId)
+          : s.taskSnapshots,
+        taskSnapshotsLoading: false,
+        taskSnapshotsError: ok ? undefined : '未找到任务快照'
+      }))
+    } catch (err) {
+      set({
+        taskSnapshotsLoading: false,
+        taskSnapshotsError: err instanceof Error ? err.message : String(err)
+      })
+    }
   },
 
   openMemoryPanel() {
@@ -3217,6 +3518,22 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
     hint: '阿里 DashScope OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。bailian.console.aliyun.com 申请 Key。',
+    openaiProtocol: 'chat'
+  },
+  {
+    key: 'baichuan',
+    label: '百川智能 Baichuan',
+    baseUrl: 'https://api.baichuan-ai.com/v1',
+    models: ['Baichuan4-Turbo', 'Baichuan4-Air'],
+    hint: '百川 OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。若端点或模型名变化,按控制台文档调整。',
+    openaiProtocol: 'chat'
+  },
+  {
+    key: 'doubao',
+    label: '豆包 Doubao / 火山方舟',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    models: ['doubao-seed-1-6', 'doubao-1-5-pro-32k'],
+    hint: '火山方舟 OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。模型 ID 以方舟控制台实际 endpoint 为准。',
     openaiProtocol: 'chat'
   },
   {

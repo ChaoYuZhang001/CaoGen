@@ -306,6 +306,11 @@ export class GeminiEngine implements Engine {
     return this.transcript.read()
   }
 
+  emitSyntheticEvent(event: AgentEvent): void {
+    if (this.disposed) return
+    this.emit(event)
+  }
+
   /** Gemini CLI 无等价权限模式;仅记录到 meta 以对齐 UI。 */
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
     this.meta.permissionMode = mode

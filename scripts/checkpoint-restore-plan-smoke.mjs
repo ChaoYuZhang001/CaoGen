@@ -10,9 +10,9 @@ const outDir = path.join(tempRoot, 'compiled')
 
 try {
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/checkpointRestorePlan.ts',
       '--outDir',
       outDir,

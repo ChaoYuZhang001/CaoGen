@@ -22,9 +22,9 @@ try {
   mkdirSync(projectB, { recursive: true })
 
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/memoryStore.ts',
       '--outDir',
       outDir,

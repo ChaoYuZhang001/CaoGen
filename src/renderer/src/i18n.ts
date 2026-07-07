@@ -20,11 +20,20 @@ const DICT: Dict = {
   pinned: { zh: '置顶', en: 'Pinned' },
   archived: { zh: '归档', en: 'Archived' },
   sidebarSearchPlaceholder: { zh: '搜索标题、项目或路径', en: 'Search title, project or path' },
+  openSidebar: { zh: '打开侧栏', en: 'Open sidebar' },
   noRecentSessions: { zh: '暂无最近会话', en: 'No recent sessions' },
   noArchivedSessions: { zh: '暂无归档会话', en: 'No archived sessions' },
   noMatchingSessions: { zh: '没有匹配的会话', en: 'No matching sessions' },
   contentSearchSection: { zh: '消息内容', en: 'Message content' },
   contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
+  recoverableTasks: { zh: '可恢复任务', en: 'Recoverable tasks' },
+  recoverTaskSnapshotTitle: { zh: '恢复任务:{cwd}', en: 'Recover task: {cwd}' },
+  deleteTaskSnapshot: { zh: '删除任务快照', en: 'Delete task snapshot' },
+  deleteTaskSnapshotConfirm: {
+    zh: '删除任务快照「{title}」? 该操作不可撤销。',
+    en: 'Delete task snapshot "{title}"? This cannot be undone.'
+  },
+  loadingTaskSnapshots: { zh: '正在检查可恢复任务…', en: 'Checking recoverable tasks…' },
   sidebarEmptyHeroTitle: { zh: '还没有会话', en: 'No sessions yet' },
   moreActions: { zh: '更多操作', en: 'More actions' },
   pinSession: { zh: '置顶', en: 'Pin' },
@@ -291,6 +300,8 @@ const DICT: Dict = {
   previewLoading: { zh: '正在准备预览…', en: 'Preparing preview…' },
   previewEmpty: { zh: '从文件面板选择一个文件进行预览。', en: 'Choose a file from Files to preview.' },
   sendToAgent: { zh: '发给 Agent', en: 'Send to Agent' },
+  previewAnnotationPlaceholder: { zh: '记录这份产物里的问题、页码、行列或复验线索。', en: 'Note the issue, page, row, column or verification clue in this artifact.' },
+  previewNoAnnotations: { zh: '暂无产物批注', en: 'No preview annotations yet' },
   browserShort: { zh: '◉ 浏览器', en: '◉ Browser' },
   browserPanelTitle: { zh: '内置浏览器', en: 'Browser' },
   browserUrlPlaceholder: { zh: '输入 URL 或域名', en: 'Enter URL or domain' },
@@ -314,6 +325,12 @@ const DICT: Dict = {
   subagentsShort: { zh: '子 Agent', en: 'Subagents' },
   pluginsShort: { zh: '插件', en: 'Plugins' },
   routinesShort: { zh: 'Routines', en: 'Routines' },
+  routineEngineDefault: { zh: '默认引擎', en: 'Default engine' },
+  routineBudgetLabel: { zh: 'Routine 预算上限 ($)', en: 'Routine budget limit ($)' },
+  routineBudgetHint: {
+    zh: '达到预算后会拦截 Routine 下一轮发送；0 表示不限制。',
+    en: 'Stops the next Routine send after the limit is reached; 0 means unlimited.'
+  },
   memoryShort: { zh: '记忆', en: 'Memory' },
   filePanelTitle: { zh: '文件编辑器', en: 'File editor' },
   filesTruncated: { zh: '文件过多,已截断', en: 'File list truncated' },
@@ -326,6 +343,7 @@ const DICT: Dict = {
   settingsTitle: { zh: '设置', en: 'Settings' },
   tabGeneral: { zh: '通用', en: 'General' },
   tabPermissions: { zh: '权限', en: 'Permissions' },
+  tabProject: { zh: '项目', en: 'Project' },
   tabPersona: { zh: '人设', en: 'Persona' },
   tabOffice: { zh: '办公区 / 宠物', en: 'Office / Pet' },
   tabProviders: { zh: '厂商', en: 'Providers' },
@@ -368,10 +386,23 @@ const DICT: Dict = {
     zh: '任务完成、等待权限、任务失败时弹系统通知;关闭后全部静默。',
     en: 'Notify on task completion, permission prompts, and failures; off = silent.'
   },
+  chinaMirrorEnabled: { zh: '启用国产生态镜像', en: 'Enable China ecosystem mirrors' },
+  chinaMirrorHint: {
+    zh: '默认关闭。开启后仅影响沙箱命令的 npm/pip/docker 镜像环境变量,不会自动触发外部网络通知。',
+    en: 'Off by default. When enabled, only sandbox npm/pip/docker mirror environment variables are injected; webhook notifications stay dry-run unless explicitly requested.'
+  },
+  chinaNpmRegistry: { zh: 'npm registry 镜像', en: 'npm registry mirror' },
+  chinaPipIndexUrl: { zh: 'pip index-url 镜像', en: 'pip index-url mirror' },
+  chinaDockerRegistryMirror: { zh: 'Docker registry mirror', en: 'Docker registry mirror' },
   preventDisplaySleep: { zh: '运行时防止显示器休眠', en: 'Prevent display sleep while running' },
   preventDisplaySleepHint: {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
     en: 'Keep the display awake while a session runs; off = follow system power settings.'
+  },
+  sdkAgentsEnabled: { zh: 'Claude SDK Agents 桥接', en: 'Claude SDK agents bridge' },
+  sdkAgentsHint: {
+    zh: '开启后把项目/用户 .claude/agents 定义注入 Claude SDK；默认关闭以保持老会话上下文不变。',
+    en: 'When enabled, inject project/user .claude/agents definitions into Claude SDK. Off by default to keep existing sessions unchanged.'
   },
   hookPostEdit: { zh: 'Hook:文件修改后执行', en: 'Hook: after file edits' },
   hookPostEditHint: {
@@ -386,6 +417,12 @@ const DICT: Dict = {
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },
+  guiAutomationEnabled: { zh: '启用 GUI 自动化工具', en: 'Enable GUI automation tools' },
+  guiAutomationHint: {
+    zh: '默认关闭。开启后 gui_* 工具仍必须逐次审批,或由你在权限提示中授予 5 分钟临时授权。',
+    en: 'Off by default. When enabled, gui_* tools still require per-action approval or a 5 minute temporary grant from the permission prompt.'
+  },
+  allowTemporary: { zh: '允许 5 分钟', en: 'Allow 5 min' },
   personaLabel: { zh: '自定义人设 / 系统提示词追加', en: 'Custom persona / system prompt append' },
   personaHint: {
     zh: '追加到内置提示词之后,用于设定语气、约束、专长等。',

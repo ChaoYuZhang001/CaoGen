@@ -11,9 +11,9 @@ const userData = path.join(tempRoot, 'userData')
 
 try {
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/transcript.ts',
       'src/main/checkpointRestorePlan.ts',
       '--outDir',
@@ -80,6 +80,18 @@ try {
   assertEqual(lines.length, 6)
   assert(lines.every((line) => JSON.parse(line).seq), 'transcript file should contain valid JSONL')
 
+  const childWriter = new TranscriptWriter()
+  childWriter.next({ kind: 'init', sdkSessionId: 'sdk-subagent-result' })
+  childWriter.next(subagentResult())
+  const childTranscriptFile = path.join(userData, 'transcripts', 'sdk-subagent-result.jsonl')
+  const childEntries = readFileSync(childTranscriptFile, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assertEqual(childEntries.length, 1)
+  assertEqual(childEntries[0].event.kind, 'subagent-result')
+  assertEqual(childEntries[0].event.childTaskId, 'child-1')
+
   console.log('transcriptRestore smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
@@ -99,6 +111,20 @@ function assistant(text) {
 
 function result() {
   return { kind: 'turn-result', subtype: 'success', isError: false }
+}
+
+function subagentResult() {
+  return {
+    kind: 'subagent-result',
+    orchestrationId: 'dag-1',
+    childTaskId: 'child-1',
+    childSessionId: 'session-child-1',
+    childRole: 'backend',
+    status: 'done',
+    resultText: 'child done',
+    costUsd: 0.01,
+    durationMs: 1234
+  }
 }
 
 function assertEqual(actual, expected) {

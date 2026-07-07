@@ -3,7 +3,13 @@ import type * as React from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
-import type { HistoryEntry, SessionMeta, SessionStatus, TranscriptSearchResult } from '../../../shared/types'
+import type {
+  HistoryEntry,
+  SessionMeta,
+  SessionStatus,
+  TaskSnapshotRecord,
+  TranscriptSearchResult
+} from '../../../shared/types'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
 
 const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
@@ -75,13 +81,21 @@ function highlightSnippet(snippet: string, query: string): React.ReactNode {
   )
 }
 
-export default function Sidebar(): React.JSX.Element {
+interface SidebarProps {
+  mobileOpen?: boolean
+  onMobileClose?: () => void
+}
+
+export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
   const activeId = useStore((s) => s.activeId)
   const history = useStore((s) => s.history)
   const projects = useStore((s) => s.projects)
+  const taskSnapshots = useStore((s) => s.taskSnapshots)
+  const taskSnapshotsLoading = useStore((s) => s.taskSnapshotsLoading)
+  const taskSnapshotsError = useStore((s) => s.taskSnapshotsError)
   const query = useStore((s) => s.sidebarQuery)
   const setSidebarQuery = useStore((s) => s.setSidebarQuery)
   const transcriptSearchResults = useStore((s) => s.transcriptSearchResults)
@@ -94,6 +108,8 @@ export default function Sidebar(): React.JSX.Element {
   const archiveHistory = useStore((s) => s.archiveHistory)
   const pinHistory = useStore((s) => s.pinHistory)
   const deleteHistoryEntry = useStore((s) => s.deleteHistoryEntry)
+  const recoverTaskSnapshot = useStore((s) => s.recoverTaskSnapshot)
+  const deleteTaskSnapshot = useStore((s) => s.deleteTaskSnapshot)
   const closeSession = useStore((s) => s.closeSession)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
@@ -123,6 +139,20 @@ export default function Sidebar(): React.JSX.Element {
     const path = entryPath(entry)
     const projectName = projectNameForPath(path)
     const text = [entryTitle(entry), path, projectName].map(normalized).join('\n')
+    return text.includes(q)
+  }
+
+  const matchesTaskSnapshot = (snapshot: TaskSnapshotRecord): boolean => {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    const projectName = projectNameForPath(snapshot.projectPath)
+    const text = [
+      snapshot.title,
+      snapshot.projectPath,
+      projectName,
+      snapshot.model,
+      snapshot.providerId
+    ].map(normalized).join('\n')
     return text.includes(q)
   }
 
@@ -166,6 +196,10 @@ export default function Sidebar(): React.JSX.Element {
   const archivedHistory = historyEntries
     .filter((entry) => entry.archived)
     .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
+  const visibleTaskSnapshots = taskSnapshots
+    .filter((snapshot) => snapshot.reason !== 'created')
+    .filter((snapshot) => !openSessionIds.has(snapshot.sessionId))
+    .filter(matchesTaskSnapshot)
 
   const projectGroups = useMemo<ProjectGroup[]>(() => {
     const groups = new Map<string, ProjectGroup>()
@@ -218,6 +252,10 @@ export default function Sidebar(): React.JSX.Element {
 
   const copyPath = (path: string): void => {
     void navigator.clipboard?.writeText(path).catch(() => undefined)
+  }
+
+  const closeMobile = (): void => {
+    onMobileClose?.()
   }
 
   const menuItemsFor = (entry: SidebarEntry): SessionMenuItem[] => {
@@ -300,8 +338,16 @@ export default function Sidebar(): React.JSX.Element {
         className={`session-card ${activeId === entry.id ? 'active' : ''}`}
         role="button"
         tabIndex={0}
-        onClick={() => selectSession(entry.id)}
-        onKeyDown={(e) => activateByKeyboard(e, () => selectSession(entry.id))}
+        onClick={() => {
+          selectSession(entry.id)
+          closeMobile()
+        }}
+        onKeyDown={(e) =>
+          activateByKeyboard(e, () => {
+            selectSession(entry.id)
+            closeMobile()
+          })
+        }
         onContextMenu={(e) => showMenu(e, entry)}
       >
         <span
@@ -342,8 +388,16 @@ export default function Sidebar(): React.JSX.Element {
         role="button"
         tabIndex={0}
         title={t('resumeSessionTitle', { cwd: path })}
-        onClick={() => void resumeFromHistory(entry)}
-        onKeyDown={(e) => activateByKeyboard(e, () => void resumeFromHistory(entry))}
+        onClick={() => {
+          closeMobile()
+          void resumeFromHistory(entry)
+        }}
+        onKeyDown={(e) =>
+          activateByKeyboard(e, () => {
+            closeMobile()
+            void resumeFromHistory(entry)
+          })
+        }
         onContextMenu={(e) => showMenu(e, ref)}
       >
         <span className="history-icon">↻</span>
@@ -388,23 +442,87 @@ export default function Sidebar(): React.JSX.Element {
     )
   }
 
-  const totalVisible = pinnedEntries.length + ongoingEntries.length + recentHistory.length + archivedHistory.length
+  const renderTaskSnapshot = (snapshot: TaskSnapshotRecord): React.ReactNode => (
+    <div
+      key={snapshot.id}
+      className="session-card task-snapshot-card"
+      role="button"
+      tabIndex={0}
+      title={t('recoverTaskSnapshotTitle', { cwd: snapshot.projectPath })}
+      onClick={() => {
+        closeMobile()
+        void recoverTaskSnapshot(snapshot.id)
+      }}
+      onKeyDown={(e) =>
+        activateByKeyboard(e, () => {
+          closeMobile()
+          void recoverTaskSnapshot(snapshot.id)
+        })
+      }
+    >
+      <span className="history-icon">↺</span>
+      <span className="session-card-body">
+        <span className="session-card-title">{snapshot.title}</span>
+        <span className="session-card-sub">
+          {projectNameForPath(snapshot.projectPath)} · {formatTime(snapshot.updatedAt)}
+        </span>
+      </span>
+      <button
+        className="session-action task-snapshot-delete"
+        title={t('deleteTaskSnapshot')}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (!window.confirm(t('deleteTaskSnapshotConfirm', { title: snapshot.title }))) return
+          void deleteTaskSnapshot(snapshot.id)
+        }}
+      >
+        ×
+      </button>
+    </div>
+  )
+
+  const totalVisible =
+    pinnedEntries.length +
+    ongoingEntries.length +
+    visibleTaskSnapshots.length +
+    recentHistory.length +
+    archivedHistory.length
   const archiveExpanded = archiveOpen || query.trim().length > 0
   const isInitialEmpty = totalVisible === 0 && query.trim().length === 0
   const contentSearchActive = query.trim().length >= 2
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${mobileOpen ? 'sidebar-mobile-open' : ''}`}>
       <div className="sidebar-brand drag-region">
         <span className="brand-mark">◆</span>
         <span className="brand-name">CaoGen</span>
+        <button
+          type="button"
+          className="sidebar-mobile-close no-drag"
+          aria-label={t('closeSession')}
+          onClick={closeMobile}
+        >
+          ×
+        </button>
       </div>
 
-      <button className="btn btn-primary sidebar-new" onClick={() => setShowNewSession(true)}>
+      <button
+        className="btn btn-primary sidebar-new"
+        onClick={() => {
+          closeMobile()
+          setShowNewSession(true)
+        }}
+      >
         {t('newSession')}
       </button>
 
-      <button className="btn btn-ghost sidebar-office" onClick={() => setView('office')}>
+      <button
+        className="btn btn-ghost sidebar-office"
+        onClick={() => {
+          closeMobile()
+          setView('office')
+        }}
+      >
         {t('office3d')}
       </button>
 
@@ -441,6 +559,19 @@ export default function Sidebar(): React.JSX.Element {
               <section className="sidebar-section">
                 <div className="sidebar-section-title">{t('ongoing')}</div>
                 {ongoingEntries.map((entry) => renderActiveEntry(entry))}
+              </section>
+            )}
+
+            {(visibleTaskSnapshots.length > 0 || taskSnapshotsLoading || taskSnapshotsError) && (
+              <section className="sidebar-section">
+                <div className="sidebar-section-title">{t('recoverableTasks')}</div>
+                {visibleTaskSnapshots.map((snapshot) => renderTaskSnapshot(snapshot))}
+                {visibleTaskSnapshots.length === 0 && taskSnapshotsLoading && (
+                  <div className="sidebar-empty">{t('loadingTaskSnapshots')}</div>
+                )}
+                {visibleTaskSnapshots.length === 0 && taskSnapshotsError && (
+                  <div className="sidebar-empty">{taskSnapshotsError}</div>
+                )}
               </section>
             )}
 
@@ -496,7 +627,13 @@ export default function Sidebar(): React.JSX.Element {
       </div>
 
       <div className="sidebar-footer">
-        <button className="btn btn-ghost" onClick={() => setShowSettings(true)}>
+        <button
+          className="btn btn-ghost"
+          onClick={() => {
+            closeMobile()
+            setShowSettings(true)
+          }}
+        >
           {t('settings')}
         </button>
       </div>

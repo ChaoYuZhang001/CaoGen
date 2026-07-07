@@ -5,11 +5,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-modelstats-build-'))
-execFileSync('npx', ['tsc', 'src/main/modelStats.ts', '--outDir', buildDir, '--target', 'ES2022', '--module', 'commonjs', '--esModuleInterop', '--skipLibCheck'], { cwd: repoRoot, stdio: 'inherit' })
-const m = await import(path.join(buildDir, 'modelStats.js'))
+execFileSync(process.execPath, [path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), 'src/main/modelStats.ts', '--outDir', buildDir, '--target', 'ES2022', '--module', 'commonjs', '--esModuleInterop', '--skipLibCheck'], { cwd: repoRoot, stdio: 'inherit' })
+const m = await import(pathToFileURL(path.join(buildDir, 'modelStats.js')).href)
 
 function assert(c, msg) { if (!c) { console.error('ASSERT FAIL:', msg); process.exit(1) } }
 

@@ -67,13 +67,21 @@ export default function StartSuggestionsPanel({
     .join(' ')
 
   return (
-    <section className={rootClassName} aria-label={mergedLabels.title}>
+    <section
+      className={rootClassName}
+      aria-label={mergedLabels.title}
+      data-start-suggestions-panel="true"
+      data-start-suggestions-visible={visibleSuggestions.length}
+      data-start-suggestions-total={suggestions.length}
+    >
       <header className="start-suggestions-header">
         <div className="start-suggestions-heading">
           <h2 className="start-suggestions-title">{mergedLabels.title}</h2>
           <p className="start-suggestions-subtitle">{mergedLabels.subtitle}</p>
         </div>
-        <div className="start-suggestions-count">{visibleSuggestions.length}</div>
+        <div className="start-suggestions-count" data-start-suggestions-count>
+          {visibleSuggestions.length}
+        </div>
       </header>
 
       <div className="start-suggestions-list">
@@ -81,6 +89,8 @@ export default function StartSuggestionsPanel({
           <article
             key={suggestion.id}
             className="start-suggestions-item"
+            data-start-suggestion-id={suggestion.id}
+            data-start-suggestion-source={suggestion.source}
             data-priority={suggestion.priority}
           >
             <div className="start-suggestions-item-head">
@@ -111,6 +121,7 @@ export default function StartSuggestionsPanel({
               <button
                 type="button"
                 className="start-suggestions-button start-suggestions-button-primary"
+                data-start-suggestion-action="send"
                 disabled={disabled}
                 aria-label={`${mergedLabels.sendToAgent}: ${suggestion.title}`}
                 onClick={() => onSendToAgent(suggestion)}
@@ -120,6 +131,7 @@ export default function StartSuggestionsPanel({
               <button
                 type="button"
                 className="start-suggestions-button"
+                data-start-suggestion-action="later"
                 disabled={disabled}
                 aria-label={`${mergedLabels.later}: ${suggestion.title}`}
                 onClick={() => onLater(suggestion)}
@@ -129,6 +141,7 @@ export default function StartSuggestionsPanel({
               <button
                 type="button"
                 className="start-suggestions-button start-suggestions-button-quiet"
+                data-start-suggestion-action="ignore"
                 disabled={disabled}
                 aria-label={`${mergedLabels.ignore}: ${suggestion.title}`}
                 onClick={() => onIgnore(suggestion)}

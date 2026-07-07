@@ -1,0 +1,53 @@
+<idea-plugin>
+  <id>com.caogen.idebridge</id>
+  <name>CaoGen Bridge</name>
+  <vendor>CaoGen</vendor>
+  <description>CaoGen IDE bridge prototype for JetBrains IDEs.</description>
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <appStarter id="caogenRecorderE2E" implementation="com.caogen.idebridge.RecorderE2EApplicationStarter"/>
+    <preloadingActivity implementation="com.caogen.idebridge.RecorderE2EPreloadingActivity"/>
+    <applicationInitializedListener implementation="com.caogen.idebridge.RecorderE2EApplicationInitializedListener"/>
+    <postStartupActivity implementation="com.caogen.idebridge.RecorderE2EStartupActivity"/>
+  </extensions>
+
+  <actions>
+    <action id="CaoGen.ConnectBridge"
+            class="com.caogen.idebridge.ConnectBridgeAction"
+            text="CaoGen: Connect/Create Session"
+            description="Connect to the explicitly started CaoGen IDE bridge and create a project session"/>
+    <action id="CaoGen.SendSelection"
+            class="com.caogen.idebridge.SendSelectionAction"
+            text="CaoGen: Send Selection"
+            description="Send selected code to the active CaoGen session"/>
+    <action id="CaoGen.Chat"
+            class="com.caogen.idebridge.ChatAction"
+            text="CaoGen: Chat"
+            description="Send a chat message to the active CaoGen session"/>
+    <action id="CaoGen.ToggleRealtimeSync"
+            class="com.caogen.idebridge.ToggleRealtimeSyncAction"
+            text="CaoGen: Toggle Realtime Sync"
+            description="Enable or disable debounced active-file sync for the current JetBrains editor"/>
+    <action id="CaoGen.RequestSelectionEdit"
+            class="com.caogen.idebridge.RequestSelectionEditAction"
+            text="CaoGen: Edit Selection"
+            description="Ask CaoGen to modify the selected code"/>
+    <action id="CaoGen.PreviewSelectionDiff"
+            class="com.caogen.idebridge.PreviewSelectionDiffAction"
+            text="CaoGen: Preview Selection Diff"
+            description="Preview the latest CaoGen replacement proposal against the captured selection"/>
+    <action id="CaoGen.ApplySelectionEdit"
+            class="com.caogen.idebridge.ApplySelectionEditAction"
+            text="CaoGen: Apply Selection Edit"
+            description="Apply the latest CaoGen replacement proposal through the IDE native undo stack"/>
+    <action id="CaoGen.ShowEvents"
+            class="com.caogen.idebridge.ShowEventsAction"
+            text="CaoGen: Show Events"
+            description="Show recent CaoGen session.event messages"/>
+    <action id="CaoGen.OpenDesktop"
+            class="com.caogen.idebridge.OpenDesktopAction"
+            text="CaoGen: Open Desktop"
+            description="Open the CaoGen desktop app for the current project"/>
+  </actions>
+</idea-plugin>

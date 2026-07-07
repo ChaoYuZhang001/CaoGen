@@ -24,6 +24,8 @@ export interface PluginUninstallResult {
 }
 
 const MAX_COPY_BYTES = 200 * 1024 * 1024 // 单插件 200MB 上限,防误选巨型目录
+const TRASH_RENAME_RETRIES = 8
+let trashSequence = 0
 
 /** 目录是否"形似插件":有 manifest / SKILL.md / 顶层 agent .md */
 function looksLikePlugin(dir: string): boolean {
@@ -147,11 +149,46 @@ export function uninstallPlugin(targetPath: string, pluginsRoot: string): Plugin
     if (!existsSync(target)) return { ok: false, error: '插件目录不存在' }
     const trashDir = join(pluginsRoot, '.trash')
     mkdirSync(trashDir, { recursive: true })
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const dest = join(trashDir, `${basename(target)}-${stamp}`)
-    renameSync(target, dest)
+    const dest = trashPath(trashDir, basename(target))
+    renameWithRetry(target, dest)
     return { ok: true, trashedTo: dest }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+function trashPath(trashDir: string, name: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  trashSequence += 1
+  return join(trashDir, `${name}-${stamp}-${process.pid}-${trashSequence}`)
+}
+
+function renameWithRetry(source: string, dest: string): void {
+  let lastError: unknown
+  for (let attempt = 0; attempt < TRASH_RENAME_RETRIES; attempt += 1) {
+    try {
+      renameSync(source, dest)
+      return
+    } catch (err) {
+      lastError = err
+      if (!isRetryableRenameError(err)) break
+      sleepSync(25 * (attempt + 1))
+    }
+  }
+  throw lastError
+}
+
+function isRetryableRenameError(err: unknown): boolean {
+  const code = errorCode(err)
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+}
+
+function errorCode(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null || !('code' in err)) return undefined
+  const code = (err as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

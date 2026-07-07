@@ -18,8 +18,7 @@ const runDir = path.join(outDir, runId)
 const electronBin = path.join(
   repoRoot,
   'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'electron.cmd' : 'electron'
+  ...(process.platform === 'win32' ? ['electron', 'dist', 'electron.exe'] : ['.bin', 'electron'])
 )
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
 
@@ -100,7 +99,7 @@ async function runX1Scenario() {
     })
   } finally {
     await stopElectron(app)
-    rmSync(tempRoot, { recursive: true, force: true })
+    cleanupTempRoot(tempRoot)
   }
 }
 
@@ -191,7 +190,7 @@ async function runS3Scenario() {
     })
   } finally {
     await stopElectron(app)
-    rmSync(tempRoot, { recursive: true, force: true })
+    cleanupTempRoot(tempRoot)
   }
 }
 
@@ -217,7 +216,8 @@ function readHistory(userDataDir) {
 async function startElectron(userDataDir, portStart) {
   mkdirSync(userDataDir, { recursive: true })
   const port = await findFreePort(portStart)
-  const child = spawn(electronBin, [`--remote-debugging-port=${port}`, mainEntry], {
+  const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
+  const child = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -666,6 +666,22 @@ function assert(condition, message) {
 function fail(message) {
   console.error(message)
   process.exit(1)
+}
+
+function cleanupTempRoot(target) {
+  try {
+    rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (error) {
+    console.warn(`temporary cleanup skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function electronSpawnCommand() {
+  return electronBin
+}
+
+function electronSpawnArgs(args) {
+  return args
 }
 
 function sleep(ms) {

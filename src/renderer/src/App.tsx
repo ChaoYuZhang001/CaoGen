@@ -1,6 +1,8 @@
-import { Suspense, lazy, useCallback, useEffect } from 'react'
+import * as React from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { useThemeEffect } from './theme'
+import { useT } from './i18n'
 import type { MenuCommand } from '../../shared/types'
 import Sidebar from './components/Sidebar'
 import WorkbenchRoot from './components/workbench/WorkbenchRoot'
@@ -8,11 +10,13 @@ import WelcomeView from './components/WelcomeView'
 import NewSessionModal from './components/NewSessionModal'
 import SettingsModal from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
+import TaskRecoveryModal from './components/TaskRecoveryModal'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(() => import('./components/office/OfficeView'))
 
 export default function App(): React.JSX.Element {
+  const t = useT()
   const init = useStore((s) => s.init)
   const activeId = useStore((s) => s.activeId)
   const hasActive = useStore((s) => (activeId ? Boolean(s.sessions[activeId]) : false))
@@ -26,6 +30,7 @@ export default function App(): React.JSX.Element {
   const setShowCommandPalette = useStore((s) => s.setShowCommandPalette)
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   useThemeEffect()
 
@@ -72,6 +77,10 @@ export default function App(): React.JSX.Element {
     if (typeof window.agentDesk === 'undefined') return
     return window.agentDesk.onMenuCommand(handleMenuCommand)
   }, [handleMenuCommand])
+
+  useEffect(() => {
+    setMobileSidebarOpen(false)
+  }, [activeId, view])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -124,11 +133,31 @@ export default function App(): React.JSX.Element {
         </Suspense>
       ) : (
         <>
-          <Sidebar />
+          <button
+            type="button"
+            className="mobile-sidebar-toggle"
+            aria-label={mobileSidebarOpen ? t('closeSession') : t('openSidebar')}
+            aria-expanded={mobileSidebarOpen}
+            onClick={() => setMobileSidebarOpen((open) => !open)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
+          {mobileSidebarOpen && (
+            <button
+              type="button"
+              className="mobile-sidebar-backdrop"
+              aria-label={t('closeSession')}
+              onClick={() => setMobileSidebarOpen(false)}
+            />
+          )}
+          <Sidebar mobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
           <main className="main">{hasActive ? <WorkbenchRoot key={activeId} /> : <WelcomeView />}</main>
         </>
       )}
       {showCommandPalette && <CommandPalette />}
+      <TaskRecoveryModal />
       {showNewSession && <NewSessionModal />}
       {showSettings && <SettingsModal />}
     </div>

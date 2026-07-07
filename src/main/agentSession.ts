@@ -8,11 +8,30 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import { getProvider, decryptToken, listProviders } from './providers'
+import { listHistory } from './history'
 import { readReferencedFiles } from './fileSuggest'
 import { buildMemorySystemAppend } from './memoryInject'
+import { buildLayeredMemoryPrompt } from './memory/memory-retriever'
+import { buildSkillInvocationPrompt } from './skill/skill-invocation'
+import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
+import {
+  buildProjectContextSystemAppend,
+  buildProjectContextSystemAppendSync
+} from './agent/context-loader'
+import { evaluateContextUsage } from './agent/context-compressor'
+import { loadSdkAgentDefinitions } from './sdkAgents'
 import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
 import { recordModelFailure, recordModelSuccess } from './modelStats'
+import { resolveSessionModelRoute } from './model/session-routing'
+import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { writeAuditLog } from './permission/audit-log'
+import { evaluateToolPermission } from './permission/tool-permission'
+import {
+  decideGuiPermission,
+  GUI_TEMPORARY_GRANT_MESSAGE,
+  grantTemporaryGuiAutomation
+} from './permission/permission-manager'
 import {
   pickModelAcrossProviders,
   recordSuccess,
@@ -35,6 +54,7 @@ import type {
   PermissionModeId,
   PermissionRequestInfo,
   RewindResult,
+  SdkAgentInfo,
   SendMessagePayload,
   SessionMeta,
   UserMessageAttachmentView,
@@ -88,6 +108,32 @@ interface PendingPermission {
   resolve: (result: PermissionResult) => void
   input: Record<string, unknown>
   info: PermissionRequestInfo
+}
+
+const CLAUDE_READ_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'WebFetch'])
+const CLAUDE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const CLAUDE_HOST_MUTATION_TOOLS = new Set(['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+function normalizeClaudeToolName(toolName: string): string {
+  if (toolName === 'Bash') return 'bash'
+  if (toolName === 'Read') return 'read_file'
+  if (toolName === 'LS') return 'list_dir'
+  if (toolName === 'Grep') return 'search_code'
+  if (toolName === 'Glob') return 'find_file'
+  if (toolName === 'Write') return 'write_file'
+  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'NotebookEdit') return 'edit_file'
+  return toolName
+}
+
+function normalizeClaudeToolInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  const normalized = { ...input }
+  const pathValue = normalized.path ?? normalized.file_path ?? normalized.notebook_path
+  if (typeof pathValue === 'string' && pathValue.trim()) {
+    normalized.path = pathValue
+    normalized.file_path = pathValue
+  }
+  if (toolName === 'Glob' && typeof normalized.pattern === 'string') normalized.path = normalized.path ?? '.'
+  return normalized
 }
 
 function errText(err: unknown): string {
@@ -252,6 +298,8 @@ export class AgentSession implements Engine {
   private stderrTail = ''
   /** auto 模式本轮路由选中的真实模型名(供结束时记模型实测统计) */
   private lastRoutedModel = ''
+  /** 最近注入到 Claude SDK 的项目上下文;保存 caogen.md 后下一轮消息会补充差异快照。 */
+  private lastProjectContextAppend = ''
   private disposed = false
   private turnStartedAt = 0
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
@@ -272,6 +320,7 @@ export class AgentSession implements Engine {
   private interrupting = false
   /** 本会话在轮次运行中持有的系统防休眠句柄。 */
   private powerBlockerId: number | null = null
+  private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
 
   constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -413,6 +462,13 @@ export class AgentSession implements Engine {
       const allowed = splitList(settings.allowedTools)
       const disallowed = splitList(settings.disallowedTools)
       const execPath = claudeExecutablePath()
+      let projectContextAppend = ''
+      try {
+        projectContextAppend = await buildProjectContextSystemAppend(this.meta.sourceCwd ?? this.meta.cwd)
+        this.lastProjectContextAppend = projectContextAppend
+      } catch (err) {
+        console.error('[caogen] 读取 caogen.md 项目上下文失败:', err)
+      }
       // 项目记忆:把已确认条目注入 systemPrompt(与人设合并为统一 append)
       let memoryAppend = ''
       try {
@@ -423,7 +479,13 @@ export class AgentSession implements Engine {
       } catch (err) {
         console.error('[caogen] 读取项目记忆失败:', err)
       }
-      const append = [persona, memoryAppend].filter((s) => s && s.trim()).join('\n\n')
+      const append = [projectContextAppend, persona, memoryAppend].filter((s) => s && s.trim()).join('\n\n')
+      const sdkAgents = settings.sdkAgentsEnabled
+        ? loadSdkAgentDefinitions(this.meta.sourceCwd ?? this.meta.cwd)
+        : undefined
+      if (sdkAgents?.diagnostics.length) {
+        console.error('[caogen] SDK agents 加载诊断:', sdkAgents.diagnostics.join('\n'))
+      }
       this.query = sdk.query({
         prompt: this.input,
         options: {
@@ -444,6 +506,7 @@ export class AgentSession implements Engine {
           ...(this.meta.model && this.meta.model !== AUTO_MODEL ? { model: this.meta.model } : {}),
           ...(this.resumeId ? { resume: this.resumeId } : {}),
           ...(this.resumeId && this.resumeAtId ? { resumeSessionAt: this.resumeAtId } : {}),
+          ...(sdkAgents && Object.keys(sdkAgents.agents).length > 0 ? { agents: sdkAgents.agents } : {}),
           // Hooks 桥:PostToolUse(文件写入后)+ Stop(轮结束),转发到时间线并可执行用户 shell 钩子
           hooks: this.buildHooks(settings),
           // 诊断:捕获 SDK 子进程 stderr 尾部,超时/崩溃时附到错误信息(否则用户只见"无响应")
@@ -585,6 +648,50 @@ export class AgentSession implements Engine {
   private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
     try {
       const strategy = getSettings().schedulerStrategy
+      const settings = getSettings()
+      if (settings.smartModelRoutingEnabled) {
+        const monthlyBudget = calculateMonthlyBudgetSnapshot({
+          settings,
+          history: listHistory(),
+          currentSession: this.meta
+        })
+        const smart = resolveSessionModelRoute({
+          enabled: true,
+          currentModel: this.meta.model,
+          providerId: this.meta.providerId,
+          providers: listProviders(),
+          engine: this.meta.engine,
+          payload,
+          strategy: settings.schedulerStrategy,
+          sessionCostUsd: this.meta.costUsd,
+          sessionBudgetUsd: this.meta.budgetUsd,
+          settingsBudgetUsd: settings.budgetUsdPerSession,
+          monthlyBudgetRemainingUsd: monthlyBudget.remainingUsd
+        })
+        if (smart.kind === 'routed') {
+          this.lastRoutedModel = smart.model
+          this.emit({
+            kind: 'routing',
+            model: smart.model,
+            reason: smart.reason,
+            providerId: smart.providerId,
+            crossValidationPlan: smart.crossValidationPlan
+          })
+          if (smart.switchedProvider) {
+            this.meta.providerId = smart.providerId
+            this.emit({ kind: 'meta', meta: { ...this.meta } })
+            await this.rebuildEngine()
+            if (!this.query) return
+            this.setStatus('running')
+            await this.query.setModel(smart.model)
+            await this.pushUserMessage(payload)
+            return
+          }
+          await this.query?.setModel(smart.model)
+          await this.pushUserMessage(payload)
+          return
+        }
+      }
       const decision = pickModelAcrossProviders({
         candidates: this.failoverCandidates(),
         text: userMessageText(payload),
@@ -624,7 +731,43 @@ export class AgentSession implements Engine {
       // 展开 @文件引用:把被引文件内容追加到发给模型的 prompt(UI 仍显示原文)
       const mentions = extractMentions(payload.text)
       const injected = mentions.length > 0 ? readReferencedFiles(this.meta.cwd, mentions) : ''
-      const promptText = injected ? payload.text + injected : payload.text
+      let promptText = injected ? payload.text + injected : payload.text
+      const layeredMemory = promptText
+        ? await buildLayeredMemoryPrompt({
+            rootDir: join(app.getPath('userData'), 'memory'),
+            query: promptText,
+            projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
+            limit: 6
+          }).catch((error) => {
+            console.error('[caogen] layered memory retrieval failed:', error)
+            return ''
+          })
+        : ''
+      if (layeredMemory.trim()) {
+        promptText = [layeredMemory, '## Current User Request', promptText].join('\n\n')
+      }
+      const skillPrompt = buildSkillInvocationPrompt({
+        enabled: getSettings().autoSkillLearningEnabled,
+        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
+        query: payload.text,
+        maxSkills: 2
+      })
+      if (skillPrompt.trim()) {
+        promptText = promptText.includes('## Current User Request')
+          ? [skillPrompt, promptText].join('\n\n')
+          : [skillPrompt, '## Current User Request', promptText].join('\n\n')
+      }
+      const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
+      if (ideDocumentContext.trim()) {
+        promptText = promptText.includes('## Current User Request')
+          ? [ideDocumentContext, promptText].join('\n\n')
+          : [ideDocumentContext, '## Current User Request', promptText].join('\n\n')
+      }
+      const liveProjectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
+      if (liveProjectContext && liveProjectContext !== this.lastProjectContextAppend) {
+        this.lastProjectContextAppend = liveProjectContext
+        promptText = ['# 项目上下文已更新', liveProjectContext, promptText].filter(Boolean).join('\n\n')
+      }
       const content: ContentBlockParam[] = []
       if (promptText) content.push({ type: 'text', text: promptText })
       for (const image of payload.images) {
@@ -661,6 +804,16 @@ export class AgentSession implements Engine {
     const pending = this.pending.get(requestId)
     if (!pending) return
     this.pending.delete(requestId)
+    if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && normalizeClaudeToolName(pending.info.toolName).startsWith('gui_')) {
+      grantTemporaryGuiAutomation()
+    }
+    writeAuditLog(this.meta.cwd, {
+      action: allow ? 'allow' : 'deny',
+      source: 'user',
+      toolName: normalizeClaudeToolName(pending.info.toolName),
+      input: pending.input,
+      message
+    })
     this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
     if (allow) {
       pending.resolve({ behavior: 'allow', updatedInput: pending.input })
@@ -676,6 +829,11 @@ export class AgentSession implements Engine {
   /** 已持久化 + 缓冲的耐久事件(user/assistant/tool-result/turn-result),供恢复时回填 */
   getTranscript() {
     return this.transcript.read()
+  }
+
+  emitSyntheticEvent(event: AgentEvent): void {
+    if (this.disposed) return
+    this.emit(event)
   }
 
   /** 回退文件到某条用户消息时的状态;dryRun 只预览不改动 */
@@ -1001,6 +1159,26 @@ export class AgentSession implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
+  async supportedAgents(): Promise<SdkAgentInfo[]> {
+    if (!this.query) return []
+    const query = this.query as unknown as {
+      supportedAgents?: () => Promise<unknown>
+    }
+    if (typeof query.supportedAgents !== 'function') return []
+    const agents = await query.supportedAgents()
+    if (!Array.isArray(agents)) return []
+    return agents
+      .map((agent): SdkAgentInfo | null => {
+        if (!agent || typeof agent !== 'object') return null
+        const record = agent as Record<string, unknown>
+        const name = typeof record.name === 'string' ? record.name : ''
+        const description = typeof record.description === 'string' ? record.description : ''
+        const model = typeof record.model === 'string' ? record.model : undefined
+        return name ? { name, description, model } : null
+      })
+      .filter((agent): agent is SdkAgentInfo => agent !== null)
+  }
+
   rename(title: string): void {
     const t = title.trim()
     if (!t) return
@@ -1110,7 +1288,7 @@ export class AgentSession implements Engine {
         const hasUsage = usage.input + usage.output + usage.cacheRead + usage.cacheCreation > 0
         if (hasUsage) {
           this.meta.usage = usage
-          this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
+          this.recordContextTokens(usage.input + usage.cacheRead + usage.cacheCreation)
         }
         const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'unknown'
         const isError = msg.is_error === true || subtype !== 'success'
@@ -1188,24 +1366,141 @@ export class AgentSession implements Engine {
     input: Record<string, unknown>,
     opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string } | undefined
   ): Promise<PermissionResult> {
+    const settings = getSettings()
+    const policyToolName = normalizeClaudeToolName(toolName)
+    const policyInput = normalizeClaudeToolInput(toolName, input)
+    const policy = evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd })
+    const audit = (action: 'allow' | 'deny' | 'ask', source: 'policy' | 'permission-mode', message: string): void => {
+      writeAuditLog(this.meta.cwd, {
+        action,
+        source,
+        toolName: policyToolName,
+        input: policyInput,
+        message,
+        riskLevel: policy.risk.level,
+        riskReasons: policy.risk.reasons
+      })
+    }
+
+    if (policy.kind === 'deny') {
+      audit('deny', 'policy', policy.reason)
+      return Promise.resolve({ behavior: 'deny', message: policy.reason })
+    }
+    if (settings.sandboxMode === 'strictDocker' && CLAUDE_HOST_MUTATION_TOOLS.has(toolName)) {
+      const message = '严格 Docker 模式下 Claude SDK 本地工具无法由 CaoGen Docker 沙箱接管,已按 fail-closed 阻止;请改用 OpenAI 本地工具链或切换沙箱模式。'
+      audit('deny', 'policy', message)
+      return Promise.resolve({ behavior: 'deny', message })
+    }
+    const guiDecision = decideGuiPermission(policyToolName, settings)
+    if (guiDecision.kind === 'deny') {
+      audit('deny', 'policy', guiDecision.reason)
+      return Promise.resolve({ behavior: 'deny', message: guiDecision.reason })
+    }
+    if (guiDecision.kind === 'allow') {
+      audit('allow', 'policy', guiDecision.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+    if (guiDecision.kind === 'ask') {
+      const requestId = randomUUID()
+      const info: PermissionRequestInfo = {
+        requestId,
+        toolName,
+        input: policyInput,
+        toolUseId: opts?.toolUseID,
+        decisionReason: guiDecision.reason
+      }
+      audit('ask', 'permission-mode', guiDecision.reason)
+      this.emit({ kind: 'permission-request', request: info })
+      return new Promise<PermissionResult>((resolve) => {
+        this.pending.set(requestId, { resolve, input: policyInput, info })
+        opts?.signal?.addEventListener('abort', () => {
+          if (this.pending.delete(requestId)) {
+            writeAuditLog(this.meta.cwd, {
+              action: 'deny',
+              source: 'user',
+              toolName: policyToolName,
+              input: policyInput,
+              message: '操作已被取消',
+              riskLevel: policy.risk.level,
+              riskReasons: policy.risk.reasons
+            })
+            this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+            resolve({ behavior: 'deny', message: '操作已被取消' })
+          }
+        })
+      })
+    }
+    if (policy.kind === 'allow') {
+      audit('allow', 'policy', policy.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+
+    if (this.meta.permissionMode === 'bypassPermissions') {
+      audit('allow', 'permission-mode', policy.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+    if (CLAUDE_READ_TOOLS.has(toolName)) {
+      audit('allow', 'permission-mode', policy.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+    if (this.meta.permissionMode === 'plan') {
+      const message = '规划模式:只允许只读工具,不执行写入或命令。'
+      audit('deny', 'permission-mode', message)
+      return Promise.resolve({ behavior: 'deny', message })
+    }
+    if (this.meta.permissionMode === 'acceptEdits' && CLAUDE_EDIT_TOOLS.has(toolName)) {
+      audit('allow', 'permission-mode', policy.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+
     const requestId = randomUUID()
     const info: PermissionRequestInfo = {
       requestId,
       toolName,
-      input,
+      input: policyInput,
       toolUseId: opts?.toolUseID,
-      decisionReason: opts?.decisionReason
+      decisionReason: opts?.decisionReason ?? policy.reason
     }
+    audit('ask', 'permission-mode', info.decisionReason ?? policy.reason)
     this.emit({ kind: 'permission-request', request: info })
     return new Promise<PermissionResult>((resolve) => {
-      this.pending.set(requestId, { resolve, input, info })
+      this.pending.set(requestId, { resolve, input: policyInput, info })
       opts?.signal?.addEventListener('abort', () => {
         if (this.pending.delete(requestId)) {
+          writeAuditLog(this.meta.cwd, {
+            action: 'deny',
+            source: 'user',
+            toolName: policyToolName,
+            input: policyInput,
+            message: '操作已被取消',
+            riskLevel: policy.risk.level,
+            riskReasons: policy.risk.reasons
+          })
           this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
           resolve({ behavior: 'deny', message: '操作已被取消' })
         }
       })
     })
+  }
+
+  private recordContextTokens(usedTokens: number): void {
+    const model = this.meta.model !== AUTO_MODEL ? this.meta.model : this.lastRoutedModel || this.meta.model
+    const state = evaluateContextUsage({ usedTokens, model })
+    this.meta.contextTokens = state.usedTokens
+    this.meta.contextWindowTokens = state.windowTokens
+    this.meta.contextRemainingTokens = state.remainingTokens
+    this.meta.contextUsageRatio = state.usageRatio
+    this.meta.contextPressure = state.pressure
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+
+    if (state.shouldWarn && this.lastContextPressure === 'normal') {
+      this.emit({
+        kind: 'hook-event',
+        event: 'context-warning',
+        detail: `上下文已使用 ${Math.round(state.usageRatio * 100)}%,剩余约 ${state.remainingTokens} tokens`
+      })
+    }
+    this.lastContextPressure = state.pressure
   }
 
   private emit(event: AgentEvent): void {
@@ -1294,6 +1589,7 @@ export function newSessionMeta(opts: {
     costUsd: 0,
     usage: emptyUsage(),
     contextTokens: 0,
+    contextPressure: 'normal',
     createdAt: Date.now()
   }
 }

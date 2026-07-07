@@ -7,11 +7,19 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { devNull, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_GIT_BUFFER = 100 * 1024 * 1024
+// Git for Windows 不能识别 Node 的 os.devNull("\\\\.\\nul"),这里使用 Git 跨平台识别的空设备路径。
+const GIT_DEV_NULL = '/dev/null'
+export const WORKTREE_MERGE_EXCLUDE_PATHSPECS = [
+  ':(exclude).caogen/audit.log',
+  ':(exclude).caogen/tmp/**',
+  ':(exclude).caogen/index.db',
+  ':(exclude).caogen/index.db-*'
+] as const
 
 export type ConflictRisk = 'low' | 'medium' | 'unknown'
 
@@ -259,6 +267,36 @@ export function applySquashPatch(repoRoot: string, patchText: string): ApplySqua
  * "patch 涉及文件 ∩ 主工作区相对基线已改动文件" 的交集。
  * 上限:20 个文件、单文件 200KB(超限截断并标记)。
  */
+export function reverseSquashPatch(repoRoot: string, patchText: string): ApplySquashPatchResult {
+  try {
+    const root = normalizeDirectory('repoRoot', repoRoot)
+    assertGitWorktreeRoot(root, 'repoRoot')
+    if (typeof patchText !== 'string') return failure('patchText 必须是字符串')
+    if (patchText.trim() === '') {
+      return { ok: true, repoRoot: root, bytes: 0, changedFiles: 0, applied: false }
+    }
+
+    const normalizedPatch = ensureTrailingNewline(patchText)
+    const check = runGit(root, ['apply', '-R', '--check', '--whitespace=nowarn', '-'], {
+      input: normalizedPatch
+    })
+    if (!check.ok) return failure(check.error ?? 'git apply -R --check failed')
+
+    const apply = runGit(root, ['apply', '-R', '--whitespace=nowarn', '-'], { input: normalizedPatch })
+    if (!apply.ok) return failure(apply.error ?? 'git apply -R failed')
+
+    return {
+      ok: true,
+      repoRoot: root,
+      bytes: Buffer.byteLength(normalizedPatch, 'utf8'),
+      changedFiles: changedFileCountFromPatch(normalizedPatch),
+      applied: true
+    }
+  } catch (err) {
+    return failure(errorMessage(err))
+  }
+}
+
 export function getConflictFiles(
   repoRoot: string,
   worktreePath: string,
@@ -603,7 +641,7 @@ function mergeBase(repoRoot: string, worktreePath: string, repoHeadSha: string, 
 }
 
 function diffStats(worktreePath: string, baseSha: string): DiffStats {
-  const numstat = gitRaw(worktreePath, ['diff', '--numstat', baseSha, '--'])
+  const numstat = gitRaw(worktreePath, ['diff', '--numstat', baseSha, ...mergePathspecArgs()])
   let changedFiles = 0
   let insertions = 0
   let deletions = 0
@@ -628,14 +666,14 @@ function buildSquashPatchText(
   worktreePath: string,
   baseSha: string
 ): { ok: true; patchText: string } | WorktreeMergeFailure {
-  const tracked = runGit(worktreePath, ['diff', '--binary', '--full-index', baseSha, '--'])
+  const tracked = runGit(worktreePath, ['diff', '--binary', '--full-index', baseSha, ...mergePathspecArgs()])
   if (!tracked.ok) return failure(tracked.error ?? 'git diff failed')
 
   const chunks = [tracked.stdout]
   for (const file of untrackedFiles(worktreePath)) {
     const untracked = runGit(
       worktreePath,
-      ['diff', '--no-index', '--binary', '--full-index', '--', devNull, file],
+      ['diff', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
       { allowExitCodes: [0, 1] }
     )
     if (!untracked.ok) return failure(untracked.error ?? `无法生成 untracked patch: ${file}`)
@@ -661,10 +699,13 @@ function untrackedFiles(worktreePath: string): string[] {
     '--exclude-standard',
     '-z',
     '--full-name',
-    '--',
-    '.'
+    ...mergePathspecArgs()
   ])
   return output.split('\0').filter(Boolean)
+}
+
+function mergePathspecArgs(): string[] {
+  return ['--', '.', ...WORKTREE_MERGE_EXCLUDE_PATHSPECS]
 }
 
 function countTextLines(worktreePath: string, relPath: string): number {

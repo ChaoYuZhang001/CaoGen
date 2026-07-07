@@ -1,0 +1,198 @@
+#!/usr/bin/env node
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const repoRoot = process.cwd()
+const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-plan-contract-'))
+const outDir = path.join(tempRoot, 'compiled')
+const projectDir = path.join(tempRoot, 'project')
+
+try {
+  verifyExactArtifacts()
+  verifySourceContracts()
+  verifyP2ExternalPreflightContracts()
+  await verifyViewHardCap()
+  console.log('p0/p1/p2 contract smoke ok')
+} finally {
+  rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function verifyP2ExternalPreflightContracts() {
+  const env = {
+    ...process.env,
+    CAOGEN_CHINA_REAL_NETWORK: '1',
+    CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS: 'feishu',
+    FEISHU_WEBHOOK_URL: ''
+  }
+  const output = execFileSync(process.execPath, ['scripts/p2-external-preflight.mjs'], {
+    cwd: repoRoot,
+    env,
+    encoding: 'utf8'
+  })
+  const report = JSON.parse(output)
+  const china = report.checks.find((check) => check.name === 'china_real_network')
+  assert(china, 'preflight report must include china_real_network check')
+  assert(
+    Array.isArray(china.requiredTargets) && china.requiredTargets.join(',') === 'feishu',
+    'preflight must preserve CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS'
+  )
+  assert(
+    Array.isArray(china.selectedTargets) && china.selectedTargets.length === 1 && china.selectedTargets[0].name === 'feishu',
+    'preflight must only require selected China real-network targets when a filter is set'
+  )
+  assert(
+    china.failures.some((failure) => failure.includes('feishu missing env')),
+    'preflight must report the selected missing target'
+  )
+  assert(
+    !china.failures.some((failure) => failure.includes('dingtalk missing env') || failure.includes('gitee_issue missing env')),
+    'preflight target filter must not fail unselected targets'
+  )
+}
+
+function verifyExactArtifacts() {
+  const requiredFiles = [
+    'caogen.md',
+    'src/main/agent/tools/index.ts',
+    'src/main/agent/tools/search-replace.ts',
+    'src/main/agent/tools/view.ts',
+    'src/main/sandbox/docker-sandbox.ts',
+    'src/main/sandbox/system-sandbox.ts',
+    'src/main/browser/browser-manager.ts',
+    'src/main/agent/tools/browser-tools.ts',
+    'src/main/git/git-helper.ts',
+    'src/main/agent/tools/git-tools.ts',
+    'src/main/indexer/index.ts',
+    'src/main/agent/context-loader.ts'
+  ]
+  for (const relPath of requiredFiles) {
+    assert(existsSync(path.join(repoRoot, relPath)), `required artifact missing: ${relPath}`)
+  }
+}
+
+function verifySourceContracts() {
+  const gitignore = readFileSync(path.join(repoRoot, '.gitignore'), 'utf8')
+  for (const marker of ['.caogen/index.db', '.caogen/tmp/', '.caogen/audit.log']) {
+    assert(gitignore.includes(marker), `.gitignore must ignore runtime artifact ${marker}`)
+  }
+
+  const browserTools = readFileSync(path.join(repoRoot, 'src/main/agent/tools/browser-tools.ts'), 'utf8')
+  assert(
+    browserTools.includes("../../browser/browser-manager.js") ||
+      browserTools.includes('../../browser/browser-manager.js'),
+    'browser tools must route through src/main/browser/browser-manager.ts'
+  )
+
+  const prompt = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+  for (const marker of [
+    'git_status',
+    'git_diff',
+    'git_commit',
+    'git_push',
+    'git_create_pr',
+    'git_merge',
+    'task_decompose',
+    'task_dispatch_dag',
+    'task_decompose_and_dispatch_dag'
+  ]) {
+    assert(prompt.includes(marker), `system prompt must mention ${marker}`)
+  }
+  const openaiTools = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
+  assert(openaiTools.includes('taskTimeoutMs'), 'DAG OpenAI tools must expose taskTimeoutMs watchdog control')
+  const dagScheduler = readFileSync(path.join(repoRoot, 'src/main/agent/dag-scheduler.ts'), 'utf8')
+  assert(dagScheduler.includes('onTaskTimeout'), 'DAG scheduler must expose a timeout callback')
+  assert(prompt.includes('openAiEndpoint'), 'OpenAIEngine must use a shared endpoint builder')
+  assert(prompt.includes('api\\/v\\d+') || prompt.includes('api/v'), 'OpenAI endpoint builder must recognize /api/vN endpoints')
+  assert(prompt.includes('compatible-mode'), 'OpenAI endpoint builder must recognize DashScope compatible-mode endpoints')
+
+  const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+  for (const scriptName of [
+    'test:plan-contract',
+    'test:search-replace',
+    'test:git-tools',
+    'test:p2-ide-build-and-vscode:required',
+    'test:p2-ide:required'
+  ]) {
+    assert(packageJson.scripts?.[scriptName], `package.json missing ${scriptName}`)
+  }
+  assert(
+    packageJson.scripts['test:p2-ide:required'].includes('test:jetbrains-ide-interaction:required'),
+    'test:p2-ide:required must include real JetBrains IDE interaction'
+  )
+
+  const deepTest = readFileSync(path.join(repoRoot, 'scripts/deep-test.mjs'), 'utf8')
+  assert(deepTest.includes('p0-p1-p2-contract-smoke.mjs'), 'deep-test must include plan contract smoke')
+
+  const p2RequiredGate = readFileSync(path.join(repoRoot, 'scripts/p2-required-gate.mjs'), 'utf8')
+  assert(p2RequiredGate.includes("name: 'ide_build_and_vscode_required'"), 'P2 required gate must use precise IDE build/VS Code check name')
+  assert(p2RequiredGate.includes('test:p2-ide-build-and-vscode:required'), 'P2 required gate must call the precise IDE build/VS Code script')
+
+  const chinaParity = readFileSync(path.join(repoRoot, 'scripts/china-tool-call-parity.mjs'), 'utf8')
+  assert(chinaParity.includes('loadProductToolMap'), 'China tool-call parity must load product tool schemas')
+  assert(chinaParity.includes('OPENAI_CODING_TOOLS'), 'China tool-call parity must use OPENAI_CODING_TOOLS')
+  assert(chinaParity.includes('search_code'), 'China tool-call parity must cover product search_code tool')
+  assert(chinaParity.includes('search_replace'), 'China tool-call parity must cover product search_replace tool')
+  assert(!chinaParity.includes("expectedName: 'search_files'"), 'China tool-call parity must not use removed search_files schema')
+
+  const chinaRealNetwork = readFileSync(path.join(repoRoot, 'scripts/china-real-network-smoke.mjs'), 'utf8')
+  assert(chinaRealNetwork.includes('assertRequiredPublicEndpoint'), 'China real-network required must reject mock/local endpoints')
+  assert(
+    chinaRealNetwork.includes('required mode needs CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS'),
+    'China real-network required must require explicit target declaration'
+  )
+
+  const engineContract = readFileSync(path.join(repoRoot, 'src/main/engine.ts'), 'utf8')
+  assert(engineContract.includes('emitSyntheticEvent?'), 'Engine must expose optional synthetic event persistence hook')
+
+  const sessionManager = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
+  for (const marker of [
+    'dagExecutionSnapshots',
+    'parent.emitSyntheticEvent(event)',
+    "kind: 'task-dag-update'",
+    'this.dagExecutionSnapshots.values()'
+  ]) {
+    assert(sessionManager.includes(marker), `SessionManager missing DAG persistence marker ${marker}`)
+  }
+}
+
+async function verifyViewHardCap() {
+  mkdirSync(projectDir, { recursive: true })
+  const filePath = path.join(projectDir, 'large.txt')
+  writeFileSync(filePath, Array.from({ length: 300 }, (_, index) => `line ${index + 1}`).join('\n'), 'utf8')
+
+  execFileSync(
+    process.execPath,
+    [
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+      'src/main/agent/tools/view.ts',
+      '--outDir',
+      outDir,
+      '--rootDir',
+      'src',
+      '--target',
+      'ES2022',
+      '--module',
+      'NodeNext',
+      '--moduleResolution',
+      'NodeNext',
+      '--types',
+      'node',
+      '--skipLibCheck'
+    ],
+    { cwd: repoRoot, stdio: 'inherit' }
+  )
+
+  const view = await import(pathToFileURL(path.join(outDir, 'main/agent/tools/view.js')).href)
+  const result = await view.runView(projectDir, { file_path: filePath, start_line: 1, end_line: 10_000 })
+  assert(result.ok, `view should read large text fixture: ${result.error ?? 'unknown error'}`)
+  assert(result.startLine === 1, `expected startLine=1, got ${result.startLine}`)
+  assert(result.endLine === 200, `view must hard-cap explicit end_line to 200 rows, got ${result.endLine}`)
+  assert(result.truncated === true, 'view must report truncated=true for capped reads')
+}
+
+function assert(condition, message = 'assertion failed') {
+  if (!condition) throw new Error(message)
+}

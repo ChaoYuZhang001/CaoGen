@@ -61,6 +61,7 @@ export default function BrowserPanel(): React.JSX.Element {
   const sendMessage = useStore((s) => s.sendMessage)
   const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://example.com')
   const [note, setNote] = useState('')
+  const [manualTakeover, setManualTakeover] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -120,6 +121,12 @@ export default function BrowserPanel(): React.JSX.Element {
           <button className="btn btn-ghost btn-sm" onClick={() => void reload()}>
             {t('refresh')}
           </button>
+          <button
+            className={`btn ${manualTakeover ? 'btn-primary' : 'btn-ghost'} btn-sm`}
+            onClick={() => setManualTakeover((value) => !value)}
+          >
+            {manualTakeover ? '交还 Agent' : '人工接管'}
+          </button>
           <button className="btn btn-ghost btn-sm" onClick={() => void closeBrowser()}>
             {t('close')}
           </button>
@@ -147,6 +154,11 @@ export default function BrowserPanel(): React.JSX.Element {
       {(browserError || browserMessage) && (
         <div className={`notice ${browserError ? 'notice-error' : 'notice-info'} workspace-diff-notice`}>
           {browserError || browserMessage}
+        </div>
+      )}
+      {manualTakeover && (
+        <div className="notice notice-info workspace-diff-notice browser-manual-takeover">
+          人工接管中：你可以直接操作页面；需要 Agent 继续自动化时点击“交还 Agent”。
         </div>
       )}
 

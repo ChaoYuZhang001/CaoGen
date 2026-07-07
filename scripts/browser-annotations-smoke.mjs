@@ -11,9 +11,9 @@ const annotationsRoot = path.join(tempRoot, 'annotations')
 
 try {
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/browserAnnotations.ts',
       '--outDir',
       outDir,

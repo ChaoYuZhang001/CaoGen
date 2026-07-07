@@ -5,6 +5,7 @@ import type {
   PermissionModeId,
   PermissionRequestInfo,
   RewindResult,
+  SdkAgentInfo,
   SendMessagePayload,
   SessionMeta,
   TranscriptEntry
@@ -27,8 +28,12 @@ export interface Engine {
   respondPermission(requestId: string, allow: boolean, message?: string): void
   pendingPermissions(): PermissionRequestInfo[]
   getTranscript(): TranscriptEntry[]
+  /** 由 SessionManager 注入的本地合成事件,用于让编排/状态事件进入同一条转录链。 */
+  emitSyntheticEvent?(event: AgentEvent): void
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
+  /** Claude SDK 原生 agents 列表;不支持的引擎可不实现。 */
+  supportedAgents?(): Promise<SdkAgentInfo[]>
   rename(title: string): void
   /** 文件检查点回退(引擎可选;不支持则返回 canRewind:false) */
   rewindFiles?(messageId: string, dryRun: boolean): Promise<RewindResult>

@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
 import { TranscriptWriter } from './transcript'
 import { decryptToken, getProvider, listProviders } from './providers'
 import {
@@ -11,6 +13,7 @@ import {
 } from './scheduler'
 import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
+import { resolveSessionModelRoute } from './model/session-routing'
 import {
   EDIT_TOOLS,
   OPENAI_CODING_TOOLS,
@@ -18,6 +21,30 @@ import {
   RESPONSES_CODING_TOOLS,
   executeCodingTool
 } from './openaiTools'
+import type { ToolExecResult } from './openaiTools'
+import { buildProjectContextSystemAppendSync } from './agent/context-loader'
+import { buildLayeredMemoryPrompt } from './memory/memory-retriever'
+import { buildSkillInvocationPrompt } from './skill/skill-invocation'
+import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
+import {
+  adaptChatCompletionRequest,
+  buildChinaProviderPromptAppend,
+  type ProviderAdapterContext
+} from './model/llm-providers/china-provider-adapter'
+import {
+  DEFAULT_KEEP_RECENT_MESSAGES,
+  estimateContextTokens,
+  evaluateContextUsage,
+  planCompressionBoundary,
+  type ContextUsageState
+} from './agent/context-compressor'
+import {
+  GUI_TEMPORARY_GRANT_MESSAGE,
+  decideGuiPermission,
+  grantTemporaryGuiAutomation
+} from './permission/permission-manager'
+import { writeAuditLog } from './permission/audit-log'
+import { evaluateToolPermission } from './permission/tool-permission'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
@@ -29,6 +56,7 @@ import type {
   PermissionRequestInfo,
   SendMessagePayload,
   SessionMeta,
+  ToolRiskLevel,
   TranscriptEntry,
   UsageTotals
 } from '../shared/types'
@@ -84,21 +112,6 @@ function releaseSlot(): void {
   }
 }
 
-/** 历史压缩触发阈值(估算 token);超过则把旧段摘要 */
-const COMPRESS_TRIGGER_TOKENS = 48_000
-/** 压缩时至少保留的最近消息条数(在此范围内找 user 边界) */
-const KEEP_RECENT_MSGS = 12
-
-/** 粗估消息 token 数:中英混排按 ~3 字符/token 保守估计 */
-function estimateTokens(messages: ChatMessage[]): number {
-  let chars = 0
-  for (const m of messages) {
-    chars += typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length
-    if (m.tool_calls) chars += JSON.stringify(m.tool_calls).length
-  }
-  return Math.ceil(chars / 3)
-}
-
 /**
  * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
  * - 'responses':OpenAI 官方 Responses API(/v1/responses,默认)
@@ -128,6 +141,7 @@ export class OpenAIEngine implements Engine {
   >()
   /** 本轮流式累积的工具调用(SSE delta 分片拼装) */
   private pendingToolCalls: PendingToolCall[] = []
+  private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
 
   constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
     this.meta = meta
@@ -203,7 +217,7 @@ export class OpenAIEngine implements Engine {
     // 新一轮:重置故障切换防打转记录
     this.triedProviders = new Set([this.meta.providerId])
     // auto 模式:跨厂商路由(openai 引擎切 Provider 无需重建,authConfig 每请求现读)
-    if (this.meta.model === AUTO_MODEL) this.autoRoute(payload.text)
+    if (this.meta.model === AUTO_MODEL) this.autoRoute(payload)
     this.abort = new AbortController()
     this.setStatus('running')
     void this.runResponse(payload, this.abort)
@@ -213,16 +227,44 @@ export class OpenAIEngine implements Engine {
   private routedModel?: string
 
   /** 跨厂商智能路由:候选 = 所有有 baseUrl 的 Provider(官方 Anthropic 空址不适配本引擎) */
-  private autoRoute(text: string): void {
+  private autoRoute(payload: SendMessagePayload): void {
     try {
+      const settings = getSettings()
+      if (settings.smartModelRoutingEnabled) {
+        const smart = resolveSessionModelRoute({
+          enabled: true,
+          currentModel: this.meta.model,
+          providerId: this.meta.providerId,
+          providers: listProviders(),
+          engine: this.meta.engine,
+          payload,
+          strategy: settings.schedulerStrategy,
+          sessionCostUsd: this.meta.costUsd,
+          sessionBudgetUsd: this.meta.budgetUsd,
+          settingsBudgetUsd: settings.budgetUsdPerSession
+        })
+        if (smart.kind === 'routed') {
+          this.routedModel = smart.model
+          if (smart.switchedProvider) this.meta.providerId = smart.providerId
+          this.emit({
+            kind: 'routing',
+            model: smart.model,
+            reason: smart.reason,
+            providerId: smart.providerId,
+            crossValidationPlan: smart.crossValidationPlan
+          })
+          this.emit({ kind: 'meta', meta: { ...this.meta } })
+          return
+        }
+      }
       // 候选:有端点且已配 key 的厂商(没 key 的选中必失败,不进池)
       const candidates = listProviders()
         .filter((p) => p.baseUrl.trim().length > 0 && p.hasToken)
         .map((p) => ({ id: p.id, name: p.name, models: p.models }))
       const decision = pickModelAcrossProviders({
         candidates,
-        text,
-        strategy: getSettings().schedulerStrategy,
+        text: payload.text,
+        strategy: settings.schedulerStrategy,
         currentProviderId: this.meta.providerId
       })
       if (!decision) return
@@ -261,6 +303,16 @@ export class OpenAIEngine implements Engine {
     const pending = this.pendingPerms.get(requestId)
     if (!pending) return
     this.pendingPerms.delete(requestId)
+    if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && pending.info.toolName.startsWith('gui_')) {
+      grantTemporaryGuiAutomation()
+    }
+    writeAuditLog(this.meta.cwd, {
+      action: allow ? 'allow' : 'deny',
+      source: 'user',
+      toolName: pending.info.toolName,
+      input: pending.info.input,
+      message
+    })
     this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
     pending.resolve({ allow, message })
   }
@@ -271,24 +323,130 @@ export class OpenAIEngine implements Engine {
 
   /** 按 permissionMode 决定工具是否需要人工审批;需要则挂起等 UI 决定 */
   private async gateTool(name: string, input: Record<string, unknown>, toolUseId: string): Promise<{ allow: boolean; message?: string }> {
-    const mode = this.meta.permissionMode
-    if (mode === 'bypassPermissions') return { allow: true }
-    if (READONLY_TOOLS.has(name)) return { allow: true }
-    if (mode === 'plan') {
-      return { allow: false, message: '规划模式:只允许只读工具(read_file/list_dir),不执行写入或命令' }
+    const settings = getSettings()
+    const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
+    if (policy.kind === 'deny') {
+      writeAuditLog(this.meta.cwd, {
+        action: 'deny',
+        source: 'policy',
+        toolName: name,
+        input,
+        message: policy.reason,
+        riskLevel: policy.risk.level,
+        riskReasons: policy.risk.reasons
+      })
+      return { allow: false, message: policy.reason }
     }
-    if (mode === 'acceptEdits' && EDIT_TOOLS.has(name)) return { allow: true }
+
+    const guiDecision = decideGuiPermission(name, settings)
+    if (guiDecision.kind === 'deny') {
+      this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: false, message: guiDecision.reason }
+    }
+    if (guiDecision.kind === 'allow') {
+      this.auditGateDecision('allow', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: true }
+    }
+    if (guiDecision.kind === 'ask') {
+      this.auditGateDecision('ask', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
+      return this.requestToolPermission(name, input, toolUseId, guiDecision.reason)
+    }
+    if (policy.kind === 'allow') {
+      writeAuditLog(this.meta.cwd, {
+        action: 'allow',
+        source: 'policy',
+        toolName: name,
+        input,
+        message: policy.reason,
+        riskLevel: policy.risk.level,
+        riskReasons: policy.risk.reasons
+      })
+      return { allow: true, message: policy.reason }
+    }
+
+    const mode = this.meta.permissionMode
+    if (mode === 'bypassPermissions') {
+      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: true }
+    }
+    if (READONLY_TOOLS.has(name)) {
+      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: true }
+    }
+    if (mode === 'plan') {
+      this.auditGateDecision('deny', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: false, message: '规划模式:只允许只读工具(view/read_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose),不执行写入或命令' }
+    }
+    if (mode === 'acceptEdits' && EDIT_TOOLS.has(name)) {
+      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: true }
+    }
     // default 模式的写入/bash,以及 acceptEdits 模式的 bash → 人工审批
+    this.auditGateDecision('ask', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
+    return this.requestToolPermission(name, input, toolUseId, policy.reason)
+  }
+
+  private auditGateDecision(
+    action: 'allow' | 'deny' | 'ask',
+    source: 'policy' | 'permission-mode',
+    toolName: string,
+    input: Record<string, unknown>,
+    message: string,
+    riskLevel: ToolRiskLevel,
+    riskReasons: string[]
+  ): void {
+    writeAuditLog(this.meta.cwd, { action, source, toolName, input, message, riskLevel, riskReasons })
+  }
+
+  private requestToolPermission(
+    name: string,
+    input: Record<string, unknown>,
+    toolUseId: string,
+    decisionReason?: string
+  ): Promise<{ allow: boolean; message?: string }> {
     const requestId = randomUUID()
-    const info: PermissionRequestInfo = { requestId, toolName: name, input, toolUseId }
+    const info: PermissionRequestInfo = { requestId, toolName: name, input, toolUseId, decisionReason }
     this.emit({ kind: 'permission-request', request: info })
     return new Promise((resolve) => {
       this.pendingPerms.set(requestId, { resolve, info })
     })
   }
 
+  private async executeAllowedTool(name: string, input: Record<string, unknown>): Promise<ToolExecResult> {
+    const settings = getSettings()
+    const exec = await executeCodingTool(name, input, this.meta.cwd, {
+      sandboxMode: settings.sandboxMode,
+      dockerImage: settings.sandboxDockerImage,
+      chinaMirrorEnabled: settings.chinaEcosystemMirrorEnabled,
+      npmRegistry: settings.chinaNpmRegistry,
+      pipIndexUrl: settings.chinaPipIndexUrl,
+      dockerRegistryMirror: settings.chinaDockerRegistryMirror,
+      sessionId: this.meta.id
+    })
+    const executionPolicy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
+    writeAuditLog(this.meta.cwd, {
+      action: 'execute',
+      source: 'sandbox',
+      toolName: name,
+      input,
+      ok: exec.ok,
+      riskLevel: executionPolicy.risk.level,
+      riskReasons: executionPolicy.risk.reasons,
+      sandboxMode: exec.sandboxMode,
+      modeUsed: exec.modeUsed,
+      sandboxed: exec.sandboxed,
+      fallbackReason: exec.fallbackReason
+    })
+    return exec
+  }
+
   getTranscript(): TranscriptEntry[] {
     return this.transcript.read()
+  }
+
+  emitSyntheticEvent(event: AgentEvent): void {
+    if (this.disposed) return
+    this.emit(event)
   }
 
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
@@ -319,13 +477,14 @@ export class OpenAIEngine implements Engine {
 
   private async runResponse(payload: SendMessagePayload, controller: AbortController): Promise<void> {
     try {
+      const payloadWithMemory = await this.augmentPayloadWithLayeredMemory(payload)
       const auth = this.authConfig()
       if (!auth.token) throw new Error(this.missingKeyMessage())
 
       if (this.protocol() === 'chat') {
-        await this.runChatCompletion(payload, controller, auth)
+        await this.runChatCompletion(payloadWithMemory, controller, auth)
       } else {
-        await this.runResponsesLoop(payload, controller, auth)
+        await this.runResponsesLoop(payloadWithMemory, controller, auth)
       }
       const latency = Date.now() - this.turnStartedAt
       recordSuccess(this.meta.providerId, latency)
@@ -343,6 +502,35 @@ export class OpenAIEngine implements Engine {
       // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
       if (await this.tryFailover(text, payload)) return
       this.finishTurn(true, text, 'error')
+    }
+  }
+
+  private async augmentPayloadWithLayeredMemory(payload: SendMessagePayload): Promise<SendMessagePayload> {
+    if (!payload.text.trim()) return payload
+    try {
+      const skillPrompt = buildSkillInvocationPrompt({
+        enabled: getSettings().autoSkillLearningEnabled,
+        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
+        query: payload.text,
+        maxSkills: 2
+      })
+      const memory = await buildLayeredMemoryPrompt({
+        rootDir: openAiMemoryRoot(),
+        query: payload.text,
+        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
+        limit: 6
+      })
+      const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
+      if (!memory.trim() && !skillPrompt.trim() && !ideDocumentContext.trim()) return payload
+      return {
+        ...payload,
+        text: [skillPrompt, ideDocumentContext, memory, '## Current User Request', payload.text]
+          .filter((item) => item.trim().length > 0)
+          .join('\n\n')
+      }
+    } catch (error) {
+      console.error('[caogen] layered memory retrieval failed:', error)
+      return payload
     }
   }
 
@@ -370,16 +558,18 @@ export class OpenAIEngine implements Engine {
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       if (controller.signal.aborted) throw new Error('已中断')
       this.pendingResponseCalls = []
+      const instructions = String(this.systemMessage().content ?? '')
 
       const body = {
         model: this.effectiveModel(),
+        instructions,
         input,
         tools: RESPONSES_CODING_TOOLS,
         ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
         stream: true
       }
       const res = await this.fetchWithRetry(
-        `${auth.baseUrl}/v1/responses`,
+        openAiEndpoint(auth.baseUrl, 'responses'),
         {
           method: 'POST',
           headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
@@ -417,7 +607,7 @@ export class OpenAIEngine implements Engine {
           resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
           isError = true
         } else {
-          const exec = await executeCodingTool(call.name, args, this.meta.cwd)
+          const exec = await this.executeAllowedTool(call.name, args)
           resultText = exec.output
           isError = !exec.ok
         }
@@ -490,23 +680,28 @@ export class OpenAIEngine implements Engine {
     this.chatHistory.push(userMessage)
 
     try {
-      // 轮次开始前压缩过长历史(仅在轮边界压,不打断进行中的 tool_call 配对)
-      await this.compressHistoryIfNeeded(auth)
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         if (controller.signal.aborted) throw new Error('已中断')
         this.pendingToolCalls = []
         // 每次循环重置流式文本缓冲(assistantText 聚合本轮所有文本段)
         const textBefore = this.assistantText
+        const system = this.systemMessage()
+        // 每次模型请求前评估上下文压力;压缩只落在 user 轮边界,不会切断 tool_call/tool_result 配对。
+        await this.compressHistoryIfNeeded(auth, system)
 
-        const body = {
+        const baseBody = {
           model: this.effectiveModel(),
-          messages: [this.systemMessage(), ...this.chatHistory],
+          messages: [system, ...this.chatHistory],
           tools: OPENAI_CODING_TOOLS,
           stream: true,
           stream_options: { include_usage: true }
         }
+        const adaptation = adaptChatCompletionRequest(baseBody, this.providerAdapterContext())
+        for (const warning of adaptation.warnings) {
+          this.emit({ kind: 'hook-event', event: 'provider-adapter', detail: warning })
+        }
         const res = await this.fetchWithRetry(
-          `${auth.baseUrl}/v1/chat/completions`,
+          openAiEndpoint(auth.baseUrl, 'chat/completions'),
           {
             method: 'POST',
             headers: {
@@ -514,7 +709,7 @@ export class OpenAIEngine implements Engine {
               'content-type': 'application/json',
               ...auth.headers
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(adaptation.body),
             signal: controller.signal
           },
           controller.signal
@@ -568,7 +763,7 @@ export class OpenAIEngine implements Engine {
             resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
             isError = true
           } else {
-            const exec = await executeCodingTool(call.name, args, this.meta.cwd)
+            const exec = await this.executeAllowedTool(call.name, args)
             resultText = exec.output
             isError = !exec.ok
           }
@@ -591,7 +786,7 @@ export class OpenAIEngine implements Engine {
   }
 
   /**
-   * chat 历史压缩:估算 token 超阈值时,把"较旧的一段"摘要成一条 system 便签,
+   * chat 历史压缩:上下文达到 90% 自动压缩阈值时,把"较旧的一段"摘要成一条 system 便签,
    * 保留最近若干轮原文。关键约束 —— 绝不切断 tool_call 配对:切点必须落在
    * 一条 user 消息之前(user 一定是干净的轮边界)。摘要失败则跳过压缩(不阻塞对话)。
    */
@@ -599,17 +794,18 @@ export class OpenAIEngine implements Engine {
     baseUrl: string
     token: string
     headers: Record<string, string>
-  }): Promise<void> {
-    const estimate = estimateTokens(this.chatHistory)
-    if (estimate < COMPRESS_TRIGGER_TOKENS) return
+  }, systemMessage: ChatMessage): Promise<void> {
+    const before = this.currentContextUsage(systemMessage)
+    this.recordContextUsage(before)
+    if (!before.shouldCompress) return
 
-    // 找切点:保留末尾 KEEP_RECENT_MSGS 条内、最靠前的一个 user 边界。
+    // 找切点:保留末尾 DEFAULT_KEEP_RECENT_MESSAGES 条内、最靠前的一个 user 边界。
     // 切点之前的消息被摘要;之后(含该 user)保留原文。
-    const keepFrom = this.findUserBoundary(Math.max(0, this.chatHistory.length - KEEP_RECENT_MSGS))
-    if (keepFrom <= 1) return // 没有可压缩的旧段(全是近期轮次)
+    const boundary = planCompressionBoundary(this.chatHistory, DEFAULT_KEEP_RECENT_MESSAGES)
+    if (!boundary.canCompress) return // 没有可压缩的旧段(全是近期轮次)
 
-    const older = this.chatHistory.slice(0, keepFrom)
-    const recent = this.chatHistory.slice(keepFrom)
+    const older = this.chatHistory.slice(0, boundary.keepFrom)
+    const recent = this.chatHistory.slice(boundary.keepFrom)
     const summary = await this.summarize(older, auth).catch(() => null)
     if (!summary) return // 摘要失败:保持原样,下轮再试
 
@@ -617,19 +813,42 @@ export class OpenAIEngine implements Engine {
       { role: 'system', content: `[早期对话摘要 · 由 CaoGen 自动压缩]\n${summary}` },
       ...recent
     ]
+    const after = this.currentContextUsage(systemMessage)
+    this.recordContextUsage(after)
     this.emit({
       kind: 'hook-event',
       event: 'context-compressed',
-      detail: `压缩 ${older.length} 条历史为摘要,保留最近 ${recent.length} 条`
+      detail: `上下文 ${Math.round(before.usageRatio * 100)}% 触发自动压缩:压缩 ${older.length} 条历史为摘要,保留最近 ${recent.length} 条;估算 token ${before.usedTokens} → ${after.usedTokens}`
     })
   }
 
-  /** 从 index 起向后找第一条 user 消息的下标(轮边界);找不到返回原 index */
-  private findUserBoundary(from: number): number {
-    for (let i = from; i < this.chatHistory.length; i++) {
-      if (this.chatHistory[i].role === 'user') return i
+  private currentContextUsage(systemMessage: ChatMessage): ContextUsageState {
+    return evaluateContextUsage({
+      usedTokens: estimateContextTokens([systemMessage, ...this.chatHistory]),
+      model: this.effectiveModel()
+    })
+  }
+
+  private recordContextUsage(state: ContextUsageState): void {
+    this.meta.contextTokens = state.usedTokens
+    this.meta.contextWindowTokens = state.windowTokens
+    this.meta.contextRemainingTokens = state.remainingTokens
+    this.meta.contextUsageRatio = state.usageRatio
+    this.meta.contextPressure = state.pressure
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+
+    if (state.shouldWarn && this.lastContextPressure === 'normal') {
+      this.emit({
+        kind: 'hook-event',
+        event: 'context-warning',
+        detail: `上下文已使用 ${Math.round(state.usageRatio * 100)}%,剩余约 ${state.remainingTokens} tokens`
+      })
     }
-    return from
+    this.lastContextPressure = state.pressure
+  }
+
+  private recordContextTokens(usedTokens: number): void {
+    this.recordContextUsage(evaluateContextUsage({ usedTokens, model: this.effectiveModel() }))
   }
 
   /** 用当前模型把一段历史压成简洁中文摘要(非流式,低温度,不带工具) */
@@ -645,7 +864,7 @@ export class OpenAIEngine implements Engine {
       })
       .join('\n')
       .slice(0, 40_000)
-    const res = await fetch(`${auth.baseUrl}/v1/chat/completions`, {
+    const res = await fetch(openAiEndpoint(auth.baseUrl, 'chat/completions'), {
       method: 'POST',
       headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
       body: JSON.stringify({
@@ -672,12 +891,25 @@ export class OpenAIEngine implements Engine {
 
   /** 编码 Agent 系统提示:工作目录 + 人设(每请求现算,设置变更即时生效) */
   private systemMessage(): ChatMessage {
-    const persona = getSettings().persona.trim()
+    const settings = getSettings()
+    const persona = settings.persona.trim()
+    const projectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
+    const providerPrompt = buildChinaProviderPromptAppend(this.providerAdapterContext())
     const lines = [
+      projectContext,
+      providerPrompt,
       '你是 CaoGen 桌面工作室里的编码 Agent。',
       `当前工作目录: ${this.meta.cwd}`,
-      '你可以使用工具(bash/read_file/write_file/edit_file/list_dir)读写项目文件、执行命令。',
-      '修改文件前先读它;优先用 edit_file 做精确修改;完成后简要说明做了什么。',
+      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/git_status/git_diff/git_commit/git_push/git_create_pr/git_merge)读写项目文件、执行命令和完成 Git 流程。',
+      '开始任务时先用 search_symbol/search_code/find_file 定位相关文件和符号,不要盲猜路径;修改文件前用 get_dependencies 查看正向/反向依赖影响面。',
+      '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
+      'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
+      '修改前可用 search_replace dry_run=true 预览 diff;完成后简要说明改动、测试和备份路径。',
+      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;git_commit 会运行项目配置的 lint/test;git_push/git_create_pr/git_merge 属高风险操作,必须尊重权限审批和失败输出。',
+      '复杂或跨模块任务先用 task_decompose 生成 DAG;用户明确要求并行/多 Agent 时,经权限审批后使用 task_dispatch_dag 或 task_decompose_and_dispatch_dag 启动子任务调度,不要把大型需求硬塞进单 Agent。',
+      settings.guiAutomationEnabled
+        ? '如需操作真实桌面应用,可使用 gui_list_windows/gui_activate_window/gui_screenshot/gui_click/gui_type/gui_scroll/gui_hotkey;这些高风险工具必须由用户审批或临时授权。'
+        : 'GUI 自动化工具默认关闭;除非用户在设置中启用并审批,不要尝试操作真实桌面应用。',
       persona
     ].filter(Boolean)
     return { role: 'system', content: lines.join('\n') }
@@ -760,8 +992,7 @@ export class OpenAIEngine implements Engine {
     const totals: UsageTotals = { input, output, cacheRead, cacheCreation: 0 }
     this.turnUsage = totals
     this.meta.usage = totals
-    this.meta.contextTokens = input + cacheRead
-    this.emit({ kind: 'meta', meta: { ...this.meta } })
+    this.recordContextTokens(input + cacheRead)
   }
 
   /**
@@ -945,8 +1176,7 @@ export class OpenAIEngine implements Engine {
     if (!usage) return
     this.turnUsage = usage
     this.meta.usage = usage
-    this.meta.contextTokens = usage.input + usage.cacheRead + usage.cacheCreation
-    this.emit({ kind: 'meta', meta: { ...this.meta } })
+    this.recordContextTokens(usage.input + usage.cacheRead + usage.cacheCreation)
   }
 
   /** 缺 key 文案:用当前 Provider 名而非写死 'OpenAI'(DeepSeek 等场景不再误导) */
@@ -982,6 +1212,11 @@ export class OpenAIEngine implements Engine {
     this.meta.status = status
     if (error) this.meta.lastError = error
     this.emit({ kind: 'status', status, error })
+  }
+
+  private providerAdapterContext(): ProviderAdapterContext {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    return { provider, model: this.effectiveModel() }
   }
 }
 
@@ -1021,6 +1256,17 @@ function imageToDataUrl(image: ImageAttachmentView): string | null {
   } catch {
     return null
   }
+}
+
+function openAiMemoryRoot(): string {
+  return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
+}
+
+function openAiEndpoint(baseUrl: string, endpoint: 'chat/completions' | 'responses'): string {
+  const clean = baseUrl.replace(/\/+$/, '')
+  if (clean.toLowerCase().endsWith(`/${endpoint}`)) return clean
+  if (/\/(?:v\d+|api\/v\d+|compatible-mode\/v\d+)$/i.test(clean)) return `${clean}/${endpoint}`
+  return `${clean}/v1/${endpoint}`
 }
 
 function parseHeaders(raw: string | undefined): Record<string, string> {

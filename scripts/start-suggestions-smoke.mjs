@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -17,26 +18,29 @@ const outDir = path.join(tempRoot, 'compiled')
 const projectDir = path.join(tempRoot, 'repo')
 const noGitDir = path.join(tempRoot, 'no-git')
 const largeDir = path.join(tempRoot, 'large')
+const timeoutDir = path.join(tempRoot, 'git-timeout')
+const fakeGitDir = path.join(tempRoot, 'fake-git-bin')
 
 try {
+  const tscArgs = [
+    'tsc',
+    'src/main/startSuggestions.ts',
+    '--outDir',
+    outDir,
+    '--target',
+    'ES2022',
+    '--module',
+    'NodeNext',
+    '--moduleResolution',
+    'NodeNext',
+    '--types',
+    'node',
+    '--skipLibCheck',
+    '--esModuleInterop'
+  ]
   execFileSync(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    [
-      'tsc',
-      'src/main/startSuggestions.ts',
-      '--outDir',
-      outDir,
-      '--target',
-      'ES2022',
-      '--module',
-      'NodeNext',
-      '--moduleResolution',
-      'NodeNext',
-      '--types',
-      'node',
-      '--skipLibCheck',
-      '--esModuleInterop'
-    ],
+    npxCommand(),
+    npxArgs(tscArgs),
     { cwd: repoRoot, stdio: 'inherit' }
   )
 
@@ -119,6 +123,35 @@ try {
     'large README should be skipped instead of read for TODO suggestions'
   )
 
+  mkdirSync(timeoutDir, { recursive: true })
+  writeFileSync(path.join(timeoutDir, 'package.json'), '{"name":"git-timeout","scripts":{"typecheck":"tsc --noEmit"}}\n', 'utf8')
+  mkdirSync(fakeGitDir, { recursive: true })
+  const fakeGitPath = path.join(fakeGitDir, process.platform === 'win32' ? 'git.cmd' : 'git')
+  writeFileSync(
+    fakeGitPath,
+    process.platform === 'win32'
+      ? '@echo off\r\nping -n 6 127.0.0.1 > nul\r\nexit /b 1\r\n'
+      : '#!/bin/sh\nsleep 5\nexit 1\n',
+    'utf8'
+  )
+  if (process.platform !== 'win32') chmodSync(fakeGitPath, 0o755)
+  const previousPath = process.env.PATH
+  process.env.PATH = `${fakeGitDir}${path.delimiter}${previousPath || ''}`
+  const timeoutStarted = Date.now()
+  try {
+    const timeoutSuggestions = startSuggestions.getStartSuggestions(timeoutDir)
+    const elapsedMs = Date.now() - timeoutStarted
+    assert(elapsedMs < 3000, `git timeout path should return promptly, took ${elapsedMs}ms`)
+    assertHasSource(timeoutSuggestions, 'package-json')
+    assert(
+      !timeoutSuggestions.some((suggestion) => suggestion.source === 'git-status'),
+      'timed out git status should not emit git suggestions'
+    )
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+  }
+
   console.log('startSuggestions smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
@@ -150,6 +183,14 @@ function findCompiledModule(root) {
     }
   }
   throw new Error(`compiled startSuggestions.js not found under ${root}`)
+}
+
+function npxCommand() {
+  return process.platform === 'win32' ? 'cmd' : 'npx'
+}
+
+function npxArgs(args) {
+  return process.platform === 'win32' ? ['/c', 'npx', ...args] : args
 }
 
 function assertHasSource(suggestions, source) {

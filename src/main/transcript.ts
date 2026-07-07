@@ -25,7 +25,9 @@ const PERSIST_KINDS = new Set<AgentEvent['kind']>([
   'routing',
   'failover',
   'checkpoint',
-  'checkpoint-restore'
+  'checkpoint-restore',
+  'subagent-result',
+  'task-dag-update'
 ])
 
 /** 回放上限:超长会话只回填最近这么多条,避免打开即卡死 */
@@ -54,6 +56,26 @@ function readEntries(path: string): TranscriptEntry[] {
     return out
   } catch {
     return []
+  }
+}
+
+export function restoreTranscriptIfMissing(sdkSessionId: string | undefined, entries: TranscriptEntry[]): void {
+  if (!sdkSessionId || entries.length === 0) return
+  if (readEntries(fileFor(sdkSessionId)).length > 0) return
+  const target = fileFor(sdkSessionId)
+  const temp = `${target}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    mkdirSync(transcriptsDir(), { recursive: true })
+    const body = entries.map((entry) => JSON.stringify(entry)).join('\n')
+    writeFileSync(temp, body ? `${body}\n` : '')
+    replaceFileWithRetry(temp, target)
+  } catch (err) {
+    try {
+      unlinkSync(temp)
+    } catch {
+      // ignore temp cleanup failure
+    }
+    console.error('[agent-desk] 从任务快照恢复转录失败:', err)
   }
 }
 
@@ -163,7 +185,7 @@ export class TranscriptWriter {
       mkdirSync(transcriptsDir(), { recursive: true })
       const body = entries.map((entry) => JSON.stringify(entry)).join('\n')
       writeFileSync(temp, body ? `${body}\n` : '')
-      renameSync(temp, target)
+      replaceFileWithRetry(temp, target)
       this.buffer = []
       this.seq = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
     } catch (err) {
@@ -189,4 +211,39 @@ export function cleanupTranscripts(keepSdkSessionIds: Set<string>): void {
   } catch {
     // 目录不存在等,忽略
   }
+}
+
+function replaceFileWithRetry(temp: string, target: string): void {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      if (process.platform === 'win32') {
+        unlinkIfExists(target)
+      }
+      renameSync(temp, target)
+      return
+    } catch (err) {
+      if (!isRetryableFileReplaceError(err) || attempt === 7) throw err
+      sleepSync(100)
+    }
+  }
+}
+
+function unlinkIfExists(path: string): void {
+  try {
+    unlinkSync(path)
+  } catch (err) {
+    if (!isRecord(err) || err.code !== 'ENOENT') throw err
+  }
+}
+
+function isRetryableFileReplaceError(err: unknown): boolean {
+  return isRecord(err) && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')
+}
+
+function isRecord(value: unknown): value is { code?: unknown } {
+  return typeof value === 'object' && value !== null
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

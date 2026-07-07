@@ -22,9 +22,9 @@ try {
   mkdirSync(path.join(projectDir, 'assets'), { recursive: true })
 
   execFileSync(
-    'npx',
+    process.execPath,
     [
-      'tsc',
+      path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/previewOps.ts',
       '--outDir',
       outDir,
@@ -131,9 +131,19 @@ try {
   assert(!absolutePath.ok, 'preparePreview should reject absolute paths')
 
   writeFileSync(path.join(tempRoot, 'outside-real.txt'), 'secret', 'utf8')
-  symlinkSync(path.join(tempRoot, 'outside-real.txt'), path.join(projectDir, 'leak.txt'))
-  const symlinkEscape = await previewOps.preparePreview(projectDir, 'leak.txt')
-  assert(!symlinkEscape.ok, 'preparePreview should reject symlinks escaping project root')
+  let symlinkCreated = false
+  try {
+    symlinkSync(path.join(tempRoot, 'outside-real.txt'), path.join(projectDir, 'leak.txt'))
+    symlinkCreated = true
+  } catch (error) {
+    if (error?.code !== 'EPERM' && error?.code !== 'EACCES') throw error
+    // Windows 未开启开发者模式或缺少权限时不能创建文件符号链接,该环境只跳过此子断言。
+    console.warn('previewOps symlink escape check skipped: current Windows account cannot create symlink')
+  }
+  if (symlinkCreated) {
+    const symlinkEscape = await previewOps.preparePreview(projectDir, 'leak.txt')
+    assert(!symlinkEscape.ok, 'preparePreview should reject symlinks escaping project root')
+  }
 
   writeFileSync(path.join(projectDir, 'src/big.txt'), '0123456789abcdef', 'utf8')
   const tooLargeText = await previewOps.preparePreview(projectDir, 'src/big.txt', { maxTextBytes: 8 })
