@@ -42,7 +42,7 @@ export const GUI_TOOLS: ToolDefinition[] = [
     function: {
       name: 'gui_list_windows',
       description:
-        '列出当前桌面可见窗口。Windows 可选 includeElements=true 返回 UI Automation 元素摘要。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
+        '列出当前桌面可见窗口。Windows/macOS 可选 includeElements=true 返回可访问性元素摘要，供后续点击/输入按 selector 定位。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
       parameters: {
         type: 'object',
         properties: {
@@ -68,7 +68,8 @@ export const GUI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'gui_screenshot',
-      description: '截取当前屏幕或指定源并保存到项目 .caogen/tmp/gui/screenshots。默认返回保存路径和源信息。',
+      description:
+        '截取当前屏幕或指定源并保存到项目 .caogen/tmp/gui/screenshots。默认返回保存路径、源信息；macOS 会附带屏幕录制权限状态，空截图会 fail-closed。',
       parameters: {
         type: 'object',
         properties: {
@@ -88,7 +89,7 @@ export const GUI_TOOLS: ToolDefinition[] = [
     function: {
       name: 'gui_click',
       description:
-        '点击屏幕坐标，或在 Windows 上按窗口/元素 selector 定位后点击。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
+        '点击屏幕坐标，或在 Windows/macOS 上按窗口/元素 selector 定位后点击。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
       parameters: {
         type: 'object',
         properties: {
@@ -106,7 +107,7 @@ export const GUI_TOOLS: ToolDefinition[] = [
     function: {
       name: 'gui_type',
       description:
-        '向当前激活窗口输入文本；Windows 可先按元素 selector 聚焦目标元素。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
+        '向当前激活窗口输入文本；Windows/macOS 可先按元素 selector 聚焦目标元素。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
       parameters: {
         type: 'object',
         properties: {
