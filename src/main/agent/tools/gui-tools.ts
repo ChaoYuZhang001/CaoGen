@@ -1,5 +1,5 @@
 import { createGuiController } from '../../gui/gui-controller'
-import type { ToolDefinition, ToolExecResult } from '../../openaiTools'
+import type { ToolDefinition, ToolExecResult } from './tool-types'
 
 export const GUI_TOOL_NAMES = [
   'gui_list_windows',
