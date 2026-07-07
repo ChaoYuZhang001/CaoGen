@@ -423,7 +423,16 @@ export class OpenAIEngine implements Engine {
       npmRegistry: settings.chinaNpmRegistry,
       pipIndexUrl: settings.chinaPipIndexUrl,
       dockerRegistryMirror: settings.chinaDockerRegistryMirror,
-      sessionId: this.meta.id
+      sessionId: this.meta.id,
+      worktreeContext: {
+        sessionId: this.meta.id,
+        repoRoot: this.meta.repoRoot,
+        sourceCwd: this.meta.sourceCwd,
+        worktreePath: this.meta.worktreePath,
+        branch: this.meta.branch,
+        baseBranch: this.meta.baseBranch,
+        baseSha: this.meta.baseSha
+      }
     })
     const executionPolicy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
     writeAuditLog(this.meta.cwd, {
@@ -902,12 +911,12 @@ export class OpenAIEngine implements Engine {
       providerPrompt,
       '你是 CaoGen 桌面工作室里的编码 Agent。',
       `当前工作目录: ${this.meta.cwd}`,
-      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/git_status/git_diff/git_commit/git_push/git_create_pr/git_merge)读写项目文件、执行命令和完成 Git 流程。',
+      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/git_status/git_diff/git_commit/git_push/git_create_pr/git_merge/code_forge_delivery)读写项目文件、执行命令和完成 Git 流程。',
       '开始任务时先用 search_symbol/search_code/find_file 定位相关文件和符号,不要盲猜路径;修改文件前用 get_dependencies 查看正向/反向依赖影响面。',
       '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
       'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
       '修改前可用 search_replace dry_run=true 预览 diff;完成后简要说明改动、测试和备份路径。',
-      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;git_commit 会运行项目配置的 lint/test;git_push/git_create_pr/git_merge 属高风险操作,必须尊重权限审批和失败输出。',
+      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;需要闭环交付时优先用 code_forge_delivery 生成 diff/验证/patch/commit/PR 结构化报告;git_commit 会运行项目配置的 lint/test;git_push/git_create_pr/git_merge/code_forge_delivery(commit/pr) 属高风险操作,必须尊重权限审批和失败输出。',
       '复杂或跨模块任务先用 task_decompose 生成 DAG;用户明确要求并行/多 Agent 时,经权限审批后使用 task_dispatch_dag 或 task_decompose_and_dispatch_dag 启动子任务调度,不要把大型需求硬塞进单 Agent。',
       settings.guiAutomationEnabled
         ? '如需操作真实桌面应用,可使用 gui_list_windows/gui_activate_window/gui_screenshot/gui_click/gui_type/gui_scroll/gui_hotkey;这些高风险工具必须由用户审批或临时授权。'

@@ -94,6 +94,7 @@ function verifySourceContracts() {
     'git_push',
     'git_create_pr',
     'git_merge',
+    'code_forge_delivery',
     'task_decompose',
     'task_dispatch_dag',
     'task_decompose_and_dispatch_dag'
