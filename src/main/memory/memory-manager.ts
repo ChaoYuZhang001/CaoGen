@@ -183,7 +183,7 @@ async function readStore(rootDir: string): Promise<MemoryFile> {
 async function writeStore(rootDir: string, entries: LayeredMemoryEntry[]): Promise<void> {
   const filePath = storePath(rootDir)
   await mkdir(path.dirname(filePath), { recursive: true })
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   try {
     await writeFile(tmp, `${JSON.stringify({ version: 1, entries }, null, 2)}\n`, 'utf8')
     await rename(tmp, filePath)

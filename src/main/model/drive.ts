@@ -104,9 +104,10 @@ export function settingsForCaoGenDrive(settings: AppSettings, mode: unknown = se
     defaultModel: policy.defaultModel,
     defaultPermissionMode: policy.defaultPermissionMode,
     schedulerStrategy: policy.schedulerStrategy,
-    smartModelRoutingEnabled: policy.smartModelRoutingEnabled,
-    modelCrossValidationAutoRunEnabled: policy.modelCrossValidationAutoRunEnabled,
-    budgetUsdPerSession: policy.sessionBudgetUsd,
+    smartModelRoutingEnabled: settings.smartModelRoutingEnabled || policy.smartModelRoutingEnabled,
+    modelCrossValidationAutoRunEnabled:
+      settings.modelCrossValidationAutoRunEnabled || policy.modelCrossValidationAutoRunEnabled,
+    budgetUsdPerSession: settings.budgetUsdPerSession,
     sandboxMode: policy.sandboxMode ?? settings.sandboxMode,
     guiAutomationEnabled: policy.guiAutomationEnabled ?? settings.guiAutomationEnabled,
     permissionAllowlist: mergeRules(settings.permissionAllowlist, policy.permissionAllowlistRules),
