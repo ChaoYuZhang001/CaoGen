@@ -20,7 +20,8 @@ const reports = {
   guiCrossApp: readJson('test-results/gui-cross-app-e2e/latest.json'),
   chinaRealNetwork: readJson('test-results/china-real-network/latest.json'),
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
-  n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json')
+  n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
+  releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json')
 }
 
 const packageJson = readJson('package.json').data ?? {}
@@ -162,25 +163,36 @@ function n1Domain() {
 }
 
 function packagingDomain(packageJson) {
+  const audit = reports.releasePackagingAudit
   const version = stringField(packageJson, 'version') || 'unknown'
   const distPath = path.join(repoRoot, 'dist')
   const hasDist = existsSync(distPath)
   return {
     id: 'packaging_release',
     title: 'Packaging and GitHub Release readiness',
-    status: version !== '0.1.2' && hasDist ? 'ready' : 'open',
+    status: audit.data?.status === 'passed' ? 'ready' : 'open',
     currentPackageVersion: version,
     distPresent: hasDist,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      expectedVersion: audit.data?.expectedVersion,
+      failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
+      warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
+    },
     commands: [
       'npm run typecheck',
       'npm run build',
       'npm run test:deep',
       'npm run secret:scan:history',
-      'npm run dist:mac'
+      'npm run dist:mac',
+      'npm run test:release-packaging-audit:required'
     ],
     nextActions: [
       'Bump package.json only when all required evidence gates are proved.',
       'Run macOS packaging and inspect dist assets before uploading.',
+      'Run the packaging audit against the intended release version before creating GitHub Release assets.',
       'Publish only the intended installer/update assets; never upload test-results, out, node_modules, .env files, certs, private keys, or local evidence packs.'
     ]
   }
@@ -250,6 +262,7 @@ function buildParallelAgents() {
         'npm run workos:release-doctor',
         'npm run test:p2-required',
         'npm run test:p2-audit -- --required',
+        'npm run test:release-packaging-audit:required',
         'npm run secret:scan:history'
       ],
       acceptance: 'Release notes and README match current evidence; v0.2.0 is not published until every gate is ready.'
