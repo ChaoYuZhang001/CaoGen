@@ -99,6 +99,7 @@ npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预
 npm run workos:release-doctor -- --refresh # 刷新轻量审计并汇总 v0.2.0 阻塞/分工/停止条件
 npm run test:n1-migration-audit # 审计真人 N1 30 分钟迁移记录(需本地私有 JSON 记录)
 npm run test:release-packaging-audit # 审计 release 版本号、macOS 资产和禁止上传文件
+npm run test:release-notes-audit # 审计 v0.2.0 发布说明草稿是否过度宣称/漏掉阻塞项
 npm run test:github-release-audit # 审计公开 GitHub Release 资产名、版本和敏感上传物
 npm run test:github-release-audit:read-text # 额外读取公开 latest*.yml/json/md/txt 小文本资产并扫描密钥
 npm run secret:scan # 扫描跟踪/暂存/未跟踪文件,阻止密钥/证书/生成物入库
@@ -137,7 +138,7 @@ CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
 
 CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
 
-最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、`npm run test:release-packaging-audit:required`、`npm run test:github-release-audit:required`、打包产物和真实外部门禁完成后再创建 Release。发布或编辑 Release 后,对目标 tag 再跑 `npm run test:github-release-audit:required -- --tag vX.Y.Z`,并对公开小文本元数据加跑 `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z`。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
+最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、`npm run test:release-packaging-audit:required`、`npm run test:release-notes-audit:final`、`npm run test:github-release-audit:required`、打包产物和真实外部门禁完成后再创建 Release。发布或编辑 Release 后,对目标 tag 再跑 `npm run test:github-release-audit:required -- --tag vX.Y.Z`,并对公开小文本元数据加跑 `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z`。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。发布说明草稿见 [Release Notes v0.2.0 Draft](./docs/RELEASE-NOTES-v0.2.0-DRAFT.md),草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
 
 ```bash
 npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)

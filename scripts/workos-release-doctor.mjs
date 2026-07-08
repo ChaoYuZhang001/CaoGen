@@ -25,6 +25,7 @@ const reports = {
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
   n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
   releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
+  releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
   githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
 }
 
@@ -36,6 +37,7 @@ const domains = [
   p2Domain(),
   n1Domain(),
   packagingDomain(packageJson),
+  releaseNotesDomain(),
   githubReleaseDomain(),
   secretDomain()
 ]
@@ -70,6 +72,7 @@ const report = {
     'Do not publish v0.2.0 while workos-release-doctor status is not ready.',
     'Do not publish while npm run test:p2-required or npm run test:p2-audit -- --required fails.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
+    'Do not publish until npm run test:release-notes-audit:final passes for the exact GitHub Release body.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
     'Do not claim public latest*.yml or other small text release metadata was content-scanned unless npm run test:github-release-audit:read-text:required -- --tag v0.2.0 passes.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
@@ -122,6 +125,11 @@ function refreshLocalEvidence() {
       id: 'release_packaging_audit',
       command: 'node scripts/release-packaging-audit.mjs',
       args: ['scripts/release-packaging-audit.mjs']
+    },
+    {
+      id: 'release_notes_audit',
+      command: 'node scripts/release-notes-audit.mjs',
+      args: ['scripts/release-notes-audit.mjs']
     },
     {
       id: 'github_release_audit',
@@ -258,6 +266,42 @@ function packagingDomain(packageJson) {
   }
 }
 
+function releaseNotesDomain() {
+  const audit = reports.releaseNotesAudit
+  const finalPassed = audit.data?.status === 'passed' && audit.data?.mode === 'final'
+  const draftPassed = audit.data?.status === 'passed' && audit.data?.mode === 'draft'
+  return {
+    id: 'release_notes',
+    title: 'GitHub Release notes truthfulness',
+    status: finalPassed ? 'ready' : draftPassed ? 'draft_ready' : 'open',
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      mode: audit.data?.mode,
+      notesPath: audit.data?.notesPath,
+      failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
+      warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
+    },
+    commands: [
+      'npm run test:release-notes-audit',
+      'npm run test:release-notes-audit:required',
+      'npm run test:release-notes-audit:final'
+    ],
+    nextActions: finalPassed
+      ? ['Keep the final release notes audit green on the exact GitHub Release body.']
+      : draftPassed
+        ? [
+            'Keep docs/RELEASE-NOTES-v0.2.0-DRAFT.md aligned with current open gates.',
+            'After P2, N1, packaging, and public assets are ready, replace draft-only blocked-release language with exact uploaded assets and run npm run test:release-notes-audit:final.'
+          ]
+        : [
+            'Create or update docs/RELEASE-NOTES-v0.2.0-DRAFT.md with exact supported claims, blockers, asset policy, macOS first-open guidance, and security statement.',
+            'Run npm run test:release-notes-audit:required before merging release docs.'
+          ]
+  }
+}
+
 function githubReleaseDomain() {
   const audit = reports.githubReleaseAudit
   return {
@@ -356,6 +400,7 @@ function buildParallelAgents() {
         'npm run test:p2-required',
         'npm run test:p2-audit -- --required',
         'npm run test:release-packaging-audit:required',
+        'npm run test:release-notes-audit:required',
         'npm run test:github-release-audit:required',
         'npm run test:github-release-audit:read-text',
         'npm run secret:scan:history'
