@@ -68,7 +68,7 @@ Only create a new GitHub Release after all items below are true:
 | Local | `npm run typecheck`, `npm run build`, `npm run test:deep` pass |
 | P2 required | `npm run test:p2-required` passes |
 | P2 audit | `npm run test:p2-audit -- --required` passes |
-| Packaging | `npm run dist:mac` produces expected DMG/zip assets; Windows/Linux only if actually verified |
+| Packaging | `npm run dist:mac` produces expected DMG/zip assets and `npm run test:release-packaging-audit:required` passes; Windows/Linux only if actually verified |
 | Release notes | Notes include truthful unsupported/conditional items, macOS first-open instructions, and no overclaim about Genesis execution |
 | N1 audit | `npm run test:n1-migration-audit:required` passes on the private human drill record |
 | Secret hygiene | `npm run secret:scan:history` passes; current tree and staged diff scan clean; no `.env`, private key, cert, token, webhook, signing material, generated artifact, or local evidence pack staged |
