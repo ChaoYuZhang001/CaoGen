@@ -26,7 +26,7 @@
 
 # Current Focus
 
-**Work OS Phase 2 外部证据收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。`npm run workos:release-doctor -- --refresh` 会先刷新 N1/packaging/GitHub Release 轻量审计,再汇总下一波 Agent 分工和发布停止条件。当前不能发布 `v0.2.0`:还缺 Windows/VS Code GUI required evidence、真实 China network/tool-call parity、N1 真人 30 分钟迁移记录与最终 release packaging。
+**Work OS Phase 2 发布收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。`npm run workos:release-doctor -- --refresh` 会先刷新 packaging/GitHub Release 轻量审计,再汇总发布停止条件。当前不能发布 `v0.2.0`:还缺最终 release packaging/version/update-source/public asset/secret hygiene 收口。Windows/VS Code GUI required evidence 交专门 Windows agent 后续补;真实 China network/tool-call parity 由用户配置;N1 真人 30 分钟迁移记录不作为本版发布阻塞。
 
 # Goal
 
@@ -39,7 +39,7 @@
 1. 规划方连续 7 天日常使用,新毛刺 ≤1/天且当天修复
 2. ~~arm64 原生包发布~~ ✅ 2026-07-06(架构三重验证;M 系真机启动复验待用户)
 3. Codex + Gemini 原生引擎各 ≥1 次真实对话验证 —— **Codex ✅ 2026-07-06(真对话 3/3,修 3 个适配 bug);Gemini 阻塞:等用户完成 `gemini` 登录**
-4. N1 秒表实测 ≤30 分钟(真人,录屏留证)
+4. N1 秒表实测 ≤30 分钟(真人,录屏留证)——北极星证据,不作为 v0.2.0 发布阻塞且未验证前不宣称通过
 5. `test:deep` 全绿保持(现 56 项);新特性必配真实 E2E
 
 # Priority Tasks
@@ -61,15 +61,14 @@
 - ~~chat 历史自动压缩~~ ✅ 超 48k token 摘要旧段,不切断 tool_call 配对(e2e 4/4)
 - ~~Responses 协议接工具循环~~ ✅ 官方 OpenAI 模型也成真编码 Agent(e2e 5/5)
 - ~~路由能力表自学习~~ ✅ 按实测成败/延迟给同档模型打平降权(集成 T17 验证)
-- N1 迁移实测:向导映射✅、演练 fixture+计时脚本✅(docs/N1-MIGRATION-DRILL.md);仅剩**真人 30 分钟计时**(不可脚本替代,阻塞)
+- N1 迁移实测:向导映射✅、演练 fixture+计时脚本✅(docs/N1-MIGRATION-DRILL.md);真人 30 分钟计时仍未做,不作为 v0.2.0 发布阻塞,未验证前不做 N1 达标宣称
 
 **Work OS Phase 2 并行任务**(2026-07-08 新排期)
 - B0 Release Gate:保持 README/STATUS/release notes 与真实 gate 一致,审计公开 GitHub Release 资产,最后合并;草稿门禁见 `docs/RELEASE-GATE-v0.2.0-DRAFT.md`
-- B1 Windows GUI Required:P2-001 strict VS Code GUI/cross-app/input required evidence
+- B1 Windows GUI Required:P2-001 strict VS Code GUI/cross-app/input evidence,由专门 Windows agent 后续补
 - B2 IDE Build + VS Code Host:✅ P2-005 插件构建、VS Code extension host evidence 已通过
 - B3 JetBrains Real IDE:✅ P2-005 JetBrains runIde recorder + interaction evidence 已通过
-- B4 China External Evidence:P2-004 真实网络与 tool-call parity evidence
-- B5 N1 Migration Drill:真人 30 分钟迁移记录
+- B4 China External Evidence:P2-004 真实网络与 tool-call parity evidence,由用户按需配置
 
 # Blockers
 
@@ -126,5 +125,5 @@
 
 # Success Criteria
 
-- **v0.2.0 验收** = Next Milestone 五条全部成立
+- **v0.2.0 验收** = Release Gate Draft 中的阻塞项全部成立;P2-001/P2-004/N1 按当前边界不阻塞,但不得过度宣称
 - **长期成功** = 北极星 N1 由**非项目相关**的真实竞品深度用户验证通过(30 分钟计时 + 资产零丢失 + 关键动作无需回退原工具)

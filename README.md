@@ -54,7 +54,7 @@
 
 这些能力的定位是 **Native Integration**,不是导入 Claude、Codex、OpenClaw、Hermes 或 ccswitch 的配置。CaoGen 会吸收它们的用户价值,但不复制竞品代码,也不伪造外部工具已经完成的能力。
 
-下一阶段并行执行表见 [Work OS Phase 2 Parallel Plan](./docs/WORKOS-PHASE2-PARALLEL-PLAN.md)。当前边界:本地 `test:deep` 已全绿;`v0.2.0` 仍需 P2 required 外部证据、N1 真人迁移记录和发布打包门禁。
+下一阶段并行执行表见 [Work OS Phase 2 Parallel Plan](./docs/WORKOS-PHASE2-PARALLEL-PLAN.md)。当前边界:本地 `test:deep` 已全绿;`v0.2.0` 发布阻塞项收敛为 release-scope P2 证据、打包/资产/密钥门禁和真实发布说明。P2-001 Windows GUI 证据交由专门 Windows agent 后续补,P2-004 国内外部证据由用户按需配置,N1 真人迁移不作为本版发布阻塞且不会在 release notes 中宣称已通过。
 
 ## 界面预览
 
@@ -95,9 +95,9 @@ npm start          # 预览构建产物
 npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
                    # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
 npm run test:p2    # P2 本地 smoke:技能、模型、国内生态本地桩、IDE bridge、OpenAI P2 工具
-npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预期失败并给出缺口
+npm run test:p2-required # 完整 P2 外部严格审计;P2-001/P2-004 对 v0.2.0 非阻塞,但不能宣称已通过
 npm run workos:release-doctor -- --refresh # 刷新轻量审计并汇总 v0.2.0 阻塞/分工/停止条件
-npm run test:n1-migration-audit # 审计真人 N1 30 分钟迁移记录(需本地私有 JSON 记录)
+npm run test:n1-migration-audit # 可选:审计真人 N1 30 分钟迁移记录;未通过前 release notes 不得宣称 N1 达标
 npm run test:release-packaging-audit # 审计 release 版本号、macOS 资产和禁止上传文件
 npm run test:github-release-audit # 审计公开 GitHub Release 资产名、版本和敏感上传物
 npm run secret:scan # 扫描跟踪/暂存/未跟踪文件,阻止密钥/证书/生成物入库
@@ -135,7 +135,7 @@ CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
 
 CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
 
-最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、`npm run test:release-packaging-audit:required`、`npm run test:github-release-audit:required`、打包产物和真实外部门禁完成后再创建 Release。发布或编辑 Release 后,对目标 tag 再跑 `npm run test:github-release-audit:required -- --tag vX.Y.Z`。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
+最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、`npm run test:release-packaging-audit:required`、`npm run test:github-release-audit:required`、打包产物和 release-scope P2 证据完成后再创建 Release。发布或编辑 Release 后,对目标 tag 再跑 `npm run test:github-release-audit:required -- --tag vX.Y.Z`。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;P2-001 Windows GUI evidence 由专门 Windows agent 后续补,P2-004 国内真实网络/工具调用 parity 由用户配置,N1 真人迁移记录不作为 v0.2.0 发布阻塞。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
 
 ```bash
 npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)
