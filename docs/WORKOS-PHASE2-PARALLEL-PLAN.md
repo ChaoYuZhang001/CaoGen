@@ -39,7 +39,7 @@ Run 6 agents in parallel. Keep each task on its own branch and do not commit gen
 
 | Agent | Branch | Objective | Main commands | Done evidence |
 |---|---|---|---|---|
-| B0 Release Gate | `codex/workos-b0-release-gate` | Keep README/STATUS/release notes truthful; prepare `v0.2.0` checklist without publishing; audit public GitHub Release assets | `npm run test:deep`, `npm run test:p2-audit -- --required`, `npm run test:release-packaging-audit:required`, `npm run test:github-release-audit:required`, `npm run secret:scan:history` | Draft release checklist and GitHub Release audit say exactly which gates are open/closed |
+| B0 Release Gate | `codex/workos-b0-release-gate` | Keep README/STATUS/release notes truthful; prepare `v0.2.0` checklist without publishing; audit public GitHub Release assets | `npm run test:deep`, `npm run test:p2-audit -- --required`, `npm run test:release-packaging-audit:required`, `npm run test:github-release-audit:required`, `npm run test:github-release-audit:read-text`, `npm run secret:scan:history` | Draft release checklist and GitHub Release audit say exactly which gates are open/closed |
 | B1 Windows GUI Required | `codex/workos-b1-gui-required` | Produce strict Windows/VS Code GUI evidence for P2-001 | `npm run test:gui-input-preflight:required`, `npm run test:gui-vscode-e2e:required`, `npm run test:gui-cross-app-e2e:required`, `npm run test:gui-desktop-e2e:required` | `test-results/gui-vscode-e2e/latest.json` and `test-results/gui-cross-app-e2e/latest.json` pass |
 | B2 IDE Build + VS Code Host | `codex/workos-b2-ide-build` | Completed: VS Code extension compile/host plus JetBrains plugin distribution | `npm run test:p2-ide-build-and-vscode:required`, `npm run test:ide-plugins:required`, `npm run test:vscode-extension-host:required` | `test-results/ide-plugins/latest.json` and `test-results/vscode-extension-host/latest.json` pass |
 | B3 JetBrains Real IDE | `codex/workos-b3-jetbrains-real` | Completed: JetBrains runIde recorder/evidence JSON accepted by required gate | `npm run test:jetbrains-recorder-e2e:required`, `npm run test:jetbrains-ide-interaction:required` | `test-results/jetbrains-ide-interaction/latest.json` passes with recorder interaction evidence |
@@ -69,7 +69,7 @@ Only create a new GitHub Release after all items below are true:
 | P2 required | `npm run test:p2-required` passes |
 | P2 audit | `npm run test:p2-audit -- --required` passes |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets and `npm run test:release-packaging-audit:required` passes; Windows/Linux only if actually verified |
-| Public Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag vX.Y.Z` |
+| Public Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag vX.Y.Z` and `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z` for public small text metadata |
 | Release notes | Notes include truthful unsupported/conditional items, macOS first-open instructions, and no overclaim about Genesis execution |
 | N1 audit | `npm run test:n1-migration-audit:required` passes on the private human drill record |
 | Secret hygiene | `npm run secret:scan:history` passes; current tree and staged diff scan clean; no `.env`, private key, cert, token, webhook, signing material, generated artifact, or local evidence pack staged |

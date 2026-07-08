@@ -26,7 +26,7 @@
 | China external | `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` pass with real public HTTPS targets | Open |
 | N1 migration | Human 30-minute migration drill record reviewed and `npm run test:n1-migration-audit:required` passes | Open |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets and `npm run test:release-packaging-audit:required` passes; Windows/Linux only if actually verified | Open |
-| Public GitHub Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag v0.2.0` | Current public v0.1.0/v0.1.1/v0.1.2 assets passed; v0.2.0 not created |
+| Public GitHub Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag v0.2.0` plus `npm run test:github-release-audit:read-text:required -- --tag v0.2.0` for public small text metadata | Current public v0.1.0/v0.1.1/v0.1.2 asset metadata passed; v0.2.0 not created |
 | Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed on current worktree/history; rerun immediately before release |
 | Release doctor | `npm run workos:release-doctor -- --refresh --required` refreshes local lightweight audits and summarizes all domains as ready | Open |
 
@@ -41,6 +41,7 @@ The final GitHub Release body must include:
 - P2 evidence summary with links or paths to the final reports used for the release decision.
 - A statement that real keys, webhooks, certs, `.env`, signing material, `test-results`, `out`, `dist`, `node_modules`, and local evidence packs are not included in the repo or release assets.
 - A list of exact uploaded asset names. Allowed public assets are installer/update files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`.
+- A note that public `latest*.yml`/small text metadata passed the read-text release audit; if the network cannot read those assets, do not claim their contents were scanned.
 
 ## Stop Conditions
 
@@ -48,7 +49,7 @@ Stop the release immediately if any of these is true:
 
 - Any real secret, webhook URL, private key, certificate, signing material, or filled `.env` appears in `git status`, staged diff, or release assets.
 - `npm run secret:scan:history` fails on a high-confidence real credential.
-- `npm run test:github-release-audit:required` reports an unexpected, suspicious, or forbidden public Release asset. Delete the asset and rotate/revoke the credential if it contained a real secret.
+- `npm run test:github-release-audit:required` or `npm run test:github-release-audit:read-text:required -- --tag v0.2.0` reports an unexpected, suspicious, forbidden, unreadable, or secret-bearing public Release asset. Delete the asset and rotate/revoke the credential if it contained a real secret.
 - `test:p2-required` or strict P2 audit still reports `missing_evidence` or `missing_external`.
 - Packaging produces assets for a platform that was not actually tested but the notes imply support.
 - Release notes claim Genesis can execute, merge, push, or publish through external child Agents before that is proved by implementation and tests.

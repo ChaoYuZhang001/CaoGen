@@ -20,7 +20,7 @@
 - P1 全部可做项收口(2026-07-06):全文搜索、冲突三栏+合并回执、插件安装/卸载/版本/权限、Codex 真验
 - Work OS 第一波已进入 main:A1 Drive、A2 Quickbar、A3 Desktop Control、A4 Code Forge、A5 Skill Fabric、A6 Memory Loop、A7 Control Center、A8 Personal OS、A9 Genesis(计划层)。Genesis 只宣称编排/交付计划,不宣称真实外部子 Agent 执行、自动合并、推送或发布。
 - P2 本地 smoke 已恢复全绿;P2-005 IDE integrations 已由 `test:p2-ide-build-and-vscode:required`、`test:jetbrains-recorder-e2e:required`、`test:jetbrains-ide-interaction:required` 证明。`npm run test:p2-audit -- --required` 仍失败,但当前失败范围已收敛为 P2-001 Windows GUI required evidence 与 P2-004 China external evidence。P2-002/P2-003 已由 `p2_default_smoke` 证明。提交/发布新增 `npm run secret:scan` / `npm run secret:scan:history` / `npm run test:github-release-audit` 门禁,用于阻止密钥、证书、签名材料、生成物和本地证据包进入公开仓库或公开 Release。
-- GitHub Releases 公开资产审计已补齐:当前 v0.1.0/v0.1.1/v0.1.2 共 26 个公开资产通过 `npm run test:github-release-audit`,未发现需删除的敏感资产;发布 v0.2.0 后必须对目标 tag 再跑 required 审计。
+- GitHub Releases 公开资产审计已补齐:当前 v0.1.0/v0.1.1/v0.1.2 共 26 个公开资产通过 `npm run test:github-release-audit`,未发现需删除的敏感资产;发布 v0.2.0 后必须对目标 tag 再跑 required 审计,并对 `latest*.yml` 等公开小文本元数据加跑 `npm run test:github-release-audit:read-text:required -- --tag v0.2.0`。
 - 五支柱实测达成:多厂商 ~95% · 调度 ~95% · 3D ~90% · 迁移级工作流 ~85% · 长期自主执行 ~80%
 - 用户实测反馈已修 4 项(冗余"你"标注、矛盾错误文案、引擎×Provider 404、填 key 不生效)
 
