@@ -12,7 +12,7 @@ version = "0.0.1"
 val intellijPlatformVersion = providers.environmentVariable("CAOGEN_JETBRAINS_PLATFORM_VERSION").orElse("2023.2.2")
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(17)
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }

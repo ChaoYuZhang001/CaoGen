@@ -96,6 +96,8 @@ npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
                    # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
 npm run test:p2    # P2 本地 smoke:技能、模型、国内生态本地桩、IDE bridge、OpenAI P2 工具
 npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预期失败并给出缺口
+npm run secret:scan # 扫描跟踪/暂存/未跟踪文件,阻止密钥/证书/生成物入库
+npm run secret:scan:history # 发布前扫描当前树和 Git 历史中的疑似密钥/敏感文件
 ```
 
 需要真实厂商 Key 的端到端脚本(不入 CI,本机手动跑):
@@ -120,14 +122,15 @@ CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
 
 - 在设置页输入的 Provider 密钥由主进程加密/脱敏保存,渲染进程只看到 `hasToken` 状态。
 - 本地开发密钥放在 shell 环境、系统钥匙串或未跟踪的 `.env.local` 中。
-- 发布前至少运行一次密钥扫描,并人工复核 `git status --short` 与即将提交的 diff。
+- 提交前至少运行 `npm run secret:scan`,发布前加跑 `npm run secret:scan:history`,并人工复核 `git status --short` 与即将提交的 diff。
+- 不提交 `test-results/`、`out/`、`dist/`、`node_modules/`、`model-stats.json`、插件构建产物、`.env`、证书、私钥或签名材料。
 - 如果任何真实 token 曾经外发或推送,必须在对应平台撤销/轮换;仅从 Git 删除不足以让旧凭据失效。
 
 ## 打包分发 / 发布
 
 CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
 
-最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、打包产物和真实外部门禁完成后再创建 Release。
+最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、打包产物和真实外部门禁完成后再创建 Release。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
 
 ```bash
 npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)

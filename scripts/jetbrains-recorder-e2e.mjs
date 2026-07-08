@@ -46,7 +46,7 @@ try {
 
     bridge = await startBridgeServer()
     const ideRun = await runIde()
-    const validation = runValidator()
+    const validation = runValidator(ideRun)
     const failures = [
       ...ideRun.failures,
       ...validation.failures
@@ -312,7 +312,7 @@ function runIdeInvocation(gradle) {
   }
 }
 
-function runValidator() {
+function runValidator(ideRun) {
   if (!existsSync(recorderPath)) {
     return {
       status: 'failed',
@@ -327,7 +327,10 @@ function runValidator() {
       ...process.env,
       CAOGEN_JETBRAINS_IDE_INTERACTION_REPORT_ROOT: reportRootForValidator,
       CAOGEN_JETBRAINS_IDE_RECORDER_JSONL: recorderPath,
-      CAOGEN_JETBRAINS_WORKSPACE: workspace
+      CAOGEN_JETBRAINS_WORKSPACE: workspace,
+      ...(ideRun.ideLogDiagnostics?.path ? { CAOGEN_JETBRAINS_RUNIDE_LOG_PATH: ideRun.ideLogDiagnostics.path } : {}),
+      ...(ideRun.command ? { CAOGEN_JETBRAINS_RUNIDE_COMMAND: ideRun.command } : {}),
+      ...(ideRun.workspaceArg ? { CAOGEN_JETBRAINS_RUNIDE_WORKSPACE: ideRun.workspaceArg } : {})
     },
     encoding: 'utf8',
     timeout: 60_000,

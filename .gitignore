@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 test-results/
+.vscode-test/
 plugins/vscode/out/
 plugins/jetbrains/build/
 plugins/jetbrains/.gradle/
