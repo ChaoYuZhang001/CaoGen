@@ -96,6 +96,7 @@ npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
                    # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
 npm run test:p2    # P2 本地 smoke:技能、模型、国内生态本地桩、IDE bridge、OpenAI P2 工具
 npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预期失败并给出缺口
+npm run workos:release-doctor # 汇总 v0.2.0 剩余阻塞、下一波 Agent 分工与发布停止条件
 npm run secret:scan # 扫描跟踪/暂存/未跟踪文件,阻止密钥/证书/生成物入库
 npm run secret:scan:history # 发布前扫描当前树和 Git 历史中的疑似密钥/敏感文件
 ```

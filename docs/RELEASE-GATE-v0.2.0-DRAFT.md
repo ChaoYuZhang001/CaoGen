@@ -27,6 +27,7 @@
 | N1 migration | Human 30-minute migration drill record reviewed | Open |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets; Windows/Linux only if actually verified | Open |
 | Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed on current worktree/history; rerun immediately before release |
+| Release doctor | `npm run workos:release-doctor -- --required` summarizes all domains as ready | Open |
 
 ## Release Notes Requirements
 
