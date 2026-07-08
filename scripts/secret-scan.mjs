@@ -9,7 +9,7 @@ const repoRoot = process.cwd()
 
 const forbiddenPathRules = [
   { name: 'dotenv', test: (file) => /^\.env(\..+)?$/.test(path.basename(file)) && path.basename(file) !== '.env.example' },
-  { name: 'private-key-or-cert', test: (file) => /\.(pem|p12|pfx|key|mobileprovision)$/i.test(file) },
+  { name: 'private-key-or-cert', test: (file) => /\.(pem|p12|pfx|key|mobileprovision|provisionprofile|keystore|jks|crt|cer|p8)$/i.test(file) },
   { name: 'ssh-private-key', test: (file) => /(^|\/)(id_rsa|id_ed25519)(\.|$)/.test(file) },
   { name: 'google-service-account', test: (file) => /(^|\/)(GoogleService-Info\.plist|firebase-service-account.*\.json)$/i.test(file) },
   { name: 'credential-file', test: (file) => /(^|\/).*credentials.*$/i.test(file) },

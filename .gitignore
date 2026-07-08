@@ -19,7 +19,13 @@ plugins/jetbrains/.kotlin/
 *.p12
 *.pfx
 *.key
+*.crt
+*.cer
+*.p8
+*.jks
+*.keystore
 *.mobileprovision
+*.provisionprofile
 id_rsa
 id_ed25519
 GoogleService-Info.plist
