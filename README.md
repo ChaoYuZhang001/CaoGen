@@ -14,11 +14,27 @@
 
 **不绑厂商、不锁模型、不乱改主目录，你的桌面你做主。**
 
-[立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#-3-分钟快速开始) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
+[立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#3-分钟快速开始) | [贡献指南](./CONTRIBUTING.md) | [安全报告](./SECURITY.md) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
 
 </div>
 
 ---
+
+## 目录
+
+- [核心优势](#核心优势)
+- [界面预览](#界面预览)
+- [为什么选 CaoGen](#为什么选-caogen)
+- [核心功能](#核心功能)
+- [3 分钟快速开始](#3-分钟快速开始)
+- [下载安装](#下载安装)
+- [校验下载文件](#校验下载文件)
+- [常见问题](#常见问题)
+- [开发与贡献](#开发与贡献)
+- [架构速览](#架构速览)
+- [项目状态](#项目状态)
+- [安全](#安全)
+- [开源协议](#开源协议)
 
 ## 核心优势
 
@@ -110,13 +126,28 @@
 
 从 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载最新版本：
 
-- **macOS**：下载 `.dmg`，拖入「应用程序」。
-- **Windows**：如当前最新版本没有 Windows 安装包，可先使用上一版 Windows NSIS 安装包。
-- **Linux**：`package.json` 已配置 AppImage 打包目标；如果最新 Release 未上传 Linux 资产，请先从源码运行或自行打包。
+| 平台 | 当前公开包 | 状态 | 说明 |
+|---|---|---|---|
+| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 已发布 | 推荐 M 系列 Mac 使用 |
+| macOS Intel | `CaoGen-0.1.3.dmg` / `CaoGen-0.1.3-mac.zip` | 已发布 | 适合 Intel Mac |
+| Windows | 本次 v0.1.3 未发布新包 | 可使用上一版 | Windows 安装包会在后续版本单独补齐 |
+| Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
 > **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
 
 也可以直接从源码运行，见下方「开发与贡献」。
+
+## 校验下载文件
+
+下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.3 macOS 资产的 SHA256 如下：
+
+| 文件 | SHA256 |
+|---|---|
+| `CaoGen-0.1.3-arm64.dmg` | `a6f4ec73f6e943a5a3e86007d83c38de4d2bbcf3e16cbbc85d0371a96359c136` |
+| `CaoGen-0.1.3-arm64-mac.zip` | `7faaa14ccda133b0094158c3445ca8ff191fb73bc5324c4c2512a7f7566839a5` |
+| `CaoGen-0.1.3.dmg` | `82ab21c0f629d24bdd4db02b19b982daaffa1f9be9f28ad7010813659e41099d` |
+| `CaoGen-0.1.3-mac.zip` | `66d522b5c90067edf3addfadbb6aa613bd272208cb105d03a836adc66af5f3a5` |
+| `latest-mac.yml` | `0fb955d9dffcd708746c24c00c0167fa381d659a2fa9114e1f4094ffbed6560e` |
 
 ## 常见问题
 
@@ -146,7 +177,7 @@ A: 当前是 beta。核心编码链路已经可试用，但项目状态仍明确
 
 ## 开发与贡献
 
-欢迎提交 Issue 和 PR。
+欢迎提交 Issue 和 PR。开始前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，安全问题请按 [SECURITY.md](./SECURITY.md) 处理，不要把漏洞细节、密钥或私有日志直接贴到公开 Issue。
 
 ### 本地运行
 
@@ -164,6 +195,7 @@ npm run typecheck  # TypeScript 类型检查
 npm run build      # 构建生产产物到 out/
 npm start          # 预览构建产物
 npm run test:deep  # 深度测试矩阵，当前脚本编排 65 项，失败即停
+npm run secret:scan # 扫描当前工作树中的明显密钥
 ```
 
 需要真实厂商 Key 的端到端脚本不进 CI，适合本机手动跑：
@@ -202,10 +234,15 @@ src/
 
 - 当前版本：**v0.1.3 beta**。
 - v0.1.3 基于当前 `main` 打包，优先发布 macOS 安装包。
+- macOS v0.1.3 安装包已经公开上传；Windows 安装包本轮未更新。
 - 已验证过的关键链路包括 DeepSeek 原生编码 Agent、Codex CLI 真对话、子代理编排、OpenAI 双协议、32 并发压测和多项 Electron mock E2E。
-- 仍需实测/收口：Apple Silicon 真机启动复验、Gemini CLI 登录后的真对话、N1 迁移 30 分钟真人计时、Linux 包发布验证。
+- 仍需实测/收口：签名与公证、Gemini CLI 登录后的真对话、N1 迁移 30 分钟真人计时、Linux 包发布验证。
 
 后续路线图见 [ROADMAP.md](./ROADMAP.md)，完整需求边界见 [REQUIREMENTS.md](./REQUIREMENTS.md)。
+
+## 安全
+
+如果你发现漏洞、供应链风险或误提交密钥，请先阅读 [SECURITY.md](./SECURITY.md)。如果密钥已经泄露，请先在对应平台撤销或轮换密钥，再提交不含敏感细节的报告。
 
 ## 开源协议
 
