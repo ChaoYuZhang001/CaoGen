@@ -10,6 +10,7 @@ const reportDir = path.join(reportRoot, runId)
 const expectedVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || '0.2.0'
 const distDir = normalizePath(argValue('--dist') || process.env.CAOGEN_RELEASE_DIST_DIR || 'dist')
 const packageJson = readPackageJson()
+const packageLock = readOptionalJson('package-lock.json')
 const failures = []
 const warnings = []
 const distFiles = existsSync(distDir) ? listFiles(distDir) : []
@@ -28,6 +29,7 @@ const report = {
   reportDir,
   expectedVersion,
   packageVersion: packageJson.version,
+  packageLockVersion: packageLock?.version ?? packageLock?.packages?.['']?.version,
   distDir: path.relative(repoRoot, distDir),
   distPresent: existsSync(distDir),
   rootFiles,
@@ -50,6 +52,14 @@ if (!required && existsSync(distDir) && report.status === 'failed') process.exit
 function validatePackage() {
   if (packageJson.version !== expectedVersion) {
     failures.push(`package.json version must be ${expectedVersion}, got ${packageJson.version || 'missing'}`)
+  }
+  const lockVersion = packageLock?.version ?? packageLock?.packages?.['']?.version
+  if (lockVersion !== expectedVersion) {
+    failures.push(`package-lock.json version must be ${expectedVersion}, got ${lockVersion || 'missing'}`)
+  }
+  const rootLockVersion = packageLock?.packages?.['']?.version
+  if (rootLockVersion !== expectedVersion) {
+    failures.push(`package-lock root package version must be ${expectedVersion}, got ${rootLockVersion || 'missing'}`)
   }
   if (packageJson.version === '0.1.2') {
     failures.push('package.json is still at latest public stable version 0.1.2; bump only after required evidence gates pass')
@@ -79,6 +89,10 @@ function validateDist() {
     if (!file) failures.push(`missing expected macOS release asset: ${asset}`)
     else if (file.size <= 0) failures.push(`release asset is empty: ${asset}`)
   }
+  const expected = new Set(expectedMacAssets(expectedVersion))
+  for (const asset of rootFiles.filter((file) => /^CaoGen-\d+\.\d+\.\d+/.test(file))) {
+    if (!expected.has(asset)) failures.push(`stale or unexpected CaoGen release asset in dist root: ${asset}`)
+  }
   const latestMac = readDistText('latest-mac.yml')
   if (latestMac !== undefined && !latestMac.includes(`version: ${expectedVersion}`)) {
     failures.push(`latest-mac.yml does not reference version ${expectedVersion}`)
@@ -104,7 +118,7 @@ function forbiddenReleasePath(relativePath) {
   const base = path.basename(normalized)
   return (
     /^\.env(\..+)?$/.test(base) ||
-    /\.(pem|p12|pfx|key|mobileprovision)$/i.test(base) ||
+    /\.(pem|p12|pfx|key|mobileprovision|provisionprofile|keystore|jks|crt|cer|p8)$/i.test(base) ||
     /^(node_modules|test-results|\.vscode-test)(\/|$)/.test(normalized) ||
     /(^|\/)(id_rsa|id_ed25519)(\.|$)/.test(normalized)
   )
@@ -151,6 +165,12 @@ function listFiles(root) {
 
 function readPackageJson() {
   return JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+}
+
+function readOptionalJson(relativePath) {
+  const filePath = path.join(repoRoot, relativePath)
+  if (!existsSync(filePath)) return undefined
+  return JSON.parse(readFileSync(filePath, 'utf8'))
 }
 
 function normalizePath(value) {

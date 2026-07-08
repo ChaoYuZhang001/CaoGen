@@ -21,7 +21,8 @@ const reports = {
   chinaRealNetwork: readJson('test-results/china-real-network/latest.json'),
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
   n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
-  releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json')
+  releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
+  githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
 }
 
 const packageJson = readJson('package.json').data ?? {}
@@ -32,6 +33,7 @@ const domains = [
   p2Domain(),
   n1Domain(),
   packagingDomain(packageJson),
+  githubReleaseDomain(),
   secretDomain()
 ]
 const openDomains = domains.filter((domain) => domain.status !== 'ready' && domain.blocking !== false)
@@ -61,6 +63,7 @@ const report = {
     'Do not publish v0.2.0 while workos-release-doctor status is not ready.',
     'Do not publish while npm run test:p2-required or npm run test:p2-audit -- --required fails.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
+    'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
   ]
 }
@@ -190,11 +193,42 @@ function packagingDomain(packageJson) {
       'npm run test:release-packaging-audit:required'
     ],
     nextActions: [
-      'Bump package.json only when all required evidence gates are proved.',
+      'Bump package.json and package-lock.json only when all required evidence gates are proved.',
       'Run macOS packaging and inspect dist assets before uploading.',
       'Run the packaging audit against the intended release version before creating GitHub Release assets.',
       'Publish only the intended installer/update assets; never upload test-results, out, node_modules, .env files, certs, private keys, or local evidence packs.'
     ]
+  }
+}
+
+function githubReleaseDomain() {
+  const audit = reports.githubReleaseAudit
+  return {
+    id: 'github_release_assets',
+    title: 'Public GitHub Release asset hygiene',
+    status: audit.data?.status === 'passed' ? 'ready' : 'open',
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      repo: audit.data?.repo,
+      releaseCount: audit.data?.releaseCount,
+      assetCount: audit.data?.assetCount,
+      failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
+      warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
+    },
+    commands: [
+      'npm run test:github-release-audit',
+      'npm run test:github-release-audit:required',
+      'npm run test:github-release-audit:required -- --tag v0.2.0'
+    ],
+    nextActions: audit.data?.status === 'passed'
+      ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
+      : [
+          'Audit current public GitHub Release assets before publishing or editing release notes.',
+          'Only installer/update metadata assets are allowed: DMG, mac zip, Windows installer, AppImage, blockmap, and latest*.yml.',
+          'If a forbidden asset is already public, delete it from GitHub Releases and rotate/revoke the credential if it contained a real secret.'
+        ]
   }
 }
 
@@ -263,6 +297,7 @@ function buildParallelAgents() {
         'npm run test:p2-required',
         'npm run test:p2-audit -- --required',
         'npm run test:release-packaging-audit:required',
+        'npm run test:github-release-audit:required',
         'npm run secret:scan:history'
       ],
       acceptance: 'Release notes and README match current evidence; v0.2.0 is not published until every gate is ready.'

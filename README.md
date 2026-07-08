@@ -99,6 +99,7 @@ npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预
 npm run workos:release-doctor # 汇总 v0.2.0 剩余阻塞、下一波 Agent 分工与发布停止条件
 npm run test:n1-migration-audit # 审计真人 N1 30 分钟迁移记录(需本地私有 JSON 记录)
 npm run test:release-packaging-audit # 审计 release 版本号、macOS 资产和禁止上传文件
+npm run test:github-release-audit # 审计公开 GitHub Release 资产名、版本和敏感上传物
 npm run secret:scan # 扫描跟踪/暂存/未跟踪文件,阻止密钥/证书/生成物入库
 npm run secret:scan:history # 发布前扫描当前树和 Git 历史中的疑似密钥/敏感文件
 ```
@@ -126,14 +127,15 @@ CHAT_E2E_KEY=<your-api-key> npx electron scripts/coding-agent-e2e.cjs
 - 在设置页输入的 Provider 密钥由主进程加密/脱敏保存,渲染进程只看到 `hasToken` 状态。
 - 本地开发密钥放在 shell 环境、系统钥匙串或未跟踪的 `.env.local` 中。
 - 提交前至少运行 `npm run secret:scan`,发布前加跑 `npm run secret:scan:history`,并人工复核 `git status --short` 与即将提交的 diff。
-- 不提交 `test-results/`、`out/`、`dist/`、`node_modules/`、`model-stats.json`、插件构建产物、`.env`、证书、私钥或签名材料。
-- 如果任何真实 token 曾经外发或推送,必须在对应平台撤销/轮换;仅从 Git 删除不足以让旧凭据失效。
+- 不提交 `test-results/`、`out/`、`dist/`、`node_modules/`、`model-stats.json`、插件构建产物、`.env`、证书、私钥、keystore、provision profile 或签名材料。
+- GitHub Releases 只允许上传安装器/更新元数据:DMG、mac zip、Windows installer、AppImage、blockmap、`latest*.yml`。不要上传本地证据包、测试报告、`.env`、证书、私钥、日志或源码构建目录。
+- 如果任何真实 token 曾经外发、推送或作为 Release 资产公开,必须先从公开位置删除,再在对应平台撤销/轮换;仅从 Git 删除不足以让旧凭据失效。
 
 ## 打包分发 / 发布
 
 CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
 
-最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、打包产物和真实外部门禁完成后再创建 Release。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
+最新稳定版见 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases)。Work OS 里程碑发布应使用新版本号,并在 `npm run typecheck`、`npm run build`、`npm run test:deep`、`npm run secret:scan:history`、`npm run test:release-packaging-audit:required`、`npm run test:github-release-audit:required`、打包产物和真实外部门禁完成后再创建 Release。发布或编辑 Release 后,对目标 tag 再跑 `npm run test:github-release-audit:required -- --tag vX.Y.Z`。当前 P2-005 IDE 证据已由 VS Code Extension Host 与 JetBrains runIde recorder 证明;`v0.2.0` 仍需 P2-001 Windows GUI evidence、P2-004 国内真实网络/工具调用 parity、N1 真人迁移记录和打包门禁。草稿门禁见 [Release Gate v0.2.0 Draft](./docs/RELEASE-GATE-v0.2.0-DRAFT.md)。
 
 ```bash
 npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)

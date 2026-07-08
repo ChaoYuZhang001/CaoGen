@@ -56,6 +56,8 @@
     "test:n1-migration-audit:required": "node scripts/n1-migration-audit.mjs --required",
     "test:release-packaging-audit": "node scripts/release-packaging-audit.mjs",
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
+    "test:github-release-audit": "node scripts/github-release-audit.mjs",
+    "test:github-release-audit:required": "node scripts/github-release-audit.mjs --required",
     "test:orchestration": "node scripts/orchestration-mock-e2e.mjs",
     "test:start-suggestions-e2e": "node scripts/start-suggestions-e2e.mjs",
     "test:gui-permission": "node scripts/gui-permission-smoke.mjs",
