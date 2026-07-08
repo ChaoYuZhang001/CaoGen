@@ -2,7 +2,7 @@
 
 <img src="./resources/icon.png" alt="CaoGen" width="96" height="96">
 
-# CaoGen（草根）
+# CaoGen
 
 ### 国产开源 · 多厂商不绑定 · AI 编码桌面工作室
 
