@@ -52,6 +52,8 @@
     "test:p2-ide-build-and-vscode:required": "npm run test:ide-plugins:required && npm run test:vscode-extension-host:required",
     "test:p2-ide:required": "npm run test:p2-ide-build-and-vscode:required && npm run test:jetbrains-ide-interaction:required",
     "test:openai-p2-tools": "node scripts/openai-p2-tools-smoke.mjs",
+    "test:n1-migration-audit": "node scripts/n1-migration-audit.mjs",
+    "test:n1-migration-audit:required": "node scripts/n1-migration-audit.mjs --required",
     "test:orchestration": "node scripts/orchestration-mock-e2e.mjs",
     "test:start-suggestions-e2e": "node scripts/start-suggestions-e2e.mjs",
     "test:gui-permission": "node scripts/gui-permission-smoke.mjs",

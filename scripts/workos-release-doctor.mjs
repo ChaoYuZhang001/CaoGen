@@ -19,7 +19,8 @@ const reports = {
   guiVscode: readJson('test-results/gui-vscode-e2e/latest.json'),
   guiCrossApp: readJson('test-results/gui-cross-app-e2e/latest.json'),
   chinaRealNetwork: readJson('test-results/china-real-network/latest.json'),
-  chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json')
+  chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
+  n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json')
 }
 
 const packageJson = readJson('package.json').data ?? {}
@@ -117,9 +118,12 @@ function nextActionsForP2(id) {
 }
 
 function n1Domain() {
+  const audit = reports.n1MigrationAudit
   const candidates = [
     'docs/N1-MIGRATION-RESULTS.md',
     'docs/N1-MIGRATION-DRILL-RESULT.md',
+    'docs/N1-MIGRATION-RESULT.json',
+    'docs/N1-MIGRATION-DRILL-RESULT.json',
     'test-results/n1-migration/latest.json'
   ]
   const evidence = candidates.map((relativePath) => {
@@ -130,21 +134,28 @@ function n1Domain() {
       size: existsSync(absolutePath) ? statSync(absolutePath).size : 0
     }
   })
-  const hasEvidence = evidence.some((item) => item.exists && item.size > 0)
   return {
     id: 'n1_migration',
     title: 'N1 human 30-minute migration drill',
-    status: hasEvidence ? 'ready' : 'open',
+    status: audit.data?.status === 'passed' ? 'ready' : 'open',
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined
+    },
     evidence,
     commands: [
       'node scripts/n1-fixture.mjs',
-      'npm run dev'
+      'npm run dev',
+      'npm run test:n1-migration-audit:required'
     ],
-    nextActions: hasEvidence
-      ? ['Review the dated N1 record against docs/N1-MIGRATION-DRILL.md before marking release-ready.']
+    nextActions: audit.data?.status === 'passed'
+      ? ['Keep the passed N1 audit report with the release evidence pack and rerun it on the release commit.']
       : [
           'Run docs/N1-MIGRATION-DRILL.md with a human tester and stopwatch.',
           'Record total time, per-step times, no-doc-help status, asset-zero-loss check, and screen recording path.',
+          'Write a private JSON record using docs/N1-MIGRATION-RESULT.template.json and run npm run test:n1-migration-audit:required.',
           'Do not replace this with automation; N1 is explicitly human UX evidence.'
         ]
   }
@@ -226,9 +237,10 @@ function buildParallelAgents() {
       objective: 'Produce the human N1 30-minute migration drill record.',
       commands: [
         'node scripts/n1-fixture.mjs',
-        'npm run dev'
+        'npm run dev',
+        'npm run test:n1-migration-audit:required'
       ],
-      acceptance: 'Dated human drill record shows <=30 minutes, all 7 steps complete, no docs/help, and source assets unchanged.'
+      acceptance: 'N1 audit passes for a dated human drill record showing <=30 minutes, all 7 steps complete, no docs/help, evidence path, commit, and source assets unchanged.'
     },
     {
       id: 'B0',
