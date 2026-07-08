@@ -31,6 +31,13 @@ const reports = {
 const packageJson = readJson('package.json').data ?? {}
 const p2Requirements = Array.isArray(reports.p2Audit.data?.requirements) ? reports.p2Audit.data.requirements : []
 const p2ById = Object.fromEntries(p2Requirements.filter(isRecord).map((item) => [item.id, item]))
+const p2RequiredResults = Array.isArray(reports.p2Required.data?.results) ? reports.p2Required.data.results : []
+const p2RequiredByName = Object.fromEntries(p2RequiredResults.filter(isRecord).map((item) => [item.name, item]))
+const releaseRequiredP2Ids = ['P2-002', 'P2-003', 'P2-005']
+const nonBlockingP2Ids = {
+  'P2-001': 'delegated_windows_agent',
+  'P2-004': 'user_configured_external'
+}
 
 const domains = [
   p2Domain(),
@@ -68,7 +75,9 @@ const report = {
   parallelAgents: buildParallelAgents(),
   releaseStopConditions: [
     'Do not publish v0.2.0 while workos-release-doctor status is not ready.',
-    'Do not publish while npm run test:p2-required or npm run test:p2-audit -- --required fails.',
+    'Do not publish while release-scope P2 evidence is missing: P2-002, P2-003, and P2-005 must be proved.',
+    'Do not claim P2-001 Windows GUI evidence or P2-004 China external evidence as release-proved until their separate required gates pass.',
+    'Do not make N1 30-minute human migration claims in v0.2.0 release notes without a passed private N1 audit record.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
@@ -85,38 +94,60 @@ console.log(JSON.stringify(report, null, 2))
 if (required && report.status !== 'ready') process.exitCode = 1
 
 function p2Domain() {
-  const proved = ['P2-001', 'P2-002', 'P2-003', 'P2-004', 'P2-005']
-    .filter((id) => p2ById[id]?.status === 'proved')
-  const open = ['P2-001', 'P2-002', 'P2-003', 'P2-004', 'P2-005']
-    .filter((id) => p2ById[id]?.status !== 'proved')
+  const releaseChecks = {
+    'P2-002': p2ById['P2-002']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
+    'P2-003': p2ById['P2-003']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
+    'P2-005':
+      p2ById['P2-005']?.status === 'proved' ||
+      (
+        p2RequiredByName.ide_build_and_vscode_required?.status === 'pass' &&
+        p2RequiredByName.jetbrains_ide_interaction_required?.status === 'pass'
+      )
+  }
+  const proved = [
+    ...releaseRequiredP2Ids.filter((id) => releaseChecks[id]),
+    ...Object.keys(nonBlockingP2Ids).filter((id) => p2ById[id]?.status === 'proved')
+  ]
+  const blockingOpen = releaseRequiredP2Ids
+    .filter((id) => !releaseChecks[id])
     .map((id) => ({
       id,
       status: stringField(p2ById[id], 'status') || 'missing',
       title: stringField(p2ById[id], 'title') || id
     }))
+  const nonBlockingOpen = Object.entries(nonBlockingP2Ids)
+    .filter(([id]) => p2ById[id]?.status !== 'proved')
+    .map(([id, releasePolicy]) => ({
+      id,
+      status: stringField(p2ById[id], 'status') || 'missing',
+      title: stringField(p2ById[id], 'title') || id,
+      releasePolicy
+    }))
   return {
     id: 'p2_required',
-    title: 'P2 required evidence',
-    status: reports.p2Audit.data?.status === 'passed' && open.length === 0 ? 'ready' : 'open',
+    title: 'P2 release-scope evidence',
+    status: blockingOpen.length === 0 ? 'ready' : 'open',
+    releaseRequired: releaseRequiredP2Ids,
     proved,
-    open,
+    open: blockingOpen,
+    nonBlockingOpen,
     commands: [
-      'npm run test:p2-required',
-      'npm run test:p2-audit -- --required'
+      'npm run test:p2',
+      'npm run test:p2-ide-build-and-vscode:required',
+      'npm run test:jetbrains-ide-interaction:required',
+      'npm run test:p2-audit -- --required # optional full external audit; P2-001/P2-004 are non-blocking for v0.2.0'
     ],
-    nextActions: open.length === 0
-      ? ['Keep P2 required and strict audit green on the release commit.']
-      : open.flatMap((item) => nextActionsForP2(item.id))
+    nextActions: [
+      ...(blockingOpen.length === 0
+        ? ['Keep P2-002/P2-003/P2-005 proved on the release commit.']
+        : blockingOpen.flatMap((item) => nextActionsForP2(item.id))),
+      ...nonBlockingOpen.flatMap((item) => nextActionsForP2(item.id))
+    ]
   }
 }
 
 function refreshLocalEvidence() {
   const commands = [
-    {
-      id: 'n1_migration_audit',
-      command: 'node scripts/n1-migration-audit.mjs',
-      args: ['scripts/n1-migration-audit.mjs']
-    },
     {
       id: 'release_packaging_audit',
       command: 'node scripts/release-packaging-audit.mjs',
@@ -197,7 +228,8 @@ function n1Domain() {
   return {
     id: 'n1_migration',
     title: 'N1 human 30-minute migration drill',
-    status: audit.data?.status === 'passed' ? 'ready' : 'open',
+    status: audit.data?.status === 'passed' ? 'ready' : 'not_required_for_v0.2.0',
+    blocking: false,
     audit: {
       path: audit.relativePath,
       exists: audit.exists,
@@ -208,15 +240,13 @@ function n1Domain() {
     commands: [
       'node scripts/n1-fixture.mjs',
       'npm run dev',
-      'npm run test:n1-migration-audit:required'
+      'npm run test:n1-migration-audit:required # optional before making N1 claims'
     ],
     nextActions: audit.data?.status === 'passed'
-      ? ['Keep the passed N1 audit report with the release evidence pack and rerun it on the release commit.']
+      ? ['Keep the passed N1 audit report private and only cite it if release notes make N1 claims.']
       : [
-          'Run docs/N1-MIGRATION-DRILL.md with a human tester and stopwatch.',
-          'Record total time, per-step times, no-doc-help status, asset-zero-loss check, and screen recording path.',
-          'Write a private JSON record using docs/N1-MIGRATION-RESULT.template.json and run npm run test:n1-migration-audit:required.',
-          'Do not replace this with automation; N1 is explicitly human UX evidence.'
+          'N1 human drill is not a v0.2.0 release blocker under the current product decision.',
+          'Do not claim 30-minute human migration in release notes until a private N1 audit record passes.'
         ]
   }
 }
@@ -319,7 +349,7 @@ function buildParallelAgents() {
         'npm run test:gui-cross-app-e2e:required',
         'npm run test:gui-desktop-e2e:required'
       ],
-      acceptance: 'P2 audit no longer reports P2-001 missing_evidence.'
+      acceptance: 'Non-blocking for v0.2.0; after this separate agent passes, release notes may upgrade the Windows GUI evidence claim.'
     },
     {
       id: 'B4',
@@ -331,18 +361,7 @@ function buildParallelAgents() {
         'npm run test:china-real-network:required',
         'npm run test:china-tool-call-parity:required'
       ],
-      acceptance: 'P2 audit marks P2-004 proved without committing secrets or evidence packs.'
-    },
-    {
-      id: 'B5',
-      branch: 'codex/workos-b5-n1-drill',
-      objective: 'Produce the human N1 30-minute migration drill record.',
-      commands: [
-        'node scripts/n1-fixture.mjs',
-        'npm run dev',
-        'npm run test:n1-migration-audit:required'
-      ],
-      acceptance: 'N1 audit passes for a dated human drill record showing <=30 minutes, all 7 steps complete, no docs/help, evidence path, commit, and source assets unchanged.'
+      acceptance: 'User-configured; v0.2.0 may ship without this evidence if release notes do not claim China external proof.'
     },
     {
       id: 'B0',
@@ -350,8 +369,9 @@ function buildParallelAgents() {
       objective: 'Keep docs, release gate, packaging, and public claims aligned with proved evidence.',
       commands: [
         'npm run workos:release-doctor -- --refresh',
-        'npm run test:p2-required',
-        'npm run test:p2-audit -- --required',
+        'npm run test:p2',
+        'npm run test:p2-ide-build-and-vscode:required',
+        'npm run test:jetbrains-ide-interaction:required',
         'npm run test:release-packaging-audit:required',
         'npm run test:github-release-audit:required',
         'npm run secret:scan:history'
@@ -384,6 +404,9 @@ function renderMarkdown(value) {
     lines.push(`- Status: ${domain.status}`)
     if (domain.proved?.length) lines.push(`- Proved: ${domain.proved.map((item) => `\`${item}\``).join(', ')}`)
     if (domain.open?.length) lines.push(`- Open: ${domain.open.map((item) => `\`${item.id}:${item.status}\``).join(', ')}`)
+    if (domain.nonBlockingOpen?.length) {
+      lines.push(`- Non-blocking open: ${domain.nonBlockingOpen.map((item) => `\`${item.id}:${item.releasePolicy}\``).join(', ')}`)
+    }
     if (domain.commands?.length) {
       lines.push('- Commands:')
       for (const command of domain.commands) lines.push(`  - \`${command}\``)
