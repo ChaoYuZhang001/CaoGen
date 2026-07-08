@@ -58,6 +58,8 @@
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
     "test:github-release-audit": "node scripts/github-release-audit.mjs",
     "test:github-release-audit:required": "node scripts/github-release-audit.mjs --required",
+    "test:github-release-audit:read-text": "node scripts/github-release-audit.mjs --read-text-assets",
+    "test:github-release-audit:read-text:required": "node scripts/github-release-audit.mjs --required --read-text-assets",
     "test:orchestration": "node scripts/orchestration-mock-e2e.mjs",
     "test:start-suggestions-e2e": "node scripts/start-suggestions-e2e.mjs",
     "test:gui-permission": "node scripts/gui-permission-smoke.mjs",

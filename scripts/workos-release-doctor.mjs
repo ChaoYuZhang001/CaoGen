@@ -71,6 +71,7 @@ const report = {
     'Do not publish while npm run test:p2-required or npm run test:p2-audit -- --required fails.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
+    'Do not claim public latest*.yml or other small text release metadata was content-scanned unless npm run test:github-release-audit:read-text:required -- --tag v0.2.0 passes.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
   ]
 }
@@ -276,7 +277,9 @@ function githubReleaseDomain() {
     commands: [
       'npm run test:github-release-audit',
       'npm run test:github-release-audit:required',
-      'npm run test:github-release-audit:required -- --tag v0.2.0'
+      'npm run test:github-release-audit:read-text',
+      'npm run test:github-release-audit:required -- --tag v0.2.0',
+      'npm run test:github-release-audit:read-text:required -- --tag v0.2.0'
     ],
     nextActions: audit.data?.status === 'passed'
       ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
@@ -354,6 +357,7 @@ function buildParallelAgents() {
         'npm run test:p2-audit -- --required',
         'npm run test:release-packaging-audit:required',
         'npm run test:github-release-audit:required',
+        'npm run test:github-release-audit:read-text',
         'npm run secret:scan:history'
       ],
       acceptance: 'Release notes and README match current evidence; v0.2.0 is not published until every gate is ready.'
