@@ -35,12 +35,15 @@ async function run() {
   // 注意 ~/.claude.json 是配置文件(人人都有,不含 token),绝不能当登录凭据 ——
   // 外部验收发现旧逻辑误把它当凭据,导致无登录环境不跳过反而硬失败(Not logged in)。
   const hostCreds = process.env.CLAUDE_CODE_HOST_CREDS_FILE
+  // ANTHROPIC_API_KEY alone is not sufficient — the Claude Agent SDK engine
+  // requires OAuth login (claude login → ~/.claude/.credentials.json or
+  // CLAUDE_CODE_HOST_CREDS_FILE). An API key without OAuth causes the SDK
+  // to report "Not logged in" and idle.
   const hasAuth =
-    !!process.env.ANTHROPIC_API_KEY ||
     (!!hostCreds && fs.existsSync(hostCreds)) ||
     fs.existsSync(path.join(os.homedir(), '.claude', '.credentials.json'))
   if (!hasAuth) {
-    console.log('[SKIP] Claude 真对话需真实登录态(ANTHROPIC_API_KEY / host-creds / ~/.claude/.credentials.json)')
+    console.log('[SKIP] Claude 真对话需真实登录态(host-creds / ~/.claude/.credentials.json)')
     console.log('       ~/.claude.json 是配置文件,不算凭据。当前环境无有效凭据,跳过。')
     console.log('\nclaude-real e2e: skipped (no auth)')
     app.exit(0)
