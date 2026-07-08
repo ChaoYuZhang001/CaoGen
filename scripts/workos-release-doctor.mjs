@@ -1,12 +1,15 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
+const refresh = process.argv.includes('--refresh') || process.env.CAOGEN_WORKOS_RELEASE_DOCTOR_REFRESH === '1'
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'workos-release-doctor')
 const reportDir = path.join(reportRoot, runId)
+const refreshResults = refresh ? refreshLocalEvidence() : []
 
 const reports = {
   p2Required: readJson('test-results/p2-required/latest.json'),
@@ -46,6 +49,10 @@ const report = {
   currentPackageVersion: stringField(packageJson, 'version') || 'unknown',
   releaseCandidate: 'v0.2.0',
   redactionPolicy: 'No secret values are read or written; only report paths, status fields, env names, and commands are emitted.',
+  refresh: {
+    enabled: refresh,
+    commands: refreshResults
+  },
   sourceReports: Object.fromEntries(Object.entries(reports).map(([name, value]) => [
     name,
     {
@@ -100,6 +107,55 @@ function p2Domain() {
     nextActions: open.length === 0
       ? ['Keep P2 required and strict audit green on the release commit.']
       : open.flatMap((item) => nextActionsForP2(item.id))
+  }
+}
+
+function refreshLocalEvidence() {
+  const commands = [
+    {
+      id: 'n1_migration_audit',
+      command: 'node scripts/n1-migration-audit.mjs',
+      args: ['scripts/n1-migration-audit.mjs']
+    },
+    {
+      id: 'release_packaging_audit',
+      command: 'node scripts/release-packaging-audit.mjs',
+      args: ['scripts/release-packaging-audit.mjs']
+    },
+    {
+      id: 'github_release_audit',
+      command: 'node scripts/github-release-audit.mjs',
+      args: ['scripts/github-release-audit.mjs']
+    }
+  ]
+  return commands.map((item) => runRefreshCommand(item))
+}
+
+function runRefreshCommand(item) {
+  const startedAt = Date.now()
+  try {
+    execFileSync(process.execPath, item.args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    return {
+      id: item.id,
+      command: item.command,
+      status: 'completed',
+      exitCode: 0,
+      durationMs: Date.now() - startedAt
+    }
+  } catch (error) {
+    return {
+      id: item.id,
+      command: item.command,
+      status: 'failed',
+      exitCode: typeof error?.status === 'number' ? error.status : 1,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
@@ -293,7 +349,7 @@ function buildParallelAgents() {
       branch: 'codex/workos-b0-release-gate',
       objective: 'Keep docs, release gate, packaging, and public claims aligned with proved evidence.',
       commands: [
-        'npm run workos:release-doctor',
+        'npm run workos:release-doctor -- --refresh',
         'npm run test:p2-required',
         'npm run test:p2-audit -- --required',
         'npm run test:release-packaging-audit:required',
@@ -313,6 +369,11 @@ function renderMarkdown(value) {
     `Run ID: ${value.runId}`,
     `Release candidate: ${value.releaseCandidate}`,
     `Package version: ${value.currentPackageVersion}`,
+    '',
+    '## Refresh',
+    '',
+    `- Enabled: ${value.refresh.enabled ? 'yes' : 'no'}`,
+    ...value.refresh.commands.map((item) => `- ${item.id}: ${item.status} (${item.durationMs}ms)`),
     '',
     '## Domains',
     ''

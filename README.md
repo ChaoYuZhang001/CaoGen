@@ -96,7 +96,7 @@ npm run test:deep  # 深度测试:typecheck/build/集成/模块冒烟/
                    # Electron IPC/OpenAI mock E2E/页面操作等串行门禁
 npm run test:p2    # P2 本地 smoke:技能、模型、国内生态本地桩、IDE bridge、OpenAI P2 工具
 npm run test:p2-required # P2 required 外部门禁;无真实环境/凭据时预期失败并给出缺口
-npm run workos:release-doctor # 汇总 v0.2.0 剩余阻塞、下一波 Agent 分工与发布停止条件
+npm run workos:release-doctor -- --refresh # 刷新轻量审计并汇总 v0.2.0 阻塞/分工/停止条件
 npm run test:n1-migration-audit # 审计真人 N1 30 分钟迁移记录(需本地私有 JSON 记录)
 npm run test:release-packaging-audit # 审计 release 版本号、macOS 资产和禁止上传文件
 npm run test:github-release-audit # 审计公开 GitHub Release 资产名、版本和敏感上传物
