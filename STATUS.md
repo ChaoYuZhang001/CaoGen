@@ -26,7 +26,7 @@
 
 # Current Focus
 
-**Work OS Phase 2 外部证据收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。`npm run workos:release-doctor` 会汇总下一波 Agent 分工和发布停止条件,并读取 N1/packaging/GitHub Release 资产审计门禁。当前不能发布 `v0.2.0`:还缺 Windows/VS Code GUI required evidence、真实 China network/tool-call parity、N1 真人 30 分钟迁移记录与最终 release packaging。
+**Work OS Phase 2 外部证据收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。`npm run workos:release-doctor -- --refresh` 会先刷新 N1/packaging/GitHub Release 轻量审计,再汇总下一波 Agent 分工和发布停止条件。当前不能发布 `v0.2.0`:还缺 Windows/VS Code GUI required evidence、真实 China network/tool-call parity、N1 真人 30 分钟迁移记录与最终 release packaging。
 
 # Goal
 

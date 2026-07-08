@@ -63,7 +63,7 @@ Only create a new GitHub Release after all items below are true:
 
 | Gate | Required evidence |
 |---|---|
-| Release doctor | `npm run workos:release-doctor -- --required` passes |
+| Release doctor | `npm run workos:release-doctor -- --refresh --required` passes |
 | Version | `package.json` and `package-lock.json` bumped from `0.1.2` to the chosen release version |
 | Local | `npm run typecheck`, `npm run build`, `npm run test:deep` pass |
 | P2 required | `npm run test:p2-required` passes |
