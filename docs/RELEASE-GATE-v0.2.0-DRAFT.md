@@ -26,6 +26,7 @@
 | China external | `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` pass with real public HTTPS targets | Open |
 | N1 migration | Human 30-minute migration drill record reviewed and `npm run test:n1-migration-audit:required` passes | Open |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets and `npm run test:release-packaging-audit:required` passes; Windows/Linux only if actually verified | Open |
+| Release notes | `npm run test:release-notes-audit:final` passes against the final GitHub Release body before publishing | Draft exists; final audit still open |
 | Public GitHub Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag v0.2.0` plus `npm run test:github-release-audit:read-text:required -- --tag v0.2.0` for public small text metadata | Current public v0.1.0/v0.1.1/v0.1.2 asset metadata passed; v0.2.0 not created |
 | Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed on current worktree/history; rerun immediately before release |
 | Release doctor | `npm run workos:release-doctor -- --refresh --required` refreshes local lightweight audits and summarizes all domains as ready | Open |
@@ -42,6 +43,7 @@ The final GitHub Release body must include:
 - A statement that real keys, webhooks, certs, `.env`, signing material, `test-results`, `out`, `dist`, `node_modules`, and local evidence packs are not included in the repo or release assets.
 - A list of exact uploaded asset names. Allowed public assets are installer/update files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`.
 - A note that public `latest*.yml`/small text metadata passed the read-text release audit; if the network cannot read those assets, do not claim their contents were scanned.
+- A passing `npm run test:release-notes-audit:final` report for the exact body used on GitHub.
 
 ## Stop Conditions
 
