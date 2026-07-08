@@ -1,0 +1,26 @@
+{
+  "date": "2026-07-08",
+  "tester": "tester name or anonymized id",
+  "testerProfile": "Codex/Claude Code/Cursor/Cline/Aider deep user",
+  "engineProvider": "provider and model used in CaoGen",
+  "fixturePath": "/absolute/path/to/caogen-n1-drill",
+  "totalMinutes": 0,
+  "result": "pass",
+  "noDocsOrHelp": true,
+  "assetZeroLoss": true,
+  "sourceAssetsUnchanged": true,
+  "screenRecordingPath": "/private/evidence/n1-recording.mov",
+  "gitCommit": "commit hash produced by CaoGen app",
+  "steps": [
+    { "id": 1, "name": "import_assets", "completed": true, "minutes": 0 },
+    { "id": 2, "name": "create_session", "completed": true, "minutes": 0 },
+    { "id": 3, "name": "file_reference", "completed": true, "minutes": 0 },
+    { "id": 4, "name": "edit_code", "completed": true, "minutes": 0 },
+    { "id": 5, "name": "review_diff", "completed": true, "minutes": 0 },
+    { "id": 6, "name": "run_validation", "completed": true, "minutes": 0 },
+    { "id": 7, "name": "commit_change", "completed": true, "minutes": 0 }
+  ],
+  "blockers": [],
+  "roughEdges": [],
+  "notes": "Keep real secrets, private repo names, and shareable recording URLs out of committed files."
+}

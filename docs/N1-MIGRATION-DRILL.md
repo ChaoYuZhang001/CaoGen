@@ -58,6 +58,22 @@ __________________________________________
 __________________________________________
 ```
 
+## 机器审计记录
+
+真人跑完后,把记录整理成私有 JSON,不要把录屏、真实私库名、真实密钥或私有 URL 提交到仓库。模板见:
+
+```bash
+cp docs/N1-MIGRATION-RESULT.template.json /tmp/caogen-n1-result.json
+```
+
+填写后运行:
+
+```bash
+CAOGEN_N1_MIGRATION_RECORD=/tmp/caogen-n1-result.json npm run test:n1-migration-audit:required
+```
+
+审计通过才表示 N1 记录满足发布门禁。它会检查:总用时 ≤30 分钟、7 步全部完成、全程无需查文档/求助、资产零丢失、源工具资产未改、录屏/证据路径存在于记录中、并记录 CaoGen 内完成的提交。
+
 ## 判定
 
 - **达标**:总用时 ≤ 30 分钟,7 步全部完成,全程无需查文档,源工具资产未被修改。

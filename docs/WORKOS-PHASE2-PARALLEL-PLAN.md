@@ -44,7 +44,7 @@ Run 6 agents in parallel. Keep each task on its own branch and do not commit gen
 | B2 IDE Build + VS Code Host | `codex/workos-b2-ide-build` | Completed: VS Code extension compile/host plus JetBrains plugin distribution | `npm run test:p2-ide-build-and-vscode:required`, `npm run test:ide-plugins:required`, `npm run test:vscode-extension-host:required` | `test-results/ide-plugins/latest.json` and `test-results/vscode-extension-host/latest.json` pass |
 | B3 JetBrains Real IDE | `codex/workos-b3-jetbrains-real` | Completed: JetBrains runIde recorder/evidence JSON accepted by required gate | `npm run test:jetbrains-recorder-e2e:required`, `npm run test:jetbrains-ide-interaction:required` | `test-results/jetbrains-ide-interaction/latest.json` passes with recorder interaction evidence |
 | B4 China External Evidence | `codex/workos-b4-china-external` | Prove China real network and tool-call parity using real configured providers | `npm run test:p2-external:pack`, `npm run test:p2-external:doctor`, `npm run test:p2-external:preflight -- --required`, `npm run test:china-real-network:required`, `npm run test:china-tool-call-parity:required` | P2-004 moves from `missing_external` to proved |
-| B5 N1 Migration Drill | `codex/workos-b5-n1-drill` | Run the real 30-minute migration drill and record proof | Follow `docs/N1-MIGRATION-DRILL.md`, then `npm run test:deep` | Dated drill record with user, stopwatch, screen recording path, pass/fail notes |
+| B5 N1 Migration Drill | `codex/workos-b5-n1-drill` | Run the real 30-minute migration drill and record proof | Follow `docs/N1-MIGRATION-DRILL.md`, then `npm run test:n1-migration-audit:required` and `npm run test:deep` | N1 audit passes for a dated human drill record with stopwatch, screen recording path, commit, no docs/help, and asset-zero-loss notes |
 
 ## Merge Order
 
@@ -70,6 +70,7 @@ Only create a new GitHub Release after all items below are true:
 | P2 audit | `npm run test:p2-audit -- --required` passes |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets; Windows/Linux only if actually verified |
 | Release notes | Notes include truthful unsupported/conditional items, macOS first-open instructions, and no overclaim about Genesis execution |
+| N1 audit | `npm run test:n1-migration-audit:required` passes on the private human drill record |
 | Secret hygiene | `npm run secret:scan:history` passes; current tree and staged diff scan clean; no `.env`, private key, cert, token, webhook, signing material, generated artifact, or local evidence pack staged |
 
 ## Open Required Evidence
