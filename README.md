@@ -1,176 +1,215 @@
-# CaoGen
+<div align="center">
 
-<p>
-  <img src="https://img.shields.io/badge/license-MIT-black" alt="License: MIT">
-  <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
-  <img src="https://img.shields.io/badge/React-18-61dafb" alt="React 18">
-  <img src="https://img.shields.io/badge/TypeScript-5-3178c6" alt="TypeScript 5">
-  <img src="https://img.shields.io/badge/3D-react--three--fiber-ff69b4" alt="react-three-fiber">
-  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
-</p>
+<img src="./resources/icon.png" alt="CaoGen" width="96" height="96">
 
-> 🐳 国产原创 · 多厂商 AI 编码桌面工作室 · 开源(MIT)
+# CaoGen（草根）
 
-多会话并行的桌面 AI 编码 Agent。终极目标是让 **Codex、Claude Code、Gemini CLI、Marvis 以及其他主流 Agent 的深度用户丝滑转用 CaoGen**,把 CaoGen 做成中国原创、世界级第一梯队的桌面 AI 编码工作室:多厂商模型可配置、指定运行或智能自动调度、每个 Agent 用 Git worktree 隔离、并行会话以写实 3D 办公区呈现,并补齐深度用户迁移所需的检查点回溯、子代理编排、内置浏览器批注、插件生态、产物预览、自动化与主动建议——完整目标与里程碑见 [ROADMAP.md](./ROADMAP.md)。
+### 国产开源 · 多厂商不绑定 · AI 编码桌面工作室
 
-当前以 Claude Agent SDK 为默认引擎(与 Claude Code 同源),OpenAI 引擎同时支持 **Responses** 与 **Chat Completions** 两种协议,在桌面层提供 CLI 给不了的体验:
+<img src="https://img.shields.io/badge/version-v0.1.2-blue" alt="version">
+<img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+<img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
+<img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
+<img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
-> **任何厂商模型都是真编码 Agent,不只是聊天**:OpenAI 引擎内置原生工具调用循环(bash / 读写文件 / 精确编辑 / 列目录,带权限审批与路径牢笼)——选 DeepSeek / 通义千问 / Grok / 网关 / vLLM·Ollama 本地模型,**无需安装任何外部 CLI**,就能在 CaoGen 里改代码跑命令(已用 DeepSeek 真实 E2E:模型自主创建/编辑文件、执行命令,7/7 通过)。全部厂商内置 Provider 预设;Claude 引擎走 Anthropic 协议,DeepSeek/Kimi/智谱官方端点亦可直连。
+**不绑厂商、不锁模型、不乱改主目录，你的桌面你做主。**
 
-- **多会话并行** — 同时在多个项目上运行 Agent,侧栏一键切换,互不阻塞
-- **真子代理编排(闭环)** — 主 Agent 一次派发最多 33 个子 Agent 并行;全部完成后结果**自动汇总回灌父 Agent**,由其总结成败、评估冲突、给出合并顺序(32 并发实测:派发 655ms,全部完成 2s)
-- **Worktree 隔离 + PR** — 每个 Agent 默认独立 Git worktree;合并前冲突风险明示,可一键生成 patch / 应用回主工作区 / 创建 PR(gh/glab)
-- **跨厂商故障切换** — 厂商余额耗尽/限流/宕机时自动切到健康厂商重试,任务不中断,切换过程在聊天流透明标注
-- **原生编码 Agent(零外部依赖)** — OpenAI 引擎内置工具调用循环:bash/read/write/edit/list 五工具、按权限模式审批(默认询问/自动接受编辑/规划只读/跳过)、文件操作路径牢笼、40 轮防失控;DeepSeek 真实 E2E 7/7
-- **多引擎架构** — Engine 接口 + 注册表:Claude Agent SDK(默认)、OpenAI(Responses/Chat 双协议 + 原生工具)、Codex CLI、Gemini CLI(可选外挂)
-- **迁移级交互** — `@` 文件、多图粘贴/拖拽、图片 OCR(macOS Vision 零依赖)、斜杠命令、`Esc Esc` / `/rewind` 检查点回溯(对话回退**即时**截断 SDK 上下文)
-- **内置浏览器批注** — 选区批注 + **DOM 圈选**(悬停高亮点选元素、按元素裁剪截图)+ 页面只读观测(文本/控制台错误/网络失败)一键发给 Agent 复验
-- **Hooks** — 文件修改后 / 每轮结束后自动执行自定义 shell 命令(如格式化/跑测试),输出回显时间线
-- **插件生态** — 扫描 Claude/Codex 的 plugin/skill/agent/MCP,启停持久化、一键投递给 Agent;**MCP 运行态探测**(stdio 真握手 / http 可达性)
-- **工作台能力** — 分屏、内置终端/编辑器、HTML/PDF/CSV/JSON/图片预览、可逐块 accept/reject 的 Diff 查看器、应用内 Git 提交
-- **记忆与自动化** — 跨会话记忆(确认制)、主动开工建议、本地 Routines 定时自执行、完成通知与防休眠(均可在设置开关)
-- **预算闸门** — 会话/Provider/全局三级预算,超限拦截发送,32 并发也烧不穿
-- **中英双语界面** — 全部 UI 文案 zh/en 可切换;白天/夜晚/跟随系统三主题
-- **权限掌控** — 敏感操作逐条审批,或随时切换权限模式(默认 / 自动接受编辑 / 规划 / 跳过)
-- **成本仪表盘** — 每轮 token 用量、上下文规模、累计费用实时显示
-- **会话恢复** — 历史会话持久化,一键恢复上下文继续工作
-- **写实 3D 办公区** — 每个会话一个工位,小人动画/厂商配色/成本气泡由**真实会话状态**驱动,父子工位间飞行消息包呈现真实编排流
+[⬇️ 立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [⚡ 快速开始](#-3-分钟快速开始) | [🗺️ 路线图](./ROADMAP.md) | [💬 反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
 
-## 界面预览
-
-![CaoGen 主界面](./docs/screenshot-app.jpg)
-
-> 侧栏多项目并行、六大能力一览;切到 **🏢 3D 办公区**,每个会话是一个工位,一眼看出谁在写码、谁在等审批。
-
-## 下载安装
-
-从 [Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载对应平台安装包(macOS `.dmg` / Windows NSIS / Linux AppImage)。
-
-> **macOS 首次打开**:当前安装包未签名,下载后 **右键点 App 图标 → 打开 → 再点「打开」** 即可(只需绕行第一次);或在 系统设置 → 隐私与安全性 底部点「仍要打开」。
-
-也可以直接从源码运行,见下方「开发」。
-
-## 运行前提
-
-- Node.js ≥ 20
-- 至少一个可用的模型来源(任选其一):
-  - 已登录 Claude Code(`claude` CLI)或设置 `ANTHROPIC_API_KEY`(Claude 引擎)
-  - 任意厂商 API Key —— 设置页选预设(DeepSeek / Qwen / Grok / 网关 / 本地 Ollama 等),
-    OpenAI 引擎 Chat Completions 协议直连,无需 Claude 账号
-- 可选:装有 `codex` / `gemini` CLI 的用户,可额外选用这两个 CLI 作为会话引擎(复用其原生沙箱/账号);**不装也不影响任何功能**——CaoGen 自带完整编码 Agent 能力
-
-## 开发
-
-```bash
-npm install
-npm run dev        # 启动开发模式(HMR)
-```
-
-## 构建 / 校验 / 测试
-
-```bash
-npm run typecheck  # TS 类型检查(主进程 + 渲染进程)
-npm run build      # 产物输出到 out/
-npm start          # 预览构建产物
-npm run test:deep  # 深度测试:typecheck/build/集成×3/模块冒烟×12/
-                   # Electron IPC/OpenAI mock E2E/页面操作冒烟(共 21 项)
-```
-
-需要真实厂商 Key 的端到端脚本(不入 CI,本机手动跑):
-
-```bash
-# Chat Completions 真对话 E2E(流式 + usage + 多轮上下文)
-CHAT_E2E_KEY=sk-... npx electron scripts/chat-protocol-e2e.cjs
-
-# 真子代理编排闭环 E2E(派发→子代理真实跑完→自动回灌→父 Agent 总结)
-CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
-
-# 32 子代理并发压测(吞吐/时延/成本统计 + 结果正确性抽查)
-CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
-
-# 原生编码 Agent E2E(模型经工具调用真实创建/编辑文件、执行命令)
-CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
-```
-
-## 打包分发 / 发布
-
-CaoGen 通过 GitHub Releases 分发(不上架 App Store)。macOS 出 `.dmg`,Windows 出 NSIS 安装器,Linux 出 AppImage。
-
-```bash
-npm run dist:mac   # 产出 dist/CaoGen-<version>.dmg(+ .zip,供自动更新)
-npm run dist       # 按当前平台打包
-npm run dist:dir   # 只出未压缩 app 目录(调试打包用)
-```
-
-### macOS:签名与"首次打开"
-
-当前配置产出的是**未签名**包(`build.mac.identity: null`)。够用来自建分发,但用户首次打开会遇到 Gatekeeper 拦截。两种发布档位:
-
-**A · 未签名(当前默认,零成本)**
-产物可直接传 GitHub Releases。用户首次打开需绕行一次:
-
-> 下载 `.dmg` → 拖入「应用程序」→ **右键点 App 图标 → 打开** → 在弹窗里再点「打开」。
-> 或:双击被拦后,去 **系统设置 → 隐私与安全性**,在底部点「仍要打开」。
-> 之后每次正常双击即可,只需绕行第一次。
-
-把上面这段放进 Release 说明,能省掉大量"打不开"的反馈。
-
-**B · 签名 + 公证(推荐公开分发,需 Apple 凭据)**
-让用户**双击即开、零警告**,是不上架却公开分发的行业标准做法。需要:
-
-1. Apple Developer 账号($99/年),申请 **Developer ID Application** 证书并装入钥匙串。
-2. 一个用于公证的 **app-specific password**(或 App Store Connect API Key)。
-3. 改 `package.json` 的 `build.mac`:去掉 `identity: null`(或设为证书名),并加公证配置:
-   ```jsonc
-   "mac": {
-     "hardenedRuntime": true,
-     "gatekeeperAssess": false,
-     "notarize": { "teamId": "<你的 TeamID>" }
-   }
-   ```
-   公证凭据通过环境变量提供:`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`。
-4. 重新 `npm run dist:mac` 即产出已签名、已公证的 `.dmg`,无需改动任何代码。
-
-> 签名/公证与「上架 App Store」是两回事:公证只是让 Apple 盖一个"扫描过、无恶意软件"的章,分发渠道仍是你自己的 GitHub Releases。
-
-### 自动更新
-
-`src/main/updater.ts` 已接 `electron-updater`(运行时探测:未打包 / 未装依赖时降级为 no-op,绝不静默下载)。启用真实自动更新:把 `package.json` 的 `build.publish` 里占位 URL 换成真实发布地址(generic 静态服务器或 github provider),发版时用 `electron-builder --publish always` 上传 `latest-mac.yml` + 安装包即可。查到新版本只**通知**,下载/安装由用户在 UI 显式确认。
-
-## 架构
-
-```
-src/
-  shared/types.ts        主/渲染进程共享类型(IPC 协议、事件模型)
-  main/
-    index.ts             应用生命周期与窗口
-    agentSession.ts      单会话封装:一个长驻的 Agent SDK query(流式输入)
-    sessionManager.ts    多会话注册表 + 事件广播 + 历史持久化
-    ipc.ts               类型化 IPC handler
-    settings.ts/history.ts  userData 下的 JSON 持久化
-    pushable.ts          可推送 AsyncIterable(SDK 流式输入通道)
-  preload/index.ts       contextBridge 暴露 window.agentDesk
-  renderer/src/          React UI(zustand 状态,事件驱动渲染)
-```
-
-主进程通过 `@anthropic-ai/claude-agent-sdk` 的流式输入模式维持每个会话的长驻 agent 进程;
-`canUseTool` 回调把权限决策转发到 UI;`includePartialMessages` 提供逐字流式;
-`resume` 支持跨重启恢复会话上下文。
-
-## 参与贡献
-
-CaoGen 是开源项目,欢迎任何形式的参与:
-
-- 🐛 **提 Issue** — bug、功能建议、使用问题都欢迎
-- 🔧 **提 PR** — 修 bug、加功能、完善文档;请先跑通 `npm run typecheck` 和 `npm run build`
-- 💡 **方向讨论** — 路线图见 [ROADMAP.md](./ROADMAP.md),需求规格见 [REQUIREMENTS.md](./REQUIREMENTS.md)
-
-开发约定:主/渲染进程共享类型集中在 `src/shared/types.ts`;新增能力遵循「主进程模块 → IPC → preload → 类型 → store → UI」六环链路;保持中英双语文案(`src/renderer/src/i18n.ts`)。
-
-## 开源许可
-
-本项目基于 [MIT License](./LICENSE) 开源。你可以自由使用、修改、分发(含商用),只需保留版权与许可声明。
+</div>
 
 ---
 
-<sub>CaoGen · 国产原创 AI 编码桌面工作室 · 以 Claude Agent SDK 为默认引擎,多厂商可配置</sub>
+## ✨ 核心优势
+
+| 🚀 不绑定任何厂商 | 🛡️ 真隔离不搞乱代码 | 🎯 为开发者而生 |
+| :--- | :--- | :--- |
+| Claude、OpenAI、DeepSeek、Qwen、Kimi、智谱、Grok、网关和本地模型都能接。余额不足、限流或服务异常时可自动切到健康 Provider。 | 每个任务可独立 Git worktree，AI 改代码不污染主目录。合并前先看 Diff，不想要的改动直接丢掉。 | 不是聊天套壳。内置终端、文件编辑、Diff、Git、预览、浏览器批注、多 Agent 编排和 3D 办公区。 |
+
+一句话：**CaoGen 想把 Claude Code / Codex / Gemini CLI / Cursor / Cline / Aider 的高频编码工作流，收进一个可控、可审、可并行的桌面工作台。**
+
+## 🖼️ 界面预览
+
+| 主界面 | 3D 办公区 |
+| :---: | :---: |
+| ![CaoGen 主界面](./docs/screenshot-app.jpg) | ![CaoGen 3D 办公区](./docs/screenshot-office.jpg) |
+
+> 3D 办公区不是装饰：每个会话对应一个工位，运行中、等待审批、完成、失败、成本气泡和子代理消息流都来自真实会话状态。
+
+## 🆚 为什么选 CaoGen？
+
+| 痛点 | CaoGen | 常见限制 |
+|---|---|---|
+| 厂商绑定 | 支持 Claude / OpenAI 协议、国产模型、网关和本地模型；Provider 可自由切换 | 单厂商产品容易被余额、限流、账号、模型策略卡住 |
+| 多任务乱改代码 | 每个任务可独立 worktree，合并前有 Diff、patch、冲突检查和回滚 | 多个 Agent 直接改同一目录时容易互相覆盖 |
+| 代码安全边界 | 本地桌面应用，密钥加密落盘；代码只发给你自己选择的模型或工具服务 | 闭源 SaaS 边界不透明，难审计真实上传内容 |
+| 成本 | MIT 开源免费；预算闸门可限制会话、Provider 和月度花费 | 订阅费和模型费叠加，重度使用成本不可控 |
+| 国产适配 | 内置 DeepSeek / Qwen / Kimi / 智谱 / 豆包等常用模板，支持国内镜像配置 | 国际产品经常需要额外网关或网络处理 |
+| 桌面体验 | 终端、浏览器、Git、预览、文件编辑、3D 多任务视图在一个工作台里 | CLI 强但不可视，简单套壳又缺少工程控制 |
+
+## 🛠️ 核心功能
+
+### 🤖 多模型支持
+
+- ✅ Claude Agent SDK 默认引擎，与 Claude Code 同源。
+- ✅ OpenAI 引擎支持 Responses API 与 Chat Completions 两种协议。
+- ✅ 常用 Provider 模板：OpenAI、DeepSeek、Kimi、智谱 GLM、Grok、Qwen、百川、豆包、本地 OpenAI 兼容服务、one-api/new-api 网关。
+- ✅ Chat Completions 兼容模型可通过工具调用循环读文件、改代码、跑命令，不只是聊天。
+- ✅ 智能路由、故障切换、模型健康记录和预算闸门已接入。
+- ⚠️ Codex CLI / Gemini CLI 引擎为实验性路径：Codex 已做真对话验证，Gemini 依赖用户本机 CLI 登录状态。
+
+### 💻 编码核心能力
+
+- ✅ `@` 文件引用、文件补全、多图粘贴/拖拽、图片 OCR。
+- ✅ 命令执行、文件读写、精确搜索替换、代码/符号检索、依赖查看等原生工具。
+- ✅ Diff 审查、逐 hunk stage/discard、应用内 Git 提交。
+- ✅ Worktree 合并审查、patch 导出/应用、冲突文件查看、PR/MR 创建（`gh` / `glab`）。
+- ✅ `Esc Esc` / `/rewind` 检查点回溯；空闲时可即时重建引擎截断上下文，运行中下次 resume 截断。
+- ✅ 可配置 Docker 沙箱、系统 shell 模式和宽松模式；敏感操作进入权限审批。
+
+### 👥 多 Agent 与多任务
+
+- ✅ 主 Agent 一次最多派发 33 个子 Agent，并行处理复杂任务。
+- ✅ 子代理结果自动回灌父会话，由父 Agent 汇总成败、冲突风险和合并顺序。
+- ✅ DAG 任务调度已接入，可表达任务依赖、失败重试和断点恢复。
+- ⚠️ DAG 自动合并属于高风险工作流，适合在测试仓库或明确验证命令下使用。
+- ✅ 任务快照与会话历史持久化，重启后可恢复上下文。
+
+### 🖥️ 桌面原生体验
+
+- ✅ 内置终端，不用切出应用跑命令。
+- ✅ 内置文件浏览和文本编辑器。
+- ✅ HTML / Markdown / Text / CSV / JSON / 图片 / PDF 预览。
+- ✅ 内置浏览器，支持选区批注、DOM 圈选、元素截图、控制台错误和网络失败观测。
+- ✅ 系统通知和防休眠：任务完成、失败、等待审批时能提醒。
+- ⚠️ GUI 自动化支持 Windows/macOS 路径，但默认关闭，属于高风险能力，需要显式授权。
+
+### ✨ 特色功能
+
+- ✅ 写实 3D 办公区：多会话、多 Provider、成本、状态、父子 Agent 消息流可视化。
+- ✅ 项目记忆、分层记忆和记忆建议，确认后才沉淀。
+- ✅ Claude / Codex plugin、skill、agent、MCP 扫描，支持启停、投递给 Agent 和 MCP 运行态探测。
+- ✅ 自动 Skill 学习、复用和优化的基础链路已接入。
+- ✅ 本地 Routines：可创建、编辑、运行、记录 run log；云端 Runner 不在当前版本范围内。
+- ✅ 中英双语、深色/浅色/跟随系统主题。
+- ⚠️ VS Code / JetBrains 插件与 IDE Bridge 正在推进，当前按实验性能力看待。
+
+## ⚡ 3 分钟快速开始
+
+1. **下载安装**：从 [Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载对应系统安装包。
+2. **添加模型**：打开设置，选择 Provider 模板，填入 API Key。DeepSeek、Qwen、Kimi、Claude、GPT、Grok、本地模型都可以。
+3. **打开项目**：选择你的代码目录，新建会话，让 AI 开始读代码、改代码、跑测试、看 Diff。
+
+第一次建议试这个提示词：
+
+```text
+帮我阅读这个项目，指出最重要的入口文件、启动方式和当前最值得修的 3 个问题。先不要改代码。
+```
+
+## 📦 下载安装
+
+从 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载最新版本：
+
+- **macOS**：下载 `.dmg`，拖入「应用程序」。
+- **Windows**：下载 `.exe`，双击安装。
+- **Linux**：`package.json` 已配置 AppImage 打包目标，但当前公开 v0.1.2 Release 未上传 Linux 安装包；Linux 用户请先从源码运行或自行打包。
+
+> ⚠️ **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
+
+也可以直接从源码运行，见下方「开发与贡献」。
+
+## ❓ 常见问题
+
+**Q: 必须要有 Claude 账号才能用吗？**
+A: 不需要。Claude 引擎需要 Claude 登录或 `ANTHROPIC_API_KEY`，但 OpenAI 引擎可以直连任意 OpenAI 兼容模型，例如 DeepSeek、Qwen、Kimi、Grok、网关或本地模型。
+
+**Q: 支持本地模型吗？**
+A: 支持。只要你的本地服务提供 OpenAI 兼容接口，例如 Ollama、vLLM、LM Studio 或 one-api/new-api，就可以用 Chat Completions 协议接入。
+
+**Q: AI 改坏我的代码怎么办？**
+A: 建议新会话开启 worktree 隔离。AI 在独立 worktree 里改，合并前你可以看 Diff、导出 patch、检查冲突；不想要就丢掉。检查点回溯也可以恢复聊天上下文和代码改动。
+
+**Q: 会上传我的代码吗？**
+A: CaoGen 没有自己的云端代码托管服务。代码会留在本机，但你发给 Agent 的上下文和工具结果会发送给你选择的模型 Provider 或本地/网关服务；请按自己的保密要求选择 Provider。
+
+**Q: Windows / Linux 能用吗？**
+A: Windows v0.1.2 已有 NSIS 安装包。Linux AppImage 打包配置已在项目中，但当前公开 Release 未上传 Linux 资产，欢迎自行打包和反馈。
+
+**Q: 和 Claude Code / Codex 比怎么样？**
+A: CaoGen 的目标不是替代单个模型 CLI 的所有细节，而是把多模型、多会话、worktree 隔离、Diff、浏览器、终端、插件和 3D 多任务视图整合到一个桌面工作台里。
+
+**Q: 现在适合正式生产使用吗？**
+A: 当前是 v0.1.2 beta。核心编码链路已经可试用，但项目状态仍明确标注未达最终发布标准；高风险任务请先用测试仓库或 worktree 隔离。
+
+## 👨‍💻 开发与贡献
+
+欢迎提交 Issue 和 PR。
+
+### 本地运行
+
+```bash
+git clone https://github.com/ChaoYuZhang001/CaoGen.git
+cd CaoGen
+npm install
+npm run dev
+```
+
+### 构建与测试
+
+```bash
+npm run typecheck  # TypeScript 类型检查
+npm run build      # 构建生产产物到 out/
+npm start          # 预览构建产物
+npm run test:deep  # 深度测试矩阵，当前脚本编排 65 项，失败即停
+```
+
+需要真实厂商 Key 的端到端脚本不进 CI，适合本机手动跑：
+
+```bash
+CHAT_E2E_KEY=sk-... npx electron scripts/chat-protocol-e2e.cjs
+CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
+CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
+CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
+```
+
+## 🧱 架构速览
+
+```text
+src/
+  shared/types.ts        主/渲染进程共享类型、IPC 协议、事件模型
+  main/
+    engine.ts/engines.ts 引擎接口与注册表
+    agentSession.ts      Claude Agent SDK 会话封装
+    openaiEngine.ts      Responses / Chat Completions 原生编码 Agent
+    codexEngine.ts       Codex CLI 实验性适配器
+    geminiEngine.ts      Gemini CLI 实验性适配器
+    sessionManager.ts    多会话、子代理、DAG、预算、历史
+    providers.ts         Provider、密钥加密、模型列表探测
+    worktreeMerge.ts     worktree 合并审查、patch、PR/MR
+    browserView.ts       内置浏览器、批注、页面观测
+    pluginRegistry.ts    plugin/skill/agent/MCP 扫描
+    routineStore.ts      本地 Routines
+  preload/index.ts       contextBridge 暴露 window.agentDesk
+  renderer/src/          React + Zustand UI
+```
+
+新增能力遵循「主进程模块 → IPC → preload → 类型 → store → UI」链路；提交前至少跑通 `npm run typecheck` 和 `npm run build`。
+
+## 🚀 项目状态
+
+- 当前版本：**v0.1.2 beta**。
+- 最新公开 Release：2026-07-06 发布，包含 macOS x64/arm64 `.dmg/.zip` 与 Windows NSIS 安装包。
+- 已验证过的关键链路包括 DeepSeek 原生编码 Agent、Codex CLI 真对话、子代理编排、OpenAI 双协议、32 并发压测和多项 Electron mock E2E。
+- 仍需实测/收口：Apple Silicon 真机启动复验、Gemini CLI 登录后的真对话、N1 迁移 30 分钟真人计时、Linux 包发布验证。
+
+后续路线图见 [ROADMAP.md](./ROADMAP.md)，完整需求边界见 [REQUIREMENTS.md](./REQUIREMENTS.md)。
+
+## 📄 开源协议
+
+本项目基于 [MIT License](./LICENSE) 开源。你可以自由使用、修改、分发和商用，只需保留版权与许可声明。
+
+---
+
+<div align="center">
+<sub>CaoGen · 国产开源 AI 编码桌面工作室 · 不绑厂商，不锁模型</sub>
+</div>
