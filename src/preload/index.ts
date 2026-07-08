@@ -17,6 +17,9 @@ import type {
   PluginRegistryScanOptions,
   ProjectMemoryDraftInput,
   ProviderInput,
+  QuickbarClipboardInput,
+  QuickbarFileInput,
+  QuickbarScreenshotInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
   SessionEventPayload,
@@ -236,6 +239,26 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('memory:layeredUpdate', entryId, input),
   deleteLayeredMemory: (entryId: string) => ipcRenderer.invoke('memory:layeredDelete', entryId),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  quickbarGetState: () => ipcRenderer.invoke('quickbar:getState'),
+  quickbarSetVisible: (visible: boolean) => ipcRenderer.invoke('quickbar:setVisible', visible),
+  quickbarGetWindowContext: (cwd?: string, sourceId?: string) =>
+    ipcRenderer.invoke('quickbar:getWindowContext', cwd, sourceId),
+  quickbarReadClipboard: (input?: QuickbarClipboardInput) =>
+    ipcRenderer.invoke('quickbar:readClipboard', input),
+  quickbarCaptureScreenshot: (input: QuickbarScreenshotInput) =>
+    ipcRenderer.invoke('quickbar:captureScreenshot', input),
+  quickbarPickFiles: () => ipcRenderer.invoke('quickbar:pickFiles'),
+  quickbarPrepareFiles: (input: QuickbarFileInput) =>
+    ipcRenderer.invoke('quickbar:prepareFiles', input),
+  onQuickbarEvent: (cb) => {
+    const listener = (_e: IpcRendererEvent, event: Parameters<typeof cb>[0]): void => {
+      cb(event)
+    }
+    ipcRenderer.on('quickbar:event', listener)
+    return () => {
+      ipcRenderer.removeListener('quickbar:event', listener)
+    }
+  },
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {
       cb(payload.sessionId, payload.event, payload.seq)
