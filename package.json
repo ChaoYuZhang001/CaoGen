@@ -1,7 +1,7 @@
 {
   "name": "caogen",
   "productName": "CaoGen",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "CaoGen — 多会话并行、多厂商可调度、3D 办公区的桌面 AI 编码 Agent",
   "main": "./out/main/index.js",
   "private": true,
@@ -130,8 +130,9 @@
     },
     "publish": [
       {
-        "provider": "generic",
-        "url": "https://example.com/caogen/"
+        "provider": "github",
+        "owner": "ChaoYuZhang001",
+        "repo": "CaoGen"
       }
     ],
     "win": {
