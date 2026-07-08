@@ -13,7 +13,9 @@ if (!required) {
   process.exit(0)
 }
 
-const codeCommand = resolveCodeCommand(process.env.CAOGEN_VSCODE_CMD || 'code.cmd')
+const explicitCodeCommand = Boolean(process.env.CAOGEN_VSCODE_CMD?.trim())
+const defaultCodeCommand = process.platform === 'win32' ? 'code.cmd' : 'code'
+const codeCommand = resolveCodeCommand(process.env.CAOGEN_VSCODE_CMD || defaultCodeCommand, { allowDownloadFallback: !explicitCodeCommand })
 const pluginDir = path.join(repoRoot, 'plugins', 'vscode')
 const testPath = path.join(pluginDir, 'out', 'test')
 const require = createRequire(import.meta.url)
@@ -21,7 +23,7 @@ const { runTests } = require(path.join(pluginDir, 'node_modules', '@vscode', 'te
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'vscode-extension-host', runId)
 const lockDir = path.join(repoRoot, 'test-results', 'vscode-extension-host', '.lock')
-const runRoot = mkdtempSync(path.join(tmpdir(), 'caogen-vscode-extension-host-'))
+const runRoot = mkdtempSync(path.join(shortTempRoot(), 'cg-vsce-'))
 const workspaceDir = path.join(runRoot, 'workspace')
 const userDataDir = path.join(runRoot, 'user-data')
 const extensionsDir = path.join(runRoot, 'extensions')
@@ -53,7 +55,7 @@ let runError
 try {
   closeExtensionDevelopmentHosts()
   const runPromise = runTests({
-    vscodeExecutablePath: codeCommand,
+    ...(codeCommand ? { vscodeExecutablePath: codeCommand } : {}),
     extensionDevelopmentPath: pluginDir,
     extensionTestsPath: testPath,
     extensionTestsEnv: {
@@ -104,7 +106,7 @@ const report = {
   status: markerPassed ? 'passed' : 'failed',
   required,
   reportDir,
-  codeCommand,
+  codeCommand: codeCommand ?? 'downloaded-by-@vscode/test-electron',
   launchArgs,
   statusCode,
   error: normalizedError,
@@ -133,14 +135,15 @@ function readMarker(file) {
   }
 }
 
-function resolveCodeCommand(command) {
+function resolveCodeCommand(command, options = {}) {
   const trimmed = command.trim()
-  if (process.platform !== 'win32') return trimmed
+  if (path.isAbsolute(trimmed)) return existsSync(trimmed) ? trimmed : undefined
+  if (process.platform !== 'win32') return hasCommand(trimmed) ? trimmed : (options.allowDownloadFallback ? undefined : trimmed)
   if (/code\.cmd$/i.test(trimmed)) {
     const candidate = codeExeFromCmd(trimmed)
     if (candidate) return candidate
   }
-  return trimmed
+  return hasCommand(trimmed) ? trimmed : (options.allowDownloadFallback ? undefined : trimmed)
 }
 
 function codeExeFromCmd(command) {
@@ -158,6 +161,14 @@ function findCommandPath(command) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.length > 0 && existsSync(line))
+}
+
+function hasCommand(command) {
+  const probe =
+    process.platform === 'win32'
+      ? spawnSync('where.exe', [command], { stdio: 'ignore', windowsHide: true })
+      : spawnSync('which', [command], { stdio: 'ignore' })
+  return probe.status === 0
 }
 
 function withTimeout(promise, timeoutMs) {
@@ -178,6 +189,11 @@ async function waitForMarkerFile(file) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function shortTempRoot() {
+  if (process.env.CAOGEN_VSCODE_SMOKE_TMP?.trim()) return process.env.CAOGEN_VSCODE_SMOKE_TMP.trim()
+  return process.platform === 'darwin' ? '/tmp' : tmpdir()
 }
 
 function closeExtensionDevelopmentHosts() {

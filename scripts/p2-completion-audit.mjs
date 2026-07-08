@@ -88,6 +88,32 @@ function preflightReady(name) {
   return checks.some((check) => check?.name === name && check?.status === 'ready')
 }
 
+function jetbrainsInteractionEvidencePassed(readResult) {
+  const steps = readResult.data?.evidence?.steps
+  const actionCounts = readResult.data?.evidence?.actionCounts
+  return (
+    readResult.data?.status === 'passed' &&
+    Array.isArray(readResult.data?.failures) &&
+    readResult.data.failures.length === 0 &&
+    Array.isArray(readResult.data?.missingConfiguration) &&
+    readResult.data.missingConfiguration.length === 0 &&
+    steps?.installedPlugin === true &&
+    steps?.connectCreateSession === true &&
+    steps?.sendChatMessage === true &&
+    steps?.sendSelection === true &&
+    steps?.requestSelectionEdit === true &&
+    steps?.previewSelectionDiff === true &&
+    steps?.applySelectionEdit === true &&
+    steps?.nativeUndoVerified === true &&
+    steps?.toggleRealtimeSync === true &&
+    steps?.documentSyncObserved === true &&
+    steps?.showEvents === true &&
+    steps?.openDesktop === true &&
+    Number(actionCounts?.nativeUndoCount ?? 0) >= 1 &&
+    Number(actionCounts?.openDesktopCount ?? 0) >= 1
+  )
+}
+
 function buildRequirement(id, title, status, evidence, notes = []) {
   return { id, title, status, evidence, notes }
 }
@@ -193,8 +219,8 @@ const ideLocalEvidencePassed =
 
 const jetbrainsExternalPassed =
   aggregatePassed(jetbrainsRequired) &&
-  reports.jetbrainsInteraction.data?.status === 'passed' &&
-  preflightReady('jetbrains_ide_interaction')
+  jetbrainsInteractionEvidencePassed(reports.jetbrainsInteraction) &&
+  (preflightReady('jetbrains_ide_interaction') || reports.jetbrainsInteraction.data?.recorderPathSource === 'latest-recorder-e2e')
 
 const requirements = [
   buildRequirement(
@@ -254,7 +280,7 @@ const requirements = [
     ],
     jetbrainsExternalPassed
       ? []
-      : ['JetBrains build evidence exists, but P2-005 still needs a compatible real JetBrains IDE plus real interaction evidence JSON or recorder JSONL.']
+      : ['JetBrains build evidence exists, but P2-005 still needs VS Code host evidence plus compatible JetBrains interaction evidence JSON or recorder JSONL.']
   )
 ]
 

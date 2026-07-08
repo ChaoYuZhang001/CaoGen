@@ -13,15 +13,18 @@ const JETBRAINS_REQUIRED_TASKS = ['buildPlugin', 'verifyPluginProjectConfigurati
 mkdirSync(reportDir, { recursive: true })
 
 runCheck('vscode_compile', true, () => {
+  const pluginDir = path.join(repoRoot, 'plugins', 'vscode')
+  const dependencyStatus = ensureVscodeDependencies(pluginDir)
   execFileSync(npmCommand(), ['run', 'compile'], {
-    cwd: path.join(repoRoot, 'plugins', 'vscode'),
+    cwd: pluginDir,
     stdio: 'pipe',
     shell: process.platform === 'win32',
     env: process.env
   })
   return {
     ok: existsSync(path.join(repoRoot, 'plugins', 'vscode', 'out', 'extension.js')),
-    artifact: path.join('plugins', 'vscode', 'out', 'extension.js')
+    artifact: path.join('plugins', 'vscode', 'out', 'extension.js'),
+    dependencyStatus
   }
 })
 
@@ -127,12 +130,21 @@ function jetbrainsBuildEnv() {
 function resolveJavaHome() {
   const explicit = process.env.CAOGEN_JAVA_HOME || process.env.JAVA_HOME
   if (explicit && existsSync(explicit)) return explicit
+  const macJdk17 = resolveMacJavaHome('17')
+  if (macJdk17) return macJdk17
   const marker = path.join(portableToolchainRoot(), 'jdk-home.txt')
   if (existsSync(marker)) {
     const value = readFileSync(marker, 'utf8').trim()
     if (value && existsSync(value)) return value
   }
   return undefined
+}
+
+function resolveMacJavaHome(version) {
+  if (process.platform !== 'darwin') return undefined
+  const probe = spawnSync('/usr/libexec/java_home', ['-v', version], { encoding: 'utf8' })
+  const value = probe.status === 0 ? probe.stdout.trim() : ''
+  return value && existsSync(value) ? value : undefined
 }
 
 function resolveGradleHome() {
@@ -152,6 +164,21 @@ function portableToolchainRoot() {
 
 function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+function ensureVscodeDependencies(pluginDir) {
+  const typeFile = path.join(pluginDir, 'node_modules', '@types', 'vscode', 'index.d.ts')
+  const tscBin = path.join(pluginDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc')
+  if (existsSync(typeFile) && existsSync(tscBin)) return 'already-present'
+  const lockFile = path.join(pluginDir, 'package-lock.json')
+  const args = existsSync(lockFile) ? ['ci'] : ['install']
+  execFileSync(npmCommand(), args, {
+    cwd: pluginDir,
+    stdio: 'pipe',
+    shell: process.platform === 'win32',
+    env: process.env
+  })
+  return existsSync(lockFile) ? 'npm-ci' : 'npm-install'
 }
 
 function writeReport(report) {

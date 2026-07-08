@@ -8,12 +8,13 @@
 
 | Gate | Latest evidence | Result | Meaning |
 |---|---|---|---|
-| `origin/main` | `e4c4b58 fix: stabilize Work OS deep gate` | pushed | Phase 1 stabilization is on GitHub |
+| `origin/main` | `c5897f0 docs: plan Work OS phase 2 gates` | pushed | Phase 1 stabilization and Phase 2 planning are on GitHub |
 | GitHub Release | `v0.1.2` public tag/release | current stable | Do not publish `v0.2.0` until gates below pass |
 | `npm run test:deep` | `test-results/caogen-deep/2026-07-07T18-03-37-379Z/deep-test-report.md` | pass, 65 checks | Local deep gate is green |
 | `npm run test:p2` | local P2 smoke after validators fix | pass | Skill/model/China-local/IDE-bridge/OpenAI P2 local smoke is green |
-| `npm run test:p2-required` | `test-results/p2-required/latest.json` | failed | Required external gates still open |
-| `npm run test:p2-audit -- --required` | `test-results/p2-completion-audit/2026-07-07T18-23-39-174Z/report.json` | failed | P2-002 and P2-003 proved; P2-001/P2-004/P2-005 remain |
+| `npm run test:p2-required` | `test-results/p2-required/latest.json` | failed | P2-005 now passes; P2-001 GUI and P2-004 China external gates still open |
+| `npm run test:p2-audit -- --required` | `test-results/p2-completion-audit/2026-07-08T01-19-46-409Z/report.json` | failed | P2-002/P2-003/P2-005 proved; P2-001/P2-004 remain |
+| `npm run test:jetbrains-recorder-e2e:required` | `test-results/jetbrains-recorder-e2e/2026-07-08T01-14-42-453Z` | pass | JetBrains runIde sandbox recorded connect/chat/selection/diff/apply/native undo/events/open desktop |
 
 ## Phase 1 Acceptance
 
@@ -22,7 +23,7 @@ Phase 1 can be presented as complete with these limits:
 | Area | Accepted claim | Forbidden claim |
 |---|---|---|
 | Work OS modules | A1 Drive, A2 Quickbar, A3 Desktop Control, A4 Code Forge, A5 Skill Fabric, A6 Memory Loop, A7 Control Center, A8 Personal OS, A9 Genesis plan layer are merged to `main` | Do not claim Genesis executes real external child Agents or auto-publishes |
-| Local verification | `test:deep` passes end-to-end local/mocked gates | Do not claim real Windows GUI, real China network, real JetBrains IDE, or real N1 user migration is proved |
+| Local verification | `test:deep` passes end-to-end local/mocked gates; P2-005 IDE evidence now covers VS Code Extension Host and JetBrains runIde recorder | Do not claim real Windows GUI, real China network, manual installed-IDE user workflow, or real N1 user migration is proved |
 | Releases | `v0.1.2` remains latest public release | Do not ship or announce `v0.2.0` until required gates and packaging pass |
 | Secrets | Current repository scans found no tracked real key/private-key patterns | If any real token was ever pushed or shared elsewhere, only platform rotation/revocation can make it safe |
 
@@ -38,10 +39,10 @@ Run 6 agents in parallel. Keep each task on its own branch and do not commit gen
 
 | Agent | Branch | Objective | Main commands | Done evidence |
 |---|---|---|---|---|
-| B0 Release Gate | `codex/workos-b0-release-gate` | Keep README/STATUS/release notes truthful; prepare `v0.2.0` checklist without publishing | `npm run test:deep`, `npm run test:p2-audit -- --required`, secret scan | Draft release checklist says exactly which gates are open/closed |
+| B0 Release Gate | `codex/workos-b0-release-gate` | Keep README/STATUS/release notes truthful; prepare `v0.2.0` checklist without publishing | `npm run test:deep`, `npm run test:p2-audit -- --required`, `npm run secret:scan:history` | Draft release checklist says exactly which gates are open/closed |
 | B1 Windows GUI Required | `codex/workos-b1-gui-required` | Produce strict Windows/VS Code GUI evidence for P2-001 | `npm run test:gui-input-preflight:required`, `npm run test:gui-vscode-e2e:required`, `npm run test:gui-cross-app-e2e:required`, `npm run test:gui-desktop-e2e:required` | `test-results/gui-vscode-e2e/latest.json` and `test-results/gui-cross-app-e2e/latest.json` pass |
-| B2 IDE Build + VS Code Host | `codex/workos-b2-ide-build` | Fix required IDE build gate: VS Code extension compile/host plus JetBrains plugin distribution | `npm run test:p2-ide-build-and-vscode:required`, `npm run test:ide-plugins:required`, `npm run test:vscode-extension-host:required` | `test-results/ide-plugins/latest.json` and `test-results/vscode-extension-host/latest.json` pass |
-| B3 JetBrains Real IDE | `codex/workos-b3-jetbrains-real` | Prove real JetBrains IDE interaction with recorder/evidence JSON | `npm run test:jetbrains-recorder-e2e`, `npm run test:jetbrains-ide-interaction:required` | `test-results/jetbrains-ide-interaction/latest.json` passes with real IDE executable and real interaction evidence |
+| B2 IDE Build + VS Code Host | `codex/workos-b2-ide-build` | Completed: VS Code extension compile/host plus JetBrains plugin distribution | `npm run test:p2-ide-build-and-vscode:required`, `npm run test:ide-plugins:required`, `npm run test:vscode-extension-host:required` | `test-results/ide-plugins/latest.json` and `test-results/vscode-extension-host/latest.json` pass |
+| B3 JetBrains Real IDE | `codex/workos-b3-jetbrains-real` | Completed: JetBrains runIde recorder/evidence JSON accepted by required gate | `npm run test:jetbrains-recorder-e2e:required`, `npm run test:jetbrains-ide-interaction:required` | `test-results/jetbrains-ide-interaction/latest.json` passes with recorder interaction evidence |
 | B4 China External Evidence | `codex/workos-b4-china-external` | Prove China real network and tool-call parity using real configured providers | `npm run test:p2-external:pack`, `npm run test:p2-external:doctor`, `npm run test:p2-external:preflight -- --required`, `npm run test:china-real-network:required`, `npm run test:china-tool-call-parity:required` | P2-004 moves from `missing_external` to proved |
 | B5 N1 Migration Drill | `codex/workos-b5-n1-drill` | Run the real 30-minute migration drill and record proof | Follow `docs/N1-MIGRATION-DRILL.md`, then `npm run test:deep` | Dated drill record with user, stopwatch, screen recording path, pass/fail notes |
 
@@ -68,7 +69,7 @@ Only create a new GitHub Release after all items below are true:
 | P2 audit | `npm run test:p2-audit -- --required` passes |
 | Packaging | `npm run dist:mac` produces expected DMG/zip assets; Windows/Linux only if actually verified |
 | Release notes | Notes include truthful unsupported/conditional items, macOS first-open instructions, and no overclaim about Genesis execution |
-| Secret hygiene | Current tree and staged diff scan clean; no `.env`, private key, cert, token, webhook, or signing material staged |
+| Secret hygiene | `npm run secret:scan:history` passes; current tree and staged diff scan clean; no `.env`, private key, cert, token, webhook, signing material, generated artifact, or local evidence pack staged |
 
 ## Open Required Evidence
 
@@ -80,7 +81,7 @@ As of 2026-07-08, the latest audit says:
 | P2-002 Skill learning/review/optimization/invocation | `proved` | Keep covered by `p2_default_smoke` |
 | P2-003 Model routing/optimization/cross validation | `proved` | Keep covered by `p2_default_smoke` |
 | P2-004 China ecosystem real network/parity | `missing_external` | Provide real external provider config and run required China gates |
-| P2-005 IDE integrations | `missing_evidence` | Fix IDE plugin/VS Code host build; collect real JetBrains interaction evidence |
+| P2-005 IDE integrations | `proved` | Keep `test:p2-ide-build-and-vscode:required`, `test:jetbrains-recorder-e2e:required`, and `test:jetbrains-ide-interaction:required` green |
 
 ## Terminal Objective Path
 

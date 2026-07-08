@@ -1,6 +1,6 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-08(第 17 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-08(第 18 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
 > ⚠️ **未达发布标准**(第 2 轮外部验收)。已通过:DeepSeek 全链路、Codex CLI、32 并发 7/7、双架构打包、Intel x64 启动、npm audit 0 漏洞、窄屏响应式 Electron QA。未通过/条件性:Claude 真对话仅在有真实登录态时通过(无凭据环境须跳过,已修检测)、Gemini 装了 CLI 不等于可用(已修 available 探测)。阻塞:arm64 真机启动需 Apple Silicon(Intel 不可替代)。
 >
@@ -19,13 +19,13 @@
 - ⚠️ **Gemini 引擎:装了 CLI ≠ 可用**。available() 现要求 CLI + 已配认证(GEMINI_API_KEY/GOOGLE_API_KEY 或 settings.json auth);无认证时如实报"不可用",不再误报可用
 - P1 全部可做项收口(2026-07-06):全文搜索、冲突三栏+合并回执、插件安装/卸载/版本/权限、Codex 真验
 - Work OS 第一波已进入 main:A1 Drive、A2 Quickbar、A3 Desktop Control、A4 Code Forge、A5 Skill Fabric、A6 Memory Loop、A7 Control Center、A8 Personal OS、A9 Genesis(计划层)。Genesis 只宣称编排/交付计划,不宣称真实外部子 Agent 执行、自动合并、推送或发布。
-- P2 本地 smoke 已恢复全绿;`npm run test:p2-audit -- --required` 仍失败,但当前失败范围已收敛为 P2-001 GUI required evidence、P2-004 China external evidence、P2-005 IDE required evidence。P2-002/P2-003 已由 `p2_default_smoke` 证明。
+- P2 本地 smoke 已恢复全绿;P2-005 IDE integrations 已由 `test:p2-ide-build-and-vscode:required`、`test:jetbrains-recorder-e2e:required`、`test:jetbrains-ide-interaction:required` 证明。`npm run test:p2-audit -- --required` 仍失败,但当前失败范围已收敛为 P2-001 Windows GUI required evidence 与 P2-004 China external evidence。P2-002/P2-003 已由 `p2_default_smoke` 证明。提交/发布新增 `npm run secret:scan` / `npm run secret:scan:history` 门禁,用于阻止密钥、证书、签名材料和生成物进入公开仓库。
 - 五支柱实测达成:多厂商 ~95% · 调度 ~95% · 3D ~90% · 迁移级工作流 ~85% · 长期自主执行 ~80%
 - 用户实测反馈已修 4 项(冗余"你"标注、矛盾错误文案、引擎×Provider 404、填 key 不生效)
 
 # Current Focus
 
-**Work OS Phase 2 外部证据收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。当前不能发布 `v0.2.0`:还缺 Windows/VS Code GUI required evidence、真实 China network/tool-call parity、IDE build + real JetBrains interaction、N1 真人 30 分钟迁移记录与最终 release packaging。
+**Work OS Phase 2 外部证据收口**:Phase 1 A1-A9 已进 main 且 deep gate 全绿;下一阶段按 `docs/WORKOS-PHASE2-PARALLEL-PLAN.md` 并行推进。当前不能发布 `v0.2.0`:还缺 Windows/VS Code GUI required evidence、真实 China network/tool-call parity、N1 真人 30 分钟迁移记录与最终 release packaging。
 
 # Goal
 
@@ -63,10 +63,10 @@
 - N1 迁移实测:向导映射✅、演练 fixture+计时脚本✅(docs/N1-MIGRATION-DRILL.md);仅剩**真人 30 分钟计时**(不可脚本替代,阻塞)
 
 **Work OS Phase 2 并行任务**(2026-07-08 新排期)
-- B0 Release Gate:保持 README/STATUS/release notes 与真实 gate 一致,最后合并
+- B0 Release Gate:保持 README/STATUS/release notes 与真实 gate 一致,最后合并;草稿门禁见 `docs/RELEASE-GATE-v0.2.0-DRAFT.md`
 - B1 Windows GUI Required:P2-001 strict VS Code GUI/cross-app/input required evidence
-- B2 IDE Build + VS Code Host:P2-005 插件构建、VS Code extension host evidence
-- B3 JetBrains Real IDE:P2-005 真实 JetBrains interaction evidence
+- B2 IDE Build + VS Code Host:✅ P2-005 插件构建、VS Code extension host evidence 已通过
+- B3 JetBrains Real IDE:✅ P2-005 JetBrains runIde recorder + interaction evidence 已通过
 - B4 China External Evidence:P2-004 真实网络与 tool-call parity evidence
 - B5 N1 Migration Drill:真人 30 分钟迁移记录
 

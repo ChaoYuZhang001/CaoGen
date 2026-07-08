@@ -7,7 +7,9 @@ import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.project.Project
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 private const val RECORDER_E2E_TIMEOUT_MS = 15_000L
 
@@ -91,9 +93,27 @@ object RecorderE2ERunner {
         }
         if (app.isDispatchThread) {
             writeAction.run()
-        } else {
-            app.invokeAndWait(writeAction, ModalityState.defaultModalityState())
+            return
         }
+
+        val latch = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        app.invokeLater(
+            {
+                try {
+                    writeAction.run()
+                } catch (error: Throwable) {
+                    failure.set(error)
+                } finally {
+                    latch.countDown()
+                }
+            },
+            ModalityState.any()
+        )
+        if (!latch.await(RECORDER_E2E_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            error("Timed out waiting for JetBrains document write action")
+        }
+        failure.get()?.let { throw it }
     }
 
     private fun waitForSession(client: CaoGenBridgeClient): String {

@@ -66,10 +66,21 @@ const jetBrainsExecutableNames = [
   'phpstorm64.exe',
   'phpstorm.exe',
   'rubymine64.exe',
-  'rubymine.exe'
+  'rubymine.exe',
+  'idea',
+  'webstorm',
+  'pycharm',
+  'clion',
+  'goland',
+  'rider',
+  'datagrip',
+  'phpstorm',
+  'rubymine'
 ]
 const recorderIdeContext = recorderPathSource === 'latest-recorder-e2e'
   ? ideContextFromLatestRecorder(discoveredRecorder)
+  : recorderPathSource === 'environment'
+    ? ideContextFromRunIdeEnvironment()
   : undefined
 const ideDiscovery = recorderIdeContext?.ideDiscovery ?? discoverIdeExecutable()
 const ideExecutable = recorderIdeContext?.ideExecutable ?? ideDiscovery.executable
@@ -410,6 +421,45 @@ function ideContextFromLatestRecorder(discovered) {
   return ideContextFromRecorderRun(discovered?.recorderReport) ?? validationContext
 }
 
+function ideContextFromRunIdeEnvironment() {
+  const logPath = normalizePath(process.env.CAOGEN_JETBRAINS_RUNIDE_LOG_PATH)
+  if (!logPath || !existsSync(logPath)) return undefined
+  const diagnostics = ideLogDiagnosticsFromFile(logPath)
+  const version = process.env.CAOGEN_JETBRAINS_RUNIDE_VERSION || inferRunIdeVersion(logPath) || pluginTargetPlatform.version
+  const buildNumber = process.env.CAOGEN_JETBRAINS_RUNIDE_BUILD || inferRunIdeBuildNumber(diagnostics)
+  const productCode = process.env.CAOGEN_JETBRAINS_RUNIDE_PRODUCT_CODE || inferRunIdeProductCode(logPath)
+  const ideMetadata = {
+    executable: undefined,
+    name: productCode === 'IC' ? 'IntelliJ IDEA Community' : 'JetBrains IDE',
+    version,
+    buildNumber,
+    productCode,
+    productInfoPath: undefined,
+    source: 'jetbrains-recorder-e2e-runIde-env',
+    buildBaseline: jetBrainsBuildNumberToBaseline(buildNumber) ?? jetBrainsReleaseToBuildBaseline(version)
+  }
+  const ideRuntime = {
+    mode: 'gradle-runIde',
+    command: process.env.CAOGEN_JETBRAINS_RUNIDE_COMMAND || undefined,
+    workspace: normalizePath(process.env.CAOGEN_JETBRAINS_RUNIDE_WORKSPACE),
+    logPath,
+    sandboxPath: inferRunIdeSandboxPath(logPath),
+    evidenceSource: 'explicit-recorder-e2e'
+  }
+  return {
+    ideExecutable: undefined,
+    ideDiscovery: {
+      executable: undefined,
+      source: 'explicit-recorder-e2e-runIde',
+      searched: false,
+      runtimeMode: ideRuntime.mode,
+      logPath
+    },
+    ideMetadata,
+    ideRuntime
+  }
+}
+
 function ideContextFromRecorderRun(report) {
   if (!isRecord(report)) return undefined
   const ideRun = recordField(report, 'ideRun')
@@ -473,6 +523,27 @@ function inferRunIdeSandboxPath(logPath) {
   const marker = `${path.sep}log${path.sep}`
   const index = logPath.lastIndexOf(marker)
   return index > 0 ? logPath.slice(0, index) : path.dirname(path.dirname(logPath))
+}
+
+function ideLogDiagnosticsFromFile(logPath) {
+  if (!logPath || !existsSync(logPath)) return { status: 'missing', path: logPath, keywordLines: [] }
+  const keywords = [
+    'CaoGen Bridge',
+    'args:',
+    'caogenRecorderE2E',
+    'ideScript',
+    'applicationInitialized',
+    'startupActivity',
+    'appStarter',
+    'autorun',
+    'recorder',
+    'Project'
+  ]
+  const keywordLines = readFileSync(logPath, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => keywords.some((keyword) => line.includes(keyword)))
+    .slice(-120)
+  return { status: 'present', path: logPath, keywordLines }
 }
 
 function inferWorkspaceFromRecorderPath(filePath) {
@@ -598,14 +669,6 @@ function discoverIdeExecutable() {
       searched: false
     }
   }
-  if (process.platform !== 'win32') {
-    return {
-      executable: undefined,
-      source: 'unsupported-platform',
-      searchRoots: [],
-      searched: false
-    }
-  }
   const roots = jetBrainsIdeSearchRoots()
   for (const root of roots) {
     const found = findExecutable(root, jetBrainsExecutableNames, 5)
@@ -628,6 +691,20 @@ function discoverIdeExecutable() {
 }
 
 function jetBrainsIdeSearchRoots() {
+  if (process.platform === 'darwin') {
+    return uniquePaths([
+      '/Applications',
+      path.join(process.env.HOME || '', 'Applications'),
+      path.join(process.env.HOME || '', 'Library', 'Application Support', 'JetBrains', 'Toolbox', 'apps')
+    ].filter(Boolean))
+  }
+  if (process.platform !== 'win32') {
+    return uniquePaths([
+      '/opt',
+      '/usr/local',
+      path.join(process.env.HOME || '', '.local', 'share', 'JetBrains', 'Toolbox', 'apps')
+    ].filter(Boolean))
+  }
   return uniquePaths([
     path.join(process.env.ProgramFiles || 'C:\\Program Files', 'JetBrains'),
     path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'JetBrains'),
@@ -737,6 +814,8 @@ function findProductInfoPath(executable) {
   for (let index = 0; index < 4; index += 1) {
     const candidate = path.join(current, 'product-info.json')
     if (existsSync(candidate)) return candidate
+    const resourcesCandidate = path.join(current, 'Resources', 'product-info.json')
+    if (existsSync(resourcesCandidate)) return resourcesCandidate
     const parent = path.dirname(current)
     if (parent === current) break
     current = parent
