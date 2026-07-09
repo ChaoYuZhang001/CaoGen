@@ -56,34 +56,53 @@ function normalizeMark(value: string, maxChars: number): string {
   return clean || 'AG'
 }
 
+const logoTextureCache = new Map<string, Texture>()
+const logoTextureLoaders = new Map<string, Promise<Texture | null>>()
+const sharedTextureLoader = new TextureLoader()
+
+function loadLogoTexture(url: string): Promise<Texture | null> {
+  const cached = logoTextureCache.get(url)
+  if (cached) return Promise.resolve(cached)
+  const pending = logoTextureLoaders.get(url)
+  if (pending) return pending
+
+  const nextLoad = new Promise<Texture | null>((resolve) => {
+    sharedTextureLoader.load(
+      url,
+      (next) => {
+        next.colorSpace = SRGBColorSpace
+        next.needsUpdate = true
+        logoTextureCache.set(url, next)
+        resolve(next)
+      },
+      undefined,
+      () => resolve(null)
+    )
+  })
+  logoTextureLoaders.set(url, nextLoad)
+  return nextLoad
+}
+
 function useLogoTexture(url?: string): Texture | null {
   const [texture, setTexture] = useState<Texture | null>(null)
 
   useEffect(() => {
     let alive = true
-    let loadedTexture: Texture | null = null
     setTexture(null)
     if (!url) return undefined
 
-    const loader = new TextureLoader()
-    loader.load(
-      url,
-      (next) => {
-        next.colorSpace = SRGBColorSpace
-        next.needsUpdate = true
-        loadedTexture = next
-        if (alive) setTexture(next)
-        else next.dispose()
-      },
-      undefined,
-      () => {
-        if (alive) setTexture(null)
-      }
-    )
+    const cached = logoTextureCache.get(url)
+    if (cached) {
+      setTexture(cached)
+      return undefined
+    }
+
+    void loadLogoTexture(url).then((next) => {
+      if (alive) setTexture(next)
+    })
 
     return () => {
       alive = false
-      loadedTexture?.dispose()
     }
   }, [url])
 

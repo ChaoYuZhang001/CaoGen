@@ -18,6 +18,17 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-orchestration-mock-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const approvalFileName = 'office-approval-required.txt'
+const officeFailureMessage = 'office deterministic validation fault'
+const OFFICE_OVERVIEW_CAMERA = {
+  position: [0.28, 4.58, 9.28],
+  target: [0.02, 0.76, -1.12],
+  fov: 43
+}
+const OFFICE_FACILITIES_CAMERA = {
+  position: [-2.4, 4.9, 12],
+  target: [-0.15, 0.82, 2],
+  fov: 43
+}
 const electronBin =
   process.platform === 'win32'
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -207,6 +218,41 @@ try {
     assert(pending.some((request) => JSON.stringify(request.input).includes(approvalFileName)), 'approval permission target missing')
   })
 
+  let failure
+  await check('failed session exposes a real error state for the 3D office fault beacon', async () => {
+    failure = await page.evaluate((cwd) => {
+      return window.agentDesk.createSession({
+        cwd,
+        engine: 'openai',
+        providerId: 'mock-deepseek',
+        model: 'deepseek-reasoner',
+        isolated: false,
+        title: 'Faulted Agent'
+      })
+    }, projectDir)
+    await page.evaluate((sessionId, run) => {
+      return window.agentDesk.sendMessage(sessionId, `office failure e2e ${run}`)
+    }, failure.id, runId)
+    const failedTurn = await waitForValue(
+      () =>
+        page.evaluate(async (sessionId) => {
+          const entries = await window.agentDesk.getTranscript(sessionId)
+          const metas = await window.agentDesk.listSessions()
+          const meta = metas.find((item) => item.id === sessionId)
+          const turn = [...entries].reverse().find((entry) => entry.event?.kind === 'turn-result')
+          return {
+            status: meta?.status ?? '',
+            isError: turn?.event?.isError === true,
+            resultText: turn?.event?.resultText ?? ''
+          }
+        }, failure.id),
+      (value) => value.status === 'error' && value.isError && String(value.resultText).includes(officeFailureMessage),
+      15_000,
+      'waiting for failed office session'
+    )
+    report.officeFailureSession = { id: failure.id, status: failedTurn.status, resultText: failedTurn.resultText }
+  })
+
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.app', { timeout: 20_000 })
   await waitForAgentDesk(page)
@@ -219,6 +265,23 @@ try {
       () =>
         page.evaluate(() => {
           const wrap = document.querySelector('.office-canvas-wrap')
+          const readTargets = (name) => {
+            try {
+              return JSON.parse(wrap?.getAttribute(name) || '[]')
+            } catch {
+              return []
+            }
+          }
+          const workstationHitTargets = readTargets('data-office-workstation-hit-targets')
+          const walkerHitTargets = readTargets('data-office-walker-hit-targets')
+          const facilityHitTargets = readTargets('data-office-facility-hit-targets')
+          const faultHitTargets = readTargets('data-office-fault-hit-targets')
+          let incidentCamera = null
+          try {
+            incidentCamera = JSON.parse(wrap?.getAttribute('data-office-incident-camera') || 'null')
+          } catch {
+            incidentCamera = null
+          }
           return {
             sessions: Number(wrap?.getAttribute('data-office-sessions') ?? 0),
             idleSessions: Number(wrap?.getAttribute('data-office-idle-sessions') ?? 0),
@@ -231,13 +294,25 @@ try {
             walkers: Number(wrap?.getAttribute('data-office-walkers') ?? 0),
             awaySessions: Number(wrap?.getAttribute('data-office-away-sessions') ?? 0),
             deskRobots: Number(wrap?.getAttribute('data-office-desk-robots') ?? 0),
+            visibleRobots: Number(wrap?.getAttribute('data-office-visible-robots') ?? 0),
+            oneRobotPerAgent: Number(wrap?.getAttribute('data-office-one-robot-per-agent') ?? 0),
             teaWalkers: Number(wrap?.getAttribute('data-office-tea-walkers') ?? 0),
             approvalWalkers: Number(wrap?.getAttribute('data-office-approval-walkers') ?? 0),
+            restroomWalkers: Number(wrap?.getAttribute('data-office-restroom-walkers') ?? 0),
+            diningWalkers: Number(wrap?.getAttribute('data-office-dining-walkers') ?? 0),
+            facilityWalkers: Number(wrap?.getAttribute('data-office-facility-walkers') ?? 0),
             approvalStations: Number(wrap?.getAttribute('data-office-approval-stations') ?? 0),
             hydrationStations: Number(wrap?.getAttribute('data-office-hydration-stations') ?? 0),
+            restroomStations: Number(wrap?.getAttribute('data-office-restroom-stations') ?? 0),
+            diningStations: Number(wrap?.getAttribute('data-office-dining-stations') ?? 0),
+            facilityFixtures: Number(wrap?.getAttribute('data-office-facility-fixtures') ?? 0),
             serviceWayfinding: Number(wrap?.getAttribute('data-office-service-wayfinding') ?? 0),
             amenityPortals: Number(wrap?.getAttribute('data-office-amenity-portals') ?? 0),
             facilitySignals: Number(wrap?.getAttribute('data-office-facility-signals') ?? 0),
+            clickableFacilities: Number(wrap?.getAttribute('data-office-clickable-facilities') ?? 0),
+            selectedFacility: wrap?.getAttribute('data-office-selected-facility') ?? '',
+            facilityHitTargets: facilityHitTargets.length,
+            facilityPanel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? '',
             sideGlass: Number(wrap?.getAttribute('data-office-side-glass') ?? 0),
             architecturalLights: Number(wrap?.getAttribute('data-office-architectural-lights') ?? 0),
             workZoneGlass: Number(wrap?.getAttribute('data-office-work-zone-glass') ?? 0),
@@ -260,6 +335,19 @@ try {
             longLightOccluders: Number(wrap?.getAttribute('data-office-long-light-occluders') ?? -1),
             presentationBackdrop: Number(wrap?.getAttribute('data-office-presentation-backdrop') ?? 0),
             industrialRobots: Number(wrap?.getAttribute('data-office-industrial-robots') ?? 0),
+            humanoidRobotSilhouettes: Number(wrap?.getAttribute('data-office-humanoid-robot-silhouettes') ?? 0),
+            humanoidFaceVisors: Number(wrap?.getAttribute('data-office-humanoid-face-visors') ?? 0),
+            humanoidShellPanels: Number(wrap?.getAttribute('data-office-humanoid-shell-panels') ?? 0),
+            humanoidArticulatedJoints: Number(wrap?.getAttribute('data-office-humanoid-articulated-joints') ?? 0),
+            humanoidBackShells: Number(wrap?.getAttribute('data-office-humanoid-back-shells') ?? 0),
+            humanoidNeutralShells: Number(wrap?.getAttribute('data-office-humanoid-neutral-shells') ?? 0),
+            faultBeacons: Number(wrap?.getAttribute('data-office-fault-beacons') ?? 0),
+            maintenanceUnits: Number(wrap?.getAttribute('data-office-maintenance-units') ?? 0),
+            diagnosticBeams: Number(wrap?.getAttribute('data-office-diagnostic-beams') ?? 0),
+            faultResponseRigs: Number(wrap?.getAttribute('data-office-fault-response-rigs') ?? 0),
+            faultHitTargets: faultHitTargets.length,
+            incidentCameraAvailable: Number(wrap?.getAttribute('data-office-incident-camera-available') ?? 0),
+            incidentCameraValid: Array.isArray(incidentCamera?.position) && Array.isArray(incidentCamera?.target) ? 1 : 0,
             providerSkinPanels: Number(wrap?.getAttribute('data-office-provider-skin-panels') ?? 0),
             realProviderLogoSkins: Number(wrap?.getAttribute('data-office-real-provider-logo-skins') ?? 0),
             realProviderLogoAssets: Number(wrap?.getAttribute('data-office-real-provider-logo-assets') ?? 0),
@@ -284,20 +372,23 @@ try {
             activeCameraPreset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
             cameraPresetControls: Number(document.querySelector('.office-camera-strip')?.getAttribute('data-office-camera-preset-controls') ?? 0),
             selectionPanelSession: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? '',
+            workstationHitTargets: workstationHitTargets.length,
+            walkerHitTargets: walkerHitTargets.length,
             opsBackplane: Number(wrap?.getAttribute('data-office-ops-backplane') ?? 0),
             dataTrunks: Number(wrap?.getAttribute('data-office-data-trunks') ?? 0),
             workstationBranches: Number(wrap?.getAttribute('data-office-workstation-branches') ?? 0),
             subjectFraming: Number(wrap?.getAttribute('data-office-subject-framing') ?? 0),
+            office3dOptimizationComplete: Number(wrap?.getAttribute('data-office-3d-optimization-complete') ?? 0),
             vendorEmblemNodes: document.querySelectorAll('.office-vendor-emblem').length,
             sessionCalloutNodes: document.querySelectorAll('.office-session-callout').length,
             walkerFloorBadgeDomNodes: document.querySelectorAll('.office-walker-floor-badge').length
           }
         }),
       (value) =>
-        value.sessions >= 4 &&
+        value.sessions >= 5 &&
         value.completedSessions >= 3 &&
         value.waitingApprovalSessions >= 1 &&
-        value.failedSessions === 0 &&
+        value.failedSessions >= 1 &&
         value.idleSessions + value.runningSessions + value.waitingApprovalSessions + value.completedSessions + value.failedSessions === value.sessions &&
         value.subagentPackets === 2 &&
         value.packets >= 3 &&
@@ -305,13 +396,26 @@ try {
         value.awaySessions >= value.waitingApprovalSessions &&
         value.deskRobots >= 1 &&
         value.deskRobots + value.awaySessions === value.sessions &&
+        value.visibleRobots === value.sessions &&
+        value.oneRobotPerAgent === 1 &&
         value.teaWalkers >= Math.min(value.idleSessions, 1) &&
         value.approvalWalkers >= Math.min(value.waitingApprovalSessions, 1) &&
+        value.diningWalkers >= Math.min(value.completedSessions, 1) &&
+        value.restroomWalkers >= Math.min(Math.max(value.completedSessions - 1, 0), 1) &&
+        value.facilityWalkers === value.teaWalkers + value.restroomWalkers + value.diningWalkers &&
+        value.walkers === value.approvalWalkers + value.facilityWalkers &&
         value.approvalStations === 1 &&
         value.hydrationStations === 1 &&
+        value.restroomStations === 1 &&
+        value.diningStations === 1 &&
+        value.facilityFixtures >= 3 &&
         value.serviceWayfinding === 1 &&
         value.amenityPortals === 2 &&
         value.facilitySignals >= 4 &&
+        value.clickableFacilities === 3 &&
+        value.selectedFacility === '' &&
+        value.facilityHitTargets === 3 &&
+        value.facilityPanel === '' &&
         value.sideGlass === 1 &&
         value.architecturalLights === 1 &&
         value.workZoneGlass === 1 &&
@@ -334,6 +438,19 @@ try {
         value.longLightOccluders === 0 &&
         value.presentationBackdrop === 1 &&
         value.industrialRobots === value.deskRobots + value.walkers &&
+        value.humanoidRobotSilhouettes === value.sessions &&
+        value.humanoidFaceVisors === value.sessions &&
+        value.humanoidShellPanels >= value.sessions * 10 &&
+        value.humanoidArticulatedJoints >= value.sessions * 8 &&
+        value.humanoidBackShells === value.sessions &&
+        value.humanoidNeutralShells === value.sessions &&
+        value.faultBeacons === value.failedSessions &&
+        value.maintenanceUnits === value.failedSessions &&
+        value.diagnosticBeams === value.failedSessions * 2 &&
+        value.faultResponseRigs === value.failedSessions &&
+        value.faultHitTargets === value.failedSessions &&
+        value.incidentCameraAvailable === 1 &&
+        value.incidentCameraValid === 1 &&
         value.providerSkinPanels >= value.sessions &&
         value.realProviderLogoSkins >= value.sessions &&
         value.realProviderLogoAssets >= value.sessions &&
@@ -354,14 +471,17 @@ try {
         value.clickableWalkers === value.walkers &&
         value.selectedSession.length > 0 &&
         value.selectedWorkstations === 1 &&
-        value.cameraPresets === 3 &&
+        value.cameraPresets === 4 &&
         value.activeCameraPreset === 'overview' &&
-        value.cameraPresetControls === 3 &&
+        value.cameraPresetControls === 4 &&
         value.selectionPanelSession === value.selectedSession &&
+        value.workstationHitTargets === value.sessions &&
+        value.walkerHitTargets === value.walkers &&
         value.opsBackplane === 1 &&
         value.dataTrunks === 1 &&
         value.workstationBranches >= value.sessions &&
         value.subjectFraming === 1 &&
+        value.office3dOptimizationComplete === 1 &&
         value.vendorEmblemNodes === 0 &&
         value.sessionCalloutNodes === 0 &&
         value.walkerFloorBadgeDomNodes === 0,
@@ -371,22 +491,35 @@ try {
     report.officeSemanticAttrs = attrs
     assert(attrs.subagentPackets === 2, `wrong subagent packet count: ${JSON.stringify(attrs)}`)
     assert(
-      attrs.sessions >= 4 &&
+      attrs.sessions >= 5 &&
         attrs.completedSessions >= 3 &&
         attrs.waitingApprovalSessions >= 1 &&
-        attrs.failedSessions === 0 &&
+        attrs.failedSessions >= 1 &&
         attrs.idleSessions + attrs.runningSessions + attrs.waitingApprovalSessions + attrs.completedSessions + attrs.failedSessions === attrs.sessions &&
         attrs.walkers >= attrs.waitingApprovalSessions &&
         attrs.awaySessions >= attrs.waitingApprovalSessions &&
         attrs.deskRobots >= 1 &&
         attrs.deskRobots + attrs.awaySessions === attrs.sessions &&
+        attrs.visibleRobots === attrs.sessions &&
+        attrs.oneRobotPerAgent === 1 &&
         attrs.teaWalkers >= Math.min(attrs.idleSessions, 1) &&
         attrs.approvalWalkers >= Math.min(attrs.waitingApprovalSessions, 1) &&
+        attrs.diningWalkers >= Math.min(attrs.completedSessions, 1) &&
+        attrs.restroomWalkers >= Math.min(Math.max(attrs.completedSessions - 1, 0), 1) &&
+        attrs.facilityWalkers === attrs.teaWalkers + attrs.restroomWalkers + attrs.diningWalkers &&
+        attrs.walkers === attrs.approvalWalkers + attrs.facilityWalkers &&
         attrs.approvalStations === 1 &&
         attrs.hydrationStations === 1 &&
+        attrs.restroomStations === 1 &&
+        attrs.diningStations === 1 &&
+        attrs.facilityFixtures >= 3 &&
         attrs.serviceWayfinding === 1 &&
         attrs.amenityPortals === 2 &&
         attrs.facilitySignals >= 4 &&
+        attrs.clickableFacilities === 3 &&
+        attrs.selectedFacility === '' &&
+        attrs.facilityHitTargets === 3 &&
+        attrs.facilityPanel === '' &&
         attrs.sideGlass === 1 &&
         attrs.architecturalLights === 1 &&
         attrs.workZoneGlass === 1 &&
@@ -409,6 +542,19 @@ try {
         attrs.longLightOccluders === 0 &&
         attrs.presentationBackdrop === 1 &&
         attrs.industrialRobots === attrs.deskRobots + attrs.walkers &&
+        attrs.humanoidRobotSilhouettes === attrs.sessions &&
+        attrs.humanoidFaceVisors === attrs.sessions &&
+        attrs.humanoidShellPanels >= attrs.sessions * 10 &&
+        attrs.humanoidArticulatedJoints >= attrs.sessions * 8 &&
+        attrs.humanoidBackShells === attrs.sessions &&
+        attrs.humanoidNeutralShells === attrs.sessions &&
+        attrs.faultBeacons === attrs.failedSessions &&
+        attrs.maintenanceUnits === attrs.failedSessions &&
+        attrs.diagnosticBeams === attrs.failedSessions * 2 &&
+        attrs.faultResponseRigs === attrs.failedSessions &&
+        attrs.faultHitTargets === attrs.failedSessions &&
+        attrs.incidentCameraAvailable === 1 &&
+        attrs.incidentCameraValid === 1 &&
         attrs.providerSkinPanels >= attrs.sessions &&
         attrs.realProviderLogoSkins >= attrs.sessions &&
         attrs.realProviderLogoAssets >= attrs.sessions &&
@@ -429,14 +575,17 @@ try {
         attrs.clickableWalkers === attrs.walkers &&
         attrs.selectedSession.length > 0 &&
         attrs.selectedWorkstations === 1 &&
-        attrs.cameraPresets === 3 &&
+        attrs.cameraPresets === 4 &&
         attrs.activeCameraPreset === 'overview' &&
-        attrs.cameraPresetControls === 3 &&
+        attrs.cameraPresetControls === 4 &&
         attrs.selectionPanelSession === attrs.selectedSession &&
+        attrs.workstationHitTargets === attrs.sessions &&
+        attrs.walkerHitTargets === attrs.walkers &&
         attrs.opsBackplane === 1 &&
         attrs.dataTrunks === 1 &&
         attrs.workstationBranches >= attrs.sessions &&
         attrs.subjectFraming === 1 &&
+        attrs.office3dOptimizationComplete === 1 &&
         attrs.vendorEmblemNodes === 0 &&
         attrs.sessionCalloutNodes === 0 &&
         attrs.walkerFloorBadgeDomNodes === 0,
@@ -452,6 +601,28 @@ try {
       5_000,
       'waiting for facilities camera preset'
     )
+    await page.click('.office-camera-button:nth-child(4)')
+    const incidents = await waitForValue(
+      () =>
+        page.evaluate(() => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          let faultTarget = null
+          try {
+            faultTarget = JSON.parse(wrap?.getAttribute('data-office-fault-hit-targets') || '[]')[0] || null
+          } catch {
+            faultTarget = null
+          }
+          return {
+            preset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            selected: wrap?.getAttribute('data-office-selected-session') ?? '',
+            faultId: faultTarget?.id ?? '',
+            available: Number(wrap?.getAttribute('data-office-incident-camera-available') ?? 0)
+          }
+        }),
+      (value) => value.preset === 'incidents' && value.available === 1 && value.faultId && value.selected === value.faultId,
+      5_000,
+      'waiting for incidents camera preset'
+    )
     await page.click('.office-camera-button:nth-child(2)')
     const agent = await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
@@ -466,7 +637,188 @@ try {
       5_000,
       'waiting for overview camera preset'
     )
-    report.officeCameraPresetSmoke = { facilities, agent, overview }
+    report.officeCameraPresetSmoke = { facilities, incidents, agent, overview }
+  })
+
+  await check('3D office facilities can be selected from the canvas', async () => {
+    await page.click('.office-camera-button:nth-child(3)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'facilities',
+      5_000,
+      'waiting for facilities before facility object click'
+    )
+    await sleep(900)
+    const facilityTarget = await page.evaluate(() => {
+      const wrap = document.querySelector('.office-canvas-wrap')
+      try {
+        const targets = JSON.parse(wrap?.getAttribute('data-office-facility-hit-targets') || '[]')
+        return targets.find((target) => target.id === 'dining') || targets[0] || null
+      } catch {
+        return null
+      }
+    })
+    assert(facilityTarget?.id === 'dining', `missing dining facility target: ${JSON.stringify(facilityTarget)}`)
+    const facilityClick = await clickProjectedOfficeTarget(page, facilityTarget, OFFICE_FACILITIES_CAMERA)
+    const selectedFacility = await waitForValue(
+      () =>
+        page.evaluate((expected) => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          return {
+            officeStillOpen: Boolean(wrap),
+            selected: wrap?.getAttribute('data-office-selected-facility') ?? '',
+            panel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? '',
+            preset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            expected
+          }
+        }, facilityTarget.id),
+      (value) => value.officeStillOpen && value.selected === value.expected && value.panel === value.expected && value.preset === 'facilities',
+      6_000,
+      'waiting for real facility object click selection'
+    )
+    report.officeFacilityObjectClickSmoke = {
+      id: facilityTarget.id,
+      click: facilityClick,
+      selected: selectedFacility.selected
+    }
+  })
+
+  await check('3D office canvas objects select agents without leaving the control room', async () => {
+    await page.click('.office-camera-button:nth-child(1)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'overview',
+      5_000,
+      'waiting for overview before workstation object click'
+    )
+    await sleep(900)
+    const clickPlan = await page.evaluate(() => {
+      const wrap = document.querySelector('.office-canvas-wrap')
+      const readTargets = (name) => {
+        try {
+          return JSON.parse(wrap?.getAttribute(name) || '[]')
+        } catch {
+          return []
+        }
+      }
+      const selected = wrap?.getAttribute('data-office-selected-session') ?? ''
+      const workstations = readTargets('data-office-workstation-hit-targets')
+      const walkers = readTargets('data-office-walker-hit-targets')
+      const walker = walkers[0] || null
+      const facilityWalker =
+        walkers.find((target) => target.reason === 'dining') ||
+        walkers.find((target) => target.reason === 'restroom') ||
+        walkers.find((target) => target.reason === 'tea') ||
+        null
+      const walkerSessionIds = new Set(walkers.map((target) => target.id))
+      const workstationCandidates = workstations
+        .filter((target) => target.id !== selected && !walkerSessionIds.has(target.id))
+        .sort((a, b) => {
+          const aScore = (a.x > 0 ? 10 : 0) + (a.z < -1 ? 6 : 0) + a.x * 0.1 - a.z * 0.02
+          const bScore = (b.x > 0 ? 10 : 0) + (b.z < -1 ? 6 : 0) + b.x * 0.1 - b.z * 0.02
+          return bScore - aScore
+        })
+      const workstation = workstationCandidates[0] || workstations.find((target) => target.id !== selected) || workstations[0] || null
+      return {
+        selected,
+        workstation,
+        walker,
+        facilityWalker,
+        workstationCount: workstations.length,
+        walkerCount: walkers.length,
+        facilityWalkerCount: walkers.filter((target) => target.reason !== 'approval').length
+      }
+    })
+    assert(clickPlan.workstationCount >= 2, `expected multiple workstation hit targets: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.workstation?.id, `missing workstation click target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.workstation.id !== clickPlan.selected, `workstation target did not change selection: ${JSON.stringify(clickPlan)}`)
+    const workstationClick = await clickProjectedOfficeTarget(page, clickPlan.workstation, OFFICE_OVERVIEW_CAMERA)
+    const selectedWorkstation = await waitForValue(
+      () =>
+        page.evaluate((expected) => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          return {
+            officeStillOpen: Boolean(wrap),
+            selected: wrap?.getAttribute('data-office-selected-session') ?? '',
+            panel: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? '',
+            preset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            expected
+          }
+        }, clickPlan.workstation.id),
+      (value) => value.officeStillOpen && value.selected === value.expected && value.panel === value.expected && value.preset === 'agent',
+      6_000,
+      'waiting for real workstation object click selection'
+    )
+
+    assert(clickPlan.walkerCount >= 1, `expected walker hit target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.walker?.id, `missing walker click target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.walker.id !== clickPlan.workstation.id, `walker target should differ from workstation target: ${JSON.stringify(clickPlan)}`)
+    await page.click('.office-camera-button:nth-child(3)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'facilities',
+      5_000,
+      'waiting for facilities before walker object click'
+    )
+    await sleep(900)
+    const walkerClick = await clickProjectedOfficeTarget(page, clickPlan.walker, OFFICE_FACILITIES_CAMERA)
+    const selectedWalker = await waitForValue(
+      () =>
+        page.evaluate((expected) => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          return {
+            officeStillOpen: Boolean(wrap),
+            selected: wrap?.getAttribute('data-office-selected-session') ?? '',
+            panel: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? '',
+            preset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            expected
+          }
+        }, clickPlan.walker.id),
+      (value) => value.officeStillOpen && value.selected === value.expected && value.panel === value.expected && value.preset === 'agent',
+      6_000,
+      'waiting for real walker object click selection'
+    )
+
+    assert(clickPlan.facilityWalkerCount >= 1, `expected non-approval facility walker: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.facilityWalker?.id, `missing facility walker click target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.facilityWalker.reason !== 'approval', `facility walker should not be approval-only: ${JSON.stringify(clickPlan)}`)
+    await page.click('.office-camera-button:nth-child(3)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'facilities',
+      5_000,
+      'waiting for facilities before non-approval facility walker object click'
+    )
+    await sleep(900)
+    const facilityWalkerClick = await clickProjectedOfficeTarget(page, clickPlan.facilityWalker, OFFICE_FACILITIES_CAMERA)
+    const selectedFacilityWalker = await waitForValue(
+      () =>
+        page.evaluate((expected) => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          return {
+            officeStillOpen: Boolean(wrap),
+            selected: wrap?.getAttribute('data-office-selected-session') ?? '',
+            panel: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? '',
+            preset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            expected
+          }
+        }, clickPlan.facilityWalker.id),
+      (value) => value.officeStillOpen && value.selected === value.expected && value.panel === value.expected && value.preset === 'agent',
+      6_000,
+      'waiting for real non-approval facility walker object click selection'
+    )
+
+    report.officeCanvasObjectClickSmoke = {
+      before: clickPlan.selected,
+      workstation: { id: clickPlan.workstation.id, click: workstationClick, selected: selectedWorkstation.selected },
+      walker: { id: clickPlan.walker.id, reason: clickPlan.walker.reason, click: walkerClick, selected: selectedWalker.selected },
+      facilityWalker: {
+        id: clickPlan.facilityWalker.id,
+        reason: clickPlan.facilityWalker.reason,
+        click: facilityWalkerClick,
+        selected: selectedFacilityWalker.selected
+      }
+    }
   })
 
   await check('3D office canvas renders nonblank with parent and child workstations', async () => {
@@ -495,7 +847,8 @@ try {
       stats.robotWorkArea.nonDarkRatio > 0.42 &&
         stats.robotWorkArea.brightPixels > 16_000 &&
         stats.robotWorkArea.cyanPixels > 4_000 &&
-        stats.robotWorkArea.coloredPixels > 15_000,
+        stats.robotWorkArea.coloredPixels > 15_000 &&
+        stats.robotWorkArea.redPixels > 60,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
     )
   })
@@ -616,6 +969,7 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
   let brightPixels = 0
   let coloredPixels = 0
   let cyanPixels = 0
+  let redPixels = 0
   const buckets = new Set()
   for (let y = Math.max(0, y0); y < Math.min(png.height, y1); y += 2) {
     for (let x = Math.max(0, x0); x < Math.min(png.width, x1); x += 2) {
@@ -633,6 +987,7 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
       if (luminance > 115) brightPixels += 1
       if (channelSpread > 28 && luminance > 35) coloredPixels += 1
       if (g > 100 && b > 110 && r < 130) cyanPixels += 1
+      if (r > 120 && g < 110 && b < 95 && channelSpread > 45) redPixels += 1
       buckets.add(`${r >> 4},${g >> 4},${b >> 4}`)
     }
   }
@@ -643,6 +998,7 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
     brightPixels,
     coloredPixels,
     cyanPixels,
+    redPixels,
     uniqueColorBuckets: buckets.size,
     nonDarkRatio: total > 0 ? nonDarkPixels / total : 0,
     darkRatio: total > 0 ? darkPixels / total : 1
@@ -667,6 +1023,10 @@ async function startOpenAiMock() {
         path: approvalFileName,
         content: `approval required ${runId}`
       })
+      return
+    }
+    if (text.includes('office failure e2e')) {
+      writeNonSwitchableError(res, officeFailureMessage)
       return
     }
     const reply = text.includes('子代理编排完成')
@@ -741,6 +1101,15 @@ function writeFunctionCallResponse(res, { responseId, callId, path: targetPath, 
   res.end()
 }
 
+function writeNonSwitchableError(res, message) {
+  const error = { message, type: 'office_mock_fault', code: 'office_mock_fault' }
+  // The office fault-beacon fixture needs a deterministic product error state.
+  // A 400 response is intentionally non-switchable, so provider failover cannot
+  // turn this session back into a successful idle session.
+  res.writeHead(400, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ error }))
+}
+
 function writeMockUserData(port) {
   writeFileSync(
     path.join(userDataDir, 'providers.json'),
@@ -792,6 +1161,85 @@ function writeMockUserData(port) {
       2
     )
   )
+}
+
+async function clickProjectedOfficeTarget(page, target, camera) {
+  const rect = await page.evaluate(() => {
+    const canvas = document.querySelector('.office canvas')
+    if (!canvas) return null
+    const box = canvas.getBoundingClientRect()
+    return {
+      left: box.left,
+      top: box.top,
+      width: box.width,
+      height: box.height
+    }
+  })
+  assert(rect && rect.width >= 300 && rect.height >= 200, `office canvas rect unavailable: ${JSON.stringify(rect)}`)
+  const projected = projectOfficePoint(target, rect, camera)
+  assert(
+    projected.x >= rect.left &&
+      projected.x <= rect.left + rect.width &&
+      projected.y >= rect.top &&
+      projected.y <= rect.top + rect.height,
+    `projected office click outside canvas: ${JSON.stringify({ target, rect, projected })}`
+  )
+  const hit = await page.evaluate(({ x, y }) => {
+    const element = document.elementFromPoint(x, y)
+    return {
+      tag: element?.tagName ?? '',
+      className: typeof element?.className === 'string' ? element.className : '',
+      isCanvas: element?.tagName === 'CANVAS'
+    }
+  }, projected)
+  assert(hit.isCanvas, `projected office click is covered before reaching canvas: ${JSON.stringify({ target, projected, hit })}`)
+  await page.mouse.click(Math.round(projected.x), Math.round(projected.y))
+  return {
+    x: Math.round(projected.x),
+    y: Math.round(projected.y),
+    ndcX: Number(projected.ndcX.toFixed(3)),
+    ndcY: Number(projected.ndcY.toFixed(3))
+  }
+}
+
+function projectOfficePoint(target, rect, camera) {
+  const position = camera.position
+  const lookAt = camera.target
+  const forward = normalize(subtract(lookAt, position))
+  const worldUp = [0, 1, 0]
+  const right = normalize(cross(forward, worldUp))
+  const up = normalize(cross(right, forward))
+  const relative = subtract([target.x, target.y, target.z], position)
+  const depth = dot(relative, forward)
+  assert(depth > 0.1, `office target is behind camera: ${JSON.stringify({ target, depth, camera })}`)
+  const aspect = rect.width / rect.height
+  const halfHeight = Math.tan((camera.fov * Math.PI) / 360) * depth
+  const halfWidth = halfHeight * aspect
+  const ndcX = dot(relative, right) / halfWidth
+  const ndcY = dot(relative, up) / halfHeight
+  return {
+    x: rect.left + ((ndcX + 1) / 2) * rect.width,
+    y: rect.top + ((1 - ndcY) / 2) * rect.height,
+    ndcX,
+    ndcY
+  }
+}
+
+function subtract(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+function normalize(v) {
+  const length = Math.hypot(v[0], v[1], v[2]) || 1
+  return [v[0] / length, v[1] / length, v[2] / length]
 }
 
 async function waitForCanvasPixels(page, timeout = 15_000) {

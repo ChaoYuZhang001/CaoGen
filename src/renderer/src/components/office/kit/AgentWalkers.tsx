@@ -9,7 +9,7 @@ import { vendorSkin } from './VendorSkins'
 import ProviderLogoBadge from './ProviderLogoBadge'
 import { providerLogoFor } from './ProviderLogos'
 
-export type AgentWalkReason = 'tea' | 'approval'
+export type AgentWalkReason = 'tea' | 'approval' | 'restroom' | 'dining'
 
 export interface AgentWalkerSpec {
   id: string
@@ -23,6 +23,7 @@ export interface AgentWalkerSpec {
   providerBaseUrl?: string
   modelName?: string
   phase: number
+  holdAtTarget?: boolean
 }
 
 interface AgentWalkersProps {
@@ -40,15 +41,25 @@ const MIN_TRAVEL_SECONDS = 2.8
 const MAX_TRAVEL_SECONDS = 7.2
 const DWELL_SECONDS: Record<AgentWalkReason, number> = {
   tea: 6.5,
-  approval: 8.5
+  approval: 8.5,
+  restroom: 7.5,
+  dining: 10.5
 }
 const REST_SECONDS: Record<AgentWalkReason, number> = {
   tea: 9.5,
-  approval: 12
+  approval: 12,
+  restroom: 11,
+  dining: 13
 }
 const ROUTE_COLOR: Record<AgentWalkReason, string> = {
   tea: '#8fe9ff',
-  approval: '#e0a33c'
+  approval: '#e0a33c',
+  restroom: '#8fe9ff',
+  dining: '#91d18b'
+}
+
+function routeColor(reason: AgentWalkReason, accent: string): string {
+  return reason === 'tea' ? accent || ROUTE_COLOR.tea : ROUTE_COLOR[reason]
 }
 
 function WalkerRouteTrail({
@@ -76,7 +87,7 @@ function WalkerRouteTrail({
   }, [home, target])
 
   if (!route) return null
-  const color = reason === 'approval' ? ROUTE_COLOR.approval : accent || ROUTE_COLOR.tea
+  const color = routeColor(reason, accent)
   return (
     <group position={[route.mid.x, 0.034, route.mid.z]} rotation={[0, route.yaw, 0]}>
       <mesh position={[0, 0, 0]} receiveShadow>
@@ -134,7 +145,7 @@ function AgentStatusMarker({
   reason: AgentWalkReason
   accent: string
 }): React.JSX.Element {
-  const color = reason === 'approval' ? ROUTE_COLOR.approval : accent
+  const color = routeColor(reason, accent)
   const position: [number, number, number] = reason === 'approval' ? [-0.26, 0.034, 0.36] : [0.28, 0.034, 0.34]
   return (
     <group position={position}>
@@ -172,6 +183,42 @@ function AgentStatusMarker({
             <boxGeometry args={[0.16, 0.016, 0.012]} />
             <meshStandardMaterial color="#fff2cf" emissive={color} emissiveIntensity={0.42} toneMapped={false} />
           </mesh>
+        </group>
+      ) : reason === 'dining' ? (
+        <group position={[0, 0.036, 0]}>
+          <mesh position={[-0.058, 0, 0]} rotation={[0, 0, -0.04]}>
+            <boxGeometry args={[0.018, 0.22, 0.014]} />
+            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+          </mesh>
+          {[-0.092, -0.058, -0.024].map((x) => (
+            <mesh key={x} position={[x, 0.092, 0]}>
+              <boxGeometry args={[0.012, 0.072, 0.012]} />
+              <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.34} toneMapped={false} />
+            </mesh>
+          ))}
+          <mesh position={[0.07, 0.012, 0]} rotation={[0, 0, -0.16]}>
+            <boxGeometry args={[0.018, 0.24, 0.014]} />
+            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+          </mesh>
+          <mesh position={[0.088, 0.11, 0]} rotation={[0, 0, -0.16]}>
+            <boxGeometry args={[0.058, 0.07, 0.012]} />
+            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.34} toneMapped={false} />
+          </mesh>
+        </group>
+      ) : reason === 'restroom' ? (
+        <group position={[0, 0.036, 0]}>
+          {[-0.065, 0.065].map((x) => (
+            <group key={x} position={[x, 0, 0]}>
+              <mesh position={[0, 0.07, 0]}>
+                <sphereGeometry args={[0.032, 14, 10]} />
+                <meshStandardMaterial color="#d8fbff" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+              </mesh>
+              <mesh position={[0, -0.032, 0]}>
+                <boxGeometry args={[0.052, 0.12, 0.014]} />
+                <meshStandardMaterial color="#d8fbff" emissive={color} emissiveIntensity={0.3} toneMapped={false} />
+              </mesh>
+            </group>
+          ))}
         </group>
       ) : (
         <group position={[0, 0.034, 0]}>
@@ -282,7 +329,7 @@ function OneAgentWalker({
 
     const clock = state.clock.getElapsedTime()
     const elapsed = clock + spec.phase
-    const local = spec.reason === 'approval' ? elapsed : elapsed % cycleSeconds
+    const local = spec.reason === 'approval' || spec.holdAtTarget ? elapsed : elapsed % cycleSeconds
     const dwellEnd = travelSeconds + DWELL_SECONDS[spec.reason]
     const backEnd = dwellEnd + travelSeconds
     let nextStage: WalkStage
@@ -295,7 +342,7 @@ function OneAgentWalker({
       desiredFacing = facingFromTo(home, target, desiredFacing)
       nextStage = 'toTarget'
       walking = true
-    } else if (spec.reason === 'approval' || local < dwellEnd) {
+    } else if (spec.reason === 'approval' || spec.holdAtTarget || local < dwellEnd) {
       position.copy(target)
       desiredFacing = facingFromTo(target, targetLookAt, desiredFacing)
       nextStage = 'target'

@@ -16,7 +16,7 @@ import { providerLogoFor } from './ProviderLogos'
 import type { ProviderLogoSpec } from './ProviderLogos'
 import { applyMonitoring, applyTyping, applyTalking, applyThinking } from './AvatarAnimations'
 import { officeActivityOf, type OfficeSessionActivity, type OfficeTask, type OfficeTaskStats } from '../model'
-import type { MeshStandardMaterial } from 'three'
+import type { Group, MeshStandardMaterial } from 'three'
 
 export type WorkstationActivity = OfficeSessionActivity
 
@@ -51,6 +51,7 @@ const ACTIVITY_COLOR: Record<WorkstationActivity, string> = {
 
 /** 待授权时头顶气泡文案 */
 const AWAITING_TEXT = '等待授权'
+const FAULT_COLOR = '#ff4e3a'
 
 export const activityOf = officeActivityOf
 
@@ -297,6 +298,172 @@ function OperatorFocusLinks({
           </mesh>
         </group>
       ))}
+    </group>
+  )
+}
+
+function FailureBeacon(): React.JSX.Element {
+  const coreRef = useRef<MeshStandardMaterial>(null)
+  const railRef = useRef<MeshStandardMaterial>(null)
+
+  useFrame((state) => {
+    const t = state.clock.getElapsedTime()
+    const pulse = 0.65 + Math.sin(t * 5.2) * 0.22
+    if (coreRef.current) {
+      coreRef.current.emissiveIntensity = 0.9 + pulse * 0.85
+      coreRef.current.opacity = 0.72 + Math.sin(t * 4.4) * 0.08
+    }
+    if (railRef.current) {
+      railRef.current.emissiveIntensity = 0.52 + pulse * 0.42
+    }
+  })
+
+  return (
+    <group position={[0, 0, 0]}>
+      <mesh position={[0, 0.09, -0.78]} castShadow>
+        <boxGeometry args={[1.84, 0.032, 0.07]} />
+        <meshStandardMaterial
+          ref={railRef}
+          color={FAULT_COLOR}
+          emissive={FAULT_COLOR}
+          emissiveIntensity={0.8}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0, 1.55, 0.5]} rotation={[0, 0, Math.PI / 4]}>
+        <octahedronGeometry args={[0.16, 0]} />
+        <meshStandardMaterial
+          ref={coreRef}
+          color={FAULT_COLOR}
+          emissive={FAULT_COLOR}
+          emissiveIntensity={1.3}
+          transparent
+          opacity={0.78}
+          roughness={0.22}
+          metalness={0.16}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0, 1.55, 0.5]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.25, 0.012, 8, 56]} />
+        <meshStandardMaterial
+          color={FAULT_COLOR}
+          emissive={FAULT_COLOR}
+          emissiveIntensity={0.7}
+          transparent
+          opacity={0.62}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0, 0.098, 0.94]} castShadow>
+        <boxGeometry args={[0.52, 0.032, 0.058]} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.72} toneMapped={false} />
+      </mesh>
+    </group>
+  )
+}
+
+function FaultDiagnosticRig(): React.JSX.Element {
+  const scannerRef = useRef<Group>(null)
+  const pulseRef = useRef<MeshStandardMaterial>(null)
+  const beamRef = useRef<MeshStandardMaterial>(null)
+
+  useFrame((state) => {
+    const t = state.clock.getElapsedTime()
+    if (scannerRef.current) {
+      scannerRef.current.rotation.y = Math.sin(t * 2.2) * 0.28
+      scannerRef.current.position.y = 0.42 + Math.sin(t * 3.1) * 0.018
+    }
+    if (pulseRef.current) {
+      pulseRef.current.emissiveIntensity = 0.62 + Math.sin(t * 4.8) * 0.22
+      pulseRef.current.opacity = 0.56 + Math.sin(t * 3.6) * 0.08
+    }
+    if (beamRef.current) {
+      beamRef.current.emissiveIntensity = 0.48 + Math.sin(t * 6.4) * 0.18
+      beamRef.current.opacity = 0.22 + Math.sin(t * 5.7) * 0.05
+    }
+  })
+
+  return (
+    <group position={[-0.72, 0, 0.74]} rotation={[0, -0.22, 0]}>
+      <mesh position={[0, 0.035, 0]} receiveShadow>
+        <cylinderGeometry args={[0.34, 0.34, 0.018, 36]} />
+        <meshStandardMaterial
+          color={FAULT_COLOR}
+          emissive={FAULT_COLOR}
+          emissiveIntensity={0.28}
+          transparent
+          opacity={0.24}
+          toneMapped={false}
+        />
+      </mesh>
+      <RoundedBox args={[0.44, 0.18, 0.36]} radius={0.045} smoothness={4} position={[0, 0.13, 0]} castShadow receiveShadow>
+        <meshStandardMaterial color="#151a22" roughness={0.52} metalness={0.38} />
+      </RoundedBox>
+      <RoundedBox args={[0.34, 0.055, 0.28]} radius={0.024} smoothness={3} position={[0, 0.245, -0.01]} castShadow>
+        <meshStandardMaterial color="#dce7f2" roughness={0.34} metalness={0.34} />
+      </RoundedBox>
+      {[-0.17, 0.17].map((x) => (
+        <mesh key={`fault-wheel-${x}`} position={[x, 0.065, 0.18]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+          <cylinderGeometry args={[0.055, 0.055, 0.035, 18]} />
+          <meshStandardMaterial color="#0b1118" roughness={0.42} metalness={0.44} />
+        </mesh>
+      ))}
+      <mesh position={[0, 0.276, 0.03]}>
+        <boxGeometry args={[0.25, 0.018, 0.024]} />
+        <meshStandardMaterial ref={pulseRef} color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.66} transparent opacity={0.58} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0.304, -0.12]}>
+        <boxGeometry args={[0.3, 0.014, 0.02]} />
+        <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.82} transparent opacity={0.82} toneMapped={false} />
+      </mesh>
+      {[-0.18, 0.18].map((x) => (
+        <mesh key={`fault-cyan-rail-${x}`} position={[x, 0.19, -0.005]} rotation={[0, 0.16 * Math.sign(x), 0]}>
+          <boxGeometry args={[0.018, 0.016, 0.25]} />
+          <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.72} transparent opacity={0.72} toneMapped={false} />
+        </mesh>
+      ))}
+      <group ref={scannerRef} position={[0, 0.42, -0.04]}>
+        <mesh position={[0, 0.1, 0]} castShadow>
+          <cylinderGeometry args={[0.025, 0.035, 0.2, 16]} />
+          <meshStandardMaterial color="#303845" roughness={0.32} metalness={0.72} />
+        </mesh>
+        <mesh position={[0, 0.22, -0.06]} rotation={[0.42, 0, 0]} castShadow>
+          <boxGeometry args={[0.22, 0.035, 0.08]} />
+          <meshStandardMaterial color="#dce7f2" roughness={0.28} metalness={0.44} />
+        </mesh>
+        <mesh position={[0, 0.22, -0.112]}>
+          <boxGeometry args={[0.14, 0.018, 0.012]} />
+          <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={1.1} toneMapped={false} />
+        </mesh>
+      </group>
+      {[-0.07, 0.07].map((x) => (
+        <mesh key={`fault-beam-${x}`} position={[0.38 + x, 0.54, -0.44]} rotation={[0.54, -0.38, 0.02]}>
+          <boxGeometry args={[0.018, 0.012, 0.82]} />
+          <meshStandardMaterial
+            ref={x < 0 ? beamRef : undefined}
+            color={FAULT_COLOR}
+            emissive={FAULT_COLOR}
+            emissiveIntensity={0.5}
+            transparent
+            opacity={0.22}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
+      <mesh position={[0.34, 0.07, -0.42]} rotation={[0, -0.38, 0]}>
+        <boxGeometry args={[0.08, 0.014, 0.68]} />
+        <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.34} transparent opacity={0.28} toneMapped={false} />
+      </mesh>
+      <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, 0.7]} castShadow>
+        <boxGeometry args={[0.22, 0.025, 0.025]} />
+        <meshStandardMaterial color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.34} toneMapped={false} />
+      </mesh>
+      <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, -0.7]} castShadow>
+        <boxGeometry args={[0.22, 0.025, 0.025]} />
+        <meshStandardMaterial color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.34} toneMapped={false} />
+      </mesh>
     </group>
   )
 }
@@ -641,6 +808,12 @@ export default function WorkstationPro({
       {/* 待授权:头顶说话气泡 */}
       {activity === 'awaiting' && !operatorAway && (
         <SpeechBubble position={[0, 1.62, 0.58]} kind="speak" text={AWAITING_TEXT} />
+      )}
+      {activity === 'error' && !operatorAway && (
+        <>
+          <FailureBeacon />
+          <FaultDiagnosticRig />
+        </>
       )}
 
       {/* 低位 3D 状态铭牌:保留状态可读性,避开 HTML 覆盖层。 */}
