@@ -38,7 +38,7 @@ interface SelectionPayload {
 
 type Listener = (event: BrowserEvent) => void
 
-const DEFAULT_URL = 'about:blank'
+const DEFAULT_URL = 'https://caobao.chat/official'
 const MAX_CONSOLE_ERRORS = 200
 
 class BrowserViewManager {
