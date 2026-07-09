@@ -1,5 +1,7 @@
 import { app, BrowserWindow, powerSaveBlocker } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { newSessionMeta } from './agentSession'
 import { createEngine } from './engine'
 import type { Engine } from './engine'
@@ -8,10 +10,9 @@ import { fixPathForGuiLaunch } from './pathFix'
 import { configureModelStatsDir } from './modelStats'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
-import { getProvider } from './providers'
+import { decryptToken, getProvider } from './providers'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import {
-  driveDefaultModel,
   getCaoGenDrivePolicy,
   settingsForCaoGenDrive
 } from './model/drive'
@@ -164,6 +165,7 @@ class SessionManager {
   }
 
   create(opts: CreateSessionOptions): SessionMeta {
+    opts = { ...opts, cwd: assertUsableSessionCwd(opts.cwd) }
     const settings = getSettings()
     // CLI 引擎(codex/gemini)有自己的账号体系与默认模型:
     // 不继承全局 defaultModel/defaultProviderId(那是别家厂商的,
@@ -174,8 +176,9 @@ class SessionManager {
       : undefined
     const driveMode = opts.driveMode ?? resumeHistory?.driveMode ?? settings.driveMode
     const drivePolicy = getCaoGenDrivePolicy(driveMode)
-    const defaultModel = isCliEngine ? '' : driveDefaultModel(driveMode)
-    const defaultProviderId = isCliEngine ? '' : settings.defaultProviderId
+    this.assertExplicitSessionChoice(opts, isCliEngine)
+    const selectedModel = opts.model ?? (isCliEngine ? '' : '')
+    const selectedProviderId = opts.providerId ?? ''
     const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
     const budgetUsd = normalizePositiveNumber(opts.budgetUsd)
     const permissionMode = opts.permissionMode ?? drivePolicy.defaultPermissionMode
@@ -186,8 +189,8 @@ class SessionManager {
       orchestrationId: opts.orchestrationId,
       childTaskId: opts.childTaskId,
       childRole: opts.childRole,
-      model: opts.model ?? defaultModel,
-      providerId: opts.providerId ?? defaultProviderId,
+      model: selectedModel,
+      providerId: selectedProviderId,
       budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
@@ -214,8 +217,8 @@ class SessionManager {
       baseBranch: worktree.record?.baseBranch,
       baseSha: worktree.record?.baseSha,
       worktreeState: worktree.record?.state,
-      model: opts.model ?? defaultModel,
-      providerId: opts.providerId ?? defaultProviderId,
+      model: selectedModel,
+      providerId: selectedProviderId,
       budgetUsd,
       resumeSessionAt,
       engine: opts.engine,
@@ -234,6 +237,20 @@ class SessionManager {
     void session.start()
     touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
+  }
+
+  private assertExplicitSessionChoice(opts: CreateSessionOptions, isCliEngine: boolean): void {
+    if (!opts.engine) throw new Error('请选择 Agent 引擎')
+    if (!isCliEngine && !opts.model) throw new Error('请选择模型或显式选择自动调度')
+    if (isCliEngine) return
+
+    const providerId = opts.providerId?.trim()
+    if (!providerId) throw new Error('请选择已配置 API key 的 Provider')
+    const provider = getProvider(providerId)
+    if (!provider) throw new Error(`Provider 不存在:${providerId}`)
+    if (!decryptToken(provider.encryptedToken)) {
+      throw new Error(`请先在设置里为 ${provider.name} 填写 API key`)
+    }
   }
 
   send(id: string, input: string | SendMessagePayload): void {
@@ -619,6 +636,7 @@ class SessionManager {
     }
     this.stopEnginePowerBlocker(id)
     this.sessions.delete(id)
+    this.persistActiveSessions()
     this.notificationStates.delete(id)
     clearIdeDocumentContext(id)
     session.dispose()
@@ -632,6 +650,7 @@ class SessionManager {
   }
 
   async disposeAll(): Promise<void> {
+    this.persistActiveSessions()
     this.preservingSnapshotsOnDispose = true
     const pendingWrites: Array<Promise<void>> = []
     try {
@@ -669,8 +688,10 @@ class SessionManager {
     const active = this.sessions.get(snapshot.sessionId)
     if (active) return { ...active.meta }
     const { lastError: _lastError, ...restMeta } = snapshot.meta
+    const cwd = assertUsableSessionCwd(restMeta.cwd)
     const meta: SessionMeta = {
       ...restMeta,
+      cwd,
       status: 'starting',
       sdkSessionId: snapshot.execution.sdkSessionId,
       resumeSessionAt: snapshot.execution.resumeSessionAt
@@ -683,6 +704,7 @@ class SessionManager {
       snapshot.execution.sdkSessionId
     )
     this.sessions.set(meta.id, session)
+    this.persistActiveSessions()
     this.snapshotCounts.set(meta.id, {
       total: snapshot.eventCount,
       sinceSave: 0,
@@ -744,6 +766,7 @@ class SessionManager {
     fixPathForGuiLaunch()
     configureModelStatsDir(app.getPath('userData'))
     registerBuiltinEngines()
+    this.restoreActiveSessions()
     const keep = new Set(listHistory().map((h) => h.sdkSessionId))
     const recoverable = await this.listTaskSnapshots()
     for (const snapshot of recoverable) {
@@ -879,6 +902,9 @@ class SessionManager {
     this.handleTaskSnapshot(sessionId, event, seq)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
+    }
+    if (!this.preservingSnapshotsOnDispose && shouldPersistActiveRegistry(event)) {
+      this.persistActiveSessions()
     }
   }
 
@@ -1416,6 +1442,55 @@ class SessionManager {
     })
   }
 
+  private restoreActiveSessions(): void {
+    const records = readActiveSessionRegistry()
+    if (records.length === 0) return
+    let restored = 0
+    for (const record of records) {
+      if (!record?.id || this.sessions.has(record.id) || !record.sdkSessionId) continue
+      let cwd: string
+      try {
+        cwd = assertUsableSessionCwd(record.cwd)
+      } catch (err) {
+        console.error('[caogen] 跳过不可恢复 active session:', errText(err))
+        continue
+      }
+      const meta: SessionMeta = {
+        ...record,
+        cwd,
+        status: 'starting',
+        lastError:
+          record.status === 'running' || record.status === 'starting'
+            ? '应用上次退出时该任务尚未完成；会话已恢复，请确认当前文件状态后继续。'
+            : record.lastError
+      }
+      try {
+        const session = createEngine(
+          meta.engine,
+          meta,
+          (event, seq) => this.dispatch(meta.id, event, seq),
+          record.sdkSessionId
+        )
+        this.sessions.set(meta.id, session)
+        this.snapshotCounts.set(meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
+        void session.start()
+        touchProject(meta.sourceCwd ?? meta.cwd)
+        restored += 1
+      } catch (err) {
+        console.error('[caogen] 恢复 active session 失败:', err)
+      }
+    }
+    if (restored > 0) this.persistActiveSessions()
+  }
+
+  private persistActiveSessions(): void {
+    const active = [...this.sessions.values()]
+      .map((session) => session.meta)
+      .filter((meta) => meta.status !== 'closed' && typeof meta.sdkSessionId === 'string' && meta.sdkSessionId.length > 0)
+      .map((meta) => ({ ...meta }))
+    writeActiveSessionRegistry(active)
+  }
+
   private emitToSubscribers(payload: SessionEventPayload): void {
     for (const listener of this.sessionEventListeners) {
       try {
@@ -1434,6 +1509,80 @@ function subtaskStatusFromSession(
   if (status === 'error') return 'failed'
   if (status === 'closed') return 'closed'
   return 'pending'
+}
+
+function activeSessionsFile(): string {
+  return join(app.getPath('userData'), 'active-sessions.json')
+}
+
+function readActiveSessionRegistry(): SessionMeta[] {
+  const file = activeSessionsFile()
+  if (!existsSync(file)) return []
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isSessionMetaRecord) as SessionMeta[]
+  } catch (err) {
+    console.error('[caogen] 读取 active session registry 失败:', err)
+    return []
+  }
+}
+
+function writeActiveSessionRegistry(records: SessionMeta[]): void {
+  try {
+    const file = activeSessionsFile()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify(records, null, 2))
+  } catch (err) {
+    console.error('[caogen] 写入 active session registry 失败:', err)
+  }
+}
+
+function assertUsableSessionCwd(rawCwd: string): string {
+  const raw = typeof rawCwd === 'string' ? rawCwd.trim() : ''
+  if (!raw) throw new Error('项目路径不能为空')
+  const cwd = resolve(raw)
+  let stat
+  try {
+    stat = statSync(cwd)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw new Error(`项目路径不存在:${cwd}`)
+    }
+    throw new Error(`项目路径不可访问:${cwd}`)
+  }
+  if (!stat.isDirectory()) throw new Error(`项目路径不是目录:${cwd}`)
+  return cwd
+}
+
+function shouldPersistActiveRegistry(event: AgentEvent): boolean {
+  return (
+    event.kind === 'init' ||
+    event.kind === 'meta' ||
+    event.kind === 'turn-result' ||
+    event.kind === 'status'
+  )
+}
+
+function isSessionMetaRecord(value: unknown): value is SessionMeta {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.title === 'string' &&
+    typeof record.cwd === 'string' &&
+    typeof record.model === 'string' &&
+    typeof record.providerId === 'string' &&
+    typeof record.permissionMode === 'string' &&
+    typeof record.status === 'string' &&
+    typeof record.costUsd === 'number' &&
+    typeof record.createdAt === 'number'
+  )
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 function buildTaskSnapshotReplayPrompt(snapshot: TaskSnapshotRecord): string {

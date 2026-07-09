@@ -124,7 +124,7 @@ export class GeminiEngine implements Engine {
     if (!this.meta.providerId) return env
     const provider = getProvider(this.meta.providerId)
     if (!provider) {
-      console.warn('[caogen] Provider 不存在,回退默认:', this.meta.providerId)
+      console.warn('[caogen] Provider 不存在,跳过 Provider 环境覆盖:', this.meta.providerId)
       return env
     }
     const token = decryptToken(provider.encryptedToken)
@@ -378,5 +378,4 @@ export const geminiEngineFactory: EngineFactory = {
   create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
     new GeminiEngine(meta, emit, resumeSdkSessionId)
 }
-
 

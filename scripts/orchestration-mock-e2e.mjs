@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import http from 'node:http'
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
@@ -10,12 +10,14 @@ import { createRequire } from 'node:module'
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
+const { PNG } = require('pngjs')
 const outDir = path.join(repoRoot, 'test-results', 'orchestration-mock-e2e')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const runDir = path.join(outDir, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-orchestration-mock-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
+const approvalFileName = 'office-approval-required.txt'
 const electronBin =
   process.platform === 'win32'
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -84,9 +86,13 @@ try {
   const page = pages.find((item) => !item.url().startsWith('devtools://')) || pages[0]
   if (!page) throw new Error('Electron page target not found')
   page.on('console', (msg) => {
-    if (msg.type() === 'error' || msg.type() === 'warning') report.warnings.push(`console ${msg.type()}: ${msg.text()}`)
+    if (msg.type() === 'error' || msg.type() === 'warning') {
+      const loc = msg.location()
+      const suffix = loc.url ? ` @ ${loc.url}:${loc.lineNumber}:${loc.columnNumber}` : ''
+      report.warnings.push(`console ${msg.type()}: ${msg.text()}${suffix}`)
+    }
   })
-  page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
+  page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.stack || error.message}`))
 
   await page.waitForSelector('.app', { timeout: 20_000 })
   await waitForAgentDesk(page)
@@ -104,8 +110,8 @@ try {
       return window.agentDesk.createSession({
         cwd,
         engine: 'openai',
-        providerId: 'mock-openai',
-        model: 'mock-responses',
+        providerId: 'mock-qwen',
+        model: 'qwen-plus',
         isolated: false,
         title: 'A3 orchestration parent'
       })
@@ -177,6 +183,30 @@ try {
     report.requests = mock.requests
   })
 
+  let approval
+  await check('approval session exposes a real pending permission for the 3D approval station', async () => {
+    approval = await page.evaluate((cwd) => {
+      return window.agentDesk.createSession({
+        cwd,
+        engine: 'openai',
+        providerId: 'mock-deepseek',
+        model: 'deepseek-reasoner',
+        isolated: false,
+        title: 'Approval gate'
+      })
+    }, projectDir)
+    await page.evaluate((sessionId, run) => {
+      return window.agentDesk.sendMessage(sessionId, `office approval e2e ${run}`)
+    }, approval.id, runId)
+    const pending = await waitForValue(
+      () => page.evaluate((sessionId) => window.agentDesk.listPendingPermissions(sessionId), approval.id),
+      (value) => Array.isArray(value) && value.some((request) => request.toolName === 'write_file'),
+      15_000,
+      'waiting for office approval pending permission'
+    )
+    assert(pending.some((request) => JSON.stringify(request.input).includes(approvalFileName)), 'approval permission target missing')
+  })
+
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.app', { timeout: 20_000 })
   await waitForAgentDesk(page)
@@ -190,22 +220,311 @@ try {
         page.evaluate(() => {
           const wrap = document.querySelector('.office-canvas-wrap')
           return {
+            sessions: Number(wrap?.getAttribute('data-office-sessions') ?? 0),
+            idleSessions: Number(wrap?.getAttribute('data-office-idle-sessions') ?? 0),
+            runningSessions: Number(wrap?.getAttribute('data-office-running-sessions') ?? 0),
+            waitingApprovalSessions: Number(wrap?.getAttribute('data-office-waiting-approval-sessions') ?? 0),
+            completedSessions: Number(wrap?.getAttribute('data-office-completed-sessions') ?? 0),
+            failedSessions: Number(wrap?.getAttribute('data-office-failed-sessions') ?? 0),
             packets: Number(wrap?.getAttribute('data-office-packets') ?? 0),
-            subagentPackets: Number(wrap?.getAttribute('data-office-subagent-packets') ?? 0)
+            subagentPackets: Number(wrap?.getAttribute('data-office-subagent-packets') ?? 0),
+            walkers: Number(wrap?.getAttribute('data-office-walkers') ?? 0),
+            awaySessions: Number(wrap?.getAttribute('data-office-away-sessions') ?? 0),
+            deskRobots: Number(wrap?.getAttribute('data-office-desk-robots') ?? 0),
+            teaWalkers: Number(wrap?.getAttribute('data-office-tea-walkers') ?? 0),
+            approvalWalkers: Number(wrap?.getAttribute('data-office-approval-walkers') ?? 0),
+            approvalStations: Number(wrap?.getAttribute('data-office-approval-stations') ?? 0),
+            hydrationStations: Number(wrap?.getAttribute('data-office-hydration-stations') ?? 0),
+            serviceWayfinding: Number(wrap?.getAttribute('data-office-service-wayfinding') ?? 0),
+            amenityPortals: Number(wrap?.getAttribute('data-office-amenity-portals') ?? 0),
+            facilitySignals: Number(wrap?.getAttribute('data-office-facility-signals') ?? 0),
+            sideGlass: Number(wrap?.getAttribute('data-office-side-glass') ?? 0),
+            architecturalLights: Number(wrap?.getAttribute('data-office-architectural-lights') ?? 0),
+            workZoneGlass: Number(wrap?.getAttribute('data-office-work-zone-glass') ?? 0),
+            vendorEmblems: Number(wrap?.getAttribute('data-office-vendor-emblems') ?? 0),
+            deskFacingScreens: Number(wrap?.getAttribute('data-office-desk-facing-screens') ?? 0),
+            operatorContactLinks: Number(wrap?.getAttribute('data-office-operator-contact-links') ?? 0),
+            screenFocusLinks: Number(wrap?.getAttribute('data-office-screen-focus-links') ?? 0),
+            deskStatusPlaques: Number(wrap?.getAttribute('data-office-desk-status-plaques') ?? 0),
+            walkerFloorBadges: Number(wrap?.getAttribute('data-office-walker-floor-badges') ?? 0),
+            workInputs: Number(wrap?.getAttribute('data-office-work-inputs') ?? 0),
+            operatorInputArrays: Number(wrap?.getAttribute('data-office-operator-input-arrays') ?? 0),
+            serviceForegroundOccluders: Number(wrap?.getAttribute('data-office-service-foreground-occluders') ?? -1),
+            screenPanels: Number(wrap?.getAttribute('data-office-screen-panels') ?? 0),
+            walkerRoutes: Number(wrap?.getAttribute('data-office-walker-routes') ?? 0),
+            sightlineSafe: Number(wrap?.getAttribute('data-office-sightline-safe') ?? 0),
+            cutawayWalls: Number(wrap?.getAttribute('data-office-cutaway-walls') ?? 0),
+            overheadFixturesHidden: Number(wrap?.getAttribute('data-office-overhead-fixtures-hidden') ?? 0),
+            sideGlassCutaway: Number(wrap?.getAttribute('data-office-side-glass-cutaway') ?? 0),
+            wallOccluders: Number(wrap?.getAttribute('data-office-wall-occluders') ?? -1),
+            longLightOccluders: Number(wrap?.getAttribute('data-office-long-light-occluders') ?? -1),
+            presentationBackdrop: Number(wrap?.getAttribute('data-office-presentation-backdrop') ?? 0),
+            industrialRobots: Number(wrap?.getAttribute('data-office-industrial-robots') ?? 0),
+            providerSkinPanels: Number(wrap?.getAttribute('data-office-provider-skin-panels') ?? 0),
+            realProviderLogoSkins: Number(wrap?.getAttribute('data-office-real-provider-logo-skins') ?? 0),
+            realProviderLogoAssets: Number(wrap?.getAttribute('data-office-real-provider-logo-assets') ?? 0),
+            realProviderLogoWordmarks: Number(wrap?.getAttribute('data-office-real-provider-logo-wordmarks') ?? 0),
+            cnProviderLogoSkins: Number(wrap?.getAttribute('data-office-cn-provider-logo-skins') ?? 0),
+            cnProviderLogoAssets: Number(wrap?.getAttribute('data-office-cn-provider-logo-assets') ?? 0),
+            cnProviderLogoWordmarks: Number(wrap?.getAttribute('data-office-cn-provider-logo-wordmarks') ?? 0),
+            detectedCnSessions: Number(wrap?.getAttribute('data-office-detected-cn-sessions') ?? 0),
+            qwenLogoSkins: Number(wrap?.getAttribute('data-office-qwen-logo-skins') ?? 0),
+            qwenSessions: Number(wrap?.getAttribute('data-office-qwen-sessions') ?? 0),
+            deepseekLogoSkins: Number(wrap?.getAttribute('data-office-deepseek-logo-skins') ?? 0),
+            deepseekSessions: Number(wrap?.getAttribute('data-office-deepseek-sessions') ?? 0),
+            abstractLogoSkins: Number(wrap?.getAttribute('data-office-abstract-logo-skins') ?? 0),
+            providerLogoBadges: Number(wrap?.getAttribute('data-office-provider-logo-badges') ?? 0),
+            providerLogoTextureBadges: Number(wrap?.getAttribute('data-office-provider-logo-texture-badges') ?? 0),
+            providerLogoWordmarkBadges: Number(wrap?.getAttribute('data-office-provider-logo-wordmark-badges') ?? 0),
+            clickableWorkstations: Number(wrap?.getAttribute('data-office-clickable-workstations') ?? 0),
+            clickableWalkers: Number(wrap?.getAttribute('data-office-clickable-walkers') ?? 0),
+            selectedSession: wrap?.getAttribute('data-office-selected-session') ?? '',
+            selectedWorkstations: Number(wrap?.getAttribute('data-office-selected-workstations') ?? 0),
+            cameraPresets: Number(wrap?.getAttribute('data-office-camera-presets') ?? 0),
+            activeCameraPreset: wrap?.getAttribute('data-office-active-camera-preset') ?? '',
+            cameraPresetControls: Number(document.querySelector('.office-camera-strip')?.getAttribute('data-office-camera-preset-controls') ?? 0),
+            selectionPanelSession: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? '',
+            opsBackplane: Number(wrap?.getAttribute('data-office-ops-backplane') ?? 0),
+            dataTrunks: Number(wrap?.getAttribute('data-office-data-trunks') ?? 0),
+            workstationBranches: Number(wrap?.getAttribute('data-office-workstation-branches') ?? 0),
+            subjectFraming: Number(wrap?.getAttribute('data-office-subject-framing') ?? 0),
+            vendorEmblemNodes: document.querySelectorAll('.office-vendor-emblem').length,
+            sessionCalloutNodes: document.querySelectorAll('.office-session-callout').length,
+            walkerFloorBadgeDomNodes: document.querySelectorAll('.office-walker-floor-badge').length
           }
         }),
-      (value) => value.subagentPackets === 2 && value.packets >= 2,
+      (value) =>
+        value.sessions >= 4 &&
+        value.completedSessions >= 3 &&
+        value.waitingApprovalSessions >= 1 &&
+        value.failedSessions === 0 &&
+        value.idleSessions + value.runningSessions + value.waitingApprovalSessions + value.completedSessions + value.failedSessions === value.sessions &&
+        value.subagentPackets === 2 &&
+        value.packets >= 3 &&
+        value.walkers >= value.waitingApprovalSessions &&
+        value.awaySessions >= value.waitingApprovalSessions &&
+        value.deskRobots >= 1 &&
+        value.deskRobots + value.awaySessions === value.sessions &&
+        value.teaWalkers >= Math.min(value.idleSessions, 1) &&
+        value.approvalWalkers >= Math.min(value.waitingApprovalSessions, 1) &&
+        value.approvalStations === 1 &&
+        value.hydrationStations === 1 &&
+        value.serviceWayfinding === 1 &&
+        value.amenityPortals === 2 &&
+        value.facilitySignals >= 4 &&
+        value.sideGlass === 1 &&
+        value.architecturalLights === 1 &&
+        value.workZoneGlass === 1 &&
+        value.vendorEmblems === 1 &&
+        value.deskFacingScreens === value.deskRobots &&
+        value.operatorContactLinks === value.deskRobots * 2 &&
+        value.screenFocusLinks === value.deskRobots * 2 &&
+        value.deskStatusPlaques === value.deskRobots &&
+        value.walkerFloorBadges === value.walkers &&
+        value.workInputs === value.deskRobots &&
+        value.operatorInputArrays === value.deskRobots &&
+        value.serviceForegroundOccluders === 0 &&
+        value.screenPanels >= value.sessions * 2 &&
+        value.walkerRoutes === value.walkers &&
+        value.sightlineSafe === 1 &&
+        value.cutawayWalls === 1 &&
+        value.overheadFixturesHidden === 1 &&
+        value.sideGlassCutaway === 1 &&
+        value.wallOccluders === 0 &&
+        value.longLightOccluders === 0 &&
+        value.presentationBackdrop === 1 &&
+        value.industrialRobots === value.deskRobots + value.walkers &&
+        value.providerSkinPanels >= value.sessions &&
+        value.realProviderLogoSkins >= value.sessions &&
+        value.realProviderLogoAssets >= value.sessions &&
+        value.realProviderLogoWordmarks >= value.sessions &&
+        value.cnProviderLogoSkins >= value.detectedCnSessions &&
+        value.cnProviderLogoAssets >= value.detectedCnSessions &&
+        value.cnProviderLogoWordmarks >= value.detectedCnSessions &&
+        value.detectedCnSessions >= value.sessions &&
+        value.qwenLogoSkins >= value.qwenSessions &&
+        value.qwenSessions >= 2 &&
+        value.deepseekLogoSkins >= value.deepseekSessions &&
+        value.deepseekSessions >= 1 &&
+        value.abstractLogoSkins === 0 &&
+        value.providerLogoBadges >= value.deskRobots * 3 + value.walkers * 2 &&
+        value.providerLogoTextureBadges >= value.deskRobots * 3 + value.walkers * 2 &&
+        value.providerLogoWordmarkBadges >= value.deskRobots * 2 + value.walkers &&
+        value.clickableWorkstations === value.sessions &&
+        value.clickableWalkers === value.walkers &&
+        value.selectedSession.length > 0 &&
+        value.selectedWorkstations === 1 &&
+        value.cameraPresets === 3 &&
+        value.activeCameraPreset === 'overview' &&
+        value.cameraPresetControls === 3 &&
+        value.selectionPanelSession === value.selectedSession &&
+        value.opsBackplane === 1 &&
+        value.dataTrunks === 1 &&
+        value.workstationBranches >= value.sessions &&
+        value.subjectFraming === 1 &&
+        value.vendorEmblemNodes === 0 &&
+        value.sessionCalloutNodes === 0 &&
+        value.walkerFloorBadgeDomNodes === 0,
       15_000,
       'waiting for office subagent packets'
     )
+    report.officeSemanticAttrs = attrs
     assert(attrs.subagentPackets === 2, `wrong subagent packet count: ${JSON.stringify(attrs)}`)
+    assert(
+      attrs.sessions >= 4 &&
+        attrs.completedSessions >= 3 &&
+        attrs.waitingApprovalSessions >= 1 &&
+        attrs.failedSessions === 0 &&
+        attrs.idleSessions + attrs.runningSessions + attrs.waitingApprovalSessions + attrs.completedSessions + attrs.failedSessions === attrs.sessions &&
+        attrs.walkers >= attrs.waitingApprovalSessions &&
+        attrs.awaySessions >= attrs.waitingApprovalSessions &&
+        attrs.deskRobots >= 1 &&
+        attrs.deskRobots + attrs.awaySessions === attrs.sessions &&
+        attrs.teaWalkers >= Math.min(attrs.idleSessions, 1) &&
+        attrs.approvalWalkers >= Math.min(attrs.waitingApprovalSessions, 1) &&
+        attrs.approvalStations === 1 &&
+        attrs.hydrationStations === 1 &&
+        attrs.serviceWayfinding === 1 &&
+        attrs.amenityPortals === 2 &&
+        attrs.facilitySignals >= 4 &&
+        attrs.sideGlass === 1 &&
+        attrs.architecturalLights === 1 &&
+        attrs.workZoneGlass === 1 &&
+        attrs.vendorEmblems === 1 &&
+        attrs.deskFacingScreens === attrs.deskRobots &&
+        attrs.operatorContactLinks === attrs.deskRobots * 2 &&
+        attrs.screenFocusLinks === attrs.deskRobots * 2 &&
+        attrs.deskStatusPlaques === attrs.deskRobots &&
+        attrs.walkerFloorBadges === attrs.walkers &&
+        attrs.workInputs === attrs.deskRobots &&
+        attrs.operatorInputArrays === attrs.deskRobots &&
+        attrs.serviceForegroundOccluders === 0 &&
+        attrs.screenPanels >= attrs.sessions * 2 &&
+        attrs.walkerRoutes === attrs.walkers &&
+        attrs.sightlineSafe === 1 &&
+        attrs.cutawayWalls === 1 &&
+        attrs.overheadFixturesHidden === 1 &&
+        attrs.sideGlassCutaway === 1 &&
+        attrs.wallOccluders === 0 &&
+        attrs.longLightOccluders === 0 &&
+        attrs.presentationBackdrop === 1 &&
+        attrs.industrialRobots === attrs.deskRobots + attrs.walkers &&
+        attrs.providerSkinPanels >= attrs.sessions &&
+        attrs.realProviderLogoSkins >= attrs.sessions &&
+        attrs.realProviderLogoAssets >= attrs.sessions &&
+        attrs.realProviderLogoWordmarks >= attrs.sessions &&
+        attrs.cnProviderLogoSkins >= attrs.detectedCnSessions &&
+        attrs.cnProviderLogoAssets >= attrs.detectedCnSessions &&
+        attrs.cnProviderLogoWordmarks >= attrs.detectedCnSessions &&
+        attrs.detectedCnSessions >= attrs.sessions &&
+        attrs.qwenLogoSkins >= attrs.qwenSessions &&
+        attrs.qwenSessions >= 2 &&
+        attrs.deepseekLogoSkins >= attrs.deepseekSessions &&
+        attrs.deepseekSessions >= 1 &&
+        attrs.abstractLogoSkins === 0 &&
+        attrs.providerLogoBadges >= attrs.deskRobots * 3 + attrs.walkers * 2 &&
+        attrs.providerLogoTextureBadges >= attrs.deskRobots * 3 + attrs.walkers * 2 &&
+        attrs.providerLogoWordmarkBadges >= attrs.deskRobots * 2 + attrs.walkers &&
+        attrs.clickableWorkstations === attrs.sessions &&
+        attrs.clickableWalkers === attrs.walkers &&
+        attrs.selectedSession.length > 0 &&
+        attrs.selectedWorkstations === 1 &&
+        attrs.cameraPresets === 3 &&
+        attrs.activeCameraPreset === 'overview' &&
+        attrs.cameraPresetControls === 3 &&
+        attrs.selectionPanelSession === attrs.selectedSession &&
+        attrs.opsBackplane === 1 &&
+        attrs.dataTrunks === 1 &&
+        attrs.workstationBranches >= attrs.sessions &&
+        attrs.subjectFraming === 1 &&
+        attrs.vendorEmblemNodes === 0 &&
+        attrs.sessionCalloutNodes === 0 &&
+        attrs.walkerFloorBadgeDomNodes === 0,
+      `office semantic walkers missing: ${JSON.stringify(attrs)}`
+    )
+  })
+
+  await check('3D office camera presets switch without leaving the control room', async () => {
+    await page.click('.office-camera-button:nth-child(3)')
+    const facilities = await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'facilities',
+      5_000,
+      'waiting for facilities camera preset'
+    )
+    await page.click('.office-camera-button:nth-child(2)')
+    const agent = await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'agent',
+      5_000,
+      'waiting for agent camera preset'
+    )
+    await page.click('.office-camera-button:nth-child(1)')
+    const overview = await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'overview',
+      5_000,
+      'waiting for overview camera preset'
+    )
+    report.officeCameraPresetSmoke = { facilities, agent, overview }
   })
 
   await check('3D office canvas renders nonblank with parent and child workstations', async () => {
     const stats = await waitForCanvasPixels(page)
     report.officeCanvas = stats
   })
-  await screenshot(page, '02-office-subagent-packets')
+  await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
+    const file = await screenshot(page, '02-office-subagent-packets')
+    const stats = analyzeOfficeScreenshot(file)
+    report.officeScreenshot = stats
+    assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
+    assert(stats.scene.nonDarkRatio > 0.2, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.brightPixels > 5000, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.coloredPixels > 12000, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
+    assert(
+      stats.leftSightline.darkRatio < 0.82 &&
+        stats.leftSightline.uniqueColorBuckets > 100 &&
+        stats.leftSightline.coloredPixels > 1500,
+      `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
+    )
+    assert(
+      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredPixels > 5000,
+      `central office work area is not readable: ${JSON.stringify(stats.centralWorkArea)}`
+    )
+    assert(
+      stats.robotWorkArea.nonDarkRatio > 0.42 &&
+        stats.robotWorkArea.brightPixels > 16_000 &&
+        stats.robotWorkArea.cyanPixels > 4_000 &&
+        stats.robotWorkArea.coloredPixels > 15_000,
+      `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
+    )
+  })
+  await check('3D office selected-agent control opens the matching session', async () => {
+    const before = await page.evaluate(() => {
+      const wrap = document.querySelector('.office-canvas-wrap')
+      return {
+        selected: wrap?.getAttribute('data-office-selected-session') ?? '',
+        panel: document.querySelector('.office-selection-panel')?.getAttribute('data-office-selection-panel') ?? ''
+      }
+    })
+    assert(before.selected && before.selected === before.panel, `selected panel mismatch before open: ${JSON.stringify(before)}`)
+    await page.click('.office-selection-panel .btn-primary')
+    const opened = await waitForValue(
+      () =>
+        page.evaluate((expected) => {
+          return {
+            officeGone: !document.querySelector('.office-canvas-wrap'),
+            activeId: window.agentDesk ? null : null,
+            body: document.body.innerText,
+            expected
+          }
+        }, before.selected),
+      (value) => value.officeGone && value.body.includes('A3 orchestration parent'),
+      8_000,
+      'waiting for selected office session to open'
+    )
+    report.officeSelectedSessionOpenSmoke = { selected: before.selected, officeGone: opened.officeGone }
+  })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   if (!report.checks.some((item) => item.status === 'fail')) {
@@ -255,6 +574,79 @@ async function screenshot(page, name) {
   const file = path.join(runDir, `${name}.png`)
   await page.screenshot({ path: file, fullPage: false })
   report.screenshots.push(file)
+  return file
+}
+
+function analyzeOfficeScreenshot(file) {
+  const png = PNG.sync.read(readFileSync(file))
+  const width = png.width
+  const height = png.height
+  return {
+    width,
+    height,
+    scene: analyzePngRegion(png, Math.floor(width * 0.2), Math.floor(height * 0.11), width, height),
+    centralWorkArea: analyzePngRegion(
+      png,
+      Math.floor(width * 0.25),
+      Math.floor(height * 0.18),
+      Math.floor(width * 0.82),
+      Math.floor(height * 0.94)
+    ),
+    robotWorkArea: analyzePngRegion(
+      png,
+      Math.floor(width * 0.25),
+      Math.floor(height * 0.32),
+      Math.floor(width * 0.73),
+      Math.floor(height * 0.82)
+    ),
+    leftSightline: analyzePngRegion(
+      png,
+      0,
+      Math.floor(height * 0.18),
+      Math.floor(width * 0.36),
+      Math.floor(height * 0.66)
+    )
+  }
+}
+
+function analyzePngRegion(png, x0, y0, x1, y1) {
+  let total = 0
+  let nonDarkPixels = 0
+  let darkPixels = 0
+  let brightPixels = 0
+  let coloredPixels = 0
+  let cyanPixels = 0
+  const buckets = new Set()
+  for (let y = Math.max(0, y0); y < Math.min(png.height, y1); y += 2) {
+    for (let x = Math.max(0, x0); x < Math.min(png.width, x1); x += 2) {
+      const i = (y * png.width + x) * 4
+      const r = png.data[i]
+      const g = png.data[i + 1]
+      const b = png.data[i + 2]
+      const a = png.data[i + 3]
+      if (a < 20) continue
+      const luminance = r * 0.2126 + g * 0.7152 + b * 0.0722
+      const channelSpread = Math.max(r, g, b) - Math.min(r, g, b)
+      total += 1
+      if (luminance > 24) nonDarkPixels += 1
+      else darkPixels += 1
+      if (luminance > 115) brightPixels += 1
+      if (channelSpread > 28 && luminance > 35) coloredPixels += 1
+      if (g > 100 && b > 110 && r < 130) cyanPixels += 1
+      buckets.add(`${r >> 4},${g >> 4},${b >> 4}`)
+    }
+  }
+  return {
+    total,
+    nonDarkPixels,
+    darkPixels,
+    brightPixels,
+    coloredPixels,
+    cyanPixels,
+    uniqueColorBuckets: buckets.size,
+    nonDarkRatio: total > 0 ? nonDarkPixels / total : 0,
+    darkRatio: total > 0 ? darkPixels / total : 1
+  }
 }
 
 async function startOpenAiMock() {
@@ -268,6 +660,15 @@ async function startOpenAiMock() {
     const body = await readJson(req)
     requests.push({ method: req.method, url: req.url, authorization: req.headers.authorization || '', body })
     const text = JSON.stringify(body)
+    if (text.includes('office approval e2e')) {
+      writeFunctionCallResponse(res, {
+        responseId: 'resp_office_approval_1',
+        callId: 'call_office_approval',
+        path: approvalFileName,
+        content: `approval required ${runId}`
+      })
+      return
+    }
     const reply = text.includes('子代理编排完成')
       ? 'Parent summary acknowledged both subagent results.'
       : text.includes('A3 child api')
@@ -309,19 +710,60 @@ async function startOpenAiMock() {
   return { server, port, requests }
 }
 
+function writeFunctionCallResponse(res, { responseId, callId, path: targetPath, content }) {
+  const item = {
+    type: 'function_call',
+    call_id: callId,
+    name: 'write_file',
+    arguments: JSON.stringify({ path: targetPath, content })
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  res.write(`data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item })}\n\n`)
+  res.write(`data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item })}\n\n`)
+  res.write(
+    `data: ${JSON.stringify({
+      type: 'response.completed',
+      response: {
+        id: responseId,
+        usage: {
+          input_tokens: 29,
+          output_tokens: 6,
+          input_tokens_details: { cached_tokens: 0 }
+        }
+      }
+    })}\n\n`
+  )
+  res.write('data: [DONE]\n\n')
+  res.end()
+}
+
 function writeMockUserData(port) {
   writeFileSync(
     path.join(userDataDir, 'providers.json'),
     JSON.stringify(
       [
         {
-          id: 'mock-openai',
-          name: 'CaoGen Orchestration Mock',
+          id: 'mock-qwen',
+          name: 'Qwen DashScope Mock',
           baseUrl: `http://127.0.0.1:${port}`,
           encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
-          models: ['mock-responses'],
+          models: ['qwen-plus'],
           openaiProtocol: 'responses',
-          note: 'Local orchestration e2e provider; no real API key required.',
+          note: 'Local Qwen/DashScope office logo e2e provider; no real API key required.',
+          createdAt: Date.now()
+        },
+        {
+          id: 'mock-deepseek',
+          name: 'DeepSeek Mock',
+          baseUrl: `http://127.0.0.1:${port}`,
+          encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
+          models: ['deepseek-reasoner'],
+          openaiProtocol: 'responses',
+          note: 'Local DeepSeek office logo e2e provider; no real API key required.',
           createdAt: Date.now()
         }
       ],
@@ -333,9 +775,9 @@ function writeMockUserData(port) {
     path.join(userDataDir, 'settings.json'),
     JSON.stringify(
       {
-        defaultModel: 'mock-responses',
+        defaultModel: 'qwen-plus',
         defaultPermissionMode: 'default',
-        defaultProviderId: 'mock-openai',
+        defaultProviderId: 'mock-qwen',
         schedulerStrategy: 'balanced',
         budgetUsdPerSession: 0,
         failoverEnabled: true,
@@ -344,7 +786,7 @@ function writeMockUserData(port) {
         persona: '',
         allowedTools: '',
         disallowedTools: '',
-        office: { showBadges: true, liveliness: 1, catEars: false }
+        office: { showBadges: true, liveliness: 0.6, catEars: false }
       },
       null,
       2

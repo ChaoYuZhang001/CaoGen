@@ -9,6 +9,10 @@ export interface OfficeProp {
   scale?: number
 }
 
+interface CeilingProps extends OfficeProp {
+  presentationMode?: boolean
+}
+
 // 吊顶高度与铺设区域(单位≈米);工位分布在 ±6 左右,吊顶略大以完整覆盖
 const CEILING_Y = 6.2
 const AREA_X = 16
@@ -17,8 +21,6 @@ const AREA_Z = 16
 // 条形灯盘规则网格:X 方向 3 段 × Z 方向 4 排
 const NX = 3
 const NZ = 4
-const PANEL_COUNT = NX * NZ
-
 // 单个灯盘尺寸(长条沿 X)
 const STRIP_LEN = (AREA_X / NX) * 0.82
 const STRIP_WIDTH = 0.55
@@ -39,8 +41,9 @@ const TROUGH_COLOR = '#111111'
 export default function Ceiling({
   position = [0, 0, 0],
   rotation = [0, 0, 0],
-  scale = 1
-}: OfficeProp): React.JSX.Element {
+  scale = 1,
+  presentationMode = false
+}: CeilingProps): React.JSX.Element {
   const troughRef = useRef<InstancedMesh>(null)
   const lightRef = useRef<InstancedMesh>(null)
   const lightMatRef = useRef<MeshStandardMaterial>(null)
@@ -55,17 +58,21 @@ export default function Ceiling({
       for (let i = 0; i < NX; i++) {
         const x = (i - (NX - 1) / 2) * (AREA_X / NX)
         const z = (j - (NZ - 1) / 2) * (AREA_Z / NZ)
+        if (presentationMode && z > 0.5) continue
         out.push([x, z])
       }
     }
     return out
-  }, [])
+  }, [presentationMode])
+  const panelCount = layout.length
+  const ceilingDepth = presentationMode ? 11 : AREA_Z + 4
+  const ceilingZ = presentationMode ? -4.5 : 0
 
   // 写入两组 instancedMesh 的实例矩阵(静态,布局后一次)
   useLayoutEffect(() => {
     const light = lightRef.current
     const trough = troughRef.current
-    for (let k = 0; k < PANEL_COUNT; k++) {
+    for (let k = 0; k < panelCount; k++) {
       const [x, z] = layout[k]
       // 灯槽边框:略大、略高
       dummy.position.set(x, CEILING_Y - 0.01, z)
@@ -80,7 +87,7 @@ export default function Ceiling({
     }
     if (trough) trough.instanceMatrix.needsUpdate = true
     if (light) light.instanceMatrix.needsUpdate = true
-  }, [dummy, layout])
+  }, [dummy, layout, panelCount])
 
   // 灯盘整体轻微呼吸(共享材质,统一脉动,保持克制)
   useFrame((state) => {
@@ -93,29 +100,33 @@ export default function Ceiling({
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {/* 吊顶主面:朝下(法线 -Y) */}
-      <mesh position={[0, CEILING_Y, 0]} rotation={[Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[AREA_X + 4, AREA_Z + 4]} />
-        <meshStandardMaterial color={CEILING_COLOR} metalness={0.1} roughness={0.95} />
-      </mesh>
+      {!presentationMode && (
+        <>
+          {/* 吊顶主面:朝下(法线 -Y) */}
+          <mesh position={[0, CEILING_Y, ceilingZ]} rotation={[Math.PI / 2, 0, 0]} receiveShadow>
+            <planeGeometry args={[AREA_X + 4, ceilingDepth]} />
+            <meshStandardMaterial color={CEILING_COLOR} metalness={0.1} roughness={0.95} />
+          </mesh>
 
-      {/* 灯槽边框(深色框,衬托灯盘) */}
-      <instancedMesh ref={troughRef} args={[undefined, undefined, PANEL_COUNT]}>
-        <boxGeometry args={[STRIP_LEN + 0.14, 0.06, STRIP_WIDTH + 0.14]} />
-        <meshStandardMaterial color={TROUGH_COLOR} metalness={0.2} roughness={0.8} />
-      </instancedMesh>
+          {/* 灯槽边框(深色框,衬托灯盘) */}
+          <instancedMesh ref={troughRef} args={[undefined, undefined, panelCount]}>
+            <boxGeometry args={[STRIP_LEN + 0.14, 0.06, STRIP_WIDTH + 0.14]} />
+            <meshStandardMaterial color={TROUGH_COLOR} metalness={0.2} roughness={0.8} />
+          </instancedMesh>
 
-      {/* 嵌入式条形灯盘:发光面(emissive + toneMapped=false 供 Bloom) */}
-      <instancedMesh ref={lightRef} args={[undefined, undefined, PANEL_COUNT]}>
-        <boxGeometry args={[STRIP_LEN, 0.04, STRIP_WIDTH]} />
-        <meshStandardMaterial
-          ref={lightMatRef}
-          color={LIGHT_COLOR}
-          emissive={LIGHT_COLOR}
-          emissiveIntensity={1.15}
-          toneMapped={false}
-        />
-      </instancedMesh>
+          {/* 嵌入式条形灯盘:发光面(emissive + toneMapped=false 供 Bloom) */}
+          <instancedMesh ref={lightRef} args={[undefined, undefined, panelCount]}>
+            <boxGeometry args={[STRIP_LEN, 0.04, STRIP_WIDTH]} />
+            <meshStandardMaterial
+              ref={lightMatRef}
+              color={LIGHT_COLOR}
+              emissive={LIGHT_COLOR}
+              emissiveIntensity={1.15}
+              toneMapped={false}
+            />
+          </instancedMesh>
+        </>
+      )}
     </group>
   )
 }

@@ -22,7 +22,7 @@ const CAP_TABLE: Array<{ match: RegExp; cap: ModelCap }> = [
   { match: /gemini.*pro|1\.5-pro|2\.0-pro/i, cap: { quality: 3, cost: 2, speed: 2 } },
   { match: /deepseek.*(reasoner|r1)/i, cap: { quality: 3, cost: 1, speed: 1 } },
   { match: /deepseek/i, cap: { quality: 2, cost: 1, speed: 2 } },
-  // 国产模型档位(官方 Anthropic 兼容端点直连,一等公民)
+  // 国产模型档位(厂商 Anthropic 兼容端点直连,一等公民)
   { match: /kimi-k2|kimi.*thinking/i, cap: { quality: 3, cost: 1, speed: 2 } },
   { match: /kimi|moonshot/i, cap: { quality: 2, cost: 1, speed: 2 } },
   { match: /glm-4\.5-air|glm.*flash/i, cap: { quality: 1, cost: 1, speed: 3 } },
@@ -110,7 +110,7 @@ export function pickModel(
   }
 }
 
-/** 官方 Anthropic(无 Provider)时的候选模型档 */
+/** Claude 模型档位候选,仅用于显式 Claude/Anthropic 类 Provider 的就近映射。 */
 export const DEFAULT_AUTO_CANDIDATES = ['haiku', 'sonnet', 'opus']
 
 export interface CrossRouteDecision {
@@ -222,9 +222,9 @@ export interface ProviderHealth {
 
 const health = new Map<string, ProviderHealth>()
 
-/** '' 表示官方 Anthropic;统一用 'official' 作 key 便于展示 */
+/** 历史空 Provider 统一用 local-login 作健康度展示 key。 */
 function key(providerId: string): string {
-  return providerId || 'official'
+  return providerId || 'local-login'
 }
 
 function ensure(providerId: string): ProviderHealth {
@@ -301,7 +301,7 @@ export function classifyFailure(text: string | undefined): FailureClass {
 }
 
 export interface FailoverCandidate {
-  /** '' = 官方 Anthropic */
+  /** Provider id;新故障切换不再主动生成空 Provider 候选。 */
   id: string
   name: string
   models: string[]

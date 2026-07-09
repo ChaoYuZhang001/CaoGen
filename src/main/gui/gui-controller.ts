@@ -152,12 +152,20 @@ function sourceKind(source: Electron.DesktopCapturerSource): 'screen' | 'window'
   return source.id.startsWith('screen:') ? 'screen' : 'window'
 }
 
+function nativeImageIsEmpty(image: Pick<Electron.NativeImage, 'isEmpty'> | null | undefined): boolean {
+  try {
+    return !image || image.isEmpty()
+  } catch {
+    return true
+  }
+}
+
 function sourceInfo(source: Electron.DesktopCapturerSource): GuiWindowInfo {
   return {
     id: source.id,
     name: source.name,
     kind: sourceKind(source),
-    appIcon: !source.appIcon.isEmpty(),
+    appIcon: !nativeImageIsEmpty(source.appIcon),
     platform: 'electron'
   }
 }
@@ -261,6 +269,7 @@ export function createGuiController(cwd: string): GuiController {
 
     async screenshot(input: ScreenshotInput): Promise<GuiScreenshotResult> {
       try {
+        const outPath = safeOutputPath(cwd, input.savePath)
         const all = await sources()
         const screenCapturePermission = screenCapturePermissionStatus()
         const source = input.sourceId
@@ -274,7 +283,7 @@ export function createGuiController(cwd: string): GuiController {
             ...(screenCapturePermission ? { screenCapturePermission } : {})
           }
         }
-        if (source.thumbnail.isEmpty()) {
+        if (nativeImageIsEmpty(source.thumbnail)) {
           return {
             ok: false,
             error: '截图源缩略图为空；请确认系统 Screen Recording/屏幕录制权限已授予 CaoGen，并重新打开应用后再试。',
@@ -287,7 +296,7 @@ export function createGuiController(cwd: string): GuiController {
 
         const width = normalizeMaxWidth(input.maxWidth)
         const image = source.thumbnail.resize({ width })
-        if (image.isEmpty()) {
+        if (nativeImageIsEmpty(image)) {
           return {
             ok: false,
             error: '截图缩放后为空；请降低 maxWidth 或重新选择截图源。',
@@ -297,7 +306,6 @@ export function createGuiController(cwd: string): GuiController {
             ...(screenCapturePermission ? { screenCapturePermission } : {})
           }
         }
-        const outPath = safeOutputPath(cwd, input.savePath)
         mkdirSync(dirname(outPath), { recursive: true })
         writeFileSync(outPath, image.toPNG())
         const size = image.getSize()

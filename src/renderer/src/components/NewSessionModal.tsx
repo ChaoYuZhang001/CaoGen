@@ -14,9 +14,9 @@ export default function NewSessionModal(): React.JSX.Element {
 
   const [cwd, setCwd] = useState('')
   const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [providerId, setProviderId] = useState(settings.defaultProviderId)
-  const [model, setModel] = useState(caogenDrivePolicyView(settings.driveMode).defaultModel)
-  const [engine, setEngine] = useState<EngineKind>('claude')
+  const [providerId, setProviderId] = useState('')
+  const [model, setModel] = useState('')
+  const [engine, setEngine] = useState<EngineKind | ''>('')
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
     caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
@@ -28,18 +28,19 @@ export default function NewSessionModal(): React.JSX.Element {
     void window.agentDesk.listEngines().then(setEngines)
   }, [])
 
-  // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表;官方则用内置别名。
-  // 无论如何都保留"自动调度",否则指定 Provider 就用不上调度器。
+  const requiresProvider = engine === 'claude' || engine === 'openai'
+
+  // 选定 Provider 时,模型下拉用该 Provider 声明的模型列表。
+  // 不再提供"默认模型"选项;自动调度也必须由用户显式选择。
   const modelOptions = useMemo(() => {
     const provider = providers.find((p) => p.id === providerId)
     if (provider && provider.models.length > 0) {
       return [
         { value: AUTO_MODEL, label: t('autoRoute') },
-        { value: '', label: t('defaultModel') },
         ...provider.models.map((m) => ({ value: m, label: m }))
       ]
     }
-    return MODEL_OPTIONS
+    return [{ value: AUTO_MODEL, label: t('autoRoute') }, ...MODEL_OPTIONS.filter((item) => item.value !== AUTO_MODEL)]
   }, [providers, providerId, t])
 
   const onProviderChange = (id: string): void => {
@@ -51,7 +52,7 @@ export default function NewSessionModal(): React.JSX.Element {
   const onDriveChange = (mode: CaoGenDriveMode): void => {
     const policy = caogenDrivePolicyView(mode)
     setDriveMode(mode)
-    setModel(policy.defaultModel)
+    setModel('')
     setPermissionMode(policy.defaultPermissionMode)
   }
 
@@ -63,6 +64,18 @@ export default function NewSessionModal(): React.JSX.Element {
   const create = async (): Promise<void> => {
     if (!cwd.trim()) {
       setError(t('errNeedProjectDir'))
+      return
+    }
+    if (!engine) {
+      setError(t('explicitEngineRequired'))
+      return
+    }
+    if (requiresProvider && !providerId) {
+      setError(t('explicitProviderRequired'))
+      return
+    }
+    if (requiresProvider && !model) {
+      setError(t('explicitModelRequired'))
       return
     }
     setBusy(true)
@@ -124,46 +137,62 @@ export default function NewSessionModal(): React.JSX.Element {
           </button>
         </div>
 
-        {engines.length > 1 && (
+        <label className="field-label">{t('engineLabel')}</label>
+        <select
+          className="select select-block"
+          value={engine}
+          onChange={(e) => {
+            setEngine(e.target.value as EngineKind | '')
+            setProviderId('')
+            setModel('')
+          }}
+        >
+          <option value="" disabled>
+            {t('selectEnginePlaceholder')}
+          </option>
+          {engines.map((en) => (
+            <option key={en.kind} value={en.kind} disabled={!en.available}>
+              {en.label}
+            </option>
+          ))}
+        </select>
+
+        {requiresProvider && (
           <>
-            <label className="field-label">{t('engineLabel')}</label>
+            <label className="field-label">{t('providerLabel')}</label>
             <select
               className="select select-block"
-              value={engine}
-              onChange={(e) => setEngine(e.target.value as EngineKind)}
+              value={providerId}
+              onChange={(e) => onProviderChange(e.target.value)}
             >
-              {engines.map((en) => (
-                <option key={en.kind} value={en.kind} disabled={!en.available}>
-                  {en.label}
+              <option value="" disabled>
+                {t('selectProviderPlaceholder')}
+              </option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id} disabled={!p.hasToken}>
+                  {p.name}
+                  {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
                 </option>
               ))}
             </select>
           </>
         )}
 
-        <label className="field-label">{t('providerLabel')}</label>
-        <select
-          className="select select-block"
-          value={providerId}
-          onChange={(e) => onProviderChange(e.target.value)}
-        >
-          <option value="">{t('officialAnthropicDefault')}</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
-            </option>
-          ))}
-        </select>
-
-        <label className="field-label">{t('model')}</label>
-        <select className="select select-block" value={model} onChange={(e) => setModel(e.target.value)}>
-          {modelOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        {requiresProvider && (
+          <>
+            <label className="field-label">{t('model')}</label>
+            <select className="select select-block" value={model} onChange={(e) => setModel(e.target.value)}>
+              <option value="" disabled>
+                {t('selectModelPlaceholder')}
+              </option>
+              {modelOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         <label className="field-label">{t('permissionMode')}</label>
         <select

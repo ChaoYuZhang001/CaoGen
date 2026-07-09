@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
@@ -9,6 +9,24 @@ import Composer from './Composer'
 import RewindPanel from './RewindPanel'
 import StartSuggestionsPanel from './StartSuggestionsPanel'
 import type { PermissionModeId } from '../../../shared/types'
+import type { ChatItem, ToolResultInfo } from '../store'
+
+const VIRTUAL_MESSAGE_THRESHOLD = 100
+const VIRTUAL_MESSAGE_ESTIMATED_HEIGHT = 116
+const VIRTUAL_MESSAGE_GAP = 14
+const VIRTUAL_MESSAGE_OVERSCAN_PX = 720
+const CHAT_SCALE_MIN = 0.85
+const CHAT_SCALE_MAX = 1.25
+const CHAT_SCALE_STEP = 0.05
+
+interface ScrollSnapshot {
+  top: number
+  height: number
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Number(value.toFixed(2))))
+}
 
 export default function ChatView(): React.JSX.Element | null {
   const t = useT()
@@ -40,11 +58,46 @@ export default function ChatView(): React.JSX.Element | null {
   const ignoreStartSuggestion = useStore((s) => s.ignoreStartSuggestion)
   const acceptMemorySuggestion = useStore((s) => s.acceptMemorySuggestion)
   const dismissMemorySuggestion = useStore((s) => s.dismissMemorySuggestion)
+  const layout = useStore((s) => s.settings.layout)
+  const updateSettings = useStore((s) => s.updateSettings)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const scrollFrame = useRef<number | null>(null)
+  const [scrollSnapshot, setScrollSnapshot] = useState<ScrollSnapshot>({ top: 0, height: 0 })
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
+
+  const updateScrollSnapshot = useCallback((): void => {
+    const el = scrollRef.current
+    if (!el) return
+    const next = { top: el.scrollTop, height: el.clientHeight }
+    setScrollSnapshot((current) =>
+      Math.abs(current.top - next.top) < 1 && Math.abs(current.height - next.height) < 1 ? current : next
+    )
+  }, [])
+
+  const scheduleScrollSnapshot = useCallback((): void => {
+    if (scrollFrame.current !== null) return
+    scrollFrame.current = window.requestAnimationFrame(() => {
+      scrollFrame.current = null
+      updateScrollSnapshot()
+    })
+  }, [updateScrollSnapshot])
+
+  const patchLayout = useCallback(
+    (patch: Partial<typeof layout>): void => {
+      void updateSettings({ layout: { ...layout, ...patch } })
+    },
+    [layout, updateSettings]
+  )
+
+  const setChatScale = useCallback(
+    (value: number): void => {
+      patchLayout({ chatScale: clamp(value, CHAT_SCALE_MIN, CHAT_SCALE_MAX) })
+    },
+    [patchLayout]
+  )
 
   useEffect(() => {
     if (!moreOpen) return
@@ -77,8 +130,18 @@ export default function ChatView(): React.JSX.Element | null {
 
   useEffect(() => {
     const el = scrollRef.current
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
-  }, [itemCount, streamLen, activeId])
+    if (el && stickToBottom.current) {
+      el.scrollTop = el.scrollHeight
+      updateScrollSnapshot()
+    }
+  }, [itemCount, streamLen, activeId, updateScrollSnapshot])
+
+  useEffect(() => {
+    updateScrollSnapshot()
+    return () => {
+      if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current)
+    }
+  }, [activeId, updateScrollSnapshot])
 
   useEffect(() => {
     if (activeId) void refreshStartSuggestions()
@@ -114,10 +177,14 @@ export default function ChatView(): React.JSX.Element | null {
     const el = scrollRef.current
     if (!el) return
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    scheduleScrollSnapshot()
   }
 
   return (
-    <div className="chat">
+    <div
+      className={`chat chat-density-${layout.chatDensity}`}
+      style={{ '--chat-scale': layout.chatScale } as React.CSSProperties}
+    >
       <header className="chat-header drag-region">
         <div className="chat-heading">
           <div className="chat-title" title={meta.title}>
@@ -153,6 +220,50 @@ export default function ChatView(): React.JSX.Element | null {
               </option>
             ))}
           </select>
+          <div className="chat-layout-controls" aria-label={t('chatLayoutControls')}>
+            <button
+              type="button"
+              className="icon-btn text-icon-btn"
+              aria-label={t('zoomOutChat')}
+              title={t('zoomOutChat')}
+              disabled={layout.chatScale <= CHAT_SCALE_MIN}
+              onClick={() => setChatScale(layout.chatScale - CHAT_SCALE_STEP)}
+            >
+              A-
+            </button>
+            <button
+              type="button"
+              className="chat-zoom-value"
+              aria-label={t('resetChatZoom')}
+              title={t('resetChatZoom')}
+              onClick={() => setChatScale(1)}
+            >
+              {Math.round(layout.chatScale * 100)}%
+            </button>
+            <button
+              type="button"
+              className="icon-btn text-icon-btn"
+              aria-label={t('zoomInChat')}
+              title={t('zoomInChat')}
+              disabled={layout.chatScale >= CHAT_SCALE_MAX}
+              onClick={() => setChatScale(layout.chatScale + CHAT_SCALE_STEP)}
+            >
+              A+
+            </button>
+            <button
+              type="button"
+              className={`icon-btn text-icon-btn ${layout.chatDensity === 'compact' ? 'icon-btn-active' : ''}`}
+              aria-label={t('toggleCompactChat')}
+              title={t('toggleCompactChat')}
+              onClick={() =>
+                patchLayout({
+                  chatDensity: layout.chatDensity === 'compact' ? 'comfortable' : 'compact'
+                })
+              }
+            >
+              ≡
+            </button>
+          </div>
           {running && (
             <button className="btn btn-danger" onClick={() => void interrupt()}>
               {t('stop')}
@@ -251,14 +362,15 @@ export default function ChatView(): React.JSX.Element | null {
             onLater={(suggestion) => laterStartSuggestion(suggestion.id)}
             onIgnore={(suggestion) => ignoreStartSuggestion(suggestion.id)}
           />
-          {session.items.map((item) => (
-            <MessageItem
-              key={item.id}
-              item={item}
-              toolResults={session.toolResults}
-              runningTools={session.runningTools}
-            />
-          ))}
+          <MessageList
+            activeId={activeId}
+            items={session.items}
+            toolResults={session.toolResults}
+            runningTools={session.runningTools}
+            scrollRef={scrollRef}
+            scrollSnapshot={scrollSnapshot}
+            stickToBottom={stickToBottom}
+          />
 
           {session.streamThinking && (
             <div className="thinking-stream">
@@ -337,6 +449,229 @@ export default function ChatView(): React.JSX.Element | null {
       </footer>
     </div>
   )
+}
+
+interface MessageListProps {
+  activeId: string
+  items: ChatItem[]
+  toolResults: Record<string, ToolResultInfo>
+  runningTools: Record<string, true>
+  scrollRef: React.RefObject<HTMLDivElement>
+  scrollSnapshot: ScrollSnapshot
+  stickToBottom: React.MutableRefObject<boolean>
+}
+
+function MessageList({
+  activeId,
+  items,
+  toolResults,
+  runningTools,
+  scrollRef,
+  scrollSnapshot,
+  stickToBottom
+}: MessageListProps): React.JSX.Element {
+  if (items.length <= VIRTUAL_MESSAGE_THRESHOLD) {
+    return (
+      <>
+        {items.map((item) => (
+          <MessageItem key={item.id} item={item} toolResults={toolResults} runningTools={runningTools} />
+        ))}
+      </>
+    )
+  }
+
+  return (
+    <VirtualMessageList
+      activeId={activeId}
+      items={items}
+      toolResults={toolResults}
+      runningTools={runningTools}
+      scrollRef={scrollRef}
+      scrollSnapshot={scrollSnapshot}
+      stickToBottom={stickToBottom}
+    />
+  )
+}
+
+function VirtualMessageList({
+  activeId,
+  items,
+  toolResults,
+  runningTools,
+  scrollRef,
+  scrollSnapshot,
+  stickToBottom
+}: MessageListProps): React.JSX.Element {
+  const listRef = useRef<HTMLDivElement>(null)
+  const sizeById = useRef(new Map<string, number>())
+  const heightFrame = useRef<number | null>(null)
+  const [heightVersion, setHeightVersion] = useState(0)
+  const [listTop, setListTop] = useState(0)
+
+  const scheduleHeightVersion = useCallback((): void => {
+    if (heightFrame.current !== null) return
+    heightFrame.current = window.requestAnimationFrame(() => {
+      heightFrame.current = null
+      setHeightVersion((value) => value + 1)
+    })
+  }, [])
+
+  const measureListTop = useCallback((): void => {
+    const scrollEl = scrollRef.current
+    const listEl = listRef.current
+    if (!scrollEl || !listEl) return
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const listRect = listEl.getBoundingClientRect()
+    const nextTop = listRect.top - scrollRect.top + scrollEl.scrollTop
+    setListTop((current) => (Math.abs(current - nextTop) < 1 ? current : nextTop))
+  }, [scrollRef])
+
+  useEffect(() => {
+    sizeById.current.clear()
+    scheduleHeightVersion()
+    setListTop(0)
+    return () => {
+      if (heightFrame.current !== null) window.cancelAnimationFrame(heightFrame.current)
+    }
+  }, [activeId, scheduleHeightVersion])
+
+  useEffect(() => {
+    const liveIds = new Set(items.map((item) => item.id))
+    let changed = false
+    for (const id of sizeById.current.keys()) {
+      if (liveIds.has(id)) continue
+      sizeById.current.delete(id)
+      changed = true
+    }
+    if (changed) scheduleHeightVersion()
+  }, [items, scheduleHeightVersion])
+
+  useLayoutEffect(() => {
+    measureListTop()
+  }, [items.length, measureListTop, scrollSnapshot.height])
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current
+    const listEl = listRef.current
+    if (!scrollEl || !listEl) return
+    const observer = new ResizeObserver(measureListTop)
+    observer.observe(scrollEl)
+    observer.observe(listEl)
+    window.addEventListener('resize', measureListTop)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measureListTop)
+    }
+  }, [measureListTop, scrollRef])
+
+  const handleMeasure = useCallback(
+    (id: string, height: number): void => {
+      const previous = sizeById.current.get(id)
+      if (previous !== undefined && Math.abs(previous - height) < 1) return
+      sizeById.current.set(id, height)
+      scheduleHeightVersion()
+      if (stickToBottom.current) {
+        window.requestAnimationFrame(() => {
+          const scrollEl = scrollRef.current
+          if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
+        })
+      }
+    },
+    [scheduleHeightVersion, scrollRef, stickToBottom]
+  )
+
+  const sizes = useMemo(
+    () => items.map((item) => sizeById.current.get(item.id) ?? VIRTUAL_MESSAGE_ESTIMATED_HEIGHT),
+    [heightVersion, items]
+  )
+  const offsets = useMemo(() => {
+    const values = new Array<number>(sizes.length + 1)
+    values[0] = 0
+    for (let i = 0; i < sizes.length; i++) values[i + 1] = values[i] + sizes[i]
+    return values
+  }, [sizes])
+
+  const totalHeight = offsets[offsets.length - 1] ?? 0
+  const visibleTop = Math.max(0, scrollSnapshot.top - listTop - VIRTUAL_MESSAGE_OVERSCAN_PX)
+  const visibleBottom = Math.min(
+    totalHeight,
+    scrollSnapshot.top - listTop + scrollSnapshot.height + VIRTUAL_MESSAGE_OVERSCAN_PX
+  )
+  const startIndex = Math.max(0, findVirtualIndex(offsets, visibleTop) - 1)
+  const endIndex = Math.min(items.length, findVirtualIndex(offsets, visibleBottom) + 1)
+  const visibleItems = items.slice(startIndex, endIndex)
+
+  return (
+    <div
+      ref={listRef}
+      className="chat-virtual-list"
+      style={{ height: totalHeight }}
+      data-virtualized-messages="true"
+      data-total-messages={items.length}
+      data-visible-messages={visibleItems.length}
+    >
+      {visibleItems.map((item, visibleOffset) => {
+        const index = startIndex + visibleOffset
+        return (
+          <VirtualMessageRow
+            key={item.id}
+            item={item}
+            top={offsets[index] ?? 0}
+            onMeasure={handleMeasure}
+            toolResults={toolResults}
+            runningTools={runningTools}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+interface VirtualMessageRowProps {
+  item: ChatItem
+  top: number
+  toolResults: Record<string, ToolResultInfo>
+  runningTools: Record<string, true>
+  onMeasure: (id: string, height: number) => void
+}
+
+function VirtualMessageRow({
+  item,
+  top,
+  toolResults,
+  runningTools,
+  onMeasure
+}: VirtualMessageRowProps): React.JSX.Element {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const node = rowRef.current
+    if (!node) return
+    const measure = (): void => {
+      onMeasure(item.id, Math.ceil(node.getBoundingClientRect().height) + VIRTUAL_MESSAGE_GAP)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [item.id, onMeasure])
+
+  return (
+    <div ref={rowRef} className="chat-virtual-row" style={{ transform: `translateY(${top}px)` }}>
+      <MessageItem item={item} toolResults={toolResults} runningTools={runningTools} />
+    </div>
+  )
+}
+
+function findVirtualIndex(offsets: number[], target: number): number {
+  let low = 0
+  let high = offsets.length - 1
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if ((offsets[mid] ?? 0) < target) low = mid + 1
+    else high = mid
+  }
+  return low
 }
 
 interface IconButtonProps {

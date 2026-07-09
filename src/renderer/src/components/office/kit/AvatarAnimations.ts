@@ -19,7 +19,7 @@ export interface AnimOptions {
   liveliness?: number
   /** 相位偏移(秒):让同类 avatar 动作不同步(默认 0) */
   phase?: number
-  /** 面向 -Z 的朝向(弧度),叠加到 root.rotation.y(默认 0) */
+  /** 机器人本地 +Z 正面朝向(弧度),叠加到 root.rotation.y(默认 0) */
   facing?: number
 }
 
@@ -90,6 +90,31 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
   lerpRotation(refs.armR, Math.sin(tt * 1.6 * L + Math.PI) * 0.04, 0, -0.06)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
+  applyFacing(refs, opts)
+}
+
+/**
+ * 值守控制台:适合 idle 工位。机器人不是休息,而是面向屏幕持续监控,
+ * 双臂停在操作面板附近,头部做很小幅的扫描。
+ */
+export function applyMonitoring(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
+  const L = amp(opts)
+  const tt = time(t, opts)
+  const root = refs.root
+  if (root) {
+    root.position.y = lerpValue(root.position.y, Math.sin(tt * 1.25 * L) * 0.006)
+    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.7 * L) * 0.008)
+  }
+  lerpRotation(
+    refs.head,
+    0.16 + Math.sin(tt * 0.9 * L) * 0.018,
+    Math.sin(tt * 0.45 * L) * 0.075,
+    Math.sin(tt * 0.6 * L) * 0.015
+  )
+  lerpRotation(refs.armL, -0.68 + Math.sin(tt * 1.4 * L) * 0.035, 0, 0.1)
+  lerpRotation(refs.armR, -0.72 + Math.cos(tt * 1.25 * L) * 0.035, 0, -0.1)
+  lerpRotation(refs.legL, 0.02, 0, 0)
+  lerpRotation(refs.legR, -0.02, 0, 0)
   applyFacing(refs, opts)
 }
 

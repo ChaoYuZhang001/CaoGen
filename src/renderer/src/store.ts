@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES, DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../../shared/types'
+import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
 import type {
   AgentEvent,
   AppSettings,
@@ -879,9 +879,9 @@ export const useStore = create<AppStore>((set, get) => {
   history: [],
   settings: {
     driveMode: 'core',
-    defaultModel: DEEPSEEK_DEFAULT_MODEL,
+    defaultModel: '',
     defaultPermissionMode: 'default',
-    defaultProviderId: DEEPSEEK_PROVIDER_ID,
+    defaultProviderId: '',
     schedulerStrategy: 'balanced',
     smartModelRoutingEnabled: false,
     modelCrossValidationAutoRunEnabled: false,
@@ -914,7 +914,14 @@ export const useStore = create<AppStore>((set, get) => {
     hookPostEditCommand: '',
     hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
-    office: { showBadges: true, liveliness: 1, catEars: false }
+    office: { showBadges: true, liveliness: 0.6, catEars: false },
+    layout: {
+      sidebarCollapsed: false,
+      sidebarWidth: 264,
+      workbenchSideWidth: 560,
+      chatScale: 1,
+      chatDensity: 'comfortable'
+    }
   },
   providers: [],
   projects: [],
@@ -1115,7 +1122,7 @@ export const useStore = create<AppStore>((set, get) => {
             ...s.workbench,
             terminal: event.terminal,
             terminalLoading: false,
-            terminalError: event.terminal.fallbackReason
+            terminalError: undefined
           }
         }
       }
@@ -3485,7 +3492,7 @@ export const useStore = create<AppStore>((set, get) => {
   async deleteProvider(id) {
     await window.agentDesk.deleteProvider(id)
     await get().refreshProviders()
-    // 若默认 Provider 被删,回退到官方
+    // 若 Provider 偏好被删,清空偏好;新建会话必须显式再选。
     if (get().settings.defaultProviderId === id) {
       await get().updateSettings({ defaultProviderId: '' })
     }
@@ -3517,7 +3524,6 @@ export const useStore = create<AppStore>((set, get) => {
 
 export const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
   { value: AUTO_MODEL, label: '🧭 自动调度' },
-  { value: '', label: '默认模型' },
   { value: 'opus', label: 'Opus' },
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'haiku', label: 'Haiku' }
@@ -3549,7 +3555,7 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 
 /**
  * Provider 预设模板。Claude 引擎使用 Anthropic Messages API;OpenAI 引擎
- * 支持 Responses(官方)与 Chat Completions(通用)两种协议,按预设的
+ * 支持 Responses(OpenAI 原生)与 Chat Completions(通用)两种协议,按预设的
  * openaiProtocol 预填。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
@@ -3565,24 +3571,24 @@ export interface ProviderPreset {
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     key: 'anthropic',
-    label: '官方 Anthropic 兼容端点',
+    label: 'Anthropic Messages 端点',
     baseUrl: '',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
   },
   {
     key: 'openai',
-    label: 'OpenAI(官方直连)',
+    label: 'OpenAI(厂商直连)',
     baseUrl: 'https://api.openai.com',
     models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
     hint: '选择 OpenAI 引擎时原生直连(Responses 协议),填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
   },
   {
     key: 'deepseek',
-    label: 'DeepSeek(官方直连)',
+    label: 'DeepSeek(厂商直连)',
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: ['deepseek-chat', 'deepseek-reasoner'],
-    hint: 'DeepSeek 官方 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
+    hint: 'DeepSeek 厂商 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
   },
   {
     key: 'deepseek-chat',
@@ -3594,24 +3600,24 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     key: 'kimi',
-    label: 'Kimi / 月之暗面(官方直连)',
+    label: 'Kimi / 月之暗面(厂商直连)',
     baseUrl: 'https://api.moonshot.cn/anthropic',
     models: ['kimi-k2-0711-preview', 'moonshot-v1-auto'],
-    hint: 'Moonshot 官方 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
+    hint: 'Moonshot 厂商 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
   },
   {
     key: 'glm',
-    label: '智谱 GLM(官方直连)',
+    label: '智谱 GLM(厂商直连)',
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: ['glm-4.5', 'glm-4.5-air'],
-    hint: '智谱官方 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
+    hint: '智谱厂商 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
   },
   {
     key: 'grok',
-    label: 'Grok / xAI(官方直连)',
+    label: 'Grok / xAI(厂商直连)',
     baseUrl: 'https://api.x.ai',
     models: ['grok-4', 'grok-4-fast'],
-    hint: 'xAI 官方同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
+    hint: 'xAI 厂商端点同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
     openaiProtocol: 'chat'
   },
   {

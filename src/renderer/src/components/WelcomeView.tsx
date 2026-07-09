@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+import type { CaoGenDriveMode, EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
 
 /**
  * 首屏"打开即输入"(对标 Codex Desktop):居中引导语 + 中央大输入框,
@@ -18,8 +18,10 @@ export default function WelcomeView(): React.JSX.Element {
   const [text, setText] = useState('')
   const [cwd, setCwd] = useState('')
   const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [providerId, setProviderId] = useState(settings.defaultProviderId)
-  const [model, setModel] = useState(caogenDrivePolicyView(settings.driveMode).defaultModel)
+  const [providerId, setProviderId] = useState('')
+  const [model, setModel] = useState('')
+  const [engine, setEngine] = useState<EngineKind | ''>('')
+  const [engines, setEngines] = useState<EngineInfo[]>([])
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
     caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
   )
@@ -27,22 +29,27 @@ export default function WelcomeView(): React.JSX.Element {
   const [error, setError] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
 
+  useEffect(() => {
+    void window.agentDesk.listEngines().then(setEngines)
+  }, [])
+
+  const requiresProvider = engine === 'claude' || engine === 'openai'
+
   const modelOptions = useMemo(() => {
     const p = providers.find((x) => x.id === providerId)
     if (p && p.models.length > 0) {
       return [
         { value: AUTO_MODEL, label: t('autoRoute') },
-        { value: '', label: t('defaultModel') },
         ...p.models.map((m) => ({ value: m, label: m }))
       ]
     }
-    return MODEL_OPTIONS
+    return [{ value: AUTO_MODEL, label: t('autoRoute') }, ...MODEL_OPTIONS.filter((item) => item.value !== AUTO_MODEL)]
   }, [providers, providerId, t])
 
   const onDriveChange = (mode: CaoGenDriveMode): void => {
     const policy = caogenDrivePolicyView(mode)
     setDriveMode(mode)
-    setModel(policy.defaultModel)
+    setModel('')
     setPermissionMode(policy.defaultPermissionMode)
   }
 
@@ -57,11 +64,23 @@ export default function WelcomeView(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     const prompt = text.trim()
     if (!prompt || busy) return
+    if (!engine) {
+      setError(t('explicitEngineRequired'))
+      return
+    }
+    if (requiresProvider && !providerId) {
+      setError(t('explicitProviderRequired'))
+      return
+    }
+    if (requiresProvider && !model) {
+      setError(t('explicitModelRequired'))
+      return
+    }
     // 未选项目目录也可发起:走"对话分组"(主进程回退到用户主目录、不隔离)
     setBusy(true)
     setError('')
     try {
-      await startSessionWithPrompt({ cwd: cwd.trim(), driveMode, model, providerId, permissionMode }, prompt)
+      await startSessionWithPrompt({ cwd: cwd.trim(), driveMode, model, providerId, engine, permissionMode }, prompt)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -98,7 +117,25 @@ export default function WelcomeView(): React.JSX.Element {
             <button className="welcome-chip" onClick={() => void browse()} title={cwd || t('welcomePickProject')}>
               📁 {projectName || t('welcomePickProject')}
             </button>
-            {providers.length > 0 && (
+            <select
+              className="welcome-mini-select"
+              value={engine}
+              onChange={(e) => {
+                setEngine(e.target.value as EngineKind | '')
+                setProviderId('')
+                setModel('')
+              }}
+            >
+              <option value="" disabled>
+                {t('selectEnginePlaceholder')}
+              </option>
+              {engines.map((en) => (
+                <option key={en.kind} value={en.kind} disabled={!en.available}>
+                  {en.label}
+                </option>
+              ))}
+            </select>
+            {requiresProvider && (
               <select
                 className="welcome-mini-select"
                 value={providerId}
@@ -107,10 +144,13 @@ export default function WelcomeView(): React.JSX.Element {
                   setModel('')
                 }}
               >
-                <option value="">官方</option>
+                <option value="" disabled>
+                  {t('selectProviderPlaceholder')}
+                </option>
                 {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
+                  <option key={p.id} value={p.id} disabled={!p.hasToken}>
                     {p.name}
+                    {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
                   </option>
                 ))}
               </select>
@@ -126,13 +166,18 @@ export default function WelcomeView(): React.JSX.Element {
                 </option>
               ))}
             </select>
-            <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {modelOptions.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
+            {requiresProvider && (
+              <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
+                <option value="" disabled>
+                  {t('selectModelPlaceholder')}
                 </option>
-              ))}
-            </select>
+                {modelOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
               className="welcome-mini-select"
               value={permissionMode}

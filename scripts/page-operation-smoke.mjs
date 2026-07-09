@@ -13,6 +13,9 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-page-smoke-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const port = await findFreePort(9400)
+const PAGE_SMOKE_PROVIDER_ID = 'page-smoke-openai'
+const PAGE_SMOKE_PROVIDER_NAME = 'Page Smoke OpenAI'
+const PAGE_SMOKE_MODEL = 'page-smoke-model'
 const electronBin =
   process.platform === 'win32'
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -69,6 +72,7 @@ writeFileSync(
   ].join('\n')
 )
 initGitProject(projectDir)
+writePageSmokeUserData()
 
 const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
 const app = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
@@ -132,6 +136,10 @@ try {
   await check(cdp, 'settings modal opens and plugin/migration tabs are reachable', async () => {
     await clickByText(cdp, '设置')
     await waitForText(cdp, '设置')
+    await clickByText(cdp, '控制室 / 外观')
+    await waitForText(cdp, '工作台布局')
+    await waitForAriaLabel(cdp, '拖拽调整侧栏宽度')
+    await waitForText(cdp, '聊天缩放')
     await clickByText(cdp, '插件')
     await waitForText(cdp, '插件')
     await clickByText(cdp, '迁移')
@@ -145,11 +153,47 @@ try {
     await waitForText(cdp, '新建会话')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
+    await chooseSelectOptionByText(cdp, PAGE_SMOKE_PROVIDER_NAME)
+    await chooseSelectOptionByText(cdp, PAGE_SMOKE_MODEL)
     await clickByText(cdp, '创建')
     await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
-    await waitForText(cdp, '缺少 API Key', 10_000) // 文案改为按 Provider 名,断言宽松匹配
   })
   await screenshot(cdp, '03-session')
+
+  await check(cdp, 'chat layout controls resize and density toggle are interactive', async () => {
+    await waitForAriaLabel(cdp, '聊天布局控制', 10_000)
+    await clickByAriaLabel(cdp, '放大聊天内容')
+    await waitForText(cdp, '105%', 5_000)
+    await clickByAriaLabel(cdp, '切换紧凑聊天密度')
+    const state = await evalValue(
+      cdp,
+      `(() => ({
+        compact: document.querySelector('.chat')?.classList.contains('chat-density-compact') ?? false,
+        scale: getComputedStyle(document.querySelector('.chat')).getPropertyValue('--chat-scale').trim()
+      }))()`
+    )
+    assert(state.compact === true, `compact chat density not applied: ${JSON.stringify(state)}`)
+    assert(state.scale === '1.05', `chat scale not persisted on root: ${JSON.stringify(state)}`)
+    await clickByAriaLabel(cdp, '重置聊天缩放')
+    await waitForText(cdp, '100%', 5_000)
+  })
+  await screenshot(cdp, '03-layout-controls')
+
+  await check(cdp, 'sidebar layout controls resize collapse and expand', async () => {
+    const before = await sidebarState(cdp)
+    await dragByAriaLabel(cdp, '拖拽调整侧栏宽度', 60, 0)
+    const resized = await sidebarState(cdp)
+    assert(resized.width > before.width + 24, `sidebar width did not grow: ${JSON.stringify({ before, resized })}`)
+    await clickByAriaLabel(cdp, '收回侧栏')
+    const collapsed = await sidebarState(cdp)
+    assert(collapsed.collapsed === true, `sidebar did not collapse: ${JSON.stringify(collapsed)}`)
+    assert(collapsed.width <= 80, `collapsed sidebar width too large: ${JSON.stringify(collapsed)}`)
+    await clickByAriaLabel(cdp, '展开侧栏')
+    const expanded = await sidebarState(cdp)
+    assert(expanded.collapsed === false, `sidebar did not expand: ${JSON.stringify(expanded)}`)
+    assert(expanded.width >= 280, `expanded sidebar did not restore width: ${JSON.stringify(expanded)}`)
+  })
+  await screenshot(cdp, '03-sidebar-layout')
 
   let worktreeRecord = null
   await check(cdp, 'managed worktree registry is created for git projects', async () => {
@@ -169,6 +213,16 @@ try {
     await waitForText(cdp, 'git apply --check passed.', 10_000)
   })
   await screenshot(cdp, '04-worktree-merge')
+
+  await check(cdp, 'tool panel layout controls resize and collapse', async () => {
+    const before = await toolPanelState(cdp)
+    await dragByAriaLabel(cdp, '拖拽调整工具面板宽度', -80, 0, { yRatio: 0.25 })
+    const resized = await toolPanelState(cdp)
+    assert(resized.width > before.width + 40, `tool panel width did not grow: ${JSON.stringify({ before, resized })}`)
+    await clickByAriaLabel(cdp, '收回工具面板')
+    await waitForNoAriaLabel(cdp, '收回工具面板', 5_000)
+  })
+  await screenshot(cdp, '04-tool-panel-layout')
 
   await check(cdp, 'workbench panels open from chat toolbar', async () => {
     // 常显图标(按 aria-label 点击):文件 / 终端
@@ -248,8 +302,8 @@ try {
 
   await check(cdp, 'office view loads without blank first screen', async () => {
     await bringPageToFront(cdp)
-    await clickByText(cdp, '3D 办公区')
-    await waitForText(cdp, '办公区', 10_000)
+    await clickByText(cdp, 'Agent 控制室')
+    await waitForText(cdp, 'Agent 控制室', 10_000)
     await bringPageToFront(cdp)
     const canvasStats = await waitForCanvasPixels(cdp)
     report.officeCanvas = canvasStats
@@ -279,6 +333,43 @@ if (failed.length > 0) {
   process.exitCode = 1
 } else {
   console.log(`page operation smoke ok: ${runDir}`)
+}
+
+function writePageSmokeUserData() {
+  mkdirSync(userDataDir, { recursive: true })
+  writeFileSync(
+    path.join(userDataDir, 'providers.json'),
+    JSON.stringify(
+      [
+        {
+          id: PAGE_SMOKE_PROVIDER_ID,
+          name: PAGE_SMOKE_PROVIDER_NAME,
+          baseUrl: 'http://127.0.0.1:1',
+          encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
+          models: [PAGE_SMOKE_MODEL],
+          openaiProtocol: 'responses',
+          note: 'Page smoke provider; no network call is expected.',
+          createdAt: Date.now()
+        }
+      ],
+      null,
+      2
+    )
+  )
+  writeFileSync(
+    path.join(userDataDir, 'settings.json'),
+    JSON.stringify(
+      {
+        defaultModel: '',
+        defaultPermissionMode: 'default',
+        defaultProviderId: '',
+        language: 'zh',
+        theme: 'dark'
+      },
+      null,
+      2
+    )
+  )
 }
 
 async function check(cdp, name, fn) {
@@ -322,6 +413,72 @@ async function clickByAriaLabel(cdp, label) {
   )
   assert(result?.ok, `aria-label button not found: ${label}`)
   await sleep(250)
+}
+
+async function dragByAriaLabel(cdp, label, deltaX, deltaY, origin = {}) {
+  const point = await evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('[aria-label=${JSON.stringify(label)}]');
+      if (!el) return { ok: false, text: document.body.innerText.slice(0, 2000) };
+      const rect = el.getBoundingClientRect();
+      const xRatio = ${JSON.stringify(origin.xRatio ?? 0.5)};
+      const yRatio = ${JSON.stringify(origin.yRatio ?? 0.5)};
+      return { ok: true, x: rect.left + rect.width * xRatio, y: rect.top + rect.height * yRatio };
+    })()`
+  )
+  assert(point?.ok, `draggable aria-label not found: ${label}\n${point?.text ?? ''}`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.x + deltaX,
+    y: point.y + deltaY,
+    button: 'left',
+    buttons: 1
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x + deltaX,
+    y: point.y + deltaY,
+    button: 'left',
+    clickCount: 1
+  })
+  await sleep(300)
+}
+
+async function sidebarState(cdp) {
+  return evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('.sidebar');
+      if (!el) return { ok: false, collapsed: false, width: 0 };
+      return {
+        ok: true,
+        collapsed: el.classList.contains('sidebar-collapsed'),
+        width: Number.parseFloat(getComputedStyle(el).width)
+      };
+    })()`
+  )
+}
+
+async function toolPanelState(cdp) {
+  return evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('.workbench-side');
+      if (!el) return { ok: false, width: 0 };
+      return {
+        ok: true,
+        width: Number.parseFloat(getComputedStyle(el).width)
+      };
+    })()`
+  )
 }
 
 async function clickByText(cdp, text) {
@@ -456,22 +613,32 @@ async function setInputByPlaceholder(cdp, placeholder, value) {
   assert(result === true, `input not found for placeholder: ${placeholder}`)
 }
 
-async function chooseSelectOptionByText(cdp, text) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const needle = ${JSON.stringify(text)};
-      for (const select of document.querySelectorAll('select')) {
-        const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
-        if (!option) continue;
-        select.value = option.value;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }
-      return false;
-    })()`
-  )
-  assert(result === true, `select option not found: ${text}`)
+async function chooseSelectOptionByText(cdp, text, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const result = await evalValue(
+      cdp,
+      `(() => {
+        const needle = ${JSON.stringify(text)};
+        for (const select of document.querySelectorAll('select')) {
+          const rect = select.getBoundingClientRect();
+          const style = window.getComputedStyle(select);
+          if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') continue;
+          const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          if (top !== select && !select.contains(top)) continue;
+          const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
+          if (!option) continue;
+          select.value = option.value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        return false;
+      })()`
+    )
+    if (result === true) return
+    await sleep(150)
+  }
+  throw new Error(`select option not found: ${text}`)
 }
 
 async function focusComposer(cdp) {
@@ -522,6 +689,19 @@ async function waitForAriaLabel(cdp, label, timeout = 5000) {
     await sleep(150)
   }
   throw new Error(`aria-label not found: ${label}`)
+}
+
+async function waitForNoAriaLabel(cdp, label, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const found = await evalValue(
+      cdp,
+      `!!document.querySelector('[aria-label=${JSON.stringify(label)}]')`
+    )
+    if (!found) return
+    await sleep(150)
+  }
+  throw new Error(`aria-label still found: ${label}`)
 }
 
 async function waitForCanvasPixels(cdp, timeout = 10_000) {

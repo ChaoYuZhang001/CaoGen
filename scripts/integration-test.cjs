@@ -154,7 +154,7 @@ function mockNativeImage(empty) {
 //   含 always429 → 每轮返回 429 错误 result
 //   含 slow429  → 延迟 80ms 后返回 429(给 interrupt 留时序窗口)
 //   含 crashmid → 第一轮消息后流抛异常(模拟进程崩溃)
-//   其余(含官方 = 无 BASE_URL)→ 正常成功轮
+//   其余(含未设置 BASE_URL)→ 正常成功轮
 const sdkLog = []
 function mockQuery({ prompt, options }) {
   const base = (options && options.env && options.env.ANTHROPIC_BASE_URL) || ''
@@ -397,7 +397,7 @@ async function main() {
   ], null, 2))
 
   function newSession(providerId, model) {
-    const meta = AS.newSessionMeta({ cwd: tmpRoot, model, providerId, permissionMode: 'default', title: 'itest' })
+    const meta = AS.newSessionMeta({ cwd: tmpRoot, engine: 'claude', model, providerId, permissionMode: 'default', title: 'itest' })
     const events = []
     const s = new AS.AgentSession(meta, (event, seq) => events.push({ seq, event }))
     return { meta, events, s, kinds: () => events.map((e) => e.event.kind) }
@@ -549,7 +549,7 @@ async function main() {
         listProjects: async () => [],
         listPendingPermissions: async () => [],
         getTranscript: async () => [],
-        createSession: async (opts) => AS.newSessionMeta({ cwd: opts.cwd, model: '', providerId: '', permissionMode: 'default', title: 't' })
+        createSession: async (opts) => AS.newSessionMeta({ cwd: opts.cwd, engine: 'claude', model: 'm-b', providerId: 'prov-b', permissionMode: 'default', title: 't' })
       }
     }
     const store = M('renderer/src/store.js')
@@ -575,7 +575,7 @@ async function main() {
     eq(sess.streamText, '', 'assistant 后应清空流式缓冲')
     // failover 事件清理运行态
     st.getState().handleEvent(meta.id, { kind: 'text-delta', text: 'zzz' }, 5)
-    st.getState().handleEvent(meta.id, { kind: 'failover', fromProviderId: 'a', toProviderId: '', fromName: '甲', toName: '官方', reason: '限流/过载' }, 6)
+    st.getState().handleEvent(meta.id, { kind: 'failover', fromProviderId: 'a', toProviderId: '', fromName: '甲', toName: '未选择 Provider', reason: '限流/过载' }, 6)
     sess = st.getState().sessions[meta.id]
     eq(sess.streamText, '', 'failover 应清空流式缓冲')
     assert(sess.items.some((i) => i.kind === 'failover'), 'failover 未入聊天流')
@@ -678,7 +678,7 @@ async function main() {
       .map((entry) => entry.payload.event)
     const repoDir = mkRepo('subagents-repo')
     try {
-      const parent = sm.create({ cwd: repoDir, title: 'parent', isolated: true, providerId: 'prov-b', model: 'm-b' })
+      const parent = sm.create({ cwd: repoDir, title: 'parent', isolated: true, engine: 'claude', providerId: 'prov-b', model: 'm-b' })
       createdIds.push(parent.id)
       await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
       const result = sm.dispatchSubagents(parent.id, {
@@ -734,7 +734,7 @@ async function main() {
     fakeWindows.push(win)
     try {
       const repoDir = mkRepo('plan-t3-subagents')
-      const parent = sm.create({ cwd: repoDir, title: 'plan parent', isolated: false, providerId: 'prov-b', model: 'm-b' })
+      const parent = sm.create({ cwd: repoDir, title: 'plan parent', isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b' })
       await waitFor(() => sm.get(parent.id)?.meta.sdkSessionId, 3000, '等待 parent init')
       const result = sm.dispatchSubagents(parent.id, {
         tasks: [{ id: 'api', role: 'backend', prompt: '实现接口并返回结果' }]
@@ -788,7 +788,7 @@ async function main() {
     await rs.createRoutine(path.join(userData, 'routines'), {
       id: 'routine-plan-t4', name: 'Failed nightly routine', prompt: 'failed validation needs repair', projectCwd: projectDir, schedule: '@daily', enabled: true
     })
-    const meta = sm.create({ cwd: projectDir, title: 'suggestions parent', isolated: false, providerId: 'prov-b', model: 'm-b' })
+    const meta = sm.create({ cwd: projectDir, title: 'suggestions parent', isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b' })
     await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000)
     const suggestions = await ipcHandlers.get('startSuggestions:get')({}, meta.id)
     const ids = new Set(suggestions.map((item) => item.id))
@@ -816,7 +816,7 @@ async function main() {
     const win = fakeWindow(bucket)
     fakeWindows.push(win)
     try {
-      const meta = sm.create({ cwd: tmpRoot, title: 'memory suggestion', isolated: false, providerId: 'prov-b', model: 'm-b' })
+      const meta = sm.create({ cwd: tmpRoot, title: 'memory suggestion', isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b' })
       await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000)
       await ipcHandlers.get('sessions:send')({}, meta.id, { text: '请记住以后默认使用 pnpm' })
       await waitFor(() => bucket.some((entry) => entry.channel === 'memory:suggestion'), 2000, '等待 memory:suggestion')
@@ -943,7 +943,7 @@ async function main() {
       .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
       .map((entry) => entry.payload.event)
     try {
-      const blocked = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-provider' })
+      const blocked = sm.create({ cwd: tmpRoot, isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b', title: 'budget-provider' })
       createdIds.push(blocked.id)
       const blockedSession = sm.get(blocked.id)
       blockedSession.meta.costUsd = 0.02
@@ -960,7 +960,7 @@ async function main() {
       await waitFor(() => eventsFor(blocked.id).some((e) => e.kind === 'turn-result' && !e.isError), 3000)
 
       providersMod.updateProvider('prov-b', { budgetUsd: 0 })
-      const globalBlocks = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-global' })
+      const globalBlocks = sm.create({ cwd: tmpRoot, isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b', title: 'budget-global' })
       createdIds.push(globalBlocks.id)
       const globalSession = sm.get(globalBlocks.id)
       globalSession.meta.costUsd = 0.6
@@ -970,7 +970,7 @@ async function main() {
       assert(String(globalSession.meta.lastError).includes('预算上限 $0.50'), `global budget 错误不明确:${globalSession.meta.lastError}`)
 
       settingsMod.updateSettings({ budgetUsdPerSession: 0, preventDisplaySleep: true })
-      const noBudget = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'budget-off' })
+      const noBudget = sm.create({ cwd: tmpRoot, isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b', title: 'budget-off' })
       createdIds.push(noBudget.id)
       const noBudgetSession = sm.get(noBudget.id)
       noBudgetSession.meta.costUsd = 999
@@ -997,7 +997,14 @@ async function main() {
       process.env.OPENAI_API_KEY = 'test-openai-key'
       process.env.OPENAI_BASE_URL = `http://127.0.0.1:${server.address().port}`
       try {
-        const openai = sm.create({ cwd: tmpRoot, isolated: false, providerId: '', engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai' })
+        const openaiProvider = providersMod.createProvider({
+          name: 'OpenAI mock',
+          baseUrl: process.env.OPENAI_BASE_URL,
+          token: process.env.OPENAI_API_KEY,
+          models: ['gpt-4.1-mini'],
+          openaiProtocol: 'responses'
+        })
+        const openai = sm.create({ cwd: tmpRoot, isolated: false, providerId: openaiProvider.id, engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai' })
         createdIds.push(openai.id)
         const openaiSession = sm.get(openai.id)
         await waitFor(() => openaiSession.meta.sdkSessionId, 3000)
@@ -1011,7 +1018,7 @@ async function main() {
         assert(cost > 0, `OpenAI usage 未在公共层累计费用:${cost}`)
         settingsMod.updateSettings({ preventDisplaySleep: false })
         const disabledPowerStarts = powerBlockerState.starts
-        const openaiNoSleep = sm.create({ cwd: tmpRoot, isolated: false, providerId: '', engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai-no-sleep' })
+        const openaiNoSleep = sm.create({ cwd: tmpRoot, isolated: false, providerId: openaiProvider.id, engine: 'openai', model: 'gpt-4.1-mini', title: 'budget-openai-no-sleep' })
         createdIds.push(openaiNoSleep.id)
         await waitFor(() => sm.get(openaiNoSleep.id)?.meta.sdkSessionId, 3000)
         sm.send(openaiNoSleep.id, 'openai should not start sleep blocker')
@@ -1054,7 +1061,7 @@ async function main() {
       .map((entry) => entry.payload.event)
     const createdIds = []
     try {
-      const meta = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', title: 'checkpoint-history' })
+      const meta = sm.create({ cwd: tmpRoot, isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b', title: 'checkpoint-history' })
       createdIds.push(meta.id)
       const session = sm.get(meta.id)
       await waitFor(() => session.meta.sdkSessionId, 3000)
@@ -1079,7 +1086,7 @@ async function main() {
 
       sm.close(meta.id)
       const beforeResumeCreates = sdkLog.length
-      const resumed = sm.create({ cwd: tmpRoot, isolated: false, providerId: 'prov-b', model: 'm-b', resumeSdkSessionId: sdkSessionId, title: 'checkpoint-resumed' })
+      const resumed = sm.create({ cwd: tmpRoot, isolated: false, engine: 'claude', providerId: 'prov-b', model: 'm-b', resumeSdkSessionId: sdkSessionId, title: 'checkpoint-resumed' })
       createdIds.push(resumed.id)
       await waitFor(
         () => sdkLog.slice(beforeResumeCreates).some((entry) => entry.resume === sdkSessionId && entry.resumeSessionAt === firstCheckpoint),
@@ -1124,18 +1131,24 @@ async function main() {
       })
     })
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const baseUrl = `http://127.0.0.1:${server.address().port}`
-    process.env.OPENAI_API_KEY = 'test-openai-key'
-    process.env.OPENAI_BASE_URL = baseUrl
-    try {
-      const events = []
-      const meta = AS.newSessionMeta({
-        cwd: tmpRoot,
-        model: 'gpt-4.1-mini',
-        providerId: '',
-        engine: 'openai',
-        permissionMode: 'default',
-        title: 'openai-itest'
+	    const baseUrl = `http://127.0.0.1:${server.address().port}`
+	    const providersMod = M('main/providers.js')
+	    const openaiProvider = providersMod.createProvider({
+	      name: 'OpenAI direct engine mock',
+	      baseUrl,
+	      token: 'test-openai-key',
+	      models: ['gpt-4.1-mini'],
+	      openaiProtocol: 'responses'
+	    })
+	    try {
+	      const events = []
+	      const meta = AS.newSessionMeta({
+	        cwd: tmpRoot,
+	        model: 'gpt-4.1-mini',
+	        providerId: openaiProvider.id,
+	        engine: 'openai',
+	        permissionMode: 'default',
+	        title: 'openai-itest'
       })
       const engine = openAIEngineFactory.create(meta, (event, seq) => events.push({ event, seq }))
       await engine.start()
@@ -1151,12 +1164,10 @@ async function main() {
       eq(result.usage.cacheRead, 3, 'OpenAI cached usage')
       eq(meta.contextTokens, 14, 'OpenAI context tokens')
       engine.dispose()
-    } finally {
-      await new Promise((resolve) => server.close(resolve))
-      delete process.env.OPENAI_API_KEY
-      delete process.env.OPENAI_BASE_URL
-    }
-  })
+	    } finally {
+	      await new Promise((resolve) => server.close(resolve))
+	    }
+	  })
 
   // ---- T14 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
   await test('T14 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
@@ -1178,12 +1189,14 @@ async function main() {
     const port = server.address().port
     const base = `http://127.0.0.1:${port}`
     const ids = await providers.fetchModels({ baseUrl: base, token: 'good-key' })
-    eq(JSON.stringify(ids), JSON.stringify(['model-x', 'model-y']), 'data 形状 + 去重')
+    assert(ids.ok, `fetchModels data 形状失败:${JSON.stringify(ids)}`)
+    eq(JSON.stringify(ids.models), JSON.stringify(['model-x', 'model-y']), 'data 形状 + 去重')
     const bare = await providers.fetchModels({ baseUrl: `${base}/bare`, token: 'good-key' })
-    eq(JSON.stringify(bare), JSON.stringify(['bare-1', 'bare-2']), '裸数组形状')
-    let threw = false
-    try { await providers.fetchModels({ baseUrl: base, token: 'bad-key' }) } catch (e) { threw = /401/.test(String(e.message)) }
-    assert(threw, '401 未按预期报错')
+    assert(bare.ok, `fetchModels 裸数组失败:${JSON.stringify(bare)}`)
+    eq(JSON.stringify(bare.models), JSON.stringify(['bare-1', 'bare-2']), '裸数组形状')
+    const authFail = await providers.fetchModels({ baseUrl: base, token: 'bad-key' })
+    assert(!authFail.ok && authFail.error?.kind === 'auth' && authFail.error?.status === 401, `401 未按结构化 auth 报错:${JSON.stringify(authFail)}`)
+    eq(JSON.stringify(authFail.models), JSON.stringify([]), '失败时不得返回陈旧模型列表')
     server.close()
   })
 
@@ -1290,16 +1303,16 @@ async function main() {
           kind: 'routing',
           model: this.meta.model,
           providerId: this.meta.providerId,
-          reason: 'behavior smoke route plan',
-          crossValidationPlan: {
-            enabled: true,
-            primary: { providerId: 'primary-provider', providerName: 'Primary', model: 'primary-model' },
-            validators: [
-              { providerId: 'review-provider', providerName: 'Reviewer', model: 'review-model' },
-              { providerId: 'arb-provider', providerName: 'Arbitrator', model: 'arb-model' }
-            ],
-            policy: 'review-primary',
-            reason: 'critical behavior smoke'
+	          reason: 'behavior smoke route plan',
+	          crossValidationPlan: {
+	            enabled: true,
+	            primary: { providerId: 'prov-b', providerName: 'Primary', model: 'primary-model' },
+	            validators: [
+	              { providerId: 'prov-a', providerName: 'Reviewer', model: 'review-model' },
+	              { providerId: 'prov-slow', providerName: 'Arbitrator', model: 'arb-model' }
+	            ],
+	            policy: 'review-primary',
+	            reason: 'critical behavior smoke'
           }
         }, ++this.seq)
         this.finish('Primary implementation done.')
@@ -1338,15 +1351,15 @@ async function main() {
     const eventsFor = (id) => bucket
       .filter((entry) => entry.channel === 'session:event' && entry.payload.sessionId === id)
       .map((entry) => entry.payload.event)
-    try {
-      const meta = sm.create({
-        cwd: tmpRoot,
-        isolated: false,
-        providerId: 'primary-provider',
-        model: 'primary-model',
-        engine: 'p2-cross-validation-mock',
-        title: 'p2 cross validation behavior'
-      })
+	    try {
+	      const meta = sm.create({
+	        cwd: tmpRoot,
+	        isolated: false,
+	        providerId: 'prov-b',
+	        model: 'primary-model',
+	        engine: 'p2-cross-validation-mock',
+	        title: 'p2 cross validation behavior'
+	      })
       createdIds.push(meta.id)
       await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000, 'wait cross-validation parent init')
       sm.send(meta.id, 'implement critical migration')
@@ -1359,10 +1372,10 @@ async function main() {
       createdIds.push(review.id, arbitration.id)
       eq(review.permissionMode, 'plan', 'model-review child must be plan-only')
       eq(arbitration.permissionMode, 'plan', 'model-arbitration child must be plan-only')
-      eq(review.providerId, 'review-provider', 'review provider')
-      eq(review.model, 'review-model', 'review model')
-      eq(arbitration.providerId, 'arb-provider', 'arbitration provider')
-      eq(arbitration.model, 'arb-model', 'arbitration model')
+	      eq(review.providerId, 'prov-a', 'review provider')
+	      eq(review.model, 'review-model', 'review model')
+	      eq(arbitration.providerId, 'prov-slow', 'arbitration provider')
+	      eq(arbitration.model, 'arb-model', 'arbitration model')
       assert(eventsFor(meta.id).some((event) => event.kind === 'hook-event' && event.event === 'model-cross-validation'), 'parent missing model-cross-validation hook event')
       assert(eventsFor(meta.id).some((event) => event.kind === 'hook-event' && event.event === 'model-cross-validation-arbitration'), 'parent missing arbitration hook event')
       const reviewPrompt = sentInputs.find((item) => item.childRole === 'model-review')?.text || ''
@@ -1408,14 +1421,15 @@ async function main() {
         }
       }
       return out
-    }
-    try {
-      const meta = sm.create({
-        cwd: projectDir,
-        isolated: false,
-        providerId: 'prov-b',
-        model: 'm-b',
-        title: 'Tailwind Config Learning Loop'
+	    }
+	    try {
+	      const meta = sm.create({
+	        cwd: projectDir,
+	        isolated: false,
+	        engine: 'claude',
+	        providerId: 'prov-b',
+	        model: 'm-b',
+	        title: 'Tailwind Config Learning Loop'
       })
       createdIds.push(meta.id)
       await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000, 'wait auto skill session init')

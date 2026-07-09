@@ -13,6 +13,7 @@ const CYAN = '#8fe9ff'
 const COUNTER = '#1e1e1e'
 const METAL = '#2c313c'
 const WHITE = '#f4f4f4'
+const WATER = '#9fe8ff'
 
 // 杯子摆位(相对台面),闭包外定义避免每帧重建
 const CUPS: Array<{ x: number; z: number; c: string }> = [
@@ -47,6 +48,22 @@ export default function CoffeeStation({
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
+      {/* 机器人补水停靠垫:低矮不挡视线,把茶水角从道具变成可抵达服务点。 */}
+      <group position={[-0.52, 0.018, 0.78]}>
+        <mesh receiveShadow>
+          <cylinderGeometry args={[0.34, 0.34, 0.018, 36]} />
+          <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.22} transparent opacity={0.28} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, 0.018, 0]}>
+          <torusGeometry args={[0.28, 0.012, 8, 36]} />
+          <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.42} transparent opacity={0.7} toneMapped={false} />
+        </mesh>
+        <mesh position={[0, 0.024, -0.02]} rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.08, 0.18, 3]} />
+          <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.46} transparent opacity={0.68} toneMapped={false} />
+        </mesh>
+      </group>
+
       {/* ---- 小台面(柜体 + 台板) ---- */}
       {/* 柜体 */}
       <mesh position={[0, 0.36, 0]} castShadow receiveShadow>
@@ -163,6 +180,35 @@ export default function CoffeeStation({
           <boxGeometry args={[0.22, 0.02, 0.06]} />
           <meshStandardMaterial color="#101216" metalness={0.3} roughness={0.6} />
         </mesh>
+        {/* 补水信标:几何水滴 + 短光条,不使用文字标签。 */}
+        <group position={[0, 1.58, 0.05]}>
+          <mesh position={[0, 0.045, 0]}>
+            <sphereGeometry args={[0.06, 18, 18]} />
+            <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.36} transparent opacity={0.88} toneMapped={false} />
+          </mesh>
+          <mesh position={[0, -0.025, 0]} rotation={[Math.PI, 0, 0]}>
+            <coneGeometry args={[0.052, 0.12, 18]} />
+            <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.32} transparent opacity={0.84} toneMapped={false} />
+          </mesh>
+          <mesh position={[0, -0.135, 0]}>
+            <boxGeometry args={[0.26, 0.018, 0.014]} />
+            <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.48} toneMapped={false} />
+          </mesh>
+        </group>
+      </group>
+
+      {/* 窄杯架:补足真实茶水间细节,也让远景更容易识别这里不是普通柜子。 */}
+      <group position={[-0.26, 1.02, 0.255]}>
+        <mesh castShadow>
+          <boxGeometry args={[0.42, 0.055, 0.06]} />
+          <meshStandardMaterial color="#303845" metalness={0.36} roughness={0.52} />
+        </mesh>
+        {[-0.14, 0, 0.14].map((x) => (
+          <mesh key={x} position={[x, 0.055, 0.01]} castShadow>
+            <cylinderGeometry args={[0.032, 0.026, 0.07, 14]} />
+            <meshStandardMaterial color="#dce7f2" roughness={0.5} metalness={0.08} />
+          </mesh>
+        ))}
       </group>
     </group>
   )

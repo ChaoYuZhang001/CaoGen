@@ -130,13 +130,13 @@ export default function ControlCenter({
             </select>
           </label>
           <label className="field-label">
-            默认 Provider
+            Provider 偏好
             <select
               className="select select-block"
               value={settings.defaultProviderId}
               onChange={(event) => onSettingsPatch({ defaultProviderId: event.target.value })}
             >
-              <option value="">官方 Anthropic</option>
+              <option value="">不设置 Provider 偏好</option>
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
@@ -145,12 +145,13 @@ export default function ControlCenter({
             </select>
           </label>
           <label className="field-label">
-            默认模型
+            模型偏好
             <select
               className="select select-block"
               value={settings.defaultModel}
               onChange={(event) => onSettingsPatch({ defaultModel: event.target.value })}
             >
+              <option value="">不设置模型偏好</option>
               {MODEL_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}

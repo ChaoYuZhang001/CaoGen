@@ -10,7 +10,7 @@ type Dict = Record<string, { zh: string; en: string }>
 const DICT: Dict = {
   // 导航 / 通用
   newSession: { zh: '+ 新建会话', en: '+ New Session' },
-  office3d: { zh: '🏢 3D 办公区', en: '🏢 3D Office' },
+  office3d: { zh: 'Agent 控制室', en: 'Agent Control Room' },
   settings: { zh: '⚙ 设置', en: '⚙ Settings' },
   listView: { zh: '列表视图', en: 'List View' },
   ongoing: { zh: '进行中', en: 'Active' },
@@ -21,6 +21,9 @@ const DICT: Dict = {
   archived: { zh: '归档', en: 'Archived' },
   sidebarSearchPlaceholder: { zh: '搜索标题、项目或路径', en: 'Search title, project or path' },
   openSidebar: { zh: '打开侧栏', en: 'Open sidebar' },
+  collapseSidebar: { zh: '收回侧栏', en: 'Collapse sidebar' },
+  expandSidebar: { zh: '展开侧栏', en: 'Expand sidebar' },
+  resizeSidebar: { zh: '拖拽调整侧栏宽度', en: 'Drag to resize sidebar' },
   noRecentSessions: { zh: '暂无最近会话', en: 'No recent sessions' },
   noArchivedSessions: { zh: '暂无归档会话', en: 'No archived sessions' },
   noMatchingSessions: { zh: '没有匹配的会话', en: 'No matching sessions' },
@@ -64,7 +67,14 @@ const DICT: Dict = {
   permissionMode: { zh: '权限模式', en: 'Permission mode' },
   stop: { zh: '⏹ 停止', en: '⏹ Stop' },
   closeSession: { zh: '关闭会话', en: 'Close session' },
-  providerOfficial: { zh: '官方', en: 'Official' },
+  chatLayoutControls: { zh: '聊天布局控制', en: 'Chat layout controls' },
+  zoomOutChat: { zh: '缩小聊天内容', en: 'Zoom chat out' },
+  zoomInChat: { zh: '放大聊天内容', en: 'Zoom chat in' },
+  resetChatZoom: { zh: '重置聊天缩放', en: 'Reset chat zoom' },
+  toggleCompactChat: { zh: '切换紧凑聊天密度', en: 'Toggle compact chat density' },
+  resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
+  collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
+  providerOfficial: { zh: '未选择 Provider', en: 'No Provider selected' },
   unknownProvider: { zh: '未知 Provider', en: 'Unknown provider' },
   provider: { zh: '厂商', en: 'Provider' },
   model: { zh: '模型', en: 'Model' },
@@ -143,23 +153,44 @@ const DICT: Dict = {
   browse: { zh: '浏览…', en: 'Browse…' },
   providerLabel: { zh: '厂商 / Provider', en: 'Provider' },
   engineLabel: { zh: 'Agent 引擎', en: 'Agent engine' },
-  officialAnthropicDefault: { zh: '官方 Anthropic(默认登录)', en: 'Official Anthropic (default login)' },
+  explicitEngineRequired: { zh: '请选择 Agent 引擎', en: 'Select an Agent engine' },
+  explicitProviderRequired: { zh: '请选择已配置 API key 的 Provider', en: 'Select a Provider with an API key' },
+  explicitModelRequired: { zh: '请选择模型或自动调度', en: 'Select a model or auto route' },
+  selectEnginePlaceholder: { zh: '请选择 Agent 引擎', en: 'Select Agent engine' },
+  selectProviderPlaceholder: { zh: '请选择 Provider', en: 'Select Provider' },
+  selectModelPlaceholder: { zh: '请选择模型', en: 'Select model' },
+  localAnthropicLogin: { zh: '未选择 Provider', en: 'No Provider selected' },
+  noDefaultProvider: { zh: '不设置 Provider 偏好', en: 'No Provider preference' },
+  noDefaultModel: { zh: '不设置模型偏好', en: 'No model preference' },
+  officialAnthropicDefault: { zh: '未选择 Provider', en: 'No Provider selected' },
   noKeyConfigured: { zh: '未配置密钥', en: 'No API key' },
   autoRoute: { zh: '🧭 自动调度', en: '🧭 Auto route' },
   errNeedProjectDir: { zh: '请选择项目目录', en: 'Please pick a project directory' },
   creating: { zh: '创建中…', en: 'Creating…' },
   create: { zh: '创建', en: 'Create' },
-  // 3D 办公区
-  officeTitle: { zh: '🏢 办公区', en: '🏢 Office' },
+  // Agent 控制室
+  officeTitle: { zh: 'Agent 控制室', en: 'Agent Control Room' },
   officeHint: {
-    zh: '拖拽旋转 · 滚轮缩放 · 点击工位进入会话',
-    en: 'Drag to rotate · scroll to zoom · click a desk to open the session'
+    zh: '单击选中 · 双击进入 · 预设镜头',
+    en: 'Select · open · camera presets'
   },
-  newShort: { zh: '+ 新建', en: '+ New' },
+  newShort: { zh: '新建', en: 'New' },
   officeEmpty: {
-    zh: '办公区还没有工位。新建一个会话,看它入职开工。',
-    en: 'No desks yet. Start a session and watch it clock in.'
+    zh: '还没有控制台。新建会话后,这里会显示 Agent 状态。',
+    en: 'No consoles yet. Start a session to see agent status here.'
   },
+  officeMetricSessions: { zh: '会话', en: 'Sessions' },
+  officeMetricWorking: { zh: '运行', en: 'Running' },
+  officeMetricAwaiting: { zh: '待授权', en: 'Approvals' },
+  officeMetricCompleted: { zh: '完成', en: 'Done' },
+  officeMetricPackets: { zh: '任务流', en: 'Task flow' },
+  officePresetOverview: { zh: '总览', en: 'Overview' },
+  officePresetAgent: { zh: 'Agent', en: 'Agent' },
+  officePresetFacilities: { zh: '设施', en: 'Facilities' },
+  officeSelectedAgent: { zh: '当前 Agent', en: 'Selected Agent' },
+  officeOpenSession: { zh: '进入会话', en: 'Open Session' },
+  officeStatusIdle: { zh: '待机', en: 'Idle' },
+  officeStatusCompleted: { zh: '完成', en: 'Done' },
   activityWorking: { zh: '工作中', en: 'Working' },
   activityAwaiting: { zh: '待授权', en: 'Needs approval' },
   activityError: { zh: '异常', en: 'Error' },
@@ -325,7 +356,7 @@ const DICT: Dict = {
   subagentsShort: { zh: '子 Agent', en: 'Subagents' },
   pluginsShort: { zh: '插件', en: 'Plugins' },
   routinesShort: { zh: 'Routines', en: 'Routines' },
-  routineEngineDefault: { zh: '默认引擎', en: 'Default engine' },
+  routineEngineDefault: { zh: '不设置引擎偏好', en: 'No engine preference' },
   routineBudgetLabel: { zh: 'Routine 预算上限 ($)', en: 'Routine budget limit ($)' },
   routineBudgetHint: {
     zh: '达到预算后会拦截 Routine 下一轮发送；0 表示不限制。',
@@ -346,7 +377,7 @@ const DICT: Dict = {
   tabPermissions: { zh: '权限', en: 'Permissions' },
   tabProject: { zh: '项目', en: 'Project' },
   tabPersona: { zh: '人设', en: 'Persona' },
-  tabOffice: { zh: '办公区 / 宠物', en: 'Office / Pet' },
+  tabOffice: { zh: '控制室 / 外观', en: 'Control Room / Appearance' },
   tabProviders: { zh: '厂商', en: 'Providers' },
   tabPlugins: { zh: '插件 / 技能', en: 'Plugins / Skills' },
   tabMigrate: { zh: '迁移', en: 'Migrate' },
@@ -375,8 +406,8 @@ const DICT: Dict = {
   themeDark: { zh: '夜晚(主黑副白)', en: 'Dark' },
   themeSystem: { zh: '跟随系统', en: 'System' },
   driveMode: { zh: 'CaoGen Drive 档位', en: 'CaoGen Drive mode' },
-  defaultProvider: { zh: '默认 Provider', en: 'Default Provider' },
-  defaultModel: { zh: '默认模型', en: 'Default Model' },
+  defaultProvider: { zh: 'Provider 偏好', en: 'Provider preference' },
+  defaultModel: { zh: '模型偏好', en: 'Model preference' },
   schedulerStrategy: { zh: '自动调度策略', en: 'Scheduler Strategy' },
   failoverEnabled: { zh: '厂商故障自动切换(任务不中断)', en: 'Auto failover across providers' },
   failoverHint: {
@@ -434,22 +465,30 @@ const DICT: Dict = {
     zh: '例如:你是一位严谨的 Rust 专家,回答简洁,总用中文。',
     en: 'e.g. You are a rigorous Rust expert; be concise; always reply in English.'
   },
-  officeShowBadges: { zh: '显示桌上厂商工牌', en: 'Show vendor badge on desk' },
-  officeLiveliness: { zh: '小人活跃度', en: 'Avatar liveliness' },
-  officeCatEars: { zh: '宠物化:给小人加猫耳 🐱', en: 'Pet mode: cat ears 🐱' },
+  officeShowBadges: { zh: '显示控制台厂商标识', en: 'Show vendor badge on console' },
+  officeLiveliness: { zh: '动效强度', en: 'Motion intensity' },
+  officeCatEars: { zh: '趣味外观:头像猫耳', en: 'Fun appearance: cat ears' },
+  layoutSection: { zh: '工作台布局', en: 'Workbench layout' },
+  layoutSidebarCollapsed: { zh: '默认收回侧栏', en: 'Collapse sidebar by default' },
+  layoutSidebarWidth: { zh: '侧栏宽度', en: 'Sidebar width' },
+  layoutToolPanelWidth: { zh: '工具面板宽度', en: 'Tool panel width' },
+  layoutChatScale: { zh: '聊天缩放', en: 'Chat zoom' },
+  layoutChatDensity: { zh: '聊天密度', en: 'Chat density' },
+  chatDensityComfortable: { zh: '舒展', en: 'Comfortable' },
+  chatDensityCompact: { zh: '紧凑', en: 'Compact' },
   pluginsInfo: {
     zh: '技能 / 插件 / MCP 服务器 / 子代理会自动从 ~/.claude 与项目 .claude 继承。把开源或自定义包放到那里即可被会话发现调用。',
     en: 'Skills / plugins / MCP servers / subagents are inherited from ~/.claude and project .claude. Drop open-source or custom packages there to use them.'
   },
   addProvider: { zh: '+ 添加', en: '+ Add' },
-  officialAnthropic: { zh: '官方 Anthropic', en: 'Official Anthropic' },
+  officialAnthropic: { zh: '未选择 Provider', en: 'No Provider selected' },
   providerEmpty: {
-    zh: '尚未配置额外 Provider,当前使用官方 Anthropic 登录。',
-    en: 'No extra providers yet — using the official Anthropic login.'
+    zh: '尚未配置可用 Provider。新建会话前请先添加并填写 API key。',
+    en: 'No usable Provider is configured. Add one with an API key before starting a session.'
   },
   healthOkTip: { zh: '健康 · 成功 {s} 失败 {f}', en: 'Healthy · {s} succeeded, {f} failed' },
   healthBadTip: { zh: '异常 · 连续失败 {n}', en: 'Unhealthy · {n} consecutive failures' },
-  officialEndpoint: { zh: '官方端点', en: 'Official endpoint' },
+  officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
   modelsCount: { zh: '{n} 个模型', en: '{n} models' },
   // Provider 编辑器
   providerEditTitle: { zh: '编辑 Provider', en: 'Edit Provider' },
@@ -479,6 +518,19 @@ const DICT: Dict = {
   fetching: { zh: '获取中…', en: 'Fetching…' },
   fetchWithKey: { zh: '⤓ 用密钥获取', en: '⤓ Fetch with key' },
   fetchedModels: { zh: '已获取 {n} 个模型', en: 'Fetched {n} models' },
+  fetchedModelsFrom: {
+    zh: '已从 {baseUrl} 获取 {n} 个模型',
+    en: 'Fetched {n} models from {baseUrl}'
+  },
+  fetchModelsFailed: { zh: '模型列表获取失败', en: 'Failed to fetch models' },
+  modelListStale: {
+    zh: '当前模型列表来自旧 Provider/Base URL；请重新获取或手动确认后再保存。',
+    en: 'This model list came from a previous Provider/Base URL. Fetch again or confirm it manually before saving.'
+  },
+  modelListStaleAfterFailure: {
+    zh: '获取失败；{baseUrl} 的模型缓存已标记为陈旧。',
+    en: 'Fetch failed. The model cache for {baseUrl} is now marked stale.'
+  },
   customHeadersLabel: { zh: '自定义请求头', en: 'Custom headers' },
   customHeadersHint: { zh: '(可选,每行 Name: value)', en: '(optional, one "Name: value" per line)' },
   openaiProtocolLabel: { zh: 'OpenAI 引擎协议', en: 'OpenAI engine protocol' },
@@ -487,8 +539,8 @@ const DICT: Dict = {
     en: '(only used by OpenAI-engine sessions; ignored by the Claude engine)'
   },
   openaiProtocolResponses: {
-    zh: 'Responses(OpenAI 官方)',
-    en: 'Responses (OpenAI official)'
+    zh: 'Responses(OpenAI 原生)',
+    en: 'Responses (OpenAI native)'
   },
   openaiProtocolChat: {
     zh: 'Chat Completions(DeepSeek/Qwen/网关/自部署通用)',

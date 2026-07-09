@@ -5,7 +5,7 @@ import { Vector3 } from 'three'
 export interface Walker {
   /** 当前世界坐标(每帧原地更新的稳定 Vector3;在你自己的 useFrame 里 group.position.copy 它) */
   position: Vector3
-  /** 朝向:绕 Y 轴的弧度,使小人的 -Z 前脸指向行进方向(与本项目"朝 -Z 面向桌子"约定一致) */
+  /** 朝向:绕 Y 轴的弧度,使机器人本地 +Z 正面指向行进方向 */
   facing: number
   /** 是否已抵达终点 */
   arrived: boolean
@@ -42,8 +42,8 @@ export function useWalker(from: Vec3, to: Vec3, speed: number): Walker {
     const dx = toVec.x - fromVec.x
     const dz = toVec.z - fromVec.z
     if (dx === 0 && dz === 0) return 0
-    // -Z 为前脸:令旋转后的 (0,0,-1) 指向 (dx,dz)
-    return Math.atan2(-dx, -dz)
+    // +Z 为正面:令旋转后的 (0,0,1) 指向 (dx,dz)
+    return Math.atan2(dx, dz)
   }, [fromVec, toVec])
 
   // 稳定的输出向量,每帧原地更新

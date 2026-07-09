@@ -113,6 +113,40 @@ try {
   assert(readFileSync(target, 'utf8').includes('return `HELLO ${normalized}`'), 'target should be edited')
   assert(actual.replacements[0].ranges[0].startLine === 1, 'line range should record start line')
 
+  const driftTarget = path.join(projectDir, 'src/whitespace-drift.ts')
+  writeFileSync(
+    driftTarget,
+    [
+      'export function total(a: number, b: number) {',
+      '    const sum =',
+      '      a + b',
+      '    return sum',
+      '}',
+      ''
+    ].join('\n'),
+    'utf8'
+  )
+  const driftOld = [
+    'export function total(a: number, b: number) {',
+    '  const sum = a + b',
+    '  return sum',
+    '}'
+  ].join('\n')
+  const driftNew = [
+    'export function total(a: number, b: number) {',
+    '  const sum = a + b',
+    '  return sum * 2',
+    '}'
+  ].join('\n')
+  const driftResult = await searchReplace.runSearchReplace(projectDir, {
+    file_path: driftTarget,
+    replacements: [{ old_str: driftOld, new_str: driftNew }]
+  })
+  assertOk(driftResult, 'search_replace should tolerate whitespace and line-break drift')
+  assert(driftResult.replacements[0].matchType === 'whitespace', 'whitespace tolerant match type should be reported')
+  assert(driftResult.replacements[0].confidence >= 0.95, 'whitespace tolerant match should be auto-apply confidence')
+  assert(readFileSync(driftTarget, 'utf8').includes('return sum * 2'), 'whitespace tolerant replacement should write')
+
   const narrow = await searchReplace.runSearchReplace(projectDir, {
     file_path: target,
     replacements: [{ old_str: '  return `HELLO ${normalized}`', new_str: '  return `hello ${normalized}`' }]

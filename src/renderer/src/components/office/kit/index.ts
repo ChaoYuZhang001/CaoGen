@@ -19,6 +19,12 @@ export { default as Bookshelf } from './Bookshelf'
 export { default as Whiteboard } from './Whiteboard'
 export { default as ServerRack } from './ServerRack'
 export { default as CoffeeStation } from './CoffeeStation'
+export { default as ApprovalStation } from './ApprovalStation'
+export { default as ServiceWayfinding } from './ServiceWayfinding'
+export { default as SideGlassCorridor } from './SideGlassCorridor'
+export { default as ArchitecturalLightBands } from './ArchitecturalLightBands'
+export { default as WorkZoneGlass } from './WorkZoneGlass'
+export { default as OperationsBackplane } from './OperationsBackplane'
 export { default as Plant } from './Plant'
 
 // ---- 工位构件 ----
@@ -34,6 +40,7 @@ export { default as AvatarRig } from './AvatarRig'
 export type { AvatarRefs } from './AvatarRig'
 export {
   applyIdle,
+  applyMonitoring,
   applyTyping,
   applyWalking,
   applyTalking,
@@ -42,6 +49,8 @@ export {
 export type { AnimOptions } from './AvatarAnimations'
 export { useWalker } from './AvatarWalk'
 export type { Walker } from './AvatarWalk'
+export { default as AgentWalkers } from './AgentWalkers'
+export type { AgentWalkerSpec, AgentWalkReason } from './AgentWalkers'
 
 // ---- 厂商皮肤 ----
 export { vendorSkin, VENDOR_SKINS } from './VendorSkins'
