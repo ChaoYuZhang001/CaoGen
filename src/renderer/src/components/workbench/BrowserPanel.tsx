@@ -59,7 +59,7 @@ export default function BrowserPanel(): React.JSX.Element {
   const observeForAgent = useStore((s) => s.observeBrowserForAgent)
   const browserPicking = useStore((s) => s.workbench.browserPicking)
   const sendMessage = useStore((s) => s.sendMessage)
-  const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://example.com')
+  const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://caobao.chat/official')
   const [note, setNote] = useState('')
   const [manualTakeover, setManualTakeover] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
