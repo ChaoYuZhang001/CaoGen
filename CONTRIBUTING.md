@@ -25,6 +25,8 @@ npm run dev
 src/main/* -> IPC -> src/preload/* -> src/shared/types.ts -> src/renderer/src/*
 ```
 
+编码边界、热点文件阈值、IPC/类型/UI/3D/测试规则见 [docs/CODING-STANDARDS.md](./docs/CODING-STANDARDS.md)。
+
 ## 提交前检查
 
 普通代码 PR 至少运行：
