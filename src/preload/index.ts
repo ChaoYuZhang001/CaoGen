@@ -16,6 +16,7 @@ import type {
   PreviewAnnotationInput,
   PluginRegistryScanOptions,
   ProjectMemoryDraftInput,
+  ProviderModelFetchInput,
   ProviderInput,
   QuickbarClipboardInput,
   QuickbarFileInput,
@@ -89,7 +90,7 @@ const api: AgentDeskApi = {
   updateProvider: (id: string, patch: Partial<ProviderInput>) =>
     ipcRenderer.invoke('providers:update', id, patch),
   deleteProvider: (id: string) => ipcRenderer.invoke('providers:delete', id),
-  fetchProviderModels: (opts: { baseUrl: string; token?: string; providerId?: string }) =>
+  fetchProviderModels: (opts: ProviderModelFetchInput) =>
     ipcRenderer.invoke('providers:fetchModels', opts),
   listProviderHealth: () => ipcRenderer.invoke('providers:health'),
   listEngines: () => ipcRenderer.invoke('engines:list'),

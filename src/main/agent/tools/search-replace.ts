@@ -9,6 +9,10 @@ const MAX_DIFF_CHARS = 20_000
 const SIMILAR_SNIPPET_COUNT = 3
 const SIMILAR_SNIPPET_CONTEXT_LINES = 3
 const MIN_CONTEXT_LINES = 3
+const AUTO_APPLY_CONFIDENCE = 0.95
+const PREVIEW_CONFIDENCE = 0.9
+const FUZZY_LINE_WINDOW_DELTA = 2
+const MAX_LEVENSHTEIN_CHARS = 4_000
 
 export interface SearchReplacementInput {
   old_str: string
@@ -36,6 +40,9 @@ export interface ReplacementResult {
   replaceAll: boolean
   matches: number
   ranges: ReplacementLineRange[]
+  matchType: MatchType
+  confidence: number
+  requiresPreview?: boolean
 }
 
 export interface SearchReplaceSuccess {
@@ -56,6 +63,20 @@ export interface SearchReplaceFailure {
 }
 
 export type SearchReplaceResult = SearchReplaceSuccess | SearchReplaceFailure
+
+type MatchType = 'exact' | 'whitespace' | 'fuzzy'
+
+interface ResolvedMatch {
+  offset: number
+  length: number
+  confidence: number
+  type: MatchType
+}
+
+interface ResolvedMatchSet {
+  matches: ResolvedMatch[]
+  bestConfidence: number
+}
 
 export async function runSearchReplace(
   projectRoot: string,
@@ -82,32 +103,44 @@ export async function runSearchReplace(
     if (contextCheck.ok === false) {
       return { ok: false, filePath, error: `第 ${index + 1} 个 old_str 上下文不足:${contextCheck.error}` }
     }
-    const matches = findMatches(nextContent, replacement.old_str)
-    if (matches.length === 0) {
+    const resolved = resolveMatches(nextContent, replacement.old_str, input.dry_run === true)
+    if (resolved.matches.length === 0) {
+      const confidenceText =
+        resolved.bestConfidence > 0 ? `最佳候选匹配度 ${formatConfidence(resolved.bestConfidence)}。` : ''
       return {
         ok: false,
         filePath,
-        error: `第 ${index + 1} 个 old_str 未在文件中找到。请根据相似片段修正缩进、空白或上下文。`,
+        error:
+          `第 ${index + 1} 个 old_str 未在文件中找到。${confidenceText}` +
+          '匹配度低于自动应用阈值,请先 dry_run 预览或根据相似片段修正缩进、空白、换行或上下文。',
         similarSnippets: findSimilarSnippets(nextContent, replacement.old_str)
       }
     }
-    if (matches.length > 1 && replacement.replace_all !== true) {
+    if (resolved.matches.length > 1 && replacement.replace_all !== true) {
       return {
         ok: false,
         filePath,
-        error: `第 ${index + 1} 个 old_str 出现 ${matches.length} 次。请增加上下文保证唯一匹配,或显式设置 replace_all=true。`,
-        similarSnippets: snippetsForMatches(nextContent, matches, replacement.old_str.length)
+        error: `第 ${index + 1} 个 old_str 出现 ${resolved.matches.length} 次。请增加上下文保证唯一匹配,或显式设置 replace_all=true。`,
+        similarSnippets: snippetsForMatches(nextContent, resolved.matches)
       }
     }
 
-    const selected = replacement.replace_all === true ? matches : [matches[0]]
-    const ranges = selected.map((offset) => lineRangeForOffset(nextContent, offset, replacement.old_str.length))
-    nextContent = replaceAtOffsets(nextContent, selected, replacement.old_str, replacement.new_str)
+    const selected = replacement.replace_all === true ? resolved.matches : [resolved.matches[0]]
+    const ranges = selected.map((match) => lineRangeForOffset(nextContent, match.offset, match.length))
+    nextContent = replaceResolvedMatches(nextContent, selected, replacement.new_str)
+    const minConfidence = Math.min(...selected.map((match) => match.confidence))
     applied.push({
       index,
       replaceAll: replacement.replace_all === true,
       matches: selected.length,
-      ranges
+      ranges,
+      matchType: selected.some((match) => match.type === 'fuzzy')
+        ? 'fuzzy'
+        : selected.some((match) => match.type === 'whitespace')
+          ? 'whitespace'
+          : 'exact',
+      confidence: minConfidence,
+      ...(minConfidence < AUTO_APPLY_CONFIDENCE ? { requiresPreview: true } : {})
     })
   }
 
@@ -167,7 +200,11 @@ export function formatSearchReplaceResult(result: SearchReplaceResult): string {
   if (result.backupPath) lines.push(`备份: ${result.backupPath}`)
   for (const item of result.replacements) {
     const ranges = item.ranges.map((range) => `${range.startLine}-${range.endLine}`).join(', ')
-    lines.push(`- replacement[${item.index}]: ${item.matches} 处, 行号 ${ranges}, replace_all=${item.replaceAll}`)
+    const confidence = item.matchType === 'exact' ? '' : `, 匹配度=${formatConfidence(item.confidence)}`
+    const preview = item.requiresPreview ? ', 已强制预览确认' : ''
+    lines.push(
+      `- replacement[${item.index}]: ${item.matches} 处, 行号 ${ranges}, replace_all=${item.replaceAll}, match=${item.matchType}${confidence}${preview}`
+    )
   }
   lines.push('', 'Diff:', result.diff || '(无差异)')
   return lines.join('\n')
@@ -212,25 +249,127 @@ async function readUtf8TextFile(filePath: string): Promise<{ ok: true; content: 
   }
 }
 
-function findMatches(content: string, needle: string): number[] {
-  const matches: number[] = []
+function resolveMatches(content: string, needle: string, allowPreviewMatch: boolean): ResolvedMatchSet {
+  const exact = findExactMatches(content, needle)
+  if (exact.length > 0) return { matches: exact, bestConfidence: 1 }
+
+  const approximate = findApproximateMatches(content, needle)
+  const best = approximate[0]
+  const bestConfidence = best?.confidence ?? 0
+  const threshold = allowPreviewMatch ? PREVIEW_CONFIDENCE : AUTO_APPLY_CONFIDENCE
+  return {
+    matches: approximate.filter((match) => match.confidence >= threshold),
+    bestConfidence
+  }
+}
+
+function findExactMatches(content: string, needle: string): ResolvedMatch[] {
+  const matches: ResolvedMatch[] = []
   let start = 0
   while (start <= content.length) {
     const index = content.indexOf(needle, start)
     if (index === -1) break
-    matches.push(index)
+    matches.push({ offset: index, length: needle.length, confidence: 1, type: 'exact' })
     start = index + Math.max(needle.length, 1)
   }
   return matches
 }
 
-function replaceAtOffsets(content: string, offsets: number[], oldStr: string, newStr: string): string {
+function findApproximateMatches(content: string, needle: string): ResolvedMatch[] {
+  const compactNeedle = compactForMatch(needle)
+  if (compactNeedle.length === 0) return []
+
+  const whitespaceMatches = findWhitespaceInsensitiveMatches(content, needle, compactNeedle)
+  if (whitespaceMatches.length > 0) return whitespaceMatches
+
+  return findFuzzyLineWindowMatches(content, needle, compactNeedle)
+}
+
+function findWhitespaceInsensitiveMatches(
+  content: string,
+  needle: string,
+  compactNeedle: string
+): ResolvedMatch[] {
+  const compact = compactWithMap(content)
+  const matches: ResolvedMatch[] = []
+  let cursor = 0
+  while (cursor <= compact.text.length) {
+    const index = compact.text.indexOf(compactNeedle, cursor)
+    if (index === -1) break
+    const first = compact.map[index]
+    const last = compact.map[index + compactNeedle.length - 1]
+    const range = expandApproximateRange(content, needle, first, last + 1)
+    matches.push({
+      offset: range.start,
+      length: range.end - range.start,
+      confidence: 1,
+      type: 'whitespace'
+    })
+    cursor = index + Math.max(compactNeedle.length, 1)
+  }
+  return dedupeMatches(matches)
+}
+
+function findFuzzyLineWindowMatches(content: string, needle: string, compactNeedle: string): ResolvedMatch[] {
+  if (compactNeedle.length > MAX_LEVENSHTEIN_CHARS) return []
+  const lines = splitLineRecords(content)
+  if (lines.length === 0) return []
+
+  const needleLineCount = Math.max(1, splitLines(needle).filter((line) => line.trim()).length)
+  const minLines = Math.max(1, needleLineCount - FUZZY_LINE_WINDOW_DELTA)
+  const maxLines = Math.max(minLines, needleLineCount + FUZZY_LINE_WINDOW_DELTA)
+  const candidates: ResolvedMatch[] = []
+
+  for (let start = 0; start < lines.length; start++) {
+    for (let count = minLines; count <= maxLines && start + count <= lines.length; count++) {
+      const endLine = lines[start + count - 1]
+      const startOffset = lines[start].start
+      const endOffset = endLine.end
+      if (endOffset <= startOffset) continue
+      const candidate = content.slice(startOffset, endOffset)
+      const compactCandidate = compactForMatch(candidate)
+      if (!compactCandidate) continue
+      const lengthRatio = Math.min(compactCandidate.length, compactNeedle.length) / Math.max(compactCandidate.length, compactNeedle.length)
+      if (lengthRatio < PREVIEW_CONFIDENCE) continue
+      const confidence = normalizedLevenshteinSimilarity(compactNeedle, compactCandidate)
+      if (confidence < PREVIEW_CONFIDENCE) continue
+      candidates.push({
+        offset: startOffset,
+        length: endOffset - startOffset,
+        confidence,
+        type: 'fuzzy'
+      })
+    }
+  }
+
+  candidates.sort((a, b) => b.confidence - a.confidence || a.offset - b.offset || a.length - b.length)
+  return dedupeMatches(candidates).slice(0, SIMILAR_SNIPPET_COUNT)
+}
+
+function dedupeMatches(matches: ResolvedMatch[]): ResolvedMatch[] {
+  const out: ResolvedMatch[] = []
+  const seen = new Set<string>()
+  for (const match of matches) {
+    const key = `${match.offset}:${match.length}`
+    if (seen.has(key)) continue
+    if (out.some((existing) => rangesOverlap(existing, match))) continue
+    seen.add(key)
+    out.push(match)
+  }
+  return out
+}
+
+function rangesOverlap(a: ResolvedMatch, b: ResolvedMatch): boolean {
+  return a.offset < b.offset + b.length && b.offset < a.offset + a.length
+}
+
+function replaceResolvedMatches(content: string, matches: ResolvedMatch[], newStr: string): string {
   let next = ''
   let cursor = 0
-  for (const offset of offsets) {
-    next += content.slice(cursor, offset)
+  for (const match of [...matches].sort((a, b) => a.offset - b.offset)) {
+    next += content.slice(cursor, match.offset)
     next += newStr
-    cursor = offset + oldStr.length
+    cursor = match.offset + match.length
   }
   return next + content.slice(cursor)
 }
@@ -275,11 +414,11 @@ function findSimilarSnippets(content: string, oldStr: string): string[] {
   return candidates.slice(0, SIMILAR_SNIPPET_COUNT).map((candidate) => formatNumberedSnippet(contentLines, candidate.index))
 }
 
-function snippetsForMatches(content: string, matches: number[], length: number): string[] {
+function snippetsForMatches(content: string, matches: ResolvedMatch[]): string[] {
   const contentLines = splitLines(content)
-  return matches.slice(0, SIMILAR_SNIPPET_COUNT).map((offset) => {
-    const lineIndex = Math.max(0, lineNumberAt(content, offset) - 1)
-    const endLine = Math.max(lineIndex, lineNumberAt(content, offset + length) - 1)
+  return matches.slice(0, SIMILAR_SNIPPET_COUNT).map((match) => {
+    const lineIndex = Math.max(0, lineNumberAt(content, match.offset) - 1)
+    const endLine = Math.max(lineIndex, lineNumberAt(content, match.offset + match.length) - 1)
     return formatNumberedSnippet(contentLines, Math.floor((lineIndex + endLine) / 2))
   })
 }
@@ -347,4 +486,87 @@ function formatUnifiedDiff(filePath: string, before: string, after: string): str
 
 function splitLines(text: string): string[] {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+}
+
+function compactForMatch(text: string): string {
+  return text.replace(/\s+/g, '').toLowerCase()
+}
+
+function compactWithMap(text: string): { text: string; map: number[] } {
+  let compact = ''
+  const map: number[] = []
+  for (let i = 0; i < text.length; i++) {
+    if (/\s/.test(text[i])) continue
+    compact += text[i].toLowerCase()
+    map.push(i)
+  }
+  return { text: compact, map }
+}
+
+function expandApproximateRange(
+  content: string,
+  needle: string,
+  start: number,
+  end: number
+): { start: number; end: number } {
+  const spansMultipleLines = splitLines(needle).filter((line) => line.trim()).length > 1
+  if (!spansMultipleLines) return { start, end }
+  return {
+    start: lineStartAt(content, start),
+    end: lineEndAt(content, end)
+  }
+}
+
+function lineStartAt(content: string, offset: number): number {
+  return content.lastIndexOf('\n', Math.max(0, offset - 1)) + 1
+}
+
+function lineEndAt(content: string, offset: number): number {
+  const next = content.indexOf('\n', offset)
+  return next === -1 ? content.length : next
+}
+
+interface LineRecord {
+  start: number
+  end: number
+}
+
+function splitLineRecords(text: string): LineRecord[] {
+  const lines: LineRecord[] = []
+  let start = 0
+  for (let i = 0; i <= text.length; i++) {
+    if (i !== text.length && text[i] !== '\n') continue
+    const rawEnd = i > start && text[i - 1] === '\r' ? i - 1 : i
+    lines.push({ start, end: rawEnd })
+    start = i + 1
+  }
+  return lines.length ? lines : [{ start: 0, end: text.length }]
+}
+
+function normalizedLevenshteinSimilarity(a: string, b: string): number {
+  if (a === b) return 1
+  if (!a || !b) return 0
+  if (a.length > MAX_LEVENSHTEIN_CHARS || b.length > MAX_LEVENSHTEIN_CHARS) return 0
+  const distance = levenshteinDistance(a, b)
+  return 1 - distance / Math.max(a.length, b.length)
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  const previous = new Array<number>(b.length + 1)
+  const current = new Array<number>(b.length + 1)
+  for (let j = 0; j <= b.length; j++) previous[j] = j
+  for (let i = 1; i <= a.length; i++) {
+    current[0] = i
+    const left = a.charCodeAt(i - 1)
+    for (let j = 1; j <= b.length; j++) {
+      const cost = left === b.charCodeAt(j - 1) ? 0 : 1
+      current[j] = Math.min(current[j - 1] + 1, previous[j] + 1, previous[j - 1] + cost)
+    }
+    for (let j = 0; j <= b.length; j++) previous[j] = current[j]
+  }
+  return previous[b.length]
+}
+
+function formatConfidence(value: number): string {
+  return `${Math.round(value * 100)}%`
 }

@@ -21,6 +21,7 @@ import ControlCenter from './ControlCenter'
 import ProjectSettings from '../pages/ProjectSettings'
 
 type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
+const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
 
 export default function SettingsModal(): React.JSX.Element {
   const t = useT()
@@ -52,6 +53,7 @@ export default function SettingsModal(): React.JSX.Element {
   const [migrateBusy, setMigrateBusy] = useState(false)
   const [migrateResult, setMigrateResult] = useState('')
   const selectedDrive = DRIVE_MODE_OPTIONS.find((option) => option.value === draft.driveMode) ?? DRIVE_MODE_OPTIONS[1]
+  const draftOffice = draft.office ?? DEFAULT_OFFICE_SETTINGS
 
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
@@ -121,11 +123,13 @@ export default function SettingsModal(): React.JSX.Element {
     const budget = Number(value)
     set('budgetUsdPerMonth', Number.isFinite(budget) && budget > 0 ? budget : 0)
   }
-  const setOffice = (patch: Partial<typeof draft.office>): void =>
-    setDraft((d) => ({ ...d, office: { ...d.office, ...patch } }))
+  const setOffice = (patch: Partial<typeof draftOffice>): void =>
+    setDraft((d) => ({ ...d, office: { ...(d.office ?? DEFAULT_OFFICE_SETTINGS), ...patch } }))
+  const setLayout = (patch: Partial<typeof draft.layout>): void =>
+    setDraft((d) => ({ ...d, layout: { ...d.layout, ...patch } }))
 
   const healthOf = (pid: string): ProviderHealthView | undefined =>
-    health.find((h) => h.providerId === (pid || 'official'))
+    health.find((h) => h.providerId === (pid || 'local-login'))
 
   const save = async (): Promise<void> => {
     await updateSettings(draft)
@@ -272,7 +276,7 @@ export default function SettingsModal(): React.JSX.Element {
                   value={draft.defaultProviderId}
                   onChange={(e) => set('defaultProviderId', e.target.value)}
                 >
-                  <option value="">{t('officialAnthropic')}</option>
+                  <option value="">{t('noDefaultProvider')}</option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -286,6 +290,7 @@ export default function SettingsModal(): React.JSX.Element {
                   value={draft.defaultModel}
                   onChange={(e) => set('defaultModel', e.target.value)}
                 >
+                  <option value="">{t('noDefaultModel')}</option>
                   {MODEL_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
@@ -628,34 +633,106 @@ export default function SettingsModal(): React.JSX.Element {
 
             {tab === 'office' && (
               <>
-                <label className="settings-check">
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-h3">{t('layoutSection')}</h3>
+                  </div>
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={draft.layout.sidebarCollapsed}
+                      onChange={(e) => setLayout({ sidebarCollapsed: e.target.checked })}
+                    />
+                    {t('layoutSidebarCollapsed')}
+                  </label>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('layoutSidebarWidth')} · {draft.layout.sidebarWidth}px
+                      <input
+                        type="range"
+                        className="input-block"
+                        min={220}
+                        max={420}
+                        step={4}
+                        value={draft.layout.sidebarWidth}
+                        onChange={(e) => setLayout({ sidebarWidth: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="field-label">
+                      {t('layoutToolPanelWidth')} · {draft.layout.workbenchSideWidth}px
+                      <input
+                        type="range"
+                        className="input-block"
+                        min={360}
+                        max={900}
+                        step={8}
+                        value={draft.layout.workbenchSideWidth}
+                        onChange={(e) => setLayout({ workbenchSideWidth: Number(e.target.value) })}
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('layoutChatScale')} · {Math.round(draft.layout.chatScale * 100)}%
+                      <input
+                        type="range"
+                        className="input-block"
+                        min={0.85}
+                        max={1.25}
+                        step={0.05}
+                        value={draft.layout.chatScale}
+                        onChange={(e) => setLayout({ chatScale: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="field-label">
+                      {t('layoutChatDensity')}
+                      <select
+                        className="select select-block"
+                        value={draft.layout.chatDensity}
+                        onChange={(e) =>
+                          setLayout({ chatDensity: e.target.value as typeof draft.layout.chatDensity })
+                        }
+                      >
+                        <option value="comfortable">{t('chatDensityComfortable')}</option>
+                        <option value="compact">{t('chatDensityCompact')}</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-h3">{t('officeTitle')}</h3>
+                  </div>
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={draftOffice.showBadges}
+                      onChange={(e) => setOffice({ showBadges: e.target.checked })}
+                    />
+                    {t('officeShowBadges')}
+                  </label>
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={draftOffice.catEars}
+                      onChange={(e) => setOffice({ catEars: e.target.checked })}
+                    />
+                    {t('officeCatEars')}
+                  </label>
+                  <label className="field-label">
+                    {t('officeLiveliness')} · {draftOffice.liveliness.toFixed(1)}×
+                  </label>
                   <input
-                    type="checkbox"
-                    checked={draft.office.showBadges}
-                    onChange={(e) => setOffice({ showBadges: e.target.checked })}
+                    type="range"
+                    className="input-block"
+                    min={0.2}
+                    max={1.2}
+                    step={0.1}
+                    value={draftOffice.liveliness}
+                    onChange={(e) => setOffice({ liveliness: Number(e.target.value) })}
                   />
-                  {t('officeShowBadges')}
-                </label>
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={draft.office.catEars}
-                    onChange={(e) => setOffice({ catEars: e.target.checked })}
-                  />
-                  {t('officeCatEars')}
-                </label>
-                <label className="field-label">
-                  {t('officeLiveliness')} · {draft.office.liveliness.toFixed(1)}×
-                </label>
-                <input
-                  type="range"
-                  className="input-block"
-                  min={0.5}
-                  max={1.5}
-                  step={0.1}
-                  value={draft.office.liveliness}
-                  onChange={(e) => setOffice({ liveliness: Number(e.target.value) })}
-                />
+                </div>
               </>
             )}
 

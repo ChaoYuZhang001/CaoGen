@@ -101,6 +101,17 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+export function isBenignNodePtyDiagnostic(text: string): boolean {
+  const normalized = text.toLowerCase()
+  return (
+    normalized.includes('attachconsole') &&
+    (normalized.includes('access is denied') ||
+      normalized.includes('already attached') ||
+      normalized.includes('invalid handle') ||
+      normalized.includes('failed'))
+  )
+}
+
 function defaultShell(): string {
   if (process.platform === 'win32') return process.env.ComSpec || 'cmd.exe'
   return process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh')
@@ -195,16 +206,21 @@ export class TerminalManager {
 
     let record: TerminalRecord
     let ptyError: string | undefined
+    let notifyPtyError = false
     try {
       record = await this.startPty({ id, sessionId: opts.sessionId, cwd, shell, cols, rows, env })
     } catch (err) {
-      ptyError = errText(err)
+      const rawPtyError = errText(err)
+      if (!isBenignNodePtyDiagnostic(rawPtyError)) {
+        ptyError = rawPtyError
+        notifyPtyError = true
+      }
       record = this.startPipe({ id, sessionId: opts.sessionId, cwd, shell, cols, rows, env, ptyError })
     }
 
     this.remember(record)
     this.emit({ kind: 'started', terminal: snapshot(record.info) })
-    if (ptyError) {
+    if (notifyPtyError && ptyError) {
       queueMicrotask(() =>
         this.emit({
           kind: 'error',

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
 import type { OpenAIProtocol, ProviderView } from '../../../shared/types'
@@ -28,21 +28,38 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [error, setError] = useState('')
   const [fetching, setFetching] = useState(false)
   const [fetchNote, setFetchNote] = useState('')
+  const [modelSourceKey, setModelSourceKey] = useState(() =>
+    provider ? providerModelSourceKey(provider.id, provider.baseUrl, provider.openaiProtocol ?? 'responses') : ''
+  )
 
   const isEdit = provider !== null
+
+  const currentModelSourceKey = useMemo(
+    () => providerModelSourceKey(provider?.id, baseUrl, openaiProtocol),
+    [provider?.id, baseUrl, openaiProtocol]
+  )
+  const modelsStale = modelsText.trim().length > 0 && modelSourceKey !== '' && modelSourceKey !== currentModelSourceKey
 
   const fetchModels = async (): Promise<void> => {
     setFetching(true)
     setError('')
     setFetchNote('')
     try {
-      const models = await window.agentDesk.fetchProviderModels({
+      const result = await window.agentDesk.fetchProviderModels({
         baseUrl: baseUrl.trim(),
         token: token.trim() || undefined,
-        providerId: provider?.id
+        providerId: provider?.id,
+        openaiProtocol
       })
-      setModelsText(models.join('\n'))
-      setFetchNote(t('fetchedModels', { n: models.length }))
+      if (!result.ok) {
+        setModelSourceKey('')
+        setFetchNote(t('modelListStaleAfterFailure', { baseUrl: result.baseUrl || baseUrl.trim() }))
+        setError(result.error?.message ?? t('fetchModelsFailed'))
+        return
+      }
+      setModelsText(result.models.join('\n'))
+      setModelSourceKey(result.cacheKey)
+      setFetchNote(t('fetchedModelsFrom', { n: result.models.length, baseUrl: result.baseUrl }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -59,6 +76,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     setBaseUrl(preset.baseUrl)
     setModelsText(preset.models.join('\n'))
     setOpenaiProtocol(preset.openaiProtocol ?? 'responses')
+    setModelSourceKey(providerModelSourceKey(provider?.id, preset.baseUrl, preset.openaiProtocol ?? 'responses'))
   }
 
   const save = async (): Promise<void> => {
@@ -182,9 +200,13 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           value={modelsText}
           rows={4}
           placeholder={'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro'}
-          onChange={(e) => setModelsText(e.target.value)}
+          onChange={(e) => {
+            setModelsText(e.target.value)
+            setModelSourceKey(currentModelSourceKey)
+          }}
         />
         {fetchNote && <div className="field-hint field-hint-ok">{fetchNote}</div>}
+        {modelsStale && <div className="field-hint field-hint-warning">{t('modelListStale')}</div>}
 
         <label className="field-label">
           {t('customHeadersLabel')} <span className="field-hint">{t('customHeadersHint')}</span>
@@ -240,4 +262,23 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
       </div>
     </div>
   )
+}
+
+function providerModelSourceKey(providerId: string | undefined, baseUrl: string, protocol: OpenAIProtocol | undefined): string {
+  const clean = normalizeProviderModelBaseUrl(baseUrl)
+  return [providerId || 'new-provider', clean, protocol || 'default'].join('|')
+}
+
+function normalizeProviderModelBaseUrl(value: string): string {
+  const clean = value.trim().replace(/\/+$/, '')
+  try {
+    const url = new URL(clean)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return clean
+  }
 }

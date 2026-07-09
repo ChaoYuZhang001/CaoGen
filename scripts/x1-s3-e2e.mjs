@@ -64,40 +64,33 @@ async function runX1Scenario() {
       await waitForText(cdp, 'CaoGen', 20_000)
       await screenshot(cdp, 'x1-01-welcome')
 
-      await check(cdp, 'X1 first launch creates blank DeepSeek provider and defaults', async () => {
+      await check(cdp, 'X1 first launch starts with no Provider defaults', async () => {
         const providersFile = path.join(userDataDir, 'providers.json')
         await waitForFile(providersFile, 5_000)
         const providers = JSON.parse(readFileSync(providersFile, 'utf8'))
         assert(Array.isArray(providers), 'providers.json should contain an array')
-        const deepSeek = providers.find((item) => item.id === 'deepseek-official')
-        assert(deepSeek, `DeepSeek provider missing: ${JSON.stringify(providers)}`)
-        assert(deepSeek.baseUrl === 'https://api.deepseek.com/anthropic', `wrong baseUrl: ${deepSeek.baseUrl}`)
-        assert(deepSeek.encryptedToken === '', 'DeepSeek provider must not include a built-in API key')
-        assert(deepSeek.models?.includes('deepseek-chat'), 'deepseek-chat missing')
-        assert(deepSeek.models?.includes('deepseek-reasoner'), 'deepseek-reasoner missing')
+        assert(providers.length === 0, `first launch must not inject provider defaults: ${JSON.stringify(providers)}`)
       })
 
-      await check(cdp, 'X1 new session modal selects DeepSeek and auto dispatch by default', async () => {
+      await check(cdp, 'X1 new session modal starts with explicit engine choice', async () => {
         await clickByText(cdp, '+ 新建会话')
         await waitForText(cdp, '新建会话')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
         const selected = await selectedNewSessionValues(cdp)
-        assert(selected.providerValue === 'deepseek-official', `wrong provider value: ${JSON.stringify(selected)}`)
-        assert(selected.providerText.includes('DeepSeek'), `provider label missing DeepSeek: ${JSON.stringify(selected)}`)
-        assert(selected.providerText.includes('未配置密钥'), `provider should show no-key label: ${JSON.stringify(selected)}`)
-        assert(selected.modelValue === 'auto', `wrong model value: ${JSON.stringify(selected)}`)
-        assert(selected.modelText.includes('自动调度'), `model label missing auto dispatch: ${JSON.stringify(selected)}`)
+        assert(selected.engineValue === '', `engine must start unselected: ${JSON.stringify(selected)}`)
+        assert(selected.engineText.includes('请选择 Agent 引擎'), `engine placeholder missing: ${JSON.stringify(selected)}`)
+        assert(selected.providerSelectCount === 0, `provider select should be hidden until engine is explicit: ${JSON.stringify(selected)}`)
+        assert(selected.modelSelectCount === 0, `model select should be hidden until provider engine is explicit: ${JSON.stringify(selected)}`)
       })
 
-      await check(cdp, 'X1 DeepSeek without key shows explicit settings prompt on send', async () => {
+      await check(cdp, 'X1 create is blocked until engine and keyed Provider are explicit', async () => {
         await clickByText(cdp, '创建')
-        await waitForText(cdp, projectDir, 15_000)
-        await focusComposer(cdp)
-        await typeText(cdp, 'ping without key')
-        await press(cdp, 'Enter')
-        await waitForText(cdp, '请在设置里填写 DeepSeek(官方直连) API key 后再开始对话', 10_000)
+        await waitForText(cdp, '请选择 Agent 引擎', 10_000)
+        await selectNewSessionEngine(cdp, 'claude')
+        await clickByText(cdp, '创建')
+        await waitForText(cdp, '请选择已配置 API key 的 Provider', 10_000)
       })
-      await screenshot(cdp, 'x1-02-no-key-error')
+      await screenshot(cdp, 'x1-02-explicit-engine-required')
     })
   } finally {
     await stopElectron(app)
@@ -346,16 +339,34 @@ async function selectedNewSessionValues(cdp) {
     `(() => {
       const modalSelects = [...document.querySelectorAll('.modal select')];
       const selects = modalSelects.length > 0 ? modalSelects : [...document.querySelectorAll('select')];
-      const provider = selects.find((select) => [...select.options].some((option) => option.value === 'deepseek-official'));
-      const model = selects.find((select) => [...select.options].some((option) => option.value === 'deepseek-chat'));
+      const engine = selects.find((select) => [...select.options].some((option) => option.value === 'claude' || option.value === 'openai'));
+      const providerSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择 Provider')));
+      const modelSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择模型')));
       return {
-        providerValue: provider?.value || '',
-        providerText: provider?.selectedOptions?.[0]?.textContent || '',
-        modelValue: model?.value || '',
-        modelText: model?.selectedOptions?.[0]?.textContent || ''
+        engineValue: engine?.value || '',
+        engineText: engine?.selectedOptions?.[0]?.textContent || '',
+        providerSelectCount: providerSelects.length,
+        modelSelectCount: modelSelects.length
       };
     })()`
   )
+}
+
+async function selectNewSessionEngine(cdp, value) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const value = ${JSON.stringify(value)};
+      const select = [...document.querySelectorAll('.modal select')]
+        .find((candidate) => [...candidate.options].some((option) => option.value === value));
+      if (!select) return { ok: false, text: document.body.innerText.slice(0, 2000) };
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true };
+    })()`
+  )
+  assert(result?.ok, `engine select not found for ${value}\n${result?.text ?? ''}`)
+  await sleep(250)
 }
 
 async function sidebarGroups(cdp) {

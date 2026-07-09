@@ -14,11 +14,13 @@ const { app, ipcMain } = require('electron')
 const repoOut = path.resolve(__dirname, '..', 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-resp-tools-'))
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-resp-work-'))
+const reportPath = path.resolve(__dirname, '..', 'test-results', 'responses-api-recheck-report.json')
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
 
 const results = []
+const requestBodies = []
 function check(name, ok, detail) {
-  results.push({ name, ok: !!ok })
+  results.push({ name, ok: !!ok, detail: detail || '' })
   console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${String(detail).slice(0, 140)}` : ''}`)
 }
 async function invoke(channel, ...args) {
@@ -45,6 +47,7 @@ const server = http.createServer((req, res) => {
   req.on('data', (c) => (body += c))
   req.on('end', () => {
     const parsed = JSON.parse(body || '{}')
+    requestBodies.push(parsed)
     const hasToolOutput = JSON.stringify(parsed.input || '').includes('function_call_output')
     callSeq += 1
     if (!hasToolOutput) {
@@ -102,6 +105,16 @@ async function run() {
   check('Responses 工具循环真实写文件', fs.existsSync(file), fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : 'missing')
   check('工具结果回灌后拿到最终文本', turn && !turn.isError, turn?.resultText?.slice(0, 40))
   check('发生了两轮请求(调用→结果→文本)', callSeq >= 2, `callSeq=${callSeq}`)
+  check(
+    '工具结果轮携带 previous_response_id',
+    requestBodies[1]?.previous_response_id === 'resp_1',
+    JSON.stringify(requestBodies[1] ?? {}).slice(0, 160)
+  )
+  check(
+    '工具结果轮只回灌 function_call_output',
+    JSON.stringify(requestBodies[1]?.input ?? '').includes('function_call_output'),
+    JSON.stringify(requestBodies[1]?.input ?? '').slice(0, 160)
+  )
 
   const entries = await invoke('sessions:transcript', meta.id)
   const toolUse = entries.some((e) => e.event.kind === 'assistant-message' && (e.event.blocks ?? []).some((b) => b.type === 'tool_use' && b.name === 'write_file'))
@@ -111,7 +124,25 @@ async function run() {
 }
 function finish(code) {
   const pass = results.filter((r) => r.ok).length
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+  fs.writeFileSync(
+    reportPath,
+    JSON.stringify(
+      {
+        ok: code === 0,
+        generatedAt: new Date().toISOString(),
+        pass,
+        total: results.length,
+        requestCount: requestBodies.length,
+        secondPreviousResponseId: requestBodies[1]?.previous_response_id,
+        results
+      },
+      null,
+      2
+    )
+  )
   console.log(`\nresponses-tools e2e: ${pass}/${results.length} 通过`)
+  console.log(`responses-api recheck report: ${reportPath}`)
   server.close()
   try { fs.rmSync(tmpUserData, { recursive: true, force: true }); fs.rmSync(workDir, { recursive: true, force: true }) } catch {}
   app.exit(code)

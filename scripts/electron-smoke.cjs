@@ -76,7 +76,20 @@ async function run() {
 
   // 3. 创建真会话(会 spawn SDK 子进程;无 Key/网络会失败,但不应让主进程崩)
   try {
-    const meta = await invoke('sessions:create', { cwd: tmpUserData, model: '', providerId: '' })
+    const provider = await invoke('providers:create', {
+      name: 'Smoke OpenAI',
+      baseUrl: 'http://127.0.0.1:9',
+      token: 'smoke-key',
+      models: ['smoke-model'],
+      openaiProtocol: 'responses'
+    })
+    const meta = await invoke('sessions:create', {
+      cwd: tmpUserData,
+      engine: 'openai',
+      providerId: provider.id,
+      model: 'smoke-model',
+      isolated: false
+    })
     check('IPC sessions:create 返回会话 meta', meta && typeof meta.id === 'string', `id=${meta && meta.id}`)
     if (meta && meta.id) {
       await new Promise((r) => setTimeout(r, 300))

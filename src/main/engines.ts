@@ -9,7 +9,7 @@ import type { SessionMeta } from '../shared/types'
 
 /**
  * M6 · 引擎注册。
- * - claude:Claude Agent SDK(AgentSession),完整能力,默认引擎。
+ * - claude:Claude Agent SDK(AgentSession),完整能力。
  * - openai:OpenAI Responses API,原生直连,覆盖文本/图片输入与流式输出。
  * - codex / gemini:探测本机 CLI 是否安装;适配器尚未实现,可用性
  *   如实上报为 false(UI 置灰),避免"能选但不能用"的假象。

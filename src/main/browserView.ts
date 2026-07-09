@@ -396,7 +396,7 @@ async function captureAnnotationScreenshot(
   const bounds = record.view.getBounds()
   if (bounds.width <= 0 || bounds.height <= 0) return undefined
   let image = await record.view.webContents.capturePage()
-  if (image.isEmpty()) return undefined
+  if (!image || image.isEmpty()) return undefined
   // 元素圈选:裁剪到元素区域 + 24px 上下文边距(clamp 到视口)
   if (cropBox && Number.isFinite(cropBox.x) && cropBox.width > 0 && cropBox.height > 0) {
     const size = image.getSize()

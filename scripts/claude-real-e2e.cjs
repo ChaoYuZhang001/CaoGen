@@ -1,10 +1,10 @@
 /**
- * Claude Agent SDK 默认引擎真对话 E2E + 诊断(发布级验收阻塞项)。
- * 用官方 Anthropic 端点(空 baseUrl Provider,继承环境登录态)最小提示跑一轮,
+ * Claude Agent SDK 显式引擎真对话 E2E + 诊断(发布级验收阻塞项)。
+ * 用显式创建的 Anthropic Provider + API key 最小提示跑一轮,
  * 超时/失败时打印 AgentSession 透出的 SDK stderr 尾部,定位根因
- * (登录态 / 二进制路径 / 子进程阻塞)。
+ * (凭据 / 二进制路径 / 子进程阻塞)。
  *
- * 运行(默认引擎走环境登录态,或设 ANTHROPIC_API_KEY):
+ * 运行(必须显式提供 ANTHROPIC_API_KEY):
  *   npx electron scripts/claude-real-e2e.cjs
  * 可选:CLAUDE_E2E_TIMEOUT(默认 60000,比产品 180s 短,快速暴露诊断)
  */
@@ -31,15 +31,19 @@ async function invoke(channel, ...args) {
 }
 
 async function run() {
+  const apiKey = process.env.ANTHROPIC_API_KEY || ''
+  if (!apiKey) {
+    console.log('[SKIP] Claude 真对话需显式 ANTHROPIC_API_KEY;当前未配置,跳过。')
+    console.log('\nclaude-real e2e: skipped (no explicit api key)')
+    app.exit(0)
+    return
+  }
   // 只接受"真实凭据":API key / 存在的 host-creds 文件 / .credentials.json。
   // 注意 ~/.claude.json 是配置文件(人人都有,不含 token),绝不能当登录凭据 ——
   // 外部验收发现旧逻辑误把它当凭据,导致无登录环境不跳过反而硬失败(Not logged in)。
   const hostCreds = process.env.CLAUDE_CODE_HOST_CREDS_FILE
-  // ANTHROPIC_API_KEY alone is not sufficient — the Claude Agent SDK engine
-  // requires OAuth login (claude login → ~/.claude/.credentials.json or
-  // CLAUDE_CODE_HOST_CREDS_FILE). An API key without OAuth causes the SDK
-  // to report "Not logged in" and idle.
   const hasAuth =
+    !!apiKey ||
     (!!hostCreds && fs.existsSync(hostCreds)) ||
     fs.existsSync(path.join(os.homedir(), '.claude', '.credentials.json'))
   if (!hasAuth) {
@@ -52,12 +56,12 @@ async function run() {
   require(path.join(repoOut, 'index.js'))
   await new Promise((r) => setTimeout(r, 900))
 
-  // 官方 Anthropic Provider:空 baseUrl,继承环境登录态(claude CLI 登录 / ANTHROPIC_API_KEY)
+  // 显式 Anthropic Provider:用户提供 API key,不使用隐藏默认 Provider。
   const provider = await invoke('providers:create', {
-    name: 'Anthropic 官方(E2E)', baseUrl: '', models: [], openaiProtocol: 'responses', token: process.env.ANTHROPIC_API_KEY || ''
+    name: 'Anthropic API Key(E2E)', baseUrl: '', models: [], openaiProtocol: 'responses', token: apiKey
   }).catch(() => null)
 
-  // Claude 默认引擎会话
+  // Claude 显式引擎会话
   const meta = await invoke('sessions:create', {
     cwd: tmpUserData, engine: 'claude',
     providerId: provider?.id, model: '', isolated: false

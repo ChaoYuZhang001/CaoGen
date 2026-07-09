@@ -44,6 +44,7 @@ import {
   decideGuiPermission,
   grantTemporaryGuiAutomation
 } from './permission/permission-manager'
+import { isGuiToolName } from './agent/tools/gui-tools'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { AUTO_MODEL } from '../shared/types'
@@ -83,6 +84,20 @@ interface PendingToolCall {
   argsText: string
 }
 
+interface TurnToolFailure {
+  toolName: string
+  toolUseId: string
+  detail: string
+}
+
+interface OpenAIErrorContext {
+  providerId: string
+  providerName: string
+  baseUrl: string
+  model: string
+  protocol: OpenAIProtocol
+}
+
 /** Agent 循环上限:防模型无限调工具烧穿 */
 const MAX_TOOL_ITERATIONS = 40
 
@@ -115,7 +130,7 @@ function releaseSlot(): void {
 
 /**
  * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
- * - 'responses':OpenAI 官方 Responses API(/v1/responses,默认)
+ * - 'responses':OpenAI 原生 Responses API(/v1/responses,协议默认)
  * - 'chat':通用 Chat Completions(/v1/chat/completions)——DeepSeek/Qwen/
  *   new-api 网关/自部署 vLLM·Ollama 等几乎所有 OpenAI 兼容端点都讲这个协议。
  * 协议按 Provider 的 openaiProtocol 字段选择。
@@ -142,6 +157,8 @@ export class OpenAIEngine implements Engine {
   >()
   /** 本轮流式累积的工具调用(SSE delta 分片拼装) */
   private pendingToolCalls: PendingToolCall[] = []
+  /** 本轮 GUI 工具失败;最终文本不能掩盖真实桌面自动化失败 */
+  private turnGuiToolFailures: TurnToolFailure[] = []
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
 
   constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
@@ -215,6 +232,7 @@ export class OpenAIEngine implements Engine {
     this.turnStartedAt = Date.now()
     this.assistantText = ''
     this.turnUsage = undefined
+    this.turnGuiToolFailures = []
     // 新一轮:重置故障切换防打转记录
     this.triedProviders = new Set([this.meta.providerId])
     // auto 模式:跨厂商路由(openai 引擎切 Provider 无需重建,authConfig 每请求现读)
@@ -227,7 +245,7 @@ export class OpenAIEngine implements Engine {
   /** 本轮路由选中的模型(meta.model 保持 auto 哨兵,下一轮重新路由) */
   private routedModel?: string
 
-  /** 跨厂商智能路由:候选 = 所有有 baseUrl 的 Provider(官方 Anthropic 空址不适配本引擎) */
+  /** 跨厂商智能路由:候选 = 所有有 baseUrl 的 Provider(空 Base URL 不适配本引擎) */
   private autoRoute(payload: SendMessagePayload): void {
     try {
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
@@ -512,7 +530,7 @@ export class OpenAIEngine implements Engine {
       recordModelFailure(this.effectiveModel())
       // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
       if (await this.tryFailover(text, payload)) return
-      this.finishTurn(true, text, 'error')
+      this.finishTurn(true, this.withProviderErrorContext(text), 'error')
     }
   }
 
@@ -589,7 +607,7 @@ export class OpenAIEngine implements Engine {
         },
         controller.signal
       )
-      if (!res.ok) throw new Error(await formatOpenAIError(res))
+      if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
       await this.consumeResponse(res)
 
       const calls = this.pendingResponseCalls.filter((c) => c.name && c.callId)
@@ -622,6 +640,7 @@ export class OpenAIEngine implements Engine {
           resultText = exec.output
           isError = !exec.ok
         }
+        this.recordGuiToolFailure(call.name, call.callId, resultText, isError)
         this.emit({ kind: 'tool-result', toolUseId: call.callId, content: resultText, isError })
         outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
       }
@@ -725,7 +744,7 @@ export class OpenAIEngine implements Engine {
           },
           controller.signal
         )
-        if (!res.ok) throw new Error(await formatOpenAIError(res))
+        if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
         await this.consumeChatStream(res)
 
         const segmentText = this.assistantText.slice(textBefore.length).trim()
@@ -778,6 +797,7 @@ export class OpenAIEngine implements Engine {
             resultText = exec.output
             isError = !exec.ok
           }
+          this.recordGuiToolFailure(call.name, call.id, resultText, isError)
           this.emit({ kind: 'tool-result', toolUseId: call.id, content: resultText, isError })
           this.chatHistory.push({ role: 'tool', tool_call_id: call.id, content: resultText })
         }
@@ -1008,8 +1028,8 @@ export class OpenAIEngine implements Engine {
   }
 
   /**
-   * 当前 Provider 的 OpenAI 协议。显式配置优先;未配置时按端点智能默认:
-   * OpenAI 官方(或未配 Provider)→ responses;任何第三方端点 → chat
+   * 当前 Provider 的 OpenAI 协议。显式配置优先;未配置时按端点选择协议默认:
+   * OpenAI 原生端点(或历史未配 Provider)→ responses;任何第三方端点 → chat
    * (Chat Completions 是通用协议,第三方几乎都不实现 Responses ——
    * 之前默认 responses 会让 DeepSeek/网关直接 404)。
    */
@@ -1165,6 +1185,13 @@ export class OpenAIEngine implements Engine {
     this.abort = null
     if (active?.signal.aborted && !isError) return
 
+    const guiFailureText = this.formatGuiToolFailures()
+    if (!isError && guiFailureText) {
+      isError = true
+      subtype = 'tool-error'
+      resultText = guiFailureText
+    }
+
     const text = this.assistantText.trim()
     if (text) {
       const blocks: AssistantBlock[] = [{ type: 'text', text }]
@@ -1181,6 +1208,25 @@ export class OpenAIEngine implements Engine {
     })
     if (isError && resultText) this.setStatus('error', resultText)
     else this.setStatus('idle')
+  }
+
+  private recordGuiToolFailure(toolName: string, toolUseId: string, resultText: string, isError: boolean): void {
+    if (!isError || !isGuiToolName(toolName)) return
+    this.turnGuiToolFailures.push({
+      toolName,
+      toolUseId,
+      detail: summarizeToolFailure(resultText)
+    })
+  }
+
+  private formatGuiToolFailures(): string | undefined {
+    if (this.turnGuiToolFailures.length === 0) return undefined
+    const failures = this.turnGuiToolFailures
+      .slice(0, 5)
+      .map((failure) => `${failure.toolName}(${failure.toolUseId}): ${failure.detail}`)
+      .join('；')
+    const suffix = this.turnGuiToolFailures.length > 5 ? `；另有 ${this.turnGuiToolFailures.length - 5} 个 GUI 工具失败` : ''
+    return `GUI 工具失败，任务未标记为成功: ${failures}${suffix}`
   }
 
   private applyUsage(value: unknown): void {
@@ -1229,6 +1275,22 @@ export class OpenAIEngine implements Engine {
   private providerAdapterContext(): ProviderAdapterContext {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     return { provider, model: this.effectiveModel() }
+  }
+
+  private openAIErrorContext(auth: { baseUrl: string }): OpenAIErrorContext {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    return {
+      providerId: this.meta.providerId || 'none',
+      providerName: provider?.name || this.meta.providerId || 'OpenAI',
+      baseUrl: redactBaseUrl(auth.baseUrl),
+      model: this.effectiveModel(),
+      protocol: this.protocol()
+    }
+  }
+
+  private withProviderErrorContext(message: string): string {
+    const auth = this.authConfig()
+    return `${message}\n${formatProviderErrorContext(this.openAIErrorContext(auth))}`
   }
 }
 
@@ -1308,6 +1370,25 @@ function numberField(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function summarizeToolFailure(resultText: string): string {
+  const clipped = clipText(resultText.trim() || '工具返回错误')
+  try {
+    const parsed = JSON.parse(resultText) as Record<string, unknown>
+    const parts: string[] = []
+    if (typeof parsed.error === 'string' && parsed.error.trim()) parts.push(parsed.error.trim())
+    if (typeof parsed.screenCapturePermission === 'string') parts.push(`screenCapturePermission=${parsed.screenCapturePermission}`)
+    if (typeof parsed.sourceCount === 'number') parts.push(`sourceCount=${parsed.sourceCount}`)
+    if (parts.length > 0) return clipText(parts.join('；'))
+  } catch {
+    // 非 JSON 工具输出直接截断展示。
+  }
+  return clipped
+}
+
+function clipText(text: string, max = 500): string {
+  return text.length > max ? `${text.slice(0, max)}...[truncated]` : text
+}
+
 function extractResponseText(value: unknown): string {
   if (!value || typeof value !== 'object') return ''
   const record = value as Record<string, unknown>
@@ -1327,13 +1408,41 @@ function extractResponseText(value: unknown): string {
     .join('')
 }
 
-async function formatOpenAIError(res: Response): Promise<string> {
+async function formatOpenAIError(res: Response, context?: OpenAIErrorContext): Promise<string> {
   const text = await res.text().catch(() => '')
+  const prefix = `OpenAI 返回 ${res.status}${statusHint(res.status)}`
+  const suffix = context ? `\n${formatProviderErrorContext(context)}` : ''
   try {
     const json = JSON.parse(text) as Record<string, unknown>
-    return `OpenAI 返回 ${res.status}: ${extractErrorMessage(json.error) || text || res.statusText}`
+    return `${prefix}: ${extractErrorMessage(json.error) || text || res.statusText}${suffix}`
   } catch {
-    return `OpenAI 返回 ${res.status}: ${text || res.statusText}`
+    return `${prefix}: ${text || res.statusText}${suffix}`
+  }
+}
+
+function statusHint(status: number): string {
+  if (status === 401 || status === 403) return '(认证/权限错误)'
+  if (status === 404) return '(模型名或端点不存在)'
+  if (status === 429) return '(限流/余额不足)'
+  if (status >= 500) return '(网关或上游服务错误)'
+  return ''
+}
+
+function formatProviderErrorContext(context: OpenAIErrorContext): string {
+  return `Provider: ${context.providerName} (${context.providerId}); baseUrl: ${context.baseUrl}; model: ${context.model}; protocol: ${context.protocol}`
+}
+
+function redactBaseUrl(value: string): string {
+  const clean = (value || '').trim()
+  try {
+    const url = new URL(clean)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return clean.replace(/([?&](?:key|token|api_key|apikey|access_token)=)[^&]+/gi, '$1[redacted]')
   }
 }
 

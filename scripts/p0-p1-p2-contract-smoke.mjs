@@ -113,6 +113,7 @@ function verifySourceContracts() {
   for (const scriptName of [
     'test:plan-contract',
     'test:search-replace',
+    'test:chat-virtual-list',
     'test:git-tools',
     'test:p2-ide-build-and-vscode:required',
     'test:p2-ide:required'
@@ -126,6 +127,7 @@ function verifySourceContracts() {
 
   const deepTest = readFileSync(path.join(repoRoot, 'scripts/deep-test.mjs'), 'utf8')
   assert(deepTest.includes('p0-p1-p2-contract-smoke.mjs'), 'deep-test must include plan contract smoke')
+  assert(deepTest.includes('chat-virtual-list-smoke.mjs'), 'deep-test must include chat virtual list smoke')
 
   const p2RequiredGate = readFileSync(path.join(repoRoot, 'scripts/p2-required-gate.mjs'), 'utf8')
   assert(p2RequiredGate.includes("name: 'ide_build_and_vscode_required'"), 'P2 required gate must use precise IDE build/VS Code check name')
@@ -147,6 +149,8 @@ function verifySourceContracts() {
 
   const engineContract = readFileSync(path.join(repoRoot, 'src/main/engine.ts'), 'utf8')
   assert(engineContract.includes('emitSyntheticEvent?'), 'Engine must expose optional synthetic event persistence hook')
+  assert(engineContract.includes('请选择 Agent 引擎'), 'Engine creation must require explicit engine selection')
+  assert(!engineContract.includes("factory = registry.get('claude')"), 'Engine creation must not silently fall back to Claude')
 
   const sessionManager = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
   for (const marker of [
@@ -157,6 +161,37 @@ function verifySourceContracts() {
   ]) {
     assert(sessionManager.includes(marker), `SessionManager missing DAG persistence marker ${marker}`)
   }
+  assert(
+    sessionManager.includes('assertExplicitSessionChoice') &&
+      sessionManager.includes('请选择已配置 API key 的 Provider') &&
+      sessionManager.includes('请选择模型或显式选择自动调度'),
+    'SessionManager must reject implicit engine/provider/model defaults for new non-CLI sessions'
+  )
+
+  const settings = readFileSync(path.join(repoRoot, 'src/main/settings.ts'), 'utf8')
+  assert(settings.includes("defaultProviderId: ''"), 'settings defaultProviderId must be empty, not a hidden provider')
+  assert(settings.includes("defaultModel: ''"), 'settings defaultModel must be empty, not a hidden model')
+
+  const providers = readFileSync(path.join(repoRoot, 'src/main/providers.ts'), 'utf8')
+  assert(!providers.includes('defaultDeepSeekProvider'), 'first launch must not inject a DeepSeek Provider')
+  assert(!providers.includes('首启默认 Provider'), 'providers must not advertise a first-run default Provider')
+  assert(!providers.includes('DEEPSEEK_PROVIDER_ID'), 'providers must not hard-code a hidden DeepSeek Provider id')
+
+  const newSessionModal = readFileSync(path.join(repoRoot, 'src/renderer/src/components/NewSessionModal.tsx'), 'utf8')
+  assert(newSessionModal.includes("useState<EngineKind | ''>('')"), 'new session UI must not default to Claude engine')
+  assert(
+    newSessionModal.includes("useState('')") &&
+      newSessionModal.includes("t('selectProviderPlaceholder')") &&
+      newSessionModal.includes("t('selectModelPlaceholder')"),
+    'new session UI must start with explicit provider/model placeholders'
+  )
+
+  const agentSession = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
+  const hiddenAnthropicName = '\u5b98\u65b9 Anthropic'
+  assert(
+    !agentSession.includes(`{ id: '', name: '${hiddenAnthropicName}'`),
+    'Claude failover must not inject an empty-provider candidate'
+  )
 }
 
 async function verifyViewHardCap() {

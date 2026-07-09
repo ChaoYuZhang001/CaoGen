@@ -2,25 +2,21 @@ import { app, safeStorage } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DEEPSEEK_DEFAULT_MODEL, DEEPSEEK_PROVIDER_ID } from '../shared/types'
-import type { OpenAIProtocol, Provider, ProviderInput, ProviderView } from '../shared/types'
+import type {
+  OpenAIProtocol,
+  Provider,
+  ProviderInput,
+  ProviderModelErrorKind,
+  ProviderModelFetchInput,
+  ProviderModelFetchResult,
+  ProviderView
+} from '../shared/types'
 
 let cache: Provider[] | null = null
+const modelFetchCache = new Map<string, { models: string[]; fetchedAt: number; baseUrl: string; providerId?: string }>()
 
 function providersFile(): string {
   return join(app.getPath('userData'), 'providers.json')
-}
-
-function defaultDeepSeekProvider(): Provider {
-  return {
-    id: DEEPSEEK_PROVIDER_ID,
-    name: 'DeepSeek(官方直连)',
-    baseUrl: 'https://api.deepseek.com/anthropic',
-    encryptedToken: '',
-    models: [DEEPSEEK_DEFAULT_MODEL, 'deepseek-reasoner'],
-    note: '首启默认 Provider。请在设置里填写 DeepSeek API key 后使用。',
-    createdAt: Date.now()
-  }
 }
 
 function load(): Provider[] {
@@ -31,7 +27,7 @@ function load(): Provider[] {
     const raw = JSON.parse(readFileSync(file, 'utf8'))
     cache = Array.isArray(raw) ? (raw as Provider[]) : []
   } catch {
-    cache = firstRun ? [defaultDeepSeekProvider()] : []
+    cache = []
     if (firstRun) persist()
   }
   return cache
@@ -87,7 +83,7 @@ export function getProvider(id: string): Provider | undefined {
 }
 
 /**
- * 已知官方端点的 Anthropic 兼容 API 在 /anthropic 子路径下(如 DeepSeek/Kimi/智谱)。
+ * 已知厂商端点的 Anthropic 兼容 API 在 /anthropic 子路径下(如 DeepSeek/Kimi/智谱)。
  * 用户常误填裸域名(如 https://api.deepseek.com),导致 SDK 打到 /v1/messages
  * 而非 /anthropic/v1/messages,对话必然失败。此处防御性补全 /anthropic 后缀。
  */
@@ -182,13 +178,15 @@ async function tryFetchModelsFrom(url: string, token: string): Promise<string[] 
         'anthropic-version': '2023-06-01'
       }
     })
-  } catch {
-    return null // 网络失败,试下一个
+  } catch (err) {
+    throw modelFetchError('network', `连接失败:${errText(err)}`)
   }
   // 401/403 是鉴权问题,不是端点不对 —— 直接抛,别再试其它候选
   if (res.status === 401 || res.status === 403) {
-    throw new Error(`端点返回 ${res.status}(密钥无效?)`)
+    throw modelFetchError('auth', `端点返回 ${res.status}(密钥无效或权限不足)`, res.status)
   }
+  if (res.status === 429) throw modelFetchError('rate_limit', '端点返回 429(限流或余额不足)', res.status)
+  if (res.status >= 500) throw modelFetchError('server', `端点返回 ${res.status}(网关或上游服务错误)`, res.status)
   if (res.status === 404) return null // 此路径无模型端点,试下一候选
   if (!res.ok) return null
   let json: unknown
@@ -220,27 +218,139 @@ async function tryFetchModelsFrom(url: string, token: string): Promise<string[] 
  *   模型列表常在根域:{root}/v1/models、{root}/models
  * 401/403 立即抛(密钥问题);全部 404/无果才报"端点不支持"。
  */
-export async function fetchModels(opts: {
-  baseUrl: string
-  token?: string
-  providerId?: string
-}): Promise<string[]> {
+export async function fetchModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult> {
   const base = (opts.baseUrl || '').trim().replace(/\/+$/, '')
-  if (!base) throw new Error('请先填写 Base URL')
+  const providerId = opts.providerId?.trim() || undefined
+  const publicBaseUrl = redactBaseUrl(base)
+  const cacheKey = providerModelCacheKey(providerId, base, opts.openaiProtocol)
+  if (!base) {
+    const result = failureModelFetchResult(cacheKey, providerId, publicBaseUrl, 'not_found', '请先填写 Base URL')
+    modelFetchCache.delete(cacheKey)
+    return result
+  }
   let token = opts.token?.trim() || ''
   if (!token && opts.providerId) {
     const p = getProvider(opts.providerId)
     if (p) token = decryptToken(p.encryptedToken)
   }
-  if (!token) throw new Error('请先填写 API 密钥')
+  if (!token) {
+    const result = failureModelFetchResult(cacheKey, providerId, publicBaseUrl, 'auth', '请先填写 API 密钥')
+    modelFetchCache.delete(cacheKey)
+    return result
+  }
 
   // 候选端点(去重,保序)
   const root = base.replace(/\/anthropic$/, '')
   const candidates = [...new Set([`${base}/v1/models`, `${base}/models`, `${root}/v1/models`, `${root}/models`])]
 
-  for (const url of candidates) {
-    const models = await tryFetchModelsFrom(url, token) // 401/403 会向上抛
-    if (models) return models
+  try {
+    for (const url of candidates) {
+      const models = await tryFetchModelsFrom(url, token) // 401/403/429/5xx/network 会向上抛
+      if (models) {
+        const fetchedAt = Date.now()
+        modelFetchCache.set(cacheKey, { models, fetchedAt, baseUrl: publicBaseUrl, providerId })
+        return {
+          ok: true,
+          providerId,
+          baseUrl: publicBaseUrl,
+          cacheKey,
+          models,
+          fetchedAt,
+          stale: false
+        }
+      }
+    }
+  } catch (err) {
+    const tagged = taggedModelFetchError(err)
+    modelFetchCache.delete(cacheKey)
+    return failureModelFetchResult(cacheKey, providerId, publicBaseUrl, tagged.kind, tagged.message, tagged.status)
   }
-  throw new Error('未能获取模型列表:该端点可能不提供 /models 接口,请手动填写模型名')
+  modelFetchCache.delete(cacheKey)
+  return failureModelFetchResult(
+    cacheKey,
+    providerId,
+    publicBaseUrl,
+    'not_found',
+    '未能获取模型列表:该端点可能不提供 /models 接口,请手动填写模型名'
+  )
+}
+
+function providerModelCacheKey(providerId: string | undefined, baseUrl: string, protocol?: OpenAIProtocol): string {
+  return [providerId || 'new-provider', normalizeCacheBaseUrl(baseUrl), protocol || 'default'].join('|')
+}
+
+function normalizeCacheBaseUrl(value: string): string {
+  const clean = (value || '').trim().replace(/\/+$/, '')
+  try {
+    const url = new URL(clean)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return clean
+  }
+}
+
+function redactBaseUrl(value: string): string {
+  const clean = (value || '').trim().replace(/\/+$/, '')
+  try {
+    const url = new URL(clean)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return clean.replace(/([?&](?:key|token|api_key|apikey|access_token)=)[^&]+/gi, '$1[redacted]')
+  }
+}
+
+function failureModelFetchResult(
+  cacheKey: string,
+  providerId: string | undefined,
+  baseUrl: string,
+  kind: ProviderModelErrorKind,
+  message: string,
+  status?: number
+): ProviderModelFetchResult {
+  return {
+    ok: false,
+    providerId,
+    baseUrl,
+    cacheKey,
+    models: [],
+    stale: true,
+    error: {
+      kind,
+      message,
+      status,
+      providerId,
+      baseUrl
+    }
+  }
+}
+
+function modelFetchError(kind: ProviderModelErrorKind, message: string, status?: number): Error {
+  const err = new Error(message) as Error & { kind?: ProviderModelErrorKind; status?: number }
+  err.kind = kind
+  err.status = status
+  return err
+}
+
+function taggedModelFetchError(err: unknown): { kind: ProviderModelErrorKind; message: string; status?: number } {
+  const record = err as { kind?: ProviderModelErrorKind; status?: number; message?: string } | null
+  if (record?.kind) {
+    return {
+      kind: record.kind,
+      message: record.message || '模型列表获取失败',
+      status: record.status
+    }
+  }
+  return { kind: 'unknown', message: errText(err) }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }

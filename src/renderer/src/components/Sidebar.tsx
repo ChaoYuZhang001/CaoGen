@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
 import type {
   HistoryEntry,
+  LayoutSettings,
   SessionMeta,
   SessionStatus,
   TaskSnapshotRecord,
@@ -19,6 +20,10 @@ const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   error: 'statusError',
   closed: 'statusClosed'
 }
+
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 420
+const SIDEBAR_COLLAPSED_WIDTH = 56
 
 type SidebarEntry =
   | { kind: 'active'; id: string; meta: SessionMeta; history?: HistoryEntry; pendingCount: number }
@@ -60,6 +65,10 @@ function historyPath(entry: HistoryEntry): string {
 
 function normalized(value: string | undefined): string {
   return (value ?? '').toLowerCase()
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)))
 }
 
 function activateByKeyboard(e: React.KeyboardEvent, action: () => void): void {
@@ -114,12 +123,44 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setView = useStore((s) => s.setView)
+  const layout = useStore((s) => s.settings.layout)
+  const updateSettings = useStore((s) => s.updateSettings)
 
   const [editing, setEditing] = useState<EditingTarget | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(layout.sidebarWidth)
+
+  useEffect(() => {
+    setSidebarWidth(layout.sidebarWidth)
+  }, [layout.sidebarWidth])
+
+  const patchLayout = (patch: Partial<LayoutSettings>): void => {
+    void updateSettings({ layout: { ...layout, ...patch } })
+  }
+
+  const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (layout.sidebarCollapsed) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+    let nextWidth = startWidth
+    const move = (moveEvent: PointerEvent): void => {
+      nextWidth = clamp(startWidth + moveEvent.clientX - startX, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+      setSidebarWidth(nextWidth)
+    }
+    const stop = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+      document.body.classList.remove('is-resizing-layout')
+      patchLayout({ sidebarWidth: nextWidth })
+    }
+    document.body.classList.add('is-resizing-layout')
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop, { once: true })
+  }
 
   const historyByActiveId = useMemo(() => {
     const map = new Map<string, HistoryEntry>()
@@ -492,10 +533,26 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   const contentSearchActive = query.trim().length >= 2
 
   return (
-    <aside className={`sidebar ${mobileOpen ? 'sidebar-mobile-open' : ''}`}>
+    <aside
+      className={`sidebar ${layout.sidebarCollapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-mobile-open' : ''}`}
+      style={
+        {
+          '--sidebar-width': `${layout.sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px`
+        } as React.CSSProperties
+      }
+    >
       <div className="sidebar-brand drag-region">
         <span className="brand-mark">◆</span>
         <span className="brand-name">CaoGen</span>
+        <button
+          type="button"
+          className="sidebar-collapse-toggle no-drag"
+          aria-label={layout.sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}
+          title={layout.sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}
+          onClick={() => patchLayout({ sidebarCollapsed: !layout.sidebarCollapsed })}
+        >
+          {layout.sidebarCollapsed ? '›' : '‹'}
+        </button>
         <button
           type="button"
           className="sidebar-mobile-close no-drag"
@@ -637,6 +694,15 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
           {t('settings')}
         </button>
       </div>
+
+      <div
+        className="sidebar-resize-handle no-drag"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('resizeSidebar')}
+        title={t('resizeSidebar')}
+        onPointerDown={startSidebarResize}
+      />
 
       {menu && (
         <SessionContextMenu

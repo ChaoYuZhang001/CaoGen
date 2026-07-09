@@ -1,5 +1,5 @@
 /**
- * 按 Provider 名称推断厂商品牌色与短标识,用于 3D 办公区小人主题化。
+ * 按 Provider 名称推断厂商品牌色与短标识,用于控制室工位主题化。
  * 名称是用户自定义自由文本,按关键词大小写不敏感匹配;命中不了给中性色。
  * 说明:仅用品牌"色 + 首标",不内置任何厂商商标图形,规避商标风险。
  */
@@ -22,10 +22,10 @@ const RULES: Array<{ match: RegExp; brand: Brand }> = [
 
 const DEFAULT_BRAND: Brand = { color: '#7a8393', label: '·' }
 
-/** providerName 为空表示官方 Anthropic */
+/** providerName 为空表示未知或历史未选择 Provider。 */
 export function brandFor(providerName: string | undefined): Brand {
   const name = (providerName ?? '').trim()
-  if (!name) return { color: '#d97757', label: 'A' } // 官方
+  if (!name) return DEFAULT_BRAND
   for (const { match, brand } of RULES) if (match.test(name)) return brand
   // 未命中已知厂商:用名称首字母 + 中性色
   const first = name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase()

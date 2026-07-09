@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { app, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
@@ -142,22 +141,6 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/**
- * 是否存在"真实" Claude 登录凭据。只认三者之一:
- * ANTHROPIC_API_KEY 环境变量 / 存在的 host-creds 文件 / ~/.claude/.credentials.json。
- * 注意:~/.claude.json 是配置文件(人人都有,不含 token),绝不能当凭据。
- */
-function hasRealClaudeAuth(): boolean {
-  if (process.env.ANTHROPIC_API_KEY) return true
-  const hostCreds = process.env.CLAUDE_CODE_HOST_CREDS_FILE
-  if (hostCreds && existsSync(hostCreds)) return true
-  try {
-    return existsSync(join(homedir(), '.claude', '.credentials.json'))
-  } catch {
-    return false
-  }
-}
-
 function normalizeBudget(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
@@ -281,7 +264,7 @@ function toolResultText(content: unknown): string {
 /**
  * 一个桌面会话 = 一个持续存活的 Agent SDK query(流式输入模式)。
  * 通过 Pushable 推送用户消息,通过回调把 SDK 消息翻译成 AgentEvent 发往渲染进程。
- * M6 起实现 Engine 接口(即"ClaudeEngine"),经 engines.ts 注册为默认引擎。
+ * M6 起实现 Engine 接口(即"ClaudeEngine"),经 engines.ts 注册。
  */
 export class AgentSession implements Engine {
   readonly meta: SessionMeta
@@ -347,13 +330,13 @@ export class AgentSession implements Engine {
     if (!this.meta.providerId) return env
     const provider = getProvider(this.meta.providerId)
     if (!provider) {
-      console.warn('[agent-desk] Provider 不存在,回退默认:', this.meta.providerId)
+      console.warn('[agent-desk] Provider 不存在,跳过 Provider 环境覆盖:', this.meta.providerId)
       return env
     }
     const token = decryptToken(provider.encryptedToken)
     // 只有在我们真能注入替代凭据时,才剥离 host 托管鉴权 —— 否则(选了 Provider
     // 但没配 key)既没了 host 登录、又没有自己的 token,SDK 子进程零凭据挂起。
-    // 这是"Claude 引擎默认挂 DeepSeek 但没填 key → 真对话超时"的根因。
+    // 这是"选了 Provider 但没填 key → 真对话超时"的根因。
     if (token || provider.baseUrl) {
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
       delete env.CLAUDE_CODE_HOST_CREDS_FILE
@@ -627,14 +610,6 @@ export class AgentSession implements Engine {
     const provider = getProvider(this.meta.providerId)
     if (!provider) return `Provider 不存在:${this.meta.providerId}`
     if (decryptToken(provider.encryptedToken)) return null
-    // 空 baseUrl 且无 token = 官方 Anthropic 预设:需要真实宿主登录态才放行。
-    // 只认"真实凭据":API key / 存在的 host-creds 文件 / .credentials.json。
-    // ~/.claude.json 是配置文件不算凭据(外部验收踩坑:误判致中途 Not logged in)。
-    if (!provider.baseUrl.trim()) {
-      if (this.meta.engine !== 'claude') return null // 非 Claude 引擎不走 Anthropic 登录
-      if (hasRealClaudeAuth()) return null
-      return '未检测到 Claude 登录态:请运行 claude 登录、设置 ANTHROPIC_API_KEY,或改用已配 key 的 Provider'
-    }
     return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
@@ -723,7 +698,7 @@ export class AgentSession implements Engine {
         await this.query?.setModel(decision.model)
       }
     } catch (err) {
-      console.error('[agent-desk] 自动路由失败,回退默认模型:', err)
+      console.error('[agent-desk] 自动路由失败,保留当前显式模型:', err)
     }
     await this.pushUserMessage(payload)
   }
@@ -1046,16 +1021,14 @@ export class AgentSession implements Engine {
   }
 
   private providerName(id: string): string {
-    if (!id) return '官方 Anthropic'
+    if (!id) return '未选择 Provider'
     return getProvider(id)?.name ?? '未知厂商'
   }
 
-  /** 故障切换候选:官方 Anthropic + 全部已配置 Provider */
+  /** 故障切换候选:只纳入已配置 key 的 Provider,避免暗中切到本机默认登录态。 */
   private failoverCandidates(): FailoverCandidate[] {
-    const out: FailoverCandidate[] = [
-      { id: '', name: '官方 Anthropic', models: [...DEFAULT_AUTO_CANDIDATES] }
-    ]
-    // 只纳入已配 key 的厂商:没 key 的选中必失败(官方 Anthropic 走环境登录例外)
+    const out: FailoverCandidate[] = []
+    // 只纳入已配 key 的厂商:没 key 的选中必失败。
     for (const p of listProviders()) {
       if (p.hasToken) out.push({ id: p.id, name: p.name, models: p.models })
     }
@@ -1588,7 +1561,7 @@ export function newSessionMeta(opts: {
     providerId: opts.providerId,
     budgetUsd: normalizeBudget(opts.budgetUsd),
     resumeSessionAt: opts.resumeSessionAt,
-    engine: opts.engine ?? 'claude',
+    engine: opts.engine,
     permissionMode: opts.permissionMode,
     status: 'starting',
     costUsd: 0,

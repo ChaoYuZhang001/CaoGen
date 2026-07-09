@@ -128,7 +128,7 @@ export function caogenDrivePolicyView(mode: unknown): CaoGenDrivePolicyView {
 }
 
 export interface ProviderHealthView {
-  /** '' / 'official' = 官方 Anthropic;否则 Provider id */
+  /** Provider id;历史健康记录里可能出现 official,但新会话不再使用空 Provider 默认。 */
   providerId: string
   successes: number
   failures: number
@@ -141,7 +141,7 @@ export interface ProviderHealthView {
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 
-/** Agent 引擎标识:claude = Claude Agent SDK(默认);openai = OpenAI Responses API;codex / gemini 经 EngineAdapter 接入 */
+/** Agent 引擎标识:claude = Claude Agent SDK;openai = OpenAI Responses API;codex / gemini 经 EngineAdapter 接入 */
 export type EngineKind = 'claude' | 'openai' | 'codex' | 'gemini'
 
 export interface EngineInfo {
@@ -192,13 +192,13 @@ export interface SessionMeta {
   worktreeState?: 'active' | 'removed'
   /** 空字符串表示跟随 CLI 默认模型 */
   model: string
-  /** 此会话绑定的 Provider ID;空字符串 = 官方 Anthropic */
+  /** 此会话绑定的 Provider ID;Claude/OpenAI 新会话必须显式选择。CLI 引擎可为空。 */
   providerId: string
   /** 本会话预算上限;0/undefined = 继承 Provider 或全局设置。 */
   budgetUsd?: number
   /** 下次 resume SDK 会话时截断到此用户消息/检查点。 */
   resumeSessionAt?: string
-  /** Agent 引擎;缺省 = 'claude' */
+  /** Agent 引擎;新会话必须显式选择。 */
   engine?: EngineKind
   permissionMode: PermissionModeId
   status: SessionStatus
@@ -259,7 +259,7 @@ export interface CreateSessionOptions {
   providerId?: string
   budgetUsd?: number
   resumeSessionAt?: string
-  /** Agent 引擎;缺省 claude */
+  /** Agent 引擎;新会话必须显式传入。 */
   engine?: EngineKind
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
@@ -733,10 +733,25 @@ export interface StartSuggestion {
 export interface OfficeSettings {
   /** 显示桌上厂商工牌 */
   showBadges: boolean
-  /** 小人动画活跃度倍率(0.5 沉稳 ~ 1.5 活泼) */
+  /** 控制室动效强度倍率(0.2 静态 ~ 1.2 活跃) */
   liveliness: number
-  /** 宠物化:给小人加猫耳 */
+  /** 趣味外观:给小人加猫耳 */
   catEars: boolean
+}
+
+export type ChatDensity = 'comfortable' | 'compact'
+
+export interface LayoutSettings {
+  /** 桌面侧栏是否收回;窄屏仍走抽屉模式。 */
+  sidebarCollapsed: boolean
+  /** 桌面侧栏宽度(px)。 */
+  sidebarWidth: number
+  /** 工作台右侧工具面板宽度(px)。 */
+  workbenchSideWidth: number
+  /** 聊天内容缩放倍率。 */
+  chatScale: number
+  /** 聊天内容密度。 */
+  chatDensity: ChatDensity
 }
 
 export interface AppSettings {
@@ -745,7 +760,7 @@ export interface AppSettings {
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
   defaultPermissionMode: PermissionModeId
-  /** 新会话默认使用的 Provider ID;空字符串 = 官方 Anthropic */
+  /** 新会话默认使用的 Provider ID;空字符串 = 不设置默认,创建时必须显式选择。 */
   defaultProviderId: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
@@ -814,14 +829,16 @@ export interface AppSettings {
   hookTurnEndCommand: string
   /** 自动 Skill 沉淀:任务成功完成后后台复盘、验证并写入项目本地 Skill 库。默认关闭。 */
   autoSkillLearningEnabled: boolean
-  /** 3D 办公区 / 宠物设置 */
+  /** Agent 控制室外观设置 */
   office: OfficeSettings
+  /** 工作台布局、缩放和可调节面板设置 */
+  layout: LayoutSettings
 }
 
 export interface Provider {
   id: string
   name: string
-  /** 空字符串 = 官方 Anthropic API */
+  /** 空字符串 = 该 Provider 使用引擎/本机默认端点;不会作为新会话隐式默认。 */
   baseUrl: string
   /** safeStorage 加密后的 token;空字符串 = 继承环境变量。仅存在于主进程 */
   encryptedToken: string
@@ -996,6 +1013,41 @@ export interface ProviderInput {
   note?: string
   /** 明文 token,经 IPC 传入主进程后加密落盘 */
   token: string
+}
+
+export type ProviderModelErrorKind =
+  | 'auth'
+  | 'rate_limit'
+  | 'server'
+  | 'network'
+  | 'gateway'
+  | 'not_found'
+  | 'unknown'
+
+export interface ProviderModelFetchInput {
+  baseUrl: string
+  token?: string
+  providerId?: string
+  openaiProtocol?: OpenAIProtocol
+}
+
+export interface ProviderModelFetchError {
+  kind: ProviderModelErrorKind
+  message: string
+  status?: number
+  providerId?: string
+  baseUrl: string
+}
+
+export interface ProviderModelFetchResult {
+  ok: boolean
+  providerId?: string
+  baseUrl: string
+  cacheKey: string
+  models: string[]
+  fetchedAt?: number
+  stale: boolean
+  error?: ProviderModelFetchError
 }
 
 export type AssistantBlock =
@@ -1811,7 +1863,7 @@ export interface AgentDeskApi {
   createProvider(provider: ProviderInput): Promise<ProviderView>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
   deleteProvider(id: string): Promise<void>
-  fetchProviderModels(opts: { baseUrl: string; token?: string; providerId?: string }): Promise<string[]>
+  fetchProviderModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult>
   listProviderHealth(): Promise<ProviderHealthView[]>
   listEngines(): Promise<EngineInfo[]>
   scanPluginRegistry(

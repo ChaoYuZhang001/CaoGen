@@ -22,6 +22,8 @@ const BEZEL_COLOR = '#15181e'
 const ARM_COLOR = '#2c313c'
 const BASE_COLOR = '#22262f'
 const HIGHLIGHT = '#f4f4f4'
+const SCREEN_INK = '#071018'
+const SCREEN_TEXT = '#dce7f2'
 
 /**
  * 双显示器 + 显示器支架臂。
@@ -143,6 +145,7 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
             toneMapped={false}
           />
         </mesh>
+        <ScreenWorkspace side={side} screenColor={screenColor} />
 
         {/* 机身底缘白高光条,统一写实感 */}
         <mesh position={[0, -0.185, 0.005]}>
@@ -161,6 +164,57 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
           />
         </mesh>
       </group>
+    </group>
+  )
+}
+
+function ScreenWorkspace({ side, screenColor }: { side: 'left' | 'right'; screenColor: string }): React.JSX.Element {
+  const dir = side === 'left' ? -1 : 1
+  const lineYs = side === 'left' ? [0.085, 0.045, 0.005, -0.035] : [0.07, 0.025, -0.02]
+  const lineWidths = side === 'left' ? [0.28, 0.22, 0.31, 0.18] : [0.18, 0.28, 0.21]
+
+  return (
+    <group position={[0, 0, 0.025]}>
+      <mesh position={[0, 0.112, 0]}>
+        <boxGeometry args={[0.46, 0.032, 0.006]} />
+        <meshStandardMaterial color={SCREEN_INK} transparent opacity={0.5} roughness={0.2} metalness={0.1} />
+      </mesh>
+      <mesh position={[-0.16, 0.112, 0.004]}>
+        <boxGeometry args={[0.12, 0.012, 0.006]} />
+        <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.28} toneMapped={false} />
+      </mesh>
+      <mesh position={[0.15, 0.112, 0.004]}>
+        <boxGeometry args={[0.1, 0.012, 0.006]} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.55} toneMapped={false} />
+      </mesh>
+
+      {lineYs.map((y, i) => (
+        <group key={`${side}-line-${i}`} position={[-0.14 + i * 0.012 * dir, y, 0.004]}>
+          <mesh position={[lineWidths[i] / 2, 0, 0]}>
+            <boxGeometry args={[lineWidths[i], 0.012, 0.006]} />
+            <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.18} toneMapped={false} transparent opacity={0.82} />
+          </mesh>
+          <mesh position={[-0.038, 0, 0.002]}>
+            <boxGeometry args={[0.026, 0.012, 0.007]} />
+            <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.42} toneMapped={false} />
+          </mesh>
+        </group>
+      ))}
+
+      <mesh position={[0.14 * dir, -0.085, 0.004]}>
+        <boxGeometry args={[0.19, 0.086, 0.006]} />
+        <meshStandardMaterial color={SCREEN_INK} transparent opacity={0.38} roughness={0.24} metalness={0.12} />
+      </mesh>
+      {[0.025, 0.052, 0.038, 0.068].map((h, i) => (
+        <mesh key={`${side}-bar-${i}`} position={[0.075 * dir + i * 0.034 * dir, -0.12 + h / 2, 0.008]}>
+          <boxGeometry args={[0.018, h, 0.007]} />
+          <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.48} toneMapped={false} transparent opacity={0.9} />
+        </mesh>
+      ))}
+      <mesh position={[-0.15 * dir, -0.108, 0.006]}>
+        <boxGeometry args={[0.16, 0.012, 0.006]} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.52} toneMapped={false} />
+      </mesh>
     </group>
   )
 }

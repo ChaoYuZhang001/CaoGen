@@ -102,6 +102,7 @@ import type {
   PluginRegistryItem,
   PluginRegistryScanOptions,
   ProviderInput,
+  ProviderModelFetchInput,
   SaveImageAttachmentBytesInput,
   SendMessagePayload,
   TaskDagDispatchInput,
@@ -1052,7 +1053,7 @@ export function registerIpc(): void {
 
   ipcMain.handle(
     'providers:fetchModels',
-    (_e, opts: { baseUrl: string; token?: string; providerId?: string }) => fetchModels(opts ?? {})
+    (_e, opts: ProviderModelFetchInput) => fetchModels(opts ?? {})
   )
 
   ipcMain.handle('dialog:pickDirectory', async (e) => {

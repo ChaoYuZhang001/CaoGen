@@ -220,9 +220,9 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
           value={providerId}
           onChange={(e) => setProviderId(e.target.value)}
         >
-          <option value="">{t('officialAnthropicDefault')}</option>
+          <option value="">{t('noDefaultProvider')}</option>
           {providers.map((p) => (
-            <option key={p.id} value={p.id}>
+            <option key={p.id} value={p.id} disabled={!p.hasToken}>
               {p.name}
               {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
             </option>
@@ -233,7 +233,7 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
         <input
           className="input input-block"
           value={model}
-          placeholder={t('defaultModel')}
+          placeholder={t('selectModelPlaceholder')}
           onChange={(e) => setModel(e.target.value)}
         />
 

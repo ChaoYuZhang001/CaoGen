@@ -30,13 +30,14 @@ let trayTimer: NodeJS.Timeout | null = null
 app.setName('CaoGen')
 app.setPath('userData', process.env.CAOGEN_USER_DATA_DIR || join(app.getPath('appData'), 'CaoGen'))
 
-/** 应用图标源文件;放置后自动生效(Windows/Linux 窗口图标 + 打包) */
+/** 应用图标源文件;Windows 使用透明背景图标,其他平台使用圆角通用图标。 */
 function iconPath(): string | undefined {
   // 打包后 resources 随 app 一起分发;dev 时用仓库内的 resources/
-  const candidates = [
-    join(process.resourcesPath ?? '', 'icon.png'),
-    join(__dirname, '../../resources/icon.png')
-  ]
+  const names = process.platform === 'win32' ? ['icon-win.png', 'icon.png'] : ['icon.png']
+  const candidates = names.flatMap((name) => [
+    join(process.resourcesPath ?? '', name),
+    join(__dirname, '../../resources', name)
+  ])
   return candidates.find((p) => p && existsSync(p))
 }
 

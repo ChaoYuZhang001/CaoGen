@@ -98,21 +98,22 @@ export interface BuildControlCenterViewInput {
 
 export function buildControlCenterView(input: BuildControlCenterViewInput): ControlCenterView {
   const policy = caogenDrivePolicyView(input.settings.driveMode)
-  const healthByProvider = new Map(input.health.map((item) => [item.providerId || 'official', item]))
-  const selectedProviderId = input.settings.defaultProviderId || 'official'
+  const healthByProvider = new Map(input.health.map((item) => [item.providerId, item]))
+  const selectedProviderId = input.settings.defaultProviderId
   const providerRows = input.providers.map((provider) =>
     buildProviderStatus(provider, healthByProvider.get(provider.id), selectedProviderId)
   )
   const selectedProvider = providerRows.find((provider) => provider.id === selectedProviderId)
-  const selectedProviderMissing = selectedProviderId !== 'official' && !selectedProvider
-  const officialProviderStatus = buildOfficialProviderStatus(healthByProvider.get('official'), selectedProviderId)
-  const allProviders = [officialProviderStatus, ...providerRows]
+  const selectedProviderMissing = Boolean(selectedProviderId) && !selectedProvider
+  const allProviders = providerRows
   const providerStatus = selectedProviderMissing
     ? 'needs-config'
-    : (allProviders.find((provider) => provider.id === selectedProviderId)?.status ?? 'external-required')
+    : selectedProviderId
+      ? (selectedProvider?.status ?? 'external-required')
+      : 'needs-config'
   const defaultProviderName = selectedProviderMissing
     ? `${input.settings.defaultProviderId} (missing)`
-    : (allProviders.find((provider) => provider.id === selectedProviderId)?.name ?? 'Official Anthropic')
+    : (selectedProvider?.name ?? '未设置 Provider 偏好')
   const mcp = buildMcpStatus(input.pluginRegistry, input.mcpProbeResults ?? {})
   const engines = input.engines.map((engine) => ({
     ...engine,
@@ -188,7 +189,7 @@ function buildProviderStatus(
   return {
     id: provider.id,
     name: provider.name,
-    endpoint: provider.baseUrl || 'official endpoint',
+    endpoint: provider.baseUrl || 'local login endpoint',
     modelCount: provider.models.length,
     budgetLabel: provider.budgetUsd > 0 ? moneyLabel(provider.budgetUsd) : 'inherits global budget',
     hasToken: provider.hasToken,
@@ -197,25 +198,6 @@ function buildProviderStatus(
     status,
     detail,
     selected: provider.id === selectedProviderId
-  }
-}
-
-function buildOfficialProviderStatus(
-  health: ProviderHealthView | undefined,
-  selectedProviderId: string
-): ControlCenterProviderStatus {
-  return {
-    id: 'official',
-    name: 'Official Anthropic',
-    endpoint: 'default Claude / Anthropic login',
-    modelCount: 3,
-    budgetLabel: 'inherits global budget',
-    hasToken: false,
-    tokenLabel: 'external credential',
-    healthLabel: health ? (health.healthy ? 'healthy' : `failing · ${health.consecutiveFailures} consecutive`) : 'not probed',
-    status: health && !health.healthy ? 'needs-config' : 'external-required',
-    detail: 'uses external CLI/login/env credential; secret is not readable here',
-    selected: selectedProviderId === 'official'
   }
 }
 
@@ -326,7 +308,7 @@ function buildCapabilities(input: {
 
 function modelLabel(model: string): string {
   if (model === AUTO_MODEL) return 'auto route'
-  if (!model) return 'engine default'
+  if (!model) return 'no model preference'
   return model
 }
 

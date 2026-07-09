@@ -3,6 +3,7 @@ import type { TaskDagAutoMergeStatus, TaskDagTaskStatus } from '../../../../shar
 
 export type OfficeTaskKind = 'subtask' | 'tool'
 export type OfficeTaskStatus = 'pending' | 'running' | 'awaiting' | 'done' | 'error'
+export type OfficeSessionActivity = 'idle' | 'working' | 'awaiting' | 'completed' | 'error'
 
 export interface OfficeTask {
   id: string
@@ -56,6 +57,15 @@ function autoMergeStatus(status: TaskDagAutoMergeStatus): OfficeTaskStatus {
   if (status === 'success') return 'done'
   if (status === 'partial') return 'awaiting'
   return 'error'
+}
+
+export function officeActivityOf(session: SessionState): OfficeSessionActivity {
+  if (session.pendingPermissions.length > 0) return 'awaiting'
+  if (session.meta.status === 'running' || session.meta.status === 'starting') return 'working'
+  if (session.meta.status === 'error') return 'error'
+  const latestTurn = [...session.items].reverse().find((item) => item.kind === 'turn-result')
+  if (latestTurn?.kind === 'turn-result') return latestTurn.isError ? 'error' : 'completed'
+  return 'idle'
 }
 
 export interface OfficeSessionModel {
@@ -116,6 +126,16 @@ function taskKind(name: string): OfficeTaskKind {
 
 function taskTitle(name: string, rawInput: unknown): string {
   const input = asRecord(rawInput)
+  const lowerName = name.toLowerCase()
+  if (lowerName === 'write_file' || lowerName === 'read_file' || lowerName === 'edit_file') {
+    return truncate(str(input.path) || str(input.file_path), 72) || name
+  }
+  if (lowerName === 'bash' || lowerName === 'shell') {
+    return truncate(firstLine(str(input.command)), 72) || name
+  }
+  if (lowerName === 'grep' || lowerName === 'glob') {
+    return truncate(str(input.pattern), 72) || name
+  }
   switch (name) {
     case 'Task':
     case 'Agent':

@@ -24,6 +24,7 @@ const commands = [
   { name: 'checkpointRestorePlan smoke', command: 'node', args: ['scripts/checkpoint-restore-plan-smoke.mjs'], category: 'smoke' },
   { name: 'fileOps smoke', command: 'node', args: ['scripts/file-ops-smoke.mjs'], category: 'smoke' },
   { name: 'searchReplace/view smoke', command: 'node', args: ['scripts/search-replace-smoke.mjs'], category: 'smoke' },
+  { name: 'chat virtual list smoke', command: 'node', args: ['scripts/chat-virtual-list-smoke.mjs'], category: 'smoke' },
   { name: 'indexer smoke', command: 'node', args: ['scripts/indexer-smoke.mjs'], category: 'smoke' },
   { name: 'context loader smoke', command: 'node', args: ['scripts/context-loader-smoke.mjs'], category: 'smoke' },
   { name: 'sandbox permission smoke', command: 'node', args: ['scripts/p0-004-sandbox-permission-smoke.mjs'], category: 'smoke' },

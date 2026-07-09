@@ -16,8 +16,8 @@ import type {
  * 事件模型(AgentEvent)与引擎解耦——任何能产出这组事件、
  * 吃进用户消息的 CLI/SDK 都可以成为一个引擎。
  *
- * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)。
- * 规划实现:CodexEngine(Codex CLI)、GeminiEngine(Gemini CLI)。
+ * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)、OpenAIEngine、CodexEngine、GeminiEngine。
+ * 注意:创建会话必须显式选择引擎;这里不再静默回退 Claude。
  */
 export interface Engine {
   readonly meta: SessionMeta
@@ -49,7 +49,7 @@ export interface Engine {
 export type EngineEmit = (event: AgentEvent, seq: number) => void
 
 export interface EngineFactory {
-  /** 引擎标识,会话按 meta.engine 选择;'claude' 为默认 */
+  /** 引擎标识,会话按 meta.engine 选择。 */
   kind: string
   /** 人类可读名(设置/新建会话下拉用) */
   label: string
@@ -72,15 +72,16 @@ export function listEngines(): Array<{ kind: string; label: string; available: b
   }))
 }
 
-/** 按 kind 创建引擎;未注册/不可用时回退默认 claude 引擎 */
+/** 按 kind 创建引擎;未注册/不可用时直接失败,避免暗中换成别的模型/账号体系。 */
 export function createEngine(
   kind: string | undefined,
   meta: SessionMeta,
   emit: EngineEmit,
   resumeSdkSessionId?: string
 ): Engine {
-  let factory = kind ? registry.get(kind) : undefined
-  if (!factory || !factory.available()) factory = registry.get('claude')
-  if (!factory) throw new Error('没有可用的 Agent 引擎(claude 引擎未注册)')
+  if (!kind) throw new Error('请选择 Agent 引擎')
+  const factory = registry.get(kind)
+  if (!factory) throw new Error(`Agent 引擎未注册:${kind}`)
+  if (!factory.available()) throw new Error(`Agent 引擎不可用:${factory.label}`)
   return factory.create(meta, emit, resumeSdkSessionId)
 }

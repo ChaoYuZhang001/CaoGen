@@ -12,6 +12,16 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:plan-contract": "node scripts/p0-p1-p2-contract-smoke.mjs",
     "test:search-replace": "node scripts/search-replace-smoke.mjs",
+    "test:chat-virtual-list": "node scripts/chat-virtual-list-smoke.mjs",
+    "test:completion-gap": "node scripts/completion-gap-runner.mjs",
+    "test:provider-restart-recheck": "node scripts/provider-restart-recheck.mjs",
+    "test:full-workflow-surface": "node scripts/full-workflow-surface-runner.mjs",
+    "test:orchestration-settings-recheck": "node scripts/orchestration-settings-recheck.mjs",
+    "test:gui-tool-status-recheck": "node scripts/gui-tool-status-recheck.mjs",
+    "test:office-status-recheck": "node scripts/office-status-recheck.mjs",
+    "test:quickbar-attachment-recheck": "node scripts/quickbar-attachment-recheck.mjs",
+    "test:terminal-packaged-recheck": "node scripts/terminal-packaged-recheck.mjs",
+    "smoke:packaged": "node scripts/terminal-packaged-recheck.mjs",
     "test:git-tools": "node scripts/git-tools-smoke.mjs",
     "test:dag": "node scripts/task-dag-smoke.cjs",
     "test:dag-recovery": "node scripts/task-dag-recovery-smoke.cjs",
@@ -100,6 +110,16 @@
       "resources/sandbox/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "resources/icon-win.png",
+        "to": "icon-win.png"
+      }
+    ],
     "asarUnpack": [
       "**/node_modules/@anthropic-ai/claude-agent-sdk*/**",
       "**/node_modules/node-pty/**"
@@ -136,7 +156,7 @@
       }
     ],
     "win": {
-      "icon": "resources/icon.png",
+      "icon": "resources/icon-win.ico",
       "target": [
         "nsis"
       ]
