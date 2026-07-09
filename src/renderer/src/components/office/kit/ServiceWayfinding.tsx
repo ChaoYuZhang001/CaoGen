@@ -161,6 +161,76 @@ function FacilityPortal({
   )
 }
 
+function RestroomFixture({
+  position,
+  rotation = [0, 0, 0],
+  accent
+}: {
+  position: [number, number, number]
+  rotation?: [number, number, number]
+  accent: string
+}): React.JSX.Element {
+  return (
+    <group position={position} rotation={rotation}>
+      {[-0.24, 0.24].map((x) => (
+        <mesh key={x} position={[x, 0.36, 0]} receiveShadow>
+          <boxGeometry args={[0.046, 0.62, 0.36]} />
+          <meshStandardMaterial color={PANEL_DARK} metalness={0.18} roughness={0.7} transparent opacity={0.72} />
+        </mesh>
+      ))}
+      <mesh position={[0, 0.18, -0.08]} receiveShadow>
+        <boxGeometry args={[0.36, 0.12, 0.18]} />
+        <meshStandardMaterial color="#dce8ef" metalness={0.08} roughness={0.48} />
+      </mesh>
+      <mesh position={[0, 0.27, -0.08]}>
+        <torusGeometry args={[0.09, 0.01, 8, 32]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.24} transparent opacity={0.58} toneMapped={false} />
+      </mesh>
+      <Strip position={[0, 0.044, 0.26]} size={[0.62, 0.014, 0.08]} color={accent} opacity={0.28} />
+    </group>
+  )
+}
+
+function DiningFixture({
+  position,
+  rotation = [0, 0, 0],
+  accent
+}: {
+  position: [number, number, number]
+  rotation?: [number, number, number]
+  accent: string
+}): React.JSX.Element {
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh position={[0, 0.22, 0]} receiveShadow castShadow>
+        <boxGeometry args={[0.92, 0.32, 0.24]} />
+        <meshStandardMaterial color="#222a23" metalness={0.12} roughness={0.74} />
+      </mesh>
+      <mesh position={[0, 0.41, -0.01]}>
+        <boxGeometry args={[0.78, 0.024, 0.25]} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.22} transparent opacity={0.48} toneMapped={false} />
+      </mesh>
+      <mesh position={[0.04, 0.24, -0.55]} receiveShadow castShadow>
+        <cylinderGeometry args={[0.24, 0.24, 0.045, 28]} />
+        <meshStandardMaterial color="#384031" metalness={0.08} roughness={0.62} />
+      </mesh>
+      {[-0.3, 0.38].map((x) => (
+        <group key={x} position={[x, 0, -0.55]}>
+          <mesh position={[0, 0.13, 0]} receiveShadow>
+            <cylinderGeometry args={[0.09, 0.09, 0.05, 20]} />
+            <meshStandardMaterial color="#273326" roughness={0.64} />
+          </mesh>
+          <mesh position={[0, 0.06, 0]}>
+            <cylinderGeometry args={[0.018, 0.018, 0.13, 12]} />
+            <meshStandardMaterial color={METAL} metalness={0.42} roughness={0.42} />
+          </mesh>
+        </group>
+      ))}
+      <Strip position={[0.04, 0.04, -0.55]} size={[0.76, 0.014, 0.54]} color={accent} opacity={0.16} />
+    </group>
+  )
+}
+
 /**
  * 服务动线:把工位、审批台、茶水区和侧边设施入口连成一个清晰的低矮路径层。
  * 所有元素都贴地或靠边,避免遮挡默认相机里的机器人和工位。
@@ -185,6 +255,8 @@ export default function ServiceWayfinding({
       {/* 侧边设施入口:真实办公室里的卫生间/餐饮不放在控制室中心,只保留走廊入口信号。 */}
       <FacilityPortal position={[-5.62, 0, 2.64]} rotation={[0, 0.28, 0]} accent={CYAN} kind="restroom" />
       <FacilityPortal position={[-4.74, 0, 2.78]} rotation={[0, 0.28, 0]} accent={DINING} kind="dining" />
+      <RestroomFixture position={[-6.18, 0, 3.16]} rotation={[0, 0.28, 0]} accent={CYAN} />
+      <DiningFixture position={[-4.16, 0, 3.34]} rotation={[0, 0.28, 0]} accent={DINING} />
     </group>
   )
 }

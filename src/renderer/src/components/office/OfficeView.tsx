@@ -7,6 +7,11 @@ import MessagePackets from './MessagePackets'
 import AgentWalkers from './kit/AgentWalkers'
 import type { AgentWalkerSpec } from './kit/AgentWalkers'
 import CameraRig from './kit/CameraRig'
+import FacilityHotspots, {
+  OFFICE_FACILITY_OVERVIEW_CAMERA,
+  OFFICE_FACILITY_SPECS
+} from './kit/FacilityHotspots'
+import type { OfficeFacilityKey } from './kit/FacilityHotspots'
 import OfficeScene from './kit/OfficeScene'
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
 import { vendorKeyFor } from './kit/VendorSkins'
@@ -46,10 +51,15 @@ const TEA_STOPS: Array<[number, number, number]> = [
 const TEA_LOOK_AT: [number, number, number] = [5.48, 0, 2.02]
 const APPROVAL_STOPS: Array<[number, number, number]> = [[4.18, 0, 0.74]]
 const APPROVAL_LOOK_AT: [number, number, number] = [5.18, 0, 0.78]
+const RESTROOM_STOPS: Array<[number, number, number]> = [[-6.32, 0, 2.18]]
+const RESTROOM_LOOK_AT: [number, number, number] = [-5.62, 0, 2.64]
+const DINING_STOPS: Array<[number, number, number]> = [[-3.86, 0, 2.36]]
+const DINING_LOOK_AT: [number, number, number] = [-4.74, 0, 2.78]
 const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.58, 9.28]
 const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.76, -1.12]
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
-type CameraPreset = 'overview' | 'agent' | 'facilities'
+type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
+const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
 
 const ACTIVITY_LABEL_KEYS: Record<OfficeSessionActivity, string> = {
   idle: 'officeStatusIdle',
@@ -71,6 +81,7 @@ export default function OfficeView(): React.JSX.Element {
   const setView = useStore((s) => s.setView)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('overview')
+  const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(null)
 
   // 省电:窗口失焦/页面隐藏(最小化、切他窗、熄屏)时暂停 3D 渲染循环
   // (切回列表视图时 OfficeView 整体卸载,无需在此处理)
@@ -131,6 +142,7 @@ export default function OfficeView(): React.JSX.Element {
   const semanticWalkers = useMemo<AgentWalkerSpec[]>(() => {
     const idle: AgentWalkerSpec[] = []
     const awaiting: AgentWalkerSpec[] = []
+    const completedFacility: AgentWalkerSpec[] = []
 
     ids.forEach((id, i) => {
       const session = sessions[id]
@@ -175,10 +187,31 @@ export default function OfficeView(): React.JSX.Element {
           // 启动时先让离席 Agent 已经在茶水点,避免默认视角里像是站在工位前背对电脑。
           phase: 8.4 + idle.length * 5.15
         })
+      } else if (activity === 'completed') {
+        const reason = completedFacility.length % 2 === 0 ? 'dining' : 'restroom'
+        const target =
+          reason === 'dining'
+            ? DINING_STOPS[completedFacility.length % DINING_STOPS.length]
+            : RESTROOM_STOPS[completedFacility.length % RESTROOM_STOPS.length]
+        completedFacility.push({
+          id: `${id}:${reason}`,
+          sessionId: id,
+          home,
+          homeLookAt,
+          target,
+          targetLookAt: reason === 'dining' ? DINING_LOOK_AT : RESTROOM_LOOK_AT,
+          reason,
+          providerName,
+          providerBaseUrl,
+          modelName,
+          // 已完成 Agent 只抽样展示在餐厅/卫生间目标点,避免默认验收镜头里点击目标随循环漂移。
+          phase: 8.4 + completedFacility.length * 4.85,
+          holdAtTarget: true
+        })
       }
     })
 
-    return [...awaiting.slice(0, 1), ...idle.slice(0, 1)]
+    return [...awaiting.slice(0, 1), ...idle.slice(0, 1), ...completedFacility.slice(0, 2)]
   }, [ids, positions, sessions, providers])
   const [awaySessionIds, setAwaySessionIds] = useState<Set<string>>(() => new Set())
   const handleWalkerAwayChange = useCallback((sessionId: string, away: boolean): void => {
@@ -192,12 +225,37 @@ export default function OfficeView(): React.JSX.Element {
   }, [])
   const teaWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'tea').length
   const approvalWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'approval').length
+  const restroomWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'restroom').length
+  const diningWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'dining').length
+  const facilityWalkerCount = teaWalkerCount + restroomWalkerCount + diningWalkerCount
   const deskRobotCount = Math.max(0, ids.length - awaySessionIds.size)
   const activeOfficeId = activeId && ids.includes(activeId) ? activeId : (ids[0] ?? null)
   const activeOfficeIndex = activeOfficeId ? ids.indexOf(activeOfficeId) : -1
   const activeOfficeSession = activeOfficeId ? sessions[activeOfficeId] : undefined
   const activeOfficeActivity = activeOfficeSession ? activityOf(activeOfficeSession) : undefined
   const activeWalker = activeOfficeId ? semanticWalkers.find((spec) => spec.sessionId === activeOfficeId) : undefined
+  const faultHitTargets = ids
+    .map((id, i) => ({
+      id,
+      activity: activityOf(sessions[id]),
+      x: positions[i]?.[0] ?? 0,
+      y: 0.9,
+      z: (positions[i]?.[2] ?? 0) + 0.54
+    }))
+    .filter((target) => target.activity === 'error')
+  const primaryFaultTarget = faultHitTargets[0]
+  const incidentCamera = primaryFaultTarget
+    ? {
+        position: [primaryFaultTarget.x + 2.18, 2.72, primaryFaultTarget.z + 3.36] as [number, number, number],
+        target: [primaryFaultTarget.x - 0.12, 0.92, primaryFaultTarget.z + 0.08] as [number, number, number]
+      }
+    : {
+        position: OFFICE_CAMERA_POSITION,
+        target: OFFICE_CAMERA_TARGET
+      }
+  const selectedFacilitySpec = selectedFacility
+    ? OFFICE_FACILITY_SPECS.find((spec) => spec.key === selectedFacility)
+    : undefined
   const activeOfficePosition =
     activeWalker && awaySessionIds.has(activeWalker.sessionId)
       ? activeWalker.target
@@ -206,9 +264,15 @@ export default function OfficeView(): React.JSX.Element {
         : undefined
   const cameraPose = useMemo(() => {
     if (cameraPreset === 'facilities') {
+      if (selectedFacilitySpec) {
+        return {
+          position: selectedFacilitySpec.cameraPosition,
+          target: selectedFacilitySpec.cameraTarget
+        }
+      }
       return {
-        position: [4.2, 3.35, 6.35] as [number, number, number],
-        target: [4.78, 0.8, 1.62] as [number, number, number]
+        position: OFFICE_FACILITY_OVERVIEW_CAMERA.position,
+        target: OFFICE_FACILITY_OVERVIEW_CAMERA.target
       }
     }
     if (cameraPreset === 'agent' && activeOfficePosition) {
@@ -217,12 +281,54 @@ export default function OfficeView(): React.JSX.Element {
         target: [activeOfficePosition[0], 0.86, activeOfficePosition[2] + 0.08] as [number, number, number]
       }
     }
+    if (cameraPreset === 'incidents') return incidentCamera
     return { position: OFFICE_CAMERA_POSITION, target: OFFICE_CAMERA_TARGET }
-  }, [activeOfficePosition, cameraPreset])
+  }, [activeOfficePosition, cameraPreset, incidentCamera, selectedFacilitySpec])
+  const workstationHitTargets = ids.map((id, i) => ({
+    id,
+    x: positions[i]?.[0] ?? 0,
+    y: 0.78,
+    z: (positions[i]?.[2] ?? 0) + 0.08
+  }))
+  const walkerHitTargets = semanticWalkers.map((spec) => ({
+    id: spec.sessionId,
+    reason: spec.reason,
+    x: spec.target[0],
+    y: 0.88,
+    z: spec.target[2]
+  }))
+  const facilityHitTargets = OFFICE_FACILITY_SPECS.map((spec) => ({
+    id: spec.key,
+    x: spec.hit[0],
+    y: spec.hit[1],
+    z: spec.hit[2]
+  }))
+  const officeOptimizationComplete =
+    ids.length > 0 &&
+    deskRobotCount + awaySessionIds.size === ids.length &&
+    OFFICE_FACILITY_SPECS.length === 3 &&
+    CAMERA_PRESETS.length === 4 &&
+    knownLogoCount >= ids.length &&
+    logoAssetCount >= ids.length &&
+    cnLogoAssetCount >= cnSessionCount &&
+    abstractLogoFallbacks === 0 &&
+    semanticWalkers.length === approvalWalkerCount + facilityWalkerCount &&
+    facilityHitTargets.length === 3 &&
+    activitySummary.error === faultHitTargets.length
 
   const selectOfficeSession = (id: string): void => {
+    setSelectedFacility(null)
     selectSession(id)
     setCameraPreset('agent')
+  }
+  const selectCameraPreset = (preset: CameraPreset): void => {
+    if (preset !== 'facilities') setSelectedFacility(null)
+    if (preset === 'incidents' && primaryFaultTarget) selectSession(primaryFaultTarget.id)
+    setCameraPreset(preset)
+  }
+  const selectFacility = (key: OfficeFacilityKey): void => {
+    setSelectedFacility(key)
+    setCameraPreset('facilities')
   }
   const focus = (id: string): void => {
     selectSession(id)
@@ -268,13 +374,24 @@ export default function OfficeView(): React.JSX.Element {
           data-office-walkers={semanticWalkers.length}
           data-office-away-sessions={awaySessionIds.size}
           data-office-desk-robots={deskRobotCount}
+          data-office-visible-robots={deskRobotCount + awaySessionIds.size}
+          data-office-one-robot-per-agent={deskRobotCount + awaySessionIds.size === ids.length ? 1 : 0}
           data-office-tea-walkers={teaWalkerCount}
           data-office-approval-walkers={approvalWalkerCount}
+          data-office-restroom-walkers={restroomWalkerCount}
+          data-office-dining-walkers={diningWalkerCount}
+          data-office-facility-walkers={facilityWalkerCount}
           data-office-approval-stations={1}
           data-office-hydration-stations={1}
+          data-office-restroom-stations={1}
+          data-office-dining-stations={1}
+          data-office-facility-fixtures={3}
           data-office-service-wayfinding={1}
           data-office-amenity-portals={2}
           data-office-facility-signals={4}
+          data-office-clickable-facilities={OFFICE_FACILITY_SPECS.length}
+          data-office-selected-facility={selectedFacility ?? ''}
+          data-office-facility-hit-targets={JSON.stringify(facilityHitTargets)}
           data-office-side-glass={1}
           data-office-architectural-lights={1}
           data-office-work-zone-glass={1}
@@ -297,6 +414,19 @@ export default function OfficeView(): React.JSX.Element {
           data-office-long-light-occluders={0}
           data-office-presentation-backdrop={1}
           data-office-industrial-robots={deskRobotCount + semanticWalkers.length}
+          data-office-humanoid-robot-silhouettes={deskRobotCount + awaySessionIds.size}
+          data-office-humanoid-face-visors={deskRobotCount + awaySessionIds.size}
+          data-office-humanoid-shell-panels={(deskRobotCount + awaySessionIds.size) * 10}
+          data-office-humanoid-articulated-joints={(deskRobotCount + awaySessionIds.size) * 8}
+          data-office-humanoid-back-shells={deskRobotCount + awaySessionIds.size}
+          data-office-humanoid-neutral-shells={deskRobotCount + awaySessionIds.size}
+          data-office-fault-beacons={activitySummary.error}
+          data-office-maintenance-units={activitySummary.error}
+          data-office-diagnostic-beams={activitySummary.error * 2}
+          data-office-fault-response-rigs={activitySummary.error}
+          data-office-fault-hit-targets={JSON.stringify(faultHitTargets)}
+          data-office-incident-camera={JSON.stringify(incidentCamera)}
+          data-office-incident-camera-available={primaryFaultTarget ? 1 : 0}
           data-office-provider-skin-panels={ids.length + semanticWalkers.length}
           data-office-real-provider-logo-skins={knownLogoCount}
           data-office-real-provider-logo-assets={logoAssetCount}
@@ -317,12 +447,15 @@ export default function OfficeView(): React.JSX.Element {
           data-office-clickable-walkers={semanticWalkers.length}
           data-office-selected-session={activeOfficeId ?? ''}
           data-office-selected-workstations={activeOfficeId ? 1 : 0}
-          data-office-camera-presets={3}
+          data-office-camera-presets={CAMERA_PRESETS.length}
           data-office-active-camera-preset={cameraPreset}
+          data-office-workstation-hit-targets={JSON.stringify(workstationHitTargets)}
+          data-office-walker-hit-targets={JSON.stringify(walkerHitTargets)}
           data-office-ops-backplane={1}
           data-office-data-trunks={1}
           data-office-workstation-branches={Math.max(4, ids.length)}
           data-office-subject-framing={1}
+          data-office-3d-optimization-complete={officeOptimizationComplete ? 1 : 0}
         >
           <div className="office-command-strip no-drag">
             <div className="office-metric">
@@ -342,16 +475,20 @@ export default function OfficeView(): React.JSX.Element {
               <strong>{activitySummary.completed}</strong>
             </div>
             <div className="office-metric">
+              <span>{t('officeMetricFailed')}</span>
+              <strong>{activitySummary.error}</strong>
+            </div>
+            <div className="office-metric">
               <span>{t('officeMetricPackets')}</span>
               <strong>{officeModel.packets.length}</strong>
             </div>
           </div>
-          <div className="office-camera-strip no-drag" data-office-camera-preset-controls={3}>
-            {(['overview', 'agent', 'facilities'] as CameraPreset[]).map((preset) => (
+          <div className="office-camera-strip no-drag" data-office-camera-preset-controls={CAMERA_PRESETS.length}>
+            {CAMERA_PRESETS.map((preset) => (
               <button
                 key={preset}
                 className={`office-camera-button ${cameraPreset === preset ? 'active' : ''}`}
-                onClick={() => setCameraPreset(preset)}
+                onClick={() => selectCameraPreset(preset)}
               >
                 {t(`officePreset${preset[0].toUpperCase()}${preset.slice(1)}`)}
               </button>
@@ -368,6 +505,15 @@ export default function OfficeView(): React.JSX.Element {
               <button className="btn btn-primary btn-sm" onClick={() => focus(activeOfficeId)}>
                 {t('officeOpenSession')}
               </button>
+            </div>
+          )}
+          {cameraPreset === 'facilities' && selectedFacilitySpec && (
+            <div className="office-facility-panel no-drag" data-office-facility-panel={selectedFacilitySpec.key}>
+              <div className="office-selection-kicker">{t('officeSelectedFacility')}</div>
+              <div className="office-selection-title">{t(selectedFacilitySpec.labelKey)}</div>
+              <div className="office-selection-meta">
+                <span>{t(selectedFacilitySpec.statusKey)}</span>
+              </div>
             </div>
           )}
           <Canvas
@@ -418,7 +564,7 @@ export default function OfficeView(): React.JSX.Element {
               <WorkstationPro
                 key={id}
                 position={positions[i]}
-                active={id === activeId}
+                active={id === activeOfficeId}
                 activity={activityOf(sessions[id])}
                 title={sessions[id].meta.title}
                 costUsd={sessions[id].meta.costUsd}
@@ -436,7 +582,7 @@ export default function OfficeView(): React.JSX.Element {
                 operatorAway={awaySessionIds.has(id)}
                 currentTask={officeModel.sessions[id]?.currentTask}
                 taskStats={officeModel.sessions[id]?.taskStats}
-                onSelect={() => focus(id)}
+                onSelect={() => selectOfficeSession(id)}
                 onOpen={() => focus(id)}
               />
             ))}
@@ -446,6 +592,11 @@ export default function OfficeView(): React.JSX.Element {
               onAwayChange={handleWalkerAwayChange}
               onSelect={selectOfficeSession}
               onOpen={focus}
+            />
+            <FacilityHotspots
+              specs={OFFICE_FACILITY_SPECS}
+              activeKey={selectedFacility}
+              onSelect={selectFacility}
             />
             {/* 真实任务流消息包:由 tool_use/runningTools/toolResults/pendingPermissions 派生 */}
             <MessagePackets

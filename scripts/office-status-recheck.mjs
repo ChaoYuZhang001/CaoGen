@@ -99,11 +99,73 @@ check('OfficeView exposes machine-readable session status counts', () => {
   }
 })
 
-check('clicking a workstation focuses the correct session', () => {
+check('clicking a workstation selects in office and double-click opens the session', () => {
   const text = source('src/renderer/src/components/office/OfficeView.tsx')
   assert(text.includes('selectSession(id)'), 'focus() must call selectSession(id)')
   assert(text.includes("setView('list')"), 'focus() must return to list view after selecting')
-  assert(text.includes('onSelect={() => focus(id)}'), 'WorkstationPro must receive per-session focus handler')
+  assert(text.includes('onSelect={() => selectOfficeSession(id)}'), 'WorkstationPro single-click must select inside office')
+  assert(text.includes('onOpen={() => focus(id)}'), 'WorkstationPro double-click must open the matching session')
+})
+
+check('OfficeView exposes clickable facility targets', () => {
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const facilities = source('src/renderer/src/components/office/kit/FacilityHotspots.tsx')
+  assert(view.includes('data-office-clickable-facilities'), 'missing clickable facilities semantic attribute')
+  assert(view.includes('data-office-facility-hit-targets'), 'missing facility hit target semantic attribute')
+  assert(view.includes('data-office-restroom-walkers'), 'missing restroom walker semantic attribute')
+  assert(view.includes('data-office-dining-walkers'), 'missing dining walker semantic attribute')
+  assert(view.includes('data-office-one-robot-per-agent'), 'missing one-robot-per-agent semantic attribute')
+  assert(view.includes('data-office-restroom-stations'), 'missing restroom station semantic attribute')
+  assert(view.includes('data-office-dining-stations'), 'missing dining station semantic attribute')
+  assert(view.includes('data-office-facility-fixtures'), 'missing facility fixture semantic attribute')
+  assert(view.includes('<FacilityHotspots'), 'OfficeView must render 3D facility hotspots')
+  assert(facilities.includes("'hydration'") && facilities.includes("'restroom'") && facilities.includes("'dining'"), 'facility hotspot set must cover hydration/restroom/dining')
+  const walkers = source('src/renderer/src/components/office/kit/AgentWalkers.tsx')
+  assert(walkers.includes("'restroom'") && walkers.includes("'dining'"), 'AgentWalkers must support restroom/dining route reasons')
+  assert(walkers.includes('holdAtTarget'), 'AgentWalkers must support stable facility target presentation')
+  const wayfinding = source('src/renderer/src/components/office/kit/ServiceWayfinding.tsx')
+  assert(wayfinding.includes('RestroomFixture') && wayfinding.includes('DiningFixture'), 'ServiceWayfinding must include restroom/dining facility fixtures')
+})
+
+check('failed office sessions expose a visible maintenance response', () => {
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const workstation = source('src/renderer/src/components/office/kit/WorkstationPro.tsx')
+  assert(view.includes('data-office-maintenance-units'), 'missing maintenance unit semantic attribute')
+  assert(view.includes('data-office-diagnostic-beams'), 'missing diagnostic beam semantic attribute')
+  assert(view.includes('data-office-fault-response-rigs'), 'missing fault response rig semantic attribute')
+  assert(view.includes('data-office-fault-hit-targets'), 'missing fault hit target semantic attribute')
+  assert(workstation.includes('function FaultDiagnosticRig'), 'WorkstationPro must render a fault diagnostic rig')
+  assert(workstation.includes('<FaultDiagnosticRig />'), 'fault diagnostic rig must be attached to error workstations')
+})
+
+check('OfficeView exposes final 3D optimization completion controls', () => {
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const i18n = source('src/renderer/src/i18n.ts')
+  assert(view.includes("'incidents'"), 'camera presets must include incidents view')
+  assert(view.includes('data-office-incident-camera'), 'missing incident camera semantic attribute')
+  assert(view.includes('data-office-incident-camera-available'), 'missing incident camera availability attribute')
+  assert(view.includes('data-office-3d-optimization-complete'), 'missing final 3D optimization completion attribute')
+  assert(view.includes('selectCameraPreset'), 'camera preset selection must route through behavior-aware handler')
+  assert(i18n.includes('officePresetIncidents'), 'missing incidents camera i18n label')
+})
+
+check('AvatarRig uses current humanoid robot design language', () => {
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const avatar = source('src/renderer/src/components/office/kit/AvatarRig.tsx')
+  assert(view.includes('data-office-humanoid-robot-silhouettes'), 'missing humanoid silhouette semantic attribute')
+  assert(view.includes('data-office-humanoid-face-visors'), 'missing humanoid visor semantic attribute')
+  assert(view.includes('data-office-humanoid-shell-panels'), 'missing humanoid shell panel semantic attribute')
+  assert(view.includes('data-office-humanoid-articulated-joints'), 'missing humanoid articulated joint semantic attribute')
+  assert(view.includes('data-office-humanoid-back-shells'), 'missing humanoid back shell semantic attribute')
+  assert(view.includes('data-office-humanoid-neutral-shells'), 'missing humanoid neutral shell semantic attribute')
+  assert(avatar.includes('function HumanoidFaceHalo'), 'AvatarRig must include a humanoid face halo')
+  assert(avatar.includes('function HumanoidChestArmor'), 'AvatarRig must include humanoid chest armor')
+  assert(avatar.includes('function HumanoidBackArmor'), 'AvatarRig must include a readable rear shell')
+  assert(avatar.includes('function HumanoidPelvisArmor'), 'AvatarRig must include a narrow humanoid pelvis shell')
+  assert(avatar.includes('function HumanoidJointBearing'), 'AvatarRig must include visible articulated joint bearings')
+  assert(avatar.includes("const body = '#17202a'") && avatar.includes('const shell = HUMANOID_SILVER'), 'AvatarRig must keep provider color off the main robot body')
+  assert(!avatar.includes('catEars &&'), 'AvatarRig must not render mascot ears on humanoid robots')
+  assert(avatar.includes('HUMANOID_SILVER') && avatar.includes('JOINT_BLACK'), 'AvatarRig must use silver hard shell and black joints')
 })
 
 check('3D office canvas has resize-safe rendering hooks', () => {
