@@ -3,19 +3,30 @@ import { useT } from '../i18n'
 import type { PermissionRequestInfo } from '../../../shared/types'
 
 const GUI_TEMPORARY_GRANT_MESSAGE = 'gui-temporary-grant:5m'
+const SENSITIVE_INPUT_KEY = /(authorization|cookie|password|secret|token|api[-_]?key|credential)/i
 
-function summarize(input: unknown): string {
-  if (!input || typeof input !== 'object') return ''
-  const obj = input as Record<string, unknown>
-  const cand =
-    obj.command ?? obj.file_path ?? obj.path ?? obj.pattern ?? obj.url ?? obj.query ?? obj.prompt
-  if (typeof cand === 'string') return cand.length > 120 ? `${cand.slice(0, 120)}…` : cand
+export function formatPermissionInput(input: unknown): string {
+  if (input === undefined) return ''
+  if (!input || typeof input !== 'object') return String(input)
   try {
-    const json = JSON.stringify(obj)
-    return json.length > 120 ? `${json.slice(0, 120)}…` : json
+    return JSON.stringify(redactSensitiveInput(input, new WeakSet<object>()), null, 2)
   } catch {
-    return ''
+    return '[unserializable input]'
   }
+}
+
+function redactSensitiveInput(value: unknown, seen: WeakSet<object>, key = ''): unknown {
+  if (SENSITIVE_INPUT_KEY.test(key)) return '[REDACTED]'
+  if (!value || typeof value !== 'object') return value
+  if (seen.has(value)) return '[circular]'
+  seen.add(value)
+  if (Array.isArray(value)) return value.map((item) => redactSensitiveInput(item, seen))
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
+      childKey,
+      redactSensitiveInput(childValue, seen, childKey)
+    ])
+  )
 }
 
 export default function PermissionBar({
@@ -31,13 +42,18 @@ export default function PermissionBar({
 
   return (
     <div className="permission-bar">
-      {requests.map((req) => (
-        <div key={req.requestId} className="permission-card">
+      {requests.map((req) => {
+        const inputText = formatPermissionInput(req.input)
+        return <div key={req.requestId} className="permission-card">
           <div className="permission-info">
             <div className="permission-title">
               {t('permissionRequest')} <code>{req.toolName}</code>
             </div>
-            {summarize(req.input) && <div className="permission-detail">{summarize(req.input)}</div>}
+            {inputText && (
+              <pre className="permission-detail" aria-label={`${req.toolName} permission input`}>
+                {inputText}
+              </pre>
+            )}
             {req.decisionReason && <div className="permission-reason">{req.decisionReason}</div>}
           </div>
           <div className="permission-actions">
@@ -65,7 +81,7 @@ export default function PermissionBar({
             </button>
           </div>
         </div>
-      ))}
+      })}
     </div>
   )
 }
