@@ -17,18 +17,21 @@ import type {
   TaskSnapshotReason,
   TaskSnapshotRecord,
   TaskSnapshotReplayCandidate,
+  TaskRunRecord,
   TaskSnapshotSubtaskState,
   TaskSnapshotSubtaskStatus,
   TaskSnapshotWorktreeInfo,
   TranscriptEntry,
   UsageTotals
 } from '../../shared/types'
+import { isTaskRunRecord } from './task-run'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>
 
-const nodeRequire = createRequire(join(process.cwd(), 'package.json'))
-const STORE_VERSION = 2
+// Finder/Dock may launch the app with cwd="/"; resolve packaged WASM beside the bundled module.
+const nodeRequire = createRequire(__filename)
+const STORE_VERSION = 4
 export const TASK_SNAPSHOT_EVENT_INTERVAL = 5
 const TASK_SNAPSHOT_DB_FILE = 'task-snapshots.db'
 
@@ -44,9 +47,11 @@ export interface BuildTaskSnapshotInput {
   meta: SessionMeta
   transcript: TranscriptEntry[]
   lastSeq: number
+  lastEventId?: string
   lastEventKind?: AgentEvent['kind']
   eventCount: number
   reason: TaskSnapshotReason
+  run?: TaskRunRecord
   subtasks?: TaskSnapshotSubtaskState[]
   dagExecutions?: TaskDagExecutionView[]
   dagRuntimes?: TaskDagRuntimeSnapshot[]
@@ -68,6 +73,8 @@ export function buildTaskSnapshot(input: BuildTaskSnapshotInput): TaskSnapshotRe
   const execution: TaskSnapshotExecutionPosition = {
     status: input.meta.status,
     lastSeq: input.lastSeq,
+    cursor: { seq: input.lastSeq, eventId: input.lastEventId },
+    lastEventId: input.lastEventId,
     lastEventKind: input.lastEventKind,
     lastEventAt: now,
     sdkSessionId: input.meta.sdkSessionId,
@@ -93,6 +100,7 @@ export function buildTaskSnapshot(input: BuildTaskSnapshotInput): TaskSnapshotRe
     reason: input.reason,
     meta: { ...input.meta },
     execution,
+    ...(input.run ? { run: { ...input.run } } : {}),
     ...(replayCandidate ? { replayCandidate } : {}),
     ...(worktree ? { worktree } : {}),
     transcript,
@@ -119,10 +127,12 @@ export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string)
     const store = await openStore(rootDir)
     try {
       const previous = findSnapshotInDb(store.db, snapshot.id, snapshot.sessionId)
+      if (previous && compareSnapshotFreshness(snapshot, previous) < 0) return previous
       const nextSnapshot: TaskSnapshotRecord = {
         ...snapshot,
         createdAt: previous?.createdAt ?? snapshot.createdAt
       }
+      if (nextSnapshot.run) upsertTaskRun(store.db, nextSnapshot.run)
       upsertSnapshot(store.db, nextSnapshot)
       await persistStore(store)
       return nextSnapshot
@@ -132,17 +142,75 @@ export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string)
   })
 }
 
-export function deleteTaskSnapshot(snapshotId: string, rootDir?: string): Promise<boolean> {
+export function deleteTaskSnapshot(
+  snapshotId: string,
+  rootDir?: string,
+  finalRun?: TaskRunRecord
+): Promise<boolean> {
   const id = snapshotId.trim()
   if (!id) return Promise.resolve(false)
   return enqueueMutation(rootDir, async () => {
     const store = await openStore(rootDir)
     try {
       const previous = findSnapshotInDb(store.db, id, id)
-      if (!previous) return false
+      if (finalRun) upsertTaskRun(store.db, finalRun)
+      if (!previous) {
+        if (finalRun) await persistStore(store)
+        return false
+      }
       store.db.run('DELETE FROM task_snapshots WHERE id = ? OR session_id = ?', [id, id])
       await persistStore(store)
       return true
+    } finally {
+      store.db.close()
+    }
+  })
+}
+
+export async function listTaskRuns(sessionId?: string, rootDir?: string): Promise<TaskRunRecord[]> {
+  await waitForPendingMutations(rootDir)
+  const store = await openStore(rootDir)
+  try {
+    return selectTaskRuns(store.db, sessionId)
+  } finally {
+    store.db.close()
+  }
+}
+
+export function supersedeToolExecution(
+  executionId: string,
+  replacementExecutionId: string,
+  now = Date.now(),
+  rootDir?: string
+): Promise<boolean> {
+  return enqueueMutation(rootDir, async () => {
+    const store = await openStore(rootDir)
+    try {
+      let changed = false
+      for (const run of selectTaskRuns(store.db)) {
+        const updated = markToolExecutionSuperseded(run, executionId, replacementExecutionId, now)
+        if (!updated) continue
+        upsertTaskRun(store.db, updated)
+        changed = true
+      }
+      for (const snapshot of selectSnapshots(store.db)) {
+        if (!snapshot.run) continue
+        const updatedRun = markToolExecutionSuperseded(
+          snapshot.run,
+          executionId,
+          replacementExecutionId,
+          now
+        )
+        if (!updatedRun) continue
+        upsertSnapshot(store.db, {
+          ...snapshot,
+          updatedAt: Math.max(snapshot.updatedAt, now),
+          run: updatedRun
+        })
+        changed = true
+      }
+      if (changed) await persistStore(store)
+      return changed
     } finally {
       store.db.close()
     }
@@ -170,8 +238,16 @@ async function openStore(rootDir?: string): Promise<{ db: SqlDatabase; path: str
     .then(() => true)
     .catch(() => false)
   const db = dbExists ? new SQL.Database(await readFile(dbPath)) : new SQL.Database()
+  const previousVersion = readStoreVersion(db)
+  if (previousVersion > STORE_VERSION) {
+    db.close()
+    throw new Error(`任务快照数据库版本过新:${previousVersion} > ${STORE_VERSION}`)
+  }
   setupSchema(db)
-  if (migrateLegacyJson(db, rootDir)) await persistStore({ db, path: dbPath })
+  const migratedLegacyJson = migrateLegacyJson(db, rootDir)
+  if (migratedLegacyJson || (dbExists && previousVersion < STORE_VERSION)) {
+    await persistStore({ db, path: dbPath })
+  }
   return { db, path: dbPath }
 }
 
@@ -217,16 +293,40 @@ function setupSchema(db: SqlDatabase): void {
   `)
   db.run('CREATE INDEX IF NOT EXISTS idx_task_snapshots_session_id ON task_snapshots(session_id);')
   db.run('CREATE INDEX IF NOT EXISTS idx_task_snapshots_updated_at ON task_snapshots(updated_at);')
+  db.run(`
+    CREATE TABLE IF NOT EXISTS task_runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      payload TEXT NOT NULL
+    );
+  `)
+  db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_session_id ON task_runs(session_id);')
+  db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_updated_at ON task_runs(updated_at);')
   db.run('PRAGMA user_version = ' + STORE_VERSION)
 }
 
+function readStoreVersion(db: SqlDatabase): number {
+  const result = db.exec('PRAGMA user_version')
+  const value = result[0]?.values[0]?.[0]
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
+}
+
 function migrateLegacyJson(db: SqlDatabase, rootDir?: string): boolean {
+  if (tableRowCount(db, 'task_snapshots') > 0 || tableRowCount(db, 'task_runs') > 0) return false
   let migrated = false
   for (const snapshot of readLegacyJsonSnapshots(rootDir)) {
+    if (snapshot.run) upsertTaskRun(db, snapshot.run)
     upsertSnapshot(db, snapshot)
     migrated = true
   }
   return migrated
+}
+
+function tableRowCount(db: SqlDatabase, table: 'task_snapshots' | 'task_runs'): number {
+  const result = db.exec(`SELECT COUNT(*) FROM ${table}`)
+  const value = result[0]?.values[0]?.[0]
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function readLegacyJsonSnapshots(rootDir?: string): TaskSnapshotRecord[] {
@@ -282,6 +382,8 @@ function findSnapshotInDb(db: SqlDatabase, id: string, sessionId: string): TaskS
 }
 
 function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
+  const previous = findSnapshotInDb(db, snapshot.id, snapshot.sessionId)
+  if (previous && compareSnapshotFreshness(snapshot, previous) < 0) return
   db.run(
     `
       INSERT INTO task_snapshots(id, session_id, updated_at, payload)
@@ -295,16 +397,115 @@ function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
   )
 }
 
+function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): void {
+  const previous = findTaskRunInDb(db, run.id)
+  if (previous && compareRunFreshness(run, previous) < 0) return
+  db.run(
+    `
+      INSERT INTO task_runs(id, session_id, updated_at, payload)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        session_id = excluded.session_id,
+        updated_at = excluded.updated_at,
+        payload = excluded.payload
+    `,
+    [run.id, run.sessionId, run.updatedAt, JSON.stringify(run)]
+  )
+}
+
+function findTaskRunInDb(db: SqlDatabase, id: string): TaskRunRecord | null {
+  const stmt = db.prepare('SELECT payload FROM task_runs WHERE id = ? LIMIT 1')
+  try {
+    stmt.bind([id])
+    if (!stmt.step()) return null
+    const payload = stmt.getAsObject().payload
+    if (typeof payload !== 'string') return null
+    const parsed = JSON.parse(payload) as unknown
+    return isTaskRunRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  } finally {
+    stmt.free()
+  }
+}
+
+function compareSnapshotFreshness(left: TaskSnapshotRecord, right: TaskSnapshotRecord): number {
+  const leftCursor = left.execution.cursor?.seq ?? left.execution.lastSeq
+  const rightCursor = right.execution.cursor?.seq ?? right.execution.lastSeq
+  if (leftCursor !== rightCursor) return leftCursor - rightCursor
+  const leftRevision = left.run?.revision ?? 0
+  const rightRevision = right.run?.revision ?? 0
+  if (leftRevision !== rightRevision) return leftRevision - rightRevision
+  return left.updatedAt - right.updatedAt
+}
+
+function compareRunFreshness(left: TaskRunRecord, right: TaskRunRecord): number {
+  const leftCursor = left.lastAppliedEventSeq ?? 0
+  const rightCursor = right.lastAppliedEventSeq ?? 0
+  if (leftCursor !== rightCursor) return leftCursor - rightCursor
+  if (left.revision !== right.revision) return left.revision - right.revision
+  return left.updatedAt - right.updatedAt
+}
+
+function selectTaskRuns(db: SqlDatabase, sessionId?: string): TaskRunRecord[] {
+  const runs: TaskRunRecord[] = []
+  const stmt = sessionId
+    ? db.prepare('SELECT payload FROM task_runs WHERE session_id = ? ORDER BY updated_at DESC')
+    : db.prepare('SELECT payload FROM task_runs ORDER BY updated_at DESC')
+  try {
+    if (sessionId) stmt.bind([sessionId])
+    while (stmt.step()) {
+      const payload = stmt.getAsObject().payload
+      if (typeof payload !== 'string') continue
+      try {
+        const parsed = JSON.parse(payload) as unknown
+        if (isTaskRunRecord(parsed)) runs.push(parsed)
+      } catch {
+        // 损坏 run 不阻断其他任务历史读取。
+      }
+    }
+  } finally {
+    stmt.free()
+  }
+  return runs
+}
+
+function markToolExecutionSuperseded(
+  run: TaskRunRecord,
+  executionId: string,
+  replacementExecutionId: string,
+  now: number
+): TaskRunRecord | null {
+  const executions = run.toolExecutions ?? []
+  const index = executions.findIndex(
+    (execution) => execution.id === executionId && execution.status === 'unknown_outcome'
+  )
+  if (index < 0) return null
+  const toolExecutions = [...executions]
+  toolExecutions[index] = {
+    ...toolExecutions[index],
+    status: 'superseded',
+    supersededByExecutionId: replacementExecutionId,
+    updatedAt: now,
+    finishedAt: now,
+    error: '未知结果已由用户确认后的成功重试取代'
+  }
+  return {
+    ...run,
+    revision: run.revision + 1,
+    updatedAt: Math.max(run.updatedAt, now),
+    toolExecutions
+  }
+}
+
 function enqueueMutation<T>(rootDir: string | undefined, task: () => Promise<T>): Promise<T> {
   const key = taskSnapshotsDbFile(rootDir)
   const previous = mutationQueues.get(key) ?? Promise.resolve()
   const next = previous.then(task, task)
-  mutationQueues.set(
-    key,
-    next.finally(() => {
-      if (mutationQueues.get(key) === next) mutationQueues.delete(key)
-    })
-  )
+  const queued = next.finally(() => {
+    if (mutationQueues.get(key) === queued) mutationQueues.delete(key)
+  })
+  mutationQueues.set(key, queued)
   return next
 }
 
@@ -413,7 +614,7 @@ function isSessionStatus(value: unknown): value is SessionStatus {
 }
 
 function isEngineKind(value: unknown): value is EngineKind {
-  return value === 'claude' || value === 'openai' || value === 'codex' || value === 'gemini'
+  return value === 'claude' || value === 'openai'
 }
 
 function isUsageTotals(value: unknown): value is UsageTotals {
@@ -468,6 +669,7 @@ function isAgentEvent(value: unknown): value is AgentEvent {
     'checkpoint-restore',
     'routing',
     'failover',
+    'provider-key-failover',
     'text-delta',
     'thinking-delta',
     'tool-start',
@@ -484,7 +686,27 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 
 function isTranscriptEntry(value: unknown): value is TranscriptEntry {
   const record = asRecord(value)
-  return !!record && typeof record.seq === 'number' && isAgentEvent(record.event)
+  return (
+    !!record &&
+    typeof record.seq === 'number' &&
+    isOptionalString(record.eventId) &&
+    isOptionalNumber(record.occurredAt) &&
+    isOptionalString(record.streamId) &&
+    isOptionalString(record.causationId) &&
+    isOptionalString(record.correlationId) &&
+    isAgentEvent(record.event)
+  )
+}
+
+function isEventCursor(value: unknown): boolean {
+  const record = asRecord(value)
+  return (
+    !!record &&
+    typeof record.seq === 'number' &&
+    Number.isInteger(record.seq) &&
+    record.seq >= 0 &&
+    isOptionalString(record.eventId)
+  )
 }
 
 function isExecutionPosition(value: unknown): value is TaskSnapshotExecutionPosition {
@@ -493,6 +715,8 @@ function isExecutionPosition(value: unknown): value is TaskSnapshotExecutionPosi
     !!record &&
     isSessionStatus(record.status) &&
     typeof record.lastSeq === 'number' &&
+    (record.cursor === undefined || isEventCursor(record.cursor)) &&
+    isOptionalString(record.lastEventId) &&
     typeof record.lastEventAt === 'number' &&
     (record.lastEventKind === undefined || isAgentEvent({ kind: record.lastEventKind })) &&
     isOptionalString(record.sdkSessionId) &&
@@ -702,6 +926,7 @@ function isTaskSnapshotRecord(value: unknown): value is TaskSnapshotRecord {
     isTaskSnapshotReason(record.reason) &&
     isSessionMeta(record.meta) &&
     isExecutionPosition(record.execution) &&
+    (record.run === undefined || isTaskRunRecord(record.run)) &&
     (record.replayCandidate === undefined || isReplayCandidate(record.replayCandidate)) &&
     (record.worktree === undefined || isWorktreeInfo(record.worktree)) &&
     Array.isArray(record.transcript) &&

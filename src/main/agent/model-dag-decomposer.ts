@@ -1,4 +1,4 @@
-import { decryptToken, getProvider } from '../providers'
+import { decryptProviderToken, getProvider } from '../providers'
 import { getSettings } from '../settings'
 import type { OpenAIProtocol, TaskDagRole, TaskDecomposeInput } from '../../shared/types'
 import type { ModelDagDecomposer, ModelDagPayload, ModelDagTaskPayload } from './task-decomposer'
@@ -60,7 +60,7 @@ function configFromInput(input: TaskDecomposeInput): ProviderModelConfig {
   const protocol = protocolFor(provider?.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL, provider?.openaiProtocol)
   const rawBaseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
   const baseUrl = protocol === 'chat' ? rawBaseUrl.replace(/\/anthropic$/, '') : rawBaseUrl
-  const token = provider ? decryptToken(provider.encryptedToken) : process.env.OPENAI_API_KEY || ''
+  const token = provider ? decryptProviderToken(provider) : process.env.OPENAI_API_KEY || ''
   if (!token) {
     throw new Error(`${provider?.name ?? 'OpenAI'} 缺少 API Key,已回退本地 DAG 拆解`)
   }

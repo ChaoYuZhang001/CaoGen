@@ -1,9 +1,8 @@
-import { Suspense, useCallback, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ContactShadows } from '@react-three/drei'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import MessagePackets from './MessagePackets'
 import AgentWalkers from './kit/AgentWalkers'
 import type { AgentWalkerSpec } from './kit/AgentWalkers'
 import CameraRig from './kit/CameraRig'
@@ -18,6 +17,7 @@ import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
 import { buildOfficeModel } from './model'
 import type { OfficeSessionActivity } from './model'
+import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
 
 /**
  * 把会话按网格铺开在房间中央空地(OfficeScene 家具占外围:
@@ -55,11 +55,20 @@ const RESTROOM_STOPS: Array<[number, number, number]> = [[-6.32, 0, 2.18]]
 const RESTROOM_LOOK_AT: [number, number, number] = [-5.62, 0, 2.64]
 const DINING_STOPS: Array<[number, number, number]> = [[-3.86, 0, 2.36]]
 const DINING_LOOK_AT: [number, number, number] = [-4.74, 0, 2.78]
-const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.58, 9.28]
-const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.76, -1.12]
+const OFFICE_CAMERA_POSITION: [number, number, number] = [1.4, 4.22, 8]
+const OFFICE_CAMERA_TARGET: [number, number, number] = [0.18, 0.9, -1.2]
+const WALKER_VISUAL_SCALE = 1.18
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
 const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
+
+function walkerLocalPoint(point: [number, number, number]): [number, number, number] {
+  return [
+    point[0] / WALKER_VISUAL_SCALE,
+    point[1] / WALKER_VISUAL_SCALE,
+    point[2] / WALKER_VISUAL_SCALE
+  ]
+}
 
 const ACTIVITY_LABEL_KEYS: Record<OfficeSessionActivity, string> = {
   idle: 'officeStatusIdle',
@@ -67,6 +76,55 @@ const ACTIVITY_LABEL_KEYS: Record<OfficeSessionActivity, string> = {
   awaiting: 'activityAwaiting',
   completed: 'officeStatusCompleted',
   error: 'activityError'
+}
+
+function routingStrategyKey(strategy: SchedulerStrategy): string {
+  if (strategy === 'quality') return 'routingStrategyQuality'
+  if (strategy === 'cost') return 'routingStrategyCost'
+  if (strategy === 'speed') return 'routingStrategySpeed'
+  return 'routingStrategyBalanced'
+}
+
+function moneyShort(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '$0'
+  return `$${value < 1 ? value.toFixed(3) : value.toFixed(2)}`
+}
+
+function durationShort(value: number | undefined): string {
+  if (!value || !Number.isFinite(value) || value <= 0) return '0s'
+  if (value < 60_000) return `${Math.max(1, Math.round(value / 1000))}s`
+  return `${Math.round(value / 60_000)}m`
+}
+
+function workspaceChangeShort(signal: {
+  changedFiles: number
+  insertions: number
+  deletions: number
+  gitOk?: boolean
+  gitStaged?: number
+  gitUnstaged?: number
+  gitUntracked?: number
+}): string {
+  if (signal.gitOk === false) return 'git error'
+  if (signal.gitOk === true) {
+    if (signal.changedFiles <= 0) return 'clean'
+    return `${signal.changedFiles} · S${signal.gitStaged ?? 0}/U${signal.gitUnstaged ?? 0}/?${signal.gitUntracked ?? 0}`
+  }
+  if (signal.changedFiles <= 0) return '0'
+  return `${signal.changedFiles} · +${signal.insertions}/-${signal.deletions}`
+}
+
+function gitStatusError(id: string, err: unknown): GitStatus {
+  return {
+    ok: false,
+    cwd: '',
+    branch: '',
+    files: [],
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    error: `office git status failed for ${id}: ${err instanceof Error ? err.message : String(err)}`
+  }
 }
 
 export default function OfficeView(): React.JSX.Element {
@@ -82,6 +140,7 @@ export default function OfficeView(): React.JSX.Element {
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('overview')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(null)
+  const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
 
   // 省电:窗口失焦/页面隐藏(最小化、切他窗、熄屏)时暂停 3D 渲染循环
   // (切回列表视图时 OfficeView 整体卸载,无需在此处理)
@@ -90,13 +149,59 @@ export default function OfficeView(): React.JSX.Element {
     themePref === 'light' ||
     (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
   const scene = isLight
-    ? { bg: '#f0f0f0', floor: '#e6e6e6', grid1: '#d0d0d0', grid2: '#dcdcdc', ground: '#ececec' }
-    : { bg: '#111820', floor: '#1d232b', grid1: '#33404d', grid2: '#232b35', ground: '#1a2028' }
+    ? { bg: '#f0f2f3', floor: '#e4e7e8', grid1: '#cfd6da', grid2: '#dde2e5', ground: '#e9ecee' }
+    : { bg: '#10151b', floor: '#202832', grid1: '#34404c', grid2: '#26313a', ground: '#1d252d' }
 
   const ids = order.filter((id) => sessions[id])
+  const idsKey = ids.join('\0')
   const positions = gridPositions(ids.length)
-  const officeModel = useMemo(() => buildOfficeModel(ids, sessions), [ids, sessions])
+  useEffect(() => {
+    if (typeof window.agentDesk === 'undefined') return
+    let cancelled = false
+    const refresh = async (): Promise<void> => {
+      if (ids.length === 0) {
+        if (!cancelled) setOfficeGitStatusBySession({})
+        return
+      }
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            return [id, await window.agentDesk.gitStatus(id)] as const
+          } catch (err) {
+            return [id, gitStatusError(id, err)] as const
+          }
+        })
+      )
+      if (cancelled) return
+      const next: Record<string, GitStatus | undefined> = {}
+      for (const [id, status] of entries) next[id] = status
+      setOfficeGitStatusBySession(next)
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [idsKey])
+  const officeModel = useMemo(
+    () => buildOfficeModel(ids, sessions, officeGitStatusBySession),
+    [ids, sessions, officeGitStatusBySession]
+  )
+  const realtime = officeModel.realtime
   const subagentPacketCount = officeModel.packets.filter((packet) => packet.toolName === 'Subagent').length
+  const officeSignalPanelCount = ids.filter((id) => {
+    const signal = officeModel.sessions[id]?.signal
+    return Boolean(
+      signal?.routing ||
+      signal?.failover ||
+      signal?.workspace.gitOk !== undefined ||
+      signal?.workspace.isolated ||
+      signal?.workspace.changedFiles ||
+      signal?.budget.budgetUsd ||
+      signal?.budget.costUsd
+    )
+  }).length
   const activitySummary = useMemo(
     () =>
       ids.reduce(
@@ -149,7 +254,7 @@ export default function OfficeView(): React.JSX.Element {
       const position = positions[i]
       if (!session || !position) return
       const activity = activityOf(session)
-      const home: [number, number, number] = [position[0], 0, position[2] + 0.78]
+      const home: [number, number, number] = [position[0], 0, position[2] + 0.64]
       const homeLookAt: [number, number, number] = [position[0], 0, position[2] - 0.48]
       const providerName = providerNameOf(session.meta.providerId)
       const providerBaseUrl = providerBaseUrlOf(session.meta.providerId)
@@ -213,6 +318,17 @@ export default function OfficeView(): React.JSX.Element {
 
     return [...awaiting.slice(0, 1), ...idle.slice(0, 1), ...completedFacility.slice(0, 2)]
   }, [ids, positions, sessions, providers])
+  const walkerRenderSpecs = useMemo<AgentWalkerSpec[]>(
+    () =>
+      semanticWalkers.map((spec) => ({
+        ...spec,
+        home: walkerLocalPoint(spec.home),
+        homeLookAt: walkerLocalPoint(spec.homeLookAt),
+        target: walkerLocalPoint(spec.target),
+        targetLookAt: walkerLocalPoint(spec.targetLookAt)
+      })),
+    [semanticWalkers]
+  )
   const [awaySessionIds, setAwaySessionIds] = useState<Set<string>>(() => new Set())
   const handleWalkerAwayChange = useCallback((sessionId: string, away: boolean): void => {
     setAwaySessionIds((current) => {
@@ -230,10 +346,17 @@ export default function OfficeView(): React.JSX.Element {
   const facilityWalkerCount = teaWalkerCount + restroomWalkerCount + diningWalkerCount
   const deskRobotCount = Math.max(0, ids.length - awaySessionIds.size)
   const activeOfficeId = activeId && ids.includes(activeId) ? activeId : (ids[0] ?? null)
+  const presentedWalkerSpecs = useMemo(
+    () =>
+      cameraPreset === 'agent' && activeOfficeId
+        ? walkerRenderSpecs.filter((spec) => spec.sessionId !== activeOfficeId)
+        : walkerRenderSpecs,
+    [activeOfficeId, cameraPreset, walkerRenderSpecs]
+  )
   const activeOfficeIndex = activeOfficeId ? ids.indexOf(activeOfficeId) : -1
   const activeOfficeSession = activeOfficeId ? sessions[activeOfficeId] : undefined
   const activeOfficeActivity = activeOfficeSession ? activityOf(activeOfficeSession) : undefined
-  const activeWalker = activeOfficeId ? semanticWalkers.find((spec) => spec.sessionId === activeOfficeId) : undefined
+  const activeOfficeSignal = activeOfficeId ? officeModel.sessions[activeOfficeId]?.signal : undefined
   const faultHitTargets = ids
     .map((id, i) => ({
       id,
@@ -256,12 +379,7 @@ export default function OfficeView(): React.JSX.Element {
   const selectedFacilitySpec = selectedFacility
     ? OFFICE_FACILITY_SPECS.find((spec) => spec.key === selectedFacility)
     : undefined
-  const activeOfficePosition =
-    activeWalker && awaySessionIds.has(activeWalker.sessionId)
-      ? activeWalker.target
-      : activeOfficeIndex >= 0
-        ? positions[activeOfficeIndex]
-        : undefined
+  const activeOfficePosition = activeOfficeIndex >= 0 ? positions[activeOfficeIndex] : undefined
   const cameraPose = useMemo(() => {
     if (cameraPreset === 'facilities') {
       if (selectedFacilitySpec) {
@@ -277,8 +395,8 @@ export default function OfficeView(): React.JSX.Element {
     }
     if (cameraPreset === 'agent' && activeOfficePosition) {
       return {
-        position: [activeOfficePosition[0] + 2.4, 2.85, activeOfficePosition[2] + 4.15] as [number, number, number],
-        target: [activeOfficePosition[0], 0.86, activeOfficePosition[2] + 0.08] as [number, number, number]
+        position: [activeOfficePosition[0] + 2.05, 2.62, activeOfficePosition[2] + 3.5] as [number, number, number],
+        target: [activeOfficePosition[0], 1.02, activeOfficePosition[2] - 0.08] as [number, number, number]
       }
     }
     if (cameraPreset === 'incidents') return incidentCamera
@@ -371,6 +489,27 @@ export default function OfficeView(): React.JSX.Element {
           data-office-failed-sessions={activitySummary.error}
           data-office-packets={officeModel.packets.length}
           data-office-subagent-packets={subagentPacketCount}
+          data-office-routed-sessions={realtime.routedSessions}
+          data-office-failover-sessions={realtime.failoverSessions}
+          data-office-budgeted-sessions={realtime.budgetedSessions}
+          data-office-over-budget-sessions={realtime.overBudgetSessions}
+          data-office-total-cost-usd={realtime.totalCostUsd.toFixed(6)}
+          data-office-total-budget-usd={realtime.totalBudgetUsd.toFixed(6)}
+          data-office-total-duration-ms={Math.round(realtime.totalDurationMs)}
+          data-office-cross-validation-validators={realtime.crossValidationValidators}
+          data-office-routing-budget-panels={officeSignalPanelCount}
+          data-office-isolated-sessions={realtime.isolatedSessions}
+          data-office-removed-worktrees={realtime.removedWorktrees}
+          data-office-workspace-changed-files={realtime.workspaceChangedFiles}
+          data-office-workspace-insertions={realtime.workspaceInsertions}
+          data-office-workspace-deletions={realtime.workspaceDeletions}
+          data-office-git-tracked-sessions={realtime.gitTrackedSessions}
+          data-office-git-dirty-sessions={realtime.gitDirtySessions}
+          data-office-git-errored-sessions={realtime.gitErroredSessions}
+          data-office-git-files={realtime.gitFiles}
+          data-office-git-staged={realtime.gitStaged}
+          data-office-git-unstaged={realtime.gitUnstaged}
+          data-office-git-untracked={realtime.gitUntracked}
           data-office-walkers={semanticWalkers.length}
           data-office-away-sessions={awaySessionIds.size}
           data-office-desk-robots={deskRobotCount}
@@ -420,6 +559,12 @@ export default function OfficeView(): React.JSX.Element {
           data-office-humanoid-articulated-joints={(deskRobotCount + awaySessionIds.size) * 8}
           data-office-humanoid-back-shells={deskRobotCount + awaySessionIds.size}
           data-office-humanoid-neutral-shells={deskRobotCount + awaySessionIds.size}
+          data-office-reference-robot-silhouettes={deskRobotCount + awaySessionIds.size}
+          data-office-reference-robot-helmet-visors={deskRobotCount + awaySessionIds.size}
+          data-office-reference-robot-shell-panels={(deskRobotCount + awaySessionIds.size) * 12}
+          data-office-reference-robot-articulated-joints={(deskRobotCount + awaySessionIds.size) * 8}
+          data-office-reference-robot-back-shells={deskRobotCount + awaySessionIds.size}
+          data-office-reference-robot-neutral-shells={deskRobotCount + awaySessionIds.size}
           data-office-fault-beacons={activitySummary.error}
           data-office-maintenance-units={activitySummary.error}
           data-office-diagnostic-beams={activitySummary.error * 2}
@@ -482,6 +627,30 @@ export default function OfficeView(): React.JSX.Element {
               <span>{t('officeMetricPackets')}</span>
               <strong>{officeModel.packets.length}</strong>
             </div>
+            <div className="office-metric">
+              <span>{t('officeMetricRouted')}</span>
+              <strong>{realtime.routedSessions}</strong>
+            </div>
+            <div className="office-metric">
+              <span>{t('officeMetricFailover')}</span>
+              <strong>{realtime.failoverSessions}</strong>
+            </div>
+            <div className="office-metric">
+              <span>{t('officeMetricCost')}</span>
+              <strong>{moneyShort(realtime.totalCostUsd)}</strong>
+            </div>
+            <div className="office-metric">
+              <span>{t('officeMetricWorkspace')}</span>
+              <strong>{realtime.workspaceChangedFiles}</strong>
+            </div>
+            <div className="office-metric">
+              <span>{t('officeMetricGit')}</span>
+              <strong>{realtime.gitDirtySessions}</strong>
+            </div>
+            <div className="office-metric">
+              <span>{t('officeMetricIsolated')}</span>
+              <strong>{realtime.isolatedSessions}</strong>
+            </div>
           </div>
           <div className="office-camera-strip no-drag" data-office-camera-preset-controls={CAMERA_PRESETS.length}>
             {CAMERA_PRESETS.map((preset) => (
@@ -502,6 +671,74 @@ export default function OfficeView(): React.JSX.Element {
                 <span>{t(ACTIVITY_LABEL_KEYS[activeOfficeActivity])}</span>
                 <span>{activeOfficeSession.meta.model || '-'}</span>
               </div>
+              {activeOfficeSignal && (
+                <div className="office-signal-list">
+                  {activeOfficeSignal.routing && (
+                    <>
+                      <div>
+                        <span>{t('officeRouting')}</span>
+                        <strong title={activeOfficeSignal.routing.reason}>
+                          {activeOfficeSignal.routing.providerName ?? activeOfficeSignal.routing.providerId} /{' '}
+                          {activeOfficeSignal.routing.model}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>{t('officeRoutingBasis')}</span>
+                        <strong title={activeOfficeSignal.routing.reason}>
+                          {activeOfficeSignal.routing.basis ?? activeOfficeSignal.routing.reason}
+                        </strong>
+                      </div>
+                      {activeOfficeSignal.routing.strategy && (
+                        <div>
+                          <span>{t('routingStrategy')}</span>
+                          <strong>{t(routingStrategyKey(activeOfficeSignal.routing.strategy))}</strong>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {activeOfficeSignal.failover && (
+                    <div>
+                      <span>{t('officeFailover')}</span>
+                      <strong>
+                        {activeOfficeSignal.failover.fromName} → {activeOfficeSignal.failover.toName}
+                      </strong>
+                    </div>
+                  )}
+                  {activeOfficeSignal.keyFailover && (
+                    <div>
+                      <span>{t('officeKeyFailover')}</span>
+                      <strong title={activeOfficeSignal.keyFailover.reason}>
+                        {activeOfficeSignal.keyFailover.fromKeyLabel} → {activeOfficeSignal.keyFailover.toKeyLabel}
+                      </strong>
+                    </div>
+                  )}
+                  <div>
+                    <span>{t('officeBudget')}</span>
+                    <strong>
+                      {moneyShort(activeOfficeSignal.budget.costUsd)}
+                      {activeOfficeSignal.budget.budgetUsd ? ` / ${moneyShort(activeOfficeSignal.budget.budgetUsd)}` : ''}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>{t('officeDuration')}</span>
+                    <strong>{durationShort(activeOfficeSignal.budget.latestDurationMs)}</strong>
+                  </div>
+                  <div>
+                    <span>{t('officeWorkspace')}</span>
+                    <strong>
+                      {activeOfficeSignal.workspace.gitOk === false
+                        ? 'git error'
+                        : activeOfficeSignal.workspace.gitBranch ||
+                          (activeOfficeSignal.workspace.isolated ? activeOfficeSignal.workspace.branch || 'worktree' : 'main')}
+                      {activeOfficeSignal.workspace.worktreeState === 'removed' ? ' · removed' : ''}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>{t('officeFiles')}</span>
+                    <strong>{workspaceChangeShort(activeOfficeSignal.workspace)}</strong>
+                  </div>
+                </div>
+              )}
               <button className="btn btn-primary btn-sm" onClick={() => focus(activeOfficeId)}>
                 {t('officeOpenSession')}
               </button>
@@ -529,23 +766,24 @@ export default function OfficeView(): React.JSX.Element {
           >
           <color attach="background" args={[scene.bg]} />
           <fog attach="fog" args={[scene.bg, 18, 42]} />
-          <ambientLight intensity={isLight ? 0.95 : 0.82} />
+          <ambientLight intensity={isLight ? 0.98 : 1.05} />
           <directionalLight
-            position={[6, 12, 6]}
-            intensity={isLight ? 1.4 : 1.28}
+            position={[5.5, 10, 7.5]}
+            intensity={isLight ? 1.45 : 1.72}
+            color={isLight ? '#ffffff' : '#fff7ed'}
             castShadow
             shadow-mapSize={[1024, 1024]}
           />
-          <directionalLight position={[-8, 6, -6]} intensity={isLight ? 0.55 : 0.72} color="#9fc0ff" />
+          <directionalLight position={[-6, 5.5, 7]} intensity={isLight ? 0.5 : 0.92} color="#d9ecff" />
           {/* 顶部聚光,强化中心舞台感 */}
-          <spotLight position={[0, 14, 2]} angle={0.7} penumbra={0.8} intensity={isLight ? 0.6 : 1.1} />
+          <spotLight position={[0, 9, 6]} angle={0.78} penumbra={0.82} intensity={isLight ? 0.58 : 1.28} />
           {/* 中央暖色补光,提亮工位区,驱散 night 家具阴影 */}
-          <pointLight position={[0, 5, 0]} intensity={isLight ? 0.4 : 1.12} distance={26} color={isLight ? '#ffffff' : '#d8e4ff'} />
-          <hemisphereLight args={[isLight ? '#ffffff' : '#9fb2d8', '#252b34', isLight ? 0.5 : 0.56]} />
+          <pointLight position={[0, 4.5, 0]} intensity={isLight ? 0.36 : 1.02} distance={26} color={isLight ? '#f3f5f6' : '#dce7f2'} />
+          <hemisphereLight args={[isLight ? '#f3f5f6' : '#aebfd0', '#303843', isLight ? 0.48 : 0.7]} />
           {/* 不可见工位补光:只提亮机器人/桌面,不增加任何会挡镜头的实体灯具。 */}
-          <pointLight position={[0, 2.35, 0.65]} intensity={isLight ? 0.36 : 1.08} distance={10.5} color={isLight ? '#ffffff' : '#c8f1ff'} />
+          <pointLight position={[0, 2.8, 1.8]} intensity={isLight ? 0.46 : 1.42} distance={15} color={isLight ? '#f3f5f6' : '#eef6ff'} />
           {/* 补一盏跟随状态色调的点光,增强氛围 */}
-          <pointLight position={[0, 3, 4]} intensity={isLight ? 0.3 : 0.6} color={isLight ? '#ffffff' : '#4a5a80'} />
+          <pointLight position={[0, 3, 4]} intensity={isLight ? 0.22 : 0.34} color={isLight ? '#f3f5f6' : '#3c4658'} />
 
           {/* 富场景背景层:地板/墙/落地窗/家具/休息区/会议桌/白板/机架/茶水角 */}
           <Suspense fallback={null}>
@@ -553,10 +791,10 @@ export default function OfficeView(): React.JSX.Element {
           </Suspense>
           <ContactShadows
             position={[0, 0.02, 0]}
-            opacity={isLight ? 0.35 : 0.55}
+            opacity={isLight ? 0.24 : 0.34}
             scale={40}
-            blur={2.2}
-            far={6}
+            blur={1.4}
+            far={3.5}
           />
 
           <Suspense fallback={null}>
@@ -582,29 +820,24 @@ export default function OfficeView(): React.JSX.Element {
                 operatorAway={awaySessionIds.has(id)}
                 currentTask={officeModel.sessions[id]?.currentTask}
                 taskStats={officeModel.sessions[id]?.taskStats}
+                sessionSignal={officeModel.sessions[id]?.signal}
                 onSelect={() => selectOfficeSession(id)}
                 onOpen={() => focus(id)}
               />
             ))}
-            <AgentWalkers
-              specs={semanticWalkers}
-              activeSessionId={activeOfficeId}
-              onAwayChange={handleWalkerAwayChange}
-              onSelect={selectOfficeSession}
-              onOpen={focus}
-            />
+            <group scale={WALKER_VISUAL_SCALE}>
+              <AgentWalkers
+                specs={presentedWalkerSpecs}
+                activeSessionId={activeOfficeId}
+                onAwayChange={handleWalkerAwayChange}
+                onSelect={selectOfficeSession}
+                onOpen={focus}
+              />
+            </group>
             <FacilityHotspots
               specs={OFFICE_FACILITY_SPECS}
               activeKey={selectedFacility}
               onSelect={selectFacility}
-            />
-            {/* 真实任务流消息包:由 tool_use/runningTools/toolResults/pendingPermissions 派生 */}
-            <MessagePackets
-              stations={ids.map((id, i) => ({
-                pos: positions[i],
-                active: activityOf(sessions[id]) === 'working'
-              }))}
-              packets={officeModel.packets}
             />
           </Suspense>
 

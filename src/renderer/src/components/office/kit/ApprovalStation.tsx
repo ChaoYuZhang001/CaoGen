@@ -11,7 +11,7 @@ export interface OfficeProp {
 const BASE = '#171b22'
 const PANEL = '#202733'
 const METAL = '#303845'
-const ACCENT = '#e0a33c'
+const ACCENT = '#6f8fa0'
 const CYAN = '#8fe9ff'
 
 /**
@@ -82,11 +82,11 @@ export default function ApprovalStation({
         {/* 几何确认符号,不用贴图/字体。 */}
         <mesh position={[-0.08, -0.02, 0.054]} rotation={[0, 0, -0.72]}>
           <boxGeometry args={[0.22, 0.035, 0.018]} />
-          <meshStandardMaterial color="#fff2cf" emissive={ACCENT} emissiveIntensity={0.55} toneMapped={false} />
+          <meshStandardMaterial color="#dce7f2" emissive={ACCENT} emissiveIntensity={0.55} toneMapped={false} />
         </mesh>
         <mesh position={[0.11, 0.015, 0.055]} rotation={[0, 0, 0.74]}>
           <boxGeometry args={[0.38, 0.035, 0.018]} />
-          <meshStandardMaterial color="#fff2cf" emissive={ACCENT} emissiveIntensity={0.55} toneMapped={false} />
+          <meshStandardMaterial color="#dce7f2" emissive={ACCENT} emissiveIntensity={0.55} toneMapped={false} />
         </mesh>
       </group>
 

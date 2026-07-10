@@ -145,7 +145,10 @@ await check('gui controller exposes macOS elements and screenshot permission dia
     'elements: item.elements',
     'screenCapturePermissionStatus',
     "getMediaAccessStatus('screen')",
-    'source.thumbnail.isEmpty()',
+    'function nativeImageIsEmpty',
+    'image.isEmpty()',
+    'nativeImageIsEmpty(source.thumbnail)',
+    'nativeImageIsEmpty(image)',
     'sourceCount: all.length',
     '截图源缩略图为空'
   ]) {

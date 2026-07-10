@@ -17,6 +17,7 @@ const fakeWindows = []
 const sentInputs = []
 const completeInitialTaskIds = new Set(['prep-a'])
 let autoCompleteRecoveredRoots = false
+let lateDisposeSessionId = null
 
 async function main() {
 let restoreModuleLoad = () => {}
@@ -35,6 +36,21 @@ try {
   const firstManager = M('main/sessionManager.js').sessionManager
   const snapshotStore = M('main/task/task-snapshot.js')
   const repoDir = mkRepo('repo')
+  fs.mkdirSync(userData, { recursive: true })
+  fs.writeFileSync(
+    path.join(userData, 'providers.json'),
+    JSON.stringify([
+      {
+        id: 'fake-provider',
+        name: 'DAG Recovery Fake',
+        baseUrl: 'http://127.0.0.1:1',
+        encryptedToken: `b64:${Buffer.from('fake-token').toString('base64')}`,
+        models: ['fake-model'],
+        openaiProtocol: 'responses',
+        createdAt: Date.now()
+      }
+    ])
+  )
   const preShutdownEvents = []
   firstManager.subscribe((payload) => preShutdownEvents.push(payload))
   const parent = firstManager.create({
@@ -100,10 +116,14 @@ try {
     const latest = latestDagUpdate(preShutdownEvents, parent.id)
     return latest?.tasks.find((task) => task.task.id === 'prep-a')?.status === 'success'
   }, 5000, 'prep-a initial success')
+  lateDisposeSessionId = parent.id
   await firstManager.disposeAll()
+  await delay(30)
   await snapshotStore.flushTaskSnapshotMutations(userData)
+  lateDisposeSessionId = null
 
   const snapshotsAfterShutdown = await snapshotStore.listTaskSnapshots(userData)
+  const taskRunsAfterShutdown = await snapshotStore.listTaskRuns(undefined, userData)
   const parentSnapshot = snapshotsAfterShutdown.find((snapshot) => snapshot.sessionId === parent.id)
   if (!parentSnapshot) {
     const dbFile = snapshotStore.taskSnapshotsDbFile(userData)
@@ -140,12 +160,32 @@ try {
   )
   assert.equal(parentSnapshot.dagRuntimes[0].autoMerge.enabled, true)
   assert.equal(parentSnapshot.dagRuntimes[0].autoMerge.verificationCommand, 'echo verify')
+  assert(
+    taskRunsAfterShutdown.some((run) => run.taskId === 'prep-a' && run.status === 'completed'),
+    'completed DAG child TaskRun should remain in SQLite history after its recovery snapshot is removed'
+  )
+  assert(
+    taskRunsAfterShutdown.some((run) => run.taskId === 'prep-b' && !['completed', 'cancelled'].includes(run.status)),
+    'unfinished DAG child TaskRun should remain recoverable at shutdown'
+  )
 
   delete require.cache[require.resolve(path.join(buildDir, 'main/sessionManager.js'))]
   const freshManager = M('main/sessionManager.js').sessionManager
   const recoveredEvents = []
   freshManager.subscribe((payload) => recoveredEvents.push(payload))
   autoCompleteRecoveredRoots = true
+  await freshManager.init()
+  assert.equal(
+    freshManager.get(parent.id),
+    undefined,
+    'legacy active-session registry must not auto-restore a session that has a richer task snapshot'
+  )
+  engineMod.registerEngine({
+    kind: 'openai',
+    label: 'DAG Recovery Fake',
+    available: () => true,
+    create: (meta, emit, resumeSdkSessionId) => new DagRecoveryFakeEngine(meta, emit, resumeSdkSessionId)
+  })
   await freshManager.recoverTaskSnapshot(parent.id)
 
   await waitFor(() => sentInputs.some((item) => item.taskId === 'verify'), 5000, 'verify task dispatch')
@@ -159,6 +199,14 @@ try {
   }, 5000, 'final recovered DAG success')
   const final = latestDagUpdate(recoveredEvents, parent.id)
   assert(final.tasks.find((task) => task.task.id === 'verify').resultText.includes('verify completed'))
+  const taskRunsAfterRecovery = await snapshotStore.listTaskRuns(undefined, userData)
+  const verifyRun = taskRunsAfterRecovery.find((run) => run.taskId === 'verify' && run.status === 'completed')
+  assert(verifyRun, 'recovered DAG verification child should persist a completed TaskRun')
+  assert.equal(verifyRun.toolExecutions.length, 1, 'verification TaskRun should persist its tool execution')
+  assert.equal(verifyRun.toolExecutions[0].status, 'succeeded')
+  assert.match(verifyRun.toolExecutions[0].idempotencyKey, /^tool-v1:/)
+  assert.equal(typeof verifyRun.toolExecutions[0].inputDigest, 'string')
+  assert.equal(typeof verifyRun.toolExecutions[0].outputDigest, 'string')
 
   await freshManager.disposeAll()
   await snapshotStore.flushTaskSnapshotMutations(userData)
@@ -292,6 +340,13 @@ class DagRecoveryFakeEngine {
     if (this.meta.childTaskId === 'verify') {
       assert(text.includes('prep-a initial result'), 'verify prompt missing prep-a dependency result')
       assert(text.includes('prep-b recovered result'), 'verify prompt missing prep-b dependency result')
+      const toolUseId = `verify-tool-${this.meta.id}`
+      this.push({ kind: 'tool-start', toolUseId, name: 'write_file' })
+      this.push({
+        kind: 'assistant-message',
+        blocks: [{ type: 'tool_use', id: toolUseId, name: 'write_file', input: { path: 'verification.txt', content: 'verified' } }]
+      })
+      this.push({ kind: 'tool-result', toolUseId, content: 'write ok', isError: false })
       setTimeout(() => this.finish('verify completed after recovered dependencies'), 20)
     }
   }
@@ -317,7 +372,12 @@ class DagRecoveryFakeEngine {
   async setPermissionMode(mode) { this.meta.permissionMode = mode }
   async setModel(model) { this.meta.model = model }
   rename(title) { this.meta.title = title }
-  dispose() { this.meta.status = 'closed' }
+  dispose() {
+    this.meta.status = 'closed'
+    if (this.meta.id === lateDisposeSessionId) {
+      setTimeout(() => this.finish('late provider completion after dispose'), 0)
+    }
+  }
 
   push(event) {
     this.transcript.push({ seq: ++this.seq, event })
@@ -373,6 +433,10 @@ function waitFor(predicate, timeoutMs = 3000, label = 'condition') {
     }
     tick()
   })
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function debugRawSnapshots(dbFile) {

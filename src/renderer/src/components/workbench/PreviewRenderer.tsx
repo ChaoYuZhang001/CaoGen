@@ -1,5 +1,11 @@
-import { lazy, Suspense, useMemo, useState, type CSSProperties } from 'react'
-import { parseCsv, prettyJson, truncate, type CsvDelimiter } from './previewUtils'
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import {
+  officePreviewUnit,
+  parseOfficePreviewContent,
+  type OfficePreviewModel,
+  type OfficePreviewUnit
+} from './officePreviewUtils'
+import { parseCsv, prettyJson, searchTextPreview, truncate, type CsvDelimiter } from './previewUtils'
 
 const Markdown = lazy(() => import('../Markdown'))
 
@@ -11,6 +17,7 @@ export type PreviewRendererType =
   | 'html'
   | 'image'
   | 'pdf'
+  | 'office'
   | 'unknown'
 
 export interface PreviewRendererValue {
@@ -31,18 +38,67 @@ export interface PreviewRendererValue {
   [key: string]: unknown
 }
 
+export interface OfficeVisualPreviewValue {
+  ok?: boolean
+  path?: string
+  dataUrl?: string
+  previewUrl?: string
+  width?: number
+  height?: number
+  source?: string
+  fidelity?: string
+  warning?: string
+  error?: string
+}
+
+export interface OfficePreviewLabels {
+  fidelity: string
+  loading: string
+  modeLabel: string
+  nextUnit: string
+  previousUnit: string
+  structure: string
+  thumbnailFidelity: string
+  unitSelector: string
+  unavailable: string
+  visual: string
+}
+
 export interface PreviewRendererProps {
   preview?: PreviewRendererValue | null
   className?: string
   maxTextChars?: number
   maxCsvRows?: number
+  officeVisual?: OfficeVisualPreviewValue | null
+  officeVisualLoading?: boolean
+  officeVisualError?: string
+  officeLabels?: Partial<OfficePreviewLabels>
+  onOfficeUnitChange?: (unit: OfficePreviewUnit | null) => void
+}
+
+const DEFAULT_OFFICE_LABELS: OfficePreviewLabels = {
+  fidelity: 'System document preview; layout may differ from the original Office application.',
+  loading: 'Generating system document preview…',
+  modeLabel: 'Office preview mode',
+  nextUnit: 'Next page or sheet',
+  previousUnit: 'Previous page or sheet',
+  structure: 'Structure',
+  thumbnailFidelity: 'System first-page thumbnail; it does not represent the complete document layout.',
+  unitSelector: 'Document page, sheet or slide',
+  unavailable: 'Visual snapshot unavailable; showing structure view',
+  visual: 'Visual'
 }
 
 export default function PreviewRenderer({
   preview,
   className,
   maxTextChars = 80_000,
-  maxCsvRows = 200
+  maxCsvRows = 200,
+  officeVisual,
+  officeVisualLoading = false,
+  officeVisualError,
+  officeLabels,
+  onOfficeUnitChange
 }: PreviewRendererProps): React.JSX.Element {
   if (!preview) {
     return (
@@ -64,9 +120,9 @@ export default function PreviewRenderer({
 
   const type = normalizePreviewType(preview)
   const path = stringValue(preview.path || preview.fullPath)
-  const title = `${type.toUpperCase()} Preview`
   const subtitle = path || stringValue(preview.mime)
   const content = contentAsText(preview.content)
+  const title = previewTitle(type, content, maxTextChars)
 
   return (
     <Shell
@@ -79,6 +135,11 @@ export default function PreviewRenderer({
         content={content}
         maxCsvRows={maxCsvRows}
         maxTextChars={maxTextChars}
+        officeLabels={{ ...DEFAULT_OFFICE_LABELS, ...officeLabels }}
+        officeVisual={officeVisual}
+        officeVisualError={officeVisualError}
+        officeVisualLoading={officeVisualLoading}
+        onOfficeUnitChange={onOfficeUnitChange}
         preview={preview}
         type={type}
       />
@@ -90,12 +151,22 @@ function PreviewBody({
   content,
   maxCsvRows,
   maxTextChars,
+  officeLabels,
+  officeVisual,
+  officeVisualError,
+  officeVisualLoading,
+  onOfficeUnitChange,
   preview,
   type
 }: {
   content: string
   maxCsvRows: number
   maxTextChars: number
+  officeLabels: OfficePreviewLabels
+  officeVisual?: OfficeVisualPreviewValue | null
+  officeVisualError?: string
+  officeVisualLoading: boolean
+  onOfficeUnitChange?: (unit: OfficePreviewUnit | null) => void
   preview: PreviewRendererValue
   type: PreviewRendererType
 }): React.JSX.Element {
@@ -105,8 +176,36 @@ function PreviewBody({
   if (type === 'html') return <HtmlPreview content={content} maxTextChars={maxTextChars} />
   if (type === 'image') return <ImagePreview preview={preview} />
   if (type === 'pdf') return <PdfPreview preview={preview} />
+  if (type === 'office') {
+    return (
+      <OfficePreview
+        key={stringValue(preview.path || preview.fullPath) || 'office-preview'}
+        content={content}
+        labels={officeLabels}
+        maxTextChars={maxTextChars}
+        onUnitChange={onOfficeUnitChange}
+        visual={officeVisual}
+        visualError={officeVisualError}
+        visualLoading={officeVisualLoading}
+      />
+    )
+  }
   if (type === 'text') return <TextPreview content={content} maxTextChars={maxTextChars} />
   return <UnknownPreview preview={preview} content={content} maxTextChars={maxTextChars} />
+}
+
+function previewTitle(type: PreviewRendererType, content: string, maxTextChars: number): string {
+  if (type === 'office') {
+    const model = parseOfficePreviewContent(truncate(content, maxTextChars))
+    if (model.kind === 'word') return 'Word Preview'
+    if (model.kind === 'excel') return 'Excel Preview'
+    if (model.kind === 'powerpoint') return 'PowerPoint Preview'
+    return 'Office Preview'
+  }
+  if (type === 'json') return 'JSON Preview'
+  if (type === 'csv') return 'CSV Preview'
+  if (type === 'pdf') return 'PDF Preview'
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)} Preview`
 }
 
 function Shell({
@@ -170,8 +269,38 @@ function TextPreview({
   content: string
   maxTextChars: number
 }): React.JSX.Element {
+  const [query, setQuery] = useState('')
+  const [matchesOnly, setMatchesOnly] = useState(false)
   const text = truncate(content, maxTextChars)
-  return <pre style={styles.pre}>{text}</pre>
+  const search = useMemo(() => searchTextPreview(text, query, { matchesOnly }), [matchesOnly, query, text])
+
+  return (
+    <>
+      <div style={styles.textToolbar}>
+        <input
+          className="input"
+          value={query}
+          placeholder="Search content"
+          style={styles.textSearchInput}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          style={matchesOnly ? styles.activeToggle : undefined}
+          disabled={!query.trim()}
+          aria-pressed={matchesOnly}
+          onClick={() => setMatchesOnly((value) => !value)}
+        >
+          Matches
+        </button>
+        <span style={styles.tableSummary}>
+          {search.query ? `${search.matchCount} matches` : `${search.lineCount} lines`}
+        </span>
+      </div>
+      <pre style={styles.pre}>{search.text}</pre>
+    </>
+  )
 }
 
 function MarkdownPreview({
@@ -208,7 +337,7 @@ function JsonPreview({
           Invalid JSON: {pretty.error}
         </div>
       )}
-      <pre style={styles.pre}>{text}</pre>
+      <TextPreview content={text} maxTextChars={maxTextChars} />
     </>
   )
 }
@@ -329,6 +458,7 @@ function ImagePreview({ preview }: { preview: PreviewRendererValue }): React.JSX
 
 function PdfPreview({ preview }: { preview: PreviewRendererValue }): React.JSX.Element {
   const src = resolveAssetSource(preview)
+  const content = contentAsText(preview.content)
 
   if (!src) {
     return (
@@ -341,9 +471,264 @@ function PdfPreview({ preview }: { preview: PreviewRendererValue }): React.JSX.E
   }
 
   return (
-    <object data={src} type="application/pdf" style={styles.pdfObject} aria-label={stringValue(preview.path) || 'PDF preview'}>
-      <iframe src={src} style={styles.iframe} title={stringValue(preview.path) || 'PDF preview'} />
-    </object>
+    <div style={styles.pdfWrap}>
+      <object
+        data={src}
+        type="application/pdf"
+        style={content ? styles.pdfObjectWithText : styles.pdfObject}
+        aria-label={stringValue(preview.path) || 'PDF preview'}
+      >
+        <iframe src={src} style={styles.iframe} title={stringValue(preview.path) || 'PDF preview'} />
+      </object>
+      {content && (
+        <section style={styles.pdfTextLayer}>
+          <div style={styles.pdfTextTitle}>Text layer</div>
+          <TextPreview content={content} maxTextChars={80_000} />
+        </section>
+      )}
+    </div>
+  )
+}
+
+function OfficePreview({
+  content,
+  labels,
+  maxTextChars,
+  onUnitChange,
+  visual,
+  visualError,
+  visualLoading
+}: {
+  content: string
+  labels: OfficePreviewLabels
+  maxTextChars: number
+  onUnitChange?: (unit: OfficePreviewUnit | null) => void
+  visual?: OfficeVisualPreviewValue | null
+  visualError?: string
+  visualLoading: boolean
+}): React.JSX.Element {
+  const model = useMemo(() => parseOfficePreviewContent(truncate(content, maxTextChars)), [content, maxTextChars])
+  const [activeUnitIndex, setActiveUnitIndex] = useState(0)
+  const unit = useMemo(() => officePreviewUnit(model, activeUnitIndex), [activeUnitIndex, model])
+  const visualDocumentSource = visual?.ok === false ? '' : stringValue(visual?.previewUrl)
+  const visualImageSource = visual?.ok === false ? '' : stringValue(visual?.dataUrl)
+  const visualReady = Boolean(visualDocumentSource || visualImageSource)
+  const visualFormat = visualDocumentSource ? 'document' : visualImageSource ? 'thumbnail' : 'none'
+  const [visualContentLoaded, setVisualContentLoaded] = useState(false)
+  const [selection, setSelection] = useState<'auto' | 'structure' | 'visual'>('auto')
+  const activeMode =
+    selection === 'auto' ? (visualReady ? 'visual' : 'structure') : selection === 'visual' && !visualReady ? 'structure' : selection
+  const visualState = visualReady ? 'ready' : visualLoading ? 'loading' : visualError ? 'error' : 'idle'
+
+  useEffect(() => {
+    if (activeUnitIndex !== unit.index) setActiveUnitIndex(unit.index)
+    onUnitChange?.(unit)
+  }, [activeUnitIndex, onUnitChange, unit])
+
+  useEffect(() => {
+    setVisualContentLoaded(false)
+  }, [visualDocumentSource, visualImageSource])
+
+  return (
+    <div
+      data-office-preview-mode={activeMode}
+      data-office-unit-index={unit.position}
+      data-office-unit-kind={unit.kind}
+      data-office-unit-title={unit.title}
+      data-office-unit-total={unit.total}
+      data-office-visual-fidelity={visual?.fidelity ?? ''}
+      data-office-visual-format={visualFormat}
+      data-office-visual-load-state={visualReady ? (visualContentLoaded ? 'loaded' : 'loading') : 'idle'}
+      data-office-visual-state={visualState}
+      style={styles.officePreviewRoot}
+    >
+      <div style={styles.officeModeToolbar}>
+        <div aria-label={labels.modeLabel} role="tablist" style={styles.officeModeControl}>
+          <button
+            aria-selected={activeMode === 'visual'}
+            className="btn btn-ghost btn-sm"
+            data-office-preview-mode-option="visual"
+            disabled={!visualReady}
+            onClick={() => setSelection('visual')}
+            role="tab"
+            style={activeMode === 'visual' ? styles.officeModeActive : undefined}
+            type="button"
+          >
+            {labels.visual}
+          </button>
+          <button
+            aria-selected={activeMode === 'structure'}
+            className="btn btn-ghost btn-sm"
+            data-office-preview-mode-option="structure"
+            onClick={() => setSelection('structure')}
+            role="tab"
+            style={activeMode === 'structure' ? styles.officeModeActive : undefined}
+            type="button"
+          >
+            {labels.structure}
+          </button>
+        </div>
+        {visualLoading && !visualReady && <span style={styles.officeVisualStatus}>{labels.loading}</span>}
+      </div>
+
+      {visualError && !visualReady && (
+        <div className="notice notice-info" title={visualError}>
+          {labels.unavailable}: {visualError}
+        </div>
+      )}
+      {visual?.warning && visualReady && (
+        <div className="notice notice-info" title={visual.warning}>
+          {visual.warning}
+        </div>
+      )}
+
+      {activeMode === 'visual' && visualReady ? (
+        <figure style={styles.officeVisualFigure}>
+          {visualDocumentSource ? (
+            <iframe
+              data-office-system-preview="document"
+              onLoad={() => setVisualContentLoaded(true)}
+              referrerPolicy="no-referrer"
+              sandbox="allow-scripts"
+              src={visualDocumentSource}
+              style={styles.officeVisualFrame}
+              title={visual?.path || 'Office system document preview'}
+            />
+          ) : (
+            <img
+              alt={visual?.path || 'Office first-page thumbnail'}
+              data-office-system-preview="thumbnail"
+              onLoad={() => setVisualContentLoaded(true)}
+              src={visualImageSource}
+              style={styles.officeVisualImage}
+            />
+          )}
+          <figcaption style={styles.officeVisualCaption}>
+            {visualDocumentSource ? labels.fidelity : labels.thumbnailFidelity}
+          </figcaption>
+        </figure>
+      ) : (
+        <OfficeStructurePreview
+          labels={labels}
+          model={model}
+          onUnitIndexChange={setActiveUnitIndex}
+          unit={unit}
+        />
+      )}
+    </div>
+  )
+}
+
+function OfficeStructurePreview({
+  labels,
+  model,
+  onUnitIndexChange,
+  unit
+}: {
+  labels: OfficePreviewLabels
+  model: OfficePreviewModel
+  onUnitIndexChange: (index: number) => void
+  unit: OfficePreviewUnit
+}): React.JSX.Element {
+  const section = model.sections[unit.index] ?? { title: unit.title, body: unit.body, rows: unit.rows }
+  const navigation = (
+    <div data-office-unit-navigation="1" style={styles.officeUnitNavigation}>
+      <button
+        aria-label={labels.previousUnit}
+        className="btn btn-ghost btn-sm"
+        data-office-unit-action="previous"
+        disabled={unit.index <= 0}
+        onClick={() => onUnitIndexChange(unit.index - 1)}
+        title={labels.previousUnit}
+        type="button"
+      >
+        &lt;
+      </button>
+      <select
+        aria-label={labels.unitSelector}
+        className="input"
+        data-office-unit-selector="1"
+        onChange={(event) => onUnitIndexChange(Number(event.target.value))}
+        style={styles.officeUnitSelect}
+        value={unit.index}
+      >
+        {model.sections.map((item, index) => (
+          <option key={`${item.title}-${index}`} value={index}>
+            {index + 1}. {item.title}
+          </option>
+        ))}
+      </select>
+      <span data-office-unit-position="1" style={styles.officeUnitPosition}>
+        {unit.position} / {unit.total}
+      </span>
+      <button
+        aria-label={labels.nextUnit}
+        className="btn btn-ghost btn-sm"
+        data-office-unit-action="next"
+        disabled={unit.index >= unit.total - 1}
+        onClick={() => onUnitIndexChange(unit.index + 1)}
+        title={labels.nextUnit}
+        type="button"
+      >
+        &gt;
+      </button>
+    </div>
+  )
+
+  if (model.kind === 'excel') {
+    return (
+      <div style={styles.officeStack}>
+        {navigation}
+        <section key={`${section.title}-${unit.index}`} style={styles.officeSection}>
+          <div style={styles.officeSectionHead}>
+            <strong>{section.title}</strong>
+            <span style={styles.tableSummary}>{section.rows.length} rows</span>
+          </div>
+          {section.rows.length > 0 ? (
+            <div style={styles.tableWrap}>
+              <table style={styles.table}>
+                <tbody>
+                  {section.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((cell, cellIndex) => {
+                        const Cell = rowIndex === 0 ? 'th' : 'td'
+                        return (
+                          <Cell key={cellIndex} style={rowIndex === 0 ? styles.th : styles.td}>
+                            {cell}
+                          </Cell>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="workspace-diff-empty">{section.body || 'Empty sheet'}</div>
+          )}
+        </section>
+      </div>
+    )
+  }
+  if (model.kind === 'powerpoint') {
+    return (
+      <div style={styles.officeStack}>
+        {navigation}
+        <section key={`${section.title}-${unit.index}`} style={styles.officeSlide}>
+          <div style={styles.officeSlideNumber}>{section.title}</div>
+          <pre style={styles.officeSlideText}>{section.body}</pre>
+        </section>
+      </div>
+    )
+  }
+  return (
+    <div style={styles.officeDocument}>
+      {navigation}
+      <section key={`${section.title}-${unit.index}`} style={styles.officeDocSection}>
+        {section.title !== model.title && <strong>{section.title}</strong>}
+        <pre style={styles.pre}>{section.body}</pre>
+      </section>
+    </div>
   )
 }
 
@@ -381,6 +766,7 @@ function normalizePreviewType(preview: PreviewRendererValue): PreviewRendererTyp
   if (mime.includes('html')) return 'html'
   if (mime.startsWith('image/')) return 'image'
   if (mime.includes('pdf')) return 'pdf'
+  if (mime.includes('wordprocessingml') || mime.includes('spreadsheetml') || mime.includes('presentationml')) return 'office'
   if (mime.startsWith('text/')) return 'text'
 
   const extension = stringValue(preview.path || preview.fullPath).split('.').pop()?.toLowerCase()
@@ -389,6 +775,7 @@ function normalizePreviewType(preview: PreviewRendererValue): PreviewRendererTyp
   if (extension === 'csv') return 'csv'
   if (extension === 'htm' || extension === 'html') return 'html'
   if (extension === 'pdf') return 'pdf'
+  if (extension && ['docx', 'pptx', 'xlsx'].includes(extension)) return 'office'
   if (extension && ['gif', 'jpeg', 'jpg', 'png', 'svg', 'webp'].includes(extension)) return 'image'
   if (extension && ['log', 'text', 'txt'].includes(extension)) return 'text'
 
@@ -396,7 +783,7 @@ function normalizePreviewType(preview: PreviewRendererValue): PreviewRendererTyp
 }
 
 function isPreviewType(value: string): value is PreviewRendererType {
-  return ['text', 'markdown', 'json', 'csv', 'html', 'image', 'pdf', 'unknown'].includes(value)
+  return ['text', 'markdown', 'json', 'csv', 'html', 'image', 'pdf', 'office', 'unknown'].includes(value)
 }
 
 function contentAsText(value: unknown): string {
@@ -524,6 +911,21 @@ const styles = {
   inlineNotice: {
     marginBottom: 10
   },
+  textToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10
+  },
+  textSearchInput: {
+    flex: '1 1 220px',
+    minWidth: 0,
+    maxWidth: 380
+  },
+  activeToggle: {
+    borderColor: 'var(--accent)',
+    color: 'var(--accent)'
+  },
   tableToolbar: {
     display: 'flex',
     alignItems: 'center',
@@ -606,6 +1008,174 @@ const styles = {
     border: '1px solid var(--border)',
     borderRadius: 8,
     background: '#fff'
+  },
+  pdfWrap: {
+    minHeight: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12
+  },
+  pdfObjectWithText: {
+    width: '100%',
+    height: '58vh',
+    minHeight: 360,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: '#fff'
+  },
+  pdfTextLayer: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0
+  },
+  pdfTextTitle: {
+    marginBottom: 8,
+    color: 'var(--text)',
+    fontSize: 12,
+    fontWeight: 700
+  },
+  officeStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    minHeight: 0
+  },
+  officePreviewRoot: {
+    minHeight: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10
+  },
+  officeModeToolbar: {
+    minHeight: 32,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10
+  },
+  officeModeControl: {
+    flex: '0 0 auto',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 2,
+    padding: 2,
+    border: '1px solid var(--border)',
+    borderRadius: 7,
+    background: 'var(--bg-input)'
+  },
+  officeModeActive: {
+    borderColor: 'var(--border-strong)',
+    background: 'var(--bg-card)',
+    color: 'var(--text)'
+  },
+  officeVisualStatus: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: 'var(--text-dim)',
+    fontSize: 11
+  },
+  officeVisualFigure: {
+    minHeight: 0,
+    flex: 1,
+    margin: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: '#fff'
+  },
+  officeVisualFrame: {
+    display: 'block',
+    width: '100%',
+    minHeight: 520,
+    flex: 1,
+    border: 0,
+    background: '#fff'
+  },
+  officeVisualImage: {
+    display: 'block',
+    maxWidth: '100%',
+    maxHeight: 'calc(100vh - 270px)',
+    objectFit: 'contain'
+  },
+  officeVisualCaption: {
+    width: '100%',
+    color: '#4c5563',
+    fontSize: 11,
+    textAlign: 'center'
+  },
+  officeUnitNavigation: {
+    minWidth: 0,
+    minHeight: 34,
+    display: 'grid',
+    gridTemplateColumns: '32px minmax(120px, 1fr) auto 32px',
+    alignItems: 'center',
+    gap: 6
+  },
+  officeUnitSelect: {
+    minWidth: 0,
+    width: '100%',
+    height: 30,
+    padding: '3px 8px',
+    fontSize: 12
+  },
+  officeUnitPosition: {
+    minWidth: 42,
+    color: 'var(--text-dim)',
+    fontSize: 11,
+    textAlign: 'center',
+    whiteSpace: 'nowrap'
+  },
+  officeSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    minHeight: 0
+  },
+  officeSectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    color: 'var(--text)',
+    fontSize: 13
+  },
+  officeSlide: {
+    minHeight: 120,
+    padding: 14,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--bg-input)'
+  },
+  officeSlideNumber: {
+    marginBottom: 10,
+    color: 'var(--text-dim)',
+    fontSize: 12,
+    fontWeight: 700
+  },
+  officeSlideText: {
+    margin: 0,
+    color: 'var(--text)',
+    fontFamily: 'inherit',
+    fontSize: 15,
+    lineHeight: 1.55,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word'
+  },
+  officeDocument: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12
+  },
+  officeDocSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6
   },
   placeholder: {
     display: 'flex',

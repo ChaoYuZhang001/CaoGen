@@ -445,6 +445,224 @@ async function main() {
     s.dispose()
   })
 
+  await test('P0 TaskRun:同会话排队消息形成独立步骤并在末轮完成后收口', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    const taskStore = M('main/task/task-snapshot.js')
+    await sm.init()
+    const events = []
+    const unsubscribe = sm.subscribe((payload) => events.push(payload))
+    const meta = sm.create({
+      cwd: tmpRoot,
+      isolated: false,
+      engine: 'claude',
+      providerId: 'prov-b',
+      model: 'm-b',
+      title: 'queued TaskRun integration'
+    })
+    try {
+      await waitFor(() => sm.get(meta.id)?.meta.sdkSessionId, 3000, '等待 TaskRun session init')
+      sm.send(meta.id, '第一条排队任务')
+      sm.send(meta.id, '第二条排队任务')
+      await waitFor(
+        () => events.filter((payload) => payload.sessionId === meta.id && payload.event.kind === 'turn-result').length >= 2,
+        5000,
+        '等待两条排队任务完成'
+      )
+      const sessionEvents = events.filter((payload) => payload.sessionId === meta.id)
+      assert(sessionEvents.every((payload) => payload.eventId), 'SessionManager events must expose eventId')
+      eq(new Set(sessionEvents.map((payload) => payload.eventId)).size, sessionEvents.length, 'eventId 不应重复')
+      await taskStore.flushTaskSnapshotMutations(userData)
+      const runs = await taskStore.listTaskRuns(meta.id, userData)
+      const latest = runs[0]
+      assert(latest, 'TaskRun history missing')
+      eq(latest.status, 'completed', '两条排队任务完成后 TaskRun 应收口')
+      eq(latest.steps.length, 2, '每条用户请求应形成独立 TaskStep')
+      assert(latest.steps.every((step) => step.status === 'completed'), '排队 TaskStep 应全部完成')
+      eq((await taskStore.listTaskSnapshots(userData)).some((snapshot) => snapshot.sessionId === meta.id), false, '末轮成功后 recovery snapshot 应删除')
+
+      const taskRun = M('main/task/task-run.js')
+      const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+      const idempotency = M('main/task/tool-idempotency.js')
+      const oldRun = taskRun.createTaskRun({
+        id: 'persisted-unknown-run',
+        sessionId: meta.id,
+        taskId: 'persisted-unknown-task'
+      })
+      const retryInput = { path: 'persisted-retry.txt', content: 'done' }
+      const retryKey = idempotency.buildToolIdempotencyKey({
+        scopeId: meta.id,
+        cwd: meta.cwd,
+        toolName: 'write_file',
+        toolInput: retryInput
+      })
+      const oldExecutionId = `${oldRun.id}:tool:old-unknown`
+      const oldRunWithUnknown = {
+        ...oldRun,
+        status: 'failed',
+        revision: oldRun.revision + 1,
+        updatedAt: Date.now(),
+        finishedAt: Date.now(),
+        error: 'interrupted',
+        toolExecutions: [{
+          id: oldExecutionId,
+          runId: oldRun.id,
+          sessionId: meta.id,
+          toolUseId: 'old-unknown',
+          toolName: 'write_file',
+          status: 'unknown_outcome',
+          idempotencyKey: retryKey,
+          createdAt: 1,
+          updatedAt: 1
+        }]
+      }
+      await taskStore.deleteTaskSnapshot('__seed-persisted-unknown__', userData, oldRunWithUnknown)
+      runtime.set(meta.id, oldRunWithUnknown)
+      runtime.set(meta.id, taskRun.createTaskRun({ id: 'persisted-retry-run', sessionId: meta.id, taskId: 'persisted-retry-task' }))
+      const retryToolUseId = 'confirmed-persisted-retry'
+      const retryExecutionId = `persisted-retry-run:tool:${retryToolUseId}`
+      sm.dispatch(meta.id, { kind: 'user-message', messageId: 'persisted-retry-message', text: '确认后重试' }, 9001)
+      sm.dispatch(meta.id, {
+        kind: 'permission-request',
+        request: {
+          requestId: 'persisted-retry-permission',
+          toolName: 'write_file',
+          toolUseId: retryToolUseId,
+          input: retryInput,
+          duplicateExecutionId: oldExecutionId
+        }
+      }, 9002)
+      sm.dispatch(meta.id, { kind: 'permission-resolved', requestId: 'persisted-retry-permission', behavior: 'allow' }, 9003)
+      sm.dispatch(meta.id, { kind: 'tool-result', toolUseId: retryToolUseId, content: 'retry ok', isError: false }, 9004)
+      await taskStore.flushTaskSnapshotMutations(userData)
+      const persistedAfterRetry = await taskStore.listTaskRuns(meta.id, userData)
+      const superseded = persistedAfterRetry
+        .flatMap((run) => run.toolExecutions ?? [])
+        .find((execution) => execution.id === oldExecutionId)
+      eq(superseded.status, 'superseded', '跨 run 成功重试应持久化 superseded')
+      eq(superseded.supersededByExecutionId, retryExecutionId, '旧记录应指向成功重试执行')
+      const persistedRetry = persistedAfterRetry
+        .flatMap((run) => run.toolExecutions ?? [])
+        .find((execution) => execution.id === retryExecutionId)
+      eq(persistedRetry.duplicateOfExecutionId, oldExecutionId, '成功重试应保留旧执行关联')
+    } finally {
+      unsubscribe()
+      sm.close(meta.id)
+    }
+  })
+
+  await test('P0 recovery cursor:转录尾部成功轮次收敛旧快照', async () => {
+    const sm = M('main/sessionManager.js').sessionManager
+    const taskStore = M('main/task/task-snapshot.js')
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const { TranscriptWriter } = M('main/transcript.js')
+    const tailMeta = AS.newSessionMeta({
+      cwd: tmpRoot,
+      model: 'm-b',
+      providerId: 'prov-b',
+      permissionMode: 'default',
+      title: 'tail reconciliation'
+    })
+    tailMeta.id = 'tail-reconciliation-session'
+    tailMeta.status = 'running'
+    tailMeta.sdkSessionId = 'sdk-tail-reconciliation'
+    const writer = new TranscriptWriter()
+    writer.next({ kind: 'init', sdkSessionId: tailMeta.sdkSessionId })
+    const userEvent = { kind: 'user-message', messageId: 'tail-user', text: '已经完成但快照尚未删除' }
+    const userEntry = writer.nextEntry(userEvent)
+    let run = taskRun.createTaskRun({
+      id: 'tail-reconciliation-run',
+      sessionId: tailMeta.id,
+      taskId: tailMeta.id,
+      now: userEntry.occurredAt
+    })
+    run = taskExecution.reduceTaskExecutionEvent(
+      run,
+      userEvent,
+      tailMeta.cwd,
+      userEntry.occurredAt,
+      userEntry
+    )
+    run = taskRun.reduceTaskRunEvent(run, userEvent, userEntry.occurredAt)
+    run = taskRun.recordTaskRunEvent(run, userEntry)
+    await taskStore.saveTaskSnapshot(
+      taskStore.buildTaskSnapshot({
+        meta: tailMeta,
+        transcript: writer.read(),
+        lastSeq: userEntry.seq,
+        lastEventId: userEntry.eventId,
+        lastEventKind: userEvent.kind,
+        eventCount: 2,
+        reason: 'important-event',
+        run,
+        now: userEntry.occurredAt
+      }),
+      userData
+    )
+    const terminalEntry = writer.nextEntry({
+      kind: 'turn-result',
+      subtype: 'success',
+      isError: false,
+      resultText: 'done'
+    })
+    const recoverable = await sm.listTaskSnapshots()
+    assert(
+      !recoverable.some((snapshot) => snapshot.sessionId === tailMeta.id),
+      '已落盘的成功 turn-result 必须收敛旧恢复入口'
+    )
+    const terminalRuns = await taskStore.listTaskRuns(tailMeta.id, userData)
+    eq(terminalRuns[0].status, 'completed', '转录尾部应将 TaskRun 收敛为 completed')
+    eq(terminalRuns[0].lastAppliedEventId, terminalEntry.eventId, '终态 run 应记录最后事件身份')
+    eq(terminalRuns[0].lastAppliedEventSeq, terminalEntry.seq, '终态 run 应记录恢复游标')
+  })
+
+  await test('P0 idempotency:Claude bypass 模式仍需确认未知结果操作', async () => {
+    const taskRun = M('main/task/task-run.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const idempotency = M('main/task/tool-idempotency.js')
+    const { events, s, meta } = newSession('prov-b', 'm-b')
+    meta.permissionMode = 'bypassPermissions'
+    const run = taskRun.createTaskRun({ id: 'claude-idempotency-run', sessionId: meta.id, taskId: meta.id })
+    const input = { command: 'npm test' }
+    const key = idempotency.buildToolIdempotencyKey({ scopeId: run.sessionId, cwd: meta.cwd, toolName: 'Bash', toolInput: input })
+    runtime.set(meta.id, {
+      ...run,
+      toolExecutions: [{
+        id: `${run.id}:tool:old-bash`,
+        runId: run.id,
+        sessionId: meta.id,
+        toolUseId: 'old-bash',
+        toolName: 'bash',
+        status: 'unknown_outcome',
+        idempotencyKey: key,
+        createdAt: 1,
+        updatedAt: 1
+      }]
+    })
+    try {
+      const decisionPromise = s.requestPermission('Bash', input, { toolUseID: 'retry-bash' })
+      await waitFor(() => events.some((entry) => entry.event.kind === 'permission-request'), 2000, '等待 Claude 幂等审批')
+      const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
+      assert(request.decisionReason.includes('结果未知'), `Claude 幂等审批原因错误:${request.decisionReason}`)
+      eq(request.duplicateExecutionId, `${run.id}:tool:old-bash`, 'Claude 幂等审批应携带旧执行关联')
+      s.respondPermission(request.requestId, true)
+      const decision = await decisionPromise
+      eq(decision.behavior, 'allow', '用户确认后 Claude 操作应继续')
+      meta.permissionMode = 'plan'
+      const beforePlanRequests = events.filter((entry) => entry.event.kind === 'permission-request').length
+      const planDecision = await s.requestPermission('Bash', input, { toolUseID: 'plan-retry-bash' })
+      eq(planDecision.behavior, 'deny', 'Claude plan 模式必须优先于幂等确认')
+      eq(
+        events.filter((entry) => entry.event.kind === 'permission-request').length,
+        beforePlanRequests,
+        'Claude plan 模式不应弹出可突破硬拒绝的审批'
+      )
+    } finally {
+      runtime.delete(meta.id)
+      s.dispose()
+    }
+  })
+
   await test('P0 SDK agents:默认关闭,显式开启后注入 .claude/agents 并可查询 supportedAgents', async () => {
     const agentsDir = path.join(tmpRoot, '.claude', 'agents')
     fs.mkdirSync(agentsDir, { recursive: true })
@@ -1169,6 +1387,62 @@ async function main() {
 	    }
 	  })
 
+  await test('P0 idempotency:OpenAI bypass 模式仍需确认未知结果操作', async () => {
+    const { openAIEngineFactory } = M('main/openaiEngine.js')
+    const taskRun = M('main/task/task-run.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const idempotency = M('main/task/tool-idempotency.js')
+    const meta = AS.newSessionMeta({
+      cwd: tmpRoot,
+      model: 'm-b',
+      providerId: 'prov-b',
+      engine: 'openai',
+      permissionMode: 'bypassPermissions',
+      title: 'openai idempotency'
+    })
+    const events = []
+    const engine = openAIEngineFactory.create(meta, (event, seq) => events.push({ event, seq }))
+    const run = taskRun.createTaskRun({ id: 'openai-idempotency-run', sessionId: meta.id, taskId: meta.id })
+    const input = { branch: 'main' }
+    const key = idempotency.buildToolIdempotencyKey({ scopeId: run.sessionId, cwd: meta.cwd, toolName: 'git_push', toolInput: input })
+    runtime.set(meta.id, {
+      ...run,
+      toolExecutions: [{
+        id: `${run.id}:tool:old-push`,
+        runId: run.id,
+        sessionId: meta.id,
+        toolUseId: 'old-push',
+        toolName: 'git_push',
+        status: 'unknown_outcome',
+        idempotencyKey: key,
+        createdAt: 1,
+        updatedAt: 1
+      }]
+    })
+    try {
+      const decisionPromise = engine.gateTool('git_push', input, 'retry-push')
+      await waitFor(() => events.some((entry) => entry.event.kind === 'permission-request'), 2000, '等待 OpenAI 幂等审批')
+      const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
+      assert(request.decisionReason.includes('结果未知'), `OpenAI 幂等审批原因错误:${request.decisionReason}`)
+      eq(request.duplicateExecutionId, `${run.id}:tool:old-push`, 'OpenAI 幂等审批应携带旧执行关联')
+      engine.respondPermission(request.requestId, true)
+      const decision = await decisionPromise
+      assert(decision.allow, '用户确认后 OpenAI 操作应继续')
+      meta.permissionMode = 'plan'
+      const beforePlanRequests = events.filter((entry) => entry.event.kind === 'permission-request').length
+      const planDecision = await engine.gateTool('git_push', input, 'plan-retry-push')
+      assert(!planDecision.allow, 'OpenAI plan 模式必须优先于幂等确认')
+      eq(
+        events.filter((entry) => entry.event.kind === 'permission-request').length,
+        beforePlanRequests,
+        'OpenAI plan 模式不应弹出可突破硬拒绝的审批'
+      )
+    } finally {
+      runtime.delete(meta.id)
+      engine.dispose()
+    }
+	  })
+
   // ---- T14 fetchModels × 真 HTTP:鉴权/形状兼容/错误路径 ----
   await test('T14 fetchModels:真 HTTP 端点(两种响应形状 + 401)', async () => {
     const providers = M('main/providers.js')
@@ -1248,6 +1522,9 @@ async function main() {
     assert(!s.classifyFailure('error_max_turns').switchable, 'max_turns 不切换')
     const d = s.pickModel(['glm-4.5-air', 'kimi-k2-0711-preview'], '重构整个项目的架构', 'quality')
     eq(d.model, 'kimi-k2-0711-preview', '国产档位:复杂任务应选 k2(q3)')
+    const fast = s.pickModel(['opus', 'haiku'], '重构整个项目的架构', 'speed')
+    eq(fast.model, 'haiku', '速度优先应独立选择速度档最高的模型')
+    assert(fast.reason.includes('速度优先'), '速度优先决策应说明策略')
   })
 
   // ---- T17 路由自学习:同档模型按实测可靠性打平改判 ----

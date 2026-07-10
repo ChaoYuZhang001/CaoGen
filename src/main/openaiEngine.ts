@@ -3,7 +3,15 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { TranscriptWriter } from './transcript'
-import { decryptToken, getProvider, listProviders } from './providers'
+import {
+  getProvider,
+  listProviders,
+  markProviderKeyUsed,
+  recordProviderKeySuccess,
+  resolveProviderToken,
+  rotateProviderKey
+} from './providers'
+import { listHistory } from './history'
 import {
   classifyFailure,
   pickFailoverTarget,
@@ -13,8 +21,10 @@ import {
 } from './scheduler'
 import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
-import { resolveSessionModelRoute } from './model/session-routing'
+import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './model/session-routing'
 import { settingsForCaoGenDrive } from './model/drive'
+import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { canRotateProviderKey } from './providerKeyRouting'
 import {
   EDIT_TOOLS,
   OPENAI_CODING_TOOLS,
@@ -47,6 +57,7 @@ import {
 import { isGuiToolName } from './agent/tools/gui-tools'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
+import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
@@ -96,6 +107,14 @@ interface OpenAIErrorContext {
   baseUrl: string
   model: string
   protocol: OpenAIProtocol
+}
+
+interface OpenAIAuthConfig {
+  baseUrl: string
+  token: string
+  headers: Record<string, string>
+  keyId?: string
+  keyLabel?: string
 }
 
 /** Agent 循环上限:防模型无限调工具烧穿 */
@@ -161,10 +180,18 @@ export class OpenAIEngine implements Engine {
   private turnGuiToolFailures: TurnToolFailure[] = []
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
 
-  constructor(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string) {
+  constructor(
+    meta: SessionMeta,
+    emit: EngineEmit,
+    resumeSdkSessionId?: string,
+    initialEventSeq = 0
+  ) {
     this.meta = meta
-    this.transcript = new TranscriptWriter(resumeSdkSessionId)
-    this.emitRaw = (event) => emit(event, this.transcript.next(event))
+    this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
+    this.emitRaw = (event) => {
+      const entry = this.transcript.nextEntry(event)
+      emit(event, entry.seq, entry)
+    }
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
       this.rebuildChatHistory()
@@ -235,6 +262,7 @@ export class OpenAIEngine implements Engine {
     this.turnGuiToolFailures = []
     // 新一轮:重置故障切换防打转记录
     this.triedProviders = new Set([this.meta.providerId])
+    this.triedProviderKeys = new Set()
     // auto 模式:跨厂商路由(openai 引擎切 Provider 无需重建,authConfig 每请求现读)
     if (this.meta.model === AUTO_MODEL) this.autoRoute(payload)
     this.abort = new AbortController()
@@ -250,6 +278,11 @@ export class OpenAIEngine implements Engine {
     try {
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
       if (settings.smartModelRoutingEnabled) {
+        const monthlyBudget = calculateMonthlyBudgetSnapshot({
+          settings,
+          history: listHistory(),
+          currentSession: this.meta
+        })
         const smart = resolveSessionModelRoute({
           enabled: true,
           currentModel: this.meta.model,
@@ -261,7 +294,18 @@ export class OpenAIEngine implements Engine {
           strategy: settings.schedulerStrategy,
           sessionCostUsd: this.meta.costUsd,
           sessionBudgetUsd: this.meta.budgetUsd,
-          settingsBudgetUsd: settings.budgetUsdPerSession
+          settingsBudgetUsd: settings.budgetUsdPerSession,
+          monthlyBudgetRemainingUsd: monthlyBudget.remainingUsd,
+          fallbackProviderId: settings.fallbackProviderId,
+          fallbackModel: settings.fallbackModel,
+          lowCostProviderId: settings.lowCostProviderId,
+          lowCostModel: settings.lowCostModel,
+          strongReasoningProviderId: settings.strongReasoningProviderId,
+          strongReasoningModel: settings.strongReasoningModel,
+          reviewProviderId: settings.reviewProviderId,
+          reviewModel: settings.reviewModel,
+          modelRoutingRules: settings.modelRoutingRules,
+          projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
         if (smart.kind === 'routed') {
           this.routedModel = smart.model
@@ -271,6 +315,8 @@ export class OpenAIEngine implements Engine {
             model: smart.model,
             reason: smart.reason,
             providerId: smart.providerId,
+            providerName: smart.providerName,
+            decision: smart.decision,
             crossValidationPlan: smart.crossValidationPlan
           })
           this.emit({ kind: 'meta', meta: { ...this.meta } })
@@ -292,7 +338,23 @@ export class OpenAIEngine implements Engine {
       if (decision.switchedProvider) {
         this.meta.providerId = decision.providerId
       }
-      this.emit({ kind: 'routing', model: decision.model, reason: decision.reason, providerId: decision.providerId })
+      this.emit({
+        kind: 'routing',
+        model: decision.model,
+        reason: decision.reason,
+        providerId: decision.providerId,
+        providerName: decision.providerName,
+        decision: createLegacyRoutingDecisionView({
+          providerId: decision.providerId,
+          providerName: decision.providerName,
+          model: decision.model,
+          strategy: settings.schedulerStrategy,
+          complexity: decision.complexity,
+          candidateCount: candidates.reduce((count, candidate) => count + candidate.models.filter(Boolean).length, 0),
+          switchedProvider: decision.switchedProvider,
+          reason: decision.reason
+        })
+      })
       this.emit({ kind: 'meta', meta: { ...this.meta } })
     } catch (err) {
       console.error('[caogen] openai 引擎自动路由失败,沿用当前配置:', err)
@@ -363,6 +425,33 @@ export class OpenAIEngine implements Engine {
       this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
       return { allow: false, message: guiDecision.reason }
     }
+    const mode = this.meta.permissionMode
+    if (mode === 'plan' && !READONLY_TOOLS.has(name)) {
+      const message = '规划模式:只允许只读工具(view/read_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose),不执行写入或命令'
+      this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
+      return { allow: false, message }
+    }
+    const idempotency = taskRuntimeRegistry.evaluateTool({
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      toolName: name,
+      toolInput: input,
+      toolUseId
+    })
+    if (idempotency.kind === 'deny') {
+      this.auditGateDecision('deny', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: false, message: idempotency.reason }
+    }
+    if (idempotency.kind === 'ask') {
+      this.auditGateDecision('ask', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
+      return this.requestToolPermission(
+        name,
+        input,
+        toolUseId,
+        idempotency.reason,
+        idempotency.duplicateExecutionId
+      )
+    }
     if (guiDecision.kind === 'allow') {
       this.auditGateDecision('allow', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
@@ -384,7 +473,6 @@ export class OpenAIEngine implements Engine {
       return { allow: true, message: policy.reason }
     }
 
-    const mode = this.meta.permissionMode
     if (mode === 'bypassPermissions') {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
@@ -392,10 +480,6 @@ export class OpenAIEngine implements Engine {
     if (READONLY_TOOLS.has(name)) {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
-    }
-    if (mode === 'plan') {
-      this.auditGateDecision('deny', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: false, message: '规划模式:只允许只读工具(view/read_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose),不执行写入或命令' }
     }
     if (mode === 'acceptEdits' && EDIT_TOOLS.has(name)) {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
@@ -408,7 +492,7 @@ export class OpenAIEngine implements Engine {
 
   private auditGateDecision(
     action: 'allow' | 'deny' | 'ask',
-    source: 'policy' | 'permission-mode',
+    source: 'policy' | 'permission-mode' | 'idempotency',
     toolName: string,
     input: Record<string, unknown>,
     message: string,
@@ -422,10 +506,18 @@ export class OpenAIEngine implements Engine {
     name: string,
     input: Record<string, unknown>,
     toolUseId: string,
-    decisionReason?: string
+    decisionReason?: string,
+    duplicateExecutionId?: string
   ): Promise<{ allow: boolean; message?: string }> {
     const requestId = randomUUID()
-    const info: PermissionRequestInfo = { requestId, toolName: name, input, toolUseId, decisionReason }
+    const info: PermissionRequestInfo = {
+      requestId,
+      toolName: name,
+      input,
+      toolUseId,
+      decisionReason,
+      duplicateExecutionId
+    }
     this.emit({ kind: 'permission-request', request: info })
     return new Promise((resolve) => {
       this.pendingPerms.set(requestId, { resolve, info })
@@ -505,10 +597,15 @@ export class OpenAIEngine implements Engine {
   }
 
   private async runResponse(payload: SendMessagePayload, controller: AbortController): Promise<void> {
+    let auth: OpenAIAuthConfig | undefined
     try {
       const payloadWithMemory = await this.augmentPayloadWithLayeredMemory(payload)
-      const auth = this.authConfig()
+      auth = this.authConfig()
       if (!auth.token) throw new Error(this.missingKeyMessage())
+      if (auth.keyId) {
+        this.triedProviderKeys.add(auth.keyId)
+        markProviderKeyUsed(this.meta.providerId, auth.keyId)
+      }
 
       if (this.protocol() === 'chat') {
         await this.runChatCompletion(payloadWithMemory, controller, auth)
@@ -516,6 +613,7 @@ export class OpenAIEngine implements Engine {
         await this.runResponsesLoop(payloadWithMemory, controller, auth)
       }
       const latency = Date.now() - this.turnStartedAt
+      if (auth.keyId) recordProviderKeySuccess(this.meta.providerId, auth.keyId)
       recordSuccess(this.meta.providerId, latency)
       recordModelSuccess(this.effectiveModel(), latency)
       this.finishTurn(false)
@@ -526,6 +624,7 @@ export class OpenAIEngine implements Engine {
         return
       }
       const text = errText(err)
+      if (auth && (await this.tryProviderKeyFailover(text, payload, controller, auth))) return
       recordFailure(this.meta.providerId, text)
       recordModelFailure(this.effectiveModel())
       // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
@@ -565,6 +664,8 @@ export class OpenAIEngine implements Engine {
 
   /** 本轮已试过的厂商(防切换打转);send 时重置 */
   private triedProviders = new Set<string>()
+  /** 本轮已试过的 API Key id;同 Provider 内轮换时防止打转。 */
+  private triedProviderKeys = new Set<string>()
   /** Responses 协议的上一轮 response id(服务端多轮上下文) */
   private lastResponseId?: string
   /** 本轮流式累积的 Responses 函数调用(按 output_index 拼装) */
@@ -655,7 +756,8 @@ export class OpenAIEngine implements Engine {
    * 换 providerId + 模型即可;chat 历史在内存里原样带走。
    */
   private async tryFailover(errorText: string, payload: SendMessagePayload): Promise<boolean> {
-    if (this.disposed || !getSettings().failoverEnabled) return false
+    const settings = getSettings()
+    if (this.disposed || !settings.failoverEnabled) return false
     if (this.triedProviders.size > OpenAIEngine.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
     if (!failure.switchable) return false
@@ -666,7 +768,9 @@ export class OpenAIEngine implements Engine {
     const target = pickFailoverTarget({
       candidates,
       exclude: this.triedProviders,
-      desiredModel: this.effectiveModel()
+      desiredModel: this.effectiveModel(),
+      fallbackProviderId: settings.fallbackProviderId,
+      fallbackModel: settings.fallbackModel
     })
     if (!target) return false
 
@@ -674,7 +778,10 @@ export class OpenAIEngine implements Engine {
     const fromName = listProviders().find((p) => p.id === fromId)?.name ?? fromId ?? '当前厂商'
     this.triedProviders.add(target.providerId)
     this.meta.providerId = target.providerId
-    if (target.model) this.routedModel = target.model
+    if (target.model) {
+      if (this.meta.model === AUTO_MODEL) this.routedModel = target.model
+      else this.meta.model = target.model
+    }
     // Responses 的 response id 不跨厂商;换家后重新开始服务端上下文链
     this.lastResponseId = undefined
     this.emit({
@@ -684,12 +791,46 @@ export class OpenAIEngine implements Engine {
       fromName,
       toName: target.name,
       model: target.model,
-      reason: failure.label
+      reason: [failure.label, target.preference].filter(Boolean).join(' · ')
     })
     this.emit({ kind: 'meta', meta: { ...this.meta } })
 
     const controller = new AbortController()
     this.abort = controller
+    await this.runResponse(payload, controller)
+    return true
+  }
+
+  private async tryProviderKeyFailover(
+    errorText: string,
+    payload: SendMessagePayload,
+    controller: AbortController,
+    auth: OpenAIAuthConfig
+  ): Promise<boolean> {
+    const settings = getSettings()
+    if (this.disposed || !settings.failoverEnabled || !this.meta.providerId || !auth.keyId) return false
+    const failure = classifyFailure(errorText)
+    if (!canRotateProviderKey(failure)) return false
+    const rotation = rotateProviderKey({
+      providerId: this.meta.providerId,
+      failedKeyId: auth.keyId,
+      excludedKeyIds: this.triedProviderKeys,
+      reason: failure.label
+    })
+    if (!rotation) return false
+
+    this.triedProviderKeys.add(rotation.toKeyId)
+    this.lastResponseId = undefined
+    this.emit({
+      kind: 'provider-key-failover',
+      providerId: rotation.providerId,
+      providerName: rotation.providerName,
+      fromKeyId: rotation.fromKeyId,
+      fromKeyLabel: rotation.fromKeyLabel,
+      toKeyId: rotation.toKeyId,
+      toKeyLabel: rotation.toKeyLabel,
+      reason: failure.label
+    })
     await this.runResponse(payload, controller)
     return true
   }
@@ -1244,15 +1385,21 @@ export class OpenAIEngine implements Engine {
     return `${name} 缺少 API Key:请在设置里为该 Provider 填写密钥,或设置 OPENAI_API_KEY。`
   }
 
-  private authConfig(): { baseUrl: string; token: string; headers: Record<string, string> } {
+  private authConfig(): OpenAIAuthConfig {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     let baseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
     // 用户把为 Claude 引擎准备的 Anthropic 兼容 Provider(…/anthropic)用在
     // OpenAI 引擎上时,剥掉子路径回到裸域 —— DeepSeek 等厂商在裸域同时提供
     // /v1/chat/completions,直接可用而非 404。
     if (this.protocol() === 'chat') baseUrl = baseUrl.replace(/\/anthropic$/, '')
-    const token = provider ? decryptToken(provider.encryptedToken) : process.env.OPENAI_API_KEY || ''
-    return { baseUrl, token, headers: parseHeaders(provider?.customHeaders) }
+    const selection = provider ? resolveProviderToken(provider) : { token: process.env.OPENAI_API_KEY || '' }
+    return {
+      baseUrl,
+      token: selection.token,
+      headers: parseHeaders(provider?.customHeaders),
+      keyId: selection.keyId,
+      keyLabel: selection.keyLabel
+    }
   }
 
   private effectiveModel(): string {
@@ -1462,6 +1609,10 @@ export const openAIEngineFactory: EngineFactory = {
   kind: 'openai',
   label: 'OpenAI 协议(Responses / Chat Completions)',
   available: () => true,
-  create: (meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine =>
-    new OpenAIEngine(meta, emit, resumeSdkSessionId)
+  create: (
+    meta: SessionMeta,
+    emit: EngineEmit,
+    resumeSdkSessionId?: string,
+    initialEventSeq?: number
+  ): Engine => new OpenAIEngine(meta, emit, resumeSdkSessionId, initialEventSeq)
 }

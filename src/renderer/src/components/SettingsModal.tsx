@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import type {
@@ -8,13 +8,16 @@ import type {
   EngineInfo,
   McpProbeResult,
   MigrationScan,
+  ModelRoutingRule,
+  ModelRoutingTaskKind,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
   ProviderHealthView,
   ProviderView,
   SandboxMode,
-  SchedulerStrategy
+  SchedulerStrategy,
+  SessionMeta
 } from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
 import ControlCenter from './ControlCenter'
@@ -22,12 +25,65 @@ import ProjectSettings from '../pages/ProjectSettings'
 
 type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
+const ROUTING_RULE_TASK_OPTIONS: Array<{ value: ModelRoutingTaskKind; labelKey: string }> = [
+  { value: 'coding', labelKey: 'routingTaskCoding' },
+  { value: 'reasoning', labelKey: 'routingTaskReasoning' },
+  { value: 'review', labelKey: 'routingTaskReview' },
+  { value: 'summarization', labelKey: 'routingTaskSummarization' },
+  { value: 'vision', labelKey: 'routingTaskVision' },
+  { value: 'longContext', labelKey: 'routingTaskLongContext' }
+]
+
+function createRoutingRule(): ModelRoutingRule {
+  const suffix =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return {
+    id: `route-${suffix}`,
+    enabled: true,
+    name: '',
+    match: '',
+    keywordMode: 'any',
+    taskKinds: [],
+    providerId: '',
+    model: ''
+  }
+}
+
+function uniqueModelOptions(
+  providers: ProviderView[],
+  providerId: string,
+  currentModel: string
+): Array<{ value: string; label: string }> {
+  const seen = new Set<string>()
+  const options: Array<{ value: string; label: string }> = []
+  const add = (value: string, label = value): void => {
+    const clean = value.trim()
+    if (!clean || seen.has(clean)) return
+    seen.add(clean)
+    options.push({ value: clean, label })
+  }
+  for (const option of MODEL_OPTIONS) {
+    if (option.value !== 'auto') add(option.value, option.label)
+  }
+  const scopedProviders = providerId ? providers.filter((provider) => provider.id === providerId) : providers
+  for (const provider of scopedProviders) {
+    for (const model of provider.models) add(model)
+  }
+  add(currentModel)
+  return options
+}
 
 export default function SettingsModal(): React.JSX.Element {
   const t = useT()
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
+  const history = useStore((s) => s.history)
+  const sessionOrder = useStore((s) => s.order)
+  const sessions = useStore((s) => s.sessions)
   const updateSettings = useStore((s) => s.updateSettings)
+  const updateProvider = useStore((s) => s.updateProvider)
   const deleteProvider = useStore((s) => s.deleteProvider)
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
@@ -37,6 +93,8 @@ export default function SettingsModal(): React.JSX.Element {
   const [draft, setDraft] = useState(settings)
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
+  const [checkingProviderId, setCheckingProviderId] = useState('')
+  const [providerProbe, setProviderProbe] = useState<{ providerId: string; ok: boolean; message: string } | null>(null)
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [pluginRegistry, setPluginRegistry] = useState<PluginRegistryView | undefined>(undefined)
   const [mcpProbeResults, setMcpProbeResults] = useState<Record<string, McpProbeResult>>({})
@@ -54,6 +112,13 @@ export default function SettingsModal(): React.JSX.Element {
   const [migrateResult, setMigrateResult] = useState('')
   const selectedDrive = DRIVE_MODE_OPTIONS.find((option) => option.value === draft.driveMode) ?? DRIVE_MODE_OPTIONS[1]
   const draftOffice = draft.office ?? DEFAULT_OFFICE_SETTINGS
+  const activeSessions = useMemo<SessionMeta[]>(
+    () => sessionOrder.flatMap((sessionId) => {
+      const session = sessions[sessionId]
+      return session ? [session.meta] : []
+    }),
+    [sessionOrder, sessions]
+  )
 
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
@@ -127,6 +192,34 @@ export default function SettingsModal(): React.JSX.Element {
     setDraft((d) => ({ ...d, office: { ...(d.office ?? DEFAULT_OFFICE_SETTINGS), ...patch } }))
   const setLayout = (patch: Partial<typeof draft.layout>): void =>
     setDraft((d) => ({ ...d, layout: { ...d.layout, ...patch } }))
+  const updateRoutingRule = (id: string, patch: Partial<ModelRoutingRule>): void =>
+    setDraft((d) => ({
+      ...d,
+      modelRoutingRules: (d.modelRoutingRules ?? []).map((rule) =>
+        rule.id === id ? { ...rule, ...patch } : rule
+      )
+    }))
+  const setRoutingRuleTaskKind = (id: string, taskKind: ModelRoutingTaskKind, enabled: boolean): void =>
+    setDraft((d) => ({
+      ...d,
+      modelRoutingRules: (d.modelRoutingRules ?? []).map((rule) => {
+        if (rule.id !== id) return rule
+        const taskKinds = enabled
+          ? [...new Set([...(rule.taskKinds ?? []), taskKind])]
+          : (rule.taskKinds ?? []).filter((item) => item !== taskKind)
+        return { ...rule, taskKinds }
+      })
+    }))
+  const addRoutingRule = (): void =>
+    setDraft((d) => ({
+      ...d,
+      modelRoutingRules: [...(d.modelRoutingRules ?? []), createRoutingRule()]
+    }))
+  const deleteRoutingRule = (id: string): void =>
+    setDraft((d) => ({
+      ...d,
+      modelRoutingRules: (d.modelRoutingRules ?? []).filter((rule) => rule.id !== id)
+    }))
 
   const healthOf = (pid: string): ProviderHealthView | undefined =>
     health.find((h) => h.providerId === (pid || 'local-login'))
@@ -177,6 +270,49 @@ export default function SettingsModal(): React.JSX.Element {
     await deleteProvider(p.id)
   }
 
+  const probeProvider = async (p: ProviderView): Promise<void> => {
+    setCheckingProviderId(p.id)
+    setProviderProbe(null)
+    try {
+      const result = await window.agentDesk.fetchProviderModels({
+        baseUrl: p.baseUrl,
+        providerId: p.id,
+        openaiProtocol: p.openaiProtocol
+      })
+      if (result.ok) {
+        await updateProvider(p.id, { models: result.models })
+        const nextHealth = await window.agentDesk.listProviderHealth()
+        setHealth(nextHealth)
+        setProviderProbe({
+          providerId: p.id,
+          ok: true,
+          message: t('providerProbeOk', {
+            n: result.models.length,
+            latencyMs: result.latencyMs ?? 0
+          })
+        })
+      } else {
+        const nextHealth = await window.agentDesk.listProviderHealth()
+        setHealth(nextHealth)
+        setProviderProbe({
+          providerId: p.id,
+          ok: false,
+          message: t('providerProbeFailed', { message: result.error?.message ?? t('fetchModelsFailed') })
+        })
+      }
+    } catch (err) {
+      const nextHealth = await window.agentDesk.listProviderHealth().catch(() => health)
+      setHealth(nextHealth)
+      setProviderProbe({
+        providerId: p.id,
+        ok: false,
+        message: t('providerProbeFailed', { message: err instanceof Error ? err.message : String(err) })
+      })
+    } finally {
+      setCheckingProviderId('')
+    }
+  }
+
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: 'control', label: t('tabControlCenter') },
     { id: 'general', label: t('tabGeneral') },
@@ -212,6 +348,8 @@ export default function SettingsModal(): React.JSX.Element {
               <ControlCenter
                 settings={draft}
                 providers={providers}
+                history={history}
+                activeSessions={activeSessions}
                 health={health}
                 engines={engines}
                 pluginRegistry={pluginRegistry}
@@ -297,6 +435,288 @@ export default function SettingsModal(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
+
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-h3">{t('modelRolesSection')}</h3>
+                  </div>
+                  <p className="settings-hint">{t('modelRolesHint')}</p>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('modelRoleLowCost')} · {t('modelRoleProvider')}
+                      <select
+                        className="select select-block"
+                        value={draft.lowCostProviderId}
+                        onChange={(e) => patchDraft({ lowCostProviderId: e.target.value })}
+                      >
+                        <option value="">{t('noRoleProvider')}</option>
+                        {providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      {t('modelRoleLowCost')} · {t('modelRoleModel')}
+                      <select
+                        className="select select-block"
+                        value={draft.lowCostModel}
+                        onChange={(e) => patchDraft({ lowCostModel: e.target.value })}
+                      >
+                        <option value="">{t('noRoleModel')}</option>
+                        {uniqueModelOptions(providers, draft.lowCostProviderId, draft.lowCostModel).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('modelRoleStrongReasoning')} · {t('modelRoleProvider')}
+                      <select
+                        className="select select-block"
+                        value={draft.strongReasoningProviderId}
+                        onChange={(e) => patchDraft({ strongReasoningProviderId: e.target.value })}
+                      >
+                        <option value="">{t('noRoleProvider')}</option>
+                        {providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      {t('modelRoleStrongReasoning')} · {t('modelRoleModel')}
+                      <select
+                        className="select select-block"
+                        value={draft.strongReasoningModel}
+                        onChange={(e) => patchDraft({ strongReasoningModel: e.target.value })}
+                      >
+                        <option value="">{t('noRoleModel')}</option>
+                        {uniqueModelOptions(providers, draft.strongReasoningProviderId, draft.strongReasoningModel).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('modelRoleReview')} · {t('modelRoleProvider')}
+                      <select
+                        className="select select-block"
+                        value={draft.reviewProviderId}
+                        onChange={(e) => patchDraft({ reviewProviderId: e.target.value })}
+                      >
+                        <option value="">{t('noRoleProvider')}</option>
+                        {providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      {t('modelRoleReview')} · {t('modelRoleModel')}
+                      <select
+                        className="select select-block"
+                        value={draft.reviewModel}
+                        onChange={(e) => patchDraft({ reviewModel: e.target.value })}
+                      >
+                        <option value="">{t('noRoleModel')}</option>
+                        {uniqueModelOptions(providers, draft.reviewProviderId, draft.reviewModel).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('modelRoleFallback')} · {t('modelRoleProvider')}
+                      <select
+                        className="select select-block"
+                        value={draft.fallbackProviderId}
+                        onChange={(e) => patchDraft({ fallbackProviderId: e.target.value })}
+                      >
+                        <option value="">{t('noRoleProvider')}</option>
+                        {providers.map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      {t('modelRoleFallback')} · {t('modelRoleModel')}
+                      <select
+                        className="select select-block"
+                        value={draft.fallbackModel}
+                        onChange={(e) => patchDraft({ fallbackModel: e.target.value })}
+                      >
+                        <option value="">{t('noRoleModel')}</option>
+                        {uniqueModelOptions(providers, draft.fallbackProviderId, draft.fallbackModel).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-h3">{t('customRoutingRules')}</h3>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={addRoutingRule}>
+                      {t('addRoutingRule')}
+                    </button>
+                  </div>
+                  <p className="settings-hint">{t('customRoutingRulesHint')}</p>
+                  {(draft.modelRoutingRules ?? []).map((rule, index) => (
+                    <div key={rule.id} className="routing-rule-card">
+                      <div className="routing-rule-head">
+                        <label className="settings-check routing-rule-toggle">
+                          <input
+                            type="checkbox"
+                            checked={rule.enabled}
+                            onChange={(e) => updateRoutingRule(rule.id, { enabled: e.target.checked })}
+                          />
+                          {t('routingRuleEnabled')}
+                        </label>
+                        <span className="routing-rule-order">#{index + 1}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => deleteRoutingRule(rule.id)}
+                        >
+                          {t('delete')}
+                        </button>
+                      </div>
+                      <label className="field-label">
+                        {t('routingRuleName')}
+                        <input
+                          className="input"
+                          value={rule.name}
+                          placeholder={t('routingRuleNamePlaceholder')}
+                          onChange={(e) => updateRoutingRule(rule.id, { name: e.target.value })}
+                        />
+                      </label>
+                      <label className="field-label">
+                        {t('routingRuleMatch')}
+                        <textarea
+                          className="input textarea"
+                          value={rule.match}
+                          placeholder={t('routingRuleMatchPlaceholder')}
+                          rows={2}
+                          onChange={(e) => updateRoutingRule(rule.id, { match: e.target.value })}
+                        />
+                      </label>
+                      <div className="settings-grid-2">
+                        <label className="field-label">
+                          {t('routingRuleProvider')}
+                          <select
+                            className="select select-block"
+                            value={rule.providerId}
+                            onChange={(e) => updateRoutingRule(rule.id, { providerId: e.target.value })}
+                          >
+                            <option value="">{t('noRoleProvider')}</option>
+                            {providers.map((provider) => (
+                              <option key={provider.id} value={provider.id}>
+                                {provider.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field-label">
+                          {t('routingRuleModel')}
+                          <select
+                            className="select select-block"
+                            value={rule.model}
+                            onChange={(e) => updateRoutingRule(rule.id, { model: e.target.value })}
+                          >
+                            <option value="">{t('noRoleModel')}</option>
+                            {uniqueModelOptions(providers, rule.providerId, rule.model).map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <div className="routing-rule-condition-grid">
+                        <label className="field-label">
+                          {t('routingRuleKeywordMode')}
+                          <select
+                            className="select select-block"
+                            value={rule.keywordMode ?? 'any'}
+                            onChange={(e) => updateRoutingRule(rule.id, { keywordMode: e.target.value === 'all' ? 'all' : 'any' })}
+                          >
+                            <option value="any">{t('routingRuleKeywordAny')}</option>
+                            <option value="all">{t('routingRuleKeywordAll')}</option>
+                          </select>
+                        </label>
+                        <label className="field-label">
+                          {t('routingRuleWhenStrategy')}
+                          <select
+                            className="select select-block"
+                            value={rule.whenStrategy ?? ''}
+                            onChange={(e) => updateRoutingRule(rule.id, {
+                              whenStrategy: e.target.value ? e.target.value as SchedulerStrategy : undefined
+                            })}
+                          >
+                            <option value="">{t('routingRuleAnyStrategy')}</option>
+                            {STRATEGY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field-label">
+                          {t('routingRuleMinRisk')}
+                          <select
+                            className="select select-block"
+                            value={rule.minRiskLevel ?? ''}
+                            onChange={(e) => updateRoutingRule(rule.id, {
+                              minRiskLevel:
+                                e.target.value === 'low' || e.target.value === 'medium' || e.target.value === 'high'
+                                  ? e.target.value
+                                  : undefined
+                            })}
+                          >
+                            <option value="">{t('routingRuleAnyRisk')}</option>
+                            <option value="low">{t('routingRiskLow')}</option>
+                            <option value="medium">{t('routingRiskMedium')}</option>
+                            <option value="high">{t('routingRiskHigh')}</option>
+                          </select>
+                        </label>
+                      </div>
+                      <fieldset className="routing-rule-task-field">
+                        <legend>{t('routingRuleTaskKinds')}</legend>
+                        <div className="routing-rule-task-grid">
+                          {ROUTING_RULE_TASK_OPTIONS.map((option) => (
+                            <label key={option.value} className="routing-rule-task-option">
+                              <input
+                                type="checkbox"
+                                checked={(rule.taskKinds ?? []).includes(option.value)}
+                                onChange={(e) => setRoutingRuleTaskKind(rule.id, option.value, e.target.checked)}
+                              />
+                              <span>{t(option.labelKey)}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <small>{t('routingRuleTaskKindsHint')}</small>
+                      </fieldset>
+                    </div>
+                  ))}
+                </div>
 
                 <label className="field-label">{t('schedulerStrategy')}</label>
                 <select
@@ -763,18 +1183,40 @@ export default function SettingsModal(): React.JSX.Element {
                                 className={`health-dot ${h.healthy ? 'health-ok' : 'health-bad'}`}
                                 title={
                                   h.healthy
-                                    ? t('healthOkTip', { s: h.successes, f: h.failures })
-                                    : t('healthBadTip', { n: h.consecutiveFailures })
+                                    ? t('healthOkTip', {
+                                        s: h.successes,
+                                        f: h.failures,
+                                        latencyMs: h.latencyEmaMs ?? h.lastLatencyMs ?? '-'
+                                      })
+                                    : t('healthBadTip', {
+                                        n: h.consecutiveFailures,
+                                        error: h.recentFailures?.[0]?.message ?? h.lastError ?? '-'
+                                      })
                                 }
                               />
                             )}
                           </div>
                           <div className="provider-row-sub">
                             {p.baseUrl || t('officialEndpoint')} ·{' '}
-                            {t('modelsCount', { n: p.models.length })}
+                            {t('modelsCount', { n: p.models.length })} ·{' '}
+                            {p.hasToken
+                              ? `${t('apiKeyCountLabel', { n: p.keyCount ?? 1 })}${p.activeKeyLabel ? ` · ${p.activeKeyLabel}` : ''}`
+                              : t('noKeyConfigured')}
                           </div>
+                          {providerProbe?.providerId === p.id && (
+                            <div className={`provider-probe-message ${providerProbe.ok ? 'provider-probe-ok' : 'provider-probe-bad'}`}>
+                              {providerProbe.message}
+                            </div>
+                          )}
                         </div>
                         <div className="provider-row-actions">
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            disabled={checkingProviderId === p.id}
+                            onClick={() => void probeProvider(p)}
+                          >
+                            {checkingProviderId === p.id ? t('providerProbing') : t('providerProbe')}
+                          </button>
                           <button className="btn btn-ghost btn-sm" onClick={() => setEditing(p)}>
                             {t('rename')}
                           </button>

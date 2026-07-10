@@ -16,6 +16,8 @@ const { app, ipcMain } = require('electron')
 const repoOut = path.resolve(__dirname, '..', 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-smoke-'))
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
+const finderLaunchCwd = path.parse(repoOut).root
+process.chdir(finderLaunchCwd)
 
 const results = []
 function check(name, ok, detail) {
@@ -39,6 +41,7 @@ async function run() {
   try {
     ipcMod = require(path.join(repoOut, 'index.js'))
     check('主进程 index.js 在真 Electron 下加载', true)
+    check('Finder/Dock 根目录 cwd 启动', process.cwd() === finderLaunchCwd, `cwd=${process.cwd()}`)
   } catch (err) {
     check('主进程 index.js 加载', false, String(err && err.message))
     // index.js 会自己 app.whenReady + createWindow,失败则直接汇总

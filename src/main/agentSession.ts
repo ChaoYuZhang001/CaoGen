@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { app, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -6,7 +6,14 @@ import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/clau
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
-import { getProvider, decryptToken, listProviders } from './providers'
+import {
+  getProvider,
+  listProviders,
+  markProviderKeyUsed,
+  recordProviderKeySuccess,
+  resolveProviderToken,
+  rotateProviderKey
+} from './providers'
 import { listHistory } from './history'
 import { readReferencedFiles } from './fileSuggest'
 import { buildMemorySystemAppend } from './memoryInject'
@@ -22,10 +29,12 @@ import { loadSdkAgentDefinitions } from './sdkAgents'
 import { imageToContentBlock } from './attachmentOps'
 import { latestUserTextUuid } from './checkpoints'
 import { recordModelFailure, recordModelSuccess } from './modelStats'
-import { resolveSessionModelRoute } from './model/session-routing'
+import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './model/session-routing'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { canRotateProviderKey } from './providerKeyRouting'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
+import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import {
   decideGuiPermission,
   GUI_TEMPORARY_GRANT_MESSAGE,
@@ -43,7 +52,7 @@ import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
 import { settingsForCaoGenDrive } from './model/drive'
 import { AUTO_MODEL } from '../shared/types'
-import type { Engine } from './engine'
+import type { Engine, EngineEmit } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
@@ -139,6 +148,10 @@ function normalizeClaudeToolInput(toolName: string, input: Record<string, unknow
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+function providerTokenFingerprint(token: string): string {
+  return token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : 'no-token'
 }
 
 function normalizeBudget(value: unknown): number {
@@ -298,6 +311,10 @@ export class AgentSession implements Engine {
   private pendingCheckpointUserMessageIds: string[] = []
   /** 本轮已尝试过的 Provider(含起始),切换时排除,防止打转 */
   private triedProviders = new Set<string>()
+  /** 当前 SDK 子进程使用的 Provider key id,不保留明文。 */
+  private activeProviderKeyId?: string
+  /** 本轮已尝试的 key id,防同 Provider 内轮换打转。 */
+  private triedProviderKeys = new Set<string>()
   private failoverBusy = false
   /** 故障切换窗口期(旧引擎已死、新引擎未起)收到的消息,切换完成后补推 */
   private queuedDuringFailover: NormalizedSendPayload[] = []
@@ -307,10 +324,18 @@ export class AgentSession implements Engine {
   private powerBlockerId: number | null = null
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
 
-  constructor(meta: SessionMeta, emit: (event: AgentEvent, seq: number) => void, resumeSdkSessionId?: string) {
+  constructor(
+    meta: SessionMeta,
+    emit: EngineEmit,
+    resumeSdkSessionId?: string,
+    initialEventSeq = 0
+  ) {
     this.meta = meta
-    this.transcript = new TranscriptWriter(resumeSdkSessionId)
-    this.emitRaw = (event) => emit(event, this.transcript.next(event))
+    this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
+    this.emitRaw = (event) => {
+      const entry = this.transcript.nextEntry(event)
+      emit(event, entry.seq, entry)
+    }
     this.resumeId = resumeSdkSessionId
     this.resumeAtId = meta.resumeSessionAt
     // resume 模式下 SDK 不会再发 system/init,手动设置并通知渲染进程
@@ -327,13 +352,19 @@ export class AgentSession implements Engine {
    */
   private buildEnv(): NodeJS.ProcessEnv {
     const env = { ...process.env }
-    if (!this.meta.providerId) return env
+    if (!this.meta.providerId) {
+      this.activeProviderKeyId = undefined
+      return env
+    }
     const provider = getProvider(this.meta.providerId)
     if (!provider) {
       console.warn('[agent-desk] Provider 不存在,跳过 Provider 环境覆盖:', this.meta.providerId)
       return env
     }
-    const token = decryptToken(provider.encryptedToken)
+    const selection = resolveProviderToken(provider)
+    const token = selection.token
+    this.activeProviderKeyId = selection.keyId
+    if (selection.keyId) markProviderKeyUsed(provider.id, selection.keyId)
     // 只有在我们真能注入替代凭据时,才剥离 host 托管鉴权 —— 否则(选了 Provider
     // 但没配 key)既没了 host 登录、又没有自己的 token,SDK 子进程零凭据挂起。
     // 这是"选了 Provider 但没填 key → 真对话超时"的根因。
@@ -540,6 +571,7 @@ export class AgentSession implements Engine {
     // 新一轮:重置故障切换尝试记录(仅在本轮内防打转)
     this.lastUserPayload = payload
     this.triedProviders = new Set([this.meta.providerId])
+    this.triedProviderKeys = new Set(this.activeProviderKeyId ? [this.activeProviderKeyId] : [])
     // Provider 凭据在会话启动后变了(典型:先建会话后填 key)→ 旧 query 的
     // env 已过期,SDK 会一直报 "Not logged in"。重建引擎再推,填 key 即生效。
     if (this.query && !this.failoverBusy && this.envFingerprint !== this.providerEnvFingerprint()) {
@@ -558,9 +590,11 @@ export class AgentSession implements Engine {
   private providerEnvFingerprint(): string {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     if (!provider) return `none:${this.meta.providerId ?? ''}`
+    const selection = resolveProviderToken(provider)
     return [
       provider.id,
-      decryptToken(provider.encryptedToken) ? 'token' : 'no-token',
+      selection.keyId ?? 'no-key',
+      providerTokenFingerprint(selection.token),
       provider.baseUrl,
       provider.customHeaders ?? ''
     ].join('|')
@@ -609,7 +643,7 @@ export class AgentSession implements Engine {
     if (!this.meta.providerId) return null
     const provider = getProvider(this.meta.providerId)
     if (!provider) return `Provider 不存在:${this.meta.providerId}`
-    if (decryptToken(provider.encryptedToken)) return null
+    if (resolveProviderToken(provider).token) return null
     return `请在设置里填写 ${provider.name} API key 后再开始对话`
   }
 
@@ -644,7 +678,17 @@ export class AgentSession implements Engine {
           sessionCostUsd: this.meta.costUsd,
           sessionBudgetUsd: this.meta.budgetUsd,
           settingsBudgetUsd: settings.budgetUsdPerSession,
-          monthlyBudgetRemainingUsd: monthlyBudget.remainingUsd
+          monthlyBudgetRemainingUsd: monthlyBudget.remainingUsd,
+          fallbackProviderId: settings.fallbackProviderId,
+          fallbackModel: settings.fallbackModel,
+          lowCostProviderId: settings.lowCostProviderId,
+          lowCostModel: settings.lowCostModel,
+          strongReasoningProviderId: settings.strongReasoningProviderId,
+          strongReasoningModel: settings.strongReasoningModel,
+          reviewProviderId: settings.reviewProviderId,
+          reviewModel: settings.reviewModel,
+          modelRoutingRules: settings.modelRoutingRules,
+          projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
         if (smart.kind === 'routed') {
           this.lastRoutedModel = smart.model
@@ -653,6 +697,8 @@ export class AgentSession implements Engine {
             model: smart.model,
             reason: smart.reason,
             providerId: smart.providerId,
+            providerName: smart.providerName,
+            decision: smart.decision,
             crossValidationPlan: smart.crossValidationPlan
           })
           if (smart.switchedProvider) {
@@ -670,8 +716,9 @@ export class AgentSession implements Engine {
           return
         }
       }
+      const candidates = this.failoverCandidates()
       const decision = pickModelAcrossProviders({
-        candidates: this.failoverCandidates(),
+        candidates,
         text: userMessageText(payload),
         strategy,
         currentProviderId: this.meta.providerId
@@ -682,7 +729,18 @@ export class AgentSession implements Engine {
           kind: 'routing',
           model: decision.model,
           reason: decision.reason,
-          providerId: decision.providerId
+          providerId: decision.providerId,
+          providerName: decision.providerName,
+          decision: createLegacyRoutingDecisionView({
+            providerId: decision.providerId,
+            providerName: decision.providerName,
+            model: decision.model,
+            strategy,
+            complexity: decision.complexity,
+            candidateCount: candidates.reduce((count, candidate) => count + candidate.models.filter(Boolean).length, 0),
+            switchedProvider: decision.switchedProvider,
+            reason: decision.reason
+          })
         })
         if (decision.switchedProvider) {
           // 跨厂商:换身份 → 重建引擎(env 换新家)→ 定模型 → 推消息
@@ -1042,7 +1100,8 @@ export class AgentSession implements Engine {
    */
   private async tryFailover(errorText: string): Promise<boolean> {
     if (this.disposed || this.failoverBusy || this.interrupting) return false
-    if (!getSettings().failoverEnabled) return false
+    const settings = getSettings()
+    if (!settings.failoverEnabled) return false
     if (!this.lastUserPayload) return false // 无在途轮次,无从重试
     if (this.triedProviders.size > AgentSession.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
@@ -1051,7 +1110,9 @@ export class AgentSession implements Engine {
     const target = pickFailoverTarget({
       candidates: this.failoverCandidates(),
       exclude: this.triedProviders,
-      desiredModel: this.meta.model !== AUTO_MODEL ? this.meta.model : ''
+      desiredModel: this.meta.model !== AUTO_MODEL ? this.meta.model : '',
+      fallbackProviderId: settings.fallbackProviderId,
+      fallbackModel: settings.fallbackModel
     })
     if (!target) return false
 
@@ -1094,7 +1155,7 @@ export class AgentSession implements Engine {
         fromName,
         toName: target.name,
         model: this.meta.model === AUTO_MODEL ? undefined : this.meta.model,
-        reason: failure.label
+        reason: [failure.label, target.preference].filter(Boolean).join(' · ')
       })
       this.emit({ kind: 'meta', meta: { ...this.meta } })
 
@@ -1117,6 +1178,67 @@ export class AgentSession implements Engine {
       for (const queued of this.queuedDuringFailover.splice(0)) {
         void this.pushUserMessage(queued)
       }
+      return true
+    } finally {
+      this.failoverBusy = false
+    }
+  }
+
+  private async tryProviderKeyFailover(errorText: string): Promise<boolean> {
+    if (this.disposed || this.failoverBusy || this.interrupting) return false
+    const settings = getSettings()
+    if (!settings.failoverEnabled || !this.lastUserPayload || !this.meta.providerId || !this.activeProviderKeyId) {
+      return false
+    }
+    const failure = classifyFailure(errorText)
+    if (!canRotateProviderKey(failure)) return false
+    const rotation = rotateProviderKey({
+      providerId: this.meta.providerId,
+      failedKeyId: this.activeProviderKeyId,
+      excludedKeyIds: this.triedProviderKeys,
+      reason: failure.label
+    })
+    if (!rotation) return false
+
+    this.failoverBusy = true
+    try {
+      this.generation++
+      for (const [requestId, pending] of this.pending) {
+        pending.resolve({ behavior: 'deny', message: 'API Key 已切换,操作作废' })
+        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      }
+      this.pending.clear()
+      this.input.end()
+      try {
+        this.query?.close()
+      } catch {
+        // 进程可能已退出
+      }
+      this.query = null
+      this.input = new Pushable<SDKUserMessage>()
+      this.resumeId = this.meta.sdkSessionId || this.resumeId
+      this.triedProviderKeys.add(rotation.toKeyId)
+      this.emit({
+        kind: 'provider-key-failover',
+        providerId: rotation.providerId,
+        providerName: rotation.providerName,
+        fromKeyId: rotation.fromKeyId,
+        fromKeyLabel: rotation.fromKeyLabel,
+        toKeyId: rotation.toKeyId,
+        toKeyLabel: rotation.toKeyLabel,
+        reason: failure.label
+      })
+
+      await this.start()
+      if (!this.query) return true
+      this.setStatus('running')
+      this.turnStartedAt = Date.now()
+      if (this.meta.model === AUTO_MODEL) {
+        void this.autoRouteThenPush(this.lastUserPayload)
+      } else {
+        void this.pushUserMessage(this.lastUserPayload)
+      }
+      for (const queued of this.queuedDuringFailover.splice(0)) void this.pushUserMessage(queued)
       return true
     } finally {
       this.failoverBusy = false
@@ -1195,6 +1317,7 @@ export class AgentSession implements Engine {
       // 附上 SDK stderr 尾部:否则子进程认证失败/崩溃时用户只见空洞错误
       const tail = this.stderrTail.trim()
       const text = tail ? `${errText(err)}\n[SDK stderr]\n${tail.slice(-1200)}` : errText(err)
+      if (this.turnInFlight && (await this.tryProviderKeyFailover(text))) return
       recordFailure(this.meta.providerId, text)
       // 流层崩溃(进程退出/网络断):仅当有轮次在途时值得切厂商重试
       if (this.turnInFlight && (await this.tryFailover(text))) return
@@ -1299,13 +1422,19 @@ export class AgentSession implements Engine {
           this.meta.model && this.meta.model !== AUTO_MODEL ? this.meta.model : this.lastRoutedModel
         if (isError) {
           const errorText = typeof msg.result === 'string' ? msg.result : subtype
-          recordFailure(this.meta.providerId, errorText)
-          if (activeModel) recordModelFailure(activeModel)
-          // 厂商侧故障:先尝试切换厂商续跑;不可切换或无处可切时按原样收尾
-          void this.tryFailover(errorText).then((switched) => {
-            if (!switched) finish()
+          void (async () => {
+            if (await this.tryProviderKeyFailover(errorText)) return
+            recordFailure(this.meta.providerId, errorText)
+            if (activeModel) recordModelFailure(activeModel)
+            if (!(await this.tryFailover(errorText))) finish()
+          })().catch((error) => {
+            console.error('[caogen] 故障接管失败:', error)
+            finish()
           })
         } else {
+          if (this.activeProviderKeyId) {
+            recordProviderKeySuccess(this.meta.providerId, this.activeProviderKeyId)
+          }
           recordSuccess(this.meta.providerId, latency)
           if (activeModel) recordModelSuccess(activeModel, latency)
           this.lastUserPayload = null // 本轮成功,清除重试凭据
@@ -1346,7 +1475,11 @@ export class AgentSession implements Engine {
     const policyToolName = normalizeClaudeToolName(toolName)
     const policyInput = normalizeClaudeToolInput(toolName, input)
     const policy = evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd })
-    const audit = (action: 'allow' | 'deny' | 'ask', source: 'policy' | 'permission-mode', message: string): void => {
+    const audit = (
+      action: 'allow' | 'deny' | 'ask',
+      source: 'policy' | 'permission-mode' | 'idempotency',
+      message: string
+    ): void => {
       writeAuditLog(this.meta.cwd, {
         action,
         source,
@@ -1357,35 +1490,21 @@ export class AgentSession implements Engine {
         riskReasons: policy.risk.reasons
       })
     }
-
-    if (policy.kind === 'deny') {
-      audit('deny', 'policy', policy.reason)
-      return Promise.resolve({ behavior: 'deny', message: policy.reason })
-    }
-    if (settings.sandboxMode === 'strictDocker' && CLAUDE_HOST_MUTATION_TOOLS.has(toolName)) {
-      const message = '严格 Docker 模式下 Claude SDK 本地工具无法由 CaoGen Docker 沙箱接管,已按 fail-closed 阻止;请改用 OpenAI 本地工具链或切换沙箱模式。'
-      audit('deny', 'policy', message)
-      return Promise.resolve({ behavior: 'deny', message })
-    }
-    const guiDecision = decideGuiPermission(policyToolName, settings)
-    if (guiDecision.kind === 'deny') {
-      audit('deny', 'policy', guiDecision.reason)
-      return Promise.resolve({ behavior: 'deny', message: guiDecision.reason })
-    }
-    if (guiDecision.kind === 'allow') {
-      audit('allow', 'policy', guiDecision.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
-    }
-    if (guiDecision.kind === 'ask') {
+    const askUser = (
+      reason: string,
+      source: 'policy' | 'permission-mode' | 'idempotency',
+      duplicateExecutionId?: string
+    ): Promise<PermissionResult> => {
       const requestId = randomUUID()
       const info: PermissionRequestInfo = {
         requestId,
         toolName,
         input: policyInput,
         toolUseId: opts?.toolUseID,
-        decisionReason: guiDecision.reason
+        decisionReason: reason,
+        duplicateExecutionId
       }
-      audit('ask', 'permission-mode', guiDecision.reason)
+      audit('ask', source, reason)
       this.emit({ kind: 'permission-request', request: info })
       return new Promise<PermissionResult>((resolve) => {
         this.pending.set(requestId, { resolve, input: policyInput, info })
@@ -1406,6 +1525,47 @@ export class AgentSession implements Engine {
         })
       })
     }
+
+    if (policy.kind === 'deny') {
+      audit('deny', 'policy', policy.reason)
+      return Promise.resolve({ behavior: 'deny', message: policy.reason })
+    }
+    if (settings.sandboxMode === 'strictDocker' && CLAUDE_HOST_MUTATION_TOOLS.has(toolName)) {
+      const message = '严格 Docker 模式下 Claude SDK 本地工具无法由 CaoGen Docker 沙箱接管,已按 fail-closed 阻止;请改用 OpenAI 本地工具链或切换沙箱模式。'
+      audit('deny', 'policy', message)
+      return Promise.resolve({ behavior: 'deny', message })
+    }
+    const guiDecision = decideGuiPermission(policyToolName, settings)
+    if (guiDecision.kind === 'deny') {
+      audit('deny', 'policy', guiDecision.reason)
+      return Promise.resolve({ behavior: 'deny', message: guiDecision.reason })
+    }
+    if (this.meta.permissionMode === 'plan' && !CLAUDE_READ_TOOLS.has(toolName)) {
+      const message = '规划模式:只允许只读工具,不执行写入或命令。'
+      audit('deny', 'permission-mode', message)
+      return Promise.resolve({ behavior: 'deny', message })
+    }
+    const idempotency = taskRuntimeRegistry.evaluateTool({
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      toolName: policyToolName,
+      toolInput: policyInput,
+      toolUseId: opts?.toolUseID
+    })
+    if (idempotency.kind === 'deny') {
+      audit('deny', 'idempotency', idempotency.reason)
+      return Promise.resolve({ behavior: 'deny', message: idempotency.reason })
+    }
+    if (idempotency.kind === 'ask') {
+      return askUser(idempotency.reason, 'idempotency', idempotency.duplicateExecutionId)
+    }
+    if (guiDecision.kind === 'allow') {
+      audit('allow', 'policy', guiDecision.reason)
+      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+    }
+    if (guiDecision.kind === 'ask') {
+      return askUser(guiDecision.reason, 'permission-mode')
+    }
     if (policy.kind === 'allow') {
       audit('allow', 'policy', policy.reason)
       return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
@@ -1419,44 +1579,12 @@ export class AgentSession implements Engine {
       audit('allow', 'permission-mode', policy.reason)
       return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
     }
-    if (this.meta.permissionMode === 'plan') {
-      const message = '规划模式:只允许只读工具,不执行写入或命令。'
-      audit('deny', 'permission-mode', message)
-      return Promise.resolve({ behavior: 'deny', message })
-    }
     if (this.meta.permissionMode === 'acceptEdits' && CLAUDE_EDIT_TOOLS.has(toolName)) {
       audit('allow', 'permission-mode', policy.reason)
       return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
     }
 
-    const requestId = randomUUID()
-    const info: PermissionRequestInfo = {
-      requestId,
-      toolName,
-      input: policyInput,
-      toolUseId: opts?.toolUseID,
-      decisionReason: opts?.decisionReason ?? policy.reason
-    }
-    audit('ask', 'permission-mode', info.decisionReason ?? policy.reason)
-    this.emit({ kind: 'permission-request', request: info })
-    return new Promise<PermissionResult>((resolve) => {
-      this.pending.set(requestId, { resolve, input: policyInput, info })
-      opts?.signal?.addEventListener('abort', () => {
-        if (this.pending.delete(requestId)) {
-          writeAuditLog(this.meta.cwd, {
-            action: 'deny',
-            source: 'user',
-            toolName: policyToolName,
-            input: policyInput,
-            message: '操作已被取消',
-            riskLevel: policy.risk.level,
-            riskReasons: policy.risk.reasons
-          })
-          this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-          resolve({ behavior: 'deny', message: '操作已被取消' })
-        }
-      })
-    })
+    return askUser(opts?.decisionReason ?? policy.reason, 'permission-mode')
   }
 
   private recordContextTokens(usedTokens: number): void {

@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentEventIdentity,
   CheckpointRestoreMode,
   CheckpointRestoreResult,
   PermissionModeId,
@@ -16,7 +17,7 @@ import type {
  * 事件模型(AgentEvent)与引擎解耦——任何能产出这组事件、
  * 吃进用户消息的 CLI/SDK 都可以成为一个引擎。
  *
- * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)、OpenAIEngine、CodexEngine、GeminiEngine。
+ * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)、OpenAIEngine。
  * 注意:创建会话必须显式选择引擎;这里不再静默回退 Claude。
  */
 export interface Engine {
@@ -46,7 +47,7 @@ export interface Engine {
   dispose(): void
 }
 
-export type EngineEmit = (event: AgentEvent, seq: number) => void
+export type EngineEmit = (event: AgentEvent, seq: number, identity?: AgentEventIdentity) => void
 
 export interface EngineFactory {
   /** 引擎标识,会话按 meta.engine 选择。 */
@@ -55,7 +56,7 @@ export interface EngineFactory {
   label: string
   /** 当前环境是否可用(CLI 是否安装等);不可用则 UI 置灰 */
   available(): boolean
-  create(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string): Engine
+  create(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string, initialEventSeq?: number): Engine
 }
 
 const registry = new Map<string, EngineFactory>()
@@ -77,11 +78,12 @@ export function createEngine(
   kind: string | undefined,
   meta: SessionMeta,
   emit: EngineEmit,
-  resumeSdkSessionId?: string
+  resumeSdkSessionId?: string,
+  initialEventSeq = 0
 ): Engine {
   if (!kind) throw new Error('请选择 Agent 引擎')
   const factory = registry.get(kind)
   if (!factory) throw new Error(`Agent 引擎未注册:${kind}`)
   if (!factory.available()) throw new Error(`Agent 引擎不可用:${factory.label}`)
-  return factory.create(meta, emit, resumeSdkSessionId)
+  return factory.create(meta, emit, resumeSdkSessionId, initialEventSeq)
 }

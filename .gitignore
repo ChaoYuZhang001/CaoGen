@@ -10,6 +10,14 @@ plugins/jetbrains/.intellijPlatform/
 plugins/jetbrains/.kotlin/
 *.log
 .DS_Store
+__pycache__/
+*.py[cod]
+*.blend1
+
+# 本地 3D 资产预览/重复工作图,不进入发布源码。
+scripts/_render-official-g1-rev1-preview.py
+docs/visual-references/reference-office-robot-model-sheet-v2.png
+docs/visual-references/reference-office-robot-model-sheet-v3.png
 
 # 本地凭据与签名材料,绝不入库
 .env

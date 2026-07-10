@@ -63,6 +63,7 @@ export interface ModelRouteDecision {
   candidates: ModelRouteCandidate[]
   task: TaskProfile
   manualOverrideApplied: boolean
+  manualOverrideReason?: string
   budgetDowngraded: boolean
   crossValidationPlan: CrossValidationPlan
   warnings: string[]
@@ -93,6 +94,7 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
         candidates,
         task,
         manualOverrideApplied: true,
+        manualOverrideReason: request.manualOverride?.reason,
         budgetDowngraded: false,
         crossValidation: request.crossValidation,
         warnings: overBudget ? ['手动覆盖命中预算上限，但调用方允许越过预算。'] : []
@@ -115,6 +117,7 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
     candidates: sorted,
     task,
     manualOverrideApplied: false,
+    manualOverrideReason: manual ? request.manualOverride?.reason : undefined,
     budgetDowngraded,
     crossValidation: request.crossValidation,
     warnings
@@ -169,7 +172,8 @@ function scoreCandidate(profile: ModelProfile, task: TaskProfile): ModelRouteCan
   const reasons = [
     `能力匹配 ${scoreProfileForTask(profile, task).toFixed(1)}`,
     `可靠性 ${reliability.toFixed(2)}`,
-    `估算成本 $${estimatedCostUsd.toFixed(4)}`
+    `估算成本 $${estimatedCostUsd.toFixed(4)}`,
+    `延迟档 ${profile.latency}`
   ]
   if (stat?.latencyEmaMs) reasons.push(`历史延迟 EMA ${stat.latencyEmaMs}ms`)
   return {
@@ -196,12 +200,28 @@ function applyManualOverride(
 
 function rankCandidates(candidates: ModelRouteCandidate[], strategy: SchedulerStrategy): ModelRouteCandidate[] {
   return [...candidates].sort((a, b) => {
+    if (strategy === 'speed') {
+      const latencyClassDelta = latencyClassRank(b.profile.latency) - latencyClassRank(a.profile.latency)
+      if (latencyClassDelta !== 0) return latencyClassDelta
+      const aLatency = a.latencyEmaMs
+      const bLatency = b.latencyEmaMs
+      if (aLatency !== undefined || bLatency !== undefined) {
+        const latencyDelta = (aLatency ?? Number.MAX_SAFE_INTEGER) - (bLatency ?? Number.MAX_SAFE_INTEGER)
+        if (latencyDelta !== 0) return latencyDelta
+      }
+    }
     const scoreDelta = b.score - a.score
     if (scoreDelta !== 0) return scoreDelta
     if (strategy === 'cost') return a.estimatedCostUsd - b.estimatedCostUsd
     if (strategy === 'quality') return b.reliability - a.reliability
     return (a.latencyEmaMs ?? Number.MAX_SAFE_INTEGER) - (b.latencyEmaMs ?? Number.MAX_SAFE_INTEGER)
   })
+}
+
+function latencyClassRank(latency: ModelProfile['latency']): number {
+  if (latency === 'fast') return 3
+  if (latency === 'balanced') return 2
+  return 1
 }
 
 function chooseBudgetSafeCandidate(
@@ -233,6 +253,7 @@ function buildDecision(input: {
   candidates: ModelRouteCandidate[]
   task: TaskProfile
   manualOverrideApplied: boolean
+  manualOverrideReason?: string
   budgetDowngraded: boolean
   crossValidation?: CrossValidationRequest
   warnings: string[]
@@ -242,6 +263,7 @@ function buildDecision(input: {
     candidates: input.candidates,
     task: input.task,
     manualOverrideApplied: input.manualOverrideApplied,
+    manualOverrideReason: input.manualOverrideReason,
     budgetDowngraded: input.budgetDowngraded,
     crossValidationPlan: planCrossValidation(input.selected, input.candidates, input.task, input.crossValidation),
     warnings: input.warnings

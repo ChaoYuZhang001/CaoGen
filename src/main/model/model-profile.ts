@@ -1,14 +1,6 @@
-import type { EngineKind, SchedulerStrategy } from '../../shared/types'
+import type { EngineKind, ModelRoutingTaskKind, SchedulerStrategy } from '../../shared/types'
 
-export type ModelTaskKind =
-  | 'chat'
-  | 'coding'
-  | 'reasoning'
-  | 'vision'
-  | 'toolUse'
-  | 'longContext'
-  | 'review'
-  | 'summarization'
+export type ModelTaskKind = ModelRoutingTaskKind
 
 export type ModelStrength = 'low' | 'medium' | 'high'
 
@@ -161,6 +153,7 @@ export function scoreProfileForTask(profile: ModelProfile, task: TaskProfile): n
   if (task.requiresVision && profile.supportsVision) score += 16
   if (task.strategy === 'cost') score += costBias(profile)
   if (task.strategy === 'quality') score += qualityBias(profile)
+  if (task.strategy === 'speed') score += speedBias(profile)
   if (task.strategy === 'balanced') score += costBias(profile) / 2 + qualityBias(profile) / 2
   if (profile.latency === 'fast') score += 3
   if (profile.latency === 'slow' && task.strategy !== 'quality') score -= 2
@@ -258,6 +251,12 @@ function costBias(profile: ModelProfile): number {
 function qualityBias(profile: ModelProfile): number {
   if (profile.cost.tier === 'high') return 8
   if (profile.cost.tier === 'medium') return 4
+  return 0
+}
+
+function speedBias(profile: ModelProfile): number {
+  if (profile.latency === 'fast') return 16
+  if (profile.latency === 'balanced') return 7
   return 0
 }
 

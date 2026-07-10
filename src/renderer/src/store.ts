@@ -23,14 +23,17 @@ import type {
   TaskDagExecutionView,
   HistoryEntry,
   MemorySuggestionEvent,
+  ModelRoutingDecisionView,
   ModelRoutePlanView,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
   ProjectFileEntry,
   PermissionRequestInfo,
+  OfficeVisualPreview,
   PreparedPreview,
   PreviewAnnotation,
+  PreviewAnnotationLocator,
   Project,
   ProviderInput,
   ProviderView,
@@ -64,6 +67,8 @@ import type {
 } from '../../shared/types'
 
 let seq = 0
+let previewRequestSeq = 0
+let previewVisualRequestSeq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
 
 function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
@@ -169,12 +174,14 @@ async function sendQuickbarPayload(
  * createSession IPC 返回前主进程可能已开始广播该会话的事件(status/init),
  * 此时 store 里还没有对应条目;先缓存,注册时按序重放,避免丢 sdkSessionId 等状态。
  */
-const pendingEvents = new Map<string, Array<{ seq: number; event: AgentEvent }>>()
+const pendingEvents = new Map<string, Array<{ seq: number; event: AgentEvent; eventId?: string }>>()
+const appliedEventIds = new Map<string, string[]>()
 const PENDING_EVENTS_CAP = 200
+const APPLIED_EVENT_IDS_CAP = 256
 
-function stashPendingEvent(sessionId: string, seq: number, event: AgentEvent): void {
+function stashPendingEvent(sessionId: string, seq: number, event: AgentEvent, eventId?: string): void {
   const queue = pendingEvents.get(sessionId) ?? []
-  if (queue.length < PENDING_EVENTS_CAP) queue.push({ seq, event })
+  if (queue.length < PENDING_EVENTS_CAP) queue.push({ seq, event, eventId })
   pendingEvents.set(sessionId, queue)
 }
 
@@ -182,18 +189,24 @@ function drainPendingEvents(sessionId: string, state: SessionState): SessionStat
   const queue = pendingEvents.get(sessionId)
   if (!queue) return state
   pendingEvents.delete(sessionId)
-  return queue.reduce((s, item) => applyEvent(s, item.seq, item.event), state)
+  return queue.reduce((s, item) => applyEvent(s, item.seq, item.event, item.eventId), state)
 }
 
-/** 应用单条事件(seq 去重 + reduce) */
-function applyEvent(s: SessionState, seq: number, event: AgentEvent): SessionState {
+/** 应用单条事件(eventId + seq 去重 + reduce) */
+function applyEvent(s: SessionState, seq: number, event: AgentEvent, eventId?: string): SessionState {
+  const recent = appliedEventIds.get(s.meta.id) ?? []
+  if (eventId && recent.includes(eventId)) return s
   if (seq <= s.lastSeq) return s
+  if (eventId) {
+    recent.push(eventId)
+    appliedEventIds.set(s.meta.id, recent.slice(-APPLIED_EVENT_IDS_CAP))
+  }
   return { ...reduceSession(s, event), lastSeq: seq }
 }
 
 /** 批量回放转录(已按 seq 排序) */
 function replayTranscript(s: SessionState, entries: TranscriptEntry[]): SessionState {
-  return entries.reduce((state, e) => applyEvent(state, e.seq, e.event), s)
+  return entries.reduce((state, e) => applyEvent(state, e.seq, e.event, e.eventId), s)
 }
 
 function replaceTranscript(s: SessionState, entries: TranscriptEntry[]): SessionState {
@@ -257,8 +270,11 @@ export type ChatItem =
   | {
       id: string
       kind: 'routing'
+      providerId: string
+      providerName?: string
       model: string
       reason: string
+      decision?: ModelRoutingDecisionView
       crossValidationPlan?: ModelRoutePlanView
     }
   | {
@@ -268,6 +284,23 @@ export type ChatItem =
       toName: string
       model?: string
       reason: string
+    }
+  | {
+      id: string
+      kind: 'provider-key-failover'
+      providerName: string
+      fromKeyLabel: string
+      toKeyLabel: string
+      reason: string
+    }
+  | {
+      id: string
+      kind: 'workspace'
+      event: 'checkpoint-restore'
+      filesChanged: string[]
+      insertions?: number
+      deletions?: number
+      note?: string
     }
   | { id: string; kind: 'notice'; level: 'info' | 'error'; text: string }
 
@@ -366,6 +399,15 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
           ...s.items,
           {
             id: genId(),
+            kind: 'workspace',
+            event: 'checkpoint-restore',
+            filesChanged: ev.filesChanged,
+            insertions: ev.insertions,
+            deletions: ev.deletions,
+            note: ev.note
+          },
+          {
+            id: genId(),
             kind: 'notice',
             level: 'info',
             text:
@@ -381,7 +423,16 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         ...s,
         items: [
           ...s.items,
-          { id: genId(), kind: 'routing', model: ev.model, reason: ev.reason, crossValidationPlan: ev.crossValidationPlan }
+          {
+            id: genId(),
+            kind: 'routing',
+            providerId: ev.providerId,
+            providerName: ev.providerName,
+            model: ev.model,
+            reason: ev.reason,
+            decision: ev.decision,
+            crossValidationPlan: ev.crossValidationPlan
+          }
         ],
         effectiveModel: ev.model
       }
@@ -401,6 +452,24 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
             fromName: ev.fromName,
             toName: ev.toName,
             model: ev.model,
+            reason: ev.reason
+          }
+        ]
+      }
+    case 'provider-key-failover':
+      return {
+        ...s,
+        streamText: '',
+        streamThinking: '',
+        runningTools: {},
+        items: [
+          ...s.items,
+          {
+            id: genId(),
+            kind: 'provider-key-failover',
+            providerName: ev.providerName,
+            fromKeyLabel: ev.fromKeyLabel,
+            toKeyLabel: ev.toKeyLabel,
             reason: ev.reason
           }
         ]
@@ -613,6 +682,9 @@ export interface WorkbenchState {
   previewPath?: string
   previewAnnotations: PreviewAnnotation[]
   previewError?: string
+  previewVisualLoading: boolean
+  previewVisual?: OfficeVisualPreview
+  previewVisualError?: string
   pluginRegistryOpen: boolean
   pluginRegistryLoading: boolean
   pluginRegistry?: PluginRegistryView
@@ -674,7 +746,7 @@ interface AppStore {
   transcriptSearchResults: TranscriptSearchResult[]
   transcriptSearchLoading: boolean
   init(): Promise<void>
-  handleEvent(sessionId: string, event: AgentEvent, seq: number): void
+  handleEvent(sessionId: string, event: AgentEvent, seq: number, eventId?: string): void
   handleMemorySuggestion(event: MemorySuggestionEvent): void
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
@@ -749,7 +821,7 @@ interface AppStore {
   openPreviewPanel(path?: string): Promise<void>
   closePreviewPanel(): void
   refreshPreviewPanel(): Promise<void>
-  savePreviewAnnotation(note: string): Promise<void>
+  savePreviewAnnotation(note: string, locator?: PreviewAnnotationLocator): Promise<void>
   refreshPreviewAnnotations(): Promise<void>
   openBrowserPanel(url?: string): Promise<void>
   closeBrowserPanel(): Promise<void>
@@ -882,7 +954,16 @@ export const useStore = create<AppStore>((set, get) => {
     defaultModel: '',
     defaultPermissionMode: 'default',
     defaultProviderId: '',
+    fallbackProviderId: '',
+    fallbackModel: '',
+    lowCostProviderId: '',
+    lowCostModel: '',
+    strongReasoningProviderId: '',
+    strongReasoningModel: '',
+    reviewProviderId: '',
+    reviewModel: '',
     schedulerStrategy: 'balanced',
+    modelRoutingRules: [],
     smartModelRoutingEnabled: false,
     modelCrossValidationAutoRunEnabled: false,
     budgetUsdPerSession: 0,
@@ -959,6 +1040,7 @@ export const useStore = create<AppStore>((set, get) => {
     previewOpen: false,
     previewLoading: false,
     previewAnnotations: [],
+    previewVisualLoading: false,
     pluginRegistryOpen: false,
     pluginRegistryLoading: false,
     mcpProbeResults: {},
@@ -984,7 +1066,9 @@ export const useStore = create<AppStore>((set, get) => {
   async init() {
     if (get().ready) return
     set({ ready: true })
-    window.agentDesk.onSessionEvent((sessionId, event, seq) => get().handleEvent(sessionId, event, seq))
+    window.agentDesk.onSessionEvent((sessionId, event, seq, eventId) =>
+      get().handleEvent(sessionId, event, seq, eventId)
+    )
     window.agentDesk.onMemorySuggestion((event) => get().handleMemorySuggestion(event))
     window.agentDesk.onTerminalEvent((event) => get().handleTerminalEvent(event))
     window.agentDesk.onBrowserEvent((event) => get().handleBrowserEvent(event))
@@ -1039,13 +1123,13 @@ export const useStore = create<AppStore>((set, get) => {
     }
   },
 
-  handleEvent(sessionId, event, seq) {
+  handleEvent(sessionId, event, seq, eventId) {
     if (event.kind === 'subagent-result' || event.kind === 'task-dag-update') {
       flushStreamBuffer(sessionId)
       set((s) => {
         const session = s.sessions[sessionId]
         if (!session) return s
-        return { sessions: { ...s.sessions, [sessionId]: reduceSession(session, event) } }
+        return { sessions: { ...s.sessions, [sessionId]: applyEvent(session, seq, event, eventId) } }
       })
       if (event.kind === 'task-dag-update') {
         void window.agentDesk.listSessions().then((metas) => {
@@ -1072,10 +1156,10 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => {
       const session = s.sessions[sessionId]
       if (!session) {
-        stashPendingEvent(sessionId, seq, event)
+        stashPendingEvent(sessionId, seq, event, eventId)
         return s
       }
-      return { sessions: { ...s.sessions, [sessionId]: applyEvent(session, seq, event) } }
+      return { sessions: { ...s.sessions, [sessionId]: applyEvent(session, seq, event, eventId) } }
     })
     // init 到达意味着 sdkSessionId 已确定,转录文件已可读;触发回放(仅 resume 会话需要)
     if (event.kind === 'init' && event.sdkSessionId) {
@@ -2337,6 +2421,11 @@ export const useStore = create<AppStore>((set, get) => {
   async openPreviewPanel(path) {
     closeNativeBrowserView(get().activeId)
     const nextPath = path ?? get().workbench.previewPath ?? get().workbench.currentFilePath
+    const pathChanged = Boolean(nextPath && nextPath !== get().workbench.previewPath)
+    if (pathChanged) {
+      previewRequestSeq += 1
+      previewVisualRequestSeq += 1
+    }
     set((s) => ({
       workbench: {
         ...s.workbench,
@@ -2351,52 +2440,139 @@ export const useStore = create<AppStore>((set, get) => {
         routineOpen: false,
         memoryOpen: false,
         previewPath: nextPath,
-        previewError: undefined
+        previewError: undefined,
+        ...(pathChanged
+          ? {
+              preview: undefined,
+              previewAnnotations: [],
+              previewLoading: false,
+              previewVisual: undefined,
+              previewVisualLoading: false,
+              previewVisualError: undefined
+            }
+          : {})
       }
     }))
     await get().refreshPreviewPanel()
   },
 
   closePreviewPanel() {
-    set((s) => ({ workbench: { ...s.workbench, previewOpen: false } }))
+    previewRequestSeq += 1
+    previewVisualRequestSeq += 1
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        previewOpen: false,
+        previewLoading: false,
+        previewVisualLoading: false
+      }
+    }))
   },
 
   async refreshPreviewPanel() {
     const id = get().activeId
     const path = get().workbench.previewPath
     if (!id || !path) return
+    const requestId = ++previewRequestSeq
+    const visualRequestId = ++previewVisualRequestSeq
     set((s) => ({
       workbench: {
         ...s.workbench,
         previewLoading: true,
-        previewError: undefined
+        previewError: undefined,
+        previewVisual: undefined,
+        previewVisualLoading: false,
+        previewVisualError: undefined
       }
     }))
+    const annotationsPromise = window.agentDesk.listPreviewAnnotations(id, path).catch(() => [])
     try {
       const preview = await window.agentDesk.preparePreview(id, path)
-      const annotations = await window.agentDesk.listPreviewAnnotations(id, path).catch(() => [])
+      if (
+        requestId !== previewRequestSeq ||
+        get().activeId !== id ||
+        get().workbench.previewPath !== path
+      ) {
+        return
+      }
+      const shouldPrepareVisual = preview.ok && preview.type === 'office'
       set((s) => ({
         workbench: {
           ...s.workbench,
           previewOpen: true,
           preview,
-          previewAnnotations: annotations,
           previewLoading: false,
-          previewError: preview.ok ? undefined : preview.error
+          previewError: preview.ok ? undefined : preview.error,
+          previewVisualLoading: shouldPrepareVisual
         }
       }))
+
+      if (shouldPrepareVisual) {
+        void window.agentDesk
+          .preparePreviewVisual(id, path)
+          .then((visual) => {
+            if (
+              visualRequestId !== previewVisualRequestSeq ||
+              get().activeId !== id ||
+              get().workbench.previewPath !== path
+            ) {
+              return
+            }
+            set((s) => ({
+              workbench: {
+                ...s.workbench,
+                previewVisual: visual.ok ? visual : undefined,
+                previewVisualLoading: false,
+                previewVisualError: visual.ok ? undefined : visual.error
+              }
+            }))
+          })
+          .catch((error) => {
+            if (
+              visualRequestId !== previewVisualRequestSeq ||
+              get().activeId !== id ||
+              get().workbench.previewPath !== path
+            ) {
+              return
+            }
+            set((s) => ({
+              workbench: {
+                ...s.workbench,
+                previewVisualLoading: false,
+                previewVisualError: error instanceof Error ? error.message : String(error)
+              }
+            }))
+          })
+      }
+
+      const annotations = await annotationsPromise
+      if (
+        requestId === previewRequestSeq &&
+        get().activeId === id &&
+        get().workbench.previewPath === path
+      ) {
+        set((s) => ({ workbench: { ...s.workbench, previewAnnotations: annotations } }))
+      }
     } catch (err) {
+      if (
+        requestId !== previewRequestSeq ||
+        get().activeId !== id ||
+        get().workbench.previewPath !== path
+      ) {
+        return
+      }
       set((s) => ({
         workbench: {
           ...s.workbench,
           previewLoading: false,
+          previewVisualLoading: false,
           previewError: err instanceof Error ? err.message : String(err)
         }
       }))
     }
   },
 
-  async savePreviewAnnotation(note) {
+  async savePreviewAnnotation(note, locator) {
     const id = get().activeId
     const { preview, previewPath } = get().workbench
     const cleanNote = note.trim()
@@ -2408,7 +2584,8 @@ export const useStore = create<AppStore>((set, get) => {
         path,
         type: preview?.type ?? null,
         mime: preview?.mime ?? null,
-        note: cleanNote
+        note: cleanNote,
+        locator: locator ?? null
       })
       set((s) => {
         const known = new Set(s.workbench.previewAnnotations.map((item) => item.id))
@@ -3542,6 +3719,7 @@ export const DRIVE_MODE_OPTIONS = CAOGEN_DRIVE_POLICIES.map((policy) => ({
 
 export const STRATEGY_OPTIONS: Array<{ value: SchedulerStrategy; label: string }> = [
   { value: 'balanced', label: '均衡' },
+  { value: 'speed', label: '速度优先' },
   { value: 'quality', label: '质量优先' },
   { value: 'cost', label: '成本优先' }
 ]
@@ -3569,6 +3747,14 @@ export interface ProviderPreset {
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    key: 'caogen-relay',
+    label: 'CaoGen 中转站模板(需配置 Key)',
+    baseUrl: 'https://gpt.zhangrui.xyz/dashboard',
+    models: [],
+    hint: 'CaoGen 中转站预设入口。服务暂不作为默认可用 Provider;请填写自己的 API Key,再用“获取模型”确认可用模型。若控制台给出的 API 路径不同,按实际路径调整 Base URL。',
+    openaiProtocol: 'chat'
+  },
   {
     key: 'anthropic',
     label: 'Anthropic Messages 端点',

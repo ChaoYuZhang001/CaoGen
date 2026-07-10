@@ -3,15 +3,15 @@
 > 历史基线: `main@3b68402`(第二波启动时)。
 > 目标: 把 CaoGen 从多厂商编码 Agent 升级为原生 Agent Work OS。
 > 注意: 这是 A0/A2/A4/A7 第二波并行启动记录,保留用于追溯当时的分工和文件锁。
-> 当前发布收口计划以 [Work OS Phase 2 Parallel Plan](./WORKOS-PHASE2-PARALLEL-PLAN.md) 和 [Release Gate v0.2.0 Draft](./RELEASE-GATE-v0.2.0-DRAFT.md) 为准。
+> 当前发布收口计划以 [Work OS Phase 2 Parallel Plan](./WORKOS-PHASE2-PARALLEL-PLAN.md) 和 [Release Gate Draft](./RELEASE-GATE-DRAFT.md) 为准。
 
 ## 新总目标
 
-CaoGen 不做 Agent 启动器，不做配置搬运工具，而做一个原生 Agent Work OS:把桌面控制、代码执行、多模型调度、Skills/MCP、长期记忆、多 Agent 交付全部集成到一个 CaoGen 任务系统里。
+CaoGen 不做 Agent 启动器，不做配置搬运工具，而做一个多厂商 AI 工作桌面:把桌面控制、代码执行、多模型调度、Skills/MCP、长期记忆、多任务交付全部集成到一个 CaoGen 任务系统里。
 
 北极星验收:
 
-> 深度用户只打开 CaoGen，不再需要 Claude Desktop、Codex Desktop、OpenClaw、Hermes、ccswitch，也能完成代码、文件、浏览器、桌面、自动化、多 Agent 交付主链路。
+> 深度用户只打开 CaoGen，就能完成模型配置、代码、文件、浏览器、桌面、自动化、多任务交付主链路。
 
 ## CaoGen Drive 档位
 
@@ -34,7 +34,7 @@ CaoGen 不做 Agent 启动器，不做配置搬运工具，而做一个原生 Ag
 | A4 | Code Forge | 工程交付闭环 | 可并行，但避开 A1 热点 | Git/worktree/diff/test/PR/IDE bridge | 一个任务能改代码、跑验证、审 diff、提交 |
 | A5 | Skill Fabric | 原生 Skills/MCP 运行时 | 已合并 | `src/main/skill/*`、`src/main/mcp/*`、Skills UI | 已通过 `skill-fabric-smoke` |
 | A6 | Memory Loop | 自成长记忆与任务复盘 | 已合并 | `src/main/memory/*`、MemoryPanel | 已通过 `memory-loop-smoke` |
-| A7 | Control Center | 替代 ccswitch 的统一控制中心 | 第二波并行 | Provider/模型/预算/路由/密钥 UI | 一个界面管模型、Key、预算、路由、MCP |
+| A7 | Control Center | 统一控制中心 | 第二波并行 | Provider/模型/预算/路由/密钥 UI | 一个界面管模型、Key、预算、路由、MCP |
 | A8 | Personal OS | 常驻助理、Routines、通知、主动任务 | 已合并 | routines/notifications/start suggestions | 已通过 `personal-os-smoke`、`routine-runner-smoke`、`start-suggestions-e2e` |
 | A9 | Genesis | CaoGen 独一档旗舰模式 | 暂缓 | DAG/子 Agent/验证/复核/交付总结 | 等 A4 Code Forge 稳定后再开 |
 | A10 | Integration | 最终集成与冲突处理 | 最后做 | 全局收口，处理冲突 | `typecheck + build + test:deep` 全绿 |
@@ -94,11 +94,11 @@ CaoGen 不做 Agent 启动器，不做配置搬运工具，而做一个原生 Ag
 
 1. 用户通过 Drive 五档启动任务，而不是手动选一堆模型参数。
 2. Spark/Core/Forge/Command/Genesis 能真实影响模型、工具、预算、验证深度。
-3. Quickbar 能替代 ChatGPT Desktop 的入口型需求。
-4. Desktop Control 能替代 Claude/Codex Computer Use 的主链路。
-5. Code Forge 能替代 Codex/Claude Code 的工程交付主链路。
-6. Skill Fabric + Memory Loop 能覆盖 OpenClaw/Hermes 的 Skills、MCP、记忆成长。
-7. Control Center 能覆盖 ccswitch 的配置/路由/Provider 管理。
+3. Quickbar 能覆盖桌面快捷入口、截图、剪贴板和文件投递需求。
+4. Desktop Control 能覆盖授权后的桌面观察、输入、窗口和 GUI 自动化主链路。
+5. Code Forge 能覆盖工程交付主链路: worktree、diff、test、commit、PR/MR 辅助。
+6. Skill Fabric + Memory Loop 能覆盖 Skills、MCP、记忆成长和经验复用。
+7. Control Center 能覆盖模型配置、路由、Provider、Key 和预算管理。
 8. Genesis 能完成“自动拆解、并行执行、审查、验证、交付”的完整闭环。
 
 ## 建议并发

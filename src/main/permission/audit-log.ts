@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { SandboxMode, ToolRiskLevel } from '../../shared/types'
 
 export type AuditAction = 'allow' | 'deny' | 'ask' | 'execute'
-export type AuditSource = 'policy' | 'permission-mode' | 'user' | 'sandbox'
+export type AuditSource = 'policy' | 'permission-mode' | 'idempotency' | 'user' | 'sandbox'
 
 export interface ToolAuditEvent {
   action: AuditAction

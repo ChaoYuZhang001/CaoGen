@@ -3,6 +3,7 @@ import type * as React from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
+import { APP_ICON_URL, APP_NAME } from '../brand'
 import type {
   HistoryEntry,
   LayoutSettings,
@@ -541,9 +542,11 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
         } as React.CSSProperties
       }
     >
-      <div className="sidebar-brand drag-region">
-        <span className="brand-mark">◆</span>
-        <span className="brand-name">CaoGen</span>
+      <div className="sidebar-brand drag-region" data-brand="caogen">
+        <span className="brand-mark" data-brand-logo="caogen-app-icon" aria-hidden="true">
+          <img src={APP_ICON_URL} alt="" />
+        </span>
+        <span className="brand-name">{APP_NAME}</span>
         <button
           type="button"
           className="sidebar-collapse-toggle no-drag"
@@ -595,7 +598,6 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
       <div className="sidebar-scroll">
         {isInitialEmpty ? (
           <div className="sidebar-empty-hero">
-            <div className="sidebar-empty-mark">◆</div>
             <div className="sidebar-empty-title">{t('sidebarEmptyHeroTitle')}</div>
             <button className="btn btn-primary btn-sm" onClick={() => setShowNewSession(true)}>
               {t('newSession')}

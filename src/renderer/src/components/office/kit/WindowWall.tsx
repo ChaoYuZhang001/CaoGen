@@ -32,7 +32,7 @@ const WINDOW_COUNT = 90
 const dummy = new Object3D()
 const skyTop = new Color('#0a1226')
 const skyBottom = new Color('#243a5e')
-const horizonGlow = new Color('#8fe9ff')
+const horizonGlow = new Color('#71879a')
 
 // 确定性伪随机(避免每次渲染抖动)
 function hash(n: number): number {
@@ -56,7 +56,7 @@ export default function WindowWall({
   const windowsRef = useRef<InstancedMesh>(null)
   const mullionXs = useMemo(() => (minimalFrames ? MINIMAL_MULLION_XS : FULL_MULLION_XS), [minimalFrames])
 
-  // 天空渐变几何:按顶点 y 生成竖向渐变 + 近地平线青色辉光
+  // 天空渐变几何:按顶点 y 生成竖向渐变 + 近地平线灰蓝辉光
   const skyGeo = useMemo(() => {
     const skyWidth = minimalFrames ? WALL_W + 2.4 : WALL_W + 8
     const skyHeight = minimalFrames ? 1.35 : WALL_H + 6
@@ -183,8 +183,8 @@ export default function WindowWall({
       <instancedMesh ref={windowsRef} args={[undefined, undefined, Math.max(1, cityData.windows.length)]}>
         <planeGeometry args={[1, 1]} />
         <meshStandardMaterial
-          color="#ffd98f"
-          emissive="#ffd98f"
+          color="#8fa0ac"
+          emissive="#8fa0ac"
           emissiveIntensity={minimalFrames ? 0.72 : 1.8}
           transparent={minimalFrames}
           opacity={minimalFrames ? 0.46 : 1}
@@ -198,7 +198,7 @@ export default function WindowWall({
           <mesh position={[0, WALL_H / 2, GLASS_Z]}>
             <planeGeometry args={[WALL_W, WALL_H]} />
             <meshStandardMaterial
-              color="#9fd8e6"
+              color="#8294a3"
               transparent
               opacity={0.12}
               metalness={0.6}
@@ -228,13 +228,13 @@ export default function WindowWall({
         </>
       )}
 
-      {/* 底部青色氛围灯带(点缀,发光) */}
+      {/* 底部钢灰氛围灯带(点缀,发光) */}
       <mesh position={[0, 0.11, GLASS_Z + 0.02]}>
         <boxGeometry args={[minimalFrames ? WALL_W * 0.55 : WALL_W, minimalFrames ? 0.014 : 0.03, 0.02]} />
         <meshStandardMaterial
-          color="#8fe9ff"
-          emissive="#8fe9ff"
-          emissiveIntensity={minimalFrames ? 0.32 : 2.2}
+          color="#71879a"
+          emissive="#71879a"
+          emissiveIntensity={minimalFrames ? 0.18 : 0.72}
           transparent={minimalFrames}
           opacity={minimalFrames ? 0.28 : 1}
           toneMapped={false}

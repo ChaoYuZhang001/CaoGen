@@ -5,9 +5,8 @@
  * 名称是用户自定义自由文本,按关键词大小写不敏感匹配;命中不了给中性灰皮肤。
  * 说明:仅用品牌线索映射出的抽象配色 + 短代码徽记,不内置任何厂商商标图形。
  *
- * 配色遵循办公区规范(主黑副白、克制):
- *  - bodyColor 为机器人外壳主色(非发光),饱和度适中避免刺眼;
- *  - accent 为 visor、胸牌、状态条等强调色。
+ * 配色遵循办公区规范:机器人保持统一银黑机身,厂商身份只进铭牌/logo。
+ * 避免把 provider/model 映射成整套彩色"衣服",否则办公区会重新变花。
  */
 
 export interface VendorSkin {
@@ -23,31 +22,45 @@ export interface VendorSkin {
   label: string
 }
 
+const NEUTRAL_BODY = '#17202a'
+const NEUTRAL_SHELL = '#d7dee5'
+const NEUTRAL_ACCENT = '#59dcff'
+
+function neutralSkin(emblem: string, label: string): VendorSkin {
+  return {
+    bodyColor: NEUTRAL_BODY,
+    shellColor: NEUTRAL_SHELL,
+    accent: NEUTRAL_ACCENT,
+    emblem,
+    label
+  }
+}
+
 /**
  * 已知厂商皮肤表(named 导出,便于外部枚举/测试)。
- * emblem 使用抽象短代码,不使用官方 logo、吉祥物或商标图形。
+ * emblem 是兜底短代码;真实厂商识别由 ProviderLogoBadge 贴到胸牌/铭牌上。
  */
 export const VENDOR_SKINS: Record<string, VendorSkin> = {
-  anthropic: { bodyColor: '#a96b54', shellColor: '#e8c6b4', accent: '#ff9d73', emblem: 'AN', label: 'Anthropic' },
-  openai: { bodyColor: '#1f6f5c', shellColor: '#c7ece2', accent: '#3fd0a8', emblem: 'OA', label: 'OpenAI' },
-  google: { bodyColor: '#3b6fe0', shellColor: '#d2def8', accent: '#6ea8ff', emblem: 'GO', label: 'Google' },
-  qwen: { bodyColor: '#6a4fd0', shellColor: '#ded7ff', accent: '#a98fff', emblem: 'QW', label: 'Qwen' },
-  deepseek: { bodyColor: '#4d6bfe', shellColor: '#d7ddff', accent: '#7d8dff', emblem: 'DS', label: 'DeepSeek' },
-  doubao: { bodyColor: '#2865a8', shellColor: '#d6e9ff', accent: '#5aa8ff', emblem: 'DB', label: 'Doubao' },
-  baidu: { bodyColor: '#2f55c8', shellColor: '#d8e2ff', accent: '#4f7dff', emblem: 'BD', label: 'ERNIE' },
-  kimi: { bodyColor: '#16b8a6', shellColor: '#caf5ee', accent: '#5fe6d4', emblem: 'KM', label: 'Kimi' },
-  zhipu: { bodyColor: '#3859ff', shellColor: '#d3dcff', accent: '#7d95ff', emblem: 'GL', label: '智谱 GLM' },
-  minimax: { bodyColor: '#b84272', shellColor: '#ffd8e8', accent: '#ff7db0', emblem: 'MM', label: 'MiniMax' },
-  spark: { bodyColor: '#b54840', shellColor: '#ffd8d4', accent: '#ff6b5f', emblem: 'XF', label: '讯飞星火' },
-  hunyuan: { bodyColor: '#24769a', shellColor: '#d2f2ff', accent: '#48d1ff', emblem: 'HY', label: '腾讯混元' },
-  yi: { bodyColor: '#628c42', shellColor: '#e2f7d5', accent: '#9de36b', emblem: 'YI', label: '零一万物' },
-  baichuan: { bodyColor: '#3183a6', shellColor: '#d5f1ff', accent: '#6fd6ff', emblem: 'BC', label: '百川' },
-  sensenova: { bodyColor: '#9b7527', shellColor: '#fff0c8', accent: '#ffcf5a', emblem: 'SN', label: '商汤日日新' },
-  stepfun: { bodyColor: '#7353bd', shellColor: '#e5d9ff', accent: '#b18cff', emblem: 'SF', label: '阶跃星辰' },
-  grok: { bodyColor: '#4a4f57', shellColor: '#d7dbe0', accent: '#b0b6c0', emblem: 'GX', label: 'Grok' },
-  meta: { bodyColor: '#0866ff', shellColor: '#d2e5ff', accent: '#5b9dff', emblem: 'MT', label: 'Meta' },
-  mistral: { bodyColor: '#b95c25', shellColor: '#ffd8be', accent: '#ff8a52', emblem: 'MS', label: 'Mistral' },
-  default: { bodyColor: '#5b6472', shellColor: '#d6e0ea', accent: '#8fe9ff', emblem: 'AG', label: 'Agent' }
+  anthropic: neutralSkin('AN', 'Anthropic'),
+  openai: neutralSkin('OA', 'OpenAI'),
+  google: neutralSkin('GO', 'Google'),
+  qwen: neutralSkin('QW', 'Qwen'),
+  deepseek: neutralSkin('DS', 'DeepSeek'),
+  doubao: neutralSkin('DB', 'Doubao'),
+  baidu: neutralSkin('BD', 'ERNIE'),
+  kimi: neutralSkin('KM', 'Kimi'),
+  zhipu: neutralSkin('GL', '智谱 GLM'),
+  minimax: neutralSkin('MM', 'MiniMax'),
+  spark: neutralSkin('XF', '讯飞星火'),
+  hunyuan: neutralSkin('HY', '腾讯混元'),
+  yi: neutralSkin('YI', '零一万物'),
+  baichuan: neutralSkin('BC', '百川'),
+  sensenova: neutralSkin('SN', '商汤日日新'),
+  stepfun: neutralSkin('SF', '阶跃星辰'),
+  grok: neutralSkin('GX', 'Grok'),
+  meta: neutralSkin('MT', 'Meta'),
+  mistral: neutralSkin('MS', 'Mistral'),
+  default: neutralSkin('AG', 'Agent')
 }
 
 /** 名称关键词 → 皮肤键;顺序即优先级 */

@@ -77,7 +77,7 @@ try {
     {
       prompt: '审查高风险 TypeScript 变更并给出修复建议',
       requestedTasks: ['review', 'reasoning'],
-      strategy: 'balanced',
+      strategy: 'speed',
       crossValidation: true,
       providers: [
         { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', models: ['deepseek-chat', 'deepseek-reasoner'] },
@@ -88,6 +88,7 @@ try {
   )
   assertEqual(routed.ok, true)
   assert(routed.output.includes('crossValidationPlan'), 'route_model should return cross validation plan')
+  assert(routed.output.includes('"strategy": "speed"'), 'route_model should accept and preserve the speed strategy')
 
   const notify = await toolsModule.executeCodingTool(
     'china_notify',

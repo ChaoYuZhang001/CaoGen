@@ -44,6 +44,22 @@ export interface ProjectContextReadResult {
   prompt: string
 }
 
+export type ProjectModelDispatchStrategy = 'cost' | 'speed' | 'balanced' | 'quality'
+
+export interface ProjectModelDispatchTarget {
+  providerId?: string
+  model?: string
+  source: string
+}
+
+export interface ProjectModelDispatchHints {
+  strategy?: ProjectModelDispatchStrategy
+  strategySource?: string
+  lowCost?: ProjectModelDispatchTarget
+  strongReasoning?: ProjectModelDispatchTarget
+  review?: ProjectModelDispatchTarget
+}
+
 interface ReadTextResult {
   text: string
   bytes: number
@@ -94,6 +110,56 @@ export async function buildProjectContextSystemAppend(projectPath: string): Prom
   return buildProjectContextSystemAppendSync(projectPath)
 }
 
+export function buildProjectScopedPromptSync(projectPath: string, prompt: string): string {
+  const userPrompt = prompt.trim()
+  const projectContext = buildProjectContextSystemAppendSync(projectPath).trim()
+  if (!projectContext) return userPrompt
+  return [
+    '# CaoGen 项目规则',
+    '以下内容来自当前项目的 caogen.md/.caogen.md/README.md。除非用户本轮明确覆盖,必须优先遵守这些项目规则。',
+    projectContext,
+    '# 当前用户请求',
+    userPrompt
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+export function readProjectModelDispatchHintsSync(projectPath: string): ProjectModelDispatchHints {
+  try {
+    return parseProjectModelDispatchHints(readProjectContext(projectPath).content)
+  } catch (err) {
+    console.error('[caogen] 读取项目模型调度策略失败:', err)
+    return {}
+  }
+}
+
+export function parseProjectModelDispatchHints(content: string): ProjectModelDispatchHints {
+  const section = extractProjectSection(content, ['模型调度策略', 'model dispatch', 'model routing'])
+  if (!section.trim()) return {}
+  const hints: ProjectModelDispatchHints = {}
+  for (const rawLine of section.split(/\r?\n/)) {
+    const line = rawLine.replace(/^[-*]\s*/, '').trim()
+    if (!line) continue
+    const strategy = parseProjectDispatchStrategy(line)
+    if (strategy && !hints.strategy) {
+      hints.strategy = strategy
+      hints.strategySource = line
+    }
+    const target = parseDispatchTarget(line)
+    if (!target) continue
+    const lower = line.toLowerCase()
+    if (!hints.review && hasAny(lower, ['审查', '复核', 'review'])) {
+      hints.review = { ...target, source: line }
+    } else if (!hints.strongReasoning && hasAny(lower, ['复杂', '强推理', '架构', '规划', 'complex', 'reasoning', 'architecture'])) {
+      hints.strongReasoning = { ...target, source: line }
+    } else if (!hints.lowCost && hasAny(lower, ['简单', '快速', '轻量', '低成本', 'simple', 'quick', 'fast', 'low-cost', 'low cost'])) {
+      hints.lowCost = { ...target, source: line }
+    }
+  }
+  return hints
+}
+
 export function writeProjectContext(projectPath: string, content: string): ProjectContextReadResult {
   if (typeof content !== 'string') throw new Error('caogen.md 内容必须是字符串')
   const projectRoot = resolveProjectRoot(projectPath)
@@ -114,9 +180,20 @@ export function generateProjectContextTemplate(
       : '- install: \n- dev: \n- build: \n- test: '
   const stack = detected.techStack.length > 0 ? detected.techStack.join(' + ') : '请填写主要技术栈'
   return [
-    '# 项目概述',
-    `技术栈: ${stack}`,
-    '架构说明: ',
+    '# 项目提示词',
+    '- 本项目中 Agent 的默认工作方式: ',
+    '- 回答语言 / 风格: ',
+    '- 需要长期遵守的业务边界: ',
+    '',
+    '# 项目背景',
+    '- 项目目标: ',
+    '- 主要用户 / 使用场景: ',
+    '- 当前阶段: ',
+    '',
+    '# 技术栈与架构',
+    `- 技术栈: ${stack}`,
+    '- 关键模块: ',
+    '- 数据 / 状态来源: ',
     '',
     '# 代码规范',
     '- 命名: ',
@@ -126,14 +203,41 @@ export function generateProjectContextTemplate(
     '# 常用命令',
     commandLines,
     '',
-    '# 测试要求',
-    '- 单测规范: ',
-    '- 覆盖率要求: ',
+    '# 测试命令',
+    '- 默认测试命令: ',
+    '- 专项 smoke: ',
+    '- 回归门禁: ',
     '',
-    '# 注意事项',
-    '- 禁改文件: ',
-    '- 特殊逻辑: ',
-    '- 部署风险: ',
+    '# 构建命令',
+    '- 默认构建命令: ',
+    '- 发布前检查: ',
+    '',
+    '# 禁止修改目录',
+    '- ',
+    '',
+    '# 工作区隔离策略',
+    '- 默认是否使用隔离 worktree: ',
+    '- 可直接修改的范围: ',
+    '- 需要用户确认的范围: ',
+    '',
+    '# 模型调度策略',
+    '- 简单任务: ',
+    '- 复杂任务: ',
+    '- 审查 / 复核任务: ',
+    '- 成本 / 速度 / 质量偏好: ',
+    '',
+    '# 项目记忆',
+    '- 已确认事实: ',
+    '- 重要文件 / 入口: ',
+    '- 不要重复尝试: ',
+    '',
+    '# 历史决策',
+    '- ',
+    '',
+    '# 交付验收',
+    '- 验证命令: ',
+    '- 完成标准: ',
+    '- 风险说明: ',
     ''
   ].join('\n')
 }
@@ -273,7 +377,15 @@ function renderProjectContextPrompt(input: {
   content: string
   detected: ProjectDetectedStack
 }): string {
-  const parts: string[] = []
+  const parts: string[] = [
+    [
+      '# 项目身份',
+      `项目根目录: ${input.projectRoot}`,
+      input.source
+        ? `项目规则文件: ${input.source.fileName}`
+        : '项目规则文件: 未找到 caogen.md/.caogen.md;本轮仅使用自动识别的项目栈与用户请求。'
+    ].join('\n')
+  ]
   if (input.content.trim()) {
     parts.push(
       [
@@ -290,6 +402,61 @@ function renderProjectContextPrompt(input: {
   if (detected) parts.push(detected)
   const prompt = parts.join('\n\n').trim()
   return prompt.length > MAX_PROMPT_CHARS ? `${prompt.slice(0, MAX_PROMPT_CHARS)}\n\n[项目上下文已截断]` : prompt
+}
+
+function extractProjectSection(content: string, names: string[]): string {
+  const lines = content.split(/\r?\n/)
+  const out: string[] = []
+  let active = false
+  for (const line of lines) {
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/)
+    if (heading) {
+      const title = heading[1].trim().toLowerCase()
+      active = names.some((name) => title.includes(name.toLowerCase()))
+      continue
+    }
+    if (active) out.push(line)
+  }
+  return out.join('\n')
+}
+
+function parseProjectDispatchStrategy(line: string): ProjectModelDispatchStrategy | undefined {
+  const lower = line.toLowerCase()
+  if (hasAny(lower, ['成本优先', '低成本优先', 'cost-first', 'cost first', 'strategy: cost', 'strategy=cost'])) return 'cost'
+  if (hasAny(lower, ['质量优先', '强推理优先', 'quality-first', 'quality first', 'strategy: quality', 'strategy=quality'])) {
+    return 'quality'
+  }
+  if (hasAny(lower, ['速度优先', 'speed-first', 'speed first', 'strategy: speed', 'strategy=speed'])) return 'speed'
+  if (hasAny(lower, ['均衡', 'balanced', 'strategy: balanced', 'strategy=balanced'])) return 'balanced'
+  return undefined
+}
+
+function parseDispatchTarget(line: string): Omit<ProjectModelDispatchTarget, 'source'> | undefined {
+  const providerId = matchTargetValue(line, ['provider', 'providerId', '厂商'])
+  const model = matchTargetValue(line, ['model', '模型'])
+  if (providerId || model) return cleanTarget({ providerId, model })
+  const slash = line.match(/(?:^|[\s:：])([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.:@-]+)/)
+  if (slash) return cleanTarget({ providerId: slash[1], model: slash[2] })
+  return undefined
+}
+
+function matchTargetValue(line: string, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const match = line.match(new RegExp(`${escapeRegExp(key)}\\s*[:=：]\\s*([^\\s,，;；]+)`, 'i'))
+    if (match?.[1]) return match[1]
+  }
+  return undefined
+}
+
+function cleanTarget(target: { providerId?: string; model?: string }): Omit<ProjectModelDispatchTarget, 'source'> | undefined {
+  const providerId = target.providerId?.trim()
+  const model = target.model?.trim()
+  if (!providerId && !model) return undefined
+  return { providerId, model }
+}
+
+function hasAny(text: string, needles: string[]): boolean {
+  return needles.some((needle) => text.includes(needle.toLowerCase()))
 }
 
 function renderDetectedStack(detected: ProjectDetectedStack): string {

@@ -2,7 +2,7 @@
 
 > 北极星 N1:任一主流 Agent 深度用户 **30 分钟内**在 CaoGen 跑通日常主链路,资产零丢失。
 > 本文是可复现的计时实测脚本。fixture 由 `scripts/n1-fixture.mjs` 生成,模拟一个
-> 同时用 Codex / Cursor / Cline / Aider 的深度用户的项目资产。
+> 同时保留多套既有 AI 工具配置的深度用户项目资产。
 
 ## 为什么需要真人跑
 
@@ -13,7 +13,7 @@
 ## 准备(不计时)
 
 ```bash
-# 1. 生成被测项目(默认 ~/caogen-n1-drill,含竞品资产 + 一个待修 bug)
+# 1. 生成被测项目(默认 ~/caogen-n1-drill,含既有工具资产 + 一个待修 bug)
 node scripts/n1-fixture.mjs
 
 # 2. 启动 CaoGen(开发模式或已安装的包)
@@ -21,7 +21,7 @@ npm run dev
 ```
 
 fixture 内容:
-- **竞品资产**:`AGENTS.md`(Codex)、`.cursorrules` + `.cursor/rules/*.mdc` + `.cursor/mcp.json`(Cursor)、`.clinerules` + `.cline/mcp.json`(Cline)、`CONVENTIONS.md`(Aider)
+- **既有工具资产**:多份规则文件、MCP 配置与项目约定文件
 - **待修 bug**:`src/sum.js` 的 `sum()` 用了减法(应为加法),`npm test` 会失败
 - 已验证迁移向导能扫描到全部 9 个资产(集成测试 T15 + fixture 实扫)
 
@@ -31,7 +31,7 @@ fixture 内容:
 
 | # | 步骤 | 动作 | 完成判据 | 用时 |
 |---|---|---|---|---|
-| 1 | 导入资产 | 设置 → 迁移 → 扫描 `~/caogen-n1-drill` → 全选导入 | CLAUDE.md 出现 Codex/Cursor/Cline/Aider 区块;`.mcp.json` 合入 filesystem+git | ___ |
+| 1 | 导入资产 | 设置 → 迁移 → 扫描 `~/caogen-n1-drill` → 全选导入 | 目标规则文件出现分来源导入区块;`.mcp.json` 合入必要服务 | ___ |
 | 2 | 建会话 | 新建会话,选目录 = fixture,选一个已配 key 的 Provider/引擎 | 进入聊天,顶栏显示项目路径 | ___ |
 | 3 | @文件引用 | 输入框 `@` 引用 `src/sum.js`,问"这个函数对吗" | Agent 读到内容,指出减法 bug | ___ |
 | 4 | 改代码 | 让 Agent 把 `sum` 改成加法 | 工具卡显示 edit_file;文件真被改 | ___ |
@@ -52,7 +52,7 @@ fixture 内容:
 __________________________________________
 需要查文档/求助的地方(N1 要求"无需查文档"):
 __________________________________________
-资产零丢失核对:源工具的 .cursorrules/.clinerules/AGENTS.md 是否被 CaoGen 改动过?(应为否)
+资产零丢失核对:既有工具配置与规则文件是否被 CaoGen 改动过?(应为否)
 __________________________________________
 体感毛刺(不影响完成但别扭的地方):
 __________________________________________
@@ -81,5 +81,5 @@ CAOGEN_N1_MIGRATION_RECORD=/tmp/caogen-n1-result.json npm run test:n1-migration-
 
 ## 留证
 
-建议录屏整个计时过程,连同记录表存档。N1 的最终验收目标是**非项目相关的真实竞品深度用户**
+建议录屏整个计时过程,连同记录表存档。N1 的最终验收目标是**非项目相关的真实同类工具深度用户**
 跑出达标数据 —— 项目方自测达标只是必要条件,不是充分条件。

@@ -42,7 +42,7 @@ try {
     path.join(outDir, 'src', 'main', 'transcript.js')
   ].find((candidate) => existsSync(candidate))
   assert(compiledPath, 'compiled transcript.js should exist')
-  const { TranscriptWriter } = await import(pathToFileURL(compiledPath).href)
+  const { TranscriptWriter, eventReceiptsFile } = await import(pathToFileURL(compiledPath).href)
 
   const writer = new TranscriptWriter()
   writer.next(user('u-1', 'first prompt'))
@@ -57,7 +57,7 @@ try {
 
   const preview = writer.planRestore('cp-2')
   assert(preview.ok, preview.reason)
-  assertEqual(preview.removeFromSeq, 10)
+  assertEqual(preview.removeFromSeq, 6)
   assertEqual(preview.removedEntries, 4)
 
   const restored = writer.restore('cp-2', {
@@ -68,17 +68,49 @@ try {
     chatRemovedEntries: preview.removedEntries
   })
   assert(restored.plan.ok, restored.plan.reason)
-  assertEqual(restored.entries.map((entry) => entry.seq).join(','), '5,6,7,8,14')
+  assertEqual(restored.entries.map((entry) => entry.seq).join(','), '1,2,3,4,10')
   assertEqual(restored.entries[restored.entries.length - 1].event.kind, 'checkpoint-restore')
 
   writer.next(user('u-3', 'third prompt'))
   const entries = writer.readAll()
-  assertEqual(entries.map((entry) => entry.seq).join(','), '5,6,7,8,14,15')
+  assertEqual(entries.map((entry) => entry.seq).join(','), '1,2,3,4,10,11')
+  assert(entries.every((entry) => entry.eventId), 'new transcript entries must carry eventId')
+  assertEqual(new Set(entries.map((entry) => entry.eventId)).size, entries.length)
+  assertEqual(new Set(entries.map((entry) => entry.streamId)).size, 1)
 
   const transcriptFile = path.join(userData, 'transcripts', 'sdk-restore.jsonl')
   const lines = readFileSync(transcriptFile, 'utf8').trim().split('\n')
   assertEqual(lines.length, 6)
   assert(lines.every((line) => JSON.parse(line).seq), 'transcript file should contain valid JSONL')
+  assert(lines.every((line) => JSON.parse(line).eventId), 'transcript JSONL should persist event identity')
+
+  const receipts = readFileSync(eventReceiptsFile('sdk-restore'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assertEqual(receipts.length, 11)
+  assertEqual(new Set(receipts.map((receipt) => receipt.eventId)).size, receipts.length)
+  assert(receipts.every((receipt) => receipt.streamId === entries[0].streamId), 'receipt stream lineage should stay stable')
+
+  const resumed = new TranscriptWriter('sdk-restore', 25)
+  const resumedEntry = resumed.nextEntry({ kind: 'status', status: 'idle' })
+  assertEqual(resumedEntry.seq, 26)
+  assertEqual(resumedEntry.streamId, entries[0].streamId)
+
+  const redacted = new TranscriptWriter()
+  redacted.next({ kind: 'init', sdkSessionId: 'sdk-redacted-receipt' })
+  redacted.next({
+    kind: 'permission-request',
+    request: {
+      requestId: 'permission-secret',
+      toolUseId: 'tool-secret',
+      toolName: 'bash',
+      input: { command: 'echo SHOULD_NOT_PERSIST' }
+    }
+  })
+  const redactedReceipt = readFileSync(eventReceiptsFile('sdk-redacted-receipt'), 'utf8')
+  assert(redactedReceipt.includes('permission-secret'), 'receipt should retain correlation ids')
+  assert(!redactedReceipt.includes('SHOULD_NOT_PERSIST'), 'receipt must not persist raw tool input')
 
   const childWriter = new TranscriptWriter()
   childWriter.next({ kind: 'init', sdkSessionId: 'sdk-subagent-result' })

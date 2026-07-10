@@ -74,6 +74,17 @@ const DICT: Dict = {
   toggleCompactChat: { zh: '切换紧凑聊天密度', en: 'Toggle compact chat density' },
   resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
   collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
+  deskRailLabel: { zh: '工作区控制条', en: 'Workspace controls' },
+  toggleDeskSummary: { zh: '切换项目摘要', en: 'Toggle project summary' },
+  openDeskTools: { zh: '打开工具抽屉', en: 'Open tool drawer' },
+  deskToolDrawer: { zh: '工作区工具', en: 'Workspace tools' },
+  showDeskPanel: { zh: '显示工具区', en: 'Show tool panel' },
+  hideDeskPanel: { zh: '隐藏工具区', en: 'Hide tool panel' },
+  deskReview: { zh: '审查', en: 'Review' },
+  deskTerminal: { zh: '终端', en: 'Terminal' },
+  deskBrowser: { zh: '浏览器', en: 'Browser' },
+  deskFiles: { zh: '文件', en: 'Files' },
+  deskSideChat: { zh: '侧边聊天', en: 'Side chat' },
   providerOfficial: { zh: '未选择 Provider', en: 'No Provider selected' },
   unknownProvider: { zh: '未知 Provider', en: 'Unknown provider' },
   provider: { zh: '厂商', en: 'Provider' },
@@ -89,10 +100,47 @@ const DICT: Dict = {
   turnErrorPlain: { zh: '本轮异常', en: 'Turn error' },
   cumulative: { zh: '累计', en: 'Total' },
   routingTitle: { zh: '智能调度决策', en: 'Smart routing decision' },
+  routingDetails: { zh: '查看调度详情', en: 'View routing details' },
+  routingStrategy: { zh: '策略', en: 'Strategy' },
+  routingStrategyQuality: { zh: '质量优先', en: 'Quality first' },
+  routingStrategyCost: { zh: '成本优先', en: 'Cost first' },
+  routingStrategySpeed: { zh: '速度优先', en: 'Speed first' },
+  routingStrategyBalanced: { zh: '均衡', en: 'Balanced' },
+  routingTasks: { zh: '任务', en: 'Task' },
+  routingTaskChat: { zh: '通用对话', en: 'General chat' },
+  routingTaskCoding: { zh: '代码', en: 'Coding' },
+  routingTaskReasoning: { zh: '推理', en: 'Reasoning' },
+  routingTaskVision: { zh: '视觉', en: 'Vision' },
+  routingTaskToolUse: { zh: '工具调用', en: 'Tool use' },
+  routingTaskLongContext: { zh: '长上下文', en: 'Long context' },
+  routingTaskReview: { zh: '审查', en: 'Review' },
+  routingTaskSummarization: { zh: '总结', en: 'Summarization' },
+  routingComplexitySimple: { zh: '简单任务', en: 'Simple task' },
+  routingComplexityMedium: { zh: '中等任务', en: 'Medium task' },
+  routingComplexityComplex: { zh: '复杂任务', en: 'Complex task' },
+  routingRisk: { zh: '风险', en: 'Risk' },
+  routingRiskLow: { zh: '低', en: 'Low' },
+  routingRiskMedium: { zh: '中', en: 'Medium' },
+  routingRiskHigh: { zh: '高', en: 'High' },
+  routingCandidates: { zh: '候选模型', en: 'Candidates' },
+  routingEstimate: { zh: '本轮估算', en: 'Turn estimate' },
+  routingReliability: { zh: '可靠性', en: 'Reliability' },
+  routingLatency: { zh: '历史延迟', en: 'Historical latency' },
+  routingRemainingBudget: { zh: '剩余预算', en: 'Remaining budget' },
+  routingReviewModels: { zh: '复核模型', en: 'Review models' },
+  routingAlternatives: { zh: '靠前备选', en: 'Top alternatives' },
+  routingProviderSwitched: { zh: '跨厂商', en: 'Provider switched' },
+  routingManualOverride: { zh: '规则命中', en: 'Rule matched' },
+  routingBudgetDowngraded: { zh: '预算降级', en: 'Budget downgrade' },
   failoverTitle: { zh: '厂商故障自动切换', en: 'Automatic provider failover' },
   failoverText: {
     zh: '{from} 故障({reason}),已切换 → {to},自动重试中',
     en: '{from} failed ({reason}), switched → {to}, retrying automatically'
+  },
+  keyFailoverTitle: { zh: 'Provider 密钥自动切换', en: 'Automatic provider key failover' },
+  keyFailoverText: {
+    zh: '{provider} 密钥 {from} 失败({reason}),已切换 → {to},自动重试中',
+    en: '{provider} key {from} failed ({reason}), switched → {to}, retrying automatically'
   },
   // 输入区
   composerQueuedPlaceholder: {
@@ -109,10 +157,11 @@ const DICT: Dict = {
   allow: { zh: '允许', en: 'Allow' },
   deny: { zh: '拒绝', en: 'Deny' },
   // 欢迎页
-  welcomeSub: { zh: '多会话并行的桌面 AI 编码 Agent', en: 'Parallel multi-session desktop AI coding agent' },
+  welcomeSub: { zh: '多厂商 AI 工作桌面', en: 'Multi-vendor AI work desktop' },
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
   welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
   welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
+  welcomeToolRequiresSession: { zh: '先发起会话后即可打开该工具。', en: 'Start a session to open this tool.' },
   welcomePickProject: { zh: '选择项目', en: 'Choose project' },
   welcomeNeedProject: { zh: '请先选择项目目录', en: 'Pick a project folder first' },
   welcomeBrowse: { zh: '浏览…', en: 'Browse…' },
@@ -185,12 +234,25 @@ const DICT: Dict = {
   officeMetricCompleted: { zh: '完成', en: 'Done' },
   officeMetricFailed: { zh: '异常', en: 'Failed' },
   officeMetricPackets: { zh: '任务流', en: 'Task flow' },
+  officeMetricRouted: { zh: '调度', en: 'Routes' },
+  officeMetricFailover: { zh: '切换', en: 'Failover' },
+  officeMetricCost: { zh: '成本', en: 'Cost' },
+  officeMetricWorkspace: { zh: '文件', en: 'Files' },
+  officeMetricGit: { zh: 'Git', en: 'Git' },
+  officeMetricIsolated: { zh: '隔离', en: 'Isolated' },
   officePresetOverview: { zh: '总览', en: 'Overview' },
   officePresetAgent: { zh: 'Agent', en: 'Agent' },
   officePresetFacilities: { zh: '设施', en: 'Facilities' },
   officePresetIncidents: { zh: '异常', en: 'Incidents' },
   officeSelectedAgent: { zh: '当前 Agent', en: 'Selected Agent' },
   officeOpenSession: { zh: '进入会话', en: 'Open Session' },
+  officeRouting: { zh: '路由', en: 'Routing' },
+  officeRoutingBasis: { zh: '依据', en: 'Basis' },
+  officeFailover: { zh: '切换', en: 'Failover' },
+  officeBudget: { zh: '预算', en: 'Budget' },
+  officeDuration: { zh: '耗时', en: 'Duration' },
+  officeWorkspace: { zh: '工作区', en: 'Workspace' },
+  officeFiles: { zh: '文件', en: 'Files' },
   officeSelectedFacility: { zh: '当前设施', en: 'Selected Facility' },
   officeFacilityHydration: { zh: '茶水间', en: 'Hydration' },
   officeFacilityRestroom: { zh: '卫生间', en: 'Restroom' },
@@ -338,8 +400,27 @@ const DICT: Dict = {
   previewLoading: { zh: '正在准备预览…', en: 'Preparing preview…' },
   previewEmpty: { zh: '从文件面板选择一个文件进行预览。', en: 'Choose a file from Files to preview.' },
   sendToAgent: { zh: '发给 Agent', en: 'Send to Agent' },
+  previewSentToAgent: { zh: '预览内容已发给 Agent。', en: 'Preview sent to Agent.' },
+  previewSendFailed: { zh: '预览发送失败', en: 'Preview send failed' },
+  sendCurrentPreviewUnit: { zh: '发送当前页/表', en: 'Send current page/sheet' },
   previewAnnotationPlaceholder: { zh: '记录这份产物里的问题、页码、行列或复验线索。', en: 'Note the issue, page, row, column or verification clue in this artifact.' },
   previewNoAnnotations: { zh: '暂无产物批注', en: 'No preview annotations yet' },
+  previewOfficeModeLabel: { zh: 'Office 预览模式', en: 'Office preview mode' },
+  previewVisualMode: { zh: '视觉', en: 'Visual' },
+  previewStructureMode: { zh: '结构', en: 'Structure' },
+  previewPreviousUnit: { zh: '上一页或工作表', en: 'Previous page or sheet' },
+  previewNextUnit: { zh: '下一页或工作表', en: 'Next page or sheet' },
+  previewUnitSelector: { zh: '文档页、工作表或幻灯片', en: 'Document page, sheet or slide' },
+  previewVisualLoading: { zh: '正在生成系统文档预览…', en: 'Generating system document preview…' },
+  previewVisualUnavailable: { zh: '视觉快照不可用，已回退到结构视图', en: 'Visual snapshot unavailable; showing structure view' },
+  previewVisualFidelity: {
+    zh: '系统文档预览可能与原应用中的完整原版式存在差异。',
+    en: 'System document preview may differ from the complete layout in the original application.'
+  },
+  previewThumbnailFidelity: {
+    zh: '系统首屏缩略图，不代表完整文档版式。',
+    en: 'System first-page thumbnail; it does not represent the complete document layout.'
+  },
   browserShort: { zh: '◉ 浏览器', en: '◉ Browser' },
   browserPanelTitle: { zh: '内置浏览器', en: 'Browser' },
   browserUrlPlaceholder: { zh: '输入 URL 或域名', en: 'Enter URL or domain' },
@@ -382,26 +463,26 @@ const DICT: Dict = {
   tabControlCenter: { zh: '控制中心', en: 'Control' },
   tabGeneral: { zh: '通用', en: 'General' },
   tabPermissions: { zh: '权限', en: 'Permissions' },
-  tabProject: { zh: '项目', en: 'Project' },
-  tabPersona: { zh: '人设', en: 'Persona' },
+  tabProject: { zh: '项目规则', en: 'Project rules' },
+  tabPersona: { zh: '通用指令', en: 'Global instructions' },
   tabOffice: { zh: '控制室 / 外观', en: 'Control Room / Appearance' },
   tabProviders: { zh: '厂商', en: 'Providers' },
   tabPlugins: { zh: '插件 / 技能', en: 'Plugins / Skills' },
   tabMigrate: { zh: '迁移', en: 'Migrate' },
-  migrateTitle: { zh: '从其他 Agent 一键搬家', en: 'Migrate from other agents' },
+  migrateTitle: { zh: '导入历史工具资产', en: 'Import existing tool assets' },
   migrateHint: {
-    zh: '扫描 Cursor / Codex / Windsurf / Cline / Aider / Copilot / Gemini 等的规则与 MCP 配置。规则注入项目 CLAUDE.md(带来源标注,原文件不动,已有 CLAUDE.md 先备份);MCP 合并进 .mcp.json(同名跳过)。',
-    en: 'Scan rules & MCP configs from Cursor / Codex / Windsurf / Cline / Aider / Copilot / Gemini. Rules are injected into the project CLAUDE.md (source-tagged, originals untouched, existing CLAUDE.md backed up); MCP merges into .mcp.json (name conflicts skipped).'
+    zh: '扫描本机已有的规则与 MCP 配置。规则注入项目规则文件(带来源标注,原文件不动,已有规则文件先备份);MCP 合并进 .mcp.json(同名跳过)。',
+    en: 'Scan existing local rules and MCP configs. Rules are injected into the project rules file (source-tagged, originals untouched, existing rule files backed up); MCP merges into .mcp.json (name conflicts skipped).'
   },
   migrateScan: { zh: '扫描', en: 'Scan' },
   migrateScanning: { zh: '扫描中…', en: 'Scanning…' },
   migrateClaudeNative: {
-    zh: '检测到 Claude Code 原生资产(CLAUDE.md / .claude),CaoGen 直接继承,无需导入',
-    en: 'Claude Code native assets detected (CLAUDE.md / .claude) — inherited directly, no import needed'
+    zh: '检测到本项目已有原生规则资产,CaoGen 直接继承,无需导入',
+    en: 'Native project rule assets detected; CaoGen inherits them directly, no import needed'
   },
   migrateNothing: {
-    zh: '未检测到其他 Agent 的配置资产。',
-    en: 'No assets from other agents detected.'
+    zh: '未检测到可导入的历史配置资产。',
+    en: 'No importable existing config assets detected.'
   },
   migrateKindRules: { zh: '规则', en: 'rules' },
   migrateKindConfig: { zh: '配置', en: 'config' },
@@ -415,6 +496,47 @@ const DICT: Dict = {
   driveMode: { zh: 'CaoGen Drive 档位', en: 'CaoGen Drive mode' },
   defaultProvider: { zh: 'Provider 偏好', en: 'Provider preference' },
   defaultModel: { zh: '模型偏好', en: 'Model preference' },
+  modelRolesSection: { zh: '模型角色偏好', en: 'Model role preferences' },
+  modelRolesHint: {
+    zh: '用于自动调度的角色化偏好。留空时继续由 CaoGen 根据任务、预算和健康状态选择模型。',
+    en: 'Role preferences for automatic routing. Leave empty to let CaoGen choose by task, budget, and health.'
+  },
+  modelRoleProvider: { zh: 'Provider', en: 'Provider' },
+  modelRoleModel: { zh: '模型', en: 'Model' },
+  modelRoleLowCost: { zh: '低成本', en: 'Low cost' },
+  modelRoleStrongReasoning: { zh: '强推理', en: 'Strong reasoning' },
+  modelRoleReview: { zh: '审查', en: 'Review' },
+  modelRoleFallback: { zh: '备用', en: 'Fallback' },
+  noRoleProvider: { zh: '不指定 Provider', en: 'No provider' },
+  noRoleModel: { zh: '不指定模型', en: 'No model' },
+  customRoutingRules: { zh: '自定义调度规则', en: 'Custom routing rules' },
+  customRoutingRulesHint: {
+    zh: '规则按顺序匹配。关键词、任务类型、最低风险和当前策略之间同时满足才命中;未配置的条件不限制。',
+    en: 'Rules match in order. Configured keyword, task, minimum-risk, and active-strategy conditions must all match; blank conditions do not restrict the rule.'
+  },
+  addRoutingRule: { zh: '+ 添加规则', en: '+ Add rule' },
+  routingRuleEnabled: { zh: '启用', en: 'Enabled' },
+  routingRuleName: { zh: '规则名', en: 'Rule name' },
+  routingRuleNamePlaceholder: { zh: '例如:发布审查走强模型', en: 'e.g. Release review uses strong model' },
+  routingRuleMatch: { zh: '匹配关键词', en: 'Match keywords' },
+  routingRuleMatchPlaceholder: {
+    zh: '可选。例如:发布,部署,release,deploy',
+    en: 'Optional, e.g. release,deploy,migration'
+  },
+  routingRuleProvider: { zh: '命中 Provider', en: 'Provider on hit' },
+  routingRuleModel: { zh: '命中模型', en: 'Model on hit' },
+  routingRuleKeywordMode: { zh: '关键词关系', en: 'Keyword relation' },
+  routingRuleKeywordAny: { zh: '任一关键词命中', en: 'Any keyword' },
+  routingRuleKeywordAll: { zh: '全部关键词命中', en: 'All keywords' },
+  routingRuleWhenStrategy: { zh: '生效策略', en: 'Active strategy' },
+  routingRuleAnyStrategy: { zh: '任意策略', en: 'Any strategy' },
+  routingRuleMinRisk: { zh: '最低风险', en: 'Minimum risk' },
+  routingRuleAnyRisk: { zh: '任意风险', en: 'Any risk' },
+  routingRuleTaskKinds: { zh: '任务类型', en: 'Task types' },
+  routingRuleTaskKindsHint: {
+    zh: '不选表示不限制;选择多个时命中任一推断任务类型即可。',
+    en: 'Leave empty for no restriction; when several are selected, any inferred task type can match.'
+  },
   schedulerStrategy: { zh: '自动调度策略', en: 'Scheduler Strategy' },
   failoverEnabled: { zh: '厂商故障自动切换(任务不中断)', en: 'Auto failover across providers' },
   failoverHint: {
@@ -463,10 +585,10 @@ const DICT: Dict = {
     en: 'Off by default. When enabled, gui_* tools still require per-action approval or a 5 minute temporary grant from the permission prompt.'
   },
   allowTemporary: { zh: '允许 5 分钟', en: 'Allow 5 min' },
-  personaLabel: { zh: '自定义人设 / 系统提示词追加', en: 'Custom persona / system prompt append' },
+  personaLabel: { zh: '通用人设 / 系统提示词追加', en: 'Global persona / system prompt append' },
   personaHint: {
-    zh: '追加到内置提示词之后,用于设定语气、约束、专长等。',
-    en: 'Appended after the built-in prompt — set tone, constraints, expertise.'
+    zh: '追加到所有项目的内置提示词之后;项目专属规则请到“项目规则”页编辑 caogen.md。',
+    en: 'Appended after the built-in prompt for every project; edit per-project caogen.md rules in Project rules.'
   },
   personaPlaceholder: {
     zh: '例如:你是一位严谨的 Rust 专家,回答简洁,总用中文。',
@@ -493,8 +615,18 @@ const DICT: Dict = {
     zh: '尚未配置可用 Provider。新建会话前请先添加并填写 API key。',
     en: 'No usable Provider is configured. Add one with an API key before starting a session.'
   },
-  healthOkTip: { zh: '健康 · 成功 {s} 失败 {f}', en: 'Healthy · {s} succeeded, {f} failed' },
-  healthBadTip: { zh: '异常 · 连续失败 {n}', en: 'Unhealthy · {n} consecutive failures' },
+  providerProbe: { zh: '检测', en: 'Probe' },
+  providerProbing: { zh: '检测中…', en: 'Probing…' },
+  providerProbeOk: {
+    zh: '连通性正常 · 获取 {n} 个模型 · {latencyMs}ms',
+    en: 'Reachable · fetched {n} models · {latencyMs}ms'
+  },
+  providerProbeFailed: {
+    zh: '连通性异常 · {message}',
+    en: 'Connection failed · {message}'
+  },
+  healthOkTip: { zh: '健康 · 成功 {s} 失败 {f} · 最近延迟 {latencyMs}ms', en: 'Healthy · {s} succeeded, {f} failed · latest latency {latencyMs}ms' },
+  healthBadTip: { zh: '异常 · 连续失败 {n} · {error}', en: 'Unhealthy · {n} consecutive failures · {error}' },
   officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
   modelsCount: { zh: '{n} 个模型', en: '{n} models' },
   // Provider 编辑器
@@ -515,6 +647,30 @@ const DICT: Dict = {
   namePlaceholder: { zh: '例如:公司网关 / OpenRouter', en: 'e.g. Company gateway / OpenRouter' },
   baseUrlLabel: { zh: 'Base URL(按所选引擎)', en: 'Base URL (matches selected engine)' },
   apiKeyLabel: { zh: 'API 密钥', en: 'API key' },
+  apiKeyLabelPrimary: { zh: '主 API 密钥', en: 'Primary API key' },
+  apiKeyNameLabel: { zh: '密钥名称', en: 'Key name' },
+  apiKeyNamePlaceholder: { zh: '例如:主账号 / 备用额度 / 中转站 A', en: 'e.g. Primary / Backup / Relay A' },
+  apiKeyListLabel: { zh: '已保存密钥', en: 'Saved keys' },
+  apiKeyCountLabel: { zh: '{n} 个可用密钥', en: '{n} usable keys' },
+  apiKeyActive: { zh: '活动', en: 'Active' },
+  apiKeyDisabled: { zh: '禁用', en: 'Disabled' },
+  apiKeyRemove: { zh: '删除', en: 'Remove' },
+  apiKeyLastUsed: { zh: '上次使用:{time}', en: 'Last used: {time}' },
+  apiKeyNeverUsed: { zh: '尚未使用', en: 'Never used' },
+  apiKeyLastFailure: {
+    zh: '最近失败:{reason} · {time}',
+    en: 'Last failure: {reason} · {time}'
+  },
+  officeKeyFailover: { zh: '密钥接管', en: 'Key failover' },
+  additionalApiKeysLabel: { zh: '新增备用 API Key', en: 'Add backup API keys' },
+  additionalApiKeysHint: {
+    zh: '每行一个,格式可写「名称=sk-...」或直接写 key。保存后只显示名称和状态,不会回显明文。',
+    en: 'One per line. Use "label=sk-..." or paste a key. After saving, only metadata is shown.'
+  },
+  additionalApiKeysPlaceholder: {
+    zh: '备用额度=sk-...\n中转站 A=sk-...',
+    en: 'Backup quota=sk-...\nRelay A=sk-...'
+  },
   savedKeepEmpty: { zh: '(已保存,留空不改)', en: '(saved — leave blank to keep)' },
   tokenPlaceholderSaved: { zh: '••••••••(不改动请留空)', en: '•••••••• (leave blank to keep)' },
   modelListLabel: { zh: '模型列表(每行一个)', en: 'Models (one per line)' },
@@ -526,8 +682,8 @@ const DICT: Dict = {
   fetchWithKey: { zh: '⤓ 用密钥获取', en: '⤓ Fetch with key' },
   fetchedModels: { zh: '已获取 {n} 个模型', en: 'Fetched {n} models' },
   fetchedModelsFrom: {
-    zh: '已从 {baseUrl} 获取 {n} 个模型',
-    en: 'Fetched {n} models from {baseUrl}'
+    zh: '已从 {baseUrl} 获取 {n} 个模型 · {latencyMs}ms',
+    en: 'Fetched {n} models from {baseUrl} · {latencyMs}ms'
   },
   fetchModelsFailed: { zh: '模型列表获取失败', en: 'Failed to fetch models' },
   modelListStale: {

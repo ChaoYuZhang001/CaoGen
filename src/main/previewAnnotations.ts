@@ -18,7 +18,7 @@ export class PreviewAnnotationValidationError extends Error {
 
 const JSON_INDENT = 2
 const SAFE_PATH_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
-const PREVIEW_TYPES = new Set<PreviewType>(['html', 'markdown', 'text', 'csv', 'json', 'image', 'pdf', 'unknown'])
+const PREVIEW_TYPES = new Set<PreviewType>(['html', 'markdown', 'text', 'csv', 'json', 'image', 'pdf', 'office', 'unknown'])
 
 export async function savePreviewAnnotation(
   rootDir: string,

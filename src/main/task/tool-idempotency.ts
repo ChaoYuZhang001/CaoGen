@@ -1,0 +1,119 @@
+import { createHash } from 'node:crypto'
+import { resolve } from 'node:path'
+
+const READ_ONLY_TOOLS = new Set([
+  'read_file',
+  'view',
+  'list_dir',
+  'search_symbol',
+  'search_code',
+  'find_file',
+  'get_dependencies',
+  'git_status',
+  'git_diff',
+  'task_decompose',
+  'web_fetch',
+  'browser_screenshot',
+  'browser_wait_for',
+  'browser_automation_status',
+  'gui_list_windows',
+  'gui_screenshot'
+])
+
+const TOOL_ALIASES: Record<string, string> = {
+  Bash: 'bash',
+  Edit: 'edit_file',
+  MultiEdit: 'edit_file',
+  NotebookEdit: 'edit_file',
+  Read: 'read_file',
+  Write: 'write_file',
+  LS: 'list_dir',
+  Glob: 'find_file',
+  Grep: 'search_code',
+  WebFetch: 'web_fetch'
+}
+
+export function normalizeToolName(toolName: string): string {
+  const trimmed = toolName.trim()
+  return TOOL_ALIASES[trimmed] ?? trimmed
+}
+
+export function isSideEffectingTool(toolName: string): boolean {
+  return !READ_ONLY_TOOLS.has(normalizeToolName(toolName))
+}
+
+export function requiresDuplicateConfirmation(toolName: string, toolInput: unknown): boolean {
+  const normalized = normalizeToolName(toolName)
+  if (normalized === 'bash') return true
+  if (
+    normalized === 'gui_activate_window' ||
+    normalized === 'gui_click' ||
+    normalized === 'gui_type' ||
+    normalized === 'gui_scroll' ||
+    normalized === 'gui_hotkey' ||
+    normalized === 'browser_navigate' ||
+    normalized === 'browser_click' ||
+    normalized === 'browser_type' ||
+    normalized === 'browser_evaluate'
+  ) {
+    return true
+  }
+  if (
+    normalized === 'git_commit' ||
+    normalized === 'git_push' ||
+    normalized === 'git_create_pr' ||
+    normalized === 'git_merge' ||
+    normalized === 'task_dispatch_dag' ||
+    normalized === 'task_decompose_and_dispatch_dag' ||
+    normalized === 'genesis_orchestrate'
+  ) {
+    return true
+  }
+  if (normalized === 'code_forge_delivery' && toolInput && typeof toolInput === 'object') {
+    const mode = (toolInput as Record<string, unknown>).mode
+    return mode === 'commit' || mode === 'pr'
+  }
+  return false
+}
+
+export function stableValueDigest(value: unknown): string {
+  return createHash('sha256').update(stableSerialize(value)).digest('hex')
+}
+
+export function buildToolIdempotencyKey(input: {
+  scopeId: string
+  cwd: string
+  toolName: string
+  toolInput: unknown
+}): string | undefined {
+  const toolName = normalizeToolName(input.toolName)
+  if (!isSideEffectingTool(toolName)) return undefined
+  return `tool-v1:${stableValueDigest({
+    scopeId: input.scopeId,
+    cwd: resolve(input.cwd),
+    toolName,
+    input: canonicalToolInput(toolName, input.toolInput)
+  })}`
+}
+
+function canonicalToolInput(toolName: string, input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = { ...(input as Record<string, unknown>) }
+  if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'search_replace' || toolName === 'read_file') {
+    const path = record.path ?? record.file_path ?? record.notebook_path
+    delete record.file_path
+    delete record.notebook_path
+    if (path !== undefined) record.path = path
+  }
+  return record
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+    .join(',')}}`
+}

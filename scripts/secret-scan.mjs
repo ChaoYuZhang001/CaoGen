@@ -48,6 +48,7 @@ const allowedSecretLine = new RegExp(
     'test-openai-key',
     'good-key',
     'bad-key',
+    'bad-or-limited',
     'fixture-api-key',
     'token-for-smoke',
     'secret-for-smoke',

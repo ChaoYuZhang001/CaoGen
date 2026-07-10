@@ -1,7 +1,7 @@
 {
   "date": "2026-07-08",
   "tester": "tester name or anonymized id",
-  "testerProfile": "Codex/Claude Code/Cursor/Cline/Aider deep user",
+  "testerProfile": "existing AI workbench deep user",
   "engineProvider": "provider and model used in CaoGen",
   "fixturePath": "/absolute/path/to/caogen-n1-drill",
   "totalMinutes": 0,

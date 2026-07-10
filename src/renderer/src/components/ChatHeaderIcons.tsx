@@ -1,6 +1,10 @@
 import * as React from 'react'
 
 export type HeaderIconName =
+  | 'summary'
+  | 'panel'
+  | 'tools'
+  | 'review'
   | 'worktree'
   | 'subagents'
   | 'files'
@@ -11,6 +15,38 @@ export type HeaderIconName =
   | 'terminal'
 
 const PATHS: Record<HeaderIconName, React.JSX.Element> = {
+  // 摘要 / 上下文
+  summary: (
+    <>
+      <rect x="3" y="2.8" width="10" height="10.4" rx="1.4" />
+      <path d="M5.4 5.4h5.2M5.4 8h5.2M5.4 10.6h3" />
+    </>
+  ),
+  // 工具面板
+  panel: (
+    <>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.3" />
+      <path d="M9.8 3v10" />
+    </>
+  ),
+  // 工具抽屉
+  tools: (
+    <>
+      <rect x="3" y="3" width="3.2" height="3.2" rx=".7" />
+      <rect x="9.8" y="3" width="3.2" height="3.2" rx=".7" />
+      <rect x="3" y="9.8" width="3.2" height="3.2" rx=".7" />
+      <rect x="9.8" y="9.8" width="3.2" height="3.2" rx=".7" />
+    </>
+  ),
+  // 审查
+  review: (
+    <>
+      <rect x="3" y="2.8" width="7.2" height="10.4" rx="1.1" />
+      <path d="M5.1 5.4h3M5.1 7.7h2.7M5.1 10h1.8" />
+      <circle cx="11" cy="10.5" r="2.2" />
+      <path d="m12.6 12.1 1.3 1.3" />
+    </>
+  ),
   // 分支 / worktree
   worktree: (
     <>

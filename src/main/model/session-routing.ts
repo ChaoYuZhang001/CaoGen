@@ -1,15 +1,26 @@
 import { AUTO_MODEL } from '../../shared/types'
 import type {
   CaoGenDriveMode,
+  ModelRoutingDecisionView,
+  ModelRoutingRiskLevel,
   ModelRoutePlanView,
   EngineKind,
+  ModelRoutingRule,
   ProviderView,
   SchedulerStrategy,
   SendMessagePayload
 } from '../../shared/types'
 import { routeModel } from './model-router'
 import type { ManualModelOverride } from './model-router'
+import { inferTaskProfile, type TaskProfile } from './model-profile'
 import { driveModeLabel, driveRiskAtLeast, driveRouteTuning } from './drive'
+import { getHealth } from '../providerHealth'
+import {
+  readProjectModelDispatchHintsSync,
+  type ProjectModelDispatchHints,
+  type ProjectModelDispatchStrategy,
+  type ProjectModelDispatchTarget
+} from '../agent/context-loader'
 
 export interface SessionRouteInput {
   enabled: boolean
@@ -25,6 +36,16 @@ export interface SessionRouteInput {
   settingsBudgetUsd: number
   monthlyBudgetRemainingUsd?: number
   manualOverride?: ManualModelOverride
+  fallbackProviderId?: string
+  fallbackModel?: string
+  lowCostProviderId?: string
+  lowCostModel?: string
+  strongReasoningProviderId?: string
+  strongReasoningModel?: string
+  reviewProviderId?: string
+  reviewModel?: string
+  modelRoutingRules?: ModelRoutingRule[]
+  projectPath?: string
 }
 
 export type SessionRouteResult =
@@ -32,49 +53,176 @@ export type SessionRouteResult =
   | {
       kind: 'routed'
       providerId: string
+      providerName?: string
       model: string
       reason: string
       switchedProvider: boolean
+      decision: ModelRoutingDecisionView
       crossValidationPlan: ModelRoutePlanView
     }
 
 export function resolveSessionModelRoute(input: SessionRouteInput): SessionRouteResult {
   if (!input.enabled || input.currentModel !== AUTO_MODEL) return { kind: 'disabled' }
-  const providers = routeableProviders(input.providers, input.engine)
+  const providerSelection = routeableProviders(input.providers, input.engine)
+  const providers = providerSelection.providers
   if (providers.length === 0) return { kind: 'disabled' }
   const prompt = input.payload.text
   const drive = driveRouteTuning(input.driveMode)
+  const projectDispatch = input.projectPath ? readProjectModelDispatchHintsSync(input.projectPath) : {}
+  const strategy = projectDispatch.strategy ?? (drive.mode === 'core' ? input.strategy : drive.strategy)
+  const budget = budgetForRoute(input)
+  const attachments = input.payload.images?.map((image) => ({ mime: image.mime }))
+  const riskLevel = driveRiskAtLeast(inferRouteRisk(prompt), drive.riskFloor)
+  const inferredTask = inferTaskProfile({
+    prompt,
+    attachments,
+    expectedOutputTokens: drive.expectedOutputTokens,
+    strategy,
+    riskLevel,
+    requiresTools: true
+  })
   const decision = routeModel({
     providers,
     prompt,
-    attachments: input.payload.images?.map((image) => ({ mime: image.mime })),
+    attachments,
     requestedTasks: drive.requestedTasks,
     expectedOutputTokens: drive.expectedOutputTokens,
-    strategy: drive.strategy,
-    manualOverride: input.manualOverride,
-    budget: budgetForRoute(input),
+    strategy,
+    manualOverride:
+      input.manualOverride ??
+      customRoutingRuleOverride(input.modelRoutingRules, {
+        prompt,
+        taskKinds: inferredTask.taskKinds,
+        riskLevel: inferredTask.riskLevel,
+        strategy: inferredTask.strategy
+      }) ??
+      projectModelRoleOverride(input, projectDispatch) ??
+      modelRoleOverride(input),
+    budget,
     crossValidation: drive.crossValidation,
-    riskLevel: driveRiskAtLeast(inferRouteRisk(prompt), drive.riskFloor),
+    riskLevel,
     requiresTools: true
   })
   const selected = decision.selected.profile
+  const switchedProvider = selected.providerId !== input.providerId
   return {
     kind: 'routed',
     providerId: selected.providerId,
+    providerName: selected.providerName,
     model: selected.model,
-    switchedProvider: selected.providerId !== input.providerId,
+    switchedProvider,
+    decision: buildRoutingDecisionView(
+      decision,
+      switchedProvider,
+      budget?.remainingUsd,
+      providerSelection.warnings
+    ),
     crossValidationPlan: decision.crossValidationPlan,
-    reason: formatRouteReason(decision, drive.mode)
+    reason: formatRouteReason(decision, drive.mode, projectDispatch, providerSelection.warnings)
   }
 }
 
-function routeableProviders(providers: ProviderView[], engine: EngineKind | undefined): ProviderView[] {
-  return providers.filter((provider) => {
+export function createLegacyRoutingDecisionView(input: {
+  providerId: string
+  providerName?: string
+  model: string
+  strategy: SchedulerStrategy
+  complexity: 'simple' | 'medium' | 'complex'
+  candidateCount: number
+  switchedProvider: boolean
+  reason: string
+}): ModelRoutingDecisionView {
+  return {
+    providerId: input.providerId,
+    providerName: input.providerName,
+    model: input.model,
+    strategy: input.strategy,
+    taskKinds: ['chat'],
+    complexity: input.complexity,
+    riskLevel: input.complexity === 'complex' ? 'high' : input.complexity === 'medium' ? 'medium' : 'low',
+    candidateCount: Math.max(1, input.candidateCount),
+    manualOverrideApplied: false,
+    selectionReason: input.reason,
+    selectedReasons: [input.reason],
+    budgetDowngraded: false,
+    switchedProvider: input.switchedProvider,
+    warnings: [],
+    alternatives: [],
+    createdAt: Date.now()
+  }
+}
+
+function buildRoutingDecisionView(
+  decision: ReturnType<typeof routeModel>,
+  switchedProvider: boolean,
+  remainingBudgetUsd: number | undefined,
+  providerWarnings: string[]
+): ModelRoutingDecisionView {
+  const selected = decision.selected
+  const alternatives = [...decision.candidates]
+    .filter(
+      (candidate) =>
+        candidate.profile.providerId !== selected.profile.providerId || candidate.profile.model !== selected.profile.model
+    )
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((candidate) => ({
+      providerId: candidate.profile.providerId,
+      providerName: candidate.profile.providerName,
+      model: candidate.profile.model,
+      score: candidate.score,
+      reliability: candidate.reliability,
+      estimatedCostUsd: candidate.estimatedCostUsd,
+      latencyEmaMs: candidate.latencyEmaMs
+    }))
+  return {
+    providerId: selected.profile.providerId,
+    providerName: selected.profile.providerName,
+    model: selected.profile.model,
+    strategy: decision.task.strategy,
+    taskKinds: decision.task.taskKinds,
+    riskLevel: decision.task.riskLevel,
+    candidateCount: decision.candidates.length,
+    score: selected.score,
+    reliability: selected.reliability,
+    estimatedCostUsd: selected.estimatedCostUsd,
+    latencyEmaMs: selected.latencyEmaMs,
+    remainingBudgetUsd,
+    manualOverrideApplied: decision.manualOverrideApplied,
+    selectionReason:
+      decision.manualOverrideReason ??
+      (decision.budgetDowngraded ? '预算约束后的最优候选' : `${strategyLabel(decision.task.strategy)}评分最优`),
+    selectedReasons: selected.reasons,
+    budgetDowngraded: decision.budgetDowngraded,
+    switchedProvider,
+    warnings: [...providerWarnings, ...decision.warnings],
+    alternatives,
+    createdAt: Date.now()
+  }
+}
+
+function routeableProviders(
+  providers: ProviderView[],
+  engine: EngineKind | undefined
+): { providers: ProviderView[]; warnings: string[] } {
+  const compatible = providers.filter((provider) => {
     if (provider.baseUrl.trim().length === 0 || !provider.hasToken || provider.models.length === 0) return false
     if (engine === 'openai') return provider.openaiProtocol === 'chat' || provider.openaiProtocol === 'responses'
     if (engine === undefined || engine === 'claude') return provider.openaiProtocol === undefined
     return false
   })
+  const healthy = compatible.filter((provider) => getHealth(provider.id).healthy)
+  if (healthy.length > 0) {
+    const excluded = compatible.length - healthy.length
+    return {
+      providers: healthy,
+      warnings: excluded > 0 ? [`已跳过 ${excluded} 个近期连续失败的 Provider。`] : []
+    }
+  }
+  return {
+    providers: compatible,
+    warnings: compatible.length > 0 ? ['所有可路由 Provider 均标记为不健康，暂按全部候选继续。'] : []
+  }
 }
 
 function budgetForRoute(input: SessionRouteInput): { remainingUsd?: number; hardLimit: boolean } | undefined {
@@ -97,7 +245,121 @@ function inferRouteRisk(prompt: string): 'low' | 'medium' | 'high' {
   return 'low'
 }
 
-function formatRouteReason(decision: ReturnType<typeof routeModel>, driveMode: CaoGenDriveMode): string {
+function modelRoleOverride(input: SessionRouteInput): ManualModelOverride | undefined {
+  const prompt = input.payload.text.toLowerCase()
+  const wantsReview = hasAny(prompt, ['review', '审查', '复核', 'diff', '风险'])
+  const wantsStrong =
+    input.driveMode === 'forge' ||
+    input.driveMode === 'command' ||
+    input.driveMode === 'genesis' ||
+    hasAny(prompt, ['reason', '推理', '架构', '规划', 'production', 'release', 'database', 'migration', '部署', '发布', '数据库', '迁移'])
+  const wantsLow =
+    input.driveMode === 'spark' ||
+    input.strategy === 'cost' ||
+    hasAny(prompt, ['quick', 'simple', 'summarize', '轻量', '快速', '简单', '总结'])
+
+  if (wantsReview) {
+    const override = buildRoleOverride(input.reviewProviderId, input.reviewModel, '审查模型偏好')
+    if (override) return override
+  }
+  if (wantsStrong) {
+    const override = buildRoleOverride(input.strongReasoningProviderId, input.strongReasoningModel, '强推理模型偏好')
+    if (override) return override
+  }
+  if (wantsLow) {
+    const override = buildRoleOverride(input.lowCostProviderId, input.lowCostModel, '低成本模型偏好')
+    if (override) return override
+  }
+  return undefined
+}
+
+function projectModelRoleOverride(input: SessionRouteInput, hints: ProjectModelDispatchHints): ManualModelOverride | undefined {
+  const prompt = input.payload.text.toLowerCase()
+  const wantsReview = hasAny(prompt, ['review', '审查', '复核', 'diff', '风险'])
+  const wantsStrong =
+    input.driveMode === 'forge' ||
+    input.driveMode === 'command' ||
+    input.driveMode === 'genesis' ||
+    hasAny(prompt, ['reason', '推理', '架构', '规划', 'production', 'release', 'database', 'migration', '部署', '发布', '数据库', '迁移'])
+  const wantsLow =
+    input.driveMode === 'spark' ||
+    (hints.strategy ?? input.strategy) === 'cost' ||
+    hasAny(prompt, ['quick', 'simple', 'summarize', '轻量', '快速', '简单', '总结'])
+
+  if (wantsReview) return buildProjectOverride(hints.review, '项目审查模型偏好')
+  if (wantsStrong) return buildProjectOverride(hints.strongReasoning, '项目复杂/强推理模型偏好')
+  if (wantsLow) return buildProjectOverride(hints.lowCost, '项目简单/低成本模型偏好')
+  return undefined
+}
+
+function customRoutingRuleOverride(
+  rules: ModelRoutingRule[] | undefined,
+  context: Pick<TaskProfile, 'taskKinds' | 'riskLevel' | 'strategy'> & { prompt: string }
+): ManualModelOverride | undefined {
+  const rule = (rules ?? []).find((item) => item.enabled && ruleMatches(item, context))
+  if (!rule) return undefined
+  const override = buildRoleOverride(
+    rule.providerId,
+    rule.model,
+    formatCustomRoutingRuleReason(rule)
+  )
+  if (!override) return undefined
+  return { ...override, allowBudgetOverflow: false }
+}
+
+function ruleMatches(
+  rule: ModelRoutingRule,
+  context: Pick<TaskProfile, 'taskKinds' | 'riskLevel' | 'strategy'> & { prompt: string }
+): boolean {
+  const lowerPrompt = context.prompt.toLowerCase()
+  const needles = rule.match
+    .split(/[\n,，;；]+/g)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+  const taskKinds = rule.taskKinds ?? []
+  const hasCondition = needles.length > 0 || taskKinds.length > 0 || Boolean(rule.minRiskLevel) || Boolean(rule.whenStrategy)
+  if (!hasCondition) return false
+  const keywordsMatch =
+    needles.length === 0 ||
+    (rule.keywordMode === 'all'
+      ? needles.every((needle) => lowerPrompt.includes(needle))
+      : needles.some((needle) => lowerPrompt.includes(needle)))
+  const tasksMatch = taskKinds.length === 0 || taskKinds.some((kind) => context.taskKinds.includes(kind))
+  const riskMatches = !rule.minRiskLevel || riskRank(context.riskLevel) >= riskRank(rule.minRiskLevel)
+  const strategyMatches = !rule.whenStrategy || context.strategy === rule.whenStrategy
+  return keywordsMatch && tasksMatch && riskMatches && strategyMatches
+}
+
+function formatCustomRoutingRuleReason(rule: ModelRoutingRule): string {
+  const base = `自定义调度规则${rule.name.trim() ? `:${rule.name.trim()}` : ''}`
+  const conditions: string[] = []
+  if (rule.keywordMode === 'all' && rule.match.trim()) conditions.push('关键词=全部')
+  if ((rule.taskKinds ?? []).length > 0) conditions.push(`任务=${rule.taskKinds?.join('+')}`)
+  if (rule.minRiskLevel) conditions.push(`风险>=${rule.minRiskLevel}`)
+  if (rule.whenStrategy) conditions.push(`策略=${rule.whenStrategy}`)
+  return conditions.length > 0 ? `${base} (${conditions.join(' · ')})` : base
+}
+
+function buildProjectOverride(target: ProjectModelDispatchTarget | undefined, reason: string): ManualModelOverride | undefined {
+  if (!target) return undefined
+  const override = buildRoleOverride(target.providerId, target.model, reason)
+  if (!override) return undefined
+  return { ...override, allowBudgetOverflow: false }
+}
+
+function buildRoleOverride(providerId: string | undefined, model: string | undefined, reason: string): ManualModelOverride | undefined {
+  const cleanProviderId = providerId?.trim()
+  const cleanModel = model?.trim()
+  if (!cleanProviderId && !cleanModel) return undefined
+  return { providerId: cleanProviderId, model: cleanModel, reason }
+}
+
+function formatRouteReason(
+  decision: ReturnType<typeof routeModel>,
+  driveMode: CaoGenDriveMode,
+  projectDispatch: ProjectModelDispatchHints,
+  providerWarnings: string[]
+): string {
   const selected = decision.selected.profile
   const parts = [
     `Drive=${driveModeLabel(driveMode)}`,
@@ -106,14 +368,30 @@ function formatRouteReason(decision: ReturnType<typeof routeModel>, driveMode: C
     `策略=${decision.task.strategy}`,
     `估算=$${decision.selected.estimatedCostUsd.toFixed(4)}`
   ]
+  if (projectDispatch.strategy) parts.push(`项目调度策略=${strategyLabel(projectDispatch.strategy)}`)
   if (decision.manualOverrideApplied) parts.push('手动覆盖')
+  if (decision.manualOverrideReason) parts.push(decision.manualOverrideReason)
   if (decision.budgetDowngraded) parts.push('预算降级')
   if (decision.crossValidationPlan.enabled) {
     const validators = decision.crossValidationPlan.validators.map((item) => `${item.providerName ?? item.providerId}/${item.model}`)
     parts.push(`复核=${validators.join(',')}`)
   }
+  for (const warning of providerWarnings) parts.push(warning)
   for (const warning of decision.warnings) parts.push(warning)
   return parts.join('；')
+}
+
+function strategyLabel(strategy: ProjectModelDispatchStrategy): string {
+  if (strategy === 'cost') return '成本优先'
+  if (strategy === 'quality') return '质量优先'
+  if (strategy === 'speed') return '速度优先'
+  return '均衡'
+}
+
+function riskRank(level: ModelRoutingRiskLevel): number {
+  if (level === 'high') return 3
+  if (level === 'medium') return 2
+  return 1
 }
 
 function hasAny(text: string, needles: string[]): boolean {

@@ -26,10 +26,15 @@ const reports = {
   n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
   releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
   releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
+  productPositioningAudit: readJson('test-results/product-positioning-audit/latest.json'),
   githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
 }
 
 const packageJson = readJson('package.json').data ?? {}
+const currentPackageVersion = stringField(packageJson, 'version') || 'unknown'
+const explicitReleaseVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || ''
+const releaseTargetVersion = explicitReleaseVersion || currentPackageVersion
+const releaseTargetLabel = explicitReleaseVersion ? `v${releaseTargetVersion}` : 'not selected; rolling from current package version'
 const p2Requirements = Array.isArray(reports.p2Audit.data?.requirements) ? reports.p2Audit.data.requirements : []
 const p2ById = Object.fromEntries(p2Requirements.filter(isRecord).map((item) => [item.id, item]))
 const p2RequiredResults = Array.isArray(reports.p2Required.data?.results) ? reports.p2Required.data.results : []
@@ -44,6 +49,7 @@ const domains = [
   p2Domain(),
   n1Domain(),
   packagingDomain(packageJson),
+  productPositioningDomain(),
   releaseNotesDomain(),
   githubReleaseDomain(),
   secretDomain()
@@ -55,8 +61,13 @@ const report = {
   required,
   runId,
   reportDir,
-  currentPackageVersion: stringField(packageJson, 'version') || 'unknown',
-  releaseCandidate: 'v0.2.0',
+  currentPackageVersion,
+  releaseCandidate: releaseTargetLabel,
+  releaseTarget: {
+    version: releaseTargetVersion,
+    source: explicitReleaseVersion ? 'explicit' : 'package.json',
+    label: releaseTargetLabel
+  },
   redactionPolicy: 'No secret values are read or written; only report paths, status fields, env names, and commands are emitted.',
   refresh: {
     enabled: refresh,
@@ -76,14 +87,15 @@ const report = {
   manualDomains: manualDomains.map((domain) => domain.id),
   parallelAgents: buildParallelAgents(),
   releaseStopConditions: [
-    'Do not publish v0.2.0 while workos-release-doctor status is not ready.',
+    'Do not publish a new release while workos-release-doctor status is not ready.',
     'Do not publish while release-scope P2 evidence is missing: P2-002, P2-003, and P2-005 must be proved.',
     'Do not claim P2-001 Windows GUI evidence or P2-004 China external evidence as release-proved until their separate required gates pass.',
-    'Do not make N1 30-minute human migration claims in v0.2.0 release notes without a passed private N1 audit record.',
+    'Do not make N1 30-minute human migration claims in release notes without a passed private N1 audit record.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
+    'Do not publish public product or release copy that mentions external product names, uses comparison framing, or forces a fixed future version target.',
     'Do not publish until npm run test:release-notes-audit:final passes for the exact GitHub Release body.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
-    'Do not claim public latest*.yml or other small text release metadata was content-scanned unless npm run test:github-release-audit:read-text:required -- --tag v0.2.0 passes.',
+    'Do not claim public latest*.yml or other small text release metadata was content-scanned unless npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z passes for the actual tag.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
   ]
 }
@@ -139,7 +151,7 @@ function p2Domain() {
       'npm run test:p2',
       'npm run test:p2-ide-build-and-vscode:required',
       'npm run test:jetbrains-ide-interaction:required',
-      'npm run test:p2-audit -- --required # optional full external audit; P2-001/P2-004 are non-blocking for v0.2.0'
+      'npm run test:p2-audit -- --required # optional full external audit; P2-001/P2-004 are non-blocking unless release notes claim them'
     ],
     nextActions: [
       ...(blockingOpen.length === 0
@@ -156,6 +168,11 @@ function refreshLocalEvidence() {
       id: 'release_packaging_audit',
       command: 'node scripts/release-packaging-audit.mjs',
       args: ['scripts/release-packaging-audit.mjs']
+    },
+    {
+      id: 'product_positioning_audit',
+      command: 'node scripts/product-positioning-audit.mjs',
+      args: ['scripts/product-positioning-audit.mjs']
     },
     {
       id: 'release_notes_audit',
@@ -237,7 +254,7 @@ function n1Domain() {
   return {
     id: 'n1_migration',
     title: 'N1 human 30-minute migration drill',
-    status: audit.data?.status === 'passed' ? 'ready' : 'not_required_for_v0.2.0',
+    status: audit.data?.status === 'passed' ? 'ready' : 'not_required_without_n1_claims',
     blocking: false,
     audit: {
       path: audit.relativePath,
@@ -254,7 +271,7 @@ function n1Domain() {
     nextActions: audit.data?.status === 'passed'
       ? ['Keep the passed N1 audit report private and only cite it if release notes make N1 claims.']
       : [
-          'N1 human drill is not a v0.2.0 release blocker under the current product decision.',
+          'N1 human drill is not a release blocker unless the release notes make N1 claims.',
           'Do not claim 30-minute human migration in release notes until a private N1 audit record passes.'
         ]
   }
@@ -322,13 +339,40 @@ function releaseNotesDomain() {
       ? ['Keep the final release notes audit green on the exact GitHub Release body.']
       : draftPassed
         ? [
-            'Keep docs/RELEASE-NOTES-v0.2.0-DRAFT.md aligned with current open gates.',
+            'Keep docs/RELEASE-NOTES-DRAFT.md aligned with current open gates.',
             'After P2, N1, packaging, and public assets are ready, replace draft-only blocked-release language with exact uploaded assets and run npm run test:release-notes-audit:final.'
           ]
         : [
-            'Create or update docs/RELEASE-NOTES-v0.2.0-DRAFT.md with exact supported claims, blockers, asset policy, macOS first-open guidance, and security statement.',
+            'Create or update docs/RELEASE-NOTES-DRAFT.md with exact supported claims, blockers, asset policy, macOS first-open guidance, and security statement.',
             'Run npm run test:release-notes-audit:required before merging release docs.'
           ]
+  }
+}
+
+function productPositioningDomain() {
+  const audit = reports.productPositioningAudit
+  return {
+    id: 'product_positioning',
+    title: 'Public product positioning',
+    status: audit.data?.status === 'passed' ? 'ready' : 'open',
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      scannedFiles: Array.isArray(audit.data?.scannedFiles) ? audit.data.scannedFiles : undefined,
+      failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
+      warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
+    },
+    commands: [
+      'npm run test:product-positioning',
+      'npm run test:product-positioning:required'
+    ],
+    nextActions: audit.data?.status === 'passed'
+      ? ['Keep README, welcome copy, release notes, and release gate free of external product names/comparison framing and version-neutral.']
+      : [
+          'Run npm run test:product-positioning:required and remove fixed future-version language, external product names/comparison framing, or overclaims from public product copy.',
+          'Keep technical engine/provider labels in settings separate from public positioning copy.'
+        ]
   }
 }
 
@@ -352,8 +396,8 @@ function githubReleaseDomain() {
       'npm run test:github-release-audit',
       'npm run test:github-release-audit:required',
       'npm run test:github-release-audit:read-text',
-      'npm run test:github-release-audit:required -- --tag v0.2.0',
-      'npm run test:github-release-audit:read-text:required -- --tag v0.2.0'
+      'npm run test:github-release-audit:required -- --tag vX.Y.Z',
+      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z'
     ],
     nextActions: audit.data?.status === 'passed'
       ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
@@ -396,7 +440,7 @@ function buildParallelAgents() {
         'npm run test:gui-cross-app-e2e:required',
         'npm run test:gui-desktop-e2e:required'
       ],
-      acceptance: 'Non-blocking for v0.2.0; after this separate agent passes, release notes may upgrade the Windows GUI evidence claim.'
+      acceptance: 'Non-blocking unless release notes claim Windows GUI proof; after this separate agent passes, release notes may upgrade the claim.'
     },
     {
       id: 'B4',
@@ -408,7 +452,7 @@ function buildParallelAgents() {
         'npm run test:china-real-network:required',
         'npm run test:china-tool-call-parity:required'
       ],
-      acceptance: 'User-configured; v0.2.0 may ship without this evidence if release notes do not claim China external proof.'
+      acceptance: 'User-configured; a release may ship without this evidence if release notes do not claim China external proof.'
     },
     {
       id: 'B0',
@@ -420,12 +464,13 @@ function buildParallelAgents() {
         'npm run test:p2-ide-build-and-vscode:required',
         'npm run test:jetbrains-ide-interaction:required',
         'npm run test:release-packaging-audit:required',
+        'npm run test:product-positioning:required',
         'npm run test:release-notes-audit:required',
         'npm run test:github-release-audit:required',
         'npm run test:github-release-audit:read-text',
         'npm run secret:scan:history'
       ],
-      acceptance: 'Release notes and README match current evidence; v0.2.0 is not published until every gate is ready.'
+      acceptance: 'Release notes and README match current evidence; no new release is published until every required gate is ready.'
     }
   ]
 }
@@ -436,7 +481,7 @@ function renderMarkdown(value) {
     '',
     `Status: ${value.status}`,
     `Run ID: ${value.runId}`,
-    `Release candidate: ${value.releaseCandidate}`,
+    `Release target: ${value.releaseTarget.label}`,
     `Package version: ${value.currentPackageVersion}`,
     '',
     '## Refresh',
@@ -509,6 +554,14 @@ function evidenceStatus(readResult) {
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function argValue(name) {
+  const index = process.argv.indexOf(name)
+  if (index >= 0 && process.argv[index + 1]) return process.argv[index + 1]
+  const prefix = `${name}=`
+  const inline = process.argv.find((item) => item.startsWith(prefix))
+  return inline ? inline.slice(prefix.length) : undefined
 }
 
 function stringField(value, key) {

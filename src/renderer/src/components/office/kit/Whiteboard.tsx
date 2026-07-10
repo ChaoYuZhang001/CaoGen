@@ -9,8 +9,8 @@ export interface OfficeProp {
   scale?: number
 }
 
-// 常量色板(主黑副白 + 青色强调)
-const BOARD_WHITE = '#f4f4f4'
+// 常量色板(深框 + 雾面灰蓝板面 + 青色强调)
+const BOARD_SURFACE = '#c7d0da'
 const FRAME_DARK = '#242424'
 const TRAY_DARK = '#1c1c1c'
 const MARKER_INK = '#23262b'
@@ -47,8 +47,27 @@ function rectStrokes(
   ]
 }
 
+function BoardPersonMark(): React.JSX.Element {
+  return (
+    <group position={[0.42, -0.28, DOODLE_Z + 0.008]}>
+      <mesh position={[0, 0.045, 0]}>
+        <circleGeometry args={[0.034, 20]} />
+        <meshStandardMaterial color={MARKER_INK} roughness={0.9} />
+      </mesh>
+      <mesh position={[0, -0.016, 0]}>
+        <boxGeometry args={[0.052, 0.068, STROKE_D]} />
+        <meshStandardMaterial color={MARKER_INK} roughness={0.9} />
+      </mesh>
+      <mesh position={[0, -0.004, 0]}>
+        <boxGeometry args={[0.13, STROKE, STROKE_D]} />
+        <meshStandardMaterial color={MARKER_INK} roughness={0.9} />
+      </mesh>
+    </group>
+  )
+}
+
 /**
- * 白板道具:白板面 + 深色边框 + 用细 box 手绘的流程图涂鸦(两个流程框 + 箭头 + 判定菱形),
+ * 白板道具:白板面 + 深色边框 + 用细 box 手绘的流程图涂鸦(两个流程框 + 箭头 + 单色人物标记),
  * 底部托盘上放三支笔。青色强调笔迹配合 Bloom 呼吸辉光。
  */
 export default function Whiteboard({
@@ -67,7 +86,7 @@ export default function Whiteboard({
     s.push({ key: 'arr-down', position: [-0.38, 0.02, DOODLE_Z], size: [STROKE, 0.16, STROKE_D], color: MARKER_INK })
     // 流程框 B(下)
     s.push(...rectStrokes('b', -0.38, -0.28, 0.46, 0.26, MARKER_INK))
-    // B → 判定 向右箭头横线(青色强调)
+    // B → 单色人物标记 向右箭头横线(青色强调)
     s.push({ key: 'arr-right', position: [0.0, -0.28, DOODLE_Z], size: [0.28, STROKE, STROKE_D], color: ACCENT, glow: true })
     // 右上角随手涂鸦(两笔斜线)
     s.push({ key: 'sq1', position: [0.42, 0.3, DOODLE_Z], size: [0.24, STROKE, STROKE_D], color: MARKER_INK })
@@ -91,7 +110,7 @@ export default function Whiteboard({
         {/* 白板面 */}
         <mesh castShadow receiveShadow>
           <boxGeometry args={[1.62, 1.04, 0.04]} />
-          <meshStandardMaterial color={BOARD_WHITE} roughness={0.55} metalness={0.02} />
+          <meshStandardMaterial color={BOARD_SURFACE} roughness={0.58} metalness={0.04} />
         </mesh>
 
         {/* 边框(四条细 box,略微前凸) */}
@@ -145,16 +164,7 @@ export default function Whiteboard({
           <meshStandardMaterial color={ACCENT} emissive={ACCENT} emissiveIntensity={1.8} toneMapped={false} />
         </mesh>
 
-        {/* 判定菱形(旋转 45° 的细描边方块,青色强调发光) */}
-        <mesh position={[0.42, -0.28, DOODLE_Z]} rotation={[0, 0, Math.PI / 4]}>
-          <boxGeometry args={[0.2, 0.2, STROKE_D]} />
-          <meshStandardMaterial color={ACCENT} emissive={ACCENT} emissiveIntensity={1.5} toneMapped={false} />
-        </mesh>
-        {/* 菱形内挖白(叠一层白面遮住中心,形成描边观感) */}
-        <mesh position={[0.42, -0.28, DOODLE_Z + 0.001]} rotation={[0, 0, Math.PI / 4]}>
-          <boxGeometry args={[0.15, 0.15, STROKE_D]} />
-          <meshStandardMaterial color={BOARD_WHITE} roughness={0.6} />
-        </mesh>
+        <BoardPersonMark />
 
         {/* 底部笔托 */}
         <mesh position={[0, -0.5, 0.1]} castShadow>
@@ -182,7 +192,7 @@ export default function Whiteboard({
         </mesh>
         <mesh position={[0.24, -0.47, 0.11]} rotation={[0, 0, Math.PI / 2]}>
           <cylinderGeometry args={[0.016, 0.016, 0.24, 16]} />
-          <meshStandardMaterial color="#d8593c" roughness={0.5} />
+          <meshStandardMaterial color="#65717d" roughness={0.5} />
         </mesh>
       </group>
 

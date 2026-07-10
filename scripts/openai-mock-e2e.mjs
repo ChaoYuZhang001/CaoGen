@@ -116,20 +116,34 @@ try {
     await focusComposer(cdp)
     await typeText(cdp, prompt)
     await press(cdp, 'Enter')
+    await waitForText(cdp, '已切换 → 备用密钥', 15_000)
     await waitForText(cdp, expected, 15_000)
     await waitForText(cdp, '本轮完成', 10_000)
   })
 
   await check(cdp, 'usage stats and request body prove the real engine path ran', async () => {
     await waitForText(cdp, '↑37 ↓11', 10_000)
-    assert(mock.requests.length === 1, `expected one OpenAI request, got ${mock.requests.length}`)
-    const request = mock.requests[0]
+    assert(mock.requests.length === 2, `expected failed primary + successful backup requests, got ${mock.requests.length}`)
+    assert(mock.requests[0].authorization === 'Bearer expired-key', `primary key was not attempted first: ${mock.requests[0].authorization}`)
+    const request = mock.requests[1]
     assert(request.url === '/v1/responses', `wrong request URL: ${request.url}`)
     assert(request.authorization === 'Bearer mock-key', `wrong auth header: ${request.authorization}`)
     assert(request.body?.model === 'mock-responses', `wrong model: ${JSON.stringify(request.body)}`)
     assert(JSON.stringify(request.body).includes(prompt), 'prompt missing from OpenAI request body')
     assert(String(request.body?.instructions ?? '').includes(projectContextNeedle), 'caogen.md context missing from Responses instructions')
     report.requests = mock.requests
+  })
+
+  await check(cdp, 'failed primary key persists sanitized state and backup becomes active', async () => {
+    const providers = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
+    const provider = providers.find((item) => item.id === 'mock-openai')
+    assert(provider?.activeKeyId === 'backup-key', `backup key did not become active: ${provider?.activeKeyId}`)
+    const primary = provider?.apiKeys?.find((item) => item.id === 'primary-key')
+    const backup = provider?.apiKeys?.find((item) => item.id === 'backup-key')
+    assert(primary?.lastFailureReason === '鉴权失败', `primary failure reason missing: ${primary?.lastFailureReason}`)
+    assert(Number.isFinite(primary?.lastFailureAt), 'primary failure timestamp missing')
+    assert(Number.isFinite(backup?.lastUsedAt), 'backup last-used timestamp missing')
+    assert(!JSON.stringify(provider).includes('Bearer '), 'provider persistence must not contain authorization headers')
   })
 
   await check(cdp, 'default permission can deny OpenAI write_file tool call', async () => {
@@ -209,7 +223,22 @@ function writeMockUserData(port) {
           id: 'mock-openai',
           name: 'CaoGen OpenAI Mock',
           baseUrl: `http://127.0.0.1:${port}`,
-          encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
+          encryptedToken: `b64:${Buffer.from('expired-key').toString('base64')}`,
+          apiKeys: [
+            {
+              id: 'primary-key',
+              label: '主密钥',
+              encryptedToken: `b64:${Buffer.from('expired-key').toString('base64')}`,
+              createdAt: Date.now()
+            },
+            {
+              id: 'backup-key',
+              label: '备用密钥',
+              encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
+              createdAt: Date.now()
+            }
+          ],
+          activeKeyId: 'primary-key',
           models: ['mock-responses'],
           // mock server 只实现 /v1/responses;非 api.openai.com 端点的智能默认
           // 是 chat,故显式声明 responses(与真实用户在 UI 里选协议一致)
@@ -263,6 +292,11 @@ async function startOpenAiMock() {
       body,
       kind
     })
+    if (req.headers.authorization === 'Bearer expired-key') {
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'invalid API key' } }))
+      return
+    }
     if (kind === 'permission-deny-call') {
       writeFunctionCallResponse(res, {
         responseId: 'resp_permission_deny_1',
@@ -483,17 +517,18 @@ async function setInputByPlaceholder(cdp, placeholder, value) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const el = [...document.querySelectorAll('input, textarea')].find((candidate) => candidate.placeholder === ${JSON.stringify(placeholder)});
-      if (!el) return false;
+      const scope = document.querySelector('.modal') || document;
+      const el = [...scope.querySelectorAll('input, textarea')].find((candidate) => candidate.placeholder === ${JSON.stringify(placeholder)});
+      if (!el) return { ok: false };
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
       setter?.call(el, ${JSON.stringify(value)});
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
+      return { ok: el.value === ${JSON.stringify(value)}, value: el.value };
     })()`
   )
-  assert(result === true, `input not found for placeholder: ${placeholder}`)
+  assert(result?.ok === true, `input not updated for placeholder: ${placeholder}; value=${JSON.stringify(result?.value)}`)
   await sleep(250)
 }
 
@@ -502,17 +537,18 @@ async function chooseSelectOptionByText(cdp, text) {
     cdp,
     `(() => {
       const needle = ${JSON.stringify(text)};
-      for (const select of document.querySelectorAll('select')) {
+      const scope = document.querySelector('.modal') || document;
+      for (const select of scope.querySelectorAll('select')) {
         const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
         if (!option) continue;
         select.value = option.value;
         select.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
+        return { ok: true, value: select.value };
       }
-      return false;
+      return { ok: false };
     })()`
   )
-  assert(result === true, `select option not found: ${text}`)
+  assert(result?.ok === true, `select option not found: ${text}`)
   await sleep(250)
 }
 

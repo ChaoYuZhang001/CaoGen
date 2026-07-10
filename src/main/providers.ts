@@ -5,12 +5,17 @@ import { dirname, join } from 'node:path'
 import type {
   OpenAIProtocol,
   Provider,
+  ProviderApiKey,
+  ProviderApiKeyInput,
+  ProviderApiKeyUpdateInput,
   ProviderInput,
   ProviderModelErrorKind,
   ProviderModelFetchInput,
   ProviderModelFetchResult,
   ProviderView
 } from '../shared/types'
+import { recordFailure, recordSuccess } from './scheduler'
+import { pickNextProviderKey } from './providerKeyRouting'
 
 let cache: Provider[] | null = null
 const modelFetchCache = new Map<string, { models: string[]; fetchedAt: number; baseUrl: string; providerId?: string }>()
@@ -68,9 +73,270 @@ export function decryptToken(encrypted: string): string {
   return ''
 }
 
+const LEGACY_KEY_LABEL = '主密钥'
+
+function legacyKeyId(providerId: string): string {
+  return `${providerId}:legacy-primary`
+}
+
+function cleanKeyLabel(value: string | undefined, fallback: string): string {
+  const label = value?.trim()
+  return label || fallback
+}
+
+function createApiKey(input: ProviderApiKeyInput, fallbackLabel: string): ProviderApiKey | null {
+  const token = input.token.trim()
+  if (!token) return null
+  return {
+    id: randomUUID(),
+    label: cleanKeyLabel(input.label, fallbackLabel),
+    encryptedToken: encryptToken(token),
+    createdAt: Date.now(),
+    disabled: input.disabled === true
+  }
+}
+
+function normalizedProviderKeys(provider: Provider): ProviderApiKey[] {
+  const seen = new Set<string>()
+  const keys: ProviderApiKey[] = []
+  const storedKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : []
+  for (const [index, key] of storedKeys.entries()) {
+    if (!key || typeof key.encryptedToken !== 'string' || !key.encryptedToken) continue
+    const id = typeof key.id === 'string' && key.id.trim() ? key.id : randomUUID()
+    if (seen.has(id)) continue
+    seen.add(id)
+    keys.push({
+      id,
+      label: cleanKeyLabel(key.label, `Key ${index + 1}`),
+      encryptedToken: key.encryptedToken,
+      createdAt: Number.isFinite(key.createdAt) ? key.createdAt : Date.now(),
+      lastUsedAt: Number.isFinite(key.lastUsedAt) ? key.lastUsedAt : undefined,
+      lastFailureAt: Number.isFinite(key.lastFailureAt) ? key.lastFailureAt : undefined,
+      lastFailureReason: typeof key.lastFailureReason === 'string' && key.lastFailureReason.trim()
+        ? key.lastFailureReason.trim().slice(0, 80)
+        : undefined,
+      disabled: key.disabled === true
+    })
+  }
+  if (keys.length === 0 && provider.encryptedToken) {
+    keys.push({
+      id: legacyKeyId(provider.id),
+      label: LEGACY_KEY_LABEL,
+      encryptedToken: provider.encryptedToken,
+      createdAt: provider.createdAt || Date.now(),
+      disabled: false
+    })
+  }
+  return keys
+}
+
+function activeProviderKey(provider: Provider, keys = normalizedProviderKeys(provider)): ProviderApiKey | undefined {
+  const activeId = provider.activeKeyId?.trim()
+  const enabledKeys = keys.filter((key) => key.encryptedToken && !key.disabled)
+  return enabledKeys.find((key) => key.id === activeId) ?? enabledKeys[0]
+}
+
+function activeKeyIdFor(provider: Provider, keys: ProviderApiKey[], requestedId?: string): string | undefined {
+  const activeId = requestedId?.trim() || provider.activeKeyId?.trim()
+  const enabledKeys = keys.filter((key) => key.encryptedToken && !key.disabled)
+  return enabledKeys.find((key) => key.id === activeId)?.id ?? enabledKeys[0]?.id
+}
+
+function applyKeyUpdates(keys: ProviderApiKey[], updates: ProviderApiKeyUpdateInput[] | undefined): ProviderApiKey[] {
+  if (!updates || updates.length === 0) return keys
+  const byId = new Map(updates.filter((item) => item.id).map((item) => [item.id, item]))
+  return keys.map((key, index) => {
+    const update = byId.get(key.id)
+    if (!update) return key
+    return {
+      ...key,
+      label: update.label === undefined ? key.label : cleanKeyLabel(update.label, `Key ${index + 1}`),
+      disabled: update.disabled === undefined ? key.disabled : update.disabled
+    }
+  })
+}
+
+function appendNewKeys(keys: ProviderApiKey[], additions: ProviderApiKeyInput[] | undefined): ProviderApiKey[] {
+  if (!additions || additions.length === 0) return keys
+  const next = [...keys]
+  for (const input of additions) {
+    const key = createApiKey(input, `Key ${next.length + 1}`)
+    if (key) next.push(key)
+  }
+  return next
+}
+
+function withPrimaryToken(keys: ProviderApiKey[], provider: Provider, patch: Partial<ProviderInput>): ProviderApiKey[] {
+  const tokenWasProvided = patch.token !== undefined
+  const active = activeProviderKey(provider, keys)
+  if (tokenWasProvided) {
+    const token = patch.token?.trim() ?? ''
+    if (!token) return []
+    const nextKey: ProviderApiKey = {
+      id: active?.id ?? randomUUID(),
+      label: cleanKeyLabel(patch.tokenLabel ?? active?.label, LEGACY_KEY_LABEL),
+      encryptedToken: encryptToken(token),
+      createdAt: active?.createdAt ?? Date.now(),
+      disabled: false
+    }
+    if (active) return keys.map((key) => key.id === active.id ? nextKey : key)
+    return [nextKey, ...keys]
+  }
+  if (patch.tokenLabel !== undefined && active) {
+    return keys.map((key) =>
+      key.id === active.id ? { ...key, label: cleanKeyLabel(patch.tokenLabel, LEGACY_KEY_LABEL) } : key
+    )
+  }
+  return keys
+}
+
+function providerKeyCount(provider: Provider): number {
+  return normalizedProviderKeys(provider).filter((key) => key.encryptedToken && !key.disabled).length
+}
+
+export function providerHasToken(provider: Provider | undefined): boolean {
+  return provider ? providerKeyCount(provider) > 0 : false
+}
+
+/** 取 Provider 当前活动 API Key。只在主进程内部使用,不回传渲染进程。 */
+export function decryptProviderToken(provider: Provider | undefined): string {
+  return resolveProviderToken(provider).token
+}
+
+export interface ProviderTokenSelection {
+  providerId?: string
+  keyId?: string
+  keyLabel?: string
+  token: string
+}
+
+export interface ProviderKeyRotation {
+  providerId: string
+  providerName: string
+  fromKeyId: string
+  fromKeyLabel: string
+  toKeyId: string
+  toKeyLabel: string
+}
+
+export function resolveProviderToken(provider: Provider | undefined): ProviderTokenSelection {
+  if (!provider) return { token: '' }
+  const active = activeProviderKey(provider)
+  return {
+    providerId: provider.id,
+    keyId: active?.id,
+    keyLabel: active?.label,
+    token: active ? decryptToken(active.encryptedToken) : ''
+  }
+}
+
+export function markProviderKeyUsed(providerId: string, keyId: string | undefined, now = Date.now()): void {
+  updateProviderKeyRuntime(providerId, keyId, (key) => ({ ...key, lastUsedAt: now }))
+}
+
+export function recordProviderKeySuccess(providerId: string, keyId: string | undefined, now = Date.now()): void {
+  updateProviderKeyRuntime(providerId, keyId, (key) => {
+    const next = { ...key, lastUsedAt: now }
+    delete next.lastFailureAt
+    delete next.lastFailureReason
+    return next
+  })
+}
+
+export function rotateProviderKey(input: {
+  providerId: string
+  failedKeyId?: string
+  excludedKeyIds?: ReadonlySet<string>
+  reason: string
+  now?: number
+}): ProviderKeyRotation | null {
+  const list = load()
+  const index = list.findIndex((provider) => provider.id === input.providerId)
+  if (index < 0) return null
+  const provider = list[index]
+  const now = input.now ?? Date.now()
+  const keys = normalizedProviderKeys(provider)
+  const active = activeProviderKey(provider, keys)
+  const failedKeyId = input.failedKeyId || active?.id
+  const failed = keys.find((key) => key.id === failedKeyId)
+  const marked = keys.map((key) =>
+    key.id === failedKeyId
+      ? { ...key, lastFailureAt: now, lastFailureReason: input.reason.trim().slice(0, 80) }
+      : key
+  )
+  const next = pickNextProviderKey(marked, {
+    activeKeyId: provider.activeKeyId,
+    failedKeyId,
+    excludedKeyIds: input.excludedKeyIds,
+    now
+  })
+  const nextProvider: Provider = {
+    ...provider,
+    apiKeys: next ? marked.map((key) => key.id === next.id ? { ...key, lastUsedAt: now } : key) : marked,
+    activeKeyId: next?.id ?? provider.activeKeyId,
+    encryptedToken: next?.encryptedToken ?? provider.encryptedToken
+  }
+  cache = [...list.slice(0, index), nextProvider, ...list.slice(index + 1)]
+  persist()
+  if (!failed || !next) return null
+  return {
+    providerId: provider.id,
+    providerName: provider.name,
+    fromKeyId: failed.id,
+    fromKeyLabel: failed.label,
+    toKeyId: next.id,
+    toKeyLabel: next.label
+  }
+}
+
 function toView(p: Provider): ProviderView {
-  const { encryptedToken, ...rest } = p
-  return { ...rest, budgetUsd: normalizeBudget(p.budgetUsd), hasToken: encryptedToken.length > 0 }
+  const { encryptedToken, apiKeys: _apiKeys, activeKeyId: _activeKeyId, ...rest } = p
+  const keys = normalizedProviderKeys(p)
+  const active = activeProviderKey(p, keys)
+  const apiKeys = keys.map((key) => ({
+    id: key.id,
+    label: key.label,
+    createdAt: key.createdAt,
+    lastUsedAt: key.lastUsedAt,
+    lastFailureAt: key.lastFailureAt,
+    lastFailureReason: key.lastFailureReason,
+    disabled: key.disabled === true,
+    active: active?.id === key.id
+  }))
+  const keyCount = keys.filter((key) => key.encryptedToken && !key.disabled).length
+  return {
+    ...rest,
+    budgetUsd: normalizeBudget(p.budgetUsd),
+    hasToken: keyCount > 0,
+    keyCount,
+    activeKeyId: active?.id,
+    activeKeyLabel: active?.label,
+    apiKeys
+  }
+}
+
+function updateProviderKeyRuntime(
+  providerId: string,
+  keyId: string | undefined,
+  update: (key: ProviderApiKey) => ProviderApiKey
+): void {
+  if (!keyId) return
+  const list = load()
+  const index = list.findIndex((provider) => provider.id === providerId)
+  if (index < 0) return
+  const provider = list[index]
+  const keys = normalizedProviderKeys(provider)
+  if (!keys.some((key) => key.id === keyId)) return
+  const apiKeys = keys.map((key) => key.id === keyId ? update(key) : key)
+  const active = activeProviderKey({ ...provider, apiKeys }, apiKeys)
+  const next = {
+    ...provider,
+    apiKeys,
+    activeKeyId: active?.id,
+    encryptedToken: active?.encryptedToken ?? ''
+  }
+  cache = [...list.slice(0, index), next, ...list.slice(index + 1)]
+  persist()
 }
 
 export function listProviders(): ProviderView[] {
@@ -113,11 +379,19 @@ function normalizeBaseUrl(baseUrl: string, openaiProtocol?: OpenAIProtocol): str
 }
 
 export function createProvider(input: ProviderInput): ProviderView {
+  const primary = typeof input.token === 'string' && input.token.trim()
+    ? createApiKey({ label: input.tokenLabel, token: input.token }, LEGACY_KEY_LABEL)
+    : null
+  const apiKeys = appendNewKeys(primary ? [primary] : [], input.additionalTokens)
+  const activeKeyId = apiKeys.find((key) => key.encryptedToken && !key.disabled)?.id
+  const activeKey = apiKeys.find((key) => key.id === activeKeyId)
   const provider: Provider = {
     id: randomUUID(),
     name: input.name,
     baseUrl: normalizeBaseUrl(input.baseUrl, input.openaiProtocol),
-    encryptedToken: encryptToken(input.token),
+    encryptedToken: activeKey?.encryptedToken ?? '',
+    apiKeys,
+    activeKeyId,
     models: input.models,
     customHeaders: input.customHeaders,
     budgetUsd: normalizeBudget(input.budgetUsd),
@@ -135,6 +409,14 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
   const idx = list.findIndex((p) => p.id === id)
   if (idx === -1) throw new Error('Provider 不存在')
   const prev = list[idx]
+  let apiKeys = normalizedProviderKeys(prev)
+  apiKeys = withPrimaryToken(apiKeys, prev, patch)
+  apiKeys = applyKeyUpdates(apiKeys, patch.keyUpdates)
+  const removeIds = new Set((patch.removeKeyIds ?? []).filter(Boolean))
+  if (removeIds.size > 0) apiKeys = apiKeys.filter((key) => !removeIds.has(key.id))
+  apiKeys = appendNewKeys(apiKeys, patch.additionalTokens)
+  const activeKeyId = activeKeyIdFor(prev, apiKeys, patch.activeKeyId)
+  const activeKey = apiKeys.find((key) => key.id === activeKeyId)
   const next: Provider = {
     ...prev,
     name: patch.name ?? prev.name,
@@ -144,7 +426,9 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
     budgetUsd: patch.budgetUsd === undefined ? normalizeBudget(prev.budgetUsd) : normalizeBudget(patch.budgetUsd),
     openaiProtocol: patch.openaiProtocol ?? prev.openaiProtocol,
     note: patch.note ?? prev.note,
-    encryptedToken: patch.token === undefined ? prev.encryptedToken : encryptToken(patch.token)
+    encryptedToken: activeKey?.encryptedToken ?? '',
+    apiKeys,
+    activeKeyId
   }
   cache = [...list.slice(0, idx), next, ...list.slice(idx + 1)]
   persist()
@@ -219,22 +503,32 @@ async function tryFetchModelsFrom(url: string, token: string): Promise<string[] 
  * 401/403 立即抛(密钥问题);全部 404/无果才报"端点不支持"。
  */
 export async function fetchModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult> {
+  const startedAt = Date.now()
   const base = (opts.baseUrl || '').trim().replace(/\/+$/, '')
   const providerId = opts.providerId?.trim() || undefined
   const publicBaseUrl = redactBaseUrl(base)
   const cacheKey = providerModelCacheKey(providerId, base, opts.openaiProtocol)
+  const finishFailure = (
+    kind: ProviderModelErrorKind,
+    message: string,
+    status?: number
+  ): ProviderModelFetchResult => {
+    const latencyMs = Date.now() - startedAt
+    if (providerId) recordFailure(providerId, message)
+    return failureModelFetchResult(cacheKey, providerId, publicBaseUrl, kind, message, status, latencyMs)
+  }
   if (!base) {
-    const result = failureModelFetchResult(cacheKey, providerId, publicBaseUrl, 'not_found', '请先填写 Base URL')
+    const result = finishFailure('not_found', '请先填写 Base URL')
     modelFetchCache.delete(cacheKey)
     return result
   }
   let token = opts.token?.trim() || ''
   if (!token && opts.providerId) {
     const p = getProvider(opts.providerId)
-    if (p) token = decryptToken(p.encryptedToken)
+    if (p) token = decryptProviderToken(p)
   }
   if (!token) {
-    const result = failureModelFetchResult(cacheKey, providerId, publicBaseUrl, 'auth', '请先填写 API 密钥')
+    const result = finishFailure('auth', '请先填写 API 密钥')
     modelFetchCache.delete(cacheKey)
     return result
   }
@@ -248,7 +542,9 @@ export async function fetchModels(opts: ProviderModelFetchInput): Promise<Provid
       const models = await tryFetchModelsFrom(url, token) // 401/403/429/5xx/network 会向上抛
       if (models) {
         const fetchedAt = Date.now()
+        const latencyMs = fetchedAt - startedAt
         modelFetchCache.set(cacheKey, { models, fetchedAt, baseUrl: publicBaseUrl, providerId })
+        if (providerId) recordSuccess(providerId, latencyMs)
         return {
           ok: true,
           providerId,
@@ -256,6 +552,7 @@ export async function fetchModels(opts: ProviderModelFetchInput): Promise<Provid
           cacheKey,
           models,
           fetchedAt,
+          latencyMs,
           stale: false
         }
       }
@@ -263,13 +560,10 @@ export async function fetchModels(opts: ProviderModelFetchInput): Promise<Provid
   } catch (err) {
     const tagged = taggedModelFetchError(err)
     modelFetchCache.delete(cacheKey)
-    return failureModelFetchResult(cacheKey, providerId, publicBaseUrl, tagged.kind, tagged.message, tagged.status)
+    return finishFailure(tagged.kind, tagged.message, tagged.status)
   }
   modelFetchCache.delete(cacheKey)
-  return failureModelFetchResult(
-    cacheKey,
-    providerId,
-    publicBaseUrl,
+  return finishFailure(
     'not_found',
     '未能获取模型列表:该端点可能不提供 /models 接口,请手动填写模型名'
   )
@@ -313,7 +607,8 @@ function failureModelFetchResult(
   baseUrl: string,
   kind: ProviderModelErrorKind,
   message: string,
-  status?: number
+  status?: number,
+  latencyMs?: number
 ): ProviderModelFetchResult {
   return {
     ok: false,
@@ -321,6 +616,7 @@ function failureModelFetchResult(
     baseUrl,
     cacheKey,
     models: [],
+    latencyMs,
     stale: true,
     error: {
       kind,

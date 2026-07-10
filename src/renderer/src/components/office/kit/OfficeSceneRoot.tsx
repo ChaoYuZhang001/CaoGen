@@ -1,7 +1,6 @@
 import LightingRig from './LightingRig'
 import OfficeScene from './OfficeScene'
 import WorkstationPro from './WorkstationPro'
-import DustMotes from './DustMotes'
 import CameraRig from './CameraRig'
 import PostFX from './PostFX'
 import type { WorkstationActivity } from './WorkstationPro'
@@ -26,14 +25,13 @@ export interface OfficeSceneRootProps {
 }
 
 /**
- * 办公区场景组合根:把布景、工位、灯光、相机、后处理与氛围粒子一次性拼装。
+ * 办公区场景组合根:把布景、工位、灯光、相机与后处理一次性拼装。
  * 必须在外层 <Canvas> 内渲染(本组件不含 Canvas)。
  *
  * 组成:
  * - LightingRig(day/night 由 light 决定)
  * - OfficeScene 布景层(墙/地/家具,中央留空给工位网格)
  * - stations.map -> WorkstationPro(逐个工位)
- * - DustMotes 空气浮尘氛围
  * - CameraRig 自动环绕相机(封装 OrbitControls)
  * - PostFX 后处理栈(Bloom/Vignette/SMAA)
  */
@@ -59,8 +57,6 @@ export default function OfficeSceneRoot({
           onSelect={s.onSelect}
         />
       ))}
-
-      <DustMotes light={light} />
 
       <CameraRig auto />
 

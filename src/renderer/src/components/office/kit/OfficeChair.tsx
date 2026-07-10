@@ -34,7 +34,7 @@ export default function OfficeChair({
   // 相位:让多把椅子的怠速回摆错开
   const phase = useMemo(() => (position[0] * 1.3 + position[2] * 0.7) % (Math.PI * 2), [position])
 
-  // 五爪脚:一根从中心向外的锥形横梁;滚轮:爪端的小球
+  // 五爪脚:一根从中心向外的横梁;滚轮:爪端的小胶轮,不用球形避免画面出现白/黑漂浮球感。
   useLayoutEffect(() => {
     const legs = legsRef.current
     const casters = castersRef.current
@@ -82,7 +82,7 @@ export default function OfficeChair({
         <meshStandardMaterial color="#22262e" metalness={0.5} roughness={0.5} />
       </instancedMesh>
       <instancedMesh ref={castersRef} args={[undefined, undefined, SPOKES]} castShadow>
-        <sphereGeometry args={[0.045, 16, 16]} />
+        <boxGeometry args={[0.085, 0.035, 0.055]} />
         <meshStandardMaterial color="#101216" metalness={0.3} roughness={0.6} />
       </instancedMesh>
 

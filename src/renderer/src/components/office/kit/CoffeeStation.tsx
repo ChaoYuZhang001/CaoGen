@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { RoundedBox } from '@react-three/drei'
 import type { MeshStandardMaterial } from 'three'
 
 /** 视觉道具通用入参:统一 position / rotation / scale */
@@ -12,14 +13,14 @@ export interface OfficeProp {
 const CYAN = '#8fe9ff'
 const COUNTER = '#1e1e1e'
 const METAL = '#2c313c'
-const WHITE = '#f4f4f4'
-const WATER = '#9fe8ff'
+const CUP_SHELL = '#b7c4ce'
+const HYDRATION_SIGNAL = '#7f9aac'
 
 // 杯子摆位(相对台面),闭包外定义避免每帧重建
 const CUPS: Array<{ x: number; z: number; c: string }> = [
-  { x: -0.5, z: 0.18, c: WHITE },
-  { x: -0.32, z: 0.24, c: WHITE },
-  { x: -0.14, z: 0.16, c: '#d8d8d8' }
+  { x: -0.5, z: 0.18, c: CUP_SHELL },
+  { x: -0.32, z: 0.24, c: CUP_SHELL },
+  { x: -0.14, z: 0.16, c: '#9fb2c2' }
 ]
 
 /**
@@ -50,16 +51,17 @@ export default function CoffeeStation({
     <group position={position} rotation={rotation} scale={scale}>
       {/* 机器人补水停靠垫:低矮不挡视线,把茶水角从道具变成可抵达服务点。 */}
       <group position={[-0.52, 0.018, 0.78]}>
-        <mesh receiveShadow>
-          <cylinderGeometry args={[0.34, 0.34, 0.018, 36]} />
+        <RoundedBox args={[0.58, 0.018, 0.3]} radius={0.035} smoothness={3} receiveShadow>
           <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.22} transparent opacity={0.28} toneMapped={false} />
-        </mesh>
-        <mesh position={[0, 0.018, 0]}>
-          <torusGeometry args={[0.28, 0.012, 8, 36]} />
-          <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.42} transparent opacity={0.7} toneMapped={false} />
-        </mesh>
-        <mesh position={[0, 0.024, -0.02]} rotation={[Math.PI / 2, 0, 0]}>
-          <coneGeometry args={[0.08, 0.18, 3]} />
+        </RoundedBox>
+        {[-0.16, 0, 0.16].map((x) => (
+          <mesh key={`hydration-dock-slat-${x}`} position={[x, 0.02, -0.02]}>
+            <boxGeometry args={[0.1, 0.012, 0.024]} />
+            <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.42} transparent opacity={0.68} toneMapped={false} />
+          </mesh>
+        ))}
+        <mesh position={[0, 0.028, 0.08]}>
+          <boxGeometry args={[0.24, 0.012, 0.02]} />
           <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.46} transparent opacity={0.68} toneMapped={false} />
         </mesh>
       </group>
@@ -106,12 +108,12 @@ export default function CoffeeStation({
         {/* 出水口下的小咖啡杯 */}
         <mesh position={[0, 0.075, 0.13]} castShadow>
           <cylinderGeometry args={[0.035, 0.028, 0.07, 16]} />
-          <meshStandardMaterial color={WHITE} roughness={0.6} />
+          <meshStandardMaterial color={CUP_SHELL} roughness={0.6} />
         </mesh>
 
         {/* 发光指示灯(青色,呼吸;供 Bloom) */}
         <mesh position={[0.11, 0.28, 0.161]}>
-          <sphereGeometry args={[0.018, 16, 16]} />
+          <boxGeometry args={[0.044, 0.018, 0.014]} />
           <meshStandardMaterial
             ref={ledMatRef}
             color={CYAN}
@@ -169,11 +171,11 @@ export default function CoffeeStation({
         {/* 冷/热龙头 */}
         <mesh position={[-0.05, 0.6, 0.19]}>
           <boxGeometry args={[0.03, 0.05, 0.03]} />
-          <meshStandardMaterial color="#4aa3ff" metalness={0.4} roughness={0.4} />
+          <meshStandardMaterial color={HYDRATION_SIGNAL} metalness={0.4} roughness={0.4} />
         </mesh>
         <mesh position={[0.05, 0.6, 0.19]}>
           <boxGeometry args={[0.03, 0.05, 0.03]} />
-          <meshStandardMaterial color="#d8593c" metalness={0.4} roughness={0.4} />
+          <meshStandardMaterial color="#8fa0ad" metalness={0.4} roughness={0.4} />
         </mesh>
         {/* 接水格栅 */}
         <mesh position={[0, 0.48, 0.18]}>
@@ -182,14 +184,12 @@ export default function CoffeeStation({
         </mesh>
         {/* 补水信标:几何水滴 + 短光条,不使用文字标签。 */}
         <group position={[0, 1.58, 0.05]}>
-          <mesh position={[0, 0.045, 0]}>
-            <sphereGeometry args={[0.06, 18, 18]} />
-            <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.36} transparent opacity={0.88} toneMapped={false} />
-          </mesh>
-          <mesh position={[0, -0.025, 0]} rotation={[Math.PI, 0, 0]}>
-            <coneGeometry args={[0.052, 0.12, 18]} />
-            <meshStandardMaterial color={WATER} emissive={WATER} emissiveIntensity={0.32} transparent opacity={0.84} toneMapped={false} />
-          </mesh>
+          {[-0.05, 0, 0.05].map((y, i) => (
+            <mesh key={`hydration-signal-${i}`} position={[0, y, 0]}>
+              <boxGeometry args={[0.08 + i * 0.04, 0.018, 0.014]} />
+              <meshStandardMaterial color={HYDRATION_SIGNAL} emissive={CYAN} emissiveIntensity={0.22 + i * 0.08} transparent opacity={0.72} toneMapped={false} />
+            </mesh>
+          ))}
           <mesh position={[0, -0.135, 0]}>
             <boxGeometry args={[0.26, 0.018, 0.014]} />
             <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.48} toneMapped={false} />
@@ -206,7 +206,7 @@ export default function CoffeeStation({
         {[-0.14, 0, 0.14].map((x) => (
           <mesh key={x} position={[x, 0.055, 0.01]} castShadow>
             <cylinderGeometry args={[0.032, 0.026, 0.07, 14]} />
-            <meshStandardMaterial color="#dce7f2" roughness={0.5} metalness={0.08} />
+            <meshStandardMaterial color={CUP_SHELL} roughness={0.5} metalness={0.08} />
           </mesh>
         ))}
       </group>

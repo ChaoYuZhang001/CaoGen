@@ -6,7 +6,6 @@ import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
 import { applyIdle, applyTalking, applyWalking } from './AvatarAnimations'
 import { vendorSkin } from './VendorSkins'
-import ProviderLogoBadge from './ProviderLogoBadge'
 import { providerLogoFor } from './ProviderLogos'
 
 export type AgentWalkReason = 'tea' | 'approval' | 'restroom' | 'dining'
@@ -52,14 +51,16 @@ const REST_SECONDS: Record<AgentWalkReason, number> = {
   dining: 13
 }
 const ROUTE_COLOR: Record<AgentWalkReason, string> = {
-  tea: '#8fe9ff',
-  approval: '#e0a33c',
-  restroom: '#8fe9ff',
-  dining: '#91d18b'
+  tea: '#5c8794',
+  approval: '#6f8fa0',
+  restroom: '#5c8794',
+  dining: '#5f7f8c'
 }
+const WALKER_ACCENT = '#59dcff'
+const WALKER_NEUTRAL = '#9fb2c2'
 
 function routeColor(reason: AgentWalkReason, accent: string): string {
-  return reason === 'tea' ? accent || ROUTE_COLOR.tea : ROUTE_COLOR[reason]
+  return reason === 'tea' ? WALKER_ACCENT || accent : ROUTE_COLOR[reason]
 }
 
 function WalkerRouteTrail({
@@ -81,56 +82,24 @@ function WalkerRouteTrail({
     return {
       length,
       yaw: Math.atan2(dx, dz),
-      mid: new Vector3((home.x + target.x) / 2, 0, (home.z + target.z) / 2),
-      dotCount: Math.min(9, Math.max(4, Math.floor(length / 0.55)))
+      mid: new Vector3((home.x + target.x) / 2, 0, (home.z + target.z) / 2)
     }
   }, [home, target])
 
   if (!route) return null
   const color = routeColor(reason, accent)
   return (
-    <group position={[route.mid.x, 0.034, route.mid.z]} rotation={[0, route.yaw, 0]}>
+    <group position={[route.mid.x, 0.018, route.mid.z]} rotation={[0, route.yaw, 0]}>
       <mesh position={[0, 0, 0]} receiveShadow>
-        <boxGeometry args={[0.055, 0.012, route.length]} />
+        <boxGeometry args={[0.05, 0.008, route.length]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={reason === 'approval' ? 0.3 : 0.24}
+          emissiveIntensity={reason === 'approval' ? 0.24 : 0.18}
           transparent
-          opacity={0.22}
+          opacity={0.18}
           roughness={0.45}
           metalness={0.08}
-          toneMapped={false}
-        />
-      </mesh>
-      {Array.from({ length: route.dotCount }).map((_, i) => {
-        const k = route.dotCount === 1 ? 0.5 : i / (route.dotCount - 1)
-        const z = -route.length / 2 + k * route.length
-        const side = i % 2 === 0 ? -0.065 : 0.065
-        return (
-          <mesh key={`${reason}-step-${i}`} position={[side, 0.012, z]} rotation={[Math.PI / 2, 0, 0.18 * (i % 2 === 0 ? -1 : 1)]}>
-            <capsuleGeometry args={[0.018, 0.06, 4, 8]} />
-            <meshStandardMaterial
-              color={color}
-              emissive={color}
-              emissiveIntensity={reason === 'approval' ? 0.45 : 0.36}
-              transparent
-              opacity={0.52}
-              roughness={0.36}
-              metalness={0.14}
-              toneMapped={false}
-            />
-          </mesh>
-        )
-      })}
-      <mesh position={[0, 0.014, route.length / 2 - 0.09]} rotation={[Math.PI / 2, 0, Math.PI]}>
-        <coneGeometry args={[0.07, 0.16, 3]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={reason === 'approval' ? 0.52 : 0.42}
-          transparent
-          opacity={0.58}
           toneMapped={false}
         />
       </mesh>
@@ -150,7 +119,7 @@ function AgentStatusMarker({
   return (
     <group position={position}>
       <mesh receiveShadow>
-        <cylinderGeometry args={[0.19, 0.19, 0.018, 32]} />
+        <boxGeometry args={[0.34, 0.018, 0.18]} />
         <meshStandardMaterial
           color={color}
           emissive={color}
@@ -162,47 +131,42 @@ function AgentStatusMarker({
           toneMapped={false}
         />
       </mesh>
-      <mesh position={[0, 0.015, 0]}>
-        <torusGeometry args={[0.13, 0.01, 8, 32]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={0.36}
-          transparent
-          opacity={0.56}
-          toneMapped={false}
-        />
-      </mesh>
+      {[-0.08, 0.08].map((x) => (
+        <mesh key={`marker-slat-${x}`} position={[x, 0.017, 0]}>
+          <boxGeometry args={[0.11, 0.012, 0.022]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.36} transparent opacity={0.56} toneMapped={false} />
+        </mesh>
+      ))}
       {reason === 'approval' ? (
         <group position={[0, 0.035, 0]}>
           <mesh position={[-0.035, 0, 0.012]} rotation={[0, 0, -0.75]}>
             <boxGeometry args={[0.09, 0.016, 0.012]} />
-            <meshStandardMaterial color="#fff2cf" emissive={color} emissiveIntensity={0.42} toneMapped={false} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.18} toneMapped={false} />
           </mesh>
           <mesh position={[0.036, 0, -0.015]} rotation={[0, 0, 0.72]}>
             <boxGeometry args={[0.16, 0.016, 0.012]} />
-            <meshStandardMaterial color="#fff2cf" emissive={color} emissiveIntensity={0.42} toneMapped={false} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.18} toneMapped={false} />
           </mesh>
         </group>
       ) : reason === 'dining' ? (
         <group position={[0, 0.036, 0]}>
           <mesh position={[-0.058, 0, 0]} rotation={[0, 0, -0.04]}>
             <boxGeometry args={[0.018, 0.22, 0.014]} />
-            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.16} toneMapped={false} />
           </mesh>
           {[-0.092, -0.058, -0.024].map((x) => (
             <mesh key={x} position={[x, 0.092, 0]}>
               <boxGeometry args={[0.012, 0.072, 0.012]} />
-              <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.34} toneMapped={false} />
+              <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.14} toneMapped={false} />
             </mesh>
           ))}
           <mesh position={[0.07, 0.012, 0]} rotation={[0, 0, -0.16]}>
             <boxGeometry args={[0.018, 0.24, 0.014]} />
-            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.16} toneMapped={false} />
           </mesh>
           <mesh position={[0.088, 0.11, 0]} rotation={[0, 0, -0.16]}>
             <boxGeometry args={[0.058, 0.07, 0.012]} />
-            <meshStandardMaterial color="#f2ffe8" emissive={color} emissiveIntensity={0.34} toneMapped={false} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.14} toneMapped={false} />
           </mesh>
         </group>
       ) : reason === 'restroom' ? (
@@ -210,12 +174,12 @@ function AgentStatusMarker({
           {[-0.065, 0.065].map((x) => (
             <group key={x} position={[x, 0, 0]}>
               <mesh position={[0, 0.07, 0]}>
-                <sphereGeometry args={[0.032, 14, 10]} />
-                <meshStandardMaterial color="#d8fbff" emissive={color} emissiveIntensity={0.38} toneMapped={false} />
+                <boxGeometry args={[0.052, 0.052, 0.014]} />
+                <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.16} toneMapped={false} />
               </mesh>
               <mesh position={[0, -0.032, 0]}>
                 <boxGeometry args={[0.052, 0.12, 0.014]} />
-                <meshStandardMaterial color="#d8fbff" emissive={color} emissiveIntensity={0.3} toneMapped={false} />
+                <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.14} toneMapped={false} />
               </mesh>
             </group>
           ))}
@@ -223,12 +187,12 @@ function AgentStatusMarker({
       ) : (
         <group position={[0, 0.034, 0]}>
           <mesh position={[0, 0, 0.014]}>
-            <sphereGeometry args={[0.052, 16, 12]} />
-            <meshStandardMaterial color="#c8f6ff" emissive={color} emissiveIntensity={0.42} toneMapped={false} />
+            <boxGeometry args={[0.13, 0.026, 0.014]} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.18} toneMapped={false} />
           </mesh>
-          <mesh position={[0, 0, -0.038]} rotation={[Math.PI, 0, 0]}>
-            <coneGeometry args={[0.052, 0.12, 18]} />
-            <meshStandardMaterial color="#c8f6ff" emissive={color} emissiveIntensity={0.36} toneMapped={false} />
+          <mesh position={[0, 0, -0.038]}>
+            <boxGeometry args={[0.08, 0.02, 0.014]} />
+            <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.16} toneMapped={false} />
           </mesh>
         </group>
       )}
@@ -381,7 +345,7 @@ function OneAgentWalker({
 
   return (
     <>
-      <WalkerRouteTrail home={home} target={target} reason={spec.reason} accent={skin.accent} />
+      <WalkerRouteTrail home={home} target={target} reason={spec.reason} accent={WALKER_ACCENT} />
       <group
         ref={groupRef}
         onClick={clickSelect}
@@ -389,47 +353,41 @@ function OneAgentWalker({
         onPointerOver={cursorOver}
         onPointerOut={cursorOut}
       >
+        <mesh name="walker-select-hitbox" position={[0, 0.88, 0]}>
+          <boxGeometry args={[0.82, 1.76, 0.66]} />
+          <meshBasicMaterial transparent opacity={0.001} depthWrite={false} colorWrite={false} />
+        </mesh>
         <mesh position={[0, 0.012, 0]} receiveShadow>
-          <cylinderGeometry args={[0.36, 0.36, 0.018, 32]} />
+          <boxGeometry args={[0.62, 0.018, 0.28]} />
           <meshStandardMaterial
-            color={skin.accent}
-            emissive={skin.accent}
-            emissiveIntensity={0.24}
+            color={WALKER_ACCENT}
+            emissive={WALKER_ACCENT}
+            emissiveIntensity={0.14}
             transparent
-            opacity={0.42}
+            opacity={0.22}
             toneMapped={false}
           />
         </mesh>
         {active && (
-          <mesh position={[0, 0.034, 0]} rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[0.46, 0.018, 8, 72]} />
-            <meshStandardMaterial
-              color="#ffffff"
-              emissive={skin.accent}
-              emissiveIntensity={0.76}
-              transparent
-              opacity={0.72}
-              toneMapped={false}
-            />
-          </mesh>
+          <>
+            {[-0.22, 0.22].map((x) => (
+              <mesh key={`walker-active-slat-${x}`} position={[x, 0.034, 0]}>
+                <boxGeometry args={[0.16, 0.014, 0.028]} />
+                <meshStandardMaterial color={WALKER_NEUTRAL} emissive={WALKER_ACCENT} emissiveIntensity={0.24} transparent opacity={0.32} toneMapped={false} />
+              </mesh>
+            ))}
+          </>
         )}
         <AvatarRig
           ref={rigRef}
           bodyColor={skin.bodyColor}
           skinColor={skin.shellColor}
-          accentColor={skin.accent}
+          accentColor={WALKER_ACCENT}
           emblem={skin.emblem}
           providerLogo={providerLogo}
-          scale={0.96}
+          scale={1}
         />
-        <ProviderLogoBadge
-          logo={providerLogo}
-          position={[0, 0.92, 0.19]}
-          width={0.38}
-          height={0.092}
-          depth={0.014}
-        />
-        {stage === 'target' && <AgentStatusMarker reason={spec.reason} accent={skin.accent} />}
+        {stage === 'target' && <AgentStatusMarker reason={spec.reason} accent={WALKER_ACCENT} />}
       </group>
     </>
   )

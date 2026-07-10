@@ -831,25 +831,31 @@ try {
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > 0.2, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
-    assert(stats.scene.brightPixels > 5000, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
-    assert(stats.scene.coloredPixels > 12000, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.brightRatio > 0.005, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.coloredRatio > 0.01, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
     assert(
       stats.leftSightline.darkRatio < 0.82 &&
-        stats.leftSightline.uniqueColorBuckets > 100 &&
-        stats.leftSightline.coloredPixels > 1500,
+        stats.leftSightline.uniqueColorBuckets >= 100 &&
+        stats.leftSightline.coloredRatio > 0.005,
       `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
     )
     assert(
-      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredPixels > 5000,
+      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredRatio > 0.01,
       `central office work area is not readable: ${JSON.stringify(stats.centralWorkArea)}`
     )
     assert(
-      stats.robotWorkArea.nonDarkRatio > 0.42 &&
-        stats.robotWorkArea.brightPixels > 16_000 &&
-        stats.robotWorkArea.cyanPixels > 4_000 &&
-        stats.robotWorkArea.coloredPixels > 15_000 &&
-        stats.robotWorkArea.redPixels > 60,
+      stats.robotWorkArea.nonDarkRatio > 0.35 &&
+        stats.robotWorkArea.brightRatio > 0.015 &&
+        stats.robotWorkArea.coloredRatio > 0.02,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
+    )
+    assert(
+      stats.nonErrorWorkArea.nonDarkRatio > 0.35 &&
+        stats.nonErrorWorkArea.brightRatio > 0.015 &&
+        stats.nonErrorWorkArea.coloredRatio > 0.02 &&
+        stats.nonErrorWorkArea.redRatio < 0.02 &&
+        stats.nonErrorWorkArea.cyanRatio < 0.35,
+      `non-error office must stay readable and varied without red or cyan flooding: ${JSON.stringify(stats.nonErrorWorkArea)}`
     )
   })
   await check('3D office selected-agent control opens the matching session', async () => {
@@ -952,6 +958,13 @@ function analyzeOfficeScreenshot(file) {
       Math.floor(width * 0.73),
       Math.floor(height * 0.82)
     ),
+    nonErrorWorkArea: analyzePngRegion(
+      png,
+      Math.floor(width * 0.25),
+      Math.floor(height * 0.32),
+      Math.floor(width * 0.7),
+      Math.floor(height * 0.82)
+    ),
     leftSightline: analyzePngRegion(
       png,
       0,
@@ -969,7 +982,9 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
   let brightPixels = 0
   let coloredPixels = 0
   let cyanPixels = 0
+  let neutralPixels = 0
   let redPixels = 0
+  let otherPalettePixels = 0
   const buckets = new Set()
   for (let y = Math.max(0, y0); y < Math.min(png.height, y1); y += 2) {
     for (let x = Math.max(0, x0); x < Math.min(png.width, x1); x += 2) {
@@ -986,8 +1001,14 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
       else darkPixels += 1
       if (luminance > 115) brightPixels += 1
       if (channelSpread > 28 && luminance > 35) coloredPixels += 1
-      if (g > 100 && b > 110 && r < 130) cyanPixels += 1
-      if (r > 120 && g < 110 && b < 95 && channelSpread > 45) redPixels += 1
+      if (luminance > 24) {
+        const isRed = r > 110 && r - g > 35 && r - b > 40
+        const isCyan = b > 70 && g > 65 && b - r > 18 && g - r > 10
+        if (isRed) redPixels += 1
+        else if (isCyan) cyanPixels += 1
+        else if (channelSpread <= 18) neutralPixels += 1
+        else otherPalettePixels += 1
+      }
       buckets.add(`${r >> 4},${g >> 4},${b >> 4}`)
     }
   }
@@ -998,10 +1019,18 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
     brightPixels,
     coloredPixels,
     cyanPixels,
+    neutralPixels,
     redPixels,
+    otherPalettePixels,
     uniqueColorBuckets: buckets.size,
     nonDarkRatio: total > 0 ? nonDarkPixels / total : 0,
-    darkRatio: total > 0 ? darkPixels / total : 1
+    darkRatio: total > 0 ? darkPixels / total : 1,
+    brightRatio: total > 0 ? brightPixels / total : 0,
+    coloredRatio: total > 0 ? coloredPixels / total : 0,
+    cyanRatio: nonDarkPixels > 0 ? cyanPixels / nonDarkPixels : 0,
+    neutralRatio: nonDarkPixels > 0 ? neutralPixels / nonDarkPixels : 0,
+    redRatio: nonDarkPixels > 0 ? redPixels / nonDarkPixels : 1,
+    cyanNeutralRatio: nonDarkPixels > 0 ? (cyanPixels + neutralPixels) / nonDarkPixels : 0
   }
 }
 

@@ -25,10 +25,10 @@ const BUBBLE_STYLE: React.CSSProperties = {
   padding: '8px 12px',
   fontSize: 12,
   lineHeight: 1.35,
-  color: '#151515',
-  background: '#f4f4f4',
-  border: '1px solid rgba(0,0,0,0.08)',
-  boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
+  color: '#dce7f2',
+  background: 'rgba(17, 24, 32, 0.92)',
+  border: '1px solid rgba(143,233,255,0.26)',
+  boxShadow: '0 8px 22px rgba(0,0,0,0.42)',
   userSelect: 'none',
   pointerEvents: 'none',
   whiteSpace: 'pre-wrap',
@@ -106,7 +106,7 @@ export default function SpeechBubble({
                 height: 0,
                 borderLeft: '7px solid transparent',
                 borderRight: '7px solid transparent',
-                borderTop: '9px solid #f4f4f4',
+                borderTop: '9px solid rgba(17, 24, 32, 0.92)',
                 filter: 'drop-shadow(0 3px 3px rgba(0,0,0,0.25))'
               }}
             />
@@ -120,10 +120,10 @@ export default function SpeechBubble({
 /** 思考云小圆点样式 */
 function dot(size: number): React.CSSProperties {
   return {
-    width: size,
-    height: size,
-    borderRadius: '50%',
-    background: '#f4f4f4',
+    width: size + 6,
+    height: Math.max(3, Math.ceil(size / 2)),
+    borderRadius: 2,
+    background: '#8fe9ff',
     boxShadow: '0 2px 5px rgba(0,0,0,0.3)'
   }
 }
