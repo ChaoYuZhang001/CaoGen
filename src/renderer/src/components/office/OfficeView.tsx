@@ -55,8 +55,8 @@ const RESTROOM_STOPS: Array<[number, number, number]> = [[-6.32, 0, 2.18]]
 const RESTROOM_LOOK_AT: [number, number, number] = [-5.62, 0, 2.64]
 const DINING_STOPS: Array<[number, number, number]> = [[-3.86, 0, 2.36]]
 const DINING_LOOK_AT: [number, number, number] = [-4.74, 0, 2.78]
-const OFFICE_CAMERA_POSITION: [number, number, number] = [1.4, 4.22, 8]
-const OFFICE_CAMERA_TARGET: [number, number, number] = [0.18, 0.9, -1.2]
+const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.58, 9.28]
+const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.76, -1.12]
 const WALKER_VISUAL_SCALE = 1.18
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
@@ -394,9 +394,11 @@ export default function OfficeView(): React.JSX.Element {
       }
     }
     if (cameraPreset === 'agent' && activeOfficePosition) {
+      const focusX = activeOfficePosition[0] * 0.45
+      const focusZ = activeOfficePosition[2] * 0.72 + OFFICE_CAMERA_TARGET[2] * 0.28
       return {
-        position: [activeOfficePosition[0] + 2.05, 2.62, activeOfficePosition[2] + 3.5] as [number, number, number],
-        target: [activeOfficePosition[0], 1.02, activeOfficePosition[2] - 0.08] as [number, number, number]
+        position: [focusX + 2.7, 3.18, focusZ + 5.35] as [number, number, number],
+        target: [focusX, 0.96, focusZ] as [number, number, number]
       }
     }
     if (cameraPreset === 'incidents') return incidentCamera
