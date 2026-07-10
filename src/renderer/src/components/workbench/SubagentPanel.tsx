@@ -66,7 +66,6 @@ const ULTIMATE_TASKS = [
   'm15-plugin-coverage: 建立 90+ 插件能力目录、验收标准和缺口导入流程',
   'm8-input-ocr: 图片多图标注、OCR、引用快照回显和大图压缩策略',
   'm8-slash-params: 斜杠命令支持插件/Routine 参数表单、最近使用和失败诊断',
-  'm6-engines: Codex CLI/Gemini CLI 原生 EngineAdapter,统一事件模型与权限请求',
   'm7-update: 自动更新、签名、公证、发布通道和失败回滚',
   'qa-migration: 设计 Codex/Claude/Gemini/Cursor/Cline/Aider 深度用户一天迁移验收脚本'
 ].join('\n')
