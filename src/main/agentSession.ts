@@ -36,6 +36,14 @@ import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import {
+  cancelEffectExecution,
+  completeEffectExecution,
+  markEffectExecutionStarted,
+  prepareEffectExecution
+} from './task/effect-runtime'
+import type { EffectExecutionHandle } from './task/effect-ledger'
+import { isSideEffectingTool } from './task/tool-idempotency'
+import {
   decideGuiPermission,
   GUI_TEMPORARY_GRANT_MESSAGE,
   grantTemporaryGuiAutomation
@@ -60,6 +68,7 @@ import type {
   CheckpointRestoreMode,
   CheckpointRestoreResult,
   EngineKind,
+  EffectStatus,
   ImageAttachmentView,
   PermissionModeId,
   PermissionRequestInfo,
@@ -118,6 +127,7 @@ interface PendingPermission {
   resolve: (result: PermissionResult) => void
   input: Record<string, unknown>
   info: PermissionRequestInfo
+  generation: number
 }
 
 const CLAUDE_READ_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'WebFetch'])
@@ -274,6 +284,12 @@ function toolResultText(content: unknown): string {
   return text
 }
 
+function asRecordInput(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
 /**
  * 一个桌面会话 = 一个持续存活的 Agent SDK query(流式输入模式)。
  * 通过 Pushable 推送用户消息,通过回调把 SDK 消息翻译成 AgentEvent 发往渲染进程。
@@ -299,6 +315,9 @@ export class AgentSession implements Engine {
   /** 最近注入到 Claude SDK 的项目上下文;保存 caogen.md 后下一轮消息会补充差异快照。 */
   private lastProjectContextAppend = ''
   private disposed = false
+  private readonly consumeTasks = new Set<Promise<void>>()
+  private readonly permissionSettlementTasks = new Set<Promise<unknown>>()
+  private disposePromise: Promise<void> | null = null
   private turnStartedAt = 0
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
   private generation = 0
@@ -323,6 +342,8 @@ export class AgentSession implements Engine {
   /** 本会话在轮次运行中持有的系统防休眠句柄。 */
   private powerBlockerId: number | null = null
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
+  private readonly effectHandles = new Map<string, EffectExecutionHandle>()
+  private readonly effectStatuses = new Map<string, EffectStatus>()
 
   constructor(
     meta: SessionMeta,
@@ -396,7 +417,14 @@ export class AgentSession implements Engine {
    * 设计取舍:钩子失败绝不打断会话(catch-all);shell 输出截断 2000 字;
    * 60s 超时防挂起。钩子仅在 Claude 引擎生效(SDK 能力)。
    */
-  private buildHooks(settings: ReturnType<typeof getSettings>): Record<string, Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<Record<string, unknown>>> }>> {
+  private buildHooks(settings: ReturnType<typeof getSettings>, generation: number): Record<
+    string,
+    Array<{
+      matcher?: string
+      timeout?: number
+      hooks: Array<(input: unknown, toolUseID?: string) => Promise<Record<string, unknown>>>
+    }>
+  > {
     const postEditCmd = (settings.hookPostEditCommand ?? '').trim()
     const turnEndCmd = (settings.hookTurnEndCommand ?? '').trim()
 
@@ -436,7 +464,69 @@ export class AgentSession implements Engine {
     }
 
     return {
+      PreToolUse: [
+        {
+          timeout: 45,
+          hooks: [
+            (input: unknown, hookToolUseId?: string): Promise<Record<string, unknown>> =>
+              this.trackPermissionSettlement((async () => {
+                const record = (input ?? {}) as Record<string, unknown>
+                const toolName = typeof record.tool_name === 'string' ? record.tool_name : ''
+                const toolInput = asRecordInput(record.tool_input)
+                const toolUseId = hookToolUseId ?? (typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined)
+                const staleReason = '操作所属引擎代已结束，PreToolUse 已作废'
+                if (!this.permissionSettlementIsCurrent(generation)) {
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse',
+                      permissionDecision: 'deny',
+                      permissionDecisionReason: staleReason
+                    }
+                  }
+                }
+                try {
+                  await this.ensureClaudeEffectPrepared(toolName, toolInput, toolUseId)
+                  if (!this.permissionSettlementIsCurrent(generation)) {
+                    if (toolUseId) {
+                      await this.cancelClaudeEffect(toolUseId, staleReason).catch(() => undefined)
+                    }
+                    return {
+                      hookSpecificOutput: {
+                        hookEventName: 'PreToolUse',
+                        permissionDecision: 'deny',
+                        permissionDecisionReason: staleReason
+                      }
+                    }
+                  }
+                  return { continue: true }
+                } catch (error) {
+                  const reason = `外部副作用账本准备失败，已阻止执行:${errText(error)}`
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse',
+                      permissionDecision: 'deny',
+                      permissionDecisionReason: reason
+                    }
+                  }
+                }
+              })())
+          ]
+        }
+      ],
       PostToolUse: [
+        {
+          timeout: 45,
+          hooks: [
+            async (input: unknown, hookToolUseId?: string): Promise<Record<string, unknown>> => {
+              const record = (input ?? {}) as Record<string, unknown>
+              const toolUseId = hookToolUseId ?? (typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined)
+              if (toolUseId) {
+                await this.finishClaudeEffect(toolUseId, true, toolResultText(record.tool_response))
+              }
+              return { continue: true }
+            }
+          ]
+        },
         {
           matcher: 'Edit|Write|MultiEdit|NotebookEdit',
           hooks: [
@@ -447,6 +537,37 @@ export class AgentSession implements Engine {
                 void runShellHook(postEditCmd, 'post-edit', toolName)
               } else {
                 this.emit({ kind: 'hook-event', event: 'post-edit', toolName })
+              }
+              return { continue: true }
+            }
+          ]
+        }
+      ],
+      PostToolUseFailure: [
+        {
+          timeout: 45,
+          hooks: [
+            async (input: unknown, hookToolUseId?: string): Promise<Record<string, unknown>> => {
+              const record = (input ?? {}) as Record<string, unknown>
+              const toolUseId = hookToolUseId ?? (typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined)
+              if (toolUseId) {
+                const error = typeof record.error === 'string' ? record.error : 'Claude tool execution failed'
+                await this.finishClaudeEffect(toolUseId, false, error)
+              }
+              return { continue: true }
+            }
+          ]
+        }
+      ],
+      PermissionDenied: [
+        {
+          hooks: [
+            async (input: unknown, hookToolUseId?: string): Promise<Record<string, unknown>> => {
+              const record = (input ?? {}) as Record<string, unknown>
+              const toolUseId = hookToolUseId ?? (typeof record.tool_use_id === 'string' ? record.tool_use_id : undefined)
+              if (toolUseId) {
+                const reason = typeof record.reason === 'string' ? record.reason : 'Claude permission denied'
+                await this.cancelClaudeEffect(toolUseId, reason)
               }
               return { continue: true }
             }
@@ -524,20 +645,25 @@ export class AgentSession implements Engine {
           ...(this.resumeId && this.resumeAtId ? { resumeSessionAt: this.resumeAtId } : {}),
           ...(sdkAgents && Object.keys(sdkAgents.agents).length > 0 ? { agents: sdkAgents.agents } : {}),
           // Hooks 桥:PostToolUse(文件写入后)+ Stop(轮结束),转发到时间线并可执行用户 shell 钩子
-          hooks: this.buildHooks(settings),
+          hooks: this.buildHooks(settings, gen),
           // 诊断:捕获 SDK 子进程 stderr 尾部,超时/崩溃时附到错误信息(否则用户只见"无响应")
           stderr: (data: string) => {
             this.stderrTail = `${this.stderrTail}${data}`.slice(-4000)
             if (data.trim()) console.error('[caogen][claude-sdk stderr]', data.trim().slice(0, 500))
           },
-          canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts)
+          canUseTool: (toolName, input, opts) => this.requestPermission(toolName, input, opts, gen)
         }
       })
     } catch (err) {
       this.setStatus('error', errText(err))
       return
     }
-    void this.consume(gen)
+    const consumeTask = this.consume(gen)
+    this.consumeTasks.add(consumeTask)
+    void consumeTask.then(
+      () => this.consumeTasks.delete(consumeTask),
+      () => this.consumeTasks.delete(consumeTask)
+    )
   }
 
   send(input: string | SendMessagePayload): void {
@@ -600,21 +726,29 @@ export class AgentSession implements Engine {
     ].join('|')
   }
 
-  /** 引擎重建核心:作废旧代 → 关旧 query → 以 resume 延续上下文重启 */
-  private async rebuildEngine(): Promise<void> {
-    this.generation++
-    for (const [requestId, pending] of this.pending) {
-      pending.resolve({ behavior: 'deny', message: '引擎重建,操作作废' })
-      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-    }
-    this.pending.clear()
+  private detachCurrentQuery(): Promise<void> {
     this.input.end()
+    const closingQuery = this.query
+    this.query = null
+    let closeResult: unknown
     try {
-      this.query?.close()
+      closeResult = closingQuery?.close()
     } catch {
       // 进程可能已退出
     }
-    this.query = null
+    return Promise.resolve(closeResult).then(
+      () => undefined,
+      () => undefined
+    )
+  }
+
+  /** 引擎重建核心:作废旧代 → 关旧 query → 以 resume 延续上下文重启 */
+  private async rebuildEngine(): Promise<void> {
+    this.generation++
+    const queryClosed = this.detachCurrentQuery()
+    await this.invalidatePermissionSettlements('引擎重建,操作作废')
+    await queryClosed
+    this.effectStatuses.clear()
     this.input = new Pushable<SDKUserMessage>()
     this.resumeId = this.meta.sdkSessionId || this.resumeId
     await this.start()
@@ -840,9 +974,6 @@ export class AgentSession implements Engine {
     const pending = this.pending.get(requestId)
     if (!pending) return
     this.pending.delete(requestId)
-    if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && normalizeClaudeToolName(pending.info.toolName).startsWith('gui_')) {
-      grantTemporaryGuiAutomation()
-    }
     writeAuditLog(this.meta.cwd, {
       action: allow ? 'allow' : 'deny',
       source: 'user',
@@ -850,12 +981,9 @@ export class AgentSession implements Engine {
       input: pending.input,
       message
     })
-    this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
-    if (allow) {
-      pending.resolve({ behavior: 'allow', updatedInput: pending.input })
-    } else {
-      pending.resolve({ behavior: 'deny', message: message || '用户拒绝了此操作' })
-    }
+    this.trackPermissionSettlement(
+      this.settlePermissionResponse(requestId, pending, allow, message)
+    )
   }
 
   pendingPermissions(): PermissionRequestInfo[] {
@@ -993,19 +1121,10 @@ export class AgentSession implements Engine {
     try {
       // 作废旧代:旧 consume 循环的残余消息/异常一律丢弃
       this.generation++
+      const queryClosed = this.detachCurrentQuery()
       // 旧引擎未决权限全部拒绝(其进程即将终止)
-      for (const [requestId, pending] of this.pending) {
-        pending.resolve({ behavior: 'deny', message: '会话已回退,操作作废' })
-        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-      }
-      this.pending.clear()
-      this.input.end()
-      try {
-        this.query?.close()
-      } catch {
-        // 进程可能已退出
-      }
-      this.query = null
+      await this.invalidatePermissionSettlements('会话已回退,操作作废')
+      await queryClosed
       this.input = new Pushable<SDKUserMessage>()
 
       // resumeId + resumeAtId 已在 restoreCheckpoint 设好;start() 会带上二者,
@@ -1106,6 +1225,7 @@ export class AgentSession implements Engine {
     if (this.triedProviders.size > AgentSession.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
     if (!failure.switchable) return false
+    if (this.blockFailoverForUnresolvedEffects()) return false
 
     const target = pickFailoverTarget({
       candidates: this.failoverCandidates(),
@@ -1121,24 +1241,15 @@ export class AgentSession implements Engine {
       // 先令旧引擎代数作废:此后旧 consume 循环的任何消息/异常都被丢弃,
       // 不会在切换过程中把会话误标为 error/closed
       this.generation++
+      const queryClosed = this.detachCurrentQuery()
       const fromId = this.meta.providerId
       const fromName = this.providerName(fromId)
       console.warn(
         `[caogen] 厂商故障切换:${fromName} → ${target.name}(${failure.label})`
       )
       // 旧引擎的未决权限全部拒绝(其进程即将终止)
-      for (const [requestId, pending] of this.pending) {
-        pending.resolve({ behavior: 'deny', message: '厂商已切换,操作作废' })
-        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-      }
-      this.pending.clear()
-      this.input.end()
-      try {
-        this.query?.close()
-      } catch {
-        // 进程可能已退出
-      }
-      this.query = null
+      await this.invalidatePermissionSettlements('厂商已切换,操作作废')
+      await queryClosed
       this.input = new Pushable<SDKUserMessage>()
 
       // 切换身份:providerId 必换;固定模型就近映射到目标厂商的同档模型
@@ -1192,6 +1303,7 @@ export class AgentSession implements Engine {
     }
     const failure = classifyFailure(errorText)
     if (!canRotateProviderKey(failure)) return false
+    if (this.blockFailoverForUnresolvedEffects()) return false
     const rotation = rotateProviderKey({
       providerId: this.meta.providerId,
       failedKeyId: this.activeProviderKeyId,
@@ -1203,18 +1315,9 @@ export class AgentSession implements Engine {
     this.failoverBusy = true
     try {
       this.generation++
-      for (const [requestId, pending] of this.pending) {
-        pending.resolve({ behavior: 'deny', message: 'API Key 已切换,操作作废' })
-        this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-      }
-      this.pending.clear()
-      this.input.end()
-      try {
-        this.query?.close()
-      } catch {
-        // 进程可能已退出
-      }
-      this.query = null
+      const queryClosed = this.detachCurrentQuery()
+      await this.invalidatePermissionSettlements('API Key 已切换,操作作废')
+      await queryClosed
       this.input = new Pushable<SDKUserMessage>()
       this.resumeId = this.meta.sdkSessionId || this.resumeId
       this.triedProviderKeys.add(rotation.toKeyId)
@@ -1284,22 +1387,23 @@ export class AgentSession implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
-  dispose(): void {
-    if (this.disposed) return
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise
+    this.disposePromise = this.disposeAndWait()
+    return this.disposePromise
+  }
+
+  private async disposeAndWait(): Promise<void> {
     this.disposed = true
-    this.input.end()
+    this.generation++
     this.stopPowerBlocker()
-    for (const [requestId, pending] of this.pending) {
-      pending.resolve({ behavior: 'deny', message: '会话已关闭' })
-      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-    }
-    this.pending.clear()
-    try {
-      this.query?.close()
-    } catch {
-      // 进程可能已退出
-    }
+    const queryClosed = this.detachCurrentQuery()
+    await this.invalidatePermissionSettlements('会话已关闭')
     this.setStatus('closed')
+    await queryClosed
+    while (this.consumeTasks.size > 0) {
+      await Promise.allSettled([...this.consumeTasks])
+    }
   }
 
   private async consume(gen: number): Promise<void> {
@@ -1317,6 +1421,11 @@ export class AgentSession implements Engine {
       // 附上 SDK stderr 尾部:否则子进程认证失败/崩溃时用户只见空洞错误
       const tail = this.stderrTail.trim()
       const text = tail ? `${errText(err)}\n[SDK stderr]\n${tail.slice(-1200)}` : errText(err)
+      if (this.blockFailoverForUnresolvedEffects()) {
+        recordFailure(this.meta.providerId, text)
+        this.setStatus('error', text)
+        return
+      }
       if (this.turnInFlight && (await this.tryProviderKeyFailover(text))) return
       recordFailure(this.meta.providerId, text)
       // 流层崩溃(进程退出/网络断):仅当有轮次在途时值得切厂商重试
@@ -1369,12 +1478,20 @@ export class AgentSession implements Engine {
         for (const raw of content) {
           const block = raw as Record<string, unknown> | null
           if (block && block.type === 'tool_result') {
+            const toolUseId = typeof block.tool_use_id === 'string' ? block.tool_use_id : ''
+            const persistedStatus = taskRuntimeRegistry
+              .get(this.meta.id)
+              ?.effects?.find((effect) => effect.toolUseId === toolUseId)
+              ?.status
+            const effectStatus = this.effectStatuses.get(toolUseId) ?? persistedStatus
             this.emit({
               kind: 'tool-result',
-              toolUseId: typeof block.tool_use_id === 'string' ? block.tool_use_id : '',
+              toolUseId,
               content: toolResultText(block.content),
-              isError: block.is_error === true
+              isError: block.is_error === true,
+              effectStatus
             })
+            this.effectStatuses.delete(toolUseId)
           }
         }
         break
@@ -1466,11 +1583,221 @@ export class AgentSession implements Engine {
     }
   }
 
+  private async ensureClaudeEffectExecuting(
+    toolName: string,
+    input: Record<string, unknown>,
+    toolUseId: string | undefined
+  ): Promise<void> {
+    const handle = await this.ensureClaudeEffectPrepared(toolName, input, toolUseId)
+    if (!toolUseId) return
+    await markEffectExecutionStarted(handle, {
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      toolUseId,
+      toolName: normalizeClaudeToolName(toolName),
+      toolInput: normalizeClaudeToolInput(toolName, input)
+    })
+  }
+
+  private async ensureClaudeEffectPrepared(
+    toolName: string,
+    input: Record<string, unknown>,
+    toolUseId: string | undefined
+  ): Promise<EffectExecutionHandle | null> {
+    const policyToolName = normalizeClaudeToolName(toolName)
+    const policyInput = normalizeClaudeToolInput(toolName, input)
+    if (!isSideEffectingTool(policyToolName)) return null
+    if (!toolUseId) throw new Error('Claude SDK 未提供 tool_use_id，无法建立效果 lease')
+    let handle = this.effectHandles.get(toolUseId)
+    if (!handle) {
+      handle = await prepareEffectExecution({
+        sessionId: this.meta.id,
+        cwd: this.meta.cwd,
+        toolUseId,
+        toolName: policyToolName,
+        toolInput: policyInput
+      }) ?? undefined
+      if (handle) this.effectHandles.set(toolUseId, handle)
+    }
+    return handle ?? null
+  }
+
+  private async finishClaudeEffect(toolUseId: string, ok: boolean, output: string): Promise<void> {
+    const handle = this.effectHandles.get(toolUseId)
+    if (!handle) return
+    try {
+      const effect = await completeEffectExecution(handle, { ok, output })
+      if (effect) this.effectStatuses.set(toolUseId, effect.status)
+    } catch (error) {
+      this.effectStatuses.set(toolUseId, 'waiting_reconciliation')
+      this.emit({
+        kind: 'hook-event',
+        event: 'effect-ledger-error',
+        detail: `外部操作结果未能写入效果账本，已保留未知结果保护:${errText(error)}`
+      })
+    } finally {
+      this.effectHandles.delete(toolUseId)
+    }
+  }
+
+  private async cancelClaudeEffect(toolUseId: string, reason: string): Promise<void> {
+    const handle = this.effectHandles.get(toolUseId)
+    if (!handle) return
+    try {
+      await cancelEffectExecution(handle, reason)
+    } finally {
+      this.effectHandles.delete(toolUseId)
+    }
+  }
+
+  private trackPermissionSettlement<T>(task: Promise<T>): Promise<T> {
+    this.permissionSettlementTasks.add(task)
+    void task.then(
+      () => this.permissionSettlementTasks.delete(task),
+      () => this.permissionSettlementTasks.delete(task)
+    )
+    return task
+  }
+
+  private permissionSettlementIsCurrent(generation: number): boolean {
+    return !this.disposed && generation === this.generation
+  }
+
+  private async authorizeClaudeTool(
+    toolName: string,
+    input: Record<string, unknown>,
+    toolUseId: string | undefined,
+    generation: number
+  ): Promise<PermissionResult> {
+    const staleMessage = '操作所属引擎代已结束，审批已作废'
+    if (!this.permissionSettlementIsCurrent(generation)) {
+      return { behavior: 'deny', message: staleMessage }
+    }
+    try {
+      await this.ensureClaudeEffectExecuting(toolName, input, toolUseId)
+    } catch (error) {
+      if (toolUseId) {
+        await this.cancelClaudeEffect(toolUseId, '效果账本准备失败，工具未获准执行').catch(() => undefined)
+      }
+      return {
+        behavior: 'deny',
+        message: `外部副作用账本准备失败，已阻止执行:${errText(error)}`
+      }
+    }
+    if (!this.permissionSettlementIsCurrent(generation)) {
+      if (toolUseId) {
+        await this.cancelClaudeEffect(toolUseId, staleMessage).catch(() => undefined)
+      }
+      return { behavior: 'deny', message: staleMessage }
+    }
+    return { behavior: 'allow', updatedInput: input }
+  }
+
+  private async settlePermissionResponse(
+    requestId: string,
+    pending: PendingPermission,
+    allow: boolean,
+    message?: string
+  ): Promise<void> {
+    let result: PermissionResult
+    if (!allow) {
+      const denyMessage = message || '用户拒绝了此操作'
+      if (pending.info.toolUseId) {
+        await this.cancelClaudeEffect(pending.info.toolUseId, denyMessage).catch(() => undefined)
+      }
+      result = { behavior: 'deny', message: denyMessage }
+    } else {
+      try {
+        result = await this.authorizeClaudeTool(
+          pending.info.toolName,
+          pending.input,
+          pending.info.toolUseId,
+          pending.generation
+        )
+        if (result.behavior === 'allow' && !this.permissionSettlementIsCurrent(pending.generation)) {
+          const staleMessage = '操作所属引擎代已结束，审批已作废'
+          if (pending.info.toolUseId) {
+            await this.cancelClaudeEffect(pending.info.toolUseId, staleMessage).catch(() => undefined)
+          }
+          result = { behavior: 'deny', message: staleMessage }
+        }
+      } catch (error) {
+        result = { behavior: 'deny', message: `处理工具权限失败:${errText(error)}` }
+      }
+    }
+    if (
+      result.behavior === 'allow' &&
+      message === GUI_TEMPORARY_GRANT_MESSAGE &&
+      normalizeClaudeToolName(pending.info.toolName).startsWith('gui_')
+    ) {
+      grantTemporaryGuiAutomation()
+    }
+    this.emit({ kind: 'permission-resolved', requestId, behavior: result.behavior })
+    pending.resolve(result)
+  }
+
+  private async awaitPermissionSettlements(): Promise<void> {
+    while (this.permissionSettlementTasks.size > 0) {
+      await Promise.allSettled([...this.permissionSettlementTasks])
+    }
+  }
+
+  private async cancelPreparedClaudeEffects(message: string): Promise<void> {
+    for (const [toolUseId] of [...this.effectHandles]) {
+      const status = taskRuntimeRegistry
+        .get(this.meta.id)
+        ?.effects?.find((effect) => effect.toolUseId === toolUseId)
+        ?.status
+      if (status === 'prepared') {
+        await this.cancelClaudeEffect(toolUseId, message).catch(() => undefined)
+      }
+    }
+  }
+
+  private async invalidatePermissionSettlements(message: string): Promise<void> {
+    await this.rejectPendingPermissions(message)
+    await this.awaitPermissionSettlements()
+    await this.cancelPreparedClaudeEffects(message)
+  }
+
+  private blockFailoverForUnresolvedEffects(): boolean {
+    const unresolved = taskRuntimeRegistry
+      .get(this.meta.id)
+      ?.effects?.find(
+        (effect) => effect.status === 'executing' || effect.status === 'waiting_reconciliation'
+      )
+    if (!unresolved) return false
+    this.lastUserPayload = null
+    this.emit({
+      kind: 'hook-event',
+      event: 'effect-reconciliation-required',
+      toolName: unresolved.toolName,
+      detail: '当前轮次存在执行结果未收敛的外部副作用，已阻止自动切换与消息重放；请先完成效果对账。'
+    })
+    return true
+  }
+
+  private async rejectPendingPermissions(message: string): Promise<void> {
+    const pendingEntries = [...this.pending.entries()]
+    this.pending.clear()
+    for (const [requestId, pending] of pendingEntries) {
+      if (pending.info.toolUseId) {
+        await this.cancelClaudeEffect(pending.info.toolUseId, message).catch(() => undefined)
+      }
+      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+      pending.resolve({ behavior: 'deny', message })
+    }
+  }
+
   private requestPermission(
     toolName: string,
     input: Record<string, unknown>,
-    opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string } | undefined
+    opts: { signal?: AbortSignal; toolUseID?: string; decisionReason?: string } | undefined,
+    requestGeneration = this.generation
   ): Promise<PermissionResult> {
+    if (!this.permissionSettlementIsCurrent(requestGeneration)) {
+      return Promise.resolve({ behavior: 'deny', message: '操作所属引擎代已结束，审批已作废' })
+    }
     const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policyToolName = normalizeClaudeToolName(toolName)
     const policyInput = normalizeClaudeToolInput(toolName, input)
@@ -1507,8 +1834,14 @@ export class AgentSession implements Engine {
       audit('ask', source, reason)
       this.emit({ kind: 'permission-request', request: info })
       return new Promise<PermissionResult>((resolve) => {
-        this.pending.set(requestId, { resolve, input: policyInput, info })
-        opts?.signal?.addEventListener('abort', () => {
+        const pending: PendingPermission = {
+          resolve,
+          input: policyInput,
+          info,
+          generation: requestGeneration
+        }
+        this.pending.set(requestId, pending)
+        const abort = (): void => {
           if (this.pending.delete(requestId)) {
             writeAuditLog(this.meta.cwd, {
               action: 'deny',
@@ -1519,12 +1852,36 @@ export class AgentSession implements Engine {
               riskLevel: policy.risk.level,
               riskReasons: policy.risk.reasons
             })
-            this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-            resolve({ behavior: 'deny', message: '操作已被取消' })
+            this.trackPermissionSettlement((async () => {
+              if (opts?.toolUseID) {
+                await this.cancelClaudeEffect(opts.toolUseID, '操作已被取消').catch(() => undefined)
+              }
+              this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
+              resolve({ behavior: 'deny', message: '操作已被取消' })
+            })())
           }
-        })
+        }
+        if (opts?.signal?.aborted) abort()
+        else opts?.signal?.addEventListener('abort', abort, { once: true })
       })
     }
+    const allowTool = (): Promise<PermissionResult> => this.trackPermissionSettlement((async () => {
+      let result = await this.authorizeClaudeTool(
+        toolName,
+        policyInput,
+        opts?.toolUseID,
+        requestGeneration
+      )
+      if (result.behavior === 'allow' && !this.permissionSettlementIsCurrent(requestGeneration)) {
+        const staleMessage = '操作所属引擎代已结束，审批已作废'
+        if (opts?.toolUseID) {
+          await this.cancelClaudeEffect(opts.toolUseID, staleMessage).catch(() => undefined)
+        }
+        result = { behavior: 'deny', message: staleMessage }
+      }
+      if (result.behavior === 'deny') audit('deny', 'idempotency', result.message)
+      return result
+    })())
 
     if (policy.kind === 'deny') {
       audit('deny', 'policy', policy.reason)
@@ -1561,27 +1918,27 @@ export class AgentSession implements Engine {
     }
     if (guiDecision.kind === 'allow') {
       audit('allow', 'policy', guiDecision.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+      return allowTool()
     }
     if (guiDecision.kind === 'ask') {
       return askUser(guiDecision.reason, 'permission-mode')
     }
     if (policy.kind === 'allow') {
       audit('allow', 'policy', policy.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+      return allowTool()
     }
 
     if (this.meta.permissionMode === 'bypassPermissions') {
       audit('allow', 'permission-mode', policy.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+      return allowTool()
     }
     if (CLAUDE_READ_TOOLS.has(toolName)) {
       audit('allow', 'permission-mode', policy.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+      return allowTool()
     }
     if (this.meta.permissionMode === 'acceptEdits' && CLAUDE_EDIT_TOOLS.has(toolName)) {
       audit('allow', 'permission-mode', policy.reason)
-      return Promise.resolve({ behavior: 'allow', updatedInput: policyInput })
+      return allowTool()
     }
 
     return askUser(opts?.decisionReason ?? policy.reason, 'permission-mode')

@@ -81,7 +81,7 @@ export const GIT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'git_commit',
       description:
-        '提交已暂存改动。不会自动 git add；提交前会读取 caogen.md/.caogen.md 的“常用命令”并运行 lint/test，失败则阻止提交。',
+        '提交已暂存改动。不会自动 git add，不会隐式执行 caogen.md 命令或 Git hooks；需要验证时先显式调用 bash。',
       parameters: {
         type: 'object',
         properties: {

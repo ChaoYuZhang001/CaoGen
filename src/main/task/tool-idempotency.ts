@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 
-const READ_ONLY_TOOLS = new Set([
+export const OPENAI_PERMISSION_READ_ONLY_TOOLS = new Set([
   'read_file',
   'view',
   'list_dir',
@@ -9,13 +9,25 @@ const READ_ONLY_TOOLS = new Set([
   'search_code',
   'find_file',
   'get_dependencies',
-  'git_status',
-  'git_diff',
   'task_decompose',
-  'web_fetch',
-  'browser_screenshot',
-  'browser_wait_for',
+  'genesis_orchestrate',
+  'list_skills',
+  'load_skill',
+  'run_skill',
+  'draft_skill',
+  'route_model',
+  'memory_search',
   'browser_automation_status',
+  'git_status',
+  'git_diff'
+])
+
+const EFFECT_FREE_TOOLS = new Set([
+  ...OPENAI_PERMISSION_READ_ONLY_TOOLS,
+  'web_fetch',
+  'web_search',
+  'browser_wait_for',
+  'browser_screenshot',
   'gui_list_windows',
   'gui_screenshot'
 ])
@@ -30,7 +42,8 @@ const TOOL_ALIASES: Record<string, string> = {
   LS: 'list_dir',
   Glob: 'find_file',
   Grep: 'search_code',
-  WebFetch: 'web_fetch'
+  WebFetch: 'web_fetch',
+  WebSearch: 'web_search'
 }
 
 export function normalizeToolName(toolName: string): string {
@@ -39,7 +52,7 @@ export function normalizeToolName(toolName: string): string {
 }
 
 export function isSideEffectingTool(toolName: string): boolean {
-  return !READ_ONLY_TOOLS.has(normalizeToolName(toolName))
+  return !EFFECT_FREE_TOOLS.has(normalizeToolName(toolName))
 }
 
 export function requiresDuplicateConfirmation(toolName: string, toolInput: unknown): boolean {

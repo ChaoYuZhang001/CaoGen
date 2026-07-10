@@ -2,12 +2,13 @@ import { app } from 'electron'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { constants } from 'node:fs'
 import initSqlJs from 'sql.js'
 import type {
   AgentEvent,
+  EffectRecord,
   EngineKind,
   SessionMeta,
   SessionStatus,
@@ -24,7 +25,8 @@ import type {
   TranscriptEntry,
   UsageTotals
 } from '../../shared/types'
-import { isTaskRunRecord } from './task-run'
+import { isTaskRunRecord, mergeTaskRunRecords } from './task-run'
+import { stableValueDigest } from './tool-idempotency'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>
@@ -34,6 +36,11 @@ const nodeRequire = createRequire(__filename)
 const STORE_VERSION = 4
 export const TASK_SNAPSHOT_EVENT_INTERVAL = 5
 const TASK_SNAPSHOT_DB_FILE = 'task-snapshots.db'
+const UNRESOLVED_EFFECT_STATUSES = new Set<EffectRecord['status']>([
+  'prepared',
+  'executing',
+  'waiting_reconciliation'
+])
 
 interface TaskSnapshotFile {
   version: number
@@ -127,12 +134,15 @@ export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string)
     const store = await openStore(rootDir)
     try {
       const previous = findSnapshotInDb(store.db, snapshot.id, snapshot.sessionId)
-      if (previous && compareSnapshotFreshness(snapshot, previous) < 0) return previous
-      const nextSnapshot: TaskSnapshotRecord = {
-        ...snapshot,
-        createdAt: previous?.createdAt ?? snapshot.createdAt
+      let nextSnapshot = previous ? mergeTaskSnapshots(previous, snapshot) : snapshot
+      if (nextSnapshot.run) {
+        const persistedRun = upsertTaskRun(store.db, nextSnapshot.run)
+        nextSnapshot = {
+          ...nextSnapshot,
+          updatedAt: Math.max(nextSnapshot.updatedAt, persistedRun.updatedAt),
+          run: persistedRun
+        }
       }
-      if (nextSnapshot.run) upsertTaskRun(store.db, nextSnapshot.run)
       upsertSnapshot(store.db, nextSnapshot)
       await persistStore(store)
       return nextSnapshot
@@ -175,6 +185,155 @@ export async function listTaskRuns(sessionId?: string, rootDir?: string): Promis
   } finally {
     store.db.close()
   }
+}
+
+/**
+ * Write-ahead barrier for external effects. The returned promise resolves only
+ * after the run and any matching recovery snapshot have reached durable storage.
+ */
+export function saveTaskRunBarrier(run: TaskRunRecord, rootDir?: string): Promise<TaskRunRecord> {
+  return enqueueMutation(rootDir, async () => {
+    const store = await openStore(rootDir)
+    try {
+      const persistedRuns = selectTaskRuns(store.db)
+      const previous = persistedRuns.find((item) => item.id === run.id) ?? null
+      const candidateRun = previous ? mergeTaskRunRecords(previous, run) : run
+      const conflictingEffect = findConflictingEffectLease(persistedRuns, candidateRun)
+      if (conflictingEffect) {
+        throw new Error(
+          `相同资源的外部效果在其他会话仍未收敛(${conflictingEffect.status})，已阻止第二个执行 lease`
+        )
+      }
+      const matchingSnapshots = selectSnapshots(store.db).filter((snapshot) =>
+        snapshot.sessionId === candidateRun.sessionId && (!snapshot.run || snapshot.run.id === candidateRun.id)
+      )
+      if (matchingSnapshots.length === 0) {
+        throw new Error('效果持久化屏障缺少可恢复任务快照，已阻止外部执行')
+      }
+      const persistedRun = assignResourceFencingTokens(store.db, candidateRun, persistedRuns)
+      upsertTaskRun(store.db, persistedRun)
+      for (const snapshot of matchingSnapshots) {
+        upsertSnapshot(store.db, {
+          ...snapshot,
+          updatedAt: Math.max(snapshot.updatedAt, persistedRun.updatedAt),
+          run: snapshot.run ? mergeTaskRunRecords(snapshot.run, persistedRun) : persistedRun
+        })
+      }
+      await persistStore(store)
+      return persistedRun
+    } finally {
+      store.db.close()
+    }
+  })
+}
+
+function findConflictingEffectLease(
+  persistedRuns: TaskRunRecord[],
+  incomingRun: TaskRunRecord
+): EffectRecord | undefined {
+  const incoming = (incomingRun.effects ?? []).filter((effect) =>
+    UNRESOLVED_EFFECT_STATUSES.has(effect.status)
+  )
+  if (incoming.length === 0) return undefined
+  const incomingIds = new Set(incoming.map((effect) => effect.id))
+  const incomingKeys = new Set(incoming.map(effectResourceKey))
+  for (const persistedRun of persistedRuns) {
+    for (const effect of persistedRun.effects ?? []) {
+      if (incomingIds.has(effect.id)) continue
+      if (!incomingKeys.has(effectResourceKey(effect))) continue
+      if (UNRESOLVED_EFFECT_STATUSES.has(effect.status)) return effect
+    }
+  }
+  return undefined
+}
+
+function assignResourceFencingTokens(
+  db: SqlDatabase,
+  incomingRun: TaskRunRecord,
+  persistedRuns: TaskRunRecord[]
+): TaskRunRecord {
+  const persistedEffects = persistedRuns.flatMap((run) => run.effects ?? [])
+  const persistedById = new Map(persistedEffects.map((effect) => [effect.id, effect]))
+  const maxByResource = new Map<string, number>()
+  for (const effect of persistedEffects) {
+    if (!effect.lease) continue
+    const resourceKey = effectResourceKey(effect)
+    maxByResource.set(
+      resourceKey,
+      Math.max(maxByResource.get(resourceKey) ?? 0, effect.lease.fencingToken)
+    )
+  }
+
+  let changed = false
+  const effects = (incomingRun.effects ?? []).map((effect) => {
+    if (!effect.lease) return effect
+    const resourceKey = effectResourceKey(effect)
+    const persistedEffect = persistedById.get(effect.id)
+    const observedMax = Math.max(
+      maxByResource.get(resourceKey) ?? 0,
+      readResourceFencingToken(db, resourceKey)
+    )
+    const fencingToken = persistedEffect?.lease?.fencingToken ?? observedMax + 1
+    const nextMax = Math.max(observedMax, fencingToken)
+    maxByResource.set(resourceKey, nextMax)
+    writeResourceFencingToken(db, resourceKey, nextMax)
+    if (effect.lease.fencingToken === fencingToken) return effect
+    changed = true
+    return withFencingToken(effect, fencingToken)
+  })
+  return changed ? { ...incomingRun, effects } : incomingRun
+}
+
+function effectResourceKey(effect: EffectRecord): string {
+  return effect.resourceKey || effect.effectKey
+}
+
+function readResourceFencingToken(db: SqlDatabase, resourceKey: string): number {
+  const stmt = db.prepare(
+    'SELECT fencing_token FROM effect_resource_fences WHERE resource_key = ? LIMIT 1'
+  )
+  try {
+    stmt.bind([resourceKey])
+    if (!stmt.step()) return 0
+    const value = stmt.getAsObject().fencing_token
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
+  } finally {
+    stmt.free()
+  }
+}
+
+function writeResourceFencingToken(db: SqlDatabase, resourceKey: string, fencingToken: number): void {
+  db.run(
+    `
+      INSERT INTO effect_resource_fences(resource_key, fencing_token)
+      VALUES (?, ?)
+      ON CONFLICT(resource_key) DO UPDATE SET
+        fencing_token = MAX(effect_resource_fences.fencing_token, excluded.fencing_token)
+    `,
+    [resourceKey, fencingToken]
+  )
+}
+
+function withFencingToken(effect: EffectRecord, fencingToken: number): EffectRecord {
+  if (!effect.lease) return effect
+  const evidence = effect.evidence.map((item) =>
+    item.kind === 'prepared' &&
+    item.generation === effect.generation &&
+    item.verifier === 'effect-ledger-v1'
+      ? {
+          ...item,
+          digest: stableValueDigest({
+            effectKey: effect.effectKey,
+            resourceKey: effect.resourceKey,
+            targetDigest: effect.targetDigest,
+            intentDigest: effect.intentDigest,
+            leaseId: effect.lease?.id,
+            fencingToken
+          })
+        }
+      : item
+  )
+  return { ...effect, lease: { ...effect.lease, fencingToken }, evidence }
 }
 
 export function supersedeToolExecution(
@@ -254,11 +413,29 @@ async function openStore(rootDir?: string): Promise<{ db: SqlDatabase; path: str
 async function persistStore(store: { db: SqlDatabase; path: string }): Promise<void> {
   const tmpPath = `${store.path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   try {
-    await writeFile(tmpPath, store.db.export())
+    const handle = await open(tmpPath, 'w')
+    try {
+      await handle.writeFile(store.db.export())
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await renameWithRetry(tmpPath, store.path)
+    await syncParentDirectory(store.path)
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => undefined)
     throw error
+  }
+}
+
+async function syncParentDirectory(path: string): Promise<void> {
+  if (process.platform === 'win32') return
+  const handle = await open(dirname(path), 'r').catch(() => null)
+  if (!handle) return
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
   }
 }
 
@@ -303,6 +480,12 @@ function setupSchema(db: SqlDatabase): void {
   `)
   db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_session_id ON task_runs(session_id);')
   db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_updated_at ON task_runs(updated_at);')
+  db.run(`
+    CREATE TABLE IF NOT EXISTS effect_resource_fences (
+      resource_key TEXT PRIMARY KEY,
+      fencing_token INTEGER NOT NULL
+    );
+  `)
   db.run('PRAGMA user_version = ' + STORE_VERSION)
 }
 
@@ -383,7 +566,7 @@ function findSnapshotInDb(db: SqlDatabase, id: string, sessionId: string): TaskS
 
 function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
   const previous = findSnapshotInDb(db, snapshot.id, snapshot.sessionId)
-  if (previous && compareSnapshotFreshness(snapshot, previous) < 0) return
+  const next = previous ? mergeTaskSnapshots(previous, snapshot) : snapshot
   db.run(
     `
       INSERT INTO task_snapshots(id, session_id, updated_at, payload)
@@ -393,13 +576,13 @@ function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
         updated_at = excluded.updated_at,
         payload = excluded.payload
     `,
-    [snapshot.id, snapshot.sessionId, snapshot.updatedAt, JSON.stringify(snapshot)]
+    [next.id, next.sessionId, next.updatedAt, JSON.stringify(next)]
   )
 }
 
-function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): void {
+function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): TaskRunRecord {
   const previous = findTaskRunInDb(db, run.id)
-  if (previous && compareRunFreshness(run, previous) < 0) return
+  const next = previous ? mergeTaskRunRecords(previous, run) : run
   db.run(
     `
       INSERT INTO task_runs(id, session_id, updated_at, payload)
@@ -409,8 +592,9 @@ function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): void {
         updated_at = excluded.updated_at,
         payload = excluded.payload
     `,
-    [run.id, run.sessionId, run.updatedAt, JSON.stringify(run)]
+    [next.id, next.sessionId, next.updatedAt, JSON.stringify(next)]
   )
+  return next
 }
 
 function findTaskRunInDb(db: SqlDatabase, id: string): TaskRunRecord | null {
@@ -439,12 +623,21 @@ function compareSnapshotFreshness(left: TaskSnapshotRecord, right: TaskSnapshotR
   return left.updatedAt - right.updatedAt
 }
 
-function compareRunFreshness(left: TaskRunRecord, right: TaskRunRecord): number {
-  const leftCursor = left.lastAppliedEventSeq ?? 0
-  const rightCursor = right.lastAppliedEventSeq ?? 0
-  if (leftCursor !== rightCursor) return leftCursor - rightCursor
-  if (left.revision !== right.revision) return left.revision - right.revision
-  return left.updatedAt - right.updatedAt
+function mergeTaskSnapshots(
+  current: TaskSnapshotRecord,
+  incoming: TaskSnapshotRecord
+): TaskSnapshotRecord {
+  const preferred = compareSnapshotFreshness(current, incoming) >= 0 ? current : incoming
+  const other = preferred === current ? incoming : current
+  const run = preferred.run && other.run
+    ? mergeTaskRunRecords(preferred.run, other.run)
+    : preferred.run ?? other.run
+  return {
+    ...preferred,
+    createdAt: current.createdAt,
+    updatedAt: Math.max(current.updatedAt, incoming.updatedAt, run?.updatedAt ?? 0),
+    ...(run ? { run } : {})
+  }
 }
 
 function selectTaskRuns(db: SqlDatabase, sessionId?: string): TaskRunRecord[] {
@@ -502,9 +695,10 @@ function enqueueMutation<T>(rootDir: string | undefined, task: () => Promise<T>)
   const key = taskSnapshotsDbFile(rootDir)
   const previous = mutationQueues.get(key) ?? Promise.resolve()
   const next = previous.then(task, task)
-  const queued = next.finally(() => {
+  const release = (): void => {
     if (mutationQueues.get(key) === queued) mutationQueues.delete(key)
-  })
+  }
+  const queued = next.then(release, release)
   mutationQueues.set(key, queued)
   return next
 }

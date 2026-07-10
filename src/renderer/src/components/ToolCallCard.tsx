@@ -153,10 +153,19 @@ export default function ToolCallCard({
   const input = asRecord(block.input)
   const summary = toolSummary(block.name, input, t)
 
-  const status = result ? (result.isError ? 'error' : 'done') : running ? 'running' : 'pending'
+  const waitingReconciliation = result?.effectStatus === 'waiting_reconciliation'
+  const status = waitingReconciliation
+    ? 'reconciliation'
+    : result
+      ? (result.isError ? 'error' : 'done')
+      : running
+        ? 'running'
+        : 'pending'
   const statusLabel =
     status === 'running'
       ? t('statusRunning')
+      : status === 'reconciliation'
+        ? t('toolWaitingReconciliation')
       : status === 'done'
         ? t('toolDone')
         : status === 'error'
@@ -188,8 +197,14 @@ export default function ToolCallCard({
           )}
           <ToolBody block={block} />
           {result && (
-            <div className={`tool-result ${result.isError ? 'tool-result-error' : ''}`}>
-              <div className="tool-result-label">{result.isError ? t('errorOutput') : t('output')}</div>
+            <div className={`tool-result ${waitingReconciliation ? 'tool-result-reconciliation' : result.isError ? 'tool-result-error' : ''}`}>
+              <div className="tool-result-label">
+                {waitingReconciliation
+                  ? t('toolReconciliationOutput')
+                  : result.isError
+                    ? t('errorOutput')
+                    : t('output')}
+              </div>
               <pre className="code-block">{displayResult || t('noOutput')}</pre>
               {truncated && (
                 <button className="btn btn-ghost btn-sm" onClick={() => setShowFullResult(true)}>

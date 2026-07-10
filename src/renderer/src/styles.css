@@ -1828,6 +1828,10 @@ textarea {
   border-color: rgba(229, 83, 75, 0.5);
 }
 
+.tool-card.tool-reconciliation {
+  border-color: color-mix(in srgb, var(--yellow) 55%, transparent);
+}
+
 .tool-header {
   display: flex;
   align-items: center;
@@ -1890,6 +1894,10 @@ textarea {
   color: var(--accent);
 }
 
+.tool-status-reconciliation {
+  color: var(--yellow);
+}
+
 .tool-chevron {
   color: var(--text-faint);
   font-size: 10px;
@@ -1918,6 +1926,11 @@ textarea {
 .tool-result-error .tool-result-label,
 .tool-result-error .code-block {
   color: var(--red);
+}
+
+.tool-result-reconciliation .tool-result-label,
+.tool-result-reconciliation .code-block {
+  color: var(--yellow);
 }
 
 .code-block {
@@ -2834,7 +2847,7 @@ textarea {
 
 .permission-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
   padding: 10px 14px;
   border: 1px solid rgba(217, 169, 74, 0.45);
@@ -2861,9 +2874,14 @@ textarea {
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  max-height: 140px;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-input);
 }
 
 .permission-reason {
@@ -3612,6 +3630,61 @@ textarea {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.task-recovery-effects {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+
+.task-recovery-effect-heading {
+  color: var(--yellow);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.task-recovery-effect-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.task-recovery-effect-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.task-recovery-effect-copy span,
+.task-recovery-effect-copy small {
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+
+.task-recovery-effect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .task-recovery-row,
+  .task-recovery-effect-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .task-recovery-actions,
+  .task-recovery-effect-actions {
+    justify-content: flex-start;
+  }
 }
 
 .project-settings {

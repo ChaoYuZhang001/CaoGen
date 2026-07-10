@@ -9,6 +9,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { withSafeLocalGitConfig } from './git/safe-git'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_GIT_BUFFER = 100 * 1024 * 1024
@@ -430,7 +431,7 @@ function filesFromPatch(patchText: string): string[] {
 
 /** 主工作区相对基线的改动文件(含已提交 + 未提交,不含未跟踪;兜底交集用)。 */
 function modifiedFilesSinceBase(repoRoot: string, baseSha: string): string[] {
-  const result = runGit(repoRoot, ['diff', '--name-only', '-z', baseSha, '--'])
+  const result = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', baseSha, '--'])
   if (!result.ok) return []
   return result.stdout.split('\0').filter(Boolean)
 }
@@ -641,7 +642,14 @@ function mergeBase(repoRoot: string, worktreePath: string, repoHeadSha: string, 
 }
 
 function diffStats(worktreePath: string, baseSha: string): DiffStats {
-  const numstat = gitRaw(worktreePath, ['diff', '--numstat', baseSha, ...mergePathspecArgs()])
+  const numstat = gitRaw(worktreePath, [
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--numstat',
+    baseSha,
+    ...mergePathspecArgs()
+  ])
   let changedFiles = 0
   let insertions = 0
   let deletions = 0
@@ -666,14 +674,22 @@ function buildSquashPatchText(
   worktreePath: string,
   baseSha: string
 ): { ok: true; patchText: string } | WorktreeMergeFailure {
-  const tracked = runGit(worktreePath, ['diff', '--binary', '--full-index', baseSha, ...mergePathspecArgs()])
+  const tracked = runGit(worktreePath, [
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--binary',
+    '--full-index',
+    baseSha,
+    ...mergePathspecArgs()
+  ])
   if (!tracked.ok) return failure(tracked.error ?? 'git diff failed')
 
   const chunks = [tracked.stdout]
   for (const file of untrackedFiles(worktreePath)) {
     const untracked = runGit(
       worktreePath,
-      ['diff', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
+      ['diff', '--no-ext-diff', '--no-textconv', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
       { allowExitCodes: [0, 1] }
     )
     if (!untracked.ok) return failure(untracked.error ?? `无法生成 untracked patch: ${file}`)
@@ -745,7 +761,7 @@ function runGit(
   options: { input?: string; allowExitCodes?: number[] } = {}
 ): GitResult {
   const allowed = options.allowExitCodes ?? [0]
-  const result = spawnSync('git', args, {
+  const result = spawnSync('git', withSafeLocalGitConfig(args), {
     cwd,
     input: options.input,
     encoding: 'utf8',

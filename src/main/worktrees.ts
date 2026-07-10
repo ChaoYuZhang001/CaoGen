@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import { withSafeLocalGitConfig } from './git/safe-git'
 import type {
   ManagedWorktreeView,
   WorktreeApplyResult,
@@ -86,7 +87,7 @@ function mergeReceiptsFile(): string {
 
 function git(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', withSafeLocalGitConfig(args), {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -107,7 +108,7 @@ function gitOrNull(cwd: string, args: string[]): string | null {
 
 function gitOutputAllowDiffExit(cwd: string, args: string[]): string {
   try {
-    return execFileSync('git', args, {
+    return execFileSync('git', withSafeLocalGitConfig(args), {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -175,7 +176,7 @@ function currentBranchFor(repoRoot: string): string | null {
 
 function branchExists(repoRoot: string, branch: string): boolean {
   try {
-    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+    execFileSync('git', withSafeLocalGitConfig(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]), {
       cwd: repoRoot,
       stdio: 'ignore',
       timeout: GIT_TIMEOUT_MS
@@ -249,7 +250,14 @@ function diffStats(record: ManagedWorktreeRecord): WorktreeDiffStats {
   if (record.state !== 'active' || !existsSync(record.worktreePath)) {
     return { changedFiles: 0, dirty: false }
   }
-  const numstat = git(record.worktreePath, ['diff', '--numstat', record.baseSha, '--'])
+  const numstat = git(record.worktreePath, [
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--numstat',
+    record.baseSha,
+    '--'
+  ])
   let changedFiles = 0
   let insertions = 0
   let deletions = 0
@@ -270,7 +278,7 @@ function diffStats(record: ManagedWorktreeRecord): WorktreeDiffStats {
 function untrackedFiles(worktreePath: string): string[] {
   const output = execFileSync(
     'git',
-    ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'],
+    withSafeLocalGitConfig(['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.']),
     {
       cwd: worktreePath,
       encoding: 'buffer',
@@ -295,7 +303,18 @@ function countTextLines(worktreePath: string, relPath: string): number {
 
 function untrackedPatch(worktreePath: string): string {
   return untrackedFiles(worktreePath)
-    .map((file) => gitOutputAllowDiffExit(worktreePath, ['diff', '--no-index', '--binary', '--', '/dev/null', file]))
+    .map((file) =>
+      gitOutputAllowDiffExit(worktreePath, [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-index',
+        '--binary',
+        '--',
+        '/dev/null',
+        file
+      ])
+    )
     .join('\n')
 }
 
@@ -423,7 +442,7 @@ export function exportManagedWorktreePatch(sessionId: string): WorktreePatchResu
     // 用 `git diff --binary baseSha`(不带 -- 的三点/两点)对比"基线↔当前工作树",
     // 它同时涵盖已提交与未提交改动,一步到位;再叠加未跟踪文件。
     const patch = [
-      git(record.worktreePath, ['diff', '--binary', record.baseSha]),
+      git(record.worktreePath, ['diff', '--no-ext-diff', '--no-textconv', '--binary', record.baseSha]),
       untrackedPatch(record.worktreePath)
     ]
       .filter(Boolean)

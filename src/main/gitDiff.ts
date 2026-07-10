@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { withSafeLocalGitConfig } from './git/safe-git'
 import type {
   WorkspaceHunkResult,
   WorkspaceDiff,
@@ -32,7 +33,7 @@ export function applyHunk(
   const patch = hunkPatch.endsWith('\n') ? hunkPatch : `${hunkPatch}\n`
   const args = options.reverse ? ['apply', '-R', '--whitespace=nowarn'] : ['apply', '--cached', '--whitespace=nowarn']
   try {
-    execFileSync('git', ['-C', cwd, ...args], {
+    execFileSync('git', withSafeLocalGitConfig(['-C', cwd, ...args]), {
       input: patch,
       encoding: 'utf8',
       timeout: 30_000,
@@ -49,15 +50,19 @@ export function getWorkspaceDiff(cwd: string): WorkspaceDiff {
   let output: Buffer
   let repoRoot: string
   try {
-    repoRoot = execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
+    repoRoot = execFileSync('git', withSafeLocalGitConfig(['-C', cwd, 'rev-parse', '--show-toplevel']), {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe']
     }).trim()
-    output = execFileSync('git', ['-C', cwd, 'diff', '--no-ext-diff', '--binary', '--', '.'], {
-      encoding: 'buffer',
-      maxBuffer: MAX_EXEC_BUFFER,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
+    output = execFileSync(
+      'git',
+      withSafeLocalGitConfig(['-C', cwd, 'diff', '--no-ext-diff', '--no-textconv', '--binary', '--', '.']),
+      {
+        encoding: 'buffer',
+        maxBuffer: MAX_EXEC_BUFFER,
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    )
   } catch (error) {
     return {
       ok: false,
@@ -88,7 +93,7 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
   try {
     output = execFileSync(
       'git',
-      ['-C', cwd, 'ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'],
+      withSafeLocalGitConfig(['-C', cwd, 'ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.']),
       {
         encoding: 'buffer',
         maxBuffer: MAX_EXEC_BUFFER,

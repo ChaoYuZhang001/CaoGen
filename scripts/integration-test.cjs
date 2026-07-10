@@ -27,6 +27,8 @@ const fakeWindows = []
 const ipcHandlers = new Map()
 let fakeBrowserSelection = null
 let fakeBrowserScreenshot = null
+const nativeDialogCalls = []
+let nativeDialogResponse = { response: 0, checkboxChecked: false }
 
 // ---------------------------------------------------------------- 断言与汇总
 const results = []
@@ -139,7 +141,13 @@ const electronStub = {
     getBounds() { return { ...this._bounds } }
   },
   ipcMain: { handle(name, fn) { ipcHandlers.set(name, fn) } },
-  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showMessageBox: async (...args) => {
+      nativeDialogCalls.push(args)
+      return nativeDialogResponse
+    }
+  },
   shell: { showItemInFolder() {}, openExternal: async () => {} }
 }
 
@@ -393,7 +401,20 @@ async function main() {
     { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), models: ['m-a'], createdAt: 1 },
     { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), models: ['m-b'], createdAt: 2 },
     { id: 'prov-slow', name: '慢网关', baseUrl: 'http://slow429.mock', encryptedToken: 'b64:' + Buffer.from('k3').toString('base64'), models: ['m-s'], createdAt: 3 },
-    { id: 'prov-crash', name: '崩网关', baseUrl: 'http://crashmid.mock', encryptedToken: 'b64:' + Buffer.from('k4').toString('base64'), models: ['m-c'], createdAt: 4 }
+    { id: 'prov-crash', name: '崩网关', baseUrl: 'http://crashmid.mock', encryptedToken: 'b64:' + Buffer.from('k4').toString('base64'), models: ['m-c'], createdAt: 4 },
+    {
+      id: 'prov-keys',
+      name: '多密钥网关',
+      baseUrl: 'http://always429.mock',
+      encryptedToken: 'b64:' + Buffer.from('key-primary').toString('base64'),
+      apiKeys: [
+        { id: 'key-primary', label: 'Primary', encryptedToken: 'b64:' + Buffer.from('key-primary').toString('base64'), createdAt: 5, disabled: false },
+        { id: 'key-backup', label: 'Backup', encryptedToken: 'b64:' + Buffer.from('key-backup').toString('base64'), createdAt: 6, disabled: false }
+      ],
+      activeKeyId: 'key-primary',
+      models: ['m-keys'],
+      createdAt: 5
+    }
   ], null, 2))
 
   function newSession(providerId, model) {
@@ -443,6 +464,427 @@ async function main() {
     assert(Math.abs(meta.costUsd - 0.0123) < 1e-9, `费用未入 meta:${meta.costUsd}`)
     eq(meta.status, 'idle', '轮后状态')
     s.dispose()
+  })
+
+  await test('P0 effect permission:Claude close 必须等待审批结算且旧代不得放行', async () => {
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const effectRuntime = M('main/task/effect-runtime.js')
+    const { events, s, meta } = newSession('prov-b', 'm-b')
+    const toolUseId = 'claude-close-permission-write'
+    const toolInput = { file_path: 'claude-close-permission.txt', content: 'after close\n' }
+    const userEvent = {
+      kind: 'user-message',
+      messageId: 'claude-close-permission-user',
+      text: 'write after approval'
+    }
+    const toolEvent = {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: toolUseId, name: 'Write', input: toolInput }]
+    }
+    let run = taskRun.createTaskRun({
+      id: 'claude-close-permission-run',
+      sessionId: meta.id,
+      taskId: meta.id
+    })
+    run = taskExecution.reduceTaskExecutionEvent(run, userEvent, meta.cwd)
+    run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, meta.cwd)
+    runtime.set(meta.id, run)
+    await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+      meta,
+      transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+      lastSeq: 2,
+      lastEventKind: 'assistant-message',
+      eventCount: 2,
+      reason: 'important-event',
+      run
+    }), userData)
+    await s.ensureClaudeEffectPrepared('Write', toolInput, toolUseId)
+
+    const originalMarkStarted = effectRuntime.markEffectExecutionStarted
+    let releaseMark = () => undefined
+    let markEnteredResolve = () => undefined
+    const markEntered = new Promise((resolve) => { markEnteredResolve = resolve })
+    const markGate = new Promise((resolve) => { releaseMark = resolve })
+    effectRuntime.markEffectExecutionStarted = async (...args) => {
+      markEnteredResolve()
+      await markGate
+      return originalMarkStarted(...args)
+    }
+
+    try {
+      const decisionPromise = s.requestPermission('Write', toolInput, { toolUseID: toolUseId })
+      await waitFor(
+        () => events.some((entry) => entry.event.kind === 'permission-request'),
+        2000,
+        '等待 Claude close-race 审批'
+      )
+      const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
+      s.respondPermission(request.requestId, true)
+      await markEntered
+
+      let closeResolved = false
+      const closePromise = s.dispose().then(() => { closeResolved = true })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert(!closeResolved, 'close 必须等待已启动的权限结算任务')
+
+      releaseMark()
+      const decision = await decisionPromise
+      await closePromise
+      eq(decision.behavior, 'deny', '旧 generation 的审批不得交付 allow')
+      assert(
+        String(decision.message).includes('审批已作废'),
+        `旧 generation 应返回明确拒绝原因:${decision.message}`
+      )
+      eq(
+        events.filter((entry) => entry.event.kind === 'permission-resolved' && entry.event.behavior === 'allow').length,
+        0,
+        'close race 不得发出 allow 事件'
+      )
+      const snapshot = await taskStore.getTaskSnapshot(meta.id, userData)
+      const effect = snapshot?.run?.effects?.find((item) => item.toolUseId === toolUseId)
+      eq(effect?.status, 'abandoned', '未交付给 SDK 的 executing Effect 必须回收为 abandoned')
+      eq(
+        effect?.evidence.filter((item) => item.kind === 'retry_authorized').length,
+        1,
+        '确认未放行后只能追加一次重试授权'
+      )
+    } finally {
+      effectRuntime.markEffectExecutionStarted = originalMarkStarted
+      releaseMark()
+      runtime.delete(meta.id)
+      await s.dispose()
+    }
+  })
+
+  await test('P0 effect hook:Claude close 必须等待旧代 PreToolUse 收敛', async () => {
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const { s, meta } = newSession('prov-b', 'm-b')
+    const toolUseId = 'claude-pretool-close-write'
+    const toolInput = { file_path: 'claude-pretool-close.txt', content: 'never delivered\n' }
+    const userEvent = {
+      kind: 'user-message',
+      messageId: 'claude-pretool-close-user',
+      text: 'prepare write while closing'
+    }
+    const toolEvent = {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: toolUseId, name: 'Write', input: toolInput }]
+    }
+    let run = taskRun.createTaskRun({
+      id: 'claude-pretool-close-run',
+      sessionId: meta.id,
+      taskId: meta.id
+    })
+    run = taskExecution.reduceTaskExecutionEvent(run, userEvent, meta.cwd)
+    run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, meta.cwd)
+    runtime.set(meta.id, run)
+    await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+      meta,
+      transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+      lastSeq: 2,
+      lastEventKind: 'assistant-message',
+      eventCount: 2,
+      reason: 'important-event',
+      run
+    }), userData)
+    await s.start()
+    await waitFor(() => s.query, 2000, '等待 PreToolUse close-race query')
+
+    const originalEnsurePrepared = s.ensureClaudeEffectPrepared.bind(s)
+    let releasePrepare = () => undefined
+    let prepareEnteredResolve = () => undefined
+    const prepareEntered = new Promise((resolve) => { prepareEnteredResolve = resolve })
+    const prepareGate = new Promise((resolve) => { releasePrepare = resolve })
+    s.ensureClaudeEffectPrepared = async (...args) => {
+      prepareEnteredResolve()
+      await prepareGate
+      return originalEnsurePrepared(...args)
+    }
+
+    const hooks = s.buildHooks(settingsMod.getSettings(), s.generation)
+    const preToolUse = hooks.PreToolUse?.[0]?.hooks?.[0]
+    assert(typeof preToolUse === 'function', '测试必须取得 Claude PreToolUse hook')
+    let closeCalled = false
+    const originalClose = s.query.close.bind(s.query)
+    s.query.close = (...args) => {
+      closeCalled = true
+      return originalClose(...args)
+    }
+
+    try {
+      const hookPromise = preToolUse(
+        { tool_name: 'Write', tool_input: toolInput, tool_use_id: toolUseId },
+        toolUseId
+      )
+      await prepareEntered
+      let closeResolved = false
+      const closePromise = s.dispose().then(() => { closeResolved = true })
+      assert(closeCalled, 'dispose 必须先发起旧 query.close 再等待 PreToolUse')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert(!closeResolved, 'PreToolUse 尚未收敛时 dispose 不得完成')
+
+      releasePrepare()
+      const hookResult = await hookPromise
+      await closePromise
+      eq(
+        hookResult?.hookSpecificOutput?.permissionDecision,
+        'deny',
+        '旧代 PreToolUse 在准备完成后必须返回 deny'
+      )
+      const snapshot = await taskStore.getTaskSnapshot(meta.id, userData)
+      const effect = snapshot?.run?.effects?.find((item) => item.toolUseId === toolUseId)
+      eq(effect?.status, 'abandoned', '晚到的旧代 PreToolUse Effect 必须被回收')
+    } finally {
+      s.ensureClaudeEffectPrepared = originalEnsurePrepared
+      releasePrepare()
+      runtime.delete(meta.id)
+      await s.dispose()
+    }
+  })
+
+  await test('P0 effect permission:Claude allow 交付前必须再次校验 generation', async () => {
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+
+    async function runCase(label, permissionMode) {
+      const { events, s, meta } = newSession('prov-b', 'm-b')
+      meta.permissionMode = permissionMode
+      const toolUseId = `claude-final-generation-${label}`
+      const toolInput = { file_path: `claude-final-generation-${label}.txt`, content: `${label}\n` }
+      const userEvent = {
+        kind: 'user-message',
+        messageId: `claude-final-generation-user-${label}`,
+        text: `write ${label}`
+      }
+      const toolEvent = {
+        kind: 'assistant-message',
+        blocks: [{ type: 'tool_use', id: toolUseId, name: 'Write', input: toolInput }]
+      }
+      let run = taskRun.createTaskRun({
+        id: `claude-final-generation-run-${label}`,
+        sessionId: meta.id,
+        taskId: meta.id
+      })
+      run = taskExecution.reduceTaskExecutionEvent(run, userEvent, meta.cwd)
+      run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, meta.cwd)
+      runtime.set(meta.id, run)
+      await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+        meta,
+        transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+        lastSeq: 2,
+        lastEventKind: 'assistant-message',
+        eventCount: 2,
+        reason: 'important-event',
+        run
+      }), userData)
+      if (permissionMode === 'default') {
+        await s.ensureClaudeEffectPrepared('Write', toolInput, toolUseId)
+      }
+
+      const originalAuthorize = s.authorizeClaudeTool.bind(s)
+      s.authorizeClaudeTool = async (...args) => {
+        const result = await originalAuthorize(...args)
+        if (result.behavior === 'allow') s.generation++
+        return result
+      }
+
+      try {
+        let decision
+        if (permissionMode === 'default') {
+          const pending = s.requestPermission('Write', toolInput, { toolUseID: toolUseId })
+          await waitFor(
+            () => events.some((entry) => entry.event.kind === 'permission-request'),
+            2000,
+            `等待 ${label} generation 审批`
+          )
+          const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
+          s.respondPermission(request.requestId, true)
+          decision = await pending
+          eq(
+            events.filter((entry) => entry.event.kind === 'permission-resolved' && entry.event.behavior === 'allow').length,
+            0,
+            '手工审批最终交付点不得泄漏旧代 allow'
+          )
+          eq(
+            events.filter((entry) => entry.event.kind === 'permission-resolved' && entry.event.behavior === 'deny').length,
+            1,
+            '手工审批旧代结果必须明确结算为 deny'
+          )
+        } else {
+          decision = await s.requestPermission('Write', toolInput, { toolUseID: toolUseId })
+        }
+        eq(decision.behavior, 'deny', `${label} 最终 allow 必须被 generation fence 撤销`)
+        const snapshot = await taskStore.getTaskSnapshot(meta.id, userData)
+        const effect = snapshot?.run?.effects?.find((item) => item.toolUseId === toolUseId)
+        eq(effect?.status, 'abandoned', `${label} 未交付 SDK 的 Effect 必须 abandoned`)
+        eq(
+          effect?.evidence.filter((item) => item.kind === 'retry_authorized').length,
+          1,
+          `${label} 只能追加一次安全重试授权`
+        )
+      } finally {
+        runtime.delete(meta.id)
+        await s.dispose()
+      }
+    }
+
+    await runCase('manual', 'default')
+    await runCase('automatic', 'bypassPermissions')
+  })
+
+  await test('P0 effect failover:未决 Claude Effect 阻止 Provider 与 API Key 重放', async () => {
+    settingsMod.updateSettings({ failoverEnabled: true })
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const effectRuntime = M('main/task/effect-runtime.js')
+    const providers = M('main/providers.js')
+
+    async function seedExecutingEffect(session, meta, providerLabel) {
+      const toolUseId = `claude-${providerLabel}-unknown-write`
+      const toolInput = {
+        path: `claude-${providerLabel}-unknown.txt`,
+        content: `${providerLabel} unknown\n`
+      }
+      const userEvent = {
+        kind: 'user-message',
+        messageId: `claude-${providerLabel}-user`,
+        text: `write ${providerLabel}`
+      }
+      const toolEvent = {
+        kind: 'assistant-message',
+        blocks: [{ type: 'tool_use', id: toolUseId, name: 'Write', input: toolInput }]
+      }
+      let run = taskRun.createTaskRun({
+        id: `claude-${providerLabel}-run`,
+        sessionId: meta.id,
+        taskId: meta.id
+      })
+      run = taskExecution.reduceTaskExecutionEvent(run, userEvent, meta.cwd)
+      run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, meta.cwd)
+      runtime.set(meta.id, run)
+      await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+        meta,
+        transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+        lastSeq: 2,
+        lastEventKind: 'assistant-message',
+        eventCount: 2,
+        reason: 'important-event',
+        run
+      }), userData)
+      const handle = await effectRuntime.prepareEffectExecution({
+        sessionId: meta.id,
+        cwd: meta.cwd,
+        toolUseId,
+        toolName: 'write_file',
+        toolInput
+      })
+      await effectRuntime.markEffectExecutionStarted(handle, {
+        sessionId: meta.id,
+        cwd: meta.cwd,
+        toolUseId,
+        toolName: 'write_file',
+        toolInput
+      })
+      session.lastUserPayload = { text: `replay ${providerLabel}`, images: [] }
+      meta.status = 'running'
+      return { handle, toolUseId }
+    }
+
+    const providerCase = newSession('prov-a', 'm-a')
+    const keyCase = newSession('prov-keys', 'm-keys')
+    const crashCase = newSession('prov-crash', 'm-c')
+    let providerEffect
+    let keyEffect
+    let crashEffect
+    try {
+      providerEffect = await seedExecutingEffect(providerCase.s, providerCase.meta, 'provider')
+      providerCase.s.triedProviders = new Set(['prov-a'])
+      const sdkCreatesBeforeProvider = sdkLog.filter((entry) => entry.create).length
+      const switchedProvider = await providerCase.s.tryFailover('API Error: 429 Too Many Requests')
+      eq(switchedProvider, false, '存在 executing Effect 时不得切换 Provider')
+      eq(providerCase.meta.providerId, 'prov-a', 'Provider 身份不得变化')
+      eq(providerCase.s.lastUserPayload, null, '必须清除自动重放凭据')
+      eq(
+        sdkLog.filter((entry) => entry.create).length,
+        sdkCreatesBeforeProvider,
+        '阻断路径不得创建替代引擎'
+      )
+      assert(
+        providerCase.events.some((entry) => entry.event.kind === 'hook-event' && entry.event.event === 'effect-reconciliation-required'),
+        'Provider 阻断必须给出效果对账事件'
+      )
+
+      keyEffect = await seedExecutingEffect(keyCase.s, keyCase.meta, 'key')
+      keyCase.s.buildEnv()
+      eq(providers.getProvider('prov-keys').activeKeyId, 'key-primary', '测试前应使用主密钥')
+      const rotatedKey = await keyCase.s.tryProviderKeyFailover('HTTP 429 rate limit')
+      eq(rotatedKey, false, '存在 executing Effect 时不得轮换 API Key')
+      eq(
+        providers.getProvider('prov-keys').activeKeyId,
+        'key-primary',
+        '阻断路径不得提前改写活动 API Key'
+      )
+      eq(keyCase.s.lastUserPayload, null, 'Key failover 也必须清除自动重放凭据')
+      assert(
+        !keyCase.events.some((entry) => entry.event.kind === 'provider-key-failover'),
+        '阻断路径不得发布 Key failover 事件'
+      )
+
+      const crashed = taskRun.reduceTaskRunEvent(
+        runtime.get(providerCase.meta.id),
+        { kind: 'status', status: 'error', error: 'stream crashed after unknown effect' }
+      )
+      eq(crashed.status, 'waiting_reconciliation', '流崩溃且 Effect 未决时必须进入 waiting_reconciliation')
+
+      await crashCase.s.start()
+      await waitFor(
+        () => crashCase.events.some((entry) => entry.event.kind === 'init'),
+        3000,
+        '等待未决 Effect 流崩溃会话启动'
+      )
+      crashEffect = await seedExecutingEffect(crashCase.s, crashCase.meta, 'stream')
+      crashCase.s.send('stream crash with unresolved effect')
+      await waitFor(
+        () => crashCase.events.some((entry) => entry.event.kind === 'status' && entry.event.status === 'error'),
+        3000,
+        '等待未决 Effect 流崩溃错误'
+      )
+      assert(!crashCase.events.some((entry) => entry.event.kind === 'failover'), '流崩溃不得绕过未决 Effect 切换 Provider')
+      assert(
+        !crashCase.events.some((entry) => entry.event.kind === 'provider-key-failover'),
+        '流崩溃不得绕过未决 Effect 轮换 Key'
+      )
+      eq(crashCase.s.lastUserPayload, null, '流崩溃阻断后必须清除消息重放凭据')
+      eq(
+        crashCase.events.filter((entry) => entry.event.kind === 'user-message').length,
+        1,
+        '流崩溃阻断路径不得重复注入用户消息'
+      )
+    } finally {
+      if (providerEffect?.handle) {
+        await effectRuntime.cancelEffectExecution(providerEffect.handle, 'integration test confirmed no execution')
+      }
+      if (keyEffect?.handle) {
+        await effectRuntime.cancelEffectExecution(keyEffect.handle, 'integration test confirmed no execution')
+      }
+      if (crashEffect?.handle) {
+        await effectRuntime.cancelEffectExecution(crashEffect.handle, 'integration test confirmed no execution')
+      }
+      runtime.delete(providerCase.meta.id)
+      runtime.delete(keyCase.meta.id)
+      runtime.delete(crashCase.meta.id)
+      await Promise.all([providerCase.s.dispose(), keyCase.s.dispose(), crashCase.s.dispose()])
+    }
   })
 
   await test('P0 TaskRun:同会话排队消息形成独立步骤并在末轮完成后收口', async () => {
@@ -618,16 +1060,25 @@ async function main() {
 
   await test('P0 idempotency:Claude bypass 模式仍需确认未知结果操作', async () => {
     const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
     const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
     const idempotency = M('main/task/tool-idempotency.js')
     const { events, s, meta } = newSession('prov-b', 'm-b')
     meta.permissionMode = 'bypassPermissions'
-    const run = taskRun.createTaskRun({ id: 'claude-idempotency-run', sessionId: meta.id, taskId: meta.id })
     const input = { command: 'npm test' }
+    const userEvent = { kind: 'user-message', messageId: 'claude-idempotency-user', text: 'retry unknown bash' }
+    const toolEvent = {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: 'retry-bash', name: 'Bash', input }]
+    }
+    let run = taskRun.createTaskRun({ id: 'claude-idempotency-run', sessionId: meta.id, taskId: meta.id })
+    run = taskExecution.reduceTaskExecutionEvent(run, userEvent, meta.cwd)
+    run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, meta.cwd)
     const key = idempotency.buildToolIdempotencyKey({ scopeId: run.sessionId, cwd: meta.cwd, toolName: 'Bash', toolInput: input })
     runtime.set(meta.id, {
       ...run,
-      toolExecutions: [{
+      toolExecutions: [...(run.toolExecutions ?? []), {
         id: `${run.id}:tool:old-bash`,
         runId: run.id,
         sessionId: meta.id,
@@ -640,6 +1091,16 @@ async function main() {
       }]
     })
     try {
+      await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+        meta,
+        transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+        lastSeq: 2,
+        lastEventKind: 'assistant-message',
+        eventCount: 2,
+        reason: 'important-event',
+        run: runtime.get(meta.id)
+      }), userData)
+      await s.ensureClaudeEffectPrepared('Bash', input, 'retry-bash')
       const decisionPromise = s.requestPermission('Bash', input, { toolUseID: 'retry-bash' })
       await waitFor(() => events.some((entry) => entry.event.kind === 'permission-request'), 2000, '等待 Claude 幂等审批')
       const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
@@ -658,8 +1119,9 @@ async function main() {
         'Claude plan 模式不应弹出可突破硬拒绝的审批'
       )
     } finally {
+      await s.cancelClaudeEffect('retry-bash', 'integration cleanup')
       runtime.delete(meta.id)
-      s.dispose()
+      await s.dispose()
     }
   })
 
@@ -1025,6 +1487,71 @@ async function main() {
     sm.close(meta.id)
   })
 
+  await test('P0 effect manual reconciliation:main 原生确认绑定真实 Effect 与用户勾选', async () => {
+    M('main/ipc.js').registerIpc()
+    const sm = M('main/sessionManager.js').sessionManager
+    const originalListSnapshots = sm.listTaskSnapshots.bind(sm)
+    const originalResolveEffect = sm.resolveTaskEffect.bind(sm)
+    const effect = {
+      id: 'native-confirm-effect',
+      revision: 7,
+      status: 'waiting_reconciliation',
+      toolName: 'git_push',
+      error: '远端查询没有得到唯一结论',
+      target: {
+        kind: 'git_push',
+        repoRoot: tmpRoot,
+        remote: 'origin',
+        pushUrlDigest: 'digest',
+        branch: 'main',
+        ref: 'refs/heads/main',
+        intendedSha: '1234567890abcdef'
+      }
+    }
+    const snapshot = {
+      id: 'native-confirm-snapshot',
+      run: { effects: [effect] }
+    }
+    let resolvedArgs
+    sm.listTaskSnapshots = async () => [snapshot]
+    sm.resolveTaskEffect = async (...args) => {
+      resolvedArgs = args
+      return snapshot
+    }
+    const owner = fakeWindow()
+    const event = { sender: owner.webContents }
+    const handler = ipcHandlers.get('taskSnapshots:resolveEffect')
+    assert(typeof handler === 'function', 'resolveEffect IPC handler missing')
+    nativeDialogCalls.length = 0
+    try {
+      nativeDialogResponse = { response: 1, checkboxChecked: false }
+      const unchecked = await handler(
+        event,
+        snapshot.id,
+        effect.id,
+        effect.revision,
+        'confirmed_not_applied'
+      )
+      eq(unchecked, snapshot, '未勾选原生确认时应保持原快照')
+      eq(resolvedArgs, undefined, '仅点击按钮但未勾选不得生成 human-v1 证据')
+      const options = nativeDialogCalls.at(-1)?.at(-1)
+      assert(options?.detail.includes('origin/main -> 1234567890ab'), '原生确认必须展示主进程读取的真实目标')
+      assert(options?.checkboxLabel, '原生确认必须要求独立勾选核对')
+
+      nativeDialogResponse = { response: 1, checkboxChecked: true }
+      await handler(event, snapshot.id, effect.id, effect.revision, 'confirmed_not_applied')
+      eq(
+        JSON.stringify(resolvedArgs),
+        JSON.stringify([snapshot.id, effect.id, effect.revision, 'confirmed_not_applied']),
+        '勾选后的处置参数必须绑定已复核的 Effect revision'
+      )
+    } finally {
+      sm.listTaskSnapshots = originalListSnapshots
+      sm.resolveTaskEffect = originalResolveEffect
+      nativeDialogResponse = { response: 0, checkboxChecked: false }
+    }
+  })
+
   // ---- PLAN T5 记忆自动提议 ----
   await test('PLAN T5 memory suggestion:send 触发提示,接受只预填不落盘', async () => {
     M('main/ipc.js').registerIpc()
@@ -1387,7 +1914,154 @@ async function main() {
 	    }
 	  })
 
-  await test('P0 idempotency:OpenAI bypass 模式仍需确认未知结果操作', async () => {
+  await test('P0 effect approval:OpenAI 审批期间 Git index 漂移必须废弃旧意图', async () => {
+    const { openAIEngineFactory } = M('main/openaiEngine.js')
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const repoDir = path.join(tmpRoot, 'openai-approval-drift')
+    fs.mkdirSync(repoDir, { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoDir })
+    execFileSync('git', ['config', 'user.email', 'effect@example.test'], { cwd: repoDir })
+    execFileSync('git', ['config', 'user.name', 'Effect Approval Test'], { cwd: repoDir })
+    fs.writeFileSync(path.join(repoDir, 'state.txt'), 'base\n')
+    execFileSync('git', ['add', 'state.txt'], { cwd: repoDir })
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: repoDir })
+    fs.writeFileSync(path.join(repoDir, 'state.txt'), 'approved-state\n')
+    execFileSync('git', ['add', 'state.txt'], { cwd: repoDir })
+    const preHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim()
+
+    const meta = AS.newSessionMeta({
+      cwd: repoDir,
+      model: 'm-b',
+      providerId: 'prov-b',
+      engine: 'openai',
+      permissionMode: 'default',
+      title: 'openai approval drift'
+    })
+    meta.id = 'openai-approval-drift-session'
+    meta.status = 'running'
+    const toolUseId = 'approval-drift-commit'
+    const toolInput = { message: 'approved commit' }
+    const userEvent = { kind: 'user-message', messageId: 'approval-drift-user', text: 'commit approved staged state' }
+    const toolEvent = {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: toolUseId, name: 'git_commit', input: toolInput }]
+    }
+    let run = taskRun.createTaskRun({ id: 'openai-approval-drift-run', sessionId: meta.id, taskId: meta.id })
+    run = taskExecution.reduceTaskExecutionEvent(run, userEvent, repoDir)
+    run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, repoDir)
+    runtime.set(meta.id, run)
+    await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+      meta,
+      transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+      lastSeq: 2,
+      lastEventKind: 'assistant-message',
+      eventCount: 2,
+      reason: 'important-event',
+      run
+    }), userData)
+
+    const events = []
+    const engine = openAIEngineFactory.create(meta, (event, seq) => events.push({ event, seq }))
+    try {
+      const execution = engine.executeToolWithPermission('git_commit', toolInput, toolUseId)
+      await waitFor(() => events.some((entry) => entry.event.kind === 'permission-request'), 2000, '等待 OpenAI Git 审批')
+      fs.writeFileSync(path.join(repoDir, 'state.txt'), 'concurrent-state\n')
+      execFileSync('git', ['add', 'state.txt'], { cwd: repoDir })
+      const request = events.find((entry) => entry.event.kind === 'permission-request').event.request
+      engine.respondPermission(request.requestId, true)
+      const result = await execution
+      assert(!result.ok, '审批后 index 漂移必须阻止 git commit')
+      assert(result.output.includes('执行前目标或输入已变化'), `漂移拒绝原因错误:${result.output}`)
+      eq(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim(), preHead, '漂移后 HEAD 不得变化')
+      const snapshot = await taskStore.getTaskSnapshot(meta.id, userData)
+      assert(snapshot && snapshot.run, '漂移后必须保留 TaskRun 快照')
+      eq(snapshot.run.effects[0].status, 'abandoned', '旧 Effect 必须废弃')
+      eq(
+        snapshot.run.effects[0].evidence.filter((item) => item.kind === 'retry_authorized').length,
+        1,
+        '旧 Effect 只能追加一次重试授权'
+      )
+    } finally {
+      runtime.delete(meta.id)
+      await engine.dispose()
+    }
+  })
+
+  await test('P0 effect interrupt:OpenAI 中断必须终止活动 Bash 子进程并保守对账', async () => {
+    const { openAIEngineFactory } = M('main/openaiEngine.js')
+    const taskRun = M('main/task/task-run.js')
+    const taskExecution = M('main/task/task-execution.js')
+    const taskStore = M('main/task/task-snapshot.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const projectDir = path.join(tmpRoot, 'openai-interrupt-bash')
+    fs.mkdirSync(projectDir, { recursive: true })
+    const startedMarker = path.join(projectDir, 'started.txt')
+    const completedMarker = path.join(projectDir, 'completed.txt')
+    const childCode = Buffer.from(
+      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(startedMarker)},'started');` +
+      `setTimeout(()=>fs.writeFileSync(${JSON.stringify(completedMarker)},'completed'),1500);`
+    ).toString('base64')
+    const command = `${JSON.stringify(process.execPath)} -e "eval(Buffer.from('${childCode}','base64').toString())"`
+    const toolUseId = 'interrupt-bash-tool'
+    const toolInput = { command }
+    const meta = AS.newSessionMeta({
+      cwd: projectDir,
+      model: 'm-b',
+      providerId: 'prov-b',
+      engine: 'openai',
+      permissionMode: 'bypassPermissions',
+      title: 'openai interrupt bash'
+    })
+    meta.id = 'openai-interrupt-bash-session'
+    meta.status = 'running'
+    const userEvent = { kind: 'user-message', messageId: 'interrupt-bash-user', text: 'run delayed marker' }
+    const toolEvent = {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: toolUseId, name: 'bash', input: toolInput }]
+    }
+    let run = taskRun.createTaskRun({ id: 'openai-interrupt-bash-run', sessionId: meta.id, taskId: meta.id })
+    run = taskExecution.reduceTaskExecutionEvent(run, userEvent, projectDir)
+    run = taskExecution.reduceTaskExecutionEvent(run, toolEvent, projectDir)
+    runtime.set(meta.id, run)
+    await taskStore.saveTaskSnapshot(taskStore.buildTaskSnapshot({
+      meta,
+      transcript: [{ seq: 1, event: userEvent }, { seq: 2, event: toolEvent }],
+      lastSeq: 2,
+      lastEventKind: 'assistant-message',
+      eventCount: 2,
+      reason: 'important-event',
+      run
+    }), userData)
+
+    const engine = openAIEngineFactory.create(meta, () => undefined)
+    const controller = new AbortController()
+    try {
+      const execution = engine.executeToolWithPermission('bash', toolInput, toolUseId, controller.signal)
+      await waitFor(() => fs.existsSync(startedMarker), 2000, '等待 Bash 子进程启动')
+      controller.abort()
+      const result = await execution
+      assert(!result.ok, '中断后的 Bash 不得报告成功')
+      assert(result.output.includes('中断'), `中断结果应明确说明:${result.output}`)
+      await new Promise((resolve) => setTimeout(resolve, 1800))
+      assert(!fs.existsSync(completedMarker), '中断必须杀掉延迟子进程，禁止最终 marker 落盘')
+      const snapshot = await taskStore.getTaskSnapshot(meta.id, userData)
+      assert(snapshot && snapshot.run, '中断后必须保留 TaskRun 快照')
+      eq(snapshot.run.effects[0].status, 'waiting_reconciliation', 'opaque Bash 中断后必须等待人工对账')
+      eq(
+        snapshot.run.effects[0].evidence.filter((item) => item.kind === 'retry_authorized').length,
+        0,
+        '活动 Bash 中断不得自动授权重试'
+      )
+    } finally {
+      runtime.delete(meta.id)
+      await engine.dispose()
+    }
+  })
+
+	  await test('P0 idempotency:OpenAI bypass 模式仍需确认未知结果操作', async () => {
     const { openAIEngineFactory } = M('main/openaiEngine.js')
     const taskRun = M('main/task/task-run.js')
     const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry

@@ -90,6 +90,23 @@ try {
   assertEqual(failed.recoveryCount, 1)
   assertEqual(failed.finishedAt, undefined)
 
+  let unresolvedError = taskRun.transitionTaskRun(
+    taskRun.createTaskRun({ id: 'run-unresolved-error', sessionId: 'session-unresolved-error', taskId: 'task-unresolved-error', now: 2201 }),
+    'executing',
+    { now: 2202 }
+  )
+  unresolvedError = {
+    ...unresolvedError,
+    effects: [{ status: 'executing' }]
+  }
+  unresolvedError = taskRun.reduceTaskRunEvent(
+    unresolvedError,
+    { kind: 'status', status: 'error', error: 'stream crashed after external execution started' },
+    2203
+  )
+  assertEqual(unresolvedError.status, 'waiting_reconciliation')
+  assertEqual(unresolvedError.finishedAt, undefined)
+
   let approvalRecovery = taskRun.createTaskRun({ id: 'run-d', sessionId: 'session-d', taskId: 'task-d', now: 2300 })
   approvalRecovery = taskRun.reduceTaskRunEvent(
     taskRun.transitionTaskRun(approvalRecovery, 'executing', { now: 2350 }),
@@ -257,6 +274,36 @@ try {
   assertEqual(executionRun.toolExecutions[0].approvalResolvedEventId, 'event-tools-approval-resolved')
   assertEqual(executionRun.toolExecutions[0].resultEventId, 'event-tools-result')
 
+  let reconciliationRun = taskRun.createTaskRun({
+    id: 'run-live-reconciliation',
+    sessionId: 'session-live-reconciliation',
+    taskId: 'task-live-reconciliation',
+    now: 4061
+  })
+  reconciliationRun = taskExecution.reduceTaskExecutionEvent(
+    reconciliationRun,
+    {
+      kind: 'assistant-message',
+      blocks: [{ type: 'tool_use', id: 'tool-live-reconciliation', name: 'bash', input: { command: 'publish' } }]
+    },
+    tempRoot,
+    4062
+  )
+  reconciliationRun = taskExecution.reduceTaskExecutionEvent(
+    reconciliationRun,
+    {
+      kind: 'tool-result',
+      toolUseId: 'tool-live-reconciliation',
+      content: 'result unknown',
+      isError: true,
+      effectStatus: 'waiting_reconciliation'
+    },
+    tempRoot,
+    4063
+  )
+  assertEqual(reconciliationRun.toolExecutions[0].status, 'unknown_outcome')
+  assertEqual(reconciliationRun.toolExecutions[0].effectStatus, 'waiting_reconciliation')
+
   executionRun = taskExecution.reduceTaskExecutionEvent(
     executionRun,
     { kind: 'tool-start', toolUseId: 'tool-2', name: 'bash' },
@@ -380,6 +427,116 @@ try {
   assertEqual(parallelApprovals.steps[0].status, 'executing')
 
   const registry = runtimeRegistry.taskRuntimeRegistry
+  registry.clear()
+  const serializationRun = {
+    ...taskRun.createTaskRun({
+      id: 'run-effect-event-serialization',
+      sessionId: 'session-effect-event-serialization',
+      taskId: 'task-effect-event-serialization',
+      now: 5900
+    }),
+    status: 'executing',
+    revision: 4,
+    updatedAt: 5940,
+    lastAppliedEventId: 'event-4',
+    lastAppliedEventSeq: 4,
+    recentEventIds: ['event-4']
+  }
+  const serializationEffect = effectRecord(serializationRun, 'serialized-write', 5940)
+  const serializationTool = {
+    ...toolRecord(serializationRun, 'serialized-write', 'write_file', 'running', 'serialized-key', 5940),
+    effectId: serializationEffect.id,
+    effectKey: serializationEffect.effectKey,
+    effectStatus: 'executing',
+    lastEventId: 'event-4',
+    lastEventSeq: 4
+  }
+  const eventBranch = {
+    ...serializationRun,
+    revision: 5,
+    updatedAt: 5960,
+    lastAppliedEventId: 'event-5',
+    lastAppliedEventSeq: 5,
+    recentEventIds: ['event-4', 'event-5'],
+    toolExecutions: [{
+      ...serializationTool,
+      outputDigest: 'event-output-digest',
+      resultEventId: 'event-5',
+      lastEventId: 'event-5',
+      lastEventSeq: 5,
+      updatedAt: 5960
+    }],
+    effects: [serializationEffect]
+  }
+  const confirmedEffect = {
+    ...serializationEffect,
+    revision: serializationEffect.revision + 1,
+    status: 'confirmed',
+    lease: { ...serializationEffect.lease, releasedAt: 5950 },
+    evidence: [
+      ...serializationEffect.evidence,
+      {
+        id: 'serialized-confirmed-evidence',
+        kind: 'execution_result',
+        digest: 'serialized-confirmed-digest',
+        observedAt: 5950,
+        verifier: 'task-run-state-smoke',
+        generation: 1
+      }
+    ],
+    updatedAt: 5950,
+    terminalAt: 5950
+  }
+  const effectBranch = {
+    ...serializationRun,
+    revision: 5,
+    updatedAt: 5950,
+    toolExecutions: [{
+      ...serializationTool,
+      status: 'succeeded',
+      effectStatus: 'confirmed',
+      updatedAt: 5950,
+      finishedAt: 5950
+    }],
+    effects: [confirmedEffect]
+  }
+  registry.set(serializationRun.sessionId, eventBranch)
+  registry.set(serializationRun.sessionId, effectBranch)
+  const serialized = registry.get(serializationRun.sessionId)
+  assertEqual(serialized.lastAppliedEventSeq, 5)
+  assertEqual(serialized.effects[0].status, 'confirmed')
+  assertEqual(serialized.toolExecutions[0].status, 'succeeded')
+  assertEqual(serialized.toolExecutions[0].effectStatus, 'confirmed')
+  assertEqual(serialized.toolExecutions[0].outputDigest, 'event-output-digest')
+  registry.clear()
+
+  const completedEventBranch = {
+    ...eventBranch,
+    status: 'completed',
+    revision: 6,
+    updatedAt: 5970,
+    lastAppliedEventId: 'event-6',
+    lastAppliedEventSeq: 6,
+    recentEventIds: ['event-4', 'event-5', 'event-6'],
+    finishedAt: 5970,
+    effects: []
+  }
+  const unresolvedEffectBranch = {
+    ...serializationRun,
+    revision: 5,
+    updatedAt: 5950,
+    toolExecutions: [serializationTool],
+    effects: [serializationEffect]
+  }
+  for (const merged of [
+    taskRun.mergeTaskRunRecords(completedEventBranch, unresolvedEffectBranch),
+    taskRun.mergeTaskRunRecords(unresolvedEffectBranch, completedEventBranch)
+  ]) {
+    assertEqual(merged.status, 'waiting_reconciliation')
+    assertEqual(merged.finishedAt, undefined)
+    assertEqual(merged.effects[0].status, 'executing')
+  }
+
   const policyRun = taskRun.createTaskRun({ id: 'run-policy', sessionId: 'session-policy', taskId: 'task-policy', now: 6000 })
   const writeInput = { path: 'result.txt', content: 'done' }
   const writeKey = toolIdempotency.buildToolIdempotencyKey({
@@ -725,6 +882,51 @@ function toolRecord(run, toolUseId, toolName, status, idempotencyKey, now) {
     status,
     idempotencyKey,
     createdAt: now,
+    updatedAt: now
+  }
+}
+
+function effectRecord(run, toolUseId, now) {
+  return {
+    schemaVersion: 1,
+    id: `${run.id}:effect:${toolUseId}`,
+    effectKey: `effect-v1:${toolUseId}`,
+    resourceKey: `resource-v1:${toolUseId}`,
+    sessionId: run.sessionId,
+    runId: run.id,
+    toolUseId,
+    toolName: 'write_file',
+    generation: 1,
+    revision: 2,
+    status: 'executing',
+    reconcilability: 'queryable',
+    target: {
+      kind: 'file_content',
+      rootPath: tempRoot,
+      relativePath: 'serialized.txt',
+      preState: 'absent',
+      expectedSha256: 'serialized-sha',
+      expectedBytes: 10
+    },
+    targetDigest: 'serialized-target-digest',
+    intentDigest: 'serialized-intent-digest',
+    inputDigest: 'serialized-input-digest',
+    lease: {
+      id: 'serialized-lease',
+      ownerId: 'serialized-owner',
+      fencingToken: 1,
+      acquiredAt: now - 10,
+      expiresAt: now + 60_000
+    },
+    evidence: [{
+      id: 'serialized-executing-evidence',
+      kind: 'executing',
+      digest: 'serialized-executing-digest',
+      observedAt: now,
+      verifier: 'task-run-state-smoke',
+      generation: 1
+    }],
+    createdAt: now - 10,
     updatedAt: now
   }
 }

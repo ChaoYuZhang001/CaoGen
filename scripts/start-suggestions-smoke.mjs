@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -45,6 +46,7 @@ try {
   )
 
   const compiledModule = findCompiledModule(outDir)
+  if (!compiledModule) throw new Error(`compiled startSuggestions.js not found under ${outDir}`)
   const startSuggestions = await import(pathToFileURL(compiledModule).href)
 
   mkdirSync(projectDir, { recursive: true })
@@ -71,6 +73,17 @@ try {
   git(projectDir, ['config', 'user.name', 'Start Suggestions Smoke'])
   git(projectDir, ['add', 'package.json', 'README.md', 'package-lock.json'])
   git(projectDir, ['commit', '-m', 'initial'])
+  const fsmonitorMarker = path.join(projectDir, 'fsmonitor-ran.txt')
+  const fsmonitorPath = path.join(projectDir, process.platform === 'win32' ? 'fsmonitor.cmd' : 'fsmonitor.sh')
+  writeFileSync(
+    fsmonitorPath,
+    process.platform === 'win32'
+      ? `@echo off\r\ntype nul > "${fsmonitorMarker}"\r\necho 1\r\necho.\r\n`
+      : `#!/bin/sh\ntouch ${JSON.stringify(fsmonitorMarker)}\nprintf '1\\n\\n'\n`,
+    'utf8'
+  )
+  if (process.platform !== 'win32') chmodSync(fsmonitorPath, 0o755)
+  git(projectDir, ['config', 'core.fsmonitor', fsmonitorPath])
 
   writeFileSync(path.join(projectDir, 'README.md'), '# Smoke\n\nTODO: finish the helper smoke test.\n', 'utf8')
   writeFileSync(path.join(projectDir, 'TODO.md'), 'FIXME: cover git dirty state.\n', 'utf8')
@@ -99,6 +112,7 @@ try {
   assertHasSource(suggestions, 'readme-todo')
   assertHasSource(suggestions, 'package-json')
   assertHasSource(suggestions, 'memory')
+  assert(!existsSync(fsmonitorMarker), 'start suggestions must not execute core.fsmonitor')
   assert(
     suggestions.some((suggestion) => suggestion.priority === 'high'),
     'dirty/failure/TODO signals should include a high-priority suggestion'
@@ -182,7 +196,7 @@ function findCompiledModule(root) {
       return fullPath
     }
   }
-  throw new Error(`compiled startSuggestions.js not found under ${root}`)
+  return undefined
 }
 
 function npxCommand() {
