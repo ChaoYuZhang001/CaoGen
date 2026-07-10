@@ -67,7 +67,7 @@
 
 ### 多厂商模型配置
 
-- 多 Provider、多 API Key、自定义 Base URL、中转站和本地兼容服务统一管理；密钥值仅在主进程加密保存。
+- 多 Provider、多 API Key、自定义 Base URL、中转站和本地兼容服务统一管理；密钥只由主进程读取，系统安全存储可用时加密保存。安全存储不可用时仍存在可逆编码 fallback，这是待移除的 P0 安全缺口，当前不宣称所有环境均加密落盘。
 - 支持主流文本生成协议、流式输出和工具调用循环。
 - 常用 Provider 模板覆盖海外、国产、网关和本地模型服务。
 - Chat Completions 兼容模型可通过工具调用循环读文件、改代码、跑命令，不只是聊天。
@@ -89,6 +89,7 @@
 
 - `@` 文件引用、文件补全、多图粘贴/拖拽、图片 OCR。
 - 命令执行、文件读写、精确搜索替换、代码/符号检索、依赖查看等原生工具。
+- 外部副作用已接入持久 Effect Ledger、资源级 lease/fencing、强杀恢复和人工对账；文件写入、Git commit/push 支持只读后置状态核验，其他未注册 Reconciler 的操作仍按 fail-closed 处理。
 - Diff 审查、逐 hunk stage/discard、应用内 Git 提交。
 - Worktree 合并审查、patch 导出/应用、冲突文件查看、PR/MR 创建（`gh` / `glab`）。
 - `Esc Esc` / `/rewind` 检查点回溯；空闲时可即时重建引擎截断上下文，运行中下次 resume 截断。
@@ -203,7 +204,7 @@ npm run dev
 npm run typecheck  # TypeScript 类型检查
 npm run build      # 构建生产产物到 out/
 npm start          # 预览构建产物
-npm run test:deep  # 深度测试矩阵，当前脚本编排 81 项，失败即停
+npm run test:deep  # 深度测试矩阵，当前脚本编排 84 项，失败即停
 npm run secret:scan # 扫描当前工作树中的明显密钥
 ```
 
