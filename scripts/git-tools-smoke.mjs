@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -48,17 +48,53 @@ try {
     openaiToolsSource.indexOf('export const READONLY_TOOLS'),
     openaiToolsSource.indexOf('/** 文件写入类')
   )
+  const idempotencySource = readFileSync(path.join(repoRoot, 'src/main/task/tool-idempotency.ts'), 'utf8')
+  const sharedReadonlyBlock = idempotencySource.slice(
+    idempotencySource.indexOf('export const OPENAI_PERMISSION_READ_ONLY_TOOLS'),
+    idempotencySource.indexOf('const EFFECT_FREE_TOOLS')
+  )
   assert(openaiToolsSource.includes('...GIT_TOOLS'), 'OpenAI coding tools should include GIT_TOOLS')
-  assert(readonlyBlock.includes("'git_status'"), 'git_status should be readonly')
-  assert(readonlyBlock.includes("'git_diff'"), 'git_diff should be readonly')
-  assert(!readonlyBlock.includes("'code_forge_delivery'"), 'code_forge_delivery should not be readonly')
+  assert(readonlyBlock.includes('OPENAI_PERMISSION_READ_ONLY_TOOLS'), 'OpenAI tools should use shared readonly classification')
+  assert(sharedReadonlyBlock.includes("'git_status'"), 'git_status should be readonly')
+  assert(sharedReadonlyBlock.includes("'git_diff'"), 'git_diff should be readonly')
+  assert(!sharedReadonlyBlock.includes("'code_forge_delivery'"), 'code_forge_delivery should not be readonly')
   assert(openaiToolsSource.includes("export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])"), 'git tools should not be acceptEdits-only')
 
   initRepo(projectDir)
-  writePassingContext(projectDir)
+  const commandMarker = path.join(projectDir, 'caogen-command-ran.txt')
+  const hookMarker = path.join(projectDir, 'git-hook-ran.txt')
+  const fsmonitorMarker = path.join(projectDir, 'fsmonitor-ran.txt')
+  const externalDiffMarker = path.join(projectDir, 'external-diff-ran.txt')
+  const textconvMarker = path.join(projectDir, 'textconv-ran.txt')
+  writeUntrustedContext(projectDir, commandMarker)
+  writeFileSync(path.join(projectDir, '.gitattributes'), 'app.txt diff=caogen-unsafe\n', 'utf8')
   writeFileSync(path.join(projectDir, 'app.txt'), 'hello\n', 'utf8')
-  git(projectDir, ['add', 'app.txt', 'caogen.md'])
+  git(projectDir, ['add', 'app.txt', 'caogen.md', '.gitattributes'])
   git(projectDir, ['commit', '-m', 'initial'])
+  const fsmonitorPath = writeExecutable(
+    projectDir,
+    'fsmonitor.sh',
+    `#!/bin/sh\ntouch ${JSON.stringify(fsmonitorMarker)}\nprintf '1\\n\\n'\n`
+  )
+  const externalDiffPath = writeExecutable(
+    projectDir,
+    'external-diff.sh',
+    `#!/bin/sh\ntouch ${JSON.stringify(externalDiffMarker)}\nexit 0\n`
+  )
+  const textconvPath = writeExecutable(
+    projectDir,
+    'textconv.sh',
+    `#!/bin/sh\ntouch ${JSON.stringify(textconvMarker)}\ncat "$1"\n`
+  )
+  git(projectDir, ['config', 'core.fsmonitor', fsmonitorPath])
+  git(projectDir, ['config', 'diff.external', externalDiffPath])
+  git(projectDir, ['config', 'diff.caogen-unsafe.textconv', textconvPath])
+  const hookPath = path.join(projectDir, '.git', 'hooks', 'pre-commit')
+  writeFileSync(hookPath, `#!/bin/sh\ntouch ${JSON.stringify(hookMarker)}\nexit 91\n`, 'utf8')
+  chmodSync(hookPath, 0o755)
+  const postHookPath = path.join(projectDir, '.git', 'hooks', 'post-commit')
+  writeFileSync(postHookPath, `#!/bin/sh\ntouch ${JSON.stringify(hookMarker)}\n`, 'utf8')
+  chmodSync(postHookPath, 0o755)
 
   writeFileSync(path.join(projectDir, 'app.txt'), 'hello\nchanged\n', 'utf8')
   writeFileSync(path.join(projectDir, 'notes.txt'), 'untracked\n', 'utf8')
@@ -68,11 +104,14 @@ try {
   const statusJson = parseJson(statusResult.output)
   assert(statusJson.files.some((file) => file.path === 'app.txt' && file.kind === 'modified'), 'modified file missing')
   assert(statusJson.files.some((file) => file.path === 'notes.txt' && file.untracked), 'untracked file missing')
+  assert(!existsSync(fsmonitorMarker), 'permission-free git_status must not execute core.fsmonitor')
 
   const diffResult = await gitTools.executeGitTool('git_diff', { file: 'app.txt' }, projectDir)
   assert(diffResult.ok, diffResult.output)
   const diffJson = parseJson(diffResult.output)
   assert(diffJson.unstagedDiff.includes('+changed'), 'unstaged diff should include changed line')
+  assert(!existsSync(externalDiffMarker), 'git_diff must not execute diff.external')
+  assert(!existsSync(textconvMarker), 'git_diff must not execute a configured textconv command')
 
   const noStageCommit = await gitTools.executeGitTool('git_commit', { message: 'should not commit unstaged' }, projectDir)
   assert(!noStageCommit.ok, 'commit should fail without staged changes')
@@ -82,15 +121,16 @@ try {
   const commitResult = await gitTools.executeGitTool('git_commit', { message: 'commit staged change' }, projectDir)
   assert(commitResult.ok, commitResult.output)
   const commitJson = parseJson(commitResult.output)
-  assert(commitJson.sha && commitJson.checks.length === 2, 'commit should return sha and two checks')
+  assert(commitJson.sha && commitJson.checks.length === 0, 'commit should return sha without implicit shell checks')
+  assert(!existsSync(commandMarker), 'git_commit must not execute commands embedded in caogen.md')
+  assert(!existsSync(hookMarker), 'git_commit must bypass pre and post repository hooks')
   assert(existsSync(path.join(projectDir, 'notes.txt')), 'untracked file should remain uncommitted')
 
-  writeFileSync(path.join(projectDir, 'app.txt'), 'hello\nchanged\nblocked\n', 'utf8')
+  writeFileSync(path.join(projectDir, 'app.txt'), 'hello\nchanged\nsecond\n', 'utf8')
   git(projectDir, ['add', 'app.txt'])
-  writeFailingContext(projectDir)
-  const blockedCommit = await gitTools.executeGitTool('git_commit', { message: 'blocked by checks' }, projectDir)
-  assert(!blockedCommit.ok, `commit should be blocked by failing caogen command: ${blockedCommit.output}`)
-  assert(blockedCommit.output.includes('提交前检查失败'), 'blocked commit should mention pre-commit checks')
+  const secondCommit = await gitTools.executeGitTool('git_commit', { message: 'second safe commit' }, projectDir)
+  assert(secondCommit.ok, `repository commands and hooks must stay inert: ${secondCommit.output}`)
+  assert(!existsSync(commandMarker) && !existsSync(hookMarker), 'hidden repository commands must remain unexecuted')
 
   git(projectDir, ['remote', 'add', 'origin', 'git@gitee.com:owner/repo.git'])
   const prResult = await gitTools.executeGitTool('git_create_pr', { title: 'Smoke PR' }, projectDir)
@@ -134,20 +174,27 @@ function initRepo(dir) {
   git(dir, ['config', 'user.name', 'CaoGen Smoke'])
 }
 
-function writePassingContext(dir) {
+function writeUntrustedContext(dir, marker) {
   writeFileSync(
     path.join(dir, 'caogen.md'),
-    ['# 项目概述', 'Git tools smoke', '', '# 常用命令', '- lint: node -e "process.exit(0)"', '- test: node -e "process.exit(0)"', ''].join('\n'),
+    [
+      '# 项目概述',
+      'Git tools smoke',
+      '',
+      '# 常用命令',
+      `- lint: node -e "require('node:fs').writeFileSync('${marker}', 'ran')"`,
+      '- test: node -e "process.exit(91)"',
+      ''
+    ].join('\n'),
     'utf8'
   )
 }
 
-function writeFailingContext(dir) {
-  writeFileSync(
-    path.join(dir, 'caogen.md'),
-    ['# 项目概述', 'Git tools smoke', '', '# 常用命令', '- lint: node -e "process.exit(0)"', '- test: node -e "process.exit(7)"', ''].join('\n'),
-    'utf8'
-  )
+function writeExecutable(dir, name, content) {
+  const file = path.join(dir, name)
+  writeFileSync(file, content, 'utf8')
+  chmodSync(file, 0o755)
+  return file
 }
 
 function git(cwd, args) {

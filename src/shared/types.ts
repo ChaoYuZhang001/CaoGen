@@ -666,6 +666,7 @@ export type TaskRunStatus =
   | 'planning'
   | 'executing'
   | 'waiting_approval'
+  | 'waiting_reconciliation'
   | 'verifying'
   | 'recovering'
   | 'completed'
@@ -705,6 +706,103 @@ export type ToolExecutionStatus =
   | 'superseded'
   | 'unknown_outcome'
 
+export type EffectStatus =
+  | 'prepared'
+  | 'executing'
+  | 'waiting_reconciliation'
+  | 'confirmed'
+  | 'failed'
+  | 'compensated'
+  | 'abandoned'
+
+export type EffectEvidenceKind =
+  | 'prepared'
+  | 'executing'
+  | 'execution_result'
+  | 'reconciliation'
+  | 'retry_authorized'
+  | 'manual_confirmation'
+  | 'compensation'
+
+export interface EffectLease {
+  id: string
+  ownerId: string
+  fencingToken: number
+  acquiredAt: number
+  expiresAt: number
+  releasedAt?: number
+}
+
+export interface EffectEvidenceRecord {
+  id: string
+  kind: EffectEvidenceKind
+  digest: string
+  observedAt: number
+  verifier: string
+  generation: number
+}
+
+export type EffectTarget =
+  | {
+      kind: 'file_content'
+      rootPath: string
+      relativePath: string
+      preState: 'absent' | 'file'
+      preSha256?: string
+      preBytes?: number
+      expectedSha256: string
+      expectedBytes: number
+    }
+  | {
+      kind: 'git_commit'
+      repoRoot: string
+      branch: string
+      preHead: string
+      stagedDiffDigest: string
+      messageDigest: string
+    }
+  | {
+      kind: 'git_push'
+      repoRoot: string
+      remote: string
+      pushUrlDigest: string
+      branch: string
+      ref: string
+      intendedSha: string
+    }
+  | {
+      kind: 'unsupported'
+      toolName: string
+    }
+
+export interface EffectRecord {
+  schemaVersion: 1
+  id: string
+  effectKey: string
+  resourceKey: string
+  sessionId: string
+  runId: string
+  stepId?: string
+  toolExecutionId?: string
+  toolUseId: string
+  toolName: string
+  generation: number
+  revision: number
+  status: EffectStatus
+  reconcilability: 'queryable' | 'opaque'
+  target: EffectTarget
+  targetDigest: string
+  intentDigest: string
+  inputDigest: string
+  lease?: EffectLease
+  evidence: EffectEvidenceRecord[]
+  compensationEffectId?: string
+  createdAt: number
+  updatedAt: number
+  terminalAt?: number
+  error?: string
+}
+
 export interface ToolExecutionRecord {
   id: string
   runId: string
@@ -718,6 +816,9 @@ export interface ToolExecutionRecord {
   inputDigest?: string
   outputDigest?: string
   idempotencyKey?: string
+  effectId?: string
+  effectKey?: string
+  effectStatus?: EffectStatus
   duplicateOfExecutionId?: string
   supersededByExecutionId?: string
   requestedEventId?: string
@@ -757,6 +858,7 @@ export interface TaskRunRecord {
   error?: string
   steps?: TaskStepRecord[]
   toolExecutions?: ToolExecutionRecord[]
+  effects?: EffectRecord[]
 }
 
 export interface TaskSnapshotSubtaskState {
@@ -1389,7 +1491,13 @@ export type AgentEvent =
   | { kind: 'thinking-delta'; text: string }
   | { kind: 'tool-start'; toolUseId: string; name: string }
   | { kind: 'assistant-message'; blocks: AssistantBlock[] }
-  | { kind: 'tool-result'; toolUseId: string; content: string; isError: boolean }
+  | {
+      kind: 'tool-result'
+      toolUseId: string
+      content: string
+      isError: boolean
+      effectStatus?: EffectStatus
+    }
   | { kind: 'permission-request'; request: PermissionRequestInfo }
   | { kind: 'permission-resolved'; requestId: string; behavior: 'allow' | 'deny' }
   | {
@@ -2122,6 +2230,12 @@ export interface AgentDeskApi {
   ): Promise<CheckpointRestoreResult>
   listTaskSnapshots(): Promise<TaskSnapshotRecord[]>
   recoverTaskSnapshot(snapshotId: string): Promise<SessionMeta>
+  resolveTaskEffect(
+    snapshotId: string,
+    effectId: string,
+    expectedRevision: number,
+    resolution: 'confirmed_applied' | 'confirmed_not_applied'
+  ): Promise<TaskSnapshotRecord>
   deleteTaskSnapshot(snapshotId: string): Promise<boolean>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult>

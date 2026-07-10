@@ -8,6 +8,7 @@ import {
   gitCreatePr,
   type GitCommitCheckResult
 } from '../git/git-helper'
+import { withSafeLocalGitConfig } from '../git/safe-git'
 import {
   canFastApplyPatch,
   createPullRequest,
@@ -592,7 +593,9 @@ function verificationCommands(input: CodeForgeDeliveryInput): string[] {
 function repoDiffStats(repoRoot: string): { insertions: number; deletions: number } {
   let insertions = 0
   let deletions = 0
-  const numstat = runGit(repoRoot, ['diff', '--numstat', 'HEAD', '--'], { allowExitCodes: [0, 1] })
+  const numstat = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD', '--'], {
+    allowExitCodes: [0, 1]
+  })
   if (numstat.ok) {
     for (const line of numstat.stdout.split(/\r?\n/)) {
       const [added, removed] = line.split('\t')
@@ -606,7 +609,7 @@ function repoDiffStats(repoRoot: string): { insertions: number; deletions: numbe
 
 function repoChangedFiles(repoRoot: string): string[] {
   const files = new Set<string>()
-  const tracked = runGit(repoRoot, ['diff', '--name-only', '-z', 'HEAD', '--'], {
+  const tracked = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', 'HEAD', '--'], {
     allowExitCodes: [0, 1]
   })
   if (tracked.ok) {
@@ -618,7 +621,7 @@ function repoChangedFiles(repoRoot: string): string[] {
 
 function changedFilesSinceBase(worktreePath: string, baseSha: string): string[] {
   const files = new Set<string>()
-  const tracked = runGit(worktreePath, ['diff', '--name-only', '-z', baseSha, '--'], {
+  const tracked = runGit(worktreePath, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', baseSha, '--'], {
     allowExitCodes: [0, 1]
   })
   if (tracked.ok) {
@@ -630,7 +633,15 @@ function changedFilesSinceBase(worktreePath: string, baseSha: string): string[] 
 
 function repoPatchText(repoRoot: string): string {
   const chunks: string[] = []
-  const tracked = runGit(repoRoot, ['diff', '--binary', '--full-index', 'HEAD', '--'], {
+  const tracked = runGit(repoRoot, [
+    'diff',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--binary',
+    '--full-index',
+    'HEAD',
+    '--'
+  ], {
     allowExitCodes: [0, 1]
   })
   if (!tracked.ok) throw new Error(tracked.error ?? 'git diff 失败')
@@ -638,7 +649,7 @@ function repoPatchText(repoRoot: string): string {
   for (const file of untrackedFiles(repoRoot)) {
     const untracked = runGit(
       repoRoot,
-      ['diff', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
+      ['diff', '--no-ext-diff', '--no-textconv', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
       { allowExitCodes: [0, 1] }
     )
     if (!untracked.ok) throw new Error(untracked.error ?? `无法生成 untracked patch: ${file}`)
@@ -735,7 +746,7 @@ function runGit(
   options: { allowExitCodes?: number[] } = {}
 ): GitRunResult {
   const allowed = options.allowExitCodes ?? [0]
-  const result = spawnSync('git', args, {
+  const result = spawnSync('git', withSafeLocalGitConfig(args), {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

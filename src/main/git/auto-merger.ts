@@ -13,6 +13,7 @@ import {
   WORKTREE_MERGE_EXCLUDE_PATHSPECS
 } from '../worktreeMerge'
 import { buildConflictResolverRequest } from '../agent/conflict-resolver'
+import { withSafeLocalGitConfig } from './safe-git'
 import type {
   TaskDagAutoMergeConflict,
   TaskDagAutoMergeEntry,
@@ -500,7 +501,7 @@ function revParseHead(worktreePath: string): string | undefined {
 }
 
 function runGit(cwd: string, args: string[]): GitRunResult {
-  const result = spawnSync('git', args, {
+  const result = spawnSync('git', withSafeLocalGitConfig(args), {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

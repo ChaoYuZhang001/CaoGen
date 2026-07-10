@@ -55,6 +55,18 @@ const api: AgentDeskApi = {
   listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
   recoverTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:recover', snapshotId),
+  resolveTaskEffect: (
+    snapshotId: string,
+    effectId: string,
+    expectedRevision: number,
+    resolution: 'confirmed_applied' | 'confirmed_not_applied'
+  ) => ipcRenderer.invoke(
+    'taskSnapshots:resolveEffect',
+    snapshotId,
+    effectId,
+    expectedRevision,
+    resolution
+  ),
   deleteTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:delete', snapshotId),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>

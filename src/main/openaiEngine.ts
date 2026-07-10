@@ -58,11 +58,19 @@ import { isGuiToolName } from './agent/tools/gui-tools'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import {
+  cancelEffectExecution,
+  completeEffectExecution,
+  markEffectExecutionStarted,
+  prepareEffectExecution,
+  type PrepareEffectExecutionInput
+} from './task/effect-runtime'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
+  EffectStatus,
   ImageAttachmentView,
   OpenAIProtocol,
   PermissionModeId,
@@ -73,6 +81,9 @@ import type {
   TranscriptEntry,
   UsageTotals
 } from '../shared/types'
+
+type EffectAwareToolExecResult = ToolExecResult & { effectStatus?: EffectStatus }
+type EffectExecutionHandle = Awaited<ReturnType<typeof prepareEffectExecution>>
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
@@ -164,6 +175,8 @@ export class OpenAIEngine implements Engine {
   private readonly emitRaw: (event: AgentEvent) => void
   private abort: AbortController | null = null
   private disposed = false
+  private activeTurn: Promise<void> | null = null
+  private disposePromise: Promise<void> | null = null
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
@@ -267,7 +280,16 @@ export class OpenAIEngine implements Engine {
     if (this.meta.model === AUTO_MODEL) this.autoRoute(payload)
     this.abort = new AbortController()
     this.setStatus('running')
-    void this.runResponse(payload, this.abort)
+    const turn = this.runResponse(payload, this.abort)
+    this.activeTurn = turn
+    void turn.then(
+      () => {
+        if (this.activeTurn === turn) this.activeTurn = null
+      },
+      () => {
+        if (this.activeTurn === turn) this.activeTurn = null
+      }
+    )
   }
 
   /** 本轮路由选中的模型(meta.model 保持 auto 哨兵,下一轮重新路由) */
@@ -368,8 +390,10 @@ export class OpenAIEngine implements Engine {
   async interrupt(): Promise<void> {
     // 先拒掉挂起的审批,否则 Agent 循环会永远等在 gateTool 上
     this.rejectAllPendingPerms('已中断')
-    if (!this.abort) return
-    this.abort.abort()
+    const activeTurn = this.activeTurn
+    if (!activeTurn) return
+    this.abort?.abort()
+    await activeTurn.catch(() => undefined)
   }
 
   /** 中断/销毁时统一拒绝所有挂起审批,防 Agent 循环悬挂 */
@@ -524,9 +548,31 @@ export class OpenAIEngine implements Engine {
     })
   }
 
-  private async executeAllowedTool(name: string, input: Record<string, unknown>): Promise<ToolExecResult> {
+  private async executeAllowedTool(
+    name: string,
+    input: Record<string, unknown>,
+    toolUseId: string,
+    effectHandle: EffectExecutionHandle,
+    effectInput: PrepareEffectExecutionInput,
+    signal?: AbortSignal
+  ): Promise<EffectAwareToolExecResult> {
     const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+    if (signal?.aborted) {
+      await cancelEffectExecution(effectHandle, '操作在外部执行前已中断')
+      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
+    }
+    try {
+      await markEffectExecutionStarted(effectHandle, effectInput)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, output: `外部副作用账本准备失败，已阻止执行:${message}` }
+    }
+    if (signal?.aborted) {
+      await cancelEffectExecution(effectHandle, '操作在外部执行前已中断')
+      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
+    }
     const exec = await executeCodingTool(name, input, this.meta.cwd, {
+      signal,
       sandboxMode: settings.sandboxMode,
       dockerImage: settings.sandboxDockerImage,
       chinaMirrorEnabled: settings.chinaEcosystemMirrorEnabled,
@@ -558,7 +604,74 @@ export class OpenAIEngine implements Engine {
       sandboxed: exec.sandboxed,
       fallbackReason: exec.fallbackReason
     })
-    return exec
+    try {
+      const effect = await completeEffectExecution(effectHandle, exec)
+      return effect ? { ...exec, effectStatus: effect.status } : exec
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        ...exec,
+        ok: false,
+        output: `${exec.output}\n\n外部操作结果未能写入效果账本，已进入未知结果保护:${message}`,
+        effectStatus: 'waiting_reconciliation'
+      }
+    }
+  }
+
+  private async executeToolWithPermission(
+    name: string,
+    input: Record<string, unknown>,
+    toolUseId: string,
+    signal?: AbortSignal
+  ): Promise<EffectAwareToolExecResult> {
+    if (signal?.aborted) return { ok: false, output: '操作已中断，未进入权限判断' }
+    const effectInput: PrepareEffectExecutionInput = {
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      toolUseId,
+      toolName: name,
+      toolInput: input
+    }
+    let effectHandle: EffectExecutionHandle
+    try {
+      // Bind the durable effect intent before permission can wait on user input.
+      effectHandle = await prepareEffectExecution(effectInput)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, output: `外部副作用账本准备失败，已阻止审批和执行:${message}` }
+    }
+    if (signal?.aborted) {
+      await cancelEffectExecution(effectHandle, '操作在权限判断前已中断')
+      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
+    }
+
+    let gate: { allow: boolean; message?: string }
+    try {
+      gate = await this.gateTool(name, input, toolUseId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await cancelEffectExecution(effectHandle, `权限判断异常，未执行:${message}`).catch(() => undefined)
+      throw error
+    }
+    if (!gate.allow) {
+      const reason = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
+      try {
+        await cancelEffectExecution(effectHandle, reason)
+        return { ok: false, output: reason, effectStatus: effectHandle ? 'abandoned' : undefined }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          ok: false,
+          output: `${reason}\n\n拒绝结果未能写入效果账本，已保持 fail-closed:${message}`,
+          effectStatus: effectHandle ? 'waiting_reconciliation' : undefined
+        }
+      }
+    }
+    if (signal?.aborted) {
+      await cancelEffectExecution(effectHandle, '操作在审批后、外部执行前已中断')
+      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
+    }
+    return this.executeAllowedTool(name, input, toolUseId, effectHandle, effectInput, signal)
   }
 
   getTranscript(): TranscriptEntry[] {
@@ -587,13 +700,20 @@ export class OpenAIEngine implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
-  dispose(): void {
-    if (this.disposed) return
+  dispose(): Promise<void> {
+    if (this.disposePromise) return this.disposePromise
+    this.disposePromise = this.disposeAndWait()
+    return this.disposePromise
+  }
+
+  private async disposeAndWait(): Promise<void> {
     this.disposed = true
     this.rejectAllPendingPerms('会话已关闭')
     this.abort?.abort()
-    this.abort = null
     this.setStatus('closed')
+    const activeTurn = this.activeTurn
+    if (activeTurn) await activeTurn.catch(() => undefined)
+    this.abort = null
   }
 
   private async runResponse(payload: SendMessagePayload, controller: AbortController): Promise<void> {
@@ -730,19 +850,18 @@ export class OpenAIEngine implements Engine {
           kind: 'assistant-message',
           blocks: [{ type: 'tool_use', id: call.callId, name: call.name, input: args }]
         })
-        const gate = await this.gateTool(call.name, args, call.callId)
-        let resultText: string
-        let isError: boolean
-        if (!gate.allow) {
-          resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
-          isError = true
-        } else {
-          const exec = await this.executeAllowedTool(call.name, args)
-          resultText = exec.output
-          isError = !exec.ok
-        }
+        const exec = await this.executeToolWithPermission(call.name, args, call.callId, controller.signal)
+        const resultText = exec.output
+        const isError = !exec.ok
+        const effectStatus = exec.effectStatus
         this.recordGuiToolFailure(call.name, call.callId, resultText, isError)
-        this.emit({ kind: 'tool-result', toolUseId: call.callId, content: resultText, isError })
+        this.emit({
+          kind: 'tool-result',
+          toolUseId: call.callId,
+          content: resultText,
+          isError,
+          effectStatus
+        })
         outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
       }
       input = outputs // 下一轮只发工具结果(previous_response_id 续上文)
@@ -927,19 +1046,18 @@ export class OpenAIEngine implements Engine {
             blocks: [{ type: 'tool_use', id: call.id, name: call.name, input: args }]
           })
 
-          const gate = await this.gateTool(call.name, args, call.id)
-          let resultText: string
-          let isError: boolean
-          if (!gate.allow) {
-            resultText = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
-            isError = true
-          } else {
-            const exec = await this.executeAllowedTool(call.name, args)
-            resultText = exec.output
-            isError = !exec.ok
-          }
+          const exec = await this.executeToolWithPermission(call.name, args, call.id, controller.signal)
+          const resultText = exec.output
+          const isError = !exec.ok
+          const effectStatus = exec.effectStatus
           this.recordGuiToolFailure(call.name, call.id, resultText, isError)
-          this.emit({ kind: 'tool-result', toolUseId: call.id, content: resultText, isError })
+          this.emit({
+            kind: 'tool-result',
+            toolUseId: call.id,
+            content: resultText,
+            isError,
+            effectStatus
+          })
           this.chatHistory.push({ role: 'tool', tool_call_id: call.id, content: resultText })
         }
       }
@@ -1077,7 +1195,7 @@ export class OpenAIEngine implements Engine {
       '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
       'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
       '修改前可用 search_replace dry_run=true 预览 diff;完成后简要说明改动、测试和备份路径。',
-      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;需要闭环交付时优先用 code_forge_delivery 生成 diff/验证/patch/commit/PR 结构化报告;git_commit 会运行项目配置的 lint/test;git_push/git_create_pr/git_merge/code_forge_delivery(commit/pr) 属高风险操作,必须尊重权限审批和失败输出。',
+      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;验证命令必须作为显式 bash 工具单独执行和审批,git_commit 不会隐式运行 caogen.md 命令或 Git hooks;需要闭环交付时优先用 code_forge_delivery 生成结构化报告;git_push/git_create_pr/git_merge/code_forge_delivery(commit/pr) 属高风险操作,必须尊重权限审批和失败输出。',
       '复杂或跨模块任务先用 task_decompose 生成 DAG;用户明确要求 Genesis/多 Agent/隔离交付时,优先用 genesis_orchestrate 生成可审查的编排/验证/交付协议。genesis_orchestrate 第一版只规划,不会真实控制外部子 Agent、不会创建 worktree、不会提交或推送。',
       '只有在用户明确要求并通过权限审批后,才使用 task_dispatch_dag 或 task_decompose_and_dispatch_dag 启动子任务调度;Spark/Core/Forge 不应默认推动 Genesis 编排,Command/Genesis 才是编排类任务的目标档位。',
       settings.guiAutomationEnabled
@@ -1324,6 +1442,7 @@ export class OpenAIEngine implements Engine {
   private finishTurn(isError: boolean, resultText?: string, subtype = 'success'): void {
     const active = this.abort
     this.abort = null
+    if (this.disposed) return
     if (active?.signal.aborted && !isError) return
 
     const guiFailureText = this.formatGuiToolFailures()

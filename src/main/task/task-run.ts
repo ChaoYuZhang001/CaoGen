@@ -1,19 +1,28 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentEvent, AgentEventIdentity, TaskRunRecord, TaskRunStatus } from '../../shared/types'
-import { isTaskStepRecord, isToolExecutionRecord } from './task-execution'
+import type {
+  AgentEvent,
+  AgentEventIdentity,
+  EffectRecord,
+  TaskRunRecord,
+  TaskRunStatus,
+  TaskStepRecord,
+  ToolExecutionRecord
+} from '../../shared/types'
+import { isEffectRecord, isTaskStepRecord, isToolExecutionRecord } from './task-execution'
 
 const TERMINAL_STATUSES = new Set<TaskRunStatus>(['completed', 'failed', 'cancelled'])
 const RECENT_EVENT_IDS_LIMIT = 128
 
 const ALLOWED_TRANSITIONS: Record<TaskRunStatus, ReadonlySet<TaskRunStatus>> = {
-  queued: new Set(['planning', 'executing', 'recovering', 'completed', 'failed', 'cancelled']),
-  planning: new Set(['executing', 'waiting_approval', 'recovering', 'completed', 'failed', 'cancelled']),
-  executing: new Set(['waiting_approval', 'verifying', 'recovering', 'completed', 'failed', 'cancelled']),
-  waiting_approval: new Set(['executing', 'recovering', 'failed', 'cancelled']),
-  verifying: new Set(['executing', 'waiting_approval', 'recovering', 'completed', 'failed', 'cancelled']),
-  recovering: new Set(['planning', 'executing', 'waiting_approval', 'verifying', 'completed', 'failed', 'cancelled']),
+  queued: new Set(['planning', 'executing', 'waiting_reconciliation', 'recovering', 'completed', 'failed', 'cancelled']),
+  planning: new Set(['executing', 'waiting_approval', 'waiting_reconciliation', 'recovering', 'completed', 'failed', 'cancelled']),
+  executing: new Set(['waiting_approval', 'waiting_reconciliation', 'verifying', 'recovering', 'completed', 'failed', 'cancelled']),
+  waiting_approval: new Set(['executing', 'waiting_reconciliation', 'recovering', 'failed', 'cancelled']),
+  waiting_reconciliation: new Set(['executing', 'recovering', 'failed', 'cancelled']),
+  verifying: new Set(['executing', 'waiting_approval', 'waiting_reconciliation', 'recovering', 'completed', 'failed', 'cancelled']),
+  recovering: new Set(['planning', 'executing', 'waiting_approval', 'waiting_reconciliation', 'verifying', 'completed', 'failed', 'cancelled']),
   completed: new Set(),
-  failed: new Set(['recovering']),
+  failed: new Set(['waiting_reconciliation', 'recovering']),
   cancelled: new Set()
 }
 
@@ -46,7 +55,8 @@ export function createTaskRun(input: CreateTaskRunInput): TaskRunRecord {
     createdAt: now,
     updatedAt: now,
     steps: [],
-    toolExecutions: []
+    toolExecutions: [],
+    effects: []
   }
 }
 
@@ -72,6 +82,218 @@ export function recordTaskRunEvent(
     lastAppliedEventSeq: identity.seq,
     recentEventIds
   }
+}
+
+/**
+ * Merge concurrent mutations of one TaskRun. Event progress and the external
+ * effect ledger have independent revision domains, so neither may replace the
+ * other through whole-record freshness ordering.
+ */
+export function mergeTaskRunRecords(
+  current: TaskRunRecord,
+  incoming: TaskRunRecord
+): TaskRunRecord {
+  if (current.id !== incoming.id || current.sessionId !== incoming.sessionId) return incoming
+  const preferred = compareTaskRunFreshness(current, incoming) >= 0 ? current : incoming
+  const other = preferred === current ? incoming : current
+  const effects = mergeEffects(preferred.effects ?? [], other.effects ?? [])
+  const merged: TaskRunRecord = {
+    ...preferred,
+    revision: Math.max(current.revision, incoming.revision),
+    updatedAt: Math.max(current.updatedAt, incoming.updatedAt),
+    recentEventIds: mergeRecentEventIds(other.recentEventIds, preferred.recentEventIds),
+    steps: mergeRecords(
+      preferred.steps ?? [],
+      other.steps ?? [],
+      (left, right) => compareEventRecordFreshness(left, right) >= 0 ? left : right
+    ),
+    toolExecutions: mergeRecords(
+      preferred.toolExecutions ?? [],
+      other.toolExecutions ?? [],
+      (left, right) => mergeToolExecutions(left, right, effects)
+    ),
+    effects
+  }
+  return projectUnresolvedEffectState(merged)
+}
+
+export function compareTaskRunFreshness(left: TaskRunRecord, right: TaskRunRecord): number {
+  const leftSeq = left.lastAppliedEventSeq ?? 0
+  const rightSeq = right.lastAppliedEventSeq ?? 0
+  if (leftSeq !== rightSeq) return leftSeq - rightSeq
+  if (left.revision !== right.revision) return left.revision - right.revision
+  return left.updatedAt - right.updatedAt
+}
+
+function mergeEffects(preferred: EffectRecord[], other: EffectRecord[]): EffectRecord[] {
+  return mergeRecords(preferred, other, (left, right) => {
+    const selected = compareEffectFreshness(left, right) >= 0 ? left : right
+    return {
+      ...selected,
+      revision: Math.max(left.revision, right.revision),
+      updatedAt: Math.max(left.updatedAt, right.updatedAt),
+      evidence: mergeEffectEvidence(left, right)
+    }
+  })
+}
+
+function compareEffectFreshness(left: EffectRecord, right: EffectRecord): number {
+  if (left.revision !== right.revision) return left.revision - right.revision
+  const phase = effectStatusPhase(left.status) - effectStatusPhase(right.status)
+  if (phase !== 0) return phase
+  return left.updatedAt - right.updatedAt
+}
+
+function effectStatusPhase(status: EffectRecord['status']): number {
+  if (status === 'compensated') return 5
+  if (status === 'confirmed' || status === 'failed' || status === 'abandoned') return 4
+  if (status === 'waiting_reconciliation') return 3
+  if (status === 'executing') return 2
+  return 1
+}
+
+function projectUnresolvedEffectState(run: TaskRunRecord): TaskRunRecord {
+  const effects = run.effects ?? []
+  const waiting = effects.some((effect) => effect.status === 'waiting_reconciliation')
+  const inFlight = effects.some(
+    (effect) => effect.status === 'prepared' || effect.status === 'executing'
+  )
+  if (!waiting && !(inFlight && isTaskRunTerminal(run.status))) return run
+  if (run.status === 'waiting_reconciliation' && run.finishedAt === undefined && run.error === undefined) {
+    return run
+  }
+  return {
+    ...run,
+    status: 'waiting_reconciliation',
+    revision: run.revision + 1,
+    finishedAt: undefined,
+    error: undefined
+  }
+}
+
+function mergeEffectEvidence(left: EffectRecord, right: EffectRecord): EffectRecord['evidence'] {
+  const byId = new Map(left.evidence.map((item) => [item.id, item]))
+  for (const item of right.evidence) {
+    if (!byId.has(item.id)) byId.set(item.id, item)
+  }
+  return [...byId.values()].sort((a, b) => a.observedAt - b.observedAt)
+}
+
+function mergeToolExecutions(
+  left: ToolExecutionRecord,
+  right: ToolExecutionRecord,
+  effects: EffectRecord[]
+): ToolExecutionRecord {
+  const preferred = compareEventRecordFreshness(left, right) >= 0 ? left : right
+  const other = preferred === left ? right : left
+  let merged: ToolExecutionRecord = {
+    ...preferred,
+    stepId: preferred.stepId ?? other.stepId,
+    requestId: preferred.requestId ?? other.requestId,
+    permissionDecision: preferred.permissionDecision ?? other.permissionDecision,
+    inputDigest: preferred.inputDigest ?? other.inputDigest,
+    outputDigest: preferred.outputDigest ?? other.outputDigest,
+    idempotencyKey: preferred.idempotencyKey ?? other.idempotencyKey,
+    effectId: preferred.effectId ?? other.effectId,
+    effectKey: preferred.effectKey ?? other.effectKey,
+    effectStatus: preferred.effectStatus ?? other.effectStatus,
+    duplicateOfExecutionId: preferred.duplicateOfExecutionId ?? other.duplicateOfExecutionId,
+    supersededByExecutionId: preferred.supersededByExecutionId ?? other.supersededByExecutionId,
+    requestedEventId: preferred.requestedEventId ?? other.requestedEventId,
+    approvalRequestedEventId:
+      preferred.approvalRequestedEventId ?? other.approvalRequestedEventId,
+    approvalResolvedEventId:
+      preferred.approvalResolvedEventId ?? other.approvalResolvedEventId,
+    toolStartEventId: preferred.toolStartEventId ?? other.toolStartEventId,
+    resultEventId: preferred.resultEventId ?? other.resultEventId,
+    startedAt: minDefined(preferred.startedAt, other.startedAt),
+    finishedAt: maxDefined(preferred.finishedAt, other.finishedAt),
+    updatedAt: Math.max(preferred.updatedAt, other.updatedAt)
+  }
+  const effect = effects.find(
+    (item) => item.id === merged.effectId || item.toolUseId === merged.toolUseId
+  )
+  if (effect) merged = projectEffectToToolExecution(merged, effect)
+  return merged
+}
+
+function projectEffectToToolExecution(
+  execution: ToolExecutionRecord,
+  effect: EffectRecord
+): ToolExecutionRecord {
+  let status = execution.status
+  if (status !== 'superseded') {
+    if (effect.status === 'confirmed' || effect.status === 'compensated') status = 'succeeded'
+    if (effect.status === 'waiting_reconciliation') status = 'unknown_outcome'
+    if (effect.status === 'failed') status = 'failed'
+    if (effect.status === 'abandoned') status = 'cancelled'
+  }
+  const terminal =
+    effect.status === 'confirmed' ||
+    effect.status === 'failed' ||
+    effect.status === 'compensated' ||
+    effect.status === 'abandoned'
+  return {
+    ...execution,
+    status,
+    effectId: effect.id,
+    effectKey: effect.effectKey,
+    effectStatus: effect.status,
+    updatedAt: Math.max(execution.updatedAt, effect.updatedAt),
+    finishedAt: terminal
+      ? maxDefined(execution.finishedAt, effect.terminalAt ?? effect.updatedAt)
+      : execution.finishedAt,
+    error:
+      execution.status === 'superseded'
+        ? execution.error
+        : effect.status === 'confirmed' || effect.status === 'compensated'
+        ? undefined
+        : effect.error ?? execution.error
+  }
+}
+
+function compareEventRecordFreshness(
+  left: TaskStepRecord | ToolExecutionRecord,
+  right: TaskStepRecord | ToolExecutionRecord
+): number {
+  const leftSeq = left.lastEventSeq ?? 0
+  const rightSeq = right.lastEventSeq ?? 0
+  if (leftSeq !== rightSeq) return leftSeq - rightSeq
+  return left.updatedAt - right.updatedAt
+}
+
+function mergeRecords<T extends { id: string }>(
+  preferred: T[],
+  other: T[],
+  merge: (left: T, right: T) => T
+): T[] {
+  const otherById = new Map(other.map((item) => [item.id, item]))
+  const merged = preferred.map((item) => {
+    const counterpart = otherById.get(item.id)
+    otherById.delete(item.id)
+    return counterpart ? merge(item, counterpart) : item
+  })
+  return [...merged, ...otherById.values()]
+}
+
+function mergeRecentEventIds(
+  earlier: string[] | undefined,
+  later: string[] | undefined
+): string[] | undefined {
+  const merged = [...new Set([...(earlier ?? []), ...(later ?? [])])].slice(-RECENT_EVENT_IDS_LIMIT)
+  return merged.length > 0 ? merged : undefined
+}
+
+function minDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right
+  if (right === undefined) return left
+  return Math.min(left, right)
+}
+
+function maxDefined(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right
+  if (right === undefined) return left
+  return Math.max(left, right)
 }
 
 export function transitionTaskRun(
@@ -144,6 +366,19 @@ export function reduceTaskRunEvent(current: TaskRunRecord, event: AgentEvent, no
     return transitionTaskRun(current, 'executing', { now, lastEventKind: event.kind })
   }
   if (event.kind === 'turn-result' && !isTaskRunTerminal(current.status)) {
+    if (current.effects?.some((effect) =>
+      effect.status === 'prepared' ||
+      effect.status === 'executing' ||
+      effect.status === 'waiting_reconciliation'
+    )) {
+      return current.status === 'waiting_reconciliation'
+        ? current
+        : transitionTaskRun(current, 'waiting_reconciliation', {
+            now,
+            lastEventKind: event.kind,
+            error: '任务包含尚未完成真实状态对账的外部副作用'
+          })
+    }
     const interrupted = event.isError && /interrupt|cancel/i.test(event.subtype ?? '')
     return transitionTaskRun(current, interrupted ? 'cancelled' : event.isError ? 'failed' : 'completed', {
       now,
@@ -152,6 +387,19 @@ export function reduceTaskRunEvent(current: TaskRunRecord, event: AgentEvent, no
     })
   }
   if (event.kind === 'status' && event.status === 'error' && !isTaskRunTerminal(current.status)) {
+    if (current.effects?.some((effect) =>
+      effect.status === 'prepared' ||
+      effect.status === 'executing' ||
+      effect.status === 'waiting_reconciliation'
+    )) {
+      return current.status === 'waiting_reconciliation'
+        ? current
+        : transitionTaskRun(current, 'waiting_reconciliation', {
+            now,
+            lastEventKind: event.kind,
+            error: event.error ?? '执行器异常退出，外部副作用尚未完成真实状态对账'
+          })
+    }
     return transitionTaskRun(current, 'failed', {
       now,
       lastEventKind: event.kind,
@@ -193,6 +441,8 @@ export function isTaskRunRecord(value: unknown): value is TaskRunRecord {
     (record.error === undefined || typeof record.error === 'string') &&
     (record.steps === undefined || (Array.isArray(record.steps) && record.steps.every(isTaskStepRecord))) &&
     (record.toolExecutions === undefined ||
-      (Array.isArray(record.toolExecutions) && record.toolExecutions.every(isToolExecutionRecord)))
+      (Array.isArray(record.toolExecutions) && record.toolExecutions.every(isToolExecutionRecord))) &&
+    (record.effects === undefined ||
+      (Array.isArray(record.effects) && record.effects.every(isEffectRecord)))
   )
 }

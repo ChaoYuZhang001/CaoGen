@@ -18,6 +18,7 @@ import {
   hasPendingTaskSteps,
   reduceTaskExecutionEvent
 } from './task-execution'
+import { hasUnresolvedEffects } from './effect-ledger'
 
 export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
   snapshot: TaskSnapshotRecord
@@ -62,7 +63,8 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
       if (
         transcriptEntry.event.kind === 'turn-result' &&
         transcriptEntry.event.isError === false &&
-        !hasPendingTaskSteps(run)
+        !hasPendingTaskSteps(run) &&
+        !hasUnresolvedEffects(run)
       ) {
         successfulTerminal = true
       }
@@ -201,13 +203,18 @@ function applyReceiptOnly(
     }
   })
   const pending = steps.some((step) => !isTerminalStepStatus(step.status))
-  const nextStatus: TaskRunRecord['status'] = pending ? 'executing' : status
+  const unresolvedEffects = hasUnresolvedEffects(run)
+  const nextStatus: TaskRunRecord['status'] = pending
+    ? 'executing'
+    : unresolvedEffects
+      ? 'waiting_reconciliation'
+      : status
   const next: TaskRunRecord = {
     ...run,
     status: nextStatus,
     revision: run.revision + 1,
     updatedAt: Math.max(run.updatedAt, receipt.occurredAt),
-    finishedAt: pending ? undefined : receipt.occurredAt,
+    finishedAt: pending || unresolvedEffects ? undefined : receipt.occurredAt,
     pendingPermissionRequestId: undefined,
     lastEventKind: 'turn-result',
     error: receipt.isError ? run.error ?? '恢复时发现已落盘的失败轮次' : undefined,
@@ -216,7 +223,7 @@ function applyReceiptOnly(
   return {
     run: next,
     changed: true,
-    successfulTerminal: !receipt.isError && !pending
+    successfulTerminal: !receipt.isError && !pending && !unresolvedEffects
   }
 }
 

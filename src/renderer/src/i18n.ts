@@ -268,6 +268,8 @@ const DICT: Dict = {
   toolDone: { zh: '完成', en: 'Done' },
   toolFailed: { zh: '失败', en: 'Failed' },
   toolPending: { zh: '等待', en: 'Pending' },
+  toolWaitingReconciliation: { zh: '等待对账', en: 'Needs reconciliation' },
+  toolReconciliationOutput: { zh: '结果尚未确认', en: 'Outcome not confirmed' },
   errorOutput: { zh: '错误输出', en: 'Error output' },
   output: { zh: '输出', en: 'Output' },
   noOutput: { zh: '(无输出)', en: '(no output)' },

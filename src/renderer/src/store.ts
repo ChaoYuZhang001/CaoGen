@@ -14,6 +14,7 @@ import type {
   CheckpointRestoreResult,
   CreateSessionOptions,
   DispatchSubagentsInput,
+  EffectStatus,
   GitCommitResult,
   GitOperationResult,
   GitStatus,
@@ -244,6 +245,7 @@ function cancelStreamFrame(frame: number): void {
 export interface ToolResultInfo {
   content: string
   isError: boolean
+  effectStatus?: EffectStatus
 }
 
 export type ChatItem =
@@ -517,7 +519,11 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         ...s,
         toolResults: {
           ...s.toolResults,
-          [ev.toolUseId]: { content: ev.content, isError: ev.isError }
+          [ev.toolUseId]: {
+            content: ev.content,
+            isError: ev.isError,
+            effectStatus: ev.effectStatus
+          }
         },
         runningTools
       }
@@ -741,6 +747,7 @@ interface AppStore {
   showNewSession: boolean
   showSettings: boolean
   showCommandPalette: boolean
+  showTaskRecovery: boolean
   sidebarQuery: string
   /** 会话全文搜索结果(随 sidebarQuery 防抖刷新;<2 字符时为空) */
   transcriptSearchResults: TranscriptSearchResult[]
@@ -754,6 +761,12 @@ interface AppStore {
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
   startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
   recoverTaskSnapshot(snapshotId: string): Promise<void>
+  resolveTaskEffect(
+    snapshotId: string,
+    effectId: string,
+    expectedRevision: number,
+    resolution: 'confirmed_applied' | 'confirmed_not_applied'
+  ): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   decomposeAndDispatchTaskDag(
     request: string,
@@ -884,6 +897,7 @@ interface AppStore {
   setShowNewSession(v: boolean): void
   setShowSettings(v: boolean): void
   setShowCommandPalette(v: boolean): void
+  setShowTaskRecovery(v: boolean): void
 }
 
 export const useStore = create<AppStore>((set, get) => {
@@ -1062,6 +1076,7 @@ export const useStore = create<AppStore>((set, get) => {
   showNewSession: false,
   showSettings: false,
   showCommandPalette: false,
+  showTaskRecovery: true,
 
   async init() {
     if (get().ready) return
@@ -1358,6 +1373,35 @@ export const useStore = create<AppStore>((set, get) => {
     }
   },
 
+  async resolveTaskEffect(snapshotId, effectId, expectedRevision, resolution) {
+    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
+    try {
+      const updated = await window.agentDesk.resolveTaskEffect(
+        snapshotId,
+        effectId,
+        expectedRevision,
+        resolution
+      )
+      set((s) => ({
+        taskSnapshots: s.taskSnapshots.map((snapshot) =>
+          snapshot.id === updated.id ? updated : snapshot
+        ),
+        taskSnapshotsLoading: false,
+        taskSnapshotsError: undefined
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      let taskSnapshots = get().taskSnapshots
+      try {
+        taskSnapshots = await window.agentDesk.listTaskSnapshots()
+      } catch {
+        // 保留原始 CAS/IPC 错误，刷新失败不覆盖根因。
+      }
+      set({ taskSnapshots, taskSnapshotsLoading: false, taskSnapshotsError: message })
+      throw err
+    }
+  },
+
   async dispatchSubagents(input) {
     const parentId = get().activeId
     if (!parentId) return undefined
@@ -1566,7 +1610,40 @@ export const useStore = create<AppStore>((set, get) => {
 
   async interrupt() {
     const id = get().activeId
-    if (id) await window.agentDesk.interrupt(id)
+    if (!id) return
+    await window.agentDesk.interrupt(id)
+    const [metas, history, taskSnapshots] = await Promise.all([
+      window.agentDesk.listSessions(),
+      window.agentDesk.listHistory(),
+      window.agentDesk.listTaskSnapshots()
+    ])
+    const interruptedMeta = metas.find((meta) => meta.id === id)
+    if (!interruptedMeta) {
+      closeNativeBrowserView(id)
+      pendingEvents.delete(id)
+    }
+    set((s) => {
+      if (interruptedMeta) {
+        const session = s.sessions[id]
+        return {
+          sessions: session
+            ? { ...s.sessions, [id]: { ...session, meta: interruptedMeta } }
+            : s.sessions,
+          history,
+          taskSnapshots
+        }
+      }
+      const sessions = { ...s.sessions }
+      delete sessions[id]
+      const order = s.order.filter((sessionId) => sessionId !== id)
+      return {
+        sessions,
+        order,
+        activeId: s.activeId === id ? (order[order.length - 1] ?? null) : s.activeId,
+        history,
+        taskSnapshots
+      }
+    })
   },
 
   async closeSession(id) {
@@ -3695,6 +3772,10 @@ export const useStore = create<AppStore>((set, get) => {
 
   setShowCommandPalette(v) {
     set({ showCommandPalette: v })
+  },
+
+  setShowTaskRecovery(v) {
+    set({ showTaskRecovery: v })
   }
   }
 })

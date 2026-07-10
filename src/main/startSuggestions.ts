@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { StartSuggestion, StartSuggestionPriority } from '../shared/types'
+import { withSafeLocalGitConfig } from './git/safe-git'
 
 export interface StartSuggestionSignal {
   id?: string
@@ -380,12 +381,16 @@ function lockfileSuggestion(lockfiles: RootFileStat[]): StartSuggestion[] {
 }
 
 function readGitStatus(root: string): GitStatusSummary | null {
-  const result = spawnSync('git', ['-C', root, 'status', '--porcelain=v1', '--untracked-files=all'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
-    maxBuffer: MAX_GIT_BUFFER
-  })
+  const result = spawnSync(
+    'git',
+    withSafeLocalGitConfig(['-C', root, 'status', '--porcelain=v1', '--untracked-files=all']),
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_GIT_BUFFER
+    }
+  )
 
   if (result.error || result.status !== 0) return null
   const stdout = typeof result.stdout === 'string' ? result.stdout : ''

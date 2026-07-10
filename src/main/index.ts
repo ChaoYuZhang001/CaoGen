@@ -30,6 +30,12 @@ let trayTimer: NodeJS.Timeout | null = null
 // 测试脚本可通过 CAOGEN_USER_DATA_DIR 指向临时目录,避免污染真实 CaoGen 配置。
 app.setName('CaoGen')
 app.setPath('userData', process.env.CAOGEN_USER_DATA_DIR || join(app.getPath('appData'), 'CaoGen'))
+const singleInstanceOwner = app.requestSingleInstanceLock()
+if (!singleInstanceOwner) {
+  app.quit()
+} else {
+  app.on('second-instance', () => showMainWindow())
+}
 
 /** 应用图标源文件;Windows 使用透明背景图标,其他平台使用圆角通用图标。 */
 function resourcePath(names: string[]): string | undefined {
@@ -240,6 +246,7 @@ function runRoutine(routine: Routine, nextRunAt: number | null): void {
   })
 }
 void app.whenReady().then(async () => {
+  if (!singleInstanceOwner) return
   await sessionManager.init()
   registerIpc()
   createWindow()
@@ -274,6 +281,7 @@ app.on('will-quit', () => {
 })
 
 app.on('before-quit', (event) => {
+  if (!singleInstanceOwner) return
   quitting = true
   if (quitCleanupStarted) return
   quitCleanupStarted = true

@@ -1,4 +1,5 @@
 import type { TaskRunRecord, ToolExecutionRecord } from '../../shared/types'
+import { mergeTaskRunRecords } from './task-run'
 import {
   buildToolIdempotencyKey,
   requiresDuplicateConfirmation
@@ -30,7 +31,10 @@ class TaskRuntimeRegistry {
       ])
       this.archivedExecutions.set(sessionId, archived.slice(-100))
     }
-    this.runs.set(sessionId, run)
+    this.runs.set(
+      sessionId,
+      previous?.id === run.id ? mergeTaskRunRecords(previous, run) : run
+    )
   }
 
   delete(sessionId: string): boolean {
@@ -122,6 +126,14 @@ class TaskRuntimeRegistry {
       ['unknown_outcome']
     )
     if (unknown) {
+      if (unknown.effectStatus === 'waiting_reconciliation') {
+        return {
+          kind: 'deny',
+          idempotencyKey,
+          duplicateExecutionId: unknown.id,
+          reason: `相同外部效果仍在等待真实状态对账(${unknown.toolName})，普通权限批准不能绕过；请先完成专用对账处置。`
+        }
+      }
       return {
         kind: 'ask',
         idempotencyKey,
@@ -129,12 +141,15 @@ class TaskRuntimeRegistry {
         reason: `相同工具操作在上次退出时结果未知(${unknown.toolName})，必须先核对实际状态；确认后才可重新执行。`
       }
     }
-    if (succeeded && requiresDuplicateConfirmation(input.toolName, input.toolInput)) {
+    if (
+      succeeded &&
+      (succeeded.effectStatus === 'confirmed' || requiresDuplicateConfirmation(input.toolName, input.toolInput))
+    ) {
       return {
         kind: 'ask',
         idempotencyKey,
         duplicateExecutionId: succeeded.id,
-        reason: `相同高风险操作已经成功执行(${succeeded.toolName})，再次执行可能产生重复副作用。`
+        reason: `相同外部效果已经确认成功(${succeeded.toolName})，再次执行可能产生重复副作用。`
       }
     }
     return { kind: 'neutral', idempotencyKey }

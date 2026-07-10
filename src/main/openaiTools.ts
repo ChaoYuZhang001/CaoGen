@@ -30,6 +30,7 @@ import {
   type GenesisOrchestrationInput
 } from './genesis/orchestrator'
 import { resolveExistingProjectPathSync, resolveWritableProjectPathSync } from './utils/safe-project-path'
+import { OPENAI_PERMISSION_READ_ONLY_TOOLS } from './task/tool-idempotency'
 import { SkillManager } from './skill/skill-manager'
 import { addMemory, searchMemories, type MemoryLayer } from './memory/memory-manager'
 import {
@@ -80,6 +81,7 @@ export interface ToolExecResult {
 }
 
 export interface ToolExecutionOptions {
+  signal?: AbortSignal
   sandboxMode?: SandboxMode
   dockerImage?: string
   dockerBinary?: string
@@ -533,26 +535,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
 ]
 
 /** 只读工具(plan 模式仅放行这些;default 模式免审批) */
-export const READONLY_TOOLS = new Set([
-  'read_file',
-  'view',
-  'list_dir',
-  'search_symbol',
-  'search_code',
-  'find_file',
-  'get_dependencies',
-  'task_decompose',
-  GENESIS_ORCHESTRATE_TOOL_NAME,
-  'list_skills',
-  'load_skill',
-  'run_skill',
-  'draft_skill',
-  'route_model',
-  'memory_search',
-  'browser_automation_status',
-  'git_status',
-  'git_diff'
-])
+export const READONLY_TOOLS = OPENAI_PERMISSION_READ_ONLY_TOOLS
 /** 文件写入类(acceptEdits 模式自动放行) */
 export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])
 
@@ -771,6 +754,7 @@ export async function executeCodingTool(
   options: ToolExecutionOptions = {}
 ): Promise<ToolExecResult> {
   try {
+    if (options.signal?.aborted) return { ok: false, output: '操作已中断' }
     if (isBrowserToolName(name)) return clipExecResult(await executeBrowserTool(name, args, options.sessionId))
     if (isGuiToolName(name)) return clipExecResult(await executeGuiTool(name, args, cwd))
     if (isGitToolName(name)) {
@@ -1036,7 +1020,8 @@ async function sandboxedFileWrite(
     chinaMirrorEnabled: options.chinaMirrorEnabled,
     npmRegistry: options.npmRegistry,
     pipIndexUrl: options.pipIndexUrl,
-    dockerRegistryMirror: options.dockerRegistryMirror
+    dockerRegistryMirror: options.dockerRegistryMirror,
+    signal: options.signal
   })
 }
 
@@ -1072,7 +1057,8 @@ async function runBash(
     chinaMirrorEnabled: options.chinaMirrorEnabled,
     npmRegistry: options.npmRegistry,
     pipIndexUrl: options.pipIndexUrl,
-    dockerRegistryMirror: options.dockerRegistryMirror
+    dockerRegistryMirror: options.dockerRegistryMirror,
+    signal: options.signal
   })
   return {
     ok: result.ok,

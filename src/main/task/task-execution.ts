@@ -1,6 +1,11 @@
 import type {
   AgentEvent,
   AgentEventIdentity,
+  EffectEvidenceRecord,
+  EffectLease,
+  EffectRecord,
+  EffectStatus,
+  EffectTarget,
   TaskRunRecord,
   TaskStepRecord,
   TaskStepStatus,
@@ -156,11 +161,14 @@ export function reduceTaskExecutionEvent(
     }
   } else if (event.kind === 'tool-result') {
     const completed = toolExecutions.find((execution) => execution.toolUseId === event.toolUseId)
+    const effect = current.effects?.find((item) => item.toolUseId === event.toolUseId)
+    const effectStatus = event.effectStatus ?? effect?.status
     toolExecutions = toolExecutions.map((execution) =>
       execution.toolUseId === event.toolUseId
         ? {
             ...execution,
-            status: event.isError ? 'failed' : 'succeeded',
+            status: toolStatusFromEffect(effectStatus, event.isError),
+            effectStatus: effectStatus ?? execution.effectStatus,
             outputDigest: stableValueDigest(event.content),
             resultEventId: identity?.eventId ?? execution.resultEventId,
             lastEventId: identity?.eventId ?? execution.lastEventId,
@@ -226,12 +234,37 @@ export function recoverTaskExecutionState(current: TaskRunRecord, now = Date.now
           lastEventKind: current.lastEventKind
         }
   )
+  const effects = (current.effects ?? []).map((effect) => {
+    if (effect.status !== 'prepared' && effect.status !== 'executing') return effect
+    return {
+      ...effect,
+      status: 'waiting_reconciliation' as const,
+      revision: effect.revision + 1,
+      lease: effect.lease && effect.lease.releasedAt === undefined
+        ? { ...effect.lease, releasedAt: now }
+        : effect.lease,
+      updatedAt: now,
+      error: '应用退出时外部副作用结果未持久化，正在等待真实状态对账'
+    }
+  })
   const toolExecutions = (current.toolExecutions ?? []).map((execution) => {
+    const effect = effects.find((item) => item.id === execution.effectId || item.toolUseId === execution.toolUseId)
+    if (effect?.status === 'confirmed') {
+      return {
+        ...execution,
+        status: 'succeeded' as const,
+        effectStatus: effect.status,
+        updatedAt: Math.max(execution.updatedAt, effect.updatedAt),
+        finishedAt: execution.finishedAt ?? effect.terminalAt ?? effect.updatedAt,
+        error: undefined
+      }
+    }
     if (TERMINAL_TOOL_STATUSES.has(execution.status)) return execution
     const wasOnlyWaiting = execution.status === 'waiting_approval'
     return {
       ...execution,
       status: wasOnlyWaiting ? ('cancelled' as const) : ('unknown_outcome' as const),
+      effectStatus: effect?.status ?? execution.effectStatus,
       permissionDecision: wasOnlyWaiting ? ('deny' as const) : execution.permissionDecision,
       updatedAt: now,
       finishedAt: now,
@@ -240,7 +273,7 @@ export function recoverTaskExecutionState(current: TaskRunRecord, now = Date.now
         : '应用退出时工具结果未持久化，副作用结果未知'
     }
   })
-  return { ...current, steps, toolExecutions }
+  return { ...current, steps, toolExecutions, effects }
 }
 
 export function hasPendingTaskSteps(run: TaskRunRecord): boolean {
@@ -258,7 +291,7 @@ export function isTaskStepRecord(value: unknown): value is TaskStepRecord {
     Number.isInteger(record.sequence) &&
     record.sequence > 0 &&
     typeof record.status === 'string' &&
-    ['queued', 'planning', 'executing', 'waiting_approval', 'verifying', 'recovering', 'completed', 'failed', 'cancelled'].includes(record.status) &&
+    ['queued', 'planning', 'executing', 'waiting_approval', 'waiting_reconciliation', 'verifying', 'recovering', 'completed', 'failed', 'cancelled'].includes(record.status) &&
     isFiniteNumber(record.createdAt) &&
     isFiniteNumber(record.updatedAt) &&
     isOptionalFiniteNumber(record.startedAt) &&
@@ -293,6 +326,9 @@ export function isToolExecutionRecord(value: unknown): value is ToolExecutionRec
     isOptionalString(record.inputDigest) &&
     isOptionalString(record.outputDigest) &&
     isOptionalString(record.idempotencyKey) &&
+    isOptionalString(record.effectId) &&
+    isOptionalString(record.effectKey) &&
+    (record.effectStatus === undefined || isEffectStatus(record.effectStatus)) &&
     isOptionalString(record.duplicateOfExecutionId) &&
     isOptionalString(record.supersededByExecutionId) &&
     isOptionalString(record.requestedEventId) &&
@@ -304,6 +340,39 @@ export function isToolExecutionRecord(value: unknown): value is ToolExecutionRec
     isOptionalNonNegativeInteger(record.lastEventSeq) &&
     isOptionalFiniteNumber(record.startedAt) &&
     isOptionalFiniteNumber(record.finishedAt) &&
+    isOptionalString(record.error)
+  )
+}
+
+export function isEffectRecord(value: unknown): value is EffectRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    record.schemaVersion === 1 &&
+    isString(record.id) &&
+    isString(record.effectKey) &&
+    isString(record.resourceKey) &&
+    isString(record.sessionId) &&
+    isString(record.runId) &&
+    isOptionalString(record.stepId) &&
+    isOptionalString(record.toolExecutionId) &&
+    isString(record.toolUseId) &&
+    isString(record.toolName) &&
+    isPositiveInteger(record.generation) &&
+    isPositiveInteger(record.revision) &&
+    isEffectStatus(record.status) &&
+    (record.reconcilability === 'queryable' || record.reconcilability === 'opaque') &&
+    isEffectTarget(record.target) &&
+    isString(record.targetDigest) &&
+    isString(record.intentDigest) &&
+    isString(record.inputDigest) &&
+    (record.lease === undefined || isEffectLease(record.lease)) &&
+    Array.isArray(record.evidence) &&
+    record.evidence.every(isEffectEvidenceRecord) &&
+    isOptionalString(record.compensationEffectId) &&
+    isFiniteNumber(record.createdAt) &&
+    isFiniteNumber(record.updatedAt) &&
+    isOptionalFiniteNumber(record.terminalAt) &&
     isOptionalString(record.error)
   )
 }
@@ -443,6 +512,100 @@ function mergeToolExecutionStatus(
   return incoming
 }
 
+function toolStatusFromEffect(
+  status: EffectStatus | undefined,
+  isError: boolean
+): ToolExecutionStatus {
+  if (status === 'confirmed') return 'succeeded'
+  if (status === 'waiting_reconciliation' || status === 'prepared' || status === 'executing') {
+    return 'unknown_outcome'
+  }
+  if (status === 'abandoned') return 'cancelled'
+  if (status === 'failed') return 'failed'
+  if (status === 'compensated') return 'succeeded'
+  return isError ? 'failed' : 'succeeded'
+}
+
+function isEffectStatus(value: unknown): value is EffectStatus {
+  return (
+    value === 'prepared' ||
+    value === 'executing' ||
+    value === 'waiting_reconciliation' ||
+    value === 'confirmed' ||
+    value === 'failed' ||
+    value === 'compensated' ||
+    value === 'abandoned'
+  )
+}
+
+function isEffectLease(value: unknown): value is EffectLease {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    isString(record.id) &&
+    isString(record.ownerId) &&
+    isPositiveInteger(record.fencingToken) &&
+    isFiniteNumber(record.acquiredAt) &&
+    isFiniteNumber(record.expiresAt) &&
+    isOptionalFiniteNumber(record.releasedAt)
+  )
+}
+
+function isEffectEvidenceRecord(value: unknown): value is EffectEvidenceRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    isString(record.id) &&
+    (record.kind === 'prepared' ||
+      record.kind === 'executing' ||
+      record.kind === 'execution_result' ||
+      record.kind === 'reconciliation' ||
+      record.kind === 'retry_authorized' ||
+      record.kind === 'manual_confirmation' ||
+      record.kind === 'compensation') &&
+    isString(record.digest) &&
+    isFiniteNumber(record.observedAt) &&
+    isString(record.verifier) &&
+    isPositiveInteger(record.generation)
+  )
+}
+
+function isEffectTarget(value: unknown): value is EffectTarget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (record.kind === 'file_content') {
+    return (
+      isString(record.rootPath) &&
+      isString(record.relativePath) &&
+      (record.preState === 'absent' || record.preState === 'file') &&
+      isOptionalString(record.preSha256) &&
+      isString(record.expectedSha256) &&
+      isOptionalNonNegativeInteger(record.expectedBytes) &&
+      record.expectedBytes !== undefined
+    )
+  }
+  if (record.kind === 'git_commit') {
+    return (
+      isString(record.repoRoot) &&
+      isString(record.branch) &&
+      isString(record.preHead) &&
+      isString(record.stagedDiffDigest) &&
+      isString(record.messageDigest)
+    )
+  }
+  if (record.kind === 'git_push') {
+    return (
+      isString(record.repoRoot) &&
+      isString(record.remote) &&
+      isString(record.pushUrlDigest) &&
+      isString(record.branch) &&
+      isString(record.ref) &&
+      isString(record.intendedSha)
+    )
+  }
+  return record.kind === 'unsupported' && isString(record.toolName)
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -457,4 +620,12 @@ function isOptionalNonNegativeInteger(value: unknown): value is number | undefin
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === 'string'
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string'
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
 }

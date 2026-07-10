@@ -25,6 +25,10 @@ const legacyRoot = path.join(tempRoot, 'legacy-store')
 const sqliteV2Root = path.join(tempRoot, 'sqlite-v2-store')
 const sqliteFutureRoot = path.join(tempRoot, 'sqlite-future-store')
 const supersedeRoot = path.join(tempRoot, 'supersede-store')
+const barrierRoot = path.join(tempRoot, 'barrier-store')
+const crossSessionBarrierRoot = path.join(tempRoot, 'cross-session-barrier-store')
+const effectFirstRaceRoot = path.join(tempRoot, 'effect-first-race-store')
+const eventFirstRaceRoot = path.join(tempRoot, 'event-first-race-store')
 
 try {
   execFileSync(
@@ -209,6 +213,317 @@ try {
   assertEqual(snapshot.dagRuntimes[0].runningTasks[0].sessionId, 'child-a')
   assertEqual(snapshot.dagRuntimes[0].mergeSessions[0].branch, 'caogen/session-child-a')
   assertEqual(snapshot.dagRuntimes[0].autoMerge.verificationCommand, 'npm.cmd run typecheck')
+
+  await assertRejects(
+    () => snapshotStore.saveTaskRunBarrier(snapshot.run, barrierRoot),
+    '缺少可恢复任务快照'
+  )
+  assertEqual((await snapshotStore.listTaskRuns('session-a', barrierRoot)).length, 0)
+  await snapshotStore.saveTaskSnapshot(snapshot, barrierRoot)
+  const barrierRun = {
+    ...snapshot.run,
+    revision: snapshot.run.revision + 1,
+    updatedAt: snapshot.run.updatedAt + 1
+  }
+  await snapshotStore.saveTaskRunBarrier(barrierRun, barrierRoot)
+  const barrierSnapshots = await snapshotStore.listTaskSnapshots(barrierRoot)
+  assertEqual(barrierSnapshots[0].run.revision, barrierRun.revision)
+
+  for (const [raceIndex, raceRoot] of [effectFirstRaceRoot, eventFirstRaceRoot].entries()) {
+    const sessionId = `effect-event-race-${raceIndex}`
+    const runId = `${sessionId}-run`
+    const toolUseId = `${sessionId}-write`
+    const effectKey = `effect-v1:${sessionId}`
+    const baseRun = {
+      ...snapshot.run,
+      id: runId,
+      sessionId,
+      taskId: sessionId,
+      revision: 10,
+      updatedAt: 5000,
+      lastAppliedEventId: `${sessionId}-event-3`,
+      lastAppliedEventSeq: 3,
+      recentEventIds: [`${sessionId}-event-3`]
+    }
+    const executingEffect = {
+      ...preparedEffect(baseRun, effectKey, 100 + raceIndex),
+      id: `${sessionId}-effect`,
+      toolUseId,
+      toolName: 'write_file',
+      revision: 2,
+      status: 'executing',
+      evidence: [{
+        id: `${sessionId}-executing-evidence`,
+        kind: 'executing',
+        digest: `${sessionId}-executing-digest`,
+        observedAt: 5000,
+        verifier: 'task-snapshot-race-smoke',
+        generation: 1
+      }],
+      createdAt: 4990,
+      updatedAt: 5000
+    }
+    const baseTool = {
+      ...snapshot.run.toolExecutions[0],
+      id: `${runId}:tool:${toolUseId}`,
+      runId,
+      sessionId,
+      toolUseId,
+      status: 'running',
+      effectId: executingEffect.id,
+      effectKey,
+      effectStatus: 'executing',
+      outputDigest: undefined,
+      resultEventId: undefined,
+      lastEventId: `${sessionId}-event-3`,
+      lastEventSeq: 3,
+      updatedAt: 5000,
+      finishedAt: undefined
+    }
+    baseRun.effects = [executingEffect]
+    baseRun.toolExecutions = [baseTool]
+    const baseSnapshot = snapshotStore.buildTaskSnapshot({
+      meta: meta(sessionId, 'running'),
+      transcript: [{
+        seq: 3,
+        event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'race write' }
+      }],
+      lastSeq: 3,
+      lastEventId: `${sessionId}-event-3`,
+      lastEventKind: 'user-message',
+      eventCount: 3,
+      reason: 'important-event',
+      run: baseRun,
+      now: 5000
+    })
+    await snapshotStore.saveTaskSnapshot(baseSnapshot, raceRoot)
+    const seededRaceSnapshots = await snapshotStore.listTaskSnapshots(raceRoot)
+    assertEqual(seededRaceSnapshots.length, 1)
+    assertEqual(seededRaceSnapshots[0].run.id, runId)
+
+    const confirmedEffect = {
+      ...executingEffect,
+      revision: 3,
+      status: 'confirmed',
+      lease: { ...executingEffect.lease, releasedAt: 5100 },
+      evidence: [
+        ...executingEffect.evidence,
+        {
+          id: `${sessionId}-confirmed-evidence`,
+          kind: 'execution_result',
+          digest: `${sessionId}-confirmed-digest`,
+          observedAt: 5100,
+          verifier: 'task-snapshot-race-smoke',
+          generation: 1
+        }
+      ],
+      updatedAt: 5100,
+      terminalAt: 5100
+    }
+    const effectRun = {
+      ...baseRun,
+      revision: 11,
+      updatedAt: 5100,
+      effects: [confirmedEffect],
+      toolExecutions: [{
+        ...baseTool,
+        status: 'succeeded',
+        effectStatus: 'confirmed',
+        updatedAt: 5100,
+        finishedAt: 5100
+      }]
+    }
+    const eventRun = {
+      ...baseRun,
+      revision: 11,
+      updatedAt: 5200,
+      lastAppliedEventId: `${sessionId}-event-4`,
+      lastAppliedEventSeq: 4,
+      recentEventIds: [`${sessionId}-event-3`, `${sessionId}-event-4`],
+      toolExecutions: [{
+        ...baseTool,
+        outputDigest: `${sessionId}-event-output`,
+        resultEventId: `${sessionId}-event-4`,
+        lastEventId: `${sessionId}-event-4`,
+        lastEventSeq: 4,
+        updatedAt: 5200
+      }]
+    }
+    const eventSnapshot = {
+      ...baseSnapshot,
+      updatedAt: 5200,
+      eventCount: 4,
+      execution: {
+        ...baseSnapshot.execution,
+        lastSeq: 4,
+        cursor: { seq: 4, eventId: `${sessionId}-event-4` },
+        lastEventId: `${sessionId}-event-4`,
+        lastEventKind: 'tool-result',
+        lastEventAt: 5200
+      },
+      transcript: [
+        ...baseSnapshot.transcript,
+        {
+          seq: 4,
+          event: {
+            kind: 'tool-result',
+            toolUseId,
+            content: 'write complete',
+            isError: false
+          }
+        }
+      ],
+      run: eventRun
+    }
+    const writes = raceIndex === 0
+      ? [
+          snapshotStore.saveTaskRunBarrier(effectRun, raceRoot),
+          snapshotStore.saveTaskSnapshot(eventSnapshot, raceRoot)
+        ]
+      : [
+          snapshotStore.saveTaskSnapshot(eventSnapshot, raceRoot),
+          snapshotStore.saveTaskRunBarrier(effectRun, raceRoot)
+        ]
+    const outcomes = await Promise.all(writes)
+    const barrierResult = raceIndex === 0 ? outcomes[0] : outcomes[1]
+    const persistedRaceSnapshot = (await snapshotStore.listTaskSnapshots(raceRoot))[0]
+    const persistedRaceRun = (await snapshotStore.listTaskRuns(sessionId, raceRoot))[0]
+    assertEqual(barrierResult.effects[0].status, 'confirmed')
+    if (raceIndex === 1) {
+      assertEqual(barrierResult.lastAppliedEventSeq, 4)
+      assertEqual(barrierResult.toolExecutions[0].outputDigest, `${sessionId}-event-output`)
+    }
+    for (const mergedRun of [persistedRaceSnapshot.run, persistedRaceRun]) {
+      assertEqual(mergedRun.lastAppliedEventSeq, 4)
+      assertEqual(mergedRun.effects[0].status, 'confirmed')
+      assertEqual(mergedRun.toolExecutions[0].status, 'succeeded')
+      assertEqual(mergedRun.toolExecutions[0].effectStatus, 'confirmed')
+      assertEqual(mergedRun.toolExecutions[0].outputDigest, `${sessionId}-event-output`)
+    }
+  }
+
+  const sharedResourceKey = 'resource-v1:shared-cross-session-target'
+  const crossSessionRuns = ['cross-session-a', 'cross-session-b'].map((sessionId, index) => ({
+    schemaVersion: 1,
+    id: `${sessionId}-run`,
+    sessionId,
+    taskId: sessionId,
+    status: 'executing',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 3000 + index,
+    updatedAt: 3000 + index,
+    steps: [],
+    toolExecutions: [],
+    effects: []
+  }))
+  for (const run of crossSessionRuns) {
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(run.sessionId, 'running'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: 'cross-session lease' } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run,
+      now: run.updatedAt
+    }), crossSessionBarrierRoot)
+  }
+  const competingRuns = crossSessionRuns.map((run, index) => ({
+    ...run,
+    revision: 2,
+    updatedAt: 3100 + index,
+    effects: [preparedEffect(run, `effect-v1:cross-session-intent-${index}`, index, sharedResourceKey)]
+  }))
+  const competingOutcomes = await Promise.allSettled(
+    competingRuns.map((run) => snapshotStore.saveTaskRunBarrier(run, crossSessionBarrierRoot))
+  )
+  assertEqual(competingOutcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1)
+  assertEqual(competingOutcomes.filter((outcome) => outcome.status === 'rejected').length, 1)
+  const conflictError = competingOutcomes
+    .filter((outcome) => outcome.status === 'rejected')
+    .map((outcome) => String(outcome.reason?.message ?? outcome.reason))
+    .join('\n')
+  assert(conflictError.includes('其他会话仍未收敛'), 'cross-session duplicate lease must fail closed')
+  const globallyPersistedEffects = (await snapshotStore.listTaskRuns(undefined, crossSessionBarrierRoot))
+    .flatMap((run) => run.effects ?? [])
+    .filter((effect) => effect.resourceKey === sharedResourceKey)
+  assertEqual(globallyPersistedEffects.length, 1)
+  const winningOutcome = competingOutcomes.find((outcome) => outcome.status === 'fulfilled')
+  const winningRun = winningOutcome.value
+  assertEqual(winningRun.effects[0].lease.fencingToken, 1)
+  const settledWinningRun = {
+    ...winningRun,
+    revision: winningRun.revision + 1,
+    updatedAt: 3200,
+    effects: [{
+      ...winningRun.effects[0],
+      revision: winningRun.effects[0].revision + 1,
+      status: 'confirmed',
+      lease: { ...winningRun.effects[0].lease, releasedAt: 3200 },
+      updatedAt: 3200,
+      terminalAt: 3200
+    }]
+  }
+  await snapshotStore.saveTaskRunBarrier(settledWinningRun, crossSessionBarrierRoot)
+  const losingRun = competingRuns.find((run) => run.id !== winningRun.id)
+  const retriedRun = await snapshotStore.saveTaskRunBarrier({
+    ...losingRun,
+    revision: losingRun.revision + 1,
+    updatedAt: 3300
+  }, crossSessionBarrierRoot)
+  assertEqual(
+    retriedRun.effects[0].lease.fencingToken,
+    2,
+    'next lease for one resource must receive the next global fencing token'
+  )
+
+  const independentRuns = ['independent-a', 'independent-b'].map((sessionId, index) => ({
+    schemaVersion: 1,
+    id: `${sessionId}-run`,
+    sessionId,
+    taskId: sessionId,
+    status: 'executing',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 3400 + index,
+    updatedAt: 3400 + index,
+    steps: [],
+    toolExecutions: [],
+    effects: []
+  }))
+  for (const run of independentRuns) {
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(run.sessionId, 'running'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: 'independent resource lease' } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run,
+      now: run.updatedAt
+    }), crossSessionBarrierRoot)
+  }
+  const independentResults = await Promise.all(independentRuns.map((run, index) =>
+    snapshotStore.saveTaskRunBarrier({
+      ...run,
+      revision: 2,
+      updatedAt: 3500 + index,
+      effects: [preparedEffect(
+        run,
+        `effect-v1:independent-intent-${index}`,
+        10 + index,
+        `resource-v1:independent-${index}`
+      )]
+    }, crossSessionBarrierRoot)
+  ))
+  assertEqual(independentResults.length, 2)
+  assert(
+    independentResults.every((run) => run.effects[0].lease.fencingToken === 1),
+    'unrelated resources must acquire leases concurrently with independent token sequences'
+  )
 
   const completedSnapshot = snapshotStore.buildTaskSnapshot({
     meta: meta('session-completed', 'idle'),
@@ -473,11 +788,17 @@ function verifyRecoveryUiAndTray() {
   const appSource = readFileSync(path.join(repoRoot, 'src/renderer/src/App.tsx'), 'utf8')
   assert(appSource.includes('TaskRecoveryModal'), 'App should mount TaskRecoveryModal')
   const recoverySource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/TaskRecoveryModal.tsx'), 'utf8')
-  for (const marker of ['listTaskSnapshots', 'recoverTaskSnapshot', 'deleteTaskSnapshot']) {
+  for (const marker of ['taskSnapshots', 'recoverTaskSnapshot', 'resolveTaskEffect', 'deleteTaskSnapshot', 'setShowTaskRecovery']) {
     assert(recoverySource.includes(marker), `TaskRecoveryModal missing ${marker}`)
   }
   const storeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
   assert(storeSource.includes('async recoverTaskSnapshot'), 'store should register recovered sessions')
+  assert(storeSource.includes('window.agentDesk.listTaskSnapshots()'), 'store should own task snapshot listing')
+  assert(storeSource.includes('async resolveTaskEffect'), 'store should own effect resolution state')
+  assert(storeSource.includes('effectStatus: ev.effectStatus'), 'store should preserve live effect status')
+  const toolCardSource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ToolCallCard.tsx'), 'utf8')
+  assert(toolCardSource.includes("effectStatus === 'waiting_reconciliation'"), 'tool card should distinguish reconciliation')
+  assert(toolCardSource.includes("t('toolWaitingReconciliation')"), 'tool card should label reconciliation')
   const mainSource = readFileSync(path.join(repoRoot, 'src/main/index.ts'), 'utf8')
   for (const marker of ['Tray', 'hasRunningSessions', 'win.hide()', 'updateTray']) {
     assert(mainSource.includes(marker), `main process missing tray marker ${marker}`)
@@ -511,6 +832,45 @@ function verifyRecoveryUiAndTray() {
 
 function assertEqual(actual, expected) {
   assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+}
+
+function preparedEffect(run, effectKey, index, resourceKey = effectKey) {
+  const observedAt = 3100 + index
+  return {
+    schemaVersion: 1,
+    id: `${run.sessionId}-effect`,
+    effectKey,
+    resourceKey,
+    sessionId: run.sessionId,
+    runId: run.id,
+    toolUseId: `${run.sessionId}-tool`,
+    toolName: 'bash',
+    generation: 1,
+    revision: 1,
+    status: 'prepared',
+    reconcilability: 'opaque',
+    target: { kind: 'unsupported', toolName: 'bash' },
+    targetDigest: 'target-digest',
+    intentDigest: 'intent-digest',
+    inputDigest: 'input-digest',
+    lease: {
+      id: `${run.sessionId}-lease`,
+      ownerId: `${run.sessionId}-owner`,
+      fencingToken: 1,
+      acquiredAt: observedAt,
+      expiresAt: observedAt + 60_000
+    },
+    evidence: [{
+      id: `${run.sessionId}-evidence`,
+      kind: 'prepared',
+      digest: 'prepared-digest',
+      observedAt,
+      verifier: 'task-snapshot-smoke',
+      generation: 1
+    }],
+    createdAt: observedAt,
+    updatedAt: observedAt
+  }
 }
 
 async function assertRejects(fn, expectedMessage) {

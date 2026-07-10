@@ -25,6 +25,7 @@ export interface Engine {
   start(): Promise<void>
   send(input: string | SendMessagePayload): void
   rejectSend(message: string): void
+  /** 中断当前轮次，并在已开始的外部执行完成或当前执行器确认停止后返回。 */
   interrupt(): Promise<void>
   respondPermission(requestId: string, allow: boolean, message?: string): void
   pendingPermissions(): PermissionRequestInfo[]
@@ -44,7 +45,11 @@ export interface Engine {
     mode: CheckpointRestoreMode,
     dryRun: boolean
   ): Promise<CheckpointRestoreResult>
-  dispose(): void
+  /**
+   * 请求底层执行器停止，并在所有已开始的外部执行都已完成或执行器已确认退出后返回。
+   * SessionManager 必须等待该屏障，才能把会话视为已停止并启动效果对账。
+   */
+  dispose(): Promise<void>
 }
 
 export type EngineEmit = (event: AgentEvent, seq: number, identity?: AgentEventIdentity) => void

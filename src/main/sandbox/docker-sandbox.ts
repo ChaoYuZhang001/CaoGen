@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
@@ -19,6 +19,7 @@ export interface SandboxCommandOptions {
   pipIndexUrl?: string
   dockerRegistryMirror?: string
   allowStrictDockerFallback?: boolean
+  signal?: AbortSignal
 }
 
 export interface SandboxCommandResult {
@@ -43,6 +44,7 @@ export interface SandboxFileWriteOptions {
   pipIndexUrl?: string
   dockerRegistryMirror?: string
   allowStrictDockerFallback?: boolean
+  signal?: AbortSignal
 }
 
 interface ExecFileResult {
@@ -72,6 +74,7 @@ fs.writeFileSync(target, payload.content, 'utf8');
 `
 
 export async function runSandboxedCommand(options: SandboxCommandOptions): Promise<SandboxCommandResult> {
+  if (options.signal?.aborted) return abortedResult(options.mode)
   const command = options.command.trim()
   if (!command) {
     return {
@@ -85,10 +88,10 @@ export async function runSandboxedCommand(options: SandboxCommandOptions): Promi
 
   if (options.mode === 'strictDocker') {
     const dockerBinary = options.dockerBinary ?? 'docker'
-    const dockerAvailable = await isDockerAvailable(dockerBinary)
+    const dockerAvailable = await isDockerAvailable(dockerBinary, options.signal)
     if (dockerAvailable) {
       const image = resolveDockerImage(options.dockerImage?.trim() || DEFAULT_DOCKER_IMAGE, options)
-      const imageAvailable = await isDockerImageAvailable(dockerBinary, image)
+      const imageAvailable = await isDockerImageAvailable(dockerBinary, image, options.signal)
       if (!imageAvailable) return handleStrictDockerUnavailable(options, command, `Docker image unavailable:${image}`)
       return runDockerCommand({ ...options, command, dockerBinary })
     }
@@ -101,6 +104,7 @@ export async function runSandboxedCommand(options: SandboxCommandOptions): Promi
 }
 
 export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions): Promise<SandboxCommandResult> {
+  if (options.signal?.aborted) return abortedResult(options.mode)
   const safePath = await resolveWritableProjectPath(options.cwd, options.targetPath).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error)
   }))
@@ -123,26 +127,26 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
   }
 
   const dockerBinary = options.dockerBinary ?? 'docker'
-  const dockerAvailable = await isDockerAvailable(dockerBinary)
+  const dockerAvailable = await isDockerAvailable(dockerBinary, options.signal)
   if (!dockerAvailable) {
     return writeTextFileWithFallback(safeOptions, `Docker 不可用,已降级为 standardSystem:${dockerBinary}`)
   }
 
   const image = resolveDockerImage(options.dockerImage?.trim() || DEFAULT_DOCKER_IMAGE, options)
-  const imageAvailable = await isDockerImageAvailable(dockerBinary, image)
+  const imageAvailable = await isDockerImageAvailable(dockerBinary, image, options.signal)
   if (!imageAvailable) {
     return writeTextFileWithFallback(safeOptions, `Docker image unavailable:${image}`)
   }
 
   const payloadRelPath = `.caogen/tmp/sandbox-write/${randomUUID()}.json`
   const payloadPath = join(cwd, payloadRelPath)
-  await mkdir(dirname(payloadPath), { recursive: true })
-  await writeFile(
-    payloadPath,
-    JSON.stringify({ targetRelPath: relPath.split(sep).join('/'), content: options.content }),
-    'utf8'
-  )
   try {
+    await mkdir(dirname(payloadPath), { recursive: true })
+    await writeFile(
+      payloadPath,
+      JSON.stringify({ targetRelPath: relPath.split(sep).join('/'), content: options.content }),
+      { encoding: 'utf8', signal: options.signal }
+    )
     const mirrorEnv = buildChinaMirrorEnv(options)
     const result = await execFilePromise(
       dockerBinary,
@@ -181,7 +185,8 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
         cwd,
         timeoutMs: options.timeoutMs,
         maxBufferBytes: 512 * 1024,
-        env: mergeProcessEnv(mirrorEnv)
+        env: mergeProcessEnv(mirrorEnv),
+        signal: options.signal
       }
     )
     const formatted = formatResult(result, 'strictDocker', true)
@@ -194,20 +199,22 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
   }
 }
 
-async function isDockerAvailable(dockerBinary: string): Promise<boolean> {
+async function isDockerAvailable(dockerBinary: string, signal?: AbortSignal): Promise<boolean> {
   const result = await execFilePromise(dockerBinary, ['version', '--format', '{{.Server.Version}}'], {
     cwd: process.cwd(),
     timeoutMs: 3_000,
-    maxBufferBytes: 256 * 1024
+    maxBufferBytes: 256 * 1024,
+    signal
   })
   return result.ok
 }
 
-async function isDockerImageAvailable(dockerBinary: string, image: string): Promise<boolean> {
+async function isDockerImageAvailable(dockerBinary: string, image: string, signal?: AbortSignal): Promise<boolean> {
   const result = await execFilePromise(dockerBinary, ['image', 'inspect', image], {
     cwd: process.cwd(),
     timeoutMs: 3_000,
-    maxBufferBytes: 256 * 1024
+    maxBufferBytes: 256 * 1024,
+    signal
   })
   return result.ok
 }
@@ -276,7 +283,8 @@ async function runDockerCommand(
       cwd: options.cwd,
       timeoutMs: options.timeoutMs,
       maxBufferBytes: options.maxBufferBytes,
-      env: mergeProcessEnv(mirrorEnv)
+      env: mergeProcessEnv(mirrorEnv),
+      signal: options.signal
     }
   )
   return formatResult(result, 'strictDocker', true)
@@ -309,8 +317,9 @@ async function writeTextFileOnHost(
   modeUsed: SandboxMode
 ): Promise<SandboxCommandResult> {
   try {
+    if (options.signal?.aborted) return abortedResult(modeUsed)
     await mkdir(dirname(options.targetPath), { recursive: true })
-    await writeFile(options.targetPath, options.content, 'utf8')
+    await writeFile(options.targetPath, options.content, { encoding: 'utf8', signal: options.signal })
     return {
       ok: true,
       output: `已写入 ${relative(resolve(options.cwd), resolve(options.targetPath))}`,
@@ -338,7 +347,8 @@ async function runSystemCommand(
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     maxBufferBytes: options.maxBufferBytes,
-    env: mergeProcessEnv(buildChinaMirrorEnv(options))
+    env: mergeProcessEnv(buildChinaMirrorEnv(options)),
+    signal: options.signal
   })
   return formatResult(result, options.mode, false)
 }
@@ -402,25 +412,135 @@ function hasRegistryHost(image: string): boolean {
 function execFilePromise(
   file: string,
   args: string[],
-  options: { cwd: string; timeoutMs: number; maxBufferBytes: number; env?: NodeJS.ProcessEnv }
+  options: {
+    cwd: string
+    timeoutMs: number
+    maxBufferBytes: number
+    env?: NodeJS.ProcessEnv
+    signal?: AbortSignal
+  }
 ): Promise<ExecFileResult> {
   return new Promise((resolvePromise) => {
-    execFile(
-      file,
-      args,
-      { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: options.maxBufferBytes, env: options.env },
-      (err, stdout, stderr) => {
-        const exitCode = exitCodeFromError(err)
-        resolvePromise({
-          ok: !err,
-          stdout: stdout.toString(),
-          stderr: stderr.toString(),
-          exitCode,
-          errorMessage: err instanceof Error ? err.message : undefined
-        })
+    if (options.signal?.aborted) {
+      resolvePromise({ ok: false, stdout: '', stderr: '', exitCode: 1, errorMessage: '操作已中断' })
+      return
+    }
+    let aborted = options.signal?.aborted === true
+    let timedOut = false
+    let overflowed = false
+    let settled = false
+    let outputBytes = 0
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let child: ChildProcess | undefined
+    let forceKillTimer: NodeJS.Timeout | undefined
+    let terminationRequested = false
+    const finish = (result: ExecFileResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      if (forceKillTimer) clearTimeout(forceKillTimer)
+      options.signal?.removeEventListener('abort', abort)
+      resolvePromise(result)
+    }
+    const terminate = (): void => {
+      if (!child || terminationRequested) return
+      terminationRequested = true
+      forceKillTimer = terminateProcessTree(child)
+    }
+    const abort = (): void => {
+      aborted = true
+      terminate()
+    }
+    const collect = (chunks: Buffer[], value: Buffer | string): void => {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+      const remaining = Math.max(0, options.maxBufferBytes - outputBytes)
+      if (remaining > 0) {
+        const kept = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining)
+        chunks.push(kept)
+        outputBytes += kept.byteLength
       }
-    )
+      if (chunk.byteLength > remaining && !overflowed) {
+        overflowed = true
+        terminate()
+      }
+    }
+    child = spawn(file, args, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    child.stdout?.on('data', (chunk: Buffer) => collect(stdout, chunk))
+    child.stderr?.on('data', (chunk: Buffer) => collect(stderr, chunk))
+    child.once('error', (error) => {
+      finish({
+        ok: false,
+        stdout: Buffer.concat(stdout).toString(),
+        stderr: Buffer.concat(stderr).toString(),
+        exitCode: 1,
+        errorMessage: error.message
+      })
+    })
+    child.once('close', (code) => {
+      const errorMessage = aborted
+        ? '操作已中断'
+        : timedOut
+          ? `操作超时(${options.timeoutMs}ms)`
+          : overflowed
+            ? `输出超过限制(${options.maxBufferBytes} bytes)`
+            : code === 0
+              ? undefined
+              : `进程退出码 ${code ?? 1}`
+      finish({
+        ok: code === 0 && !aborted && !timedOut && !overflowed,
+        stdout: Buffer.concat(stdout).toString(),
+        stderr: Buffer.concat(stderr).toString(),
+        exitCode: typeof code === 'number' ? code : 1,
+        errorMessage
+      })
+    })
+    const timeout = setTimeout(() => {
+      timedOut = true
+      terminate()
+    }, options.timeoutMs)
+    timeout.unref()
+    options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) abort()
   })
+}
+
+function abortedResult(modeUsed: SandboxMode): SandboxCommandResult {
+  return {
+    ok: false,
+    output: '操作已中断',
+    exitCode: 1,
+    modeUsed,
+    sandboxed: false
+  }
+}
+
+function terminateProcessTree(child: ChildProcess): NodeJS.Timeout | undefined {
+  const pid = child.pid
+  if (!pid) return undefined
+  if (process.platform === 'win32') {
+    execFile('taskkill', ['/pid', String(pid), '/t', '/f'], () => undefined)
+    return undefined
+  }
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    child.kill('SIGTERM')
+  }
+  const forceKill = setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      child.kill('SIGKILL')
+    }
+  }, 500)
+  forceKill.unref()
+  return forceKill
 }
 
 function exitCodeFromError(err: Error | null): number {

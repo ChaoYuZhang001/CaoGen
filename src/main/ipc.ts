@@ -58,6 +58,7 @@ import {
 } from './gitOps'
 import { applyHunk, getWorkspaceDiff } from './gitDiff'
 import { getStartSuggestions, type StartSuggestionSignal } from './startSuggestions'
+import { stableValueDigest } from './task/tool-idempotency'
 import {
   applyManagedWorktreePatch,
   checkManagedWorktreeApply,
@@ -96,6 +97,7 @@ import type {
   CreateRoutineInput,
   CreateSessionOptions,
   DispatchSubagentsInput,
+  EffectRecord,
   ImageAttachmentView,
   MarkRunOptions,
   PermissionModeId,
@@ -108,6 +110,7 @@ import type {
   SendMessagePayload,
   TaskDagDispatchInput,
   TaskDecomposeInput,
+  TaskSnapshotRecord,
   UpdateRoutineInput
 } from '../shared/types'
 
@@ -284,6 +287,51 @@ function isInsidePath(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
+function effectTargetDescription(effect: EffectRecord): string {
+  if (effect.target.kind === 'file_content') return effect.target.relativePath
+  if (effect.target.kind === 'git_commit') {
+    return `${effect.target.branch} @ ${effect.target.preHead.slice(0, 12)}`
+  }
+  if (effect.target.kind === 'git_push') {
+    return `${effect.target.remote}/${effect.target.branch} -> ${effect.target.intendedSha.slice(0, 12)}`
+  }
+  return `${effect.target.toolName}（无自动查询器）`
+}
+
+function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRecord): string {
+  if (effect.target.kind === 'file_content') {
+    return `write ${effect.target.expectedBytes} bytes · sha256 ${effect.target.expectedSha256.slice(0, 16)}`
+  }
+  if (effect.target.kind === 'git_commit') {
+    return `staged ${effect.target.stagedDiffDigest.slice(0, 16)} · message ${effect.target.messageDigest.slice(0, 16)}`
+  }
+  if (effect.target.kind === 'git_push') return `push ${effect.target.intendedSha.slice(0, 12)}`
+  for (const entry of [...snapshot.transcript].reverse()) {
+    if (entry.event.kind !== 'assistant-message') continue
+    const block = entry.event.blocks.find(
+      (item) => item.type === 'tool_use' && item.id === effect.toolUseId
+    )
+    if (!block || block.type !== 'tool_use') continue
+    const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+      ? block.input as Record<string, unknown>
+      : {}
+    if (stableValueDigest(input) !== effect.inputDigest) break
+    if (typeof input.command === 'string') return `command: ${redactEffectText(input.command)}`
+    const path = input.path ?? input.file_path
+    if (typeof path === 'string') return `path: ${redactEffectText(path)}`
+    return `input keys: ${Object.keys(input).sort().join(', ') || '(none)'} · sha256 ${effect.inputDigest.slice(0, 16)}`
+  }
+  return `input sha256 ${effect.inputDigest.slice(0, 16)}（原始输入不可用）`
+}
+
+function redactEffectText(value: string): string {
+  const redacted = value
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
+    .replace(/\b(api[-_]?key|token|password|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\b(https?:\/\/)([^\s/@]+):([^\s/@]+)@/gi, '$1[REDACTED]@')
+  return redacted.length > 600 ? `${redacted.slice(0, 600)}...[truncated]` : redacted
+}
+
 export function registerIpc(): void {
   registerQuickbarIpc()
 
@@ -303,6 +351,62 @@ export function registerIpc(): void {
     }
     return sessionManager.recoverTaskSnapshot(snapshotId)
   })
+
+  ipcMain.handle(
+    'taskSnapshots:resolveEffect',
+    async (
+      event,
+      snapshotId: string,
+      effectId: string,
+      expectedRevision: number,
+      resolution: 'confirmed_applied' | 'confirmed_not_applied'
+    ) => {
+      if (typeof snapshotId !== 'string' || !snapshotId.trim()) throw new Error('必须指定任务快照 ID')
+      if (typeof effectId !== 'string' || !effectId.trim()) throw new Error('必须指定 EffectRecord ID')
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+        throw new Error('必须指定有效的 EffectRecord revision')
+      }
+      if (resolution !== 'confirmed_applied' && resolution !== 'confirmed_not_applied') {
+        throw new Error('无效的效果处置类型')
+      }
+      const snapshot = (await sessionManager.listTaskSnapshots()).find((item) => item.id === snapshotId)
+      const effect = snapshot?.run?.effects?.find((item) => item.id === effectId)
+      if (!snapshot || !effect) throw new Error('EffectRecord 已不存在，请刷新恢复列表')
+      if (effect.status !== 'waiting_reconciliation') {
+        throw new Error(`EffectRecord 不在等待对账状态:${effect.status}`)
+      }
+      if (effect.revision !== expectedRevision) {
+        throw new Error(`stale_revision: EffectRecord 已从 ${expectedRevision} 更新到 ${effect.revision}`)
+      }
+      const confirmsApplied = resolution === 'confirmed_applied'
+      const parent = BrowserWindow.fromWebContents(event.sender)
+      const options = {
+        type: 'warning' as const,
+        title: '确认外部效果状态',
+        message: confirmsApplied ? '确认该外部操作已经执行？' : '确认该外部操作没有执行？',
+        detail: [
+          `工具: ${effect.toolName}`,
+          `目标: ${effectTargetDescription(effect)}`,
+          `意图: ${effectIntentDescription(snapshot, effect)}`,
+          effect.error ? `当前证据: ${effect.error}` : '',
+          confirmsApplied
+            ? '确认后会把效果记为已执行，不会再次执行。'
+            : '确认后会生成重试授权，后续可能再次产生该外部副作用。'
+        ].filter(Boolean).join('\n'),
+        buttons: ['取消', confirmsApplied ? '确认已执行' : '确认未执行并允许重试'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        checkboxLabel: '我已核对上方工具、目标和当前证据',
+        checkboxChecked: false
+      }
+      const confirmation = parent
+        ? await dialog.showMessageBox(parent, options)
+        : await dialog.showMessageBox(options)
+      if (confirmation.response !== 1 || confirmation.checkboxChecked !== true) return snapshot
+      return sessionManager.resolveTaskEffect(snapshotId, effectId, expectedRevision, resolution)
+    }
+  )
 
   ipcMain.handle('taskSnapshots:delete', (_e, snapshotId: string) => {
     if (typeof snapshotId !== 'string' || snapshotId.trim().length === 0) return false
@@ -694,9 +798,7 @@ export function registerIpc(): void {
     await sessionManager.interrupt(id)
   })
 
-  ipcMain.handle('sessions:close', (_e, id: string) => {
-    sessionManager.close(id)
-  })
+  ipcMain.handle('sessions:close', (_e, id: string) => sessionManager.close(id))
 
   ipcMain.handle(
     'sessions:permission',

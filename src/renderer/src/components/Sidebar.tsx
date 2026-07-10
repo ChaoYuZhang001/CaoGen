@@ -120,6 +120,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   const deleteHistoryEntry = useStore((s) => s.deleteHistoryEntry)
   const recoverTaskSnapshot = useStore((s) => s.recoverTaskSnapshot)
   const deleteTaskSnapshot = useStore((s) => s.deleteTaskSnapshot)
+  const setShowTaskRecovery = useStore((s) => s.setShowTaskRecovery)
   const closeSession = useStore((s) => s.closeSession)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
@@ -240,7 +241,10 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
   const visibleTaskSnapshots = taskSnapshots
     .filter((snapshot) => snapshot.reason !== 'created')
-    .filter((snapshot) => !openSessionIds.has(snapshot.sessionId))
+    .filter((snapshot) =>
+      !openSessionIds.has(snapshot.sessionId) ||
+      snapshot.run?.effects?.some((effect) => effect.status === 'waiting_reconciliation')
+    )
     .filter(matchesTaskSnapshot)
 
   const projectGroups = useMemo<ProjectGroup[]>(() => {
@@ -484,44 +488,52 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     )
   }
 
-  const renderTaskSnapshot = (snapshot: TaskSnapshotRecord): React.ReactNode => (
-    <div
-      key={snapshot.id}
-      className="session-card task-snapshot-card"
-      role="button"
-      tabIndex={0}
-      title={t('recoverTaskSnapshotTitle', { cwd: snapshot.projectPath })}
-      onClick={() => {
-        closeMobile()
-        void recoverTaskSnapshot(snapshot.id)
-      }}
-      onKeyDown={(e) =>
-        activateByKeyboard(e, () => {
-          closeMobile()
-          void recoverTaskSnapshot(snapshot.id)
-        })
+  const renderTaskSnapshot = (snapshot: TaskSnapshotRecord): React.ReactNode => {
+    const waitingReconciliation = snapshot.run?.effects?.some(
+      (effect) => effect.status === 'waiting_reconciliation'
+    ) === true
+    const openSnapshot = (): void => {
+      closeMobile()
+      if (waitingReconciliation) {
+        setShowTaskRecovery(true)
+        return
       }
-    >
-      <span className="history-icon">↺</span>
-      <span className="session-card-body">
-        <span className="session-card-title">{snapshot.title}</span>
-        <span className="session-card-sub">
-          {projectNameForPath(snapshot.projectPath)} · {formatTime(snapshot.updatedAt)}
-        </span>
-      </span>
-      <button
-        className="session-action task-snapshot-delete"
-        title={t('deleteTaskSnapshot')}
-        onClick={(e) => {
-          e.stopPropagation()
-          if (!window.confirm(t('deleteTaskSnapshotConfirm', { title: snapshot.title }))) return
-          void deleteTaskSnapshot(snapshot.id)
-        }}
+      void recoverTaskSnapshot(snapshot.id)
+    }
+    return (
+      <div
+        key={snapshot.id}
+        className="session-card task-snapshot-card"
+        role="button"
+        tabIndex={0}
+        title={t('recoverTaskSnapshotTitle', { cwd: snapshot.projectPath })}
+        onClick={openSnapshot}
+        onKeyDown={(e) => activateByKeyboard(e, openSnapshot)}
       >
-        ×
-      </button>
-    </div>
-  )
+        <span className="history-icon">↺</span>
+        <span className="session-card-body">
+          <span className="session-card-title">{snapshot.title}</span>
+          <span className="session-card-sub">
+            {waitingReconciliation ? '等待对账 · ' : ''}
+            {projectNameForPath(snapshot.projectPath)} · {formatTime(snapshot.updatedAt)}
+          </span>
+        </span>
+        <button
+          className="session-action task-snapshot-delete"
+          title={t('deleteTaskSnapshot')}
+          disabled={waitingReconciliation}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (waitingReconciliation) return
+            if (!window.confirm(t('deleteTaskSnapshotConfirm', { title: snapshot.title }))) return
+            void deleteTaskSnapshot(snapshot.id)
+          }}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
 
   const totalVisible =
     pinnedEntries.length +

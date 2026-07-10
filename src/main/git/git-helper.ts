@@ -1,14 +1,16 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, relative, resolve } from 'node:path'
-import { readProjectContext } from '../agent/context-loader'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { withSafeLocalGitConfig } from './safe-git'
 
 const GIT_TIMEOUT_MS = 120_000
-const COMMAND_TIMEOUT_MS = 180_000
 const MAX_BUFFER = 16 * 1024 * 1024
 const MAX_OUTPUT_CHARS = 24_000
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
 const SUPPORTED_PR_PROVIDERS = new Set<PullRequestProvider>(['github', 'gitlab'])
+const TRUSTED_EMPTY_HOOKS_DIR = createTrustedEmptyHooksDir()
 
 export type PullRequestProvider = 'github' | 'gitlab' | 'gitee' | 'unknown'
 export type PullRequestTool = 'gh' | 'glab'
@@ -132,11 +134,6 @@ interface BranchInfo {
   behind: number
 }
 
-interface ParsedCommand {
-  name: string
-  command: string
-}
-
 interface NormalizedFilePath {
   absolute: string
   relative: string
@@ -179,9 +176,9 @@ export function gitDiff(cwd: string, rawFile?: string): GitDiffOperationResult {
   }
 
   const pathArgs = file?.relative ? ['--', file.relative] : ['--']
-  const staged = runGit(repo.repoRoot, ['diff', '--cached', ...pathArgs])
+  const staged = runGit(repo.repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--cached', ...pathArgs])
   if (!staged.ok) return failure('读取 staged diff 失败', repo.repoRoot, staged.error)
-  const unstaged = runGit(repo.repoRoot, ['diff', ...pathArgs])
+  const unstaged = runGit(repo.repoRoot, ['diff', '--no-ext-diff', '--no-textconv', ...pathArgs])
   if (!unstaged.ok) return failure('读取 unstaged diff 失败', repo.repoRoot, unstaged.error)
 
   const untracked = rawFile
@@ -223,19 +220,18 @@ export function gitCommit(cwd: string, message: string): GitCommitOperationResul
     return failure('没有已暂存的改动；为避免误提交其他 Agent 改动，git_commit 不会自动 git add', repo.repoRoot)
   }
 
-  const checks = runPreCommitChecks(repo.repoRoot)
-  const failed = checks.find((check) => !check.ok)
-  if (failed) {
-    return {
-      ok: false,
-      repoRoot: repo.repoRoot,
-      error: `提交前检查失败: ${failed.name}`,
-      details: failed.output,
-      checks
-    }
-  }
-
-  const commit = runGit(repo.repoRoot, ['commit', '-m', text])
+  const checks: GitCommitCheckResult[] = []
+  const commit = runGit(repo.repoRoot, [
+    '-c',
+    `core.hooksPath=${TRUSTED_EMPTY_HOOKS_DIR}`,
+    '-c',
+    'commit.gpgSign=false',
+    'commit',
+    '--no-verify',
+    '--no-gpg-sign',
+    '-m',
+    text
+  ])
   if (!commit.ok) return failure('git commit 失败', repo.repoRoot, commit.error, undefined, checks)
 
   const sha = gitText(repo.repoRoot, ['rev-parse', 'HEAD'])
@@ -253,7 +249,17 @@ export function gitPush(cwd: string, rawBranch?: string): GitPushOperationResult
   const remote = preferredRemote(repo.repoRoot)
   if (!remote) return failure('未配置 Git remote，无法 push', repo.repoRoot)
 
-  const push = runGit(repo.repoRoot, ['push', '-u', remote, `${branch}:${branch}`])
+  const push = runGit(repo.repoRoot, [
+    '-c',
+    `core.hooksPath=${TRUSTED_EMPTY_HOOKS_DIR}`,
+    '-c',
+    'push.gpgSign=false',
+    'push',
+    '--no-verify',
+    '-u',
+    remote,
+    `${branch}:${branch}`
+  ])
   if (!push.ok) return failure('git push 失败', repo.repoRoot, push.error)
 
   const upstream = `${remote}/${branch}`
@@ -364,7 +370,16 @@ export function gitMerge(cwd: string, branch: string): GitMergeOperationResult {
     )
   }
 
-  const merge = runGit(repo.repoRoot, ['merge', '--no-ff', '--no-edit', target])
+  const merge = runGit(repo.repoRoot, [
+    '-c',
+    `core.hooksPath=${TRUSTED_EMPTY_HOOKS_DIR}`,
+    'merge',
+    '--no-verify',
+    '--no-gpg-sign',
+    '--no-ff',
+    '--no-edit',
+    target
+  ])
   if (!merge.ok) {
     return failure('git merge 失败', repo.repoRoot, merge.error, unmergedFiles(repo.repoRoot))
   }
@@ -398,12 +413,18 @@ function resolveRepo(cwd: string): { ok: true; repoRoot: string } | GitFailure {
   return { ok: true, repoRoot: resolve(result.stdout.trim()) }
 }
 
+function createTrustedEmptyHooksDir(): string {
+  const dir = join(tmpdir(), `caogen-empty-git-hooks-${process.pid}-${randomUUID()}`)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  return dir
+}
+
 function runGit(
   cwd: string,
   args: string[],
   options: { allowExitCodes?: number[]; input?: string } = {}
 ): GitRunResult {
-  return runCommand('git', args, cwd, undefined, options)
+  return runCommand('git', withSafeLocalGitConfig(args), cwd, undefined, options)
 }
 
 function runCommand(
@@ -437,23 +458,6 @@ function runCommand(
   return { ok: true, stdout, stderr, status }
 }
 
-function runShellCommand(cwd: string, command: string): GitRunResult {
-  const result = spawnSync(command, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
-    timeout: COMMAND_TIMEOUT_MS,
-    maxBuffer: MAX_BUFFER
-  })
-  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
-  const stderr = typeof result.stderr === 'string' ? result.stderr : ''
-  const status = result.status
-  if (result.error) return { ok: false, stdout, stderr, status, error: result.error.message }
-  if (status !== 0) return { ok: false, stdout, stderr, status, error: shellCommandError(command, status, stdout, stderr) }
-  return { ok: true, stdout, stderr, status }
-}
-
 function gitText(cwd: string, args: string[]): { ok: true; text: string } | { ok: false; error: string } {
   const result = runGit(cwd, args)
   if (!result.ok) return { ok: false, error: result.error ?? `git ${args.join(' ')} 失败` }
@@ -464,12 +468,6 @@ function commandError(command: string, args: string[], status: number | null, st
   const output = (stderr.trim() || stdout.trim()).slice(0, MAX_OUTPUT_CHARS)
   const code = status === null ? 'timeout' : String(status)
   return output ? `${command} ${args.join(' ')} failed (${code}): ${output}` : `${command} ${args.join(' ')} failed (${code})`
-}
-
-function shellCommandError(command: string, status: number | null, stdout: string, stderr: string): string {
-  const output = (stderr.trim() || stdout.trim()).slice(0, MAX_OUTPUT_CHARS)
-  const code = status === null ? 'timeout' : String(status)
-  return output ? `${command} failed (${code}): ${output}` : `${command} failed (${code})`
 }
 
 function readBranchInfo(repoRoot: string): BranchInfo {
@@ -553,91 +551,16 @@ function untrackedFiles(repoRoot: string): string[] {
 }
 
 function unmergedFiles(repoRoot: string): string[] {
-  const result = runGit(repoRoot, ['diff', '--name-only', '--diff-filter=U', '-z'])
+  const result = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--diff-filter=U', '-z'])
   if (!result.ok) return []
   return result.stdout.split('\0').filter(Boolean)
 }
 
 function hasStagedChanges(repoRoot: string): boolean {
-  const result = runGit(repoRoot, ['diff', '--cached', '--quiet', '--exit-code'], { allowExitCodes: [0, 1] })
-  return result.status === 1
-}
-
-function runPreCommitChecks(repoRoot: string): GitCommitCheckResult[] {
-  const commands = readLintTestCommands(repoRoot)
-  return commands.map((item) => {
-    const result = runShellCommand(repoRoot, item.command)
-    const output = clip([result.stdout, result.stderr, result.error].filter(Boolean).join('\n')).text
-    return {
-      name: item.name,
-      command: item.command,
-      ok: result.ok,
-      exitCode: result.status,
-      output: output || '(无输出)'
-    }
+  const result = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--cached', '--quiet', '--exit-code'], {
+    allowExitCodes: [0, 1]
   })
-}
-
-function readLintTestCommands(repoRoot: string): ParsedCommand[] {
-  let content = ''
-  try {
-    const context = readProjectContext(repoRoot)
-    if (context.source?.fileName === 'caogen.md' || context.source?.fileName === '.caogen.md') {
-      content = context.content
-    }
-  } catch {
-    content = ''
-  }
-  if (!content.trim()) return []
-
-  const section = commonCommandsSection(content)
-  const commands = parseNamedCommands(section)
-  const selected = commands.filter((item) => /^(lint|test)$/i.test(item.name))
-  return dedupeCommands(selected)
-}
-
-function commonCommandsSection(content: string): string {
-  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const start = lines.findIndex((line) => /^#{1,6}\s*(常用命令|commands?|scripts?)\s*$/i.test(line.trim()))
-  if (start === -1) return ''
-  const body: string[] = []
-  for (const line of lines.slice(start + 1)) {
-    if (/^#{1,6}\s+\S+/.test(line.trim())) break
-    body.push(line)
-  }
-  return body.join('\n')
-}
-
-function parseNamedCommands(section: string): ParsedCommand[] {
-  const commands: ParsedCommand[] = []
-  for (const line of section.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    const bullet = /^(?:[-*+]|\d+\.)\s*`?([A-Za-z0-9:_-]+)`?\s*[:：-]\s*(.+)$/.exec(trimmed)
-    if (bullet) {
-      commands.push({ name: bullet[1].trim(), command: stripCommandFence(bullet[2]) })
-      continue
-    }
-    const fenced = /^`?((?:npm|pnpm|yarn|bun)\s+run\s+(lint|test)\b.+?)`?$/.exec(trimmed)
-    if (fenced) commands.push({ name: fenced[2], command: stripCommandFence(fenced[1]) })
-  }
-  return commands.filter((item) => item.command.length > 0)
-}
-
-function stripCommandFence(value: string): string {
-  return value.trim().replace(/^`+/, '').replace(/`+$/, '').trim()
-}
-
-function dedupeCommands(commands: ParsedCommand[]): ParsedCommand[] {
-  const seen = new Set<string>()
-  const result: ParsedCommand[] = []
-  for (const command of commands) {
-    const key = command.name.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    result.push(command)
-  }
-  return result
+  return result.status === 1
 }
 
 function preferredRemote(repoRoot: string): string | null {

@@ -49,6 +49,12 @@ import {
 } from './task/task-execution'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { isTaskLedgerEvent, reconcileSnapshotWithReceipts } from './task/task-recovery'
+import {
+  reconcilePersistedTaskSnapshot,
+  resolvePersistedTaskEffect,
+  runHasUnresolvedEffects,
+  runHasWaitingEffects
+} from './task/effect-runtime'
 import { decomposeTask } from './agent/task-decomposer'
 import { createModelDagDecomposer } from './agent/model-dag-decomposer'
 import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
@@ -91,6 +97,8 @@ interface SessionNotificationState {
   terminalNotified: boolean
 }
 
+const TASK_SNAPSHOT_RECONCILIATION_CONCURRENCY = 4
+
 function trimForNotification(text: string, max = 120): string {
   const clean = text.replace(/\s+/g, ' ').trim()
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
@@ -109,6 +117,28 @@ function formatDuration(ms: number | undefined): string | undefined {
 function cleanOneLine(text: string, fallback: string, max = 80): string {
   const clean = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : ''
   return (clean || fallback).slice(0, max)
+}
+
+async function mapWithConcurrencyInOrder<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return []
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    async () => {
+      while (true) {
+        const index = nextIndex++
+        if (index >= items.length) return
+        results[index] = await task(items[index], index)
+      }
+    }
+  )
+  await Promise.all(workers)
+  return results
 }
 
 function normalizeTaskId(value: string | undefined, fallback: string): string {
@@ -172,6 +202,8 @@ class SessionManager {
     turnSeq: number
   }>()
   private preservingSnapshotsOnDispose = false
+  private readonly effectRecoveryPreservedSessions = new Set<string>()
+  private readonly closingSessions = new Map<string, Promise<void>>()
 
   list(): SessionMeta[] {
     return [...this.sessions.values()].map((s) => ({ ...s.meta }))
@@ -275,12 +307,16 @@ class SessionManager {
   send(id: string, input: string | SendMessagePayload): void {
     const session = this.sessions.get(id)
     if (!session) return
+    const currentRun = this.taskRuns.get(id)
+    if (runHasUnresolvedEffects(currentRun)) {
+      session.rejectSend('当前任务存在尚未完成真实状态对账的外部副作用，已阻止继续发送；请先完成效果对账。')
+      return
+    }
     const budgetError = this.budgetError(session)
     if (budgetError) {
       session.rejectSend(budgetError)
       return
     }
-    const currentRun = this.taskRuns.get(id)
     if (!currentRun || isTaskRunTerminal(currentRun.status)) {
       this.taskRuns.set(
         id,
@@ -296,13 +332,28 @@ class SessionManager {
   async interrupt(id: string): Promise<void> {
     const session = this.sessions.get(id)
     if (!session) return
-    await session.interrupt()
-    const run = this.taskRuns.get(id)
-    if (run && !isTaskRunTerminal(run.status)) {
-      this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'turn-result' }))
+    this.effectRecoveryPreservedSessions.add(id)
+    try {
+      await session.interrupt()
+      const run = this.taskRuns.get(id)
+      const preserveEffectRecovery = runHasUnresolvedEffects(run)
+      if (preserveEffectRecovery) {
+        // 未知外部效果不能留在 active 会话里，否则恢复面板会过滤它且会话还能继续发工具。
+        // 统一走 close 屏障：终止底层执行器、持久化 waiting_reconciliation、移出 active。
+        await this.close(id)
+        return
+      }
+      if (run && !isTaskRunTerminal(run.status)) {
+        this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'turn-result' }))
+        this.snapshotCounts.delete(id)
+        await deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
+      } else {
+        this.snapshotCounts.delete(id)
+        await deleteTaskSnapshot(id, undefined, run)
+      }
+    } finally {
+      this.effectRecoveryPreservedSessions.delete(id)
     }
-    this.snapshotCounts.delete(id)
-    await deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
   }
 
   dispatchSubagents(parentSessionId: string, input: DispatchSubagentsInput): SubagentDispatchResult {
@@ -654,12 +705,35 @@ class SessionManager {
     this.send(state.parentSessionId, lines.join('\n'))
   }
 
-  close(id: string): void {
+  close(id: string): Promise<void> {
+    const existing = this.closingSessions.get(id)
+    if (existing) return existing
     const session = this.sessions.get(id)
-    if (!session) return
-    const run = this.taskRuns.get(id)
+    if (!session) return Promise.resolve()
+    this.effectRecoveryPreservedSessions.add(id)
+    const closing = this.closeAfterExecutorStops(id, session).finally(() => {
+      this.effectRecoveryPreservedSessions.delete(id)
+      this.closingSessions.delete(id)
+    })
+    this.closingSessions.set(id, closing)
+    return closing
+  }
+
+  private async closeAfterExecutorStops(id: string, session: Engine): Promise<void> {
+    await session.dispose()
+    let run = this.taskRuns.get(id)
+    const preserveEffectRecovery = runHasUnresolvedEffects(run)
     if (run && !isTaskRunTerminal(run.status)) {
-      this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'status' }))
+      if (preserveEffectRecovery) {
+        run = recoverTaskExecutionState(run)
+        if (run.status !== 'waiting_reconciliation') {
+          run = transitionTaskRun(run, 'waiting_reconciliation', { lastEventKind: 'status' })
+        }
+        this.taskRuns.set(id, run)
+        await this.writeTaskSnapshot(id, 'shutdown', 0, 'status')
+      } else {
+        this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'status' }))
+      }
     }
     // 编排中的 child 被手动关闭:按"失败"记账,避免整组编排永远等不齐
     const orchestrationId = session.meta.orchestrationId
@@ -686,9 +760,10 @@ class SessionManager {
     this.persistActiveSessions()
     this.notificationStates.delete(id)
     clearIdeDocumentContext(id)
-    session.dispose()
-    void deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
-    this.taskRuns.delete(id)
+    if (!preserveEffectRecovery) {
+      await deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
+      this.taskRuns.delete(id)
+    }
   }
 
   updateWorktreeState(id: string, state: SessionMeta['worktreeState']): void {
@@ -704,16 +779,23 @@ class SessionManager {
     // turn-result/status 把刚写好的恢复快照删掉。
     this.preservingSnapshotsOnDispose = true
     const pendingWrites: Array<Promise<void>> = []
+    const pendingDisposals: Array<Promise<void>> = []
     for (const session of this.sessions.values()) {
       pendingWrites.push(this.writeTaskSnapshot(session.meta.id, 'shutdown', 0, 'status'))
-      session.dispose()
+      pendingDisposals.push(session.dispose())
       this.stopEnginePowerBlocker(session.meta.id)
       clearIdeDocumentContext(session.meta.id)
     }
-    this.sessions.clear()
-    this.notificationStates.clear()
+    const disposalResults = await Promise.allSettled(pendingDisposals)
+    for (const result of disposalResults) {
+      if (result.status === 'rejected') {
+        console.error('[caogen] 关闭执行器时发生错误，保留恢复快照:', result.reason)
+      }
+    }
     await Promise.all(pendingWrites)
     await flushTaskSnapshotMutations()
+    this.sessions.clear()
+    this.notificationStates.clear()
     this.taskRuns.clear()
     this.recentEventIds.clear()
   }
@@ -724,20 +806,29 @@ class SessionManager {
 
   async listTaskSnapshots(): Promise<TaskSnapshotRecord[]> {
     const snapshots = await listTaskSnapshots()
-    const recoverable: TaskSnapshotRecord[] = []
-    for (const snapshot of snapshots) {
-      const reconciled = reconcileSnapshotWithReceipts(snapshot)
-      if (reconciled.terminalRun) {
-        await deleteTaskSnapshot(snapshot.id, undefined, reconciled.terminalRun)
-        continue
+    const reconciled = await mapWithConcurrencyInOrder(
+      snapshots,
+      TASK_SNAPSHOT_RECONCILIATION_CONCURRENCY,
+      async (snapshot): Promise<TaskSnapshotRecord | null> => {
+        if (this.sessions.has(snapshot.sessionId)) {
+          return snapshot
+        }
+        const reconciled = reconcileSnapshotWithReceipts(snapshot)
+        if (reconciled.terminalRun) {
+          await deleteTaskSnapshot(snapshot.id, undefined, reconciled.terminalRun)
+          return null
+        }
+        return reconcilePersistedTaskSnapshot(reconciled.snapshot)
       }
-      if (reconciled.snapshot !== snapshot) await saveTaskSnapshot(reconciled.snapshot)
-      recoverable.push(reconciled.snapshot)
-    }
-    return recoverable
+    )
+    return reconciled.filter((snapshot): snapshot is TaskSnapshotRecord => snapshot !== null)
   }
 
-  deleteTaskSnapshot(id: string): Promise<boolean> {
+  async deleteTaskSnapshot(id: string): Promise<boolean> {
+    const snapshot = await getTaskSnapshot(id)
+    if (runHasUnresolvedEffects(snapshot?.run)) {
+      throw new Error('waiting_reconciliation 效果尚未处置，不能删除恢复入口；请先确认已执行或未执行。')
+    }
     this.snapshotCounts.delete(id)
     if (!this.sessions.has(id)) this.recentEventIds.delete(id)
     this.taskRuns.delete(id)
@@ -747,15 +838,17 @@ class SessionManager {
   async recoverTaskSnapshot(id: string): Promise<SessionMeta> {
     const storedSnapshot = await getTaskSnapshot(id)
     if (!storedSnapshot) throw new Error('未找到可恢复的任务快照')
+    const active = this.sessions.get(storedSnapshot.sessionId)
+    if (active) return { ...active.meta }
     const reconciled = reconcileSnapshotWithReceipts(storedSnapshot)
     if (reconciled.terminalRun) {
       await deleteTaskSnapshot(storedSnapshot.id, undefined, reconciled.terminalRun)
       throw new Error('任务已完成，恢复入口已自动收敛')
     }
-    const snapshot = reconciled.snapshot
-    if (snapshot !== storedSnapshot) await saveTaskSnapshot(snapshot)
-    const active = this.sessions.get(snapshot.sessionId)
-    if (active) return { ...active.meta }
+    const snapshot = await reconcilePersistedTaskSnapshot(reconciled.snapshot)
+    if (runHasWaitingEffects(snapshot.run)) {
+      throw new Error('任务包含 waiting_reconciliation 外部副作用，已阻止自动续跑；请先在恢复面板完成专用对账处置。')
+    }
     if (snapshot.run && (snapshot.run.status === 'completed' || snapshot.run.status === 'cancelled')) {
       throw new Error(`任务已处于终态，不能恢复:${snapshot.run.status}`)
     }
@@ -811,6 +904,15 @@ class SessionManager {
     this.startRecoveredSession(session, recoveredSnapshot, restoredDagRuntimeCount > 0)
     touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
+  }
+
+  async resolveTaskEffect(
+    snapshotId: string,
+    effectId: string,
+    expectedRevision: number,
+    resolution: 'confirmed_applied' | 'confirmed_not_applied'
+  ): Promise<TaskSnapshotRecord> {
+    return resolvePersistedTaskEffect(snapshotId, effectId, expectedRevision, resolution)
   }
 
   private startRecoveredSession(
@@ -1281,7 +1383,12 @@ class SessionManager {
     const cwd = this.sessions.get(sessionId)?.meta.cwd ?? ''
     let next = reduceTaskExecutionEvent(current, event, cwd, Date.now(), identity)
     if (event.kind === 'status' && event.status === 'closed') {
-      if (!this.preservingSnapshotsOnDispose && !isTaskRunTerminal(next.status)) {
+      if (
+        !this.preservingSnapshotsOnDispose &&
+        !this.effectRecoveryPreservedSessions.has(sessionId) &&
+        !isTaskRunTerminal(next.status) &&
+        !runHasUnresolvedEffects(next)
+      ) {
         next = transitionTaskRun(next, 'cancelled', { lastEventKind: event.kind })
       }
     } else if (!(event.kind === 'turn-result' && hasPendingTaskSteps(next))) {
@@ -1344,11 +1451,14 @@ class SessionManager {
 
   private isSnapshotCleanupEvent(sessionId: string, event: AgentEvent): boolean {
     const run = this.taskRuns.get(sessionId)
+    if (this.effectRecoveryPreservedSessions.has(sessionId)) return false
     return (
       (event.kind === 'turn-result' &&
         event.isError === false &&
-        (!run || !hasPendingTaskSteps(run))) ||
-      (event.kind === 'status' && event.status === 'closed')
+        (!run || (!hasPendingTaskSteps(run) && !runHasUnresolvedEffects(run)))) ||
+      (event.kind === 'status' &&
+        event.status === 'closed' &&
+        !runHasUnresolvedEffects(run))
     )
   }
 

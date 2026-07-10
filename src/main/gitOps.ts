@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import type { GitCommitResult, GitFileStatus, GitOperationResult, GitStatus } from '../shared/types'
+import { withSafeLocalGitConfig } from './git/safe-git'
 
 const GIT_TIMEOUT_MS = 30_000
 const MAX_BUFFER = 2 * 1024 * 1024
 
 function runGit(cwd: string, args: string[]): string {
-  return execFileSync('git', args, {
+  return execFileSync('git', withSafeLocalGitConfig(args), {
     cwd,
     encoding: 'utf8',
     timeout: GIT_TIMEOUT_MS,
@@ -146,7 +147,7 @@ export function unstageFiles(cwd: string, paths: unknown): GitOperationResult {
 
 function hasStagedChanges(cwd: string): boolean {
   try {
-    runGit(cwd, ['diff', '--cached', '--quiet', '--exit-code'])
+    runGit(cwd, ['diff', '--no-ext-diff', '--no-textconv', '--cached', '--quiet', '--exit-code'])
     return false
   } catch (error) {
     const status = (error as { status?: number }).status
