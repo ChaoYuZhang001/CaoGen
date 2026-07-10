@@ -71,7 +71,29 @@ function evaluatePermissionManager() {
   return module.exports
 }
 
+function evaluatePermissionInputFormatter() {
+  const input = source('src/renderer/src/components/PermissionBar.tsx')
+  const output = ts.transpileModule(input, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+      jsx: ts.JsxEmit.ReactJSX
+    }
+  }).outputText
+  const module = { exports: {} }
+  const localRequire = (specifier) => {
+    if (specifier === '../store') return { useStore: () => () => undefined }
+    if (specifier === '../i18n') return { useT: () => (key) => key }
+    if (specifier === 'react/jsx-runtime') return { jsx: () => null, jsxs: () => null, Fragment: Symbol('Fragment') }
+    throw new Error(`unexpected require: ${specifier}`)
+  }
+  new Function('require', 'module', 'exports', output)(localRequire, module, module.exports)
+  return module.exports.formatPermissionInput
+}
+
 const permissionManager = evaluatePermissionManager()
+const formatPermissionInput = evaluatePermissionInputFormatter()
 
 check('permission manager denies gui tools when disabled by default', () => {
   const decision = permissionManager.decideGuiPermission('gui_click', {
@@ -249,6 +271,22 @@ check('renderer exposes gui enable switch and scoped temporary allow action', ()
   const permissionBar = source('src/renderer/src/components/PermissionBar.tsx')
   assert(permissionBar.includes("req.toolName.startsWith('gui_')"), 'temporary allow button must be scoped to gui_* tools')
   assert(permissionBar.includes('GUI_TEMPORARY_GRANT_MESSAGE'), 'temporary allow must send grant token')
+})
+
+check('permission card exposes the full executable tail while redacting credential fields', () => {
+  const dangerousSuffix = '; rm -rf "$HOME/important"'
+  const formatted = formatPermissionInput({
+    command: `${'echo safe '.repeat(20)}${dangerousSuffix}`,
+    authorization: 'Bearer renderer-secret'
+  })
+  assert(
+    formatted.includes('rm -rf') && formatted.includes('$HOME/important'),
+    'permission input must not truncate a dangerous command suffix'
+  )
+  assert(!formatted.includes('renderer-secret'), 'permission input must redact credential fields')
+  const permissionBar = source('src/renderer/src/components/PermissionBar.tsx')
+  assert(permissionBar.includes('<pre className="permission-detail"'), 'permission input must render as selectable preformatted text')
+  assert(!permissionBar.includes('slice(0, 120)'), 'permission input must not retain the old 120-character truncation')
 })
 
 check('renderer refreshes settings after temporary gui grant response', () => {

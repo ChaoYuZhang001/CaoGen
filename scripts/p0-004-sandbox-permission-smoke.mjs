@@ -226,7 +226,23 @@ function verifyAudit(audit) {
   const record = JSON.parse(line)
   assert(record.toolName === 'bash', 'audit record toolName mismatch')
   assert(record.action === 'execute', 'audit record action mismatch')
-  assert(record.inputSummary === 'echo audit', 'audit record input summary mismatch')
+  assert(record.input === undefined, 'audit record must never persist raw input')
+  assert(record.inputSummary.startsWith('command bytes='), 'audit record should store only command metadata')
+  assert(record.inputDigest && !record.inputSummary.includes('echo audit'), 'audit command summary must use a digest')
+
+  const sentinel = 'AUDIT_SENTINEL_SECRET_7f2d'
+  audit.writeAuditLog(projectDir, {
+    action: 'ask',
+    source: 'permission-mode',
+    toolName: 'write_file',
+    input: { path: 'src/private.txt', content: sentinel, authorization: `Bearer ${sentinel}` },
+    message: `token=${sentinel}`
+  })
+  const sanitizedText = readFileSync(path.join(projectDir, '.caogen', 'audit.log'), 'utf8')
+  assert(!sanitizedText.includes(sentinel), 'audit log must not contain raw secrets or file content')
+  const sanitizedRecord = JSON.parse(sanitizedText.trim().split(/\r?\n/).at(-1))
+  assert(sanitizedRecord.input === undefined, 'sanitized audit record must omit input property')
+  assert(sanitizedRecord.inputSummary.includes('path=src/private.txt'), 'write audit should retain safe target metadata')
 }
 
 function verifyOpenAiToolsBridge() {
@@ -254,7 +270,10 @@ function verifyDockerSandboxImage() {
     "'--memory'",
     "'--pids-limit'",
     "'--user'",
-    "'node'"
+    "'node'",
+    'if (forceKillTimer) clearTimeout(forceKillTimer)',
+    'if (options.signal?.aborted) abort()',
+    'terminationRequested = true'
   ]) {
     assert(sandboxSource.includes(marker), `docker sandbox missing ${marker}`)
   }
