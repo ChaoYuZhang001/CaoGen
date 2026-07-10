@@ -856,7 +856,7 @@ export default function WorkstationPro({
           </mesh>
 
           {/* 转椅后撤并缩小,让机器人轮廓与面向显示器的姿态保持完整可见。 */}
-          <OfficeChair position={[0, 0, 0.94]} scale={0.82} />
+          <OfficeChair position={[-0.34, 0, 0.9]} scale={0.78} />
 
           <OperatorWorkSurface
             accent={stationAccent}

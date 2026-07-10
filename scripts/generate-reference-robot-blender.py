@@ -105,8 +105,15 @@ def parent_object(obj: bpy.types.Object, parent: bpy.types.Object | None) -> Non
         obj.parent = parent
 
 
-def smooth_mesh(obj: bpy.types.Object) -> None:
+def smooth_mesh(obj: bpy.types.Object, *, angle: float | None = None) -> None:
     if not isinstance(obj.data, bpy.types.Mesh):
+        return
+    if angle is not None:
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.shade_smooth_by_angle(angle=angle, keep_sharp_edges=True)
+        obj.select_set(False)
         return
     for polygon in obj.data.polygons:
         polygon.use_smooth = True
@@ -626,10 +633,30 @@ def import_official_mesh(
     obj.location = location
     obj.rotation_mode = "QUATERNION"
     obj.rotation_quaternion = Quaternion(rotation_quaternion)
-    smooth_mesh(obj)
+    smooth_mesh(obj, angle=math.radians(38))
     assign_material(obj, material)
     parent_object(obj, parent)
     return obj
+
+
+def reshape_reference_torso(obj: bpy.types.Object) -> None:
+    vertices = obj.data.vertices
+    if not vertices:
+        return
+    min_x = min(vertex.co.x for vertex in vertices)
+    max_x = max(vertex.co.x for vertex in vertices)
+    min_z = min(vertex.co.z for vertex in vertices)
+    max_z = max(vertex.co.z for vertex in vertices)
+    center_x = (min_x + max_x) / 2
+    height = max(max_z - min_z, 1e-6)
+    for vertex in vertices:
+        height_ratio = (vertex.co.z - min_z) / height
+        width_scale = 0.72 + height_ratio * 0.16
+        depth_scale = 0.78 + height_ratio * 0.10
+        vertex.co.x = center_x + (vertex.co.x - center_x) * depth_scale
+        vertex.co.y *= width_scale
+        vertex.co.z = max_z - (max_z - vertex.co.z) * 0.84
+    obj.data.update()
 
 
 def build_reference_helmet(
@@ -1052,6 +1079,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
             if mesh_name == "head_link":
                 if head_control is None:
                     head_control = add_empty("helmet_head", tuple(head_pivot), body)
+                    head_control.scale = (1.0, 0.88, 0.88)
                     head_control["unitree_mesh_name"] = "head_link"
                 mesh_parent = head_control
                 mesh_location -= head_pivot
@@ -1064,7 +1092,38 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
                 rotation_quaternion=parse_floats(geom.get("quat"), 4, (1.0, 0.0, 0.0, 0.0)),
             )
             mesh_obj["unitree_mesh_name"] = mesh_name
+            if mesh_name == "torso_link":
+                reshape_reference_torso(mesh_obj)
+            elif mesh_name.endswith("knee_link"):
+                mesh_obj.scale.x *= 0.88
+                mesh_obj.scale.y *= 0.92
+            elif mesh_name.endswith("ankle_roll_link"):
+                mesh_obj.scale.x *= 0.86
             imported_meshes.add(mesh_name)
+
+        if original_name.endswith("shoulder_pitch_link"):
+            side = 1 if original_name.startswith("left") else -1
+            add_cylinder(
+                f"{original_name}_outer_joint_cover",
+                0.034,
+                0.026,
+                (0.0, side * 0.04, -0.01),
+                materials["silver_hi"],
+                rotation=(0.0, math.radians(90), 0.0),
+                bevel=0.004,
+                parent=body,
+            )
+        elif original_name.endswith("shoulder_roll_link"):
+            side = 1 if original_name.startswith("left") else -1
+            add_cylinder(
+                f"{original_name}_inner_joint_cover",
+                0.03,
+                0.03,
+                (-0.004, side * 0.006, -0.053),
+                materials["silver_shadow"],
+                bevel=0.004,
+                parent=body,
+            )
 
         for child in element.findall("body"):
             build_body(child, body)
@@ -1081,7 +1140,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
     add_box(
         "official_dark_sensor_band",
         (0.008, 0.108, 0.026),
-        (0.048, 0.0, 0.116),
+        (0.067, 0.0, 0.116),
         materials["glass"],
         bevel=0.006,
         parent=head_control,
@@ -1089,26 +1148,62 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
     add_curve_tube(
         "official_cyan_u_visor_light",
         [
-            (0.049, -0.052, 0.121),
-            (0.043, -0.055, 0.095),
-            (0.032, -0.048, 0.055),
-            (0.021, -0.028, 0.032),
-            (0.028, 0.0, 0.025),
-            (0.021, 0.028, 0.032),
-            (0.032, 0.048, 0.055),
-            (0.043, 0.055, 0.095),
-            (0.049, 0.052, 0.121),
+            (0.070, -0.052, 0.121),
+            (0.072, -0.056, 0.092),
+            (0.072, -0.050, 0.045),
+            (0.071, -0.030, 0.012),
+            (0.071, 0.0, 0.002),
+            (0.071, 0.030, 0.012),
+            (0.072, 0.050, 0.045),
+            (0.072, 0.056, 0.092),
+            (0.070, 0.052, 0.121),
         ],
-        0.0026,
+        0.0023,
         materials["cyan"],
         parent=head_control,
     )
     add_box(
         "official_cyan_sensor_slit",
         (0.008, 0.104, 0.008),
-        (0.048, 0.0, 0.117),
+        (0.071, 0.0, 0.117),
         materials["cyan"],
         bevel=0.003,
+        parent=head_control,
+    )
+    add_panel_yz(
+        "official_inner_face_diffuser",
+        [
+            (-0.044, 0.006),
+            (-0.056, 0.036),
+            (-0.050, 0.078),
+            (-0.030, 0.094),
+            (0.030, 0.094),
+            (0.050, 0.078),
+            (0.056, 0.036),
+            (0.044, 0.006),
+        ],
+        0.034,
+        0.008,
+        materials["glass"],
+        bevel=0.008,
+        parent=head_control,
+    )
+    add_panel_yz(
+        "official_rear_head_closeout",
+        [
+            (-0.060, -0.004),
+            (-0.069, 0.035),
+            (-0.066, 0.104),
+            (-0.046, 0.151),
+            (0.046, 0.151),
+            (0.066, 0.104),
+            (0.069, 0.035),
+            (0.060, -0.004),
+        ],
+        -0.048,
+        0.020,
+        materials["black_soft"],
+        bevel=0.012,
         parent=head_control,
     )
 
@@ -1227,18 +1322,18 @@ def main() -> None:
     scene.world.use_nodes = True
 
     materials = {
-        "silver": make_material("SilverBrushed", "#9ca7b1", metallic=0.82, roughness=0.32, coat=0.2),
-        "silver_hi": make_material("SilverHighlight", "#b8c1c9", metallic=0.82, roughness=0.27, coat=0.24),
-        "silver_shadow": make_material("SilverShadow", "#69747e", metallic=0.76, roughness=0.37, coat=0.15),
-        "black": make_material("HelmetBlack", "#070a0e", metallic=0.34, roughness=0.36, coat=0.16),
-        "black_soft": make_material("GraphiteBlack", "#141a21", metallic=0.3, roughness=0.42, coat=0.12),
-        "joint": make_material("JointBlack", "#030609", metallic=0.72, roughness=0.3),
-        "carbon": make_material("CarbonInsert", "#202a34", metallic=0.38, roughness=0.4),
-        "glass": make_material("SensorGlass", "#02070b", metallic=0.25, roughness=0.1, coat=0.55),
-        "cyan": make_material("SensorCyan", "#36c7e8", metallic=0.08, roughness=0.26, emission="#36c7e8", emission_strength=0.9),
-        "seam": make_material("MechanicalSeam", "#687582", metallic=0.7, roughness=0.28),
-        "sole": make_material("ShoePolymer", "#020407", metallic=0.34, roughness=0.46),
-        "preview_floor": make_material("PreviewFloorMaterial", "#c4cdd4", metallic=0.0, roughness=0.74),
+        "silver": make_material("SilverBrushed", "#aeb7bf", metallic=0.58, roughness=0.42, coat=0.16),
+        "silver_hi": make_material("SilverHighlight", "#c5ccd2", metallic=0.54, roughness=0.36, coat=0.18),
+        "silver_shadow": make_material("SilverShadow", "#7b8791", metallic=0.5, roughness=0.44, coat=0.12),
+        "black": make_material("HelmetBlack", "#0c1117", metallic=0.2, roughness=0.44, coat=0.14),
+        "black_soft": make_material("GraphiteBlack", "#171d24", metallic=0.22, roughness=0.48, coat=0.1),
+        "joint": make_material("JointBlack", "#080c11", metallic=0.5, roughness=0.38),
+        "carbon": make_material("CarbonInsert", "#242c34", metallic=0.28, roughness=0.46),
+        "glass": make_material("SensorGlass", "#03080d", metallic=0.12, roughness=0.16, coat=0.42),
+        "cyan": make_material("SensorCyan", "#43c8e6", metallic=0.04, roughness=0.3, emission="#43c8e6", emission_strength=0.62),
+        "seam": make_material("MechanicalSeam", "#73808b", metallic=0.48, roughness=0.4),
+        "sole": make_material("ShoePolymer", "#05080c", metallic=0.18, roughness=0.52),
+        "preview_floor": make_material("PreviewFloorMaterial", "#d8dde1", metallic=0.0, roughness=0.78),
     }
 
     add_reference_images()
