@@ -9,11 +9,11 @@ export interface OfficeProp {
   scale?: number
 }
 
-const WARM = '#ffd9a0'
+const LAMP_COOL = '#b9cbe0'
 
 /**
  * 可折臂台灯:底座 + 两段臂(下臂/上臂)+ 灯头。
- * on 时灯头暖色发光并投出一盏 pointLight,发光材质配合 Bloom(toneMapped={false})。
+ * on 时灯头冷灰色发光并投出一盏 pointLight,发光材质配合 Bloom(toneMapped={false})。
  */
 export default function DeskLamp({
   position = [0, 0, 0],
@@ -38,9 +38,9 @@ export default function DeskLamp({
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
-      {/* 底座:圆盘 + 短颈 */}
+      {/* 底座:低矮轴承座 + 短颈 */}
       <mesh position={[0, 0.02, 0]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.12, 0.14, 0.04, 32]} />
+        <boxGeometry args={[0.24, 0.04, 0.18]} />
         <meshStandardMaterial color="#22252c" metalness={0.6} roughness={0.4} />
       </mesh>
       <mesh position={[0, 0.06, 0]}>
@@ -50,7 +50,7 @@ export default function DeskLamp({
 
       {/* 关节 1(底座顶) */}
       <mesh position={[0, 0.1, 0]}>
-        <sphereGeometry args={[0.035, 16, 16]} />
+        <boxGeometry args={[0.066, 0.042, 0.052]} />
         <meshStandardMaterial color="#3a4150" metalness={0.7} roughness={0.3} />
       </mesh>
 
@@ -63,7 +63,7 @@ export default function DeskLamp({
 
         {/* 关节 2 */}
         <mesh position={[0, 0.32, 0]}>
-          <sphereGeometry args={[0.03, 16, 16]} />
+          <boxGeometry args={[0.056, 0.038, 0.046]} />
           <meshStandardMaterial color="#3a4150" metalness={0.7} roughness={0.3} />
         </mesh>
 
@@ -76,7 +76,7 @@ export default function DeskLamp({
 
           {/* 关节 3(灯头接点) */}
           <mesh position={[0, 0.28, 0]}>
-            <sphereGeometry args={[0.03, 16, 16]} />
+            <boxGeometry args={[0.056, 0.038, 0.046]} />
             <meshStandardMaterial color="#3a4150" metalness={0.7} roughness={0.3} />
           </mesh>
 
@@ -91,8 +91,8 @@ export default function DeskLamp({
               <circleGeometry args={[0.09, 32]} />
               <meshStandardMaterial
                 ref={shadeMatRef}
-                color={WARM}
-                emissive={WARM}
+                color={LAMP_COOL}
+                emissive={LAMP_COOL}
                 emissiveIntensity={on ? 1.6 : 0.04}
                 toneMapped={false}
               />
@@ -104,7 +104,7 @@ export default function DeskLamp({
                 intensity={0.9}
                 distance={2.4}
                 decay={2}
-                color={WARM}
+                color={LAMP_COOL}
                 castShadow
               />
             )}

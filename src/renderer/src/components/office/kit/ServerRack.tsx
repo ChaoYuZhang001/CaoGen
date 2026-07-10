@@ -65,7 +65,7 @@ export default function ServerRack({
         speed: 2.4 + ((i * 1.37) % 4),
         off: (i * 0.61) % 1,
         base: 0.25 + ((i * 0.29) % 1) * 0.4,
-        // 多数青/绿,偶发暖色(告警感)
+        // 冷灰青状态灯,避免绿色/暖色在办公区抢视觉。
         hue: i % 7 === 0 ? 0 : i % 5 === 0 ? 1 : 2
       })
     }
@@ -95,8 +95,8 @@ export default function ServerRack({
   const tmpMatrix = useMemo(() => new Matrix4(), [])
   const tmpColor = useMemo(() => new Color(), [])
   const cyan = useMemo(() => new Color('#8fe9ff'), [])
-  const green = useMemo(() => new Color('#5affa8'), [])
-  const warm = useMemo(() => new Color('#ffb14a'), [])
+  const slate = useMemo(() => new Color('#6f8fa0'), [])
+  const dim = useMemo(() => new Color('#516071'), [])
 
   // 实例矩阵一次性写入(位置固定);同时预置实例色以提前触发 USE_COLOR 分支
   useLayoutEffect(() => {
@@ -123,7 +123,7 @@ export default function ServerRack({
       const flick = Math.sin(t * (p.speed * 2.3) + p.off * 5.1)
       const on = wave + flick * 0.5 > -0.2
       const k = on ? p.base + (0.5 + wave * 0.5) * 1.6 : 0.06
-      const src = p.hue === 0 ? warm : p.hue === 1 ? cyan : green
+      const src = p.hue === 0 ? slate : p.hue === 1 ? cyan : dim
       mesh.setColorAt(i, tmpColor.copy(src).multiplyScalar(k))
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
@@ -147,7 +147,7 @@ export default function ServerRack({
         <meshStandardMaterial color="#1c1c1c" metalness={0.4} roughness={0.6} />
       </RoundedBox>
 
-      {/* 多层设备:金属面板 + 白高光条 + 通风缝 */}
+      {/* 多层设备:金属面板 + 冷灰高光条 + 通风缝 */}
       {shelfYs.map((y, s) => (
         <group key={s} position={[0, y, RACK_D / 2 - 0.01]}>
           <RoundedBox args={[RACK_W - 0.1, SHELF_STEP * 0.62, 0.06]} radius={0.018} smoothness={3} castShadow>
@@ -155,7 +155,7 @@ export default function ServerRack({
           </RoundedBox>
           <mesh position={[0.24, 0, 0.032]}>
             <boxGeometry args={[0.06, SHELF_STEP * 0.4, 0.01]} />
-            <meshStandardMaterial color="#f4f4f4" metalness={0.2} roughness={0.35} />
+            <meshStandardMaterial color="#8fa0ac" metalness={0.28} roughness={0.42} />
           </mesh>
           <mesh position={[-0.08, 0, 0.032]}>
             <boxGeometry args={[0.26, SHELF_STEP * 0.16, 0.008]} />
@@ -166,10 +166,10 @@ export default function ServerRack({
 
       {/* 一排闪烁 LED(instancedMesh,实例色驱动 emissive,供 Bloom) */}
       <instancedMesh ref={ledsRef} args={[undefined, undefined, LED_COUNT]}>
-        <sphereGeometry args={[0.016, 16, 16]} />
+        <boxGeometry args={[0.028, 0.014, 0.012]} />
         <meshStandardMaterial
           color="#111111"
-          emissive="#ffffff"
+          emissive="#8fe9ff"
           emissiveIntensity={1.6}
           toneMapped={false}
           onBeforeCompile={emissiveFromInstanceColor}

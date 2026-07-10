@@ -54,6 +54,7 @@ try {
 
   const spark = drive.settingsForCaoGenDrive(baseSettings, 'spark')
   const core = drive.settingsForCaoGenDrive(baseSettings, 'core')
+  const coreSpeed = drive.settingsForCaoGenDrive({ ...baseSettings, schedulerStrategy: 'speed' }, 'core')
   const forge = drive.settingsForCaoGenDrive(baseSettings, 'forge')
   const command = drive.settingsForCaoGenDrive(baseSettings, 'command')
   const genesis = drive.settingsForCaoGenDrive(baseSettings, 'genesis')
@@ -66,6 +67,8 @@ try {
   assert(spark.permissionDenylist.includes('risk>=high'), 'Spark should deny high-risk tools')
   assert(!spark.modelCrossValidationAutoRunEnabled, 'Spark should not auto-run model review')
   assert(spark.budgetUsdPerSession === 0, 'settingsForCaoGenDrive must preserve explicit unlimited session budget')
+  assert(core.schedulerStrategy === 'balanced', 'Core should preserve the default balanced user strategy')
+  assert(coreSpeed.schedulerStrategy === 'speed', 'Core should preserve an explicit user speed strategy')
   assert(corePolicy.sessionBudgetUsd > sparkPolicy.sessionBudgetUsd, 'Core policy budget should exceed Spark')
   assert(forge.defaultPermissionMode === 'acceptEdits', 'Forge should auto-accept edits')
   assert(forge.sandboxMode === 'standardSystem', 'Forge should raise sandbox discipline')
@@ -109,6 +112,25 @@ try {
   assert(sparkRoute.reason.includes('Drive=Spark'), 'Spark route reason should name Drive')
   assert(sparkRoute.reason.includes('策略=cost'), 'Spark route should use cost strategy')
   assert(!sparkRoute.crossValidationPlan.enabled, 'Spark route should not create cross-validation')
+
+  const coreSpeedRoute = sessionRouting.resolveSessionModelRoute({
+    enabled: true,
+    currentModel: 'auto',
+    providerId: 'deepseek-official',
+    providers,
+    payload: { text: 'review and implement production database migration code', images: [] },
+    strategy: coreSpeed.schedulerStrategy,
+    sessionCostUsd: 0,
+    settingsBudgetUsd: coreSpeed.budgetUsdPerSession,
+    driveMode: 'core'
+  })
+  assert(coreSpeedRoute.kind === 'routed', 'Core speed route should route auto sessions')
+  assert(coreSpeedRoute.reason.includes('策略=speed'), 'Core route should use the user speed strategy')
+  assert(coreSpeedRoute.decision.strategy === 'speed', 'Core route should preserve speed in structured routing data')
+  assert(
+    coreSpeedRoute.decision.selectedReasons.some((reason) => reason.includes('延迟档 fast')),
+    'Core speed route should explain the selected latency class'
+  )
 
   const commandRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,

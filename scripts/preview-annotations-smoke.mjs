@@ -59,9 +59,19 @@ try {
     createdAt: '2026-07-07T00:01:00.000Z'
   })
 
+  await annotations.savePreviewAnnotation(storeRoot, 'sess-1', {
+    id: 'ann-3',
+    path: 'reports/brief.docx',
+    type: 'office',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    note: 'Second paragraph needs review',
+    locator: { quote: 'Office preview works' },
+    createdAt: '2026-07-07T00:02:00.000Z'
+  })
+
   const all = await annotations.listPreviewAnnotations(storeRoot, 'sess-1')
-  assertEqual(all.length, 2)
-  assertEqual(all[0].id, 'ann-2')
+  assertEqual(all.length, 3)
+  assertEqual(all[0].id, 'ann-3')
 
   const filtered = await annotations.listPreviewAnnotations(storeRoot, 'sess-1', 'reports/table.csv')
   assertEqual(filtered.length, 1)

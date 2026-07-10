@@ -1,7 +1,8 @@
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { RoundedBox } from '@react-three/drei'
 import { Object3D } from 'three'
-import type { InstancedMesh, Mesh, MeshStandardMaterial, Points } from 'three'
+import type { InstancedMesh, Mesh, MeshStandardMaterial } from 'three'
 
 /** 视觉道具通用入参:相对办公桌面摆放。 */
 export interface OfficeProp {
@@ -10,17 +11,17 @@ export interface OfficeProp {
   scale?: number
 }
 
-// ---- 配色(主黑副白,克制;强调用青) ----
+// ---- 配色(黑/深灰/银灰/灰蓝,少量青色强调) ----
 const C_KEYBOARD = '#1b1e25'
 const C_KEY = '#2b3039'
 const C_MOUSE = '#23272f'
-const C_MUG = '#f2f2f2'
-const C_COFFEE = '#2a1912'
+const C_MUG = '#aeb8c4'
+const C_COFFEE = '#111820'
 const C_NOTE_COVER = '#20232b'
-const C_NOTE_PAPER = '#e9e3d3'
+const C_NOTE_PAPER = '#b9c3cf'
 const C_METAL = '#8a909c'
 const C_PEN = '#3a4150'
-const ACCENT = '#8fe9ff'
+const ACCENT = '#59b8c8'
 
 // 键盘按键网格
 const KEY_COLS = 11
@@ -30,11 +31,8 @@ const KEY_PITCH_X = 0.036
 const KEY_PITCH_Z = 0.036
 const KEY_SIZE = 0.03
 
-// 咖啡蒸汽粒子
-const STEAM_COUNT = 10
-
 /**
- * 桌面小物合集:键盘(实例化按键)、鼠标、马克杯(带蒸汽)、笔记本 + 笔 + 便签。
+ * 桌面小物合集:键盘(实例化按键)、鼠标、马克杯、笔记本 + 笔 + 便签。
  * 低多边形、几何体代码生成;发光件配合 Bloom(toneMapped=false)。
  * 摆放基准:自身原点位于桌面上,y=0 即桌面;-Z 为面向屏幕方向。
  */
@@ -45,7 +43,6 @@ export default function DeskAccessories({
 }: OfficeProp): React.JSX.Element {
   const keysRef = useRef<InstancedMesh>(null)
   const ledRef = useRef<Mesh>(null)
-  const steamRef = useRef<Points>(null)
 
   // 闭包外复用,避免 useFrame 内 new
   const dummy = useMemo(() => new Object3D(), [])
@@ -54,21 +51,6 @@ export default function DeskAccessories({
   const keyJitter = useMemo(() => {
     const arr = new Float32Array(KEY_COUNT)
     for (let i = 0; i < KEY_COUNT; i++) arr[i] = ((i * 37) % 5) * 0.0008
-    return arr
-  }, [])
-
-  // 蒸汽粒子:缓冲区 + 每颗相位/速度
-  const steamPositions = useMemo(() => new Float32Array(STEAM_COUNT * 3), [])
-  const steamData = useMemo(() => {
-    const arr: Array<{ x: number; z: number; speed: number; off: number }> = []
-    for (let i = 0; i < STEAM_COUNT; i++) {
-      arr.push({
-        x: (((i * 13) % 7) - 3) * 0.006,
-        z: (((i * 29) % 7) - 3) * 0.006,
-        speed: 0.3 + (i % 4) * 0.08,
-        off: (i * 0.41) % 1
-      })
-    }
     return arr
   }, [])
 
@@ -101,21 +83,6 @@ export default function DeskAccessories({
       mat.emissiveIntensity = 1.4 + Math.sin(t * 2.2) * 0.7
     }
 
-    // 咖啡蒸汽缓缓上升 + 轻微摆动,循环复用
-    const steam = steamRef.current
-    if (steam) {
-      const posAttr = steam.geometry.attributes.position
-      for (let i = 0; i < STEAM_COUNT; i++) {
-        const d = steamData[i]
-        const local = (t * d.speed + d.off) % 1
-        const y = 0.11 + local * 0.22
-        const sway = Math.sin((t + i) * 1.6) * 0.012 * local
-        posAttr.setXYZ(i, d.x + sway, y, d.z + sway * 0.5)
-      }
-      posAttr.needsUpdate = true
-      const pm = steam.material as MeshStandardMaterial & { opacity: number }
-      pm.opacity = 0.18 + Math.abs(Math.sin(t * 0.8)) * 0.12
-    }
   })
 
   return (
@@ -132,7 +99,7 @@ export default function DeskAccessories({
         </instancedMesh>
         {/* 待机指示灯(青,供 Bloom) */}
         <mesh ref={ledRef} position={[0.19, 0.017, -0.07]}>
-          <sphereGeometry args={[0.006, 8, 8]} />
+          <boxGeometry args={[0.024, 0.006, 0.01]} />
           <meshStandardMaterial
             color={ACCENT}
             emissive={ACCENT}
@@ -144,10 +111,9 @@ export default function DeskAccessories({
 
       {/* ---- 鼠标 ---- */}
       <group position={[0.31, 0, 0.14]}>
-        <mesh castShadow position={[0, 0.014, 0]} scale={[1, 0.6, 1.5]}>
-          <sphereGeometry args={[0.028, 16, 16]} />
+        <RoundedBox args={[0.058, 0.03, 0.086]} radius={0.018} smoothness={3} position={[0, 0.018, 0]} castShadow>
           <meshStandardMaterial color={C_MOUSE} metalness={0.25} roughness={0.65} />
-        </mesh>
+        </RoundedBox>
         {/* 滚轮缝隙(细发光条) */}
         <mesh position={[0, 0.03, 0.006]}>
           <boxGeometry args={[0.003, 0.003, 0.014]} />
@@ -176,25 +142,6 @@ export default function DeskAccessories({
           <torusGeometry args={[0.028, 0.008, 12, 24, Math.PI * 1.2]} />
           <meshStandardMaterial color={C_MUG} metalness={0.1} roughness={0.5} />
         </mesh>
-        {/* 蒸汽(发光点,供 Bloom) */}
-        <points ref={steamRef}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              args={[steamPositions, 3]}
-              count={STEAM_COUNT}
-            />
-          </bufferGeometry>
-          <pointsMaterial
-            color="#f4f4f4"
-            size={0.02}
-            sizeAttenuation
-            transparent
-            opacity={0.25}
-            depthWrite={false}
-            toneMapped={false}
-          />
-        </points>
       </group>
 
       {/* ---- 笔记本 + 笔 + 便签 ---- */}
@@ -233,7 +180,7 @@ export default function DeskAccessories({
         </mesh>
         <mesh position={[0.006, 0.014, -0.006]} rotation={[0, 0.15, 0]}>
           <boxGeometry args={[0.078, 0.004, 0.078]} />
-          <meshStandardMaterial color="#f4f4f4" metalness={0} roughness={0.95} />
+          <meshStandardMaterial color="#aeb8c4" metalness={0} roughness={0.95} />
         </mesh>
       </group>
     </group>

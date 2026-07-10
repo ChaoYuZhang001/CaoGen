@@ -1,7 +1,4 @@
-import { useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
-import { Color } from 'three'
-import type { Group, Mesh, MeshStandardMaterial } from 'three'
+import { useMemo } from 'react'
 
 export interface OfficeProp {
   position?: [number, number, number]
@@ -9,7 +6,7 @@ export interface OfficeProp {
   scale?: number
 }
 
-const ACCENT = '#8fe9ff'
+const ACCENT = '#59b8c8'
 const TABLE_RADIUS = 0.95
 const CHAIR_ORBIT = 1.5
 
@@ -42,8 +39,8 @@ function Chair({ color }: { color: string }): React.JSX.Element {
 }
 
 /**
- * 圆形会议桌 + 环绕椅子 + 中央发光协作枢纽。
- * seats 默认 4;椅子均匀环绕并朝向桌心。中央枢纽缓慢旋转并呼吸辉光(配合 Bloom)。
+ * 圆形会议桌 + 环绕椅子 + 中央硬表面协作信号。
+ * seats 默认 4;椅子均匀环绕并朝向桌心。中央信号保持低轮廓、固定且克制。
  */
 export default function MeetingTable({
   position = [0, 0, 0],
@@ -51,10 +48,6 @@ export default function MeetingTable({
   scale = 1,
   seats = 4
 }: OfficeProp & { seats?: number }): React.JSX.Element {
-  const hubRef = useRef<Group>(null)
-  const hubMatRef = useRef<MeshStandardMaterial>(null)
-  const glowRef = useRef<Mesh>(null)
-
   const seatCount = Math.max(1, Math.floor(seats))
 
   // 椅子的角度/位置/朝向预计算(闭包外复用,避免每帧计算)
@@ -70,21 +63,6 @@ export default function MeetingTable({
     return out
   }, [seatCount])
 
-  const accentColor = useMemo(() => new Color(ACCENT), [])
-
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime()
-    if (hubRef.current) hubRef.current.rotation.y = t * 0.6
-    if (hubMatRef.current) {
-      hubMatRef.current.emissive.copy(accentColor)
-      hubMatRef.current.emissiveIntensity = 1.6 + Math.sin(t * 2) * 0.6
-    }
-    if (glowRef.current) {
-      const s = 1 + Math.sin(t * 1.8) * 0.06
-      glowRef.current.scale.setScalar(s)
-    }
-  })
-
   return (
     <group position={position} rotation={rotation} scale={scale}>
       {/* 桌面 */}
@@ -95,7 +73,7 @@ export default function MeetingTable({
       {/* 桌面高光内圈 */}
       <mesh position={[0, 0.755, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[TABLE_RADIUS - 0.12, TABLE_RADIUS - 0.04, 48]} />
-        <meshStandardMaterial color="#f4f4f4" metalness={0.3} roughness={0.5} opacity={0.35} transparent />
+        <meshStandardMaterial color="#9fb2c2" metalness={0.3} roughness={0.5} opacity={0.28} transparent />
       </mesh>
       {/* 中柱 */}
       <mesh position={[0, 0.36, 0]}>
@@ -108,31 +86,24 @@ export default function MeetingTable({
         <meshStandardMaterial color="#22262f" metalness={0.5} roughness={0.45} />
       </mesh>
 
-      {/* 中央协作枢纽:发光核心(供 Bloom) */}
-      <group ref={hubRef} position={[0, 0.9, 0]}>
-        <mesh>
-          <icosahedronGeometry args={[0.13, 1]} />
+      {/* 中央协作信号:固定圆柱基座 + 窄盒状态条。 */}
+      <group position={[0, 0.755, 0]}>
+        <mesh position={[0, 0.035, 0]} castShadow>
+          <cylinderGeometry args={[0.18, 0.2, 0.07, 24]} />
+          <meshStandardMaterial color="#252b34" metalness={0.58} roughness={0.38} />
+        </mesh>
+        <mesh position={[0, 0.09, 0]} castShadow>
+          <boxGeometry args={[0.22, 0.035, 0.08]} />
           <meshStandardMaterial
-            ref={hubMatRef}
             color={ACCENT}
             emissive={ACCENT}
-            emissiveIntensity={1.8}
+            emissiveIntensity={0.28}
+            roughness={0.32}
+            metalness={0.38}
             toneMapped={false}
           />
         </mesh>
       </group>
-      {/* 枢纽下方桌面发光基座环 */}
-      <mesh ref={glowRef} position={[0, 0.76, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.16, 0.24, 32]} />
-        <meshStandardMaterial
-          color={ACCENT}
-          emissive={ACCENT}
-          emissiveIntensity={1.4}
-          transparent
-          opacity={0.7}
-          toneMapped={false}
-        />
-      </mesh>
 
       {/* 环绕椅子 */}
       {chairs.map((c, i) => (

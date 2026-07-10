@@ -47,6 +47,7 @@ import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
 import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
+import { prepareOfficeVisualPreview } from './previewVisual'
 import { listPreviewAnnotations, savePreviewAnnotation } from './previewAnnotations'
 import {
   commit as gitCommit,
@@ -480,6 +481,12 @@ export function registerIpc(): void {
     return preparePreview(cwd, typeof relPath === 'string' ? relPath : '')
   })
 
+  ipcMain.handle('preview:prepareVisual', (_e, id: string, relPath: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, source: 'quick-look', fidelity: 'first-page-thumbnail', error: '会话不存在' }
+    return prepareOfficeVisualPreview(cwd, typeof relPath === 'string' ? relPath : '')
+  })
+
   ipcMain.handle('preview:saveAnnotation', (_e, id: string, input: PreviewAnnotationInput) => {
     if (!sessionManager.get(id)) throw new Error('会话不存在')
     return savePreviewAnnotation(previewAnnotationRoot(), id, input)
@@ -684,7 +691,7 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('sessions:interrupt', async (_e, id: string) => {
-    await sessionManager.get(id)?.interrupt()
+    await sessionManager.interrupt(id)
   })
 
   ipcMain.handle('sessions:close', (_e, id: string) => {
@@ -928,19 +935,22 @@ export function registerIpc(): void {
         ok: true
       }))
     // recentFailures:用 Provider 健康度作为唯一可靠的失败来源。
-    // 不健康或带 lastError 的 Provider 表示近期确有失败的调用,可据此提示排查。
+    // 成功恢复会清掉 lastError,历史失败仍保留在 recentFailures 供控制中心审计。
     const recentFailureSignals: StartSuggestionSignal[] = listHealth()
       .filter((h) => !h.healthy || (typeof h.lastError === 'string' && h.lastError.trim() !== ''))
-      .map((h) => ({
-        id: `provider-health:${h.providerId}`,
-        title: `Provider ${h.providerId}`,
-        body: h.lastError ?? `${h.consecutiveFailures} consecutive failures`,
-        source: 'provider-health',
-        error: h.lastError,
-        updatedAt: h.lastUsedAt,
-        failed: true,
-        ok: false
-      }))
+      .map((h) => {
+        const latest = h.recentFailures[0]
+        return {
+          id: `provider-health:${h.providerId}`,
+          title: `Provider ${h.providerId}`,
+          body: latest ? `${latest.label}: ${latest.message}` : h.lastError ?? `${h.consecutiveFailures} consecutive failures`,
+          source: 'provider-health',
+          error: latest?.message ?? h.lastError,
+          updatedAt: h.lastFailureAt ?? h.lastUsedAt,
+          failed: true,
+          ok: false
+        }
+      })
     return getStartSuggestions(projectRoot, {
       memoryEntries: memory.entries.map((entry) => ({
         id: entry.id,

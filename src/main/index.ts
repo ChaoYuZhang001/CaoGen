@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
 import { disposeProjectIndexers } from './indexer'
+import { disposeOfficeVisualPreviews } from './previewVisual'
 import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
 import { executeRoutine } from './routines/routine-executor'
 import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
@@ -31,14 +32,23 @@ app.setName('CaoGen')
 app.setPath('userData', process.env.CAOGEN_USER_DATA_DIR || join(app.getPath('appData'), 'CaoGen'))
 
 /** 应用图标源文件;Windows 使用透明背景图标,其他平台使用圆角通用图标。 */
-function iconPath(): string | undefined {
+function resourcePath(names: string[]): string | undefined {
   // 打包后 resources 随 app 一起分发;dev 时用仓库内的 resources/
-  const names = process.platform === 'win32' ? ['icon-win.png', 'icon.png'] : ['icon.png']
   const candidates = names.flatMap((name) => [
     join(process.resourcesPath ?? '', name),
     join(__dirname, '../../resources', name)
   ])
   return candidates.find((p) => p && existsSync(p))
+}
+
+function iconPath(): string | undefined {
+  return resourcePath(process.platform === 'win32' ? ['icon-win.png', 'icon.png'] : ['icon.png'])
+}
+
+function trayIconPath(): string | undefined {
+  return process.platform === 'darwin'
+    ? resourcePath(['trayTemplate.png'])
+    : iconPath()
 }
 
 function createWindow(): BrowserWindow {
@@ -123,8 +133,9 @@ function updateTray(): void {
 
 function installTray(): void {
   if (tray) return
-  const icon = iconPath()
+  const icon = trayIconPath()
   const image = icon ? nativeImage.createFromPath(icon) : nativeImage.createEmpty()
+  if (process.platform === 'darwin' && !image.isEmpty()) image.setTemplateImage(true)
   tray = new Tray(image)
   tray.on('click', showMainWindow)
   updateTray()
@@ -272,6 +283,7 @@ app.on('before-quit', (event) => {
     trayTimer = null
   }
   stopRoutineScheduler()
+  disposeOfficeVisualPreviews()
   // 退出前等待任务快照落盘,再释放项目索引 watcher/SQLite 句柄。
   void (async () => {
     await sessionManager.disposeAll()

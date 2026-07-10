@@ -1,7 +1,7 @@
 import type { OfficeProp } from './Floor'
 
-const GLASS = '#9fd8e6'
-const EDGE = '#8fe9ff'
+const GLASS = '#8294a3'
+const EDGE = '#71879a'
 const FRAME = '#26313b'
 
 function GlassPanel({
@@ -32,7 +32,7 @@ function GlassPanel({
       </mesh>
       <mesh position={[0, -size[1] / 2 + 0.02, 0]}>
         <boxGeometry args={[size[0], 0.028, size[2]]} />
-        <meshStandardMaterial color={EDGE} emissive={EDGE} emissiveIntensity={0.18} toneMapped={false} transparent opacity={0.72} />
+        <meshStandardMaterial color={EDGE} emissive={EDGE} emissiveIntensity={0.1} toneMapped={false} transparent opacity={0.62} />
       </mesh>
     </group>
   )

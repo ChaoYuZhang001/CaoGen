@@ -8,9 +8,10 @@ import type { Engine } from './engine'
 import { registerBuiltinEngines } from './engines'
 import { fixPathForGuiLaunch } from './pathFix'
 import { configureModelStatsDir } from './modelStats'
+import { configureProviderHealthDir } from './providerHealth'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
-import { decryptToken, getProvider } from './providers'
+import { decryptProviderToken, getProvider } from './providers'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import {
   getCaoGenDrivePolicy,
@@ -26,11 +27,28 @@ import {
   buildTaskSnapshot,
   deleteTaskSnapshot,
   getTaskSnapshot,
+  listTaskRuns as listPersistedTaskRuns,
   listTaskSnapshots,
   saveTaskSnapshot,
+  supersedeToolExecution,
   flushTaskSnapshotMutations,
   TASK_SNAPSHOT_EVENT_INTERVAL
 } from './task/task-snapshot'
+import {
+  createTaskRun,
+  hasTaskRunAppliedEvent,
+  isTaskRunTerminal,
+  recordTaskRunEvent,
+  reduceTaskRunEvent,
+  transitionTaskRun
+} from './task/task-run'
+import {
+  hasPendingTaskSteps,
+  recoverTaskExecutionState,
+  reduceTaskExecutionEvent
+} from './task/task-execution'
+import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { isTaskLedgerEvent, reconcileSnapshotWithReceipts } from './task/task-recovery'
 import { decomposeTask } from './agent/task-decomposer'
 import { createModelDagDecomposer } from './agent/model-dag-decomposer'
 import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
@@ -44,6 +62,7 @@ import {
 } from './model/cross-validation'
 import type {
   AgentEvent,
+  AgentEventIdentity,
   CreateSessionOptions,
   DispatchSubagentsInput,
   ModelRoutePlanView,
@@ -120,6 +139,7 @@ interface OrchestrationState {
 
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly taskRuns = taskRuntimeRegistry
   private readonly sessionEventListeners = new Set<(payload: SessionEventPayload) => void>()
   private readonly notificationStates = new Map<string, SessionNotificationState>()
   /** 真编排事件总线:orchestrationId → 状态;全部 child 首轮完成后回灌父 Agent */
@@ -131,7 +151,11 @@ class SessionManager {
   /** DAG 完成后执行的显式自动合并配置;默认不写主工作区。 */
   private readonly dagAutoMergeOptions = new Map<string, { enabled: boolean; verificationCommand?: string }>()
   private readonly dagRuntimeMergeSessions = new Map<string, TaskDagRuntimeMergeSession[]>()
-  private readonly snapshotCounts = new Map<string, { total: number; sinceSave: number; lastSeq: number }>()
+  private readonly snapshotCounts = new Map<
+    string,
+    { total: number; sinceSave: number; lastSeq: number; lastEventId?: string }
+  >()
+  private readonly recentEventIds = new Map<string, string[]>()
   /** 非 Claude 引擎由 SessionManager 统一托管防休眠;Claude AgentSession 内部已有同等保护。 */
   private readonly enginePowerBlockers = new Map<string, number>()
   /** P2-003 路由事件生成的复核计划，等待本轮 turn-result 成功后执行。 */
@@ -167,17 +191,13 @@ class SessionManager {
   create(opts: CreateSessionOptions): SessionMeta {
     opts = { ...opts, cwd: assertUsableSessionCwd(opts.cwd) }
     const settings = getSettings()
-    // CLI 引擎(codex/gemini)有自己的账号体系与默认模型:
-    // 不继承全局 defaultModel/defaultProviderId(那是别家厂商的,
-    // 透传会让 CLI 打错端点/报模型不存在 —— 实测踩坑)。
-    const isCliEngine = opts.engine === 'codex' || opts.engine === 'gemini'
     const resumeHistory = opts.resumeSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === opts.resumeSdkSessionId)
       : undefined
     const driveMode = opts.driveMode ?? resumeHistory?.driveMode ?? settings.driveMode
     const drivePolicy = getCaoGenDrivePolicy(driveMode)
-    this.assertExplicitSessionChoice(opts, isCliEngine)
-    const selectedModel = opts.model ?? (isCliEngine ? '' : '')
+    this.assertExplicitSessionChoice(opts)
+    const selectedModel = opts.model ?? ''
     const selectedProviderId = opts.providerId ?? ''
     const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
     const budgetUsd = normalizePositiveNumber(opts.budgetUsd)
@@ -229,7 +249,7 @@ class SessionManager {
     const session = createEngine(
       opts.engine,
       meta,
-      (event, seq) => this.dispatch(meta.id, event, seq),
+      (event, seq, identity) => this.dispatch(meta.id, event, seq, identity),
       opts.resumeSdkSessionId
     )
     this.sessions.set(meta.id, session)
@@ -239,16 +259,15 @@ class SessionManager {
     return { ...meta }
   }
 
-  private assertExplicitSessionChoice(opts: CreateSessionOptions, isCliEngine: boolean): void {
+  private assertExplicitSessionChoice(opts: CreateSessionOptions): void {
     if (!opts.engine) throw new Error('请选择 Agent 引擎')
-    if (!isCliEngine && !opts.model) throw new Error('请选择模型或显式选择自动调度')
-    if (isCliEngine) return
+    if (!opts.model) throw new Error('请选择模型或显式选择自动调度')
 
     const providerId = opts.providerId?.trim()
     if (!providerId) throw new Error('请选择已配置 API key 的 Provider')
     const provider = getProvider(providerId)
     if (!provider) throw new Error(`Provider 不存在:${providerId}`)
-    if (!decryptToken(provider.encryptedToken)) {
+    if (!decryptProviderToken(provider)) {
       throw new Error(`请先在设置里为 ${provider.name} 填写 API key`)
     }
   }
@@ -261,7 +280,29 @@ class SessionManager {
       session.rejectSend(budgetError)
       return
     }
+    const currentRun = this.taskRuns.get(id)
+    if (!currentRun || isTaskRunTerminal(currentRun.status)) {
+      this.taskRuns.set(
+        id,
+        createTaskRun({
+          sessionId: id,
+          taskId: session.meta.childTaskId ?? id
+        })
+      )
+    }
     session.send(input)
+  }
+
+  async interrupt(id: string): Promise<void> {
+    const session = this.sessions.get(id)
+    if (!session) return
+    await session.interrupt()
+    const run = this.taskRuns.get(id)
+    if (run && !isTaskRunTerminal(run.status)) {
+      this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'turn-result' }))
+    }
+    this.snapshotCounts.delete(id)
+    await deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
   }
 
   dispatchSubagents(parentSessionId: string, input: DispatchSubagentsInput): SubagentDispatchResult {
@@ -616,6 +657,10 @@ class SessionManager {
   close(id: string): void {
     const session = this.sessions.get(id)
     if (!session) return
+    const run = this.taskRuns.get(id)
+    if (run && !isTaskRunTerminal(run.status)) {
+      this.taskRuns.set(id, transitionTaskRun(run, 'cancelled', { lastEventKind: 'status' }))
+    }
     // 编排中的 child 被手动关闭:按"失败"记账,避免整组编排永远等不齐
     const orchestrationId = session.meta.orchestrationId
     const dag = orchestrationId ? this.dagSchedulers.get(orchestrationId) : undefined
@@ -636,10 +681,14 @@ class SessionManager {
     }
     this.stopEnginePowerBlocker(id)
     this.sessions.delete(id)
+    this.snapshotCounts.delete(id)
+    this.recentEventIds.delete(id)
     this.persistActiveSessions()
     this.notificationStates.delete(id)
     clearIdeDocumentContext(id)
     session.dispose()
+    void deleteTaskSnapshot(id, undefined, this.taskRuns.get(id))
+    this.taskRuns.delete(id)
   }
 
   updateWorktreeState(id: string, state: SessionMeta['worktreeState']): void {
@@ -651,42 +700,78 @@ class SessionManager {
 
   async disposeAll(): Promise<void> {
     this.persistActiveSessions()
+    // dispose 后 provider 仍可能异步发出尾事件。关机期间保持保护，避免晚到的
+    // turn-result/status 把刚写好的恢复快照删掉。
     this.preservingSnapshotsOnDispose = true
     const pendingWrites: Array<Promise<void>> = []
-    try {
-      for (const session of this.sessions.values()) {
-        pendingWrites.push(this.writeTaskSnapshot(session.meta.id, 'shutdown', 0, 'status'))
-        session.dispose()
-        this.stopEnginePowerBlocker(session.meta.id)
-        clearIdeDocumentContext(session.meta.id)
-      }
-      this.sessions.clear()
-      this.notificationStates.clear()
-    } finally {
-      this.preservingSnapshotsOnDispose = false
+    for (const session of this.sessions.values()) {
+      pendingWrites.push(this.writeTaskSnapshot(session.meta.id, 'shutdown', 0, 'status'))
+      session.dispose()
+      this.stopEnginePowerBlocker(session.meta.id)
+      clearIdeDocumentContext(session.meta.id)
     }
+    this.sessions.clear()
+    this.notificationStates.clear()
     await Promise.all(pendingWrites)
     await flushTaskSnapshotMutations()
+    this.taskRuns.clear()
+    this.recentEventIds.clear()
   }
 
   getTranscript(id: string): TranscriptEntry[] {
     return this.sessions.get(id)?.getTranscript() ?? []
   }
 
-  listTaskSnapshots(): Promise<TaskSnapshotRecord[]> {
-    return listTaskSnapshots()
+  async listTaskSnapshots(): Promise<TaskSnapshotRecord[]> {
+    const snapshots = await listTaskSnapshots()
+    const recoverable: TaskSnapshotRecord[] = []
+    for (const snapshot of snapshots) {
+      const reconciled = reconcileSnapshotWithReceipts(snapshot)
+      if (reconciled.terminalRun) {
+        await deleteTaskSnapshot(snapshot.id, undefined, reconciled.terminalRun)
+        continue
+      }
+      if (reconciled.snapshot !== snapshot) await saveTaskSnapshot(reconciled.snapshot)
+      recoverable.push(reconciled.snapshot)
+    }
+    return recoverable
   }
 
   deleteTaskSnapshot(id: string): Promise<boolean> {
     this.snapshotCounts.delete(id)
+    if (!this.sessions.has(id)) this.recentEventIds.delete(id)
+    this.taskRuns.delete(id)
     return deleteTaskSnapshot(id)
   }
 
   async recoverTaskSnapshot(id: string): Promise<SessionMeta> {
-    const snapshot = await getTaskSnapshot(id)
-    if (!snapshot) throw new Error('未找到可恢复的任务快照')
+    const storedSnapshot = await getTaskSnapshot(id)
+    if (!storedSnapshot) throw new Error('未找到可恢复的任务快照')
+    const reconciled = reconcileSnapshotWithReceipts(storedSnapshot)
+    if (reconciled.terminalRun) {
+      await deleteTaskSnapshot(storedSnapshot.id, undefined, reconciled.terminalRun)
+      throw new Error('任务已完成，恢复入口已自动收敛')
+    }
+    const snapshot = reconciled.snapshot
+    if (snapshot !== storedSnapshot) await saveTaskSnapshot(snapshot)
     const active = this.sessions.get(snapshot.sessionId)
     if (active) return { ...active.meta }
+    if (snapshot.run && (snapshot.run.status === 'completed' || snapshot.run.status === 'cancelled')) {
+      throw new Error(`任务已处于终态，不能恢复:${snapshot.run.status}`)
+    }
+    const recoveredRunBase = snapshot.run
+      ? transitionTaskRun(snapshot.run, 'recovering', { lastEventKind: snapshot.execution.lastEventKind })
+      : transitionTaskRun(
+          createTaskRun({
+            id: `legacy-${snapshot.sessionId}`,
+            sessionId: snapshot.sessionId,
+            taskId: snapshot.taskId,
+            now: snapshot.createdAt
+          }),
+          'recovering',
+          { now: Date.now(), lastEventKind: snapshot.execution.lastEventKind }
+        )
+    const recoveredRun = recoverTaskExecutionState(recoveredRunBase)
     const { lastError: _lastError, ...restMeta } = snapshot.meta
     const cwd = assertUsableSessionCwd(restMeta.cwd)
     const meta: SessionMeta = {
@@ -697,22 +782,33 @@ class SessionManager {
       resumeSessionAt: snapshot.execution.resumeSessionAt
     }
     restoreTranscriptIfMissing(snapshot.execution.sdkSessionId, snapshot.transcript)
-    const session = createEngine(
-      meta.engine,
-      meta,
-      (event, seq) => this.dispatch(meta.id, event, seq),
-      snapshot.execution.sdkSessionId
-    )
-    this.sessions.set(meta.id, session)
-    this.persistActiveSessions()
+    this.taskRuns.set(snapshot.sessionId, recoveredRun)
     this.snapshotCounts.set(meta.id, {
       total: snapshot.eventCount,
       sinceSave: 0,
-      lastSeq: snapshot.execution.lastSeq
+      lastSeq: snapshot.execution.cursor?.seq ?? snapshot.execution.lastSeq,
+      lastEventId: snapshot.execution.cursor?.eventId ?? snapshot.execution.lastEventId
     })
-    const restoredDagRuntimeCount = this.restoreDagRuntimesFromSnapshot(meta.id, snapshot)
-    void this.writeTaskSnapshot(meta.id, 'recovered', snapshot.execution.lastSeq)
-    this.startRecoveredSession(session, snapshot, restoredDagRuntimeCount > 0)
+    this.recentEventIds.set(meta.id, [...(recoveredRun.recentEventIds ?? [])].slice(-256))
+    const session = createEngine(
+      meta.engine,
+      meta,
+      (event, seq, identity) => this.dispatch(meta.id, event, seq, identity),
+      snapshot.execution.sdkSessionId,
+      snapshot.execution.cursor?.seq ?? snapshot.execution.lastSeq
+    )
+    this.sessions.set(meta.id, session)
+    this.persistActiveSessions()
+    const recoveredSnapshot = { ...snapshot, run: recoveredRun }
+    const restoredDagRuntimeCount = this.restoreDagRuntimesFromSnapshot(meta.id, recoveredSnapshot)
+    await this.writeTaskSnapshot(
+      meta.id,
+      'recovered',
+      snapshot.execution.cursor?.seq ?? snapshot.execution.lastSeq,
+      snapshot.execution.lastEventKind,
+      snapshot.execution.cursor?.eventId ?? snapshot.execution.lastEventId
+    )
+    this.startRecoveredSession(session, recoveredSnapshot, restoredDagRuntimeCount > 0)
     touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
   }
@@ -725,7 +821,7 @@ class SessionManager {
     void session
       .start()
       .then(() => {
-        const replay = snapshot.replayCandidate
+        const replayPrompts = buildTaskSnapshotReplayPrompts(snapshot)
         const active = this.sessions.get(snapshot.sessionId)
         if (active !== session) return
         if (resumeDagRuntime) {
@@ -741,18 +837,18 @@ class SessionManager {
           this.resumeRecoveredDagRuntimes(snapshot.sessionId)
           return
         }
-        if (!replay) return
+        if (replayPrompts.length === 0) return
         if (active.meta.status === 'error' || active.meta.status === 'closed') return
         this.dispatch(
           snapshot.sessionId,
           {
             kind: 'hook-event',
             event: 'task-snapshot-replay',
-            detail: `已从快照恢复,准备续跑用户请求 seq ${replay.seq}。`
+            detail: `已从快照恢复,准备按顺序续跑 ${replayPrompts.length} 个未完成步骤。`
           },
           0
         )
-        this.send(snapshot.sessionId, buildTaskSnapshotReplayPrompt(snapshot))
+        for (const prompt of replayPrompts) this.send(snapshot.sessionId, prompt)
       })
       .catch((err) => {
         console.error('[caogen] 恢复任务快照启动失败:', err)
@@ -761,14 +857,15 @@ class SessionManager {
 
   /** 启动时:补全 GUI 启动缺失的 PATH → 注册内置引擎 → 清理不可达转录文件 */
   async init(): Promise<void> {
-    // 必须在引擎探测(codex/gemini CLI 是否在 PATH 上)之前补 PATH,
-    // 否则 Dock 启动的应用因 PATH 极简会误报 CLI"未安装"。
+    // Dock 启动的应用 PATH 极简,先补全以便后续工具调用找到用户安装的 CLI。
     fixPathForGuiLaunch()
     configureModelStatsDir(app.getPath('userData'))
+    configureProviderHealthDir(app.getPath('userData'))
     registerBuiltinEngines()
-    this.restoreActiveSessions()
-    const keep = new Set(listHistory().map((h) => h.sdkSessionId))
     const recoverable = await this.listTaskSnapshots()
+    this.taskRuns.hydrateHistory(await listPersistedTaskRuns())
+    this.restoreActiveSessions(new Set(recoverable.map((snapshot) => snapshot.sessionId)))
+    const keep = new Set(listHistory().map((h) => h.sdkSessionId))
     for (const snapshot of recoverable) {
       const sdkSessionId = snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
       if (sdkSessionId) keep.add(sdkSessionId)
@@ -853,10 +950,18 @@ class SessionManager {
     }
   }
 
-  private dispatch(sessionId: string, rawEvent: AgentEvent, seq: number): void {
+  private dispatch(
+    sessionId: string,
+    rawEvent: AgentEvent,
+    seq: number,
+    sourceIdentity?: AgentEventIdentity
+  ): void {
+    const identity = this.normalizeEventIdentity(sessionId, seq, sourceIdentity)
+    if (!identity) return
     const session = this.sessions.get(sessionId)
     const event = session ? this.normalizeTurnResultCost(session, rawEvent) : rawEvent
-    const payload: SessionEventPayload = { sessionId, seq, event }
+    this.handleTaskRunEvent(sessionId, event, identity)
+    const payload: SessionEventPayload = { sessionId, ...identity, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
     }
@@ -897,15 +1002,53 @@ class SessionManager {
     this.handleEnginePowerBlocker(sessionId, event)
     this.handleNotification(sessionId, event)
     this.handleAutoSkillReview(sessionId, event)
-    this.handleModelCrossValidation(sessionId, event, seq)
-    this.handleModelReviewArbitration(sessionId, event, seq)
-    this.handleTaskSnapshot(sessionId, event, seq)
+    this.handleModelCrossValidation(sessionId, event, identity.seq)
+    this.handleModelReviewArbitration(sessionId, event, identity.seq)
+    this.handleTaskSnapshot(sessionId, event, identity)
     if (event.kind === 'init' || event.kind === 'turn-result' || event.kind === 'meta') {
       this.persist(sessionId)
     }
     if (!this.preservingSnapshotsOnDispose && shouldPersistActiveRegistry(event)) {
       this.persistActiveSessions()
     }
+  }
+
+  private normalizeEventIdentity(
+    sessionId: string,
+    sourceSeq: number,
+    source?: AgentEventIdentity
+  ): AgentEventIdentity | null {
+    const eventId = source?.eventId?.trim() || randomUUID()
+    const recent = this.recentEventIds.get(sessionId) ?? []
+    if (recent.includes(eventId)) return null
+    const state = this.snapshotCounts.get(sessionId) ?? {
+      total: 0,
+      sinceSave: 0,
+      lastSeq: 0
+    }
+    const candidate = Number.isInteger(source?.seq) && (source?.seq ?? 0) > 0
+      ? source!.seq
+      : Number.isInteger(sourceSeq) && sourceSeq > 0
+        ? sourceSeq
+        : state.lastSeq + 1
+    const normalizedSeq = candidate > state.lastSeq ? candidate : state.lastSeq + 1
+    const identity: AgentEventIdentity = {
+      schemaVersion: 1,
+      streamId: source?.streamId?.trim() || `session:${sessionId}`,
+      eventId,
+      seq: normalizedSeq,
+      occurredAt: source?.occurredAt ?? Date.now(),
+      ...(source?.causationId ? { causationId: source.causationId } : {}),
+      ...(source?.correlationId ? { correlationId: source.correlationId } : {})
+    }
+    recent.push(eventId)
+    this.recentEventIds.set(sessionId, recent.slice(-256))
+    this.snapshotCounts.set(sessionId, {
+      ...state,
+      lastSeq: normalizedSeq,
+      lastEventId: eventId
+    })
+    return identity
   }
 
   private handleAutoSkillReview(sessionId: string, event: AgentEvent): void {
@@ -1094,11 +1237,18 @@ class SessionManager {
     }
   }
 
-  private handleTaskSnapshot(sessionId: string, event: AgentEvent, seq: number): void {
-    if (this.isSnapshotCleanupEvent(event)) {
+  private handleTaskSnapshot(
+    sessionId: string,
+    event: AgentEvent,
+    identity: AgentEventIdentity
+  ): void {
+    if (this.isSnapshotCleanupEvent(sessionId, event)) {
       if (!this.preservingSnapshotsOnDispose) {
         this.snapshotCounts.delete(sessionId)
-        void deleteTaskSnapshot(sessionId)
+        if (event.kind === 'status' && event.status === 'closed') {
+          this.recentEventIds.delete(sessionId)
+        }
+        void deleteTaskSnapshot(sessionId, undefined, this.taskRuns.get(sessionId))
       }
       return
     }
@@ -1108,19 +1258,63 @@ class SessionManager {
     if (this.isSnapshotCountedEvent(event)) {
       state.total += 1
       state.sinceSave += 1
-      state.lastSeq = Math.max(state.lastSeq, seq)
+      state.lastSeq = Math.max(state.lastSeq, identity.seq)
+      state.lastEventId = identity.eventId
     }
     const reason = this.snapshotReason(event, state.sinceSave)
     if (reason) {
       this.snapshotCounts.set(sessionId, { ...state, sinceSave: 0 })
-      void this.writeTaskSnapshot(sessionId, reason, seq, event.kind)
+      void this.writeTaskSnapshot(sessionId, reason, identity.seq, event.kind, identity.eventId)
       return
     }
     this.snapshotCounts.set(sessionId, state)
   }
 
+  private handleTaskRunEvent(
+    sessionId: string,
+    event: AgentEvent,
+    identity: AgentEventIdentity
+  ): void {
+    const current = this.taskRuns.get(sessionId)
+    if (!current) return
+    if (hasTaskRunAppliedEvent(current, identity)) return
+    const cwd = this.sessions.get(sessionId)?.meta.cwd ?? ''
+    let next = reduceTaskExecutionEvent(current, event, cwd, Date.now(), identity)
+    if (event.kind === 'status' && event.status === 'closed') {
+      if (!this.preservingSnapshotsOnDispose && !isTaskRunTerminal(next.status)) {
+        next = transitionTaskRun(next, 'cancelled', { lastEventKind: event.kind })
+      }
+    } else if (!(event.kind === 'turn-result' && hasPendingTaskSteps(next))) {
+      next = reduceTaskRunEvent(next, event)
+    }
+    if (isTaskLedgerEvent(event)) {
+      next = recordTaskRunEvent(next, identity, next === current)
+    }
+    if (event.kind === 'tool-result' && !event.isError) {
+      const completed = next.toolExecutions?.find((execution) => execution.toolUseId === event.toolUseId)
+      const duplicateExecutionId = completed?.duplicateOfExecutionId
+      if (completed && duplicateExecutionId && duplicateExecutionId !== completed.id) {
+        this.taskRuns.supersedeArchivedExecution(
+          sessionId,
+          duplicateExecutionId,
+          completed.id,
+          completed.updatedAt
+        )
+        void supersedeToolExecution(
+          duplicateExecutionId,
+          completed.id,
+          completed.updatedAt
+        ).catch((err) => {
+          console.error('[caogen] 更新被成功重试取代的工具记录失败:', err)
+        })
+      }
+    }
+    if (next !== current) this.taskRuns.set(sessionId, next)
+  }
+
   private snapshotReason(event: AgentEvent, sinceSave: number): TaskSnapshotReason | null {
     if (event.kind === 'turn-result' && event.isError) return 'important-event'
+    if (event.kind === 'turn-result') return 'important-event'
     if (event.kind === 'status' && event.status === 'error') return 'important-event'
     if (
       event.kind === 'init' ||
@@ -1129,11 +1323,18 @@ class SessionManager {
       event.kind === 'checkpoint' ||
       event.kind === 'checkpoint-restore' ||
       event.kind === 'permission-request' ||
+      event.kind === 'permission-resolved' ||
+      event.kind === 'tool-start' ||
+      event.kind === 'tool-result' ||
       event.kind === 'subagent-result' ||
       event.kind === 'task-dag-update'
     ) {
       return 'important-event'
     }
+    if (event.kind === 'assistant-message' && event.blocks.some((block) => block.type === 'tool_use')) {
+      return 'important-event'
+    }
+    if (event.kind === 'status' && event.status === 'running') return 'important-event'
     return sinceSave >= TASK_SNAPSHOT_EVENT_INTERVAL ? 'event-batch' : null
   }
 
@@ -1141,9 +1342,12 @@ class SessionManager {
     return event.kind !== 'text-delta' && event.kind !== 'thinking-delta'
   }
 
-  private isSnapshotCleanupEvent(event: AgentEvent): boolean {
+  private isSnapshotCleanupEvent(sessionId: string, event: AgentEvent): boolean {
+    const run = this.taskRuns.get(sessionId)
     return (
-      (event.kind === 'turn-result' && event.isError === false) ||
+      (event.kind === 'turn-result' &&
+        event.isError === false &&
+        (!run || !hasPendingTaskSteps(run))) ||
       (event.kind === 'status' && event.status === 'closed')
     )
   }
@@ -1152,7 +1356,8 @@ class SessionManager {
     sessionId: string,
     reason: TaskSnapshotReason,
     seq: number,
-    eventKind?: AgentEvent['kind']
+    eventKind?: AgentEvent['kind'],
+    eventId?: string
   ): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1163,9 +1368,11 @@ class SessionManager {
           meta: session.meta,
           transcript: session.getTranscript(),
           lastSeq: Math.max(seq, state.lastSeq),
+          lastEventId: eventId ?? state.lastEventId,
           lastEventKind: eventKind,
           eventCount: state.total,
           reason,
+          run: this.taskRuns.get(sessionId),
           subtasks: this.snapshotSubtasksFor(sessionId),
           dagExecutions: this.snapshotDagExecutionsFor(sessionId),
           dagRuntimes: this.snapshotDagRuntimesFor(sessionId)
@@ -1442,12 +1649,12 @@ class SessionManager {
     })
   }
 
-  private restoreActiveSessions(): void {
+  private restoreActiveSessions(snapshotSessionIds: ReadonlySet<string> = new Set()): void {
     const records = readActiveSessionRegistry()
     if (records.length === 0) return
     let restored = 0
     for (const record of records) {
-      if (!record?.id || this.sessions.has(record.id) || !record.sdkSessionId) continue
+      if (!record?.id || this.sessions.has(record.id) || snapshotSessionIds.has(record.id) || !record.sdkSessionId) continue
       let cwd: string
       try {
         cwd = assertUsableSessionCwd(record.cwd)
@@ -1465,14 +1672,14 @@ class SessionManager {
             : record.lastError
       }
       try {
+        this.snapshotCounts.set(meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
         const session = createEngine(
           meta.engine,
           meta,
-          (event, seq) => this.dispatch(meta.id, event, seq),
+          (event, seq, identity) => this.dispatch(meta.id, event, seq, identity),
           record.sdkSessionId
         )
         this.sessions.set(meta.id, session)
-        this.snapshotCounts.set(meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
         void session.start()
         touchProject(meta.sourceCwd ?? meta.cwd)
         restored += 1
@@ -1585,14 +1792,38 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-function buildTaskSnapshotReplayPrompt(snapshot: TaskSnapshotRecord): string {
+function buildTaskSnapshotReplayPrompts(snapshot: TaskSnapshotRecord): string[] {
+  const pendingSteps = (snapshot.run?.steps ?? [])
+    .filter((step) => step.status !== 'completed' && step.status !== 'failed' && step.status !== 'cancelled')
+    .filter((step) => typeof step.requestText === 'string' && step.requestText.trim())
+    .sort((a, b) => a.sequence - b.sequence)
+  if (pendingSteps.length > 0) {
+    return pendingSteps.map((step) => buildTaskStepReplayPrompt(snapshot, step.requestText ?? '', step.messageId, step.sequence))
+  }
   const replay = snapshot.replayCandidate
-  if (!replay) return '请继续恢复后的未完成任务。'
+  if (!replay) return []
+  return [buildTaskStepReplayPrompt(snapshot, replay.text, replay.messageId, replay.seq)]
+}
+
+function buildTaskStepReplayPrompt(
+  snapshot: TaskSnapshotRecord,
+  requestText: string,
+  messageId: string | undefined,
+  sequence: number
+): string {
+  const unknownTools = (snapshot.run?.toolExecutions ?? [])
+    .filter((execution) => execution.status === 'unknown_outcome')
+    .map((execution) =>
+      `- ${execution.toolName}${execution.idempotencyKey ? ` (${execution.idempotencyKey})` : ''}`
+    )
   return [
     '【CaoGen 断点续跑】程序从任务快照恢复。请继续完成上一条未完成的用户请求。',
     '',
-    `原始用户请求(messageId=${replay.messageId}, seq=${replay.seq}):`,
-    replay.text,
+    `原始用户请求(messageId=${messageId ?? 'unknown'}, step=${sequence}):`,
+    requestText,
+    ...(unknownTools.length > 0
+      ? ['', '以下工具在退出时结果未知，重复执行前必须先核对实际状态:', ...unknownTools]
+      : []),
     '',
     '续跑要求:',
     '1. 先检查当前文件状态、git diff 和已有工具结果,判断哪些步骤已经完成。',

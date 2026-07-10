@@ -7,10 +7,11 @@ const required = process.argv.includes('--required') || process.env.CAOGEN_RELEA
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'release-packaging-audit')
 const reportDir = path.join(reportRoot, runId)
-const expectedVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || '0.2.0'
 const distDir = normalizePath(argValue('--dist') || process.env.CAOGEN_RELEASE_DIST_DIR || 'dist')
 const packageJson = readPackageJson()
 const packageLock = readOptionalJson('package-lock.json')
+const explicitExpectedVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || ''
+const expectedVersion = explicitExpectedVersion || packageJson.version
 const failures = []
 const warnings = []
 const distFiles = existsSync(distDir) ? listFiles(distDir) : []
@@ -28,12 +29,14 @@ const report = {
   runId,
   reportDir,
   expectedVersion,
+  expectedVersionSource: explicitExpectedVersion ? 'explicit' : 'package.json',
   packageVersion: packageJson.version,
   packageLockVersion: packageLock?.version ?? packageLock?.packages?.['']?.version,
   distDir: path.relative(repoRoot, distDir),
   distPresent: existsSync(distDir),
   rootFiles,
   uploadableAssets: rootFiles.filter(isUploadableReleaseAsset),
+  unexpectedUploadableAssets: rootFiles.filter(isUploadableReleaseAsset).filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
   expectedMacAssets: expectedMacAssets(expectedVersion),
   signing: packageJson.build?.mac?.identity === null ? 'unsigned' : 'configured-or-auto',
   publish: summarizePublish(packageJson.build?.publish),
@@ -50,6 +53,10 @@ if (required && report.status !== 'passed') process.exitCode = 1
 if (!required && existsSync(distDir) && report.status === 'failed') process.exitCode = 1
 
 function validatePackage() {
+  if (!packageJson.version) {
+    failures.push('package.json version is missing')
+    return
+  }
   if (packageJson.version !== expectedVersion) {
     failures.push(`package.json version must be ${expectedVersion}, got ${packageJson.version || 'missing'}`)
   }
@@ -60,9 +67,6 @@ function validatePackage() {
   const rootLockVersion = packageLock?.packages?.['']?.version
   if (rootLockVersion !== expectedVersion) {
     failures.push(`package-lock root package version must be ${expectedVersion}, got ${rootLockVersion || 'missing'}`)
-  }
-  if (packageJson.version === '0.1.2') {
-    failures.push('package.json is still at latest public stable version 0.1.2; bump only after required evidence gates pass')
   }
   const publishEntries = Array.isArray(packageJson.build?.publish) ? packageJson.build.publish : []
   for (const entry of publishEntries) {
@@ -92,6 +96,9 @@ function validateDist() {
   const expected = new Set(expectedMacAssets(expectedVersion))
   for (const asset of rootFiles.filter((file) => /^CaoGen-\d+\.\d+\.\d+/.test(file))) {
     if (!expected.has(asset)) failures.push(`stale or unexpected CaoGen release asset in dist root: ${asset}`)
+  }
+  for (const asset of rootFiles.filter(isUploadableReleaseAsset).filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion))) {
+    failures.push(`unexpected uploadable release asset in dist root: ${asset}`)
   }
   const latestMac = readDistText('latest-mac.yml')
   if (latestMac !== undefined && !latestMac.includes(`version: ${expectedVersion}`)) {
@@ -125,7 +132,12 @@ function forbiddenReleasePath(relativePath) {
 }
 
 function isUploadableReleaseAsset(file) {
-  return /\.(dmg|zip|exe|AppImage|blockmap|ya?ml)$/i.test(file)
+  return /\.(dmg|zip|exe|AppImage|blockmap)$/i.test(file) || /^latest.*\.ya?ml$/i.test(file)
+}
+
+function isExpectedUploadableReleaseAsset(file, version) {
+  const expected = new Set(expectedMacAssets(version))
+  return expected.has(file)
 }
 
 function summarizePublish(value) {

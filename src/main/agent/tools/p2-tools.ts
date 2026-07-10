@@ -74,7 +74,7 @@ export const P2_TOOLS: ToolDefinition[] = [
             type: 'array',
             items: { type: 'string', enum: ['chat', 'coding', 'reasoning', 'vision', 'toolUse', 'longContext', 'review', 'summarization'] }
           },
-          strategy: { type: 'string', enum: ['balanced', 'cost', 'quality'] },
+          strategy: { type: 'string', enum: ['balanced', 'cost', 'speed', 'quality'] },
           contextTokens: { type: 'number' },
           expectedOutputTokens: { type: 'number' },
           remainingUsd: { type: 'number' },
@@ -282,7 +282,7 @@ function stringArray(value: unknown): string[] | undefined {
 }
 
 function schedulerStrategy(value: unknown): SchedulerStrategy | undefined {
-  return value === 'balanced' || value === 'cost' || value === 'quality' ? value : undefined
+  return value === 'balanced' || value === 'cost' || value === 'speed' || value === 'quality' ? value : undefined
 }
 
 function modelTaskKinds(value: unknown): ModelTaskKind[] | undefined {

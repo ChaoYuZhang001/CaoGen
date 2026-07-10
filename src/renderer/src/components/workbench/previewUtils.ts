@@ -25,6 +25,20 @@ export interface ParsedCsv {
 
 export type CsvDelimiter = ',' | '\t' | ';'
 
+export interface SearchTextPreviewOptions {
+  matchesOnly?: boolean
+  maxMatchedLines?: number
+}
+
+export interface SearchTextPreviewResult {
+  text: string
+  query: string
+  matchCount: number
+  lineCount: number
+  visibleLineCount: number
+  truncated: boolean
+}
+
 export function truncate(value: string, maxChars = 20_000, options: TruncateOptions = {}): string {
   const limit = safePositiveInt(maxChars, 20_000)
   if (value.length <= limit) return value
@@ -47,6 +61,61 @@ export function prettyJson(value: unknown, spaces = 2): PrettyJsonResult {
       text: typeof value === 'string' ? value : String(value),
       error: err instanceof Error ? err.message : String(err)
     }
+  }
+}
+
+export function searchTextPreview(
+  value: string,
+  query: string,
+  options: SearchTextPreviewOptions = {}
+): SearchTextPreviewResult {
+  const cleanQuery = query.trim()
+  const lines = value.split(/\r?\n/)
+  if (!cleanQuery) {
+    return {
+      text: value,
+      query: '',
+      matchCount: 0,
+      lineCount: lines.length,
+      visibleLineCount: lines.length,
+      truncated: false
+    }
+  }
+
+  const lowerQuery = cleanQuery.toLowerCase()
+  const matchedLines: Array<{ index: number; text: string; count: number }> = []
+  let matchCount = 0
+  lines.forEach((line, index) => {
+    const count = countOccurrences(line.toLowerCase(), lowerQuery)
+    if (count > 0) {
+      matchCount += count
+      matchedLines.push({ index, text: line, count })
+    }
+  })
+
+  if (!options.matchesOnly) {
+    return {
+      text: value,
+      query: cleanQuery,
+      matchCount,
+      lineCount: lines.length,
+      visibleLineCount: lines.length,
+      truncated: false
+    }
+  }
+
+  const maxMatchedLines = safePositiveInt(options.maxMatchedLines, 300)
+  const visible = matchedLines.slice(0, maxMatchedLines)
+  const body = visible.map((line) => `${line.index + 1}: ${line.text}`).join('\n')
+  const truncated = matchedLines.length > visible.length
+  const suffix = truncated ? `\n\n[truncated ${matchedLines.length - visible.length} matched lines]` : ''
+  return {
+    text: body ? `${body}${suffix}` : '[no matches]',
+    query: cleanQuery,
+    matchCount,
+    lineCount: lines.length,
+    visibleLineCount: visible.length,
+    truncated
   }
 }
 
@@ -131,6 +200,19 @@ export function parseCsv(value: string, options: ParseCsvOptions = {}): ParsedCs
   }
 
   return { rows, rowCount, truncated, error }
+}
+
+function countOccurrences(value: string, needle: string): number {
+  if (!needle) return 0
+  let count = 0
+  let index = 0
+  while (index < value.length) {
+    const found = value.indexOf(needle, index)
+    if (found === -1) break
+    count += 1
+    index = found + needle.length
+  }
+  return count
 }
 
 function detectDelimiter(value: string): CsvDelimiter {

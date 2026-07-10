@@ -131,11 +131,13 @@ function ProviderLogoTexture({
   const planeWidth = useWordmark ? width * 0.72 : markSize
   const planeHeight = useWordmark ? height * 0.56 : markSize
   const x = useWordmark ? 0.02 : compact ? 0 : -width * 0.31
+  const backingWidth = useWordmark ? planeWidth * 1.06 : markSize * 1.14
+  const backingHeight = useWordmark ? planeHeight * 1.45 : markSize * 0.74
   return (
     <group position={[x, -height * 0.02, depth / 2 + 0.011]}>
       <mesh position={[0, 0, -0.002]}>
-        {useWordmark ? <planeGeometry args={[planeWidth * 1.06, planeHeight * 1.45]} /> : <circleGeometry args={[markSize * 0.58, 32]} />}
-        <meshBasicMaterial color="#f8fbff" transparent opacity={compact ? 0.82 : 0.9} toneMapped={false} depthWrite={false} />
+        <planeGeometry args={[backingWidth, backingHeight]} />
+        <meshBasicMaterial color={compact ? '#aeb8c4' : '#d7dee5'} transparent opacity={compact ? 0.48 : 0.72} toneMapped={false} depthWrite={false} />
       </mesh>
       <mesh position={[0, 0, 0.002]}>
         <planeGeometry args={[planeWidth, planeHeight]} />
@@ -181,22 +183,22 @@ export default function ProviderLogoBadge({
             key: `${ch}-${charIndex}-${rowIndex}-${colIndex}`,
             x: startX + (charIndex * 6 + colIndex) * cell,
             y: startY - rowIndex * cell,
-            color: rowIndex <= 1 ? logo.textColor : logo.brandColor
+            color: rowIndex <= 1 ? '#d7dee5' : '#59dcff'
           })
         })
       })
     })
     return { cell, items: out }
-  }, [compact, hasLogoAsset, height, logo.brandColor, logo.textColor, mark, width])
+  }, [compact, hasLogoAsset, height, mark, width])
 
   return (
     <group position={position} rotation={rotation} scale={scale}>
       <RoundedBox args={[width, height, depth]} radius={Math.min(width, height) * 0.13} smoothness={3} castShadow receiveShadow>
-        <meshStandardMaterial color={logo.plateColor} metalness={0.34} roughness={0.46} />
+        <meshStandardMaterial color="#151b22" metalness={0.42} roughness={0.44} />
       </RoundedBox>
       <mesh position={[0, height / 2 - cells.cell * 0.72, depth / 2 + 0.003]}>
         <boxGeometry args={[width * 0.78, cells.cell * 0.36, 0.006]} />
-        <meshStandardMaterial color={logo.brandColor} emissive={logo.brandColor} emissiveIntensity={0.62} toneMapped={false} />
+        <meshStandardMaterial color="#59dcff" emissive="#59dcff" emissiveIntensity={0.42} toneMapped={false} />
       </mesh>
       <ProviderLogoTexture logo={logo} width={width} height={height} depth={depth} compact={compact} />
       {cells.items.map((cell) => (

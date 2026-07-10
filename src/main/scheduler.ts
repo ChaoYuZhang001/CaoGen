@@ -1,5 +1,16 @@
 import type { SchedulerStrategy } from '../shared/types'
 import { reliabilityScore } from './modelStats'
+import { getHealth as readProviderHealth } from './providerHealth'
+
+export {
+  classifyFailure,
+  configureProviderHealthDir,
+  getHealth,
+  listHealth,
+  recordFailure,
+  recordSuccess
+} from './providerHealth'
+export type { FailureClass, ProviderFailureRecord, ProviderHealth } from './providerHealth'
 
 /** 模型能力档:quality/cost/speed 各 1-3(3 最高)。tier 用于按复杂度匹配。 */
 interface ModelCap {
@@ -69,6 +80,7 @@ export interface RouteDecision {
  * 从候选模型里挑一个。
  * - quality:满足复杂度前提下选质量最高
  * - cost:满足复杂度前提下选成本最低
+ * - speed:从可用模型中优先选择速度档最高者
  * - balanced:选质量档最接近目标档的(打平再比成本)
  */
 export function pickModel(
@@ -91,6 +103,12 @@ export function pickModel(
     const eligible = scored.filter((s) => s.cap.quality >= target)
     const from = eligible.length > 0 ? eligible : scored
     chosen = from.reduce((a, b) => (b.cap.cost < a.cap.cost ? b : a))
+  } else if (strategy === 'speed') {
+    chosen = scored.reduce((a, b) => {
+      if (b.cap.speed !== a.cap.speed) return b.cap.speed > a.cap.speed ? b : a
+      if (b.cap.quality !== a.cap.quality) return b.cap.quality > a.cap.quality ? b : a
+      return b.cap.cost < a.cap.cost ? b : a
+    })
   } else {
     // balanced:质量档与目标差距最小,打平比成本低
     chosen = scored.reduce((a, b) => {
@@ -102,7 +120,8 @@ export function pickModel(
   }
 
   const cLabel = complexity === 'complex' ? '复杂' : complexity === 'medium' ? '中等' : '简单'
-  const sLabel = strategy === 'quality' ? '质量优先' : strategy === 'cost' ? '成本优先' : '均衡'
+  const sLabel =
+    strategy === 'quality' ? '质量优先' : strategy === 'cost' ? '成本优先' : strategy === 'speed' ? '速度优先' : '均衡'
   return {
     model: chosen.model,
     complexity,
@@ -146,7 +165,7 @@ export function pickModelAcrossProviders(opts: {
   }
   const pool: Entry[] = []
   for (const c of opts.candidates) {
-    if (!ensure(c.id).healthy) continue // 跳过不健康厂商(连续失败≥3)
+    if (!readProviderHealth(c.id).healthy) continue // 跳过不健康厂商(连续失败≥3)
     for (const model of c.models) {
       if (!model) continue
       pool.push({
@@ -181,6 +200,8 @@ export function pickModelAcrossProviders(opts: {
     pool.length = 0
     pool.push(...from)
     better = (a, b) => (b.cap.cost !== a.cap.cost ? b.cap.cost < a.cap.cost : tieBreak(a, b))
+  } else if (opts.strategy === 'speed') {
+    better = (a, b) => (b.cap.speed !== a.cap.speed ? b.cap.speed > a.cap.speed : tieBreak(a, b))
   } else {
     better = (a, b) => {
       const da = Math.abs(a.cap.quality - target)
@@ -192,7 +213,14 @@ export function pickModelAcrossProviders(opts: {
   const chosen = pool.reduce((a, b) => (better(a, b) ? b : a))
 
   const cLabel = complexity === 'complex' ? '复杂' : complexity === 'medium' ? '中等' : '简单'
-  const sLabel = opts.strategy === 'quality' ? '质量优先' : opts.strategy === 'cost' ? '成本优先' : '均衡'
+  const sLabel =
+    opts.strategy === 'quality'
+      ? '质量优先'
+      : opts.strategy === 'cost'
+        ? '成本优先'
+        : opts.strategy === 'speed'
+          ? '速度优先'
+          : '均衡'
   const switchedProvider = chosen.providerId !== opts.currentProviderId
   return {
     providerId: chosen.providerId,
@@ -206,99 +234,7 @@ export function pickModelAcrossProviders(opts: {
   }
 }
 
-// ---------- Provider 健康度 ----------
-
-export interface ProviderHealth {
-  providerId: string
-  successes: number
-  failures: number
-  consecutiveFailures: number
-  lastLatencyMs?: number
-  lastError?: string
-  lastUsedAt?: number
-  /** 派生:consecutiveFailures>=3 判定不健康 */
-  healthy: boolean
-}
-
-const health = new Map<string, ProviderHealth>()
-
-/** 历史空 Provider 统一用 local-login 作健康度展示 key。 */
-function key(providerId: string): string {
-  return providerId || 'local-login'
-}
-
-function ensure(providerId: string): ProviderHealth {
-  const k = key(providerId)
-  let h = health.get(k)
-  if (!h) {
-    h = { providerId: k, successes: 0, failures: 0, consecutiveFailures: 0, healthy: true }
-    health.set(k, h)
-  }
-  return h
-}
-
-export function recordSuccess(providerId: string, latencyMs?: number): void {
-  const h = ensure(providerId)
-  h.successes += 1
-  h.consecutiveFailures = 0
-  h.healthy = true
-  if (latencyMs !== undefined) h.lastLatencyMs = latencyMs
-  h.lastUsedAt = Date.now()
-}
-
-export function recordFailure(providerId: string, error?: string): void {
-  const h = ensure(providerId)
-  h.failures += 1
-  h.consecutiveFailures += 1
-  if (error) h.lastError = error
-  h.lastUsedAt = Date.now()
-  if (h.consecutiveFailures >= 3) h.healthy = false
-}
-
-export function getHealth(providerId: string): ProviderHealth {
-  return ensure(providerId)
-}
-
-export function listHealth(): ProviderHealth[] {
-  return [...health.values()]
-}
-
 // ---------- 故障分类与跨厂商切换(M4.1) ----------
-
-export interface FailureClass {
-  /** 换一个厂商大概率能解决 → 值得自动切换重试 */
-  switchable: boolean
-  /** 面向用户的简短原因标签 */
-  label: string
-}
-
-/**
- * 按错误文本归类失败原因。只有"厂商侧"故障(余额/限流/鉴权/模型下线/
- * 服务端/网络/进程崩溃)才可切换;执行类错误(如 max_turns)换厂商无意义。
- */
-export function classifyFailure(text: string | undefined): FailureClass {
-  const t = (text || '').slice(0, 2000)
-  if (/credit|balance|quota|insufficient|billing|余额|配额/i.test(t))
-    return { switchable: true, label: '余额/配额不足' }
-  if (/rate.?limit|too.?many.?requests|\b429\b|overloaded|限流|过载/i.test(t))
-    return { switchable: true, label: '限流/过载' }
-  if (
-    /model.{0,24}(not.?found|not.?exist|not.?support|unavailable|invalid)|(unknown|invalid|no such).{0,8}model|模型不存在|无此模型/i.test(
-      t
-    )
-  )
-    return { switchable: true, label: '模型不可用' }
-  if (/unauthorized|authentication|invalid.{0,12}(api.?key|token)|\b401\b|鉴权/i.test(t))
-    return { switchable: true, label: '鉴权失败' }
-  if (/forbidden|permission.?denied|\b403\b/i.test(t)) return { switchable: true, label: '访问被拒' }
-  if (/\b(500|502|503|504|529)\b|internal.?server|bad.?gateway|service.?unavailable/i.test(t))
-    return { switchable: true, label: '服务端错误' }
-  if (/econnrefused|enotfound|etimedout|econnreset|network|fetch.?failed|socket|dns/i.test(t))
-    return { switchable: true, label: '网络异常' }
-  if (/exited with code|process exited|closed unexpectedly|spawn/i.test(t))
-    return { switchable: true, label: '引擎异常退出' }
-  return { switchable: false, label: t ? '执行错误' : '未知错误' }
-}
 
 export interface FailoverCandidate {
   /** Provider id;新故障切换不再主动生成空 Provider 候选。 */
@@ -312,6 +248,8 @@ export interface FailoverTarget {
   name: string
   /** 目标厂商上与原模型能力档最接近的模型;无模型列表时为空 */
   model?: string
+  /** 用户显式偏好命中时写入,供事件说明真实切换原因。 */
+  preference?: string
 }
 
 /**
@@ -322,12 +260,17 @@ export function pickFailoverTarget(opts: {
   candidates: FailoverCandidate[]
   exclude: Set<string>
   desiredModel: string
+  fallbackProviderId?: string
+  fallbackModel?: string
 }): FailoverTarget | null {
+  const preferred = pickPreferredFailoverTarget(opts)
+  if (preferred) return preferred
+
   const want = capOf(opts.desiredModel || 'sonnet').quality
   let best: { c: FailoverCandidate; model?: string; dist: number } | null = null
   for (const c of opts.candidates) {
     if (opts.exclude.has(c.id)) continue
-    if (!ensure(c.id).healthy) continue
+    if (!readProviderHealth(c.id).healthy) continue
     let model: string | undefined
     let dist = 1 // 无模型列表:能力未知,给轻微劣势
     if (c.models.length > 0) {
@@ -349,4 +292,52 @@ export function pickFailoverTarget(opts: {
     if (!best || dist < best.dist) best = { c, model, dist }
   }
   return best ? { providerId: best.c.id, name: best.c.name, model: best.model } : null
+}
+
+function pickPreferredFailoverTarget(opts: {
+  candidates: FailoverCandidate[]
+  exclude: Set<string>
+  desiredModel: string
+  fallbackProviderId?: string
+  fallbackModel?: string
+}): FailoverTarget | null {
+  const fallbackProviderId = opts.fallbackProviderId?.trim()
+  const fallbackModel = opts.fallbackModel?.trim()
+  if (!fallbackProviderId && !fallbackModel) return null
+
+  const healthyCandidates = opts.candidates.filter((c) => !opts.exclude.has(c.id) && readProviderHealth(c.id).healthy)
+  let preferredCandidates = healthyCandidates
+  if (fallbackProviderId) {
+    preferredCandidates = healthyCandidates.filter((c) => c.id === fallbackProviderId)
+  } else if (fallbackModel) {
+    preferredCandidates = healthyCandidates.filter((c) => c.models.length === 0 || c.models.includes(fallbackModel))
+  }
+
+  const candidate = preferredCandidates[0]
+  if (!candidate) return null
+
+  return {
+    providerId: candidate.id,
+    name: candidate.name,
+    model: fallbackModel || closestModel(candidate.models, opts.desiredModel),
+    preference: '备用模型偏好'
+  }
+}
+
+function closestModel(models: string[], desiredModel: string): string | undefined {
+  if (models.length === 0) return undefined
+  const want = capOf(desiredModel || 'sonnet').quality
+  let best = models[0]
+  let bestDist = Number.POSITIVE_INFINITY
+  let bestCost = 4
+  for (const model of models) {
+    const cap = capOf(model)
+    const dist = Math.abs(cap.quality - want)
+    if (dist < bestDist || (dist === bestDist && cap.cost < bestCost)) {
+      best = model
+      bestDist = dist
+      bestCost = cap.cost
+    }
+  }
+  return best
 }

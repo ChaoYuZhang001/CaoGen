@@ -1,11 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
+import { APP_ICON_URL, APP_NAME } from '../brand'
+import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
 import type { CaoGenDriveMode, EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
 
+interface WelcomeTool {
+  key: string
+  labelKey: string
+  icon: HeaderIconName
+}
+
+const WELCOME_TOOLS: WelcomeTool[] = [
+  { key: 'review', labelKey: 'deskReview', icon: 'review' },
+  { key: 'terminal', labelKey: 'deskTerminal', icon: 'terminal' },
+  { key: 'browser', labelKey: 'deskBrowser', icon: 'browser' },
+  { key: 'files', labelKey: 'deskFiles', icon: 'files' },
+  { key: 'sideChat', labelKey: 'deskSideChat', icon: 'subagents' }
+]
+
 /**
- * 首屏"打开即输入"(对标 Codex Desktop):居中引导语 + 中央大输入框,
+ * 首屏"打开即输入":居中引导语 + 中央大输入框,
  * 内嵌项目选择 / Provider / 模型 / 权限,回车直接建会话并发送首条消息。
  */
 export default function WelcomeView(): React.JSX.Element {
@@ -98,114 +114,130 @@ export default function WelcomeView(): React.JSX.Element {
 
   return (
     <div className="welcome welcome-hero">
-      <div className="welcome-hero-inner">
-        <div className="welcome-mark">◆</div>
-        <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
+      <div className="welcome-stage">
+        <div className="welcome-hero-inner">
+          <img className="welcome-logo" src={APP_ICON_URL} alt={APP_NAME} />
+          <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
 
-        <div className="welcome-composer">
-          <textarea
-            ref={taRef}
-            className="welcome-composer-input"
-            placeholder={t('welcomeInputPlaceholder')}
-            value={text}
-            rows={2}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={onKeyDown}
-            autoFocus
-          />
-          <div className="welcome-composer-bar">
-            <button className="welcome-chip" onClick={() => void browse()} title={cwd || t('welcomePickProject')}>
-              📁 {projectName || t('welcomePickProject')}
-            </button>
-            <select
-              className="welcome-mini-select"
-              value={engine}
-              onChange={(e) => {
-                setEngine(e.target.value as EngineKind | '')
-                setProviderId('')
-                setModel('')
-              }}
-            >
-              <option value="" disabled>
-                {t('selectEnginePlaceholder')}
-              </option>
-              {engines.map((en) => (
-                <option key={en.kind} value={en.kind} disabled={!en.available}>
-                  {en.label}
-                </option>
-              ))}
-            </select>
-            {requiresProvider && (
+          <div className="welcome-composer">
+            <textarea
+              ref={taRef}
+              className="welcome-composer-input"
+              placeholder={t('welcomeInputPlaceholder')}
+              value={text}
+              rows={2}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={onKeyDown}
+              autoFocus
+            />
+            <div className="welcome-composer-bar">
+              <button className="welcome-chip" onClick={() => void browse()} title={cwd || t('welcomePickProject')}>
+                📁 {projectName || t('welcomePickProject')}
+              </button>
               <select
                 className="welcome-mini-select"
-                value={providerId}
+                value={engine}
                 onChange={(e) => {
-                  setProviderId(e.target.value)
+                  setEngine(e.target.value as EngineKind | '')
+                  setProviderId('')
                   setModel('')
                 }}
               >
                 <option value="" disabled>
-                  {t('selectProviderPlaceholder')}
+                  {t('selectEnginePlaceholder')}
                 </option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id} disabled={!p.hasToken}>
-                    {p.name}
-                    {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
+                {engines.map((en) => (
+                  <option key={en.kind} value={en.kind} disabled={!en.available}>
+                    {en.label}
                   </option>
                 ))}
               </select>
-            )}
-            <select
-              className="welcome-mini-select"
-              value={driveMode}
-              onChange={(e) => onDriveChange(e.target.value as CaoGenDriveMode)}
-            >
-              {DRIVE_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            {requiresProvider && (
-              <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
-                <option value="" disabled>
-                  {t('selectModelPlaceholder')}
-                </option>
-                {modelOptions.map((o) => (
+              {requiresProvider && (
+                <select
+                  className="welcome-mini-select"
+                  value={providerId}
+                  onChange={(e) => {
+                    setProviderId(e.target.value)
+                    setModel('')
+                  }}
+                >
+                  <option value="" disabled>
+                    {t('selectProviderPlaceholder')}
+                  </option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.hasToken}>
+                      {p.name}
+                      {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <select
+                className="welcome-mini-select"
+                value={driveMode}
+                onChange={(e) => onDriveChange(e.target.value as CaoGenDriveMode)}
+              >
+                {DRIVE_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {requiresProvider && (
+                <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
+                  <option value="" disabled>
+                    {t('selectModelPlaceholder')}
+                  </option>
+                  {modelOptions.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <select
+                className="welcome-mini-select"
+                value={permissionMode}
+                onChange={(e) => setPermissionMode(e.target.value as PermissionModeId)}
+              >
+                {PERMISSION_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
                 ))}
               </select>
-            )}
-            <select
-              className="welcome-mini-select"
-              value={permissionMode}
-              onChange={(e) => setPermissionMode(e.target.value as PermissionModeId)}
-            >
-              {PERMISSION_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <button className="welcome-send" disabled={busy || !text.trim()} onClick={() => void submit()}>
-              {busy ? '···' : '↑'}
-            </button>
+              <button className="welcome-send" disabled={busy || !text.trim()} onClick={() => void submit()}>
+                {busy ? '···' : '↑'}
+              </button>
+            </div>
           </div>
+
+          {projects.length > 0 && !cwd && (
+            <div className="welcome-recent">
+              {projects.slice(0, 5).map((p) => (
+                <button key={p.id} className="welcome-recent-chip" title={p.path} onClick={() => setCwd(p.path)}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="notice notice-error welcome-error">{error}</div>}
         </div>
 
-        {projects.length > 0 && !cwd && (
-          <div className="welcome-recent">
-            {projects.slice(0, 5).map((p) => (
-              <button key={p.id} className="welcome-recent-chip" title={p.path} onClick={() => setCwd(p.path)}>
-                {p.name}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {error && <div className="notice notice-error welcome-error">{error}</div>}
+        <aside className="welcome-tools" aria-label={t('deskToolDrawer')}>
+          {WELCOME_TOOLS.map((tool) => (
+            <button
+              key={tool.key}
+              type="button"
+              className="welcome-tool-row"
+              onClick={() => setError(t('welcomeToolRequiresSession'))}
+            >
+              <HeaderIcon name={tool.icon} />
+              <span>{t(tool.labelKey)}</span>
+            </button>
+          ))}
+        </aside>
       </div>
     </div>
   )

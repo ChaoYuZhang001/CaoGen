@@ -9,8 +9,14 @@ export interface AvatarRefs {
   head?: Object3D | null
   armL?: Object3D | null
   armR?: Object3D | null
+  elbowL?: Object3D | null
+  elbowR?: Object3D | null
+  wristL?: Object3D | null
+  wristR?: Object3D | null
   legL?: Object3D | null
   legR?: Object3D | null
+  kneeL?: Object3D | null
+  kneeR?: Object3D | null
 }
 
 /** 动作可选参数:强度/速度倍率与相位偏移(供多个 avatar 错峰) */
@@ -28,7 +34,7 @@ export interface AnimOptions {
  * 无 JSX / 无组件 / 无 hooks —— 仅在调用方的 useFrame 内被调用。
  * 每次调用会为涉及的关节设置一个完整姿态(而非增量累加),因此可安全逐帧重复调用。
  *
- * 约定:root.position.y 为离地高度(y=0 为站立基准),head/arm/leg 均为相对局部旋转。
+ * 约定:root.position.y 为离地高度(y=0 为站立基准),其余关节均为相对局部旋转。
  */
 
 // —— 复用常量,避免闭包内分配 —— //
@@ -47,8 +53,14 @@ function time(t: number, opts: AnimOptions | undefined): number {
 function neutralLimbs(refs: AvatarRefs): void {
   if (refs.armL) refs.armL.rotation.set(0, 0, 0)
   if (refs.armR) refs.armR.rotation.set(0, 0, 0)
+  if (refs.elbowL) refs.elbowL.rotation.set(0, 0, 0)
+  if (refs.elbowR) refs.elbowR.rotation.set(0, 0, 0)
+  if (refs.wristL) refs.wristL.rotation.set(0, 0, 0)
+  if (refs.wristR) refs.wristR.rotation.set(0, 0, 0)
   if (refs.legL) refs.legL.rotation.set(0, 0, 0)
   if (refs.legR) refs.legR.rotation.set(0, 0, 0)
+  if (refs.kneeL) refs.kneeL.rotation.set(0, 0, 0)
+  if (refs.kneeR) refs.kneeR.rotation.set(0, 0, 0)
 }
 
 function applyFacing(refs: AvatarRefs, opts: AnimOptions | undefined): void {
@@ -82,14 +94,20 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = lerpValue(root.position.y, Math.sin(tt * 1.6 * L) * 0.012)
+    root.position.y = lerpValue(root.position.y, 0)
     root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
   lerpRotation(refs.head, 0.04 + Math.sin(tt * 1.2 * L) * 0.03, Math.sin(tt * 0.5 * L) * 0.12, Math.sin(tt * 0.8 * L) * 0.05)
   lerpRotation(refs.armL, Math.sin(tt * 1.6 * L) * 0.04, 0, 0.06)
   lerpRotation(refs.armR, Math.sin(tt * 1.6 * L + Math.PI) * 0.04, 0, -0.06)
+  lerpRotation(refs.elbowL, 0, 0, 0)
+  lerpRotation(refs.elbowR, 0, 0, 0)
+  lerpRotation(refs.wristL, 0, 0, 0)
+  lerpRotation(refs.wristR, 0, 0, 0)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
+  lerpRotation(refs.kneeL, 0, 0, 0)
+  lerpRotation(refs.kneeR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -102,7 +120,7 @@ export function applyMonitoring(refs: AvatarRefs, t: number, opts?: AnimOptions)
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = lerpValue(root.position.y, Math.sin(tt * 1.25 * L) * 0.006)
+    root.position.y = lerpValue(root.position.y, 0)
     root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.7 * L) * 0.008)
   }
   lerpRotation(
@@ -111,10 +129,16 @@ export function applyMonitoring(refs: AvatarRefs, t: number, opts?: AnimOptions)
     Math.sin(tt * 0.45 * L) * 0.075,
     Math.sin(tt * 0.6 * L) * 0.015
   )
-  lerpRotation(refs.armL, -0.68 + Math.sin(tt * 1.4 * L) * 0.035, 0, 0.1)
-  lerpRotation(refs.armR, -0.72 + Math.cos(tt * 1.25 * L) * 0.035, 0, -0.1)
+  lerpRotation(refs.armL, -0.46 + Math.sin(tt * 1.4 * L) * 0.025, 0, 0.1)
+  lerpRotation(refs.armR, -0.49 + Math.cos(tt * 1.25 * L) * 0.025, 0, -0.1)
+  lerpRotation(refs.elbowL, -0.66 + Math.sin(tt * 1.1 * L) * 0.04, 0, 0)
+  lerpRotation(refs.elbowR, -0.7 + Math.cos(tt * 1.05 * L) * 0.04, 0, 0)
+  lerpRotation(refs.wristL, 0.16 + Math.sin(tt * 1.3 * L) * 0.025, 0, 0.025)
+  lerpRotation(refs.wristR, 0.16 + Math.cos(tt * 1.2 * L) * 0.025, 0, -0.025)
   lerpRotation(refs.legL, 0.02, 0, 0)
   lerpRotation(refs.legR, -0.02, 0, 0)
+  lerpRotation(refs.kneeL, 0.04, 0, 0)
+  lerpRotation(refs.kneeR, 0.04, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -127,15 +151,21 @@ export function applyTyping(refs: AvatarRefs, t: number, opts?: AnimOptions): vo
   const beat = tt * 16 * L
   const root = refs.root
   if (root) {
-    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(tt * 8 * L)) * 0.02)
+    root.position.y = lerpValue(root.position.y, 0)
     root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
   lerpRotation(refs.head, 0.22 + Math.sin(beat) * 0.05, Math.sin(tt * 2 * L) * 0.06, 0)
-  // 手臂前伸至桌面(rotation.x 负值抬向前方),小幅交替敲击
-  lerpRotation(refs.armL, -1.15 + Math.sin(beat) * 0.28, 0, 0.12)
-  lerpRotation(refs.armR, -1.15 + Math.cos(beat) * 0.28, 0, -0.12)
+  // 肩部负责前伸,肘和腕承担主要敲击幅度,避免整条手臂刚性摆动。
+  lerpRotation(refs.armL, -0.58 + Math.sin(beat) * 0.035, 0, 0.12)
+  lerpRotation(refs.armR, -0.58 + Math.cos(beat) * 0.035, 0, -0.12)
+  lerpRotation(refs.elbowL, -0.78 + Math.sin(beat) * 0.16, 0, 0)
+  lerpRotation(refs.elbowR, -0.78 + Math.cos(beat) * 0.16, 0, 0)
+  lerpRotation(refs.wristL, 0.18 + Math.sin(beat + Math.PI / 3) * 0.2, 0, 0.035)
+  lerpRotation(refs.wristR, 0.18 + Math.cos(beat + Math.PI / 3) * 0.2, 0, -0.035)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
+  lerpRotation(refs.kneeL, 0.06, 0, 0)
+  lerpRotation(refs.kneeR, 0.06, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -147,18 +177,26 @@ export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   const tt = time(t, opts)
   const stride = tt * 6 * L
   const swing = Math.sin(stride)
+  const bendL = Math.max(0, swing)
+  const bendR = Math.max(0, -swing)
   const root = refs.root
   if (root) {
     // 步伐落点时的双峰起伏
-    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.06)
+    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.022)
     root.rotation.z = lerpAngle(root.rotation.z, Math.sin(stride) * 0.03)
   }
   lerpRotation(refs.head, 0.06, 0, Math.sin(stride) * 0.04)
-  // 对角摆动:左臂与右腿同相,右臂与左腿同相
-  lerpRotation(refs.armL, swing * 0.6, 0, 0)
-  lerpRotation(refs.armR, -swing * 0.6, 0, 0)
-  lerpRotation(refs.legL, -swing * 0.7, 0, 0)
-  lerpRotation(refs.legR, swing * 0.7, 0, 0)
+  // 对角摆动:肩/髋控制步幅,肘/膝在摆动侧屈曲以形成清晰的回收步。
+  lerpRotation(refs.armL, swing * 0.4, 0, 0)
+  lerpRotation(refs.armR, -swing * 0.4, 0, 0)
+  lerpRotation(refs.elbowL, -0.12 - bendL * 0.22, 0, 0)
+  lerpRotation(refs.elbowR, -0.12 - bendR * 0.22, 0, 0)
+  lerpRotation(refs.wristL, swing * -0.06, 0, 0)
+  lerpRotation(refs.wristR, swing * 0.06, 0, 0)
+  lerpRotation(refs.legL, -swing * 0.5, 0, 0)
+  lerpRotation(refs.legR, swing * 0.5, 0, 0)
+  lerpRotation(refs.kneeL, 0.08 + bendL * 0.48, 0, 0)
+  lerpRotation(refs.kneeR, 0.08 + bendR * 0.48, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -170,7 +208,7 @@ export function applyTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = lerpValue(root.position.y, Math.sin(tt * 2.4 * L) * 0.015)
+    root.position.y = lerpValue(root.position.y, 0)
     root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
   // 叠加两个频率模拟说话时的自然点头/侧偏
@@ -179,8 +217,14 @@ export function applyTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   const gesture = Math.max(0, Math.sin(tt * 1.3 * L))
   lerpRotation(refs.armR, -0.5 - gesture * 0.7, 0, -0.2 - gesture * 0.25)
   lerpRotation(refs.armL, -0.1, 0, 0.08)
+  lerpRotation(refs.elbowL, 0, 0, 0)
+  lerpRotation(refs.elbowR, 0, 0, 0)
+  lerpRotation(refs.wristL, 0, 0, 0)
+  lerpRotation(refs.wristR, 0, 0, 0)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
+  lerpRotation(refs.kneeL, 0, 0, 0)
+  lerpRotation(refs.kneeR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -192,15 +236,21 @@ export function applyThinking(refs: AvatarRefs, t: number, opts?: AnimOptions): 
   const tt = time(t, opts)
   const root = refs.root
   if (root) {
-    root.position.y = lerpValue(root.position.y, Math.sin(tt * 0.9 * L) * 0.008)
+    root.position.y = lerpValue(root.position.y, 0)
     root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.4 * L) * 0.02)
   }
   lerpRotation(refs.head, -0.12 + Math.sin(tt * 0.7 * L) * 0.03, 0.1 + Math.sin(tt * 0.5 * L) * 0.05, 0.18)
   // 右手托腮:大幅抬起并内收
   lerpRotation(refs.armR, -2.3, 0, -0.55)
   lerpRotation(refs.armL, -0.08, 0, 0.05)
+  lerpRotation(refs.elbowL, 0, 0, 0)
+  lerpRotation(refs.elbowR, 0, 0, 0)
+  lerpRotation(refs.wristL, 0, 0, 0)
+  lerpRotation(refs.wristR, 0, 0, 0)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
+  lerpRotation(refs.kneeL, 0, 0, 0)
+  lerpRotation(refs.kneeR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 

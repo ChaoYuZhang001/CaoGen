@@ -100,7 +100,7 @@ try {
     name: 'Morning review updated',
     prompt: 'Summarize open work.',
     schedule: '@hourly',
-    engine: 'gemini',
+    engine: 'openai',
     permissionMode: 'acceptEdits',
     budgetUsd: 2,
     nextRunAt: null,
@@ -113,7 +113,7 @@ try {
   assertEqual(updated.projectCwd, projectRoot)
   assertEqual(updated.schedule, '@hourly')
   assertEqual(updated.permissionMode, 'acceptEdits')
-  assertEqual(updated.engine, 'gemini')
+  assertEqual(updated.engine, 'openai')
   assertEqual(updated.createdAt, 1000)
   assert(updated.updatedAt >= created.updatedAt, 'updateRoutine should advance updatedAt')
   assert(!hasOwn(updated, 'nextRunAt'), 'nextRunAt: null should clear the persisted schedule boundary')

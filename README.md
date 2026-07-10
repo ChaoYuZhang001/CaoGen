@@ -4,7 +4,7 @@
 
 # CaoGen
 
-### 国产开源 · 多厂商不绑定 · AI 编码桌面工作室
+### 国产开源 · 多厂商不绑定 · AI 工作桌面
 
 <img src="https://img.shields.io/badge/version-v0.1.3-blue" alt="version">
 <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -12,7 +12,7 @@
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
-**不绑厂商、不锁模型、不乱改主目录，你的桌面你做主。**
+**多模型、多项目、多文件、多任务、多工具，统一放进一个可控的桌面工作室。**
 
 [立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#3-分钟快速开始) | [贡献指南](./CONTRIBUTING.md) | [安全报告](./SECURITY.md) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
 
@@ -24,7 +24,7 @@
 
 - [核心优势](#核心优势)
 - [界面预览](#界面预览)
-- [为什么选 CaoGen](#为什么选-caogen)
+- [工作桌面能力](#工作桌面能力)
 - [核心功能](#核心功能)
 - [3 分钟快速开始](#3-分钟快速开始)
 - [下载安装](#下载安装)
@@ -38,11 +38,11 @@
 
 ## 核心优势
 
-| 不绑定任何厂商 | 真隔离不搞乱代码 | 为开发者而生 |
+| 多厂商统一 | 项目规则独立 | 完整工作桌面 |
 | :--- | :--- | :--- |
-| Claude、OpenAI、DeepSeek、Qwen、Kimi、智谱、Grok、网关和本地模型都能接。余额不足、限流或服务异常时可自动切到健康 Provider。 | 每个任务可独立 Git worktree，AI 改代码不污染主目录。合并前先看 Diff，不想要的改动直接丢掉。 | 不是聊天套壳。内置终端、文件编辑、Diff、Git、预览、浏览器批注、多 Agent 编排和 3D 办公区。 |
+| 支持多模型、多密钥、多厂商配置，也能接入中转站和本地兼容服务。活动密钥鉴权、额度或限流失败时先切同 Provider 备用密钥，仍失败再切健康 Provider。 | 每个项目可独立配置 AI 工作规则、技术栈说明、常用命令、默认调度策略和安全边界。 | 内置代码执行、项目理解、任务拆解、终端、文件、Diff、Git、预览、浏览器批注、插件扩展和 3D 办公区。 |
 
-一句话：**CaoGen 想把 Claude Code / Codex / Gemini CLI / Cursor / Cline / Aider 的高频编码工作流，收进一个可控、可审、可并行的桌面工作台。**
+一句话：**CaoGen 是一个多厂商 AI 工作桌面，让用户在一个桌面环境里完成从想法、需求、资料、方案到代码、内容、测试、审查与交付的完整 AI 工作流程。**
 
 ## 界面预览
 
@@ -52,27 +52,38 @@
 
 > 3D 办公区不是装饰：每个会话对应一个工位，运行中、等待审批、完成、失败、成本气泡和子代理消息流都来自真实会话状态。
 
-## 为什么选 CaoGen？
+## 工作桌面能力
 
-| 痛点 | CaoGen | 常见限制 |
-|---|---|---|
-| 厂商绑定 | 支持 Claude / OpenAI 协议、国产模型、网关和本地模型；Provider 可自由切换 | 单厂商产品容易被余额、限流、账号、模型策略卡住 |
-| 多任务乱改代码 | 每个任务可独立 worktree，合并前有 Diff、patch、冲突检查和回滚 | 多个 Agent 直接改同一目录时容易互相覆盖 |
-| 代码安全边界 | 本地桌面应用，密钥加密落盘；代码只发给你自己选择的模型或工具服务 | 闭源 SaaS 边界不透明，难审计真实上传内容 |
-| 成本 | MIT 开源免费；预算闸门可限制会话、Provider 和月度花费 | 订阅费和模型费叠加，重度使用成本不可控 |
-| 国产适配 | 内置 DeepSeek / Qwen / Kimi / 智谱 / 豆包等常用模板，支持国内镜像配置 | 国际产品经常需要额外网关或网络处理 |
-| 桌面体验 | 终端、浏览器、Git、预览、文件编辑、3D 多任务视图在一个工作台里 | CLI 强但不可视，简单套壳又缺少工程控制 |
+| 能力域 | CaoGen 当前目标 |
+|---|---|
+| 模型与服务 | 多协议、多厂商、网关、中转站和本地模型统一配置；Provider、模型、密钥、Base URL 和健康状态集中管理。 |
+| 项目与规则 | 每个项目独立保存提示词、技术栈、常用命令、测试/构建命令、禁止目录、调度策略和项目记忆。 |
+| 文件与资料 | 在应用内查看 HTML、Markdown、JSON、CSV、PDF、图片和 Office 文档；macOS 可生成隔离的系统文档预览，结构页、工作表和幻灯片可单独发送给 Agent。 |
+| 任务与交付 | 支持任务拆解、命令执行、Diff 审查、Git 操作、worktree 隔离、冲突检查和交付前验证。 |
+| 调度与成本 | 支持均衡、成本优先、质量优先和速度优先，按任务类型、项目规则、用户规则、Provider 健康状态、预算和失败记录选择模型，并保留可读的路由原因。 |
+| 可视化办公 | 3D 办公区展示会话、工位、审批、失败、成本、耗时、子任务消息和工作区状态。 |
 
 ## 核心功能
 
-### 多模型支持
+### 多厂商模型配置
 
-- Claude Agent SDK 默认引擎，与 Claude Code 同源。
-- OpenAI 引擎支持 Responses API 与 Chat Completions 两种协议。
-- 常用 Provider 模板：OpenAI、DeepSeek、Kimi、智谱 GLM、Grok、Qwen、百川、豆包、本地 OpenAI 兼容服务、one-api/new-api 网关。
+- 多 Provider、多 API Key、自定义 Base URL、中转站和本地兼容服务统一管理；密钥值仅在主进程加密保存。
+- 支持主流文本生成协议、流式输出和工具调用循环。
+- 常用 Provider 模板覆盖海外、国产、网关和本地模型服务。
 - Chat Completions 兼容模型可通过工具调用循环读文件、改代码、跑命令，不只是聊天。
-- 智能路由、故障切换、模型健康记录和预算闸门已接入。
-- Codex CLI / Gemini CLI 引擎是实验性路径：Codex 已做真对话验证，Gemini 依赖用户本机 CLI 登录状态。
+- 智能路由、同 Provider 备用密钥接管、跨 Provider 故障切换、模型健康记录和预算闸门已接入。
+- 速度优先会先比较模型延迟档，再参考历史延迟 EMA；质量优先与速度优先对同一复杂任务可产生不同选择。
+- 调度策略按“项目规则 > Core 用户策略 > 专用工作模式预设”生效，设置页和自定义规则均可保存速度优先条件。
+- 模型不可用时必须明确提示原因，不伪装成可用。
+
+### 项目级工作规则
+
+- 每个项目可独立配置提示词、项目背景、技术栈说明和输出风格。
+- 可记录启动命令、测试命令、构建命令、关键目录、禁止修改路径和验收标准。
+- 可配置默认模型、规划模型、编码模型、审查模型、低成本模型和 fallback 顺序。
+- `caogen.md` 的模型调度策略可影响自动路由，并在调度理由里显示来源。
+- 项目记忆、历史决策和常见问题可复用，但沉淀前需要用户确认。
+- 未配置 `caogen.md` 的新项目也会注入项目身份和工作目录边界，避免规则链路静默失效。
 
 ### 编码核心能力
 
@@ -91,11 +102,12 @@
 - DAG 自动合并属于高风险工作流，适合在测试仓库或明确验证命令下使用。
 - 任务快照与会话历史持久化，重启后可恢复上下文。
 
-### 桌面原生体验
+### 文件预览与桌面体验
 
 - 内置终端，不用切出应用跑命令。
 - 内置文件浏览和文本编辑器。
-- HTML / Markdown / Text / CSV / JSON / 图片 / PDF 预览。
+- HTML / Markdown / Text / CSV / JSON / 图片 / PDF 预览；PDF 支持内嵌查看和文本层 best-effort 提取。
+- Word / Excel / PowerPoint 已接入 OOXML 文本与结构预览(`.docx` / `.xlsx` / `.pptx`)；结构视图支持页、工作表和幻灯片导航及当前单元引用。macOS 可显示无网络、sandbox 隔离的系统文档预览，失败时回退首屏缩略图或结构视图；系统渲染可能与原应用中的完整原版式存在差异。
 - 内置浏览器，支持选区批注、DOM 圈选、元素截图、控制台错误和网络失败观测。
 - 系统通知和防休眠：任务完成、失败、等待审批时能提醒。
 - GUI 自动化支持 Windows/macOS 路径，但默认关闭，属于高风险能力，需要显式授权。
@@ -104,7 +116,7 @@
 
 - 写实 3D 办公区：多会话、多 Provider、成本、状态、父子 Agent 消息流可视化。
 - 项目记忆、分层记忆和记忆建议，确认后才沉淀。
-- Claude / Codex plugin、skill、agent、MCP 扫描，支持启停、投递给 Agent 和 MCP 运行态探测。
+- plugin、skill、agent、MCP 扫描，支持启停、投递给 Agent 和 MCP 运行态探测。
 - 自动 Skill 学习、复用和优化的基础链路已接入。
 - 本地 Routines：可创建、编辑、运行、记录 run log；云端 Runner 不在当前版本范围内。
 - 中英双语、深色/浅色/跟随系统主题。
@@ -113,8 +125,8 @@
 ## 3 分钟快速开始
 
 1. **下载安装**：从 [Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载对应系统安装包。
-2. **添加模型**：打开设置，选择 Provider 模板，填入 API Key。DeepSeek、Qwen、Kimi、Claude、GPT、Grok、本地模型都可以。
-3. **打开项目**：选择你的代码目录，新建会话，让 AI 开始读代码、改代码、跑测试、看 Diff。
+2. **添加模型**：打开设置，选择 Provider 模板或自定义中转站，填入 API Key。
+3. **打开项目**：选择你的代码目录或资料目录，新建会话，让 AI 开始理解项目、处理文件、拆解任务、跑验证、看 Diff。
 
 第一次建议试这个提示词：
 
@@ -130,7 +142,7 @@
 |---|---|---|---|
 | macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 已发布 | 推荐 M 系列 Mac 使用 |
 | macOS Intel | `CaoGen-0.1.3.dmg` / `CaoGen-0.1.3-mac.zip` | 已发布 | 适合 Intel Mac |
-| Windows | 本次 v0.1.3 未发布新包 | 可使用上一版 | Windows 安装包会在后续版本单独补齐 |
+| Windows | `CaoGen.Setup.0.1.3.exe` | 已发布 | 请按 GitHub Release 资产和校验信息下载 |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
 > **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
@@ -147,13 +159,14 @@
 | `CaoGen-0.1.3-arm64-mac.zip` | `7faaa14ccda133b0094158c3445ca8ff191fb73bc5324c4c2512a7f7566839a5` |
 | `CaoGen-0.1.3.dmg` | `82ab21c0f629d24bdd4db02b19b982daaffa1f9be9f28ad7010813659e41099d` |
 | `CaoGen-0.1.3-mac.zip` | `66d522b5c90067edf3addfadbb6aa613bd272208cb105d03a836adc66af5f3a5` |
+| `CaoGen.Setup.0.1.3.exe` | 请以 GitHub Release 资产摘要或重新下载后本机 `shasum -a 256` 为准 |
 | `latest-mac.yml` | `0fb955d9dffcd708746c24c00c0167fa381d659a2fa9114e1f4094ffbed6560e` |
 
 ## 常见问题
 
-**Q: 必须要有 Claude 账号才能用吗？**
+**Q: 必须绑定某个厂商账号才能用吗？**
 
-A: 不需要。Claude 引擎需要 Claude 登录或 `ANTHROPIC_API_KEY`，但 OpenAI 引擎可以直连任意 OpenAI 兼容模型，例如 DeepSeek、Qwen、Kimi、Grok、网关或本地模型。
+A: 不需要。CaoGen 支持多厂商和本地兼容服务。某些引擎或 Provider 需要对应账号、API Key 或本机登录态，但它们不是使用 CaoGen 的唯一入口。
 
 **Q: 支持本地模型吗？**
 
@@ -166,10 +179,6 @@ A: 建议新会话开启 worktree 隔离。AI 在独立 worktree 里改，合并
 **Q: 会上传我的代码吗？**
 
 A: CaoGen 没有自己的云端代码托管服务。代码会留在本机，但你发给 Agent 的上下文和工具结果会发送给你选择的模型 Provider 或本地/网关服务；请按自己的保密要求选择 Provider。
-
-**Q: 和 Claude Code / Codex 比怎么样？**
-
-A: CaoGen 的目标不是替代单个模型 CLI 的所有细节，而是把多模型、多会话、worktree 隔离、Diff、浏览器、终端、插件和 3D 多任务视图整合到一个桌面工作台里。
 
 **Q: 现在适合正式生产使用吗？**
 
@@ -194,7 +203,7 @@ npm run dev
 npm run typecheck  # TypeScript 类型检查
 npm run build      # 构建生产产物到 out/
 npm start          # 预览构建产物
-npm run test:deep  # 深度测试矩阵，当前脚本编排 65 项，失败即停
+npm run test:deep  # 深度测试矩阵，当前脚本编排 81 项，失败即停
 npm run secret:scan # 扫描当前工作树中的明显密钥
 ```
 
@@ -214,10 +223,8 @@ src/
   shared/types.ts        主/渲染进程共享类型、IPC 协议、事件模型
   main/
     engine.ts/engines.ts 引擎接口与注册表
-    agentSession.ts      Claude Agent SDK 会话封装
+    agentSession.ts      Agent SDK 会话封装
     openaiEngine.ts      Responses / Chat Completions 原生编码 Agent
-    codexEngine.ts       Codex CLI 实验性适配器
-    geminiEngine.ts      Gemini CLI 实验性适配器
     sessionManager.ts    多会话、子代理、DAG、预算、历史
     providers.ts         Provider、密钥加密、模型列表探测
     worktreeMerge.ts     worktree 合并审查、patch、PR/MR
@@ -233,10 +240,9 @@ src/
 ## 项目状态
 
 - 当前版本：**v0.1.3 beta**。
-- v0.1.3 基于当前 `main` 打包，优先发布 macOS 安装包。
-- macOS v0.1.3 安装包已经公开上传；Windows 安装包本轮未更新。
-- 已验证过的关键链路包括 DeepSeek 原生编码 Agent、Codex CLI 真对话、子代理编排、OpenAI 双协议、32 并发压测和多项 Electron mock E2E。
-- 仍需实测/收口：签名与公证、Gemini CLI 登录后的真对话、N1 迁移 30 分钟真人计时、Linux 包发布验证。
+- v0.1.3 基于当前 `main` 打包，已发布 macOS 和 Windows 安装包。
+- 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
+- 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
 
 后续路线图见 [ROADMAP.md](./ROADMAP.md)，完整需求边界见 [REQUIREMENTS.md](./REQUIREMENTS.md)。
 
@@ -251,5 +257,5 @@ src/
 ---
 
 <div align="center">
-<sub>CaoGen · 国产开源 AI 编码桌面工作室 · 不绑厂商，不锁模型</sub>
+<sub>CaoGen · 国产开源 AI 工作桌面 · 不绑厂商，不锁模型</sub>
 </div>

@@ -5,8 +5,8 @@ export interface OfficeProp {
 }
 
 const CYAN = '#8fe9ff'
-const APPROVAL = '#e0a33c'
-const DINING = '#91d18b'
+const APPROVAL = '#6f8fa0'
+const DINING = '#5f7f8c'
 const FLOOR_DARK = '#151a21'
 const PANEL_DARK = '#171b22'
 const METAL = '#303845'
@@ -63,7 +63,7 @@ function RestroomIcon({ accent }: { accent: string }): React.JSX.Element {
   return (
     <group position={[0, 0.42, 0.04]} scale={0.86}>
       <mesh position={[-0.12, 0.18, 0]}>
-        <sphereGeometry args={[0.055, 16, 16]} />
+        <boxGeometry args={[0.09, 0.09, 0.018]} />
         <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.34} toneMapped={false} />
       </mesh>
       <mesh position={[-0.12, -0.02, 0]}>
@@ -71,7 +71,7 @@ function RestroomIcon({ accent }: { accent: string }): React.JSX.Element {
         <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.26} toneMapped={false} />
       </mesh>
       <mesh position={[0.12, 0.18, 0]}>
-        <sphereGeometry args={[0.055, 16, 16]} />
+        <boxGeometry args={[0.09, 0.09, 0.018]} />
         <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.34} toneMapped={false} />
       </mesh>
       <mesh position={[0.12, -0.02, 0]}>
@@ -180,12 +180,14 @@ function RestroomFixture({
       ))}
       <mesh position={[0, 0.18, -0.08]} receiveShadow>
         <boxGeometry args={[0.36, 0.12, 0.18]} />
-        <meshStandardMaterial color="#dce8ef" metalness={0.08} roughness={0.48} />
+        <meshStandardMaterial color="#9fb2c2" metalness={0.08} roughness={0.48} />
       </mesh>
-      <mesh position={[0, 0.27, -0.08]}>
-        <torusGeometry args={[0.09, 0.01, 8, 32]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.24} transparent opacity={0.58} toneMapped={false} />
-      </mesh>
+      {[-0.07, 0.07].map((x) => (
+        <mesh key={`restroom-fixture-slat-${x}`} position={[x, 0.27, -0.08]}>
+          <boxGeometry args={[0.1, 0.014, 0.018]} />
+          <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.24} transparent opacity={0.58} toneMapped={false} />
+        </mesh>
+      ))}
       <Strip position={[0, 0.044, 0.26]} size={[0.62, 0.014, 0.08]} color={accent} opacity={0.28} />
     </group>
   )
@@ -204,7 +206,7 @@ function DiningFixture({
     <group position={position} rotation={rotation}>
       <mesh position={[0, 0.22, 0]} receiveShadow castShadow>
         <boxGeometry args={[0.92, 0.32, 0.24]} />
-        <meshStandardMaterial color="#222a23" metalness={0.12} roughness={0.74} />
+        <meshStandardMaterial color="#202832" metalness={0.12} roughness={0.74} />
       </mesh>
       <mesh position={[0, 0.41, -0.01]}>
         <boxGeometry args={[0.78, 0.024, 0.25]} />
@@ -212,13 +214,13 @@ function DiningFixture({
       </mesh>
       <mesh position={[0.04, 0.24, -0.55]} receiveShadow castShadow>
         <cylinderGeometry args={[0.24, 0.24, 0.045, 28]} />
-        <meshStandardMaterial color="#384031" metalness={0.08} roughness={0.62} />
+        <meshStandardMaterial color="#303845" metalness={0.08} roughness={0.62} />
       </mesh>
       {[-0.3, 0.38].map((x) => (
         <group key={x} position={[x, 0, -0.55]}>
           <mesh position={[0, 0.13, 0]} receiveShadow>
             <cylinderGeometry args={[0.09, 0.09, 0.05, 20]} />
-            <meshStandardMaterial color="#273326" roughness={0.64} />
+            <meshStandardMaterial color="#26313b" roughness={0.64} />
           </mesh>
           <mesh position={[0, 0.06, 0]}>
             <cylinderGeometry args={[0.018, 0.018, 0.13, 12]} />

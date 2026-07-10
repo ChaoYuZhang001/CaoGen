@@ -52,6 +52,25 @@ try {
   assertEqual(limited.rows.length, 2)
   assert(limited.truncated, 'maxRows should mark parsed data as truncated')
 
+  const searchAll = utils.searchTextPreview('Alpha\nbeta alpha\nGamma\n', 'ALPHA')
+  assertEqual(searchAll.matchCount, 2)
+  assertEqual(searchAll.visibleLineCount, 4)
+  assert(searchAll.text.includes('beta alpha'), 'search without matchesOnly should keep full text')
+
+  const searchMatches = utils.searchTextPreview('Alpha\nbeta alpha\nGamma\n', 'alpha', { matchesOnly: true })
+  assertEqual(searchMatches.matchCount, 2)
+  assertEqual(searchMatches.visibleLineCount, 2)
+  assert(searchMatches.text.includes('1: Alpha'), 'matchesOnly should include matching line number')
+  assert(searchMatches.text.includes('2: beta alpha'), 'matchesOnly should include later matching line number')
+  assert(!searchMatches.text.includes('Gamma'), 'matchesOnly should hide non-matching lines')
+
+  const searchTruncated = utils.searchTextPreview('one\none\none\none\n', 'one', {
+    matchesOnly: true,
+    maxMatchedLines: 2
+  })
+  assert(searchTruncated.truncated, 'matchesOnly should report truncated matched lines')
+  assert(searchTruncated.text.includes('truncated 2 matched lines'), 'matchesOnly should explain hidden matches')
+
   console.log('previewUtils smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })

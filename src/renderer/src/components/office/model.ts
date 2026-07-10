@@ -1,5 +1,5 @@
 import type { SessionState, ToolResultInfo } from '../../store'
-import type { TaskDagAutoMergeStatus, TaskDagTaskStatus } from '../../../../shared/types'
+import type { GitStatus, SchedulerStrategy, TaskDagAutoMergeStatus, TaskDagTaskStatus } from '../../../../shared/types'
 
 export type OfficeTaskKind = 'subtask' | 'tool'
 export type OfficeTaskStatus = 'pending' | 'running' | 'awaiting' | 'done' | 'error'
@@ -39,6 +39,93 @@ export interface OfficePacket {
   toolName: string
 }
 
+export interface OfficeRoutingSignal {
+  providerId: string
+  providerName?: string
+  model: string
+  reason: string
+  basis?: string
+  strategy?: SchedulerStrategy
+  taskKinds: string[]
+  riskLevel?: 'low' | 'medium' | 'high'
+  budgetDowngraded: boolean
+  validators: number
+  crossValidationEnabled: boolean
+}
+
+export interface OfficeFailoverSignal {
+  fromName: string
+  toName: string
+  model?: string
+  reason: string
+}
+
+export interface OfficeProviderKeyFailoverSignal {
+  providerName: string
+  fromKeyLabel: string
+  toKeyLabel: string
+  reason: string
+}
+
+export interface OfficeBudgetSignal {
+  costUsd: number
+  budgetUsd?: number
+  remainingUsd?: number
+  ratio?: number
+  overBudget: boolean
+  latestDurationMs?: number
+}
+
+export interface OfficeWorkspaceSignal {
+  isolated: boolean
+  branch?: string
+  worktreeState?: 'active' | 'removed'
+  worktreePath?: string
+  sourceCwd?: string
+  changedFiles: number
+  insertions: number
+  deletions: number
+  latestEvent?: 'checkpoint-restore'
+  gitOk?: boolean
+  gitBranch?: string
+  gitFiles?: number
+  gitStaged?: number
+  gitUnstaged?: number
+  gitUntracked?: number
+  gitError?: string
+}
+
+export interface OfficeSessionSignal {
+  routing?: OfficeRoutingSignal
+  failover?: OfficeFailoverSignal
+  keyFailover?: OfficeProviderKeyFailoverSignal
+  budget: OfficeBudgetSignal
+  workspace: OfficeWorkspaceSignal
+}
+
+export interface OfficeRealtimeSummary {
+  routedSessions: number
+  failoverSessions: number
+  budgetedSessions: number
+  overBudgetSessions: number
+  totalCostUsd: number
+  totalBudgetUsd: number
+  totalDurationMs: number
+  crossValidationValidators: number
+  isolatedSessions: number
+  removedWorktrees: number
+  workspaceChangedFiles: number
+  workspaceInsertions: number
+  workspaceDeletions: number
+  gitTrackedSessions: number
+  gitDirtySessions: number
+  gitErroredSessions: number
+  gitFiles: number
+  gitStaged: number
+  gitUnstaged: number
+  gitUntracked: number
+}
+
 function childStatus(status: string): OfficeTaskStatus {
   if (status === 'error') return 'error'
   if (status === 'running' || status === 'starting') return 'running'
@@ -73,6 +160,7 @@ export interface OfficeSessionModel {
   tasks: OfficeTask[]
   taskStats: OfficeTaskStats
   currentTask?: OfficeTask
+  signal: OfficeSessionSignal
 }
 
 export interface OfficeModel {
@@ -81,6 +169,7 @@ export interface OfficeModel {
   taskStats: OfficeTaskStats
   currentTask?: OfficeTask
   sessions: Record<string, OfficeSessionModel>
+  realtime: OfficeRealtimeSummary
 }
 
 const EMPTY_STATS: OfficeTaskStats = {
@@ -94,12 +183,39 @@ const EMPTY_STATS: OfficeTaskStats = {
   error: 0
 }
 
+const EMPTY_REALTIME: OfficeRealtimeSummary = {
+  routedSessions: 0,
+  failoverSessions: 0,
+  budgetedSessions: 0,
+  overBudgetSessions: 0,
+  totalCostUsd: 0,
+  totalBudgetUsd: 0,
+  totalDurationMs: 0,
+  crossValidationValidators: 0,
+  isolatedSessions: 0,
+  removedWorktrees: 0,
+  workspaceChangedFiles: 0,
+  workspaceInsertions: 0,
+  workspaceDeletions: 0,
+  gitTrackedSessions: 0,
+  gitDirtySessions: 0,
+  gitErroredSessions: 0,
+  gitFiles: 0,
+  gitStaged: 0,
+  gitUnstaged: 0,
+  gitUntracked: 0
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
 }
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
 function firstLine(v: string): string {
@@ -318,6 +434,154 @@ function statsFor(tasks: OfficeTask[]): OfficeTaskStats {
   return stats
 }
 
+function latestRoutingSignal(session: SessionState): OfficeRoutingSignal | undefined {
+  for (let i = session.items.length - 1; i >= 0; i--) {
+    const item = session.items[i]
+    if (item.kind !== 'routing') continue
+    return {
+      providerId: item.providerId,
+      providerName: item.providerName ?? item.decision?.providerName,
+      model: item.model,
+      reason: item.reason,
+      basis: item.decision?.selectionReason,
+      strategy: item.decision?.strategy,
+      taskKinds: item.decision?.taskKinds ?? [],
+      riskLevel: item.decision?.riskLevel,
+      budgetDowngraded: Boolean(item.decision?.budgetDowngraded),
+      validators: item.crossValidationPlan?.validators.length ?? 0,
+      crossValidationEnabled: Boolean(item.crossValidationPlan?.enabled)
+    }
+  }
+  return undefined
+}
+
+function latestFailoverSignal(session: SessionState): OfficeFailoverSignal | undefined {
+  for (let i = session.items.length - 1; i >= 0; i--) {
+    const item = session.items[i]
+    if (item.kind !== 'failover') continue
+    return {
+      fromName: item.fromName,
+      toName: item.toName,
+      model: item.model,
+      reason: item.reason
+    }
+  }
+  return undefined
+}
+
+function latestProviderKeyFailoverSignal(session: SessionState): OfficeProviderKeyFailoverSignal | undefined {
+  for (let i = session.items.length - 1; i >= 0; i--) {
+    const item = session.items[i]
+    if (item.kind !== 'provider-key-failover') continue
+    return {
+      providerName: item.providerName,
+      fromKeyLabel: item.fromKeyLabel,
+      toKeyLabel: item.toKeyLabel,
+      reason: item.reason
+    }
+  }
+  return undefined
+}
+
+function latestTurnDurationMs(session: SessionState): number | undefined {
+  for (let i = session.items.length - 1; i >= 0; i--) {
+    const item = session.items[i]
+    if (item.kind !== 'turn-result') continue
+    return item.durationMs
+  }
+  return undefined
+}
+
+function latestWorkspaceSignal(session: SessionState, gitStatus?: GitStatus): OfficeWorkspaceSignal {
+  let changedFiles = 0
+  let insertions = 0
+  let deletions = 0
+  let latestEvent: OfficeWorkspaceSignal['latestEvent']
+  for (let i = session.items.length - 1; i >= 0; i--) {
+    const item = session.items[i]
+    if (item.kind !== 'workspace') continue
+    changedFiles = item.filesChanged.length
+    insertions = item.insertions ?? 0
+    deletions = item.deletions ?? 0
+    latestEvent = item.event
+    break
+  }
+  const gitFiles = gitStatus?.ok ? gitStatus.files.length : undefined
+  const gitStaged = gitStatus?.ok ? gitStatus.staged : undefined
+  const gitUnstaged = gitStatus?.ok ? gitStatus.unstaged : undefined
+  const gitUntracked = gitStatus?.ok ? gitStatus.untracked : undefined
+  return {
+    isolated: Boolean(session.meta.isolated),
+    branch: session.meta.branch,
+    worktreeState: session.meta.worktreeState,
+    worktreePath: session.meta.worktreePath,
+    sourceCwd: session.meta.sourceCwd,
+    changedFiles: gitFiles ?? changedFiles,
+    insertions,
+    deletions,
+    latestEvent,
+    gitOk: gitStatus ? gitStatus.ok : undefined,
+    gitBranch: gitStatus?.ok ? gitStatus.branch : undefined,
+    gitFiles,
+    gitStaged,
+    gitUnstaged,
+    gitUntracked,
+    gitError: gitStatus && !gitStatus.ok ? gitStatus.error : undefined
+  }
+}
+
+function sessionSignal(session: SessionState, gitStatus?: GitStatus): OfficeSessionSignal {
+  const costUsd = Math.max(0, num(session.meta.costUsd) ?? 0)
+  const budgetUsd = num(session.meta.budgetUsd)
+  const hasBudget = budgetUsd !== undefined && budgetUsd > 0
+  const remainingUsd = hasBudget ? Math.max(0, budgetUsd - costUsd) : undefined
+  const ratio = hasBudget ? Math.min(1, costUsd / budgetUsd) : undefined
+  return {
+    routing: latestRoutingSignal(session),
+    failover: latestFailoverSignal(session),
+    keyFailover: latestProviderKeyFailoverSignal(session),
+    budget: {
+      costUsd,
+      budgetUsd: hasBudget ? budgetUsd : undefined,
+      remainingUsd,
+      ratio,
+      overBudget: Boolean(hasBudget && costUsd >= budgetUsd),
+      latestDurationMs: latestTurnDurationMs(session)
+    },
+    workspace: latestWorkspaceSignal(session, gitStatus)
+  }
+}
+
+function mergeRealtime(into: OfficeRealtimeSummary, signal: OfficeSessionSignal): void {
+  if (signal.routing) {
+    into.routedSessions += 1
+    into.crossValidationValidators += signal.routing.validators
+  }
+  if (signal.failover) into.failoverSessions += 1
+  if (signal.budget.budgetUsd && signal.budget.budgetUsd > 0) {
+    into.budgetedSessions += 1
+    into.totalBudgetUsd += signal.budget.budgetUsd
+  }
+  if (signal.budget.overBudget) into.overBudgetSessions += 1
+  into.totalCostUsd += signal.budget.costUsd
+  into.totalDurationMs += signal.budget.latestDurationMs ?? 0
+  if (signal.workspace.isolated) into.isolatedSessions += 1
+  if (signal.workspace.worktreeState === 'removed') into.removedWorktrees += 1
+  into.workspaceChangedFiles += signal.workspace.changedFiles
+  into.workspaceInsertions += signal.workspace.insertions
+  into.workspaceDeletions += signal.workspace.deletions
+  if (signal.workspace.gitOk === true) {
+    into.gitTrackedSessions += 1
+    into.gitFiles += signal.workspace.gitFiles ?? 0
+    into.gitStaged += signal.workspace.gitStaged ?? 0
+    into.gitUnstaged += signal.workspace.gitUnstaged ?? 0
+    into.gitUntracked += signal.workspace.gitUntracked ?? 0
+    if ((signal.workspace.gitFiles ?? 0) > 0) into.gitDirtySessions += 1
+  } else if (signal.workspace.gitOk === false) {
+    into.gitErroredSessions += 1
+  }
+}
+
 function packetFor(task: OfficeTask, stationIndex: number): OfficePacket | undefined {
   if (task.status !== 'running' && task.status !== 'awaiting') return undefined
   return {
@@ -332,11 +596,16 @@ function packetFor(task: OfficeTask, stationIndex: number): OfficePacket | undef
   }
 }
 
-export function buildOfficeModel(ids: string[], sessions: Record<string, SessionState>): OfficeModel {
+export function buildOfficeModel(
+  ids: string[],
+  sessions: Record<string, SessionState>,
+  gitStatuses: Record<string, GitStatus | undefined> = {}
+): OfficeModel {
   const bySession: Record<string, OfficeSessionModel> = {}
   const allTasks: OfficeTask[] = []
   const packets: OfficePacket[] = []
   const totalStats = newStats()
+  const realtime: OfficeRealtimeSummary = { ...EMPTY_REALTIME }
   const stationBySession = new Map(ids.map((id, index) => [id, index] as const))
 
   ids.forEach((sessionId, stationIndex) => {
@@ -345,9 +614,11 @@ export function buildOfficeModel(ids: string[], sessions: Record<string, Session
     const tasks = collectSessionTasks(sessionId, session)
     const taskStats = statsFor(tasks)
     const active = currentTask(tasks)
-    bySession[sessionId] = { sessionId, tasks, taskStats, currentTask: active }
+    const signal = sessionSignal(session, gitStatuses[sessionId])
+    bySession[sessionId] = { sessionId, tasks, taskStats, currentTask: active, signal }
     allTasks.push(...tasks)
     mergeStats(totalStats, taskStats)
+    mergeRealtime(realtime, signal)
     for (const task of tasks) {
       const packet = packetFor(task, stationIndex)
       if (packet) packets.push(packet)
@@ -378,6 +649,7 @@ export function buildOfficeModel(ids: string[], sessions: Record<string, Session
     packets,
     taskStats: totalStats,
     currentTask: currentTask(allTasks),
-    sessions: bySession
+    sessions: bySession,
+    realtime
   }
 }

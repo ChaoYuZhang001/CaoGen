@@ -10,12 +10,12 @@ export interface OfficeProp {
   scale?: number
 }
 
-// 配色:哑光金属 + 木质桌面,克制中性
-const TOP_WOOD = '#5a4636' // 桌面木色(哑光)
-const TOP_EDGE = '#3f3126' // 桌面封边
-const METAL = '#2b2f36' // 哑光金属腿/横梁
-const METAL_DARK = '#20242a' // 金属暗部
-const TROUGH = '#191c21' // 侧边理线槽内壁
+// 配色:银灰复合桌面 + 哑光金属,减少木色造成的杂乱。
+const TOP_WOOD = '#707b85' // 中性复合桌面
+const TOP_EDGE = '#4f5a65' // 桌面封边
+const METAL = '#39424d' // 哑光金属腿/横梁
+const METAL_DARK = '#2d353f' // 金属暗部
+const TROUGH = '#202832' // 侧边理线槽内壁
 const CABLE = '#8fe9ff' // 理线槽内的线缆微光(青)
 
 // 桌体尺寸(约 1.4 宽 × 0.7 深),桌面高约 0.74
@@ -51,14 +51,22 @@ export default function Desk({
 
   return (
     <group ref={groupRef} position={position} rotation={rotation} scale={scale}>
-      {/* 桌面(木) */}
+      {/* 桌面(中性复合材质) */}
       <RoundedBox args={[W, TOP_T, D]} radius={0.025} smoothness={3} position={[0, TOP_Y - TOP_T / 2, 0]} castShadow receiveShadow>
-        <meshStandardMaterial color={TOP_WOOD} metalness={0.05} roughness={0.85} />
+        <meshStandardMaterial color={TOP_WOOD} metalness={0.18} roughness={0.62} />
       </RoundedBox>
-      {/* 桌面封边(压在木色上方一薄层,做出实木封边观感) */}
+      {/* 桌面封边(压在桌面上方一薄层,做出复合板边缘层次) */}
       <RoundedBox args={[W + 0.01, 0.012, D + 0.01]} radius={0.022} smoothness={3} position={[0, TOP_Y - TOP_T + 0.006, 0]} castShadow>
-        <meshStandardMaterial color={TOP_EDGE} metalness={0.1} roughness={0.7} />
+        <meshStandardMaterial color={TOP_EDGE} metalness={0.22} roughness={0.58} />
       </RoundedBox>
+      <mesh position={[0, TOP_Y + 0.004, D / 2 - 0.045]}>
+        <boxGeometry args={[W * 0.95, 0.018, 0.032]} />
+        <meshStandardMaterial color={CABLE} emissive={CABLE} emissiveIntensity={0.78} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, TOP_Y + 0.003, -D / 2 + 0.045]}>
+        <boxGeometry args={[W * 0.78, 0.014, 0.026]} />
+        <meshStandardMaterial color={CABLE} emissive={CABLE} emissiveIntensity={0.56} transparent opacity={0.86} toneMapped={false} />
+      </mesh>
 
       {/* 四条金属方腿 */}
       {(

@@ -124,17 +124,17 @@ export default function Plant({
       {/* 陶盆 */}
       <mesh position={[0, dims.potH / 2, 0]} castShadow receiveShadow>
         <cylinderGeometry args={[dims.potTop, dims.potBot, dims.potH, 24]} />
-        <meshStandardMaterial color="#8a5a3c" roughness={0.85} metalness={0.05} />
+        <meshStandardMaterial color="#4f5963" roughness={0.78} metalness={0.12} />
       </mesh>
       {/* 盆沿 */}
       <mesh position={[0, dims.potH, 0]} castShadow>
         <cylinderGeometry args={[dims.potTop * 1.08, dims.potTop, dims.potH * 0.12, 24]} />
-        <meshStandardMaterial color="#7a4d33" roughness={0.85} metalness={0.05} />
+        <meshStandardMaterial color="#65717d" roughness={0.72} metalness={0.16} />
       </mesh>
       {/* 土壤 */}
       <mesh position={[0, dims.soilY, 0]}>
         <cylinderGeometry args={[dims.soilR, dims.soilR, dims.potH * 0.12, 24]} />
-        <meshStandardMaterial color="#2e211a" roughness={1} />
+        <meshStandardMaterial color="#161d24" roughness={0.95} />
       </mesh>
 
       {/* 主干 + 叶片(整簇摇摆) */}
@@ -142,7 +142,7 @@ export default function Plant({
         {/* 主干 */}
         <mesh position={[0, dims.stemH / 2, 0]} castShadow>
           <cylinderGeometry args={[dims.stemR * 0.7, dims.stemR, dims.stemH, 12]} />
-          <meshStandardMaterial color="#4a6a2f" roughness={0.8} />
+          <meshStandardMaterial color="#27323a" roughness={0.8} />
         </mesh>
 
         {/* cone 主叶簇 */}
@@ -152,7 +152,7 @@ export default function Plant({
               <mesh position={[0, leaf.y + leaf.length / 2, 0]} castShadow>
                 <coneGeometry args={[leaf.radius, leaf.length, 6]} />
                 <meshStandardMaterial
-                  color={i % 2 === 0 ? '#3f8a35' : '#4fa63f'}
+                  color={i % 2 === 0 ? '#3d4d58' : '#475a66'}
                   roughness={0.7}
                   metalness={0}
                 />
@@ -167,7 +167,7 @@ export default function Plant({
             <group rotation={[leaf.tilt, 0, 0]}>
               <mesh position={[0, leaf.y + leaf.length / 2, 0]}>
                 <planeGeometry args={[leaf.radius * 2.2, leaf.length]} />
-                <meshStandardMaterial color="#57b246" roughness={0.7} side={DoubleSide} />
+                <meshStandardMaterial color="#506571" roughness={0.7} side={DoubleSide} />
               </mesh>
             </group>
           </group>

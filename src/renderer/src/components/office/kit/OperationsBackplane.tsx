@@ -3,17 +3,18 @@ import { useFrame } from '@react-three/fiber'
 import type { MeshStandardMaterial } from 'three'
 import type { OfficeProp } from './Floor'
 
-const CYAN = '#8fe9ff'
-const APPROVAL = '#e0a33c'
+const SIGNAL_CYAN = '#72b8c8'
+const STEEL_BLUE = '#7f95a6'
+const APPROVAL = '#6f8fa0'
 const PANEL = '#101820'
 const FRAME = '#26313b'
-const GLASS = '#9fd8e6'
+const GLASS = '#8294a3'
 const DIM = '#516071'
 
 function PulseBar({
   position,
   size,
-  color = CYAN,
+  color = SIGNAL_CYAN,
   intensity = 0.42,
   opacity = 0.72
 }: {
@@ -104,8 +105,8 @@ function DataTrunk(): React.JSX.Element {
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = 0.34 + Math.sin(t * 2.6) * 0.12
-      pulseRef.current.opacity = 0.46 + Math.sin(t * 1.8) * 0.08
+      pulseRef.current.emissiveIntensity = 0.18 + Math.sin(t * 2.6) * 0.06
+      pulseRef.current.opacity = 0.34 + Math.sin(t * 1.8) * 0.05
     }
   })
 
@@ -120,11 +121,11 @@ function DataTrunk(): React.JSX.Element {
         <boxGeometry args={[0.026, 0.012, 5.72]} />
         <meshStandardMaterial
           ref={pulseRef}
-          color={CYAN}
-          emissive={CYAN}
-          emissiveIntensity={0.34}
+          color={STEEL_BLUE}
+          emissive={STEEL_BLUE}
+          emissiveIntensity={0.18}
           transparent
-          opacity={0.46}
+          opacity={0.34}
           toneMapped={false}
         />
       </mesh>
@@ -141,7 +142,7 @@ function DataTrunk(): React.JSX.Element {
           </mesh>
           <mesh position={[x / 2, 0.06, z + dir * 0.08]} receiveShadow>
             <boxGeometry args={[Math.abs(x) * 0.82, 0.01, 0.02]} />
-            <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={0.22} transparent opacity={0.34} toneMapped={false} />
+            <meshStandardMaterial color={STEEL_BLUE} emissive={STEEL_BLUE} emissiveIntensity={0.12} transparent opacity={0.3} toneMapped={false} />
           </mesh>
         </group>
       ))}
@@ -149,8 +150,8 @@ function DataTrunk(): React.JSX.Element {
         <mesh key={`node-${z}`} position={[0, 0.074, z]} receiveShadow>
           <cylinderGeometry args={[0.08, 0.08, 0.012, 28]} />
           <meshStandardMaterial
-            color={i % 3 === 0 ? APPROVAL : CYAN}
-            emissive={i % 3 === 0 ? APPROVAL : CYAN}
+            color={i % 3 === 0 ? APPROVAL : SIGNAL_CYAN}
+            emissive={i % 3 === 0 ? APPROVAL : SIGNAL_CYAN}
             emissiveIntensity={0.28}
             transparent
             opacity={0.42}
@@ -186,7 +187,7 @@ export default function OperationsBackplane({
             key={`segment-signal-${x}`}
             position={[x, 0.6, 0.012]}
             size={[0.64, 0.018, 0.014]}
-            color={i === 1 ? APPROVAL : CYAN}
+            color={i === 1 ? APPROVAL : SIGNAL_CYAN}
             intensity={0.18}
             opacity={0.28}
           />
@@ -201,15 +202,15 @@ export default function OperationsBackplane({
             opacity={0.22}
           />
         ))}
-        <OperationsPanel position={[-1.95, 0.02, 0.04]} accent={CYAN} index={0} />
+        <OperationsPanel position={[-1.95, 0.02, 0.04]} accent={SIGNAL_CYAN} index={0} />
         <OperationsPanel position={[0, 0.02, 0.04]} accent={APPROVAL} index={1} />
-        <OperationsPanel position={[1.95, 0.02, 0.04]} accent={CYAN} index={2} />
+        <OperationsPanel position={[1.95, 0.02, 0.04]} accent={SIGNAL_CYAN} index={2} />
         {[-2.85, -0.95, 0.95, 2.85].map((x, i) => (
           <mesh key={`uplink-${x}`} position={[x, -0.76, 0.05]}>
             <boxGeometry args={[0.035, 0.3, 0.018]} />
             <meshStandardMaterial
-              color={i % 2 === 0 ? CYAN : APPROVAL}
-              emissive={i % 2 === 0 ? CYAN : APPROVAL}
+              color={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
+              emissive={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
               emissiveIntensity={0.24}
               transparent
               opacity={0.48}

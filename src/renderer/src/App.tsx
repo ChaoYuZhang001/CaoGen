@@ -12,6 +12,7 @@ import SettingsModal from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
+import { APP_ICON_URL, APP_NAME } from './brand'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(() => import('./components/office/OfficeView'))
@@ -120,7 +121,8 @@ export default function App(): React.JSX.Element {
   if (typeof window.agentDesk === 'undefined') {
     return (
       <div className="app-fallback">
-        <h1>CaoGen</h1>
+        <img className="app-fallback-logo" src={APP_ICON_URL} alt="" />
+        <h1>{APP_NAME}</h1>
         <p>请通过 Electron 启动本应用(npm run dev)。</p>
       </div>
     )

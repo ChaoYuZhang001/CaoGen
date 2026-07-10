@@ -64,7 +64,6 @@ export { default as LightingRig } from './LightingRig'
 export type { LightingRigProps } from './LightingRig'
 export { default as CameraRig } from './CameraRig'
 export { default as PostFX } from './PostFX'
-export { default as DustMotes } from './DustMotes'
 
 // ---- 组合根 ----
 export { default as OfficeSceneRoot } from './OfficeSceneRoot'

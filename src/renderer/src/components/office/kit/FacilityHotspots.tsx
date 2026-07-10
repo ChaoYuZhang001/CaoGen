@@ -45,7 +45,7 @@ export const OFFICE_FACILITY_SPECS: OfficeFacilitySpec[] = [
     key: 'dining',
     labelKey: 'officeFacilityDining',
     statusKey: 'officeFacilityReady',
-    accent: '#91d18b',
+    accent: '#5f7f8c',
     position: [-4.74, 0, 2.78],
     hit: [-4.74, 0.52, 2.86],
     cameraPosition: [-3.2, 2.82, 6.04],
@@ -63,14 +63,12 @@ function FacilityGlyph({ kind, accent }: { kind: OfficeFacilityKey; accent: stri
   if (kind === 'hydration') {
     return (
       <group position={[0, 0.18, 0]}>
-        <mesh position={[0, 0.06, 0]}>
-          <sphereGeometry args={[0.065, 18, 16]} />
-          <meshStandardMaterial color="#d8fbff" emissive={accent} emissiveIntensity={0.42} transparent opacity={0.9} toneMapped={false} />
-        </mesh>
-        <mesh position={[0, -0.025, 0]} rotation={[Math.PI, 0, 0]}>
-          <coneGeometry args={[0.055, 0.13, 18]} />
-          <meshStandardMaterial color="#d8fbff" emissive={accent} emissiveIntensity={0.36} transparent opacity={0.86} toneMapped={false} />
-        </mesh>
+        {[-0.04, 0.02, 0.08].map((y, i) => (
+          <mesh key={`hydration-glyph-slat-${i}`} position={[0, y, 0]}>
+            <boxGeometry args={[0.16 - i * 0.035, 0.022, 0.018]} />
+            <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3 + i * 0.06} transparent opacity={0.78} toneMapped={false} />
+          </mesh>
+        ))}
       </group>
     )
   }
@@ -81,12 +79,12 @@ function FacilityGlyph({ kind, accent }: { kind: OfficeFacilityKey; accent: stri
         {[-0.075, 0.075].map((x) => (
           <group key={x} position={[x, 0, 0]}>
             <mesh position={[0, 0.09, 0]}>
-              <sphereGeometry args={[0.04, 16, 12]} />
-              <meshStandardMaterial color="#d8fbff" emissive={accent} emissiveIntensity={0.38} toneMapped={false} />
+              <boxGeometry args={[0.07, 0.07, 0.018]} />
+              <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.38} toneMapped={false} />
             </mesh>
             <mesh position={[0, -0.035, 0]}>
               <boxGeometry args={[0.07, 0.16, 0.018]} />
-              <meshStandardMaterial color="#d8fbff" emissive={accent} emissiveIntensity={0.28} toneMapped={false} />
+              <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.28} toneMapped={false} />
             </mesh>
           </group>
         ))}
@@ -98,21 +96,21 @@ function FacilityGlyph({ kind, accent }: { kind: OfficeFacilityKey; accent: stri
     <group position={[0, 0.2, 0]}>
       <mesh position={[-0.06, 0, 0]}>
         <boxGeometry args={[0.026, 0.28, 0.018]} />
-        <meshStandardMaterial color="#f0ffe8" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
+        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
       </mesh>
       {[-0.1, -0.06, -0.02].map((x) => (
         <mesh key={x} position={[x, 0.13, 0]}>
           <boxGeometry args={[0.014, 0.088, 0.016]} />
-          <meshStandardMaterial color="#f0ffe8" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
+          <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
         </mesh>
       ))}
       <mesh position={[0.08, 0.02, 0]} rotation={[0, 0, -0.1]}>
         <boxGeometry args={[0.03, 0.31, 0.018]} />
-        <meshStandardMaterial color="#f0ffe8" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
+        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
       </mesh>
       <mesh position={[0.1, 0.14, 0]} rotation={[0, 0, -0.1]}>
         <boxGeometry args={[0.07, 0.09, 0.016]} />
-        <meshStandardMaterial color="#f0ffe8" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
+        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -156,7 +154,7 @@ function FacilityHotspot({
   return (
     <group position={spec.position} onClick={clickSelect} onDoubleClick={clickSelect} onPointerOver={cursorOver} onPointerOut={cursorOut}>
       <mesh position={[0, 0.046, 0]} receiveShadow>
-        <cylinderGeometry args={[0.42, 0.42, 0.02, 44]} />
+        <boxGeometry args={[0.68, 0.02, 0.34]} />
         <meshStandardMaterial
           ref={pulseRef}
           color={spec.accent}
@@ -167,18 +165,20 @@ function FacilityHotspot({
           toneMapped={false}
         />
       </mesh>
-      <mesh position={[0, 0.066, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[active ? 0.5 : 0.34, 0.012, 8, 64]} />
-        <meshStandardMaterial
-          ref={ringRef}
-          color={active ? '#ffffff' : spec.accent}
-          emissive={spec.accent}
-          emissiveIntensity={active ? 0.78 : 0.36}
-          transparent
-          opacity={active ? 0.7 : 0.48}
-          toneMapped={false}
-        />
-      </mesh>
+      {[-0.2, 0.2].map((x) => (
+        <mesh key={`facility-active-slat-${x}`} position={[x, 0.066, 0]}>
+          <boxGeometry args={[active ? 0.24 : 0.16, 0.014, 0.024]} />
+          <meshStandardMaterial
+            ref={x < 0 ? ringRef : undefined}
+            color={active ? '#b7c4ce' : spec.accent}
+            emissive={spec.accent}
+            emissiveIntensity={active ? 0.78 : 0.36}
+            transparent
+            opacity={active ? 0.7 : 0.48}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
       <mesh position={[0, 0.36, 0]} castShadow>
         <boxGeometry args={[0.32, 0.035, 0.09]} />
         <meshStandardMaterial color={spec.accent} emissive={spec.accent} emissiveIntensity={0.52} toneMapped={false} />

@@ -104,7 +104,7 @@ export function settingsForCaoGenDrive(settings: AppSettings, mode: unknown = se
     driveMode: policy.mode,
     defaultModel: policy.defaultModel,
     defaultPermissionMode: policy.defaultPermissionMode,
-    schedulerStrategy: policy.schedulerStrategy,
+    schedulerStrategy: policy.mode === 'core' ? settings.schedulerStrategy : policy.schedulerStrategy,
     smartModelRoutingEnabled: settings.smartModelRoutingEnabled || policy.smartModelRoutingEnabled,
     modelCrossValidationAutoRunEnabled:
       settings.modelCrossValidationAutoRunEnabled || policy.modelCrossValidationAutoRunEnabled,

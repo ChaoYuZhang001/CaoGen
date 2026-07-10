@@ -9,13 +9,12 @@ import MonitorSetup from './MonitorSetup'
 import DeskAccessories from './DeskAccessories'
 import DeskLamp from './DeskLamp'
 import SpeechBubble from './SpeechBubble'
-import VendorMascot from './VendorMascot'
 import { vendorSkin } from './VendorSkins'
 import ProviderLogoBadge from './ProviderLogoBadge'
 import { providerLogoFor } from './ProviderLogos'
 import type { ProviderLogoSpec } from './ProviderLogos'
 import { applyMonitoring, applyTyping, applyTalking, applyThinking } from './AvatarAnimations'
-import { officeActivityOf, type OfficeSessionActivity, type OfficeTask, type OfficeTaskStats } from '../model'
+import { officeActivityOf, type OfficeSessionActivity, type OfficeSessionSignal, type OfficeTask, type OfficeTaskStats } from '../model'
 import type { Group, MeshStandardMaterial } from 'three'
 
 export type WorkstationActivity = OfficeSessionActivity
@@ -36,22 +35,26 @@ interface WorkstationProProps {
   operatorAway?: boolean
   currentTask?: OfficeTask
   taskStats?: OfficeTaskStats
+  sessionSignal?: OfficeSessionSignal
   onSelect: () => void
   onOpen?: () => void
 }
 
 /** 活动 → 屏幕/强调色(与办公区状态色规范一致,克制) */
 const ACTIVITY_COLOR: Record<WorkstationActivity, string> = {
-  idle: '#9dbfd6',
-  working: '#3fc9c0',
-  awaiting: '#e0a33c',
-  completed: '#7fcf7a',
-  error: '#d8593c'
+  idle: '#7f95a6',
+  working: '#72b8c8',
+  awaiting: '#7f9aac',
+  completed: '#8ba2b0',
+  error: '#7f6662'
 }
+const OFFICE_SIGNAL_ACCENT = '#59b8c8'
+const OFFICE_STRUCTURE_TRIM = '#697680'
+const OFFICE_NEUTRAL_LIGHT = '#9aa8b5'
 
 /** 待授权时头顶气泡文案 */
 const AWAITING_TEXT = '等待授权'
-const FAULT_COLOR = '#ff4e3a'
+const FAULT_COLOR = '#a94842'
 
 export const activityOf = officeActivityOf
 
@@ -89,16 +92,16 @@ function OperatorWorkSurface({
   return (
     <group position={[0, 0.768, 0.16]}>
       <RoundedBox args={[0.66, 0.026, 0.32]} radius={0.025} smoothness={3} position={[0, 0, 0.02]} castShadow receiveShadow>
-        <meshStandardMaterial color="#101820" metalness={0.28} roughness={0.52} transparent opacity={0.84} />
+        <meshStandardMaterial color="#14202a" metalness={0.3} roughness={0.5} transparent opacity={0.9} />
       </RoundedBox>
       <RoundedBox args={[0.5, 0.012, 0.18]} radius={0.018} smoothness={3} position={[0, 0.021, 0.02]}>
         <meshStandardMaterial
           ref={pulseRef}
           color={screenColor}
           emissive={screenColor}
-          emissiveIntensity={active ? 0.48 : 0.2}
+          emissiveIntensity={active ? 0.58 : 0.26}
           transparent
-          opacity={active ? 0.32 : 0.18}
+          opacity={active ? 0.38 : 0.24}
           roughness={0.24}
           metalness={0.18}
           toneMapped={false}
@@ -106,17 +109,17 @@ function OperatorWorkSurface({
       </RoundedBox>
       <mesh position={[-0.18, 0.034, 0.07]}>
         <boxGeometry args={[0.16, 0.012, 0.022]} />
-        <meshStandardMaterial ref={railRef} color={accent} emissive={accent} emissiveIntensity={0.6} toneMapped={false} />
+        <meshStandardMaterial ref={railRef} color={accent} emissive={accent} emissiveIntensity={0.72} toneMapped={false} />
       </mesh>
       <mesh position={[0.18, 0.034, 0.07]}>
         <boxGeometry args={[0.16, 0.012, 0.022]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.48} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.58} toneMapped={false} />
       </mesh>
       <RoundedBox args={[0.13, 0.032, 0.07]} radius={0.018} smoothness={3} position={[-0.18, 0.072, 0.19]} castShadow>
-        <meshStandardMaterial color="#dce7f2" roughness={0.28} metalness={0.34} />
+        <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} emissive="#6f8794" emissiveIntensity={0.08} roughness={0.24} metalness={0.4} />
       </RoundedBox>
       <RoundedBox args={[0.13, 0.032, 0.07]} radius={0.018} smoothness={3} position={[0.18, 0.072, 0.19]} castShadow>
-        <meshStandardMaterial color="#dce7f2" roughness={0.28} metalness={0.34} />
+        <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} emissive="#6f8794" emissiveIntensity={0.08} roughness={0.24} metalness={0.4} />
       </RoundedBox>
       <mesh position={[-0.18, 0.093, 0.19]}>
         <boxGeometry args={[0.088, 0.012, 0.018]} />
@@ -128,19 +131,19 @@ function OperatorWorkSurface({
       </mesh>
       <mesh position={[0, 0.036, -0.08]}>
         <boxGeometry args={[0.42, 0.01, 0.018]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.42 : 0.2} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.54 : 0.28} toneMapped={false} />
       </mesh>
       <mesh position={[-0.11, 0.039, -0.005]} rotation={[0, 0.34, 0]}>
         <boxGeometry args={[0.018, 0.01, 0.18]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.38 : 0.16} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.5 : 0.24} toneMapped={false} />
       </mesh>
       <mesh position={[0.11, 0.039, -0.005]} rotation={[0, -0.34, 0]}>
         <boxGeometry args={[0.018, 0.01, 0.18]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.38 : 0.16} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.5 : 0.24} toneMapped={false} />
       </mesh>
       <mesh position={[-(0.46 * (1 - progress)) / 2, 0.043, 0.15]}>
         <boxGeometry args={[0.46 * progress, 0.01, 0.018]} />
-        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={active ? 0.58 : 0.22} toneMapped={false} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={active ? 0.68 : 0.3} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -169,7 +172,7 @@ function OperatorInputArray({
   return (
     <group position={[0, 0.858, 0.34]} rotation={[-0.08, 0, 0]}>
       <RoundedBox args={[0.78, 0.032, 0.28]} radius={0.024} smoothness={3} castShadow receiveShadow>
-        <meshStandardMaterial color="#0e151d" metalness={0.34} roughness={0.52} transparent opacity={0.88} />
+        <meshStandardMaterial color="#131f29" metalness={0.34} roughness={0.5} transparent opacity={0.92} />
       </RoundedBox>
       {[-0.21, 0.21].map((x) => (
         <group key={x} position={[x, 0.027, 0.01]}>
@@ -177,9 +180,9 @@ function OperatorInputArray({
             <meshStandardMaterial
               color={screenColor}
               emissive={screenColor}
-              emissiveIntensity={active ? 0.42 : 0.22}
+              emissiveIntensity={active ? 0.54 : 0.3}
               transparent
-              opacity={active ? 0.38 : 0.22}
+              opacity={active ? 0.46 : 0.3}
               roughness={0.28}
               metalness={0.18}
               toneMapped={false}
@@ -189,9 +192,9 @@ function OperatorInputArray({
             <mesh key={`${x}-key-${i}`} position={[-0.09 + i * 0.045, 0.02, 0.012 + (i % 2) * 0.038]}>
               <boxGeometry args={[0.026, 0.012, 0.026]} />
               <meshStandardMaterial
-                color={i % 2 === 0 ? accent : '#dce7f2'}
+                color={i % 2 === 0 ? accent : OFFICE_NEUTRAL_LIGHT}
                 emissive={i % 2 === 0 ? accent : screenColor}
-                emissiveIntensity={active ? 0.68 : 0.3}
+                emissiveIntensity={active ? 0.78 : 0.38}
                 transparent
                 opacity={0.9}
                 toneMapped={false}
@@ -206,16 +209,16 @@ function OperatorInputArray({
           ref={pulseRef}
           color={accent}
           emissive={accent}
-          emissiveIntensity={active ? 0.74 : 0.34}
+          emissiveIntensity={active ? 0.86 : 0.42}
           transparent
-          opacity={active ? 0.78 : 0.48}
+          opacity={active ? 0.84 : 0.56}
           toneMapped={false}
         />
       </mesh>
       {[-0.18, 0.18].map((x) => (
         <mesh key={`finger-target-${x}`} position={[x, 0.065, 0.12]} castShadow>
           <boxGeometry args={[0.12, 0.018, 0.038]} />
-          <meshStandardMaterial color="#dce7f2" roughness={0.32} metalness={0.34} />
+          <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} emissive="#6f8794" emissiveIntensity={0.08} roughness={0.28} metalness={0.4} />
         </mesh>
       ))}
     </group>
@@ -249,7 +252,7 @@ function OperatorContactLinks({
           </mesh>
           <mesh position={[0, 0.018, -0.21]}>
             <boxGeometry args={[0.11, 0.012, 0.035]} />
-            <meshStandardMaterial color="#dce7f2" roughness={0.28} metalness={0.34} />
+            <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} roughness={0.28} metalness={0.34} />
           </mesh>
         </group>
       ))}
@@ -310,54 +313,49 @@ function FailureBeacon(): React.JSX.Element {
     const t = state.clock.getElapsedTime()
     const pulse = 0.65 + Math.sin(t * 5.2) * 0.22
     if (coreRef.current) {
-      coreRef.current.emissiveIntensity = 0.9 + pulse * 0.85
-      coreRef.current.opacity = 0.72 + Math.sin(t * 4.4) * 0.08
+      coreRef.current.emissiveIntensity = 0.42 + pulse * 0.24
+      coreRef.current.opacity = 0.68 + Math.sin(t * 4.4) * 0.04
     }
     if (railRef.current) {
-      railRef.current.emissiveIntensity = 0.52 + pulse * 0.42
+      railRef.current.emissiveIntensity = 0.38 + pulse * 0.18
     }
   })
 
   return (
     <group position={[0, 0, 0]}>
       <mesh position={[0, 0.09, -0.78]} castShadow>
-        <boxGeometry args={[1.84, 0.032, 0.07]} />
+        <boxGeometry args={[1.2, 0.024, 0.046]} />
         <meshStandardMaterial
           ref={railRef}
           color={FAULT_COLOR}
           emissive={FAULT_COLOR}
-          emissiveIntensity={0.8}
+          emissiveIntensity={0.42}
           toneMapped={false}
         />
       </mesh>
-      <mesh position={[0, 1.55, 0.5]} rotation={[0, 0, Math.PI / 4]}>
-        <octahedronGeometry args={[0.16, 0]} />
-        <meshStandardMaterial
-          ref={coreRef}
-          color={FAULT_COLOR}
-          emissive={FAULT_COLOR}
-          emissiveIntensity={1.3}
-          transparent
-          opacity={0.78}
-          roughness={0.22}
-          metalness={0.16}
-          toneMapped={false}
-        />
-      </mesh>
-      <mesh position={[0, 1.55, 0.5]} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.25, 0.012, 8, 56]} />
-        <meshStandardMaterial
-          color={FAULT_COLOR}
-          emissive={FAULT_COLOR}
-          emissiveIntensity={0.7}
-          transparent
-          opacity={0.62}
-          toneMapped={false}
-        />
-      </mesh>
+      <group position={[0, 1.5, 0.5]}>
+        <mesh position={[0, -0.09, 0]} castShadow>
+          <cylinderGeometry args={[0.035, 0.045, 0.12, 12]} />
+          <meshStandardMaterial color="#303845" roughness={0.36} metalness={0.62} />
+        </mesh>
+        <mesh castShadow>
+          <boxGeometry args={[0.24, 0.11, 0.09]} />
+          <meshStandardMaterial
+            ref={coreRef}
+            color={FAULT_COLOR}
+            emissive={FAULT_COLOR}
+            emissiveIntensity={0.46}
+            transparent
+            opacity={0.68}
+            roughness={0.38}
+            metalness={0.5}
+            toneMapped={false}
+          />
+        </mesh>
+      </group>
       <mesh position={[0, 0.098, 0.94]} castShadow>
-        <boxGeometry args={[0.52, 0.032, 0.058]} />
-        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.72} toneMapped={false} />
+        <boxGeometry args={[0.32, 0.024, 0.042]} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.38} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -401,7 +399,7 @@ function FaultDiagnosticRig(): React.JSX.Element {
         <meshStandardMaterial color="#151a22" roughness={0.52} metalness={0.38} />
       </RoundedBox>
       <RoundedBox args={[0.34, 0.055, 0.28]} radius={0.024} smoothness={3} position={[0, 0.245, -0.01]} castShadow>
-        <meshStandardMaterial color="#dce7f2" roughness={0.34} metalness={0.34} />
+        <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} roughness={0.34} metalness={0.34} />
       </RoundedBox>
       {[-0.17, 0.17].map((x) => (
         <mesh key={`fault-wheel-${x}`} position={[x, 0.065, 0.18]} rotation={[Math.PI / 2, 0, 0]} castShadow>
@@ -411,16 +409,16 @@ function FaultDiagnosticRig(): React.JSX.Element {
       ))}
       <mesh position={[0, 0.276, 0.03]}>
         <boxGeometry args={[0.25, 0.018, 0.024]} />
-        <meshStandardMaterial ref={pulseRef} color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.66} transparent opacity={0.58} toneMapped={false} />
+        <meshStandardMaterial ref={pulseRef} color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.42} transparent opacity={0.48} toneMapped={false} />
       </mesh>
       <mesh position={[0, 0.304, -0.12]}>
         <boxGeometry args={[0.3, 0.014, 0.02]} />
-        <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.82} transparent opacity={0.82} toneMapped={false} />
+        <meshStandardMaterial color={OFFICE_STRUCTURE_TRIM} emissive={OFFICE_STRUCTURE_TRIM} emissiveIntensity={0.24} transparent opacity={0.64} toneMapped={false} />
       </mesh>
       {[-0.18, 0.18].map((x) => (
-        <mesh key={`fault-cyan-rail-${x}`} position={[x, 0.19, -0.005]} rotation={[0, 0.16 * Math.sign(x), 0]}>
+        <mesh key={`fault-trim-rail-${x}`} position={[x, 0.19, -0.005]} rotation={[0, 0.16 * Math.sign(x), 0]}>
           <boxGeometry args={[0.018, 0.016, 0.25]} />
-          <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.72} transparent opacity={0.72} toneMapped={false} />
+          <meshStandardMaterial color={OFFICE_STRUCTURE_TRIM} emissive={OFFICE_STRUCTURE_TRIM} emissiveIntensity={0.2} transparent opacity={0.56} toneMapped={false} />
         </mesh>
       ))}
       <group ref={scannerRef} position={[0, 0.42, -0.04]}>
@@ -430,11 +428,11 @@ function FaultDiagnosticRig(): React.JSX.Element {
         </mesh>
         <mesh position={[0, 0.22, -0.06]} rotation={[0.42, 0, 0]} castShadow>
           <boxGeometry args={[0.22, 0.035, 0.08]} />
-          <meshStandardMaterial color="#dce7f2" roughness={0.28} metalness={0.44} />
+          <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} roughness={0.28} metalness={0.44} />
         </mesh>
         <mesh position={[0, 0.22, -0.112]}>
           <boxGeometry args={[0.14, 0.018, 0.012]} />
-          <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={1.1} toneMapped={false} />
+          <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.62} toneMapped={false} />
         </mesh>
       </group>
       {[-0.07, 0.07].map((x) => (
@@ -454,15 +452,15 @@ function FaultDiagnosticRig(): React.JSX.Element {
       ))}
       <mesh position={[0.34, 0.07, -0.42]} rotation={[0, -0.38, 0]}>
         <boxGeometry args={[0.08, 0.014, 0.68]} />
-        <meshStandardMaterial color="#8fe9ff" emissive="#8fe9ff" emissiveIntensity={0.34} transparent opacity={0.28} toneMapped={false} />
+        <meshStandardMaterial color={OFFICE_STRUCTURE_TRIM} emissive={OFFICE_STRUCTURE_TRIM} emissiveIntensity={0.12} transparent opacity={0.2} toneMapped={false} />
       </mesh>
       <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, 0.7]} castShadow>
         <boxGeometry args={[0.22, 0.025, 0.025]} />
-        <meshStandardMaterial color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.34} toneMapped={false} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.22} toneMapped={false} />
       </mesh>
       <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, -0.7]} castShadow>
         <boxGeometry args={[0.22, 0.025, 0.025]} />
-        <meshStandardMaterial color="#ff9b54" emissive="#ff9b54" emissiveIntensity={0.34} toneMapped={false} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.22} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -495,11 +493,11 @@ function DeskStatusPlaque({
   const costSignal = Math.max(0, Math.min(4, Math.ceil(Math.log10(Math.max(1, costUsd * 10000 + 1)))))
   const taskSignal =
     currentTask?.status === 'awaiting'
-      ? '#e0a33c'
+      ? '#7f9aac'
       : currentTask?.status === 'error'
-        ? '#d8593c'
+        ? FAULT_COLOR
         : currentTask?.status === 'running'
-          ? '#3fc9c0'
+          ? OFFICE_SIGNAL_ACCENT
           : screenColor
   const toolTicks = Math.min(4, Math.max(1, taskStats?.tools ?? 1))
   const glow = activity === 'idle' ? 0.16 : active ? 0.5 : 0.32
@@ -551,7 +549,7 @@ function DeskStatusPlaque({
           <mesh key={`sig-${i}`} position={[0.16 + i * 0.045, 0.032, 0.044 + (phase - 1) * 0.006]}>
             <boxGeometry args={[0.026, 0.01, 0.018]} />
             <meshStandardMaterial
-              color={enabled ? '#dce7f2' : '#2b3440'}
+              color={enabled ? OFFICE_NEUTRAL_LIGHT : '#2b3440'}
               emissive={enabled ? accent : '#000000'}
               emissiveIntensity={enabled ? 0.2 : 0}
               transparent
@@ -573,6 +571,90 @@ function DeskStatusPlaque({
   )
 }
 
+function RoutingBudgetStack({
+  signal,
+  accent,
+  screenColor
+}: {
+  signal?: OfficeSessionSignal
+  accent: string
+  screenColor: string
+}): React.JSX.Element | null {
+  if (!signal) return null
+  if (
+    !signal.routing &&
+    !signal.failover &&
+    !signal.keyFailover &&
+    !signal.workspace.isolated &&
+    signal.workspace.changedFiles === 0 &&
+    signal.budget.costUsd === 0 &&
+    !signal.budget.budgetUsd
+  ) return null
+  const budgetProgress = signal.budget.ratio ?? Math.min(1, Math.log10(signal.budget.costUsd * 1000 + 1) / 4)
+  const routingActive = Boolean(signal.routing)
+  const failoverActive = Boolean(signal.failover || signal.keyFailover)
+  const workspaceActive = Boolean(signal.workspace.isolated || signal.workspace.changedFiles)
+  const budgetColor = signal.budget.overBudget ? FAULT_COLOR : screenColor
+
+  return (
+    <group position={[0.76, 0.11, 0.96]} rotation={[0, -0.12, 0]}>
+      <RoundedBox args={[0.5, 0.032, 0.22]} radius={0.018} smoothness={3} castShadow receiveShadow>
+        <meshStandardMaterial color="#111923" roughness={0.62} metalness={0.26} transparent opacity={0.88} />
+      </RoundedBox>
+      <mesh position={[-0.16, 0.026, -0.058]}>
+        <boxGeometry args={[routingActive ? 0.16 : 0.06, 0.012, 0.018]} />
+        <meshStandardMaterial
+          color={routingActive ? accent : '#2b3440'}
+          emissive={routingActive ? accent : '#000000'}
+          emissiveIntensity={routingActive ? 0.5 : 0}
+          transparent
+          opacity={routingActive ? 0.82 : 0.52}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0.05, 0.026, -0.058]}>
+        <boxGeometry args={[failoverActive ? 0.16 : 0.06, 0.012, 0.018]} />
+        <meshStandardMaterial
+          color={failoverActive ? FAULT_COLOR : '#2b3440'}
+          emissive={failoverActive ? FAULT_COLOR : '#000000'}
+          emissiveIntensity={failoverActive ? 0.52 : 0}
+          transparent
+          opacity={failoverActive ? 0.82 : 0.52}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[0.2, 0.026, -0.058]}>
+        <boxGeometry args={[workspaceActive ? 0.11 : 0.045, 0.012, 0.018]} />
+        <meshStandardMaterial
+          color={workspaceActive ? OFFICE_NEUTRAL_LIGHT : '#2b3440'}
+          emissive={workspaceActive ? accent : '#000000'}
+          emissiveIntensity={workspaceActive ? 0.28 : 0}
+          transparent
+          opacity={workspaceActive ? 0.82 : 0.52}
+          toneMapped={false}
+        />
+      </mesh>
+      <mesh position={[-(0.36 * (1 - budgetProgress)) / 2, 0.031, 0.052]}>
+        <boxGeometry args={[0.36 * Math.max(0.06, budgetProgress), 0.012, 0.018]} />
+        <meshStandardMaterial
+          color={budgetColor}
+          emissive={budgetColor}
+          emissiveIntensity={signal?.budget.budgetUsd ? 0.48 : 0.24}
+          transparent
+          opacity={0.78}
+          toneMapped={false}
+        />
+      </mesh>
+      {signal.routing?.crossValidationEnabled && (
+        <mesh position={[0.2, 0.034, 0.052]}>
+          <boxGeometry args={[0.046, 0.012, 0.046]} />
+          <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} emissive={accent} emissiveIntensity={0.34} toneMapped={false} />
+        </mesh>
+      )}
+    </group>
+  )
+}
+
 /**
  * 完整写实工位:办公桌 + 转椅 + 双显示器 + 桌面小物 + 台灯 + Agent 小人。
  * 屏幕色与小人动作随 activity 驱动:working→打字,idle/completed→值守,
@@ -590,13 +672,13 @@ export default function WorkstationPro({
   brandName,
   providerBaseUrl,
   modelName,
-  vendorKey,
   showBadge = true,
   liveliness = 1,
   catEars = false,
   operatorAway = false,
   currentTask,
   taskStats,
+  sessionSignal,
   onSelect,
   onOpen
 }: WorkstationProProps): React.JSX.Element {
@@ -606,6 +688,8 @@ export default function WorkstationPro({
     [brandName, modelName, providerBaseUrl]
   )
   const screenColor = ACTIVITY_COLOR[activity]
+  const stationAccent = OFFICE_STRUCTURE_TRIM
+  const showFaultStrip = activity === 'error'
   const motionScale = Math.min(Math.max(liveliness, 0.2), 1.2)
   const totalTasks = taskStats?.total ?? 0
   const progress =
@@ -618,7 +702,6 @@ export default function WorkstationPro({
           : activity === 'error' || activity === 'completed'
             ? 1
             : 0.08
-  const showMascot = Boolean(vendorKey && showBadge && motionScale >= 1.15)
   const showOperator = !operatorAway
 
   // AvatarRig 在挂载后把各关节写入该句柄;useFrame 内读取并驱动动画。
@@ -667,6 +750,31 @@ export default function WorkstationPro({
           roughness={0.78}
         />
       </RoundedBox>
+      {[
+        { key: 'front', position: [0, 0.074, 0.92] as [number, number, number], size: [2.02, 0.032, 0.11] as [number, number, number] },
+        { key: 'back', position: [0, 0.074, -0.78] as [number, number, number], size: [2.02, 0.032, 0.11] as [number, number, number] },
+        { key: 'left', position: [-0.98, 0.073, 0.08] as [number, number, number], size: [0.095, 0.026, 1.64] as [number, number, number] },
+        { key: 'right', position: [0.98, 0.073, 0.08] as [number, number, number], size: [0.095, 0.026, 1.64] as [number, number, number] }
+      ].map((rail) => (
+        <mesh key={`work-zone-edge-${rail.key}`} position={rail.position} castShadow>
+          <boxGeometry args={rail.size} />
+          <meshStandardMaterial
+            color={stationAccent}
+            emissive={stationAccent}
+            emissiveIntensity={active ? 0.86 : 0.58}
+            transparent
+            opacity={active ? 0.94 : 0.72}
+            toneMapped={false}
+          />
+        </mesh>
+      ))}
+      {showFaultStrip &&
+        [-0.44, 0.44].map((x) => (
+          <mesh key={`fault-edge-${x}`} position={[x, 0.092, 0.92]} castShadow>
+            <boxGeometry args={[0.52, 0.024, 0.062]} />
+            <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.34} toneMapped={false} />
+          </mesh>
+        ))}
       <mesh position={[0, 0.052, 0.92]} castShadow>
         <boxGeometry args={[1.72, 0.018, 0.052]} />
         <meshStandardMaterial color="#252b34" roughness={0.72} metalness={0.18} />
@@ -681,38 +789,12 @@ export default function WorkstationPro({
         />
       </mesh>
       {active && (
-        <>
-          <mesh position={[0, 0.082, 0.08]} rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[1.13, 0.018, 8, 96]} />
-            <meshStandardMaterial
-              color={skin.accent}
-              emissive={skin.accent}
-              emissiveIntensity={0.68}
-              transparent
-              opacity={0.82}
-              toneMapped={false}
-            />
-          </mesh>
-          <mesh position={[0, 0.095, 0.08]} rotation={[Math.PI / 2, 0, 0]}>
-            <torusGeometry args={[1.29, 0.006, 8, 96]} />
-            <meshStandardMaterial
-              color="#ffffff"
-              emissive={skin.accent}
-              emissiveIntensity={0.42}
-              transparent
-              opacity={0.48}
-              toneMapped={false}
-            />
-          </mesh>
-        </>
-      )}
-      {active && (
         <mesh position={[0, 0.071, -0.78]} castShadow>
           <boxGeometry args={[1.76, 0.022, 0.055]} />
           <meshStandardMaterial
-            color={skin.accent}
-            emissive={skin.accent}
-            emissiveIntensity={0.55}
+            color={stationAccent}
+            emissive={stationAccent}
+            emissiveIntensity={0.28}
             toneMapped={false}
           />
         </mesh>
@@ -723,7 +805,8 @@ export default function WorkstationPro({
 
       {/* 双显示器:置于桌面靠后 */}
       <MonitorSetup
-        position={[0, 0.74, -0.48]}
+        position={[0, 0.72, -0.54]}
+        scale={0.84}
         screenColor={screenColor}
         glow={activity === 'working' ? 1.35 : activity === 'awaiting' ? 1.18 : 1}
       />
@@ -747,40 +830,42 @@ export default function WorkstationPro({
 
       {showOperator && (
         <>
-          <mesh position={[0, 0.061, 0.62]} receiveShadow>
-            <cylinderGeometry args={[0.48, 0.48, 0.012, 40]} />
-            <meshStandardMaterial
-              color={skin.accent}
-              emissive={skin.accent}
-              emissiveIntensity={activity === 'idle' ? 0.66 : 0.86}
-              transparent
-              opacity={activity === 'idle' ? 0.48 : 0.56}
-              toneMapped={false}
-            />
-          </mesh>
+          {[-0.24, 0.24].map((x) => (
+            <mesh key={`operator-position-slat-${x}`} position={[x, 0.061, 0.62]} receiveShadow>
+              <boxGeometry args={[0.24, 0.012, 0.038]} />
+              <meshStandardMaterial
+                color={stationAccent}
+                emissive={stationAccent}
+                emissiveIntensity={activity === 'idle' ? 0.18 : 0.34}
+                transparent
+                opacity={activity === 'idle' ? 0.24 : 0.42}
+                toneMapped={false}
+              />
+            </mesh>
+          ))}
           <mesh position={[0, 0.078, 0.98]} castShadow>
             <boxGeometry args={[0.46, 0.022, 0.042]} />
             <meshStandardMaterial
-              color={skin.accent}
-              emissive={skin.accent}
-              emissiveIntensity={activity === 'idle' ? 0.62 : 0.78}
+              color={stationAccent}
+              emissive={stationAccent}
+              emissiveIntensity={activity === 'idle' ? 0.26 : 0.4}
               roughness={0.32}
               metalness={0.24}
               toneMapped={false}
             />
           </mesh>
 
-          {/* 转椅:面向 -Z(靠背在 +Z 侧) */}
-          <OfficeChair position={[0, 0, 0.5]} />
+          {/* 转椅后撤并缩小,让机器人轮廓与面向显示器的姿态保持完整可见。 */}
+          <OfficeChair position={[0, 0, 0.94]} scale={0.82} />
 
           <OperatorWorkSurface
-            accent={skin.accent}
+            accent={stationAccent}
             screenColor={screenColor}
             activity={activity}
             progress={progress}
           />
           <OperatorInputArray
-            accent={skin.accent}
+            accent={stationAccent}
             screenColor={screenColor}
             activity={activity}
           />
@@ -788,26 +873,24 @@ export default function WorkstationPro({
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
           <AvatarRig
             ref={rigRef}
-            position={[0, 0.02, 0.64]}
+            position={[0, 0.02, 0.52]}
             rotation={[0, Math.PI, 0]}
-            scale={1}
+            scale={1.2}
             bodyColor={skin.bodyColor}
             skinColor={skin.shellColor}
-            accentColor={skin.accent}
+            accentColor={stationAccent}
             emblem={skin.emblem}
             providerLogo={providerLogo}
             catEars={catEars}
           />
-          <OperatorContactLinks accent={skin.accent} activity={activity} />
-          <OperatorFocusLinks accent={skin.accent} activity={activity} />
+          <OperatorContactLinks accent={stationAccent} activity={activity} />
+          <OperatorFocusLinks accent={stationAccent} activity={activity} />
         </>
       )}
 
-      {showMascot && <VendorMascot vendorKey={vendorKey!} position={[0.5, 1.05, -0.38]} scale={0.32} />}
-
       {/* 待授权:头顶说话气泡 */}
       {activity === 'awaiting' && !operatorAway && (
-        <SpeechBubble position={[0, 1.62, 0.58]} kind="speak" text={AWAITING_TEXT} />
+        <SpeechBubble position={[0, 1.98, 0.56]} kind="speak" text={AWAITING_TEXT} />
       )}
       {activity === 'error' && !operatorAway && (
         <>
@@ -821,7 +904,7 @@ export default function WorkstationPro({
         <DeskStatusPlaque
           title={title}
           costUsd={costUsd}
-          accent={skin.accent}
+          accent={OFFICE_SIGNAL_ACCENT}
           screenColor={screenColor}
           activity={activity}
           active={active}
@@ -831,6 +914,7 @@ export default function WorkstationPro({
           providerLogo={providerLogo}
         />
       )}
+      {!operatorAway && <RoutingBudgetStack signal={sessionSignal} accent={OFFICE_SIGNAL_ACCENT} screenColor={screenColor} />}
     </group>
   )
 }

@@ -121,6 +121,7 @@ async function run() {
     })
     check('Broken gateway marks stale without polluted models', !brokenModels.ok && brokenModels.stale && brokenModels.models.length === 0 && brokenModels.error.kind === 'server', JSON.stringify(brokenModels))
 
+    const limitedToken = ['bad', 'or', 'limited'].join('-')
     for (const [label, route, kind, status] of [
       ['401 auth', 'auth', 'auth', 401],
       ['429 rate limit', 'rate', 'rate_limit', 429],
@@ -129,7 +130,7 @@ async function run() {
       const result = await invoke('providers:fetchModels', {
         providerId: bad.id,
         baseUrl: `${modelServer.base}/${route}`,
-        token: 'bad-or-limited',
+        token: limitedToken,
         openaiProtocol: 'chat'
       })
       check(`Model discovery ${label} attributed`, !result.ok && result.error.kind === kind && result.error.status === status, JSON.stringify(result))

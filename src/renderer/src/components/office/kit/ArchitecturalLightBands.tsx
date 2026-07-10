@@ -1,7 +1,8 @@
 import type { OfficeProp } from './Floor'
 
 const COOL_WHITE = '#b9cbe0'
-const CYAN = '#8fe9ff'
+const STEEL_BLUE = '#7f95a6'
+const SIGNAL_CYAN = '#72b8c8'
 const FLOOR_WASH = '#26323f'
 const RAIL_DARK = '#1b232d'
 
@@ -83,16 +84,16 @@ export default function ArchitecturalLightBands({
           <LightBar
             position={[0, edgeY, -8.92]}
             size={[backLightLength, edgeDepth, edgeDepth]}
-            color={CYAN}
-            intensity={0.7}
-            opacity={1}
+            color={STEEL_BLUE}
+            intensity={0.38}
+            opacity={0.88}
           />
           <LightBar
             position={[-8.92, edgeY, -3.15]}
             size={[edgeDepth, edgeDepth, sideLightLength]}
-            color={CYAN}
-            intensity={0.58}
-            opacity={1}
+            color={STEEL_BLUE}
+            intensity={0.32}
+            opacity={0.86}
           />
           <LightBar
             position={[8.92, edgeY, -3.3]}
@@ -129,9 +130,9 @@ export default function ArchitecturalLightBands({
           key={`${x}:${z}`}
           position={[x, 0.07, z]}
           size={[0.62, 0.018, 0.055]}
-          color={CYAN}
-          intensity={0.36}
-          opacity={0.8}
+          color={SIGNAL_CYAN}
+          intensity={0.26}
+          opacity={0.68}
         />
       ))}
     </group>

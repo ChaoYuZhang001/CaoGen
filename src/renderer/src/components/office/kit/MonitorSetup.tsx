@@ -16,12 +16,12 @@ type MonitorSetupProps = OfficeProp & {
   glow?: number
 }
 
-// 深灰机身/支架配色,克制中性,主黑副白
+// 深灰机身/支架配色,克制中性,亮部用银灰而非纯白
 const CASE_COLOR = '#1c1f26'
 const BEZEL_COLOR = '#15181e'
 const ARM_COLOR = '#2c313c'
 const BASE_COLOR = '#22262f'
-const HIGHLIGHT = '#f4f4f4'
+const HIGHLIGHT = '#b7c4ce'
 const SCREEN_INK = '#071018'
 const SCREEN_TEXT = '#dce7f2'
 
@@ -68,7 +68,7 @@ export default function MonitorSetup({
 
       {/* 立柱顶部枢纽 */}
       <mesh position={[0, 0.54, 0]} castShadow>
-        <sphereGeometry args={[0.05, 16, 16]} />
+        <boxGeometry args={[0.09, 0.07, 0.07]} />
         <meshStandardMaterial color={ARM_COLOR} metalness={0.6} roughness={0.4} />
       </mesh>
 
@@ -119,7 +119,7 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
       <group position={[headX, 0.62, 0]} rotation={[0, yaw, 0]}>
         {/* 挂点小球 */}
         <mesh position={[0, -0.08, -0.03]} castShadow>
-          <sphereGeometry args={[0.04, 16, 16]} />
+          <boxGeometry args={[0.075, 0.052, 0.052]} />
           <meshStandardMaterial color={ARM_COLOR} metalness={0.6} roughness={0.4} />
         </mesh>
 
@@ -155,7 +155,7 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
 
         {/* 电源状态灯(轻发光) */}
         <mesh position={[0.26, -0.175, 0.02]}>
-          <sphereGeometry args={[0.012, 8, 8]} />
+          <boxGeometry args={[0.028, 0.01, 0.006]} />
           <meshStandardMaterial
             color={screenColor}
             emissive={screenColor}

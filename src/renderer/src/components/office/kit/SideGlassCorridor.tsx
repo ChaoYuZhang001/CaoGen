@@ -1,7 +1,7 @@
 import type { OfficeProp } from './Floor'
 import WindowWall from './WindowWall'
 
-const CYAN = '#8fe9ff'
+const STEEL_BLUE = '#7f95a6'
 const FRAME = '#202833'
 const RAIL = '#293340'
 
@@ -42,14 +42,14 @@ export default function SideGlassCorridor({
       </mesh>
       <mesh position={[-9.52, 0.12, presentationMode ? -2.9 : -1.1]}>
         <boxGeometry args={[0.03, 0.03, lowLightLength]} />
-        <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={presentationMode ? 0.48 : 0.9} toneMapped={false} transparent={presentationMode} opacity={presentationMode ? 0.72 : 1} />
+        <meshStandardMaterial color={STEEL_BLUE} emissive={STEEL_BLUE} emissiveIntensity={presentationMode ? 0.24 : 0.4} toneMapped={false} transparent={presentationMode} opacity={presentationMode ? 0.62 : 1} />
       </mesh>
 
       {/* 几个贴边光点,让侧廊在夜间截图里可读。 */}
       {glowPoints.map((z) => (
         <mesh key={z} position={[-9.5, presentationMode ? 0.28 : 1.92, z]}>
           <boxGeometry args={[0.03, presentationMode ? 0.028 : 0.08, presentationMode ? 0.24 : 0.72]} />
-          <meshStandardMaterial color={CYAN} emissive={CYAN} emissiveIntensity={presentationMode ? 0.22 : 0.72} toneMapped={false} transparent={presentationMode} opacity={presentationMode ? 0.46 : 1} />
+          <meshStandardMaterial color={STEEL_BLUE} emissive={STEEL_BLUE} emissiveIntensity={presentationMode ? 0.16 : 0.3} toneMapped={false} transparent={presentationMode} opacity={presentationMode ? 0.42 : 1} />
         </mesh>
       ))}
     </group>

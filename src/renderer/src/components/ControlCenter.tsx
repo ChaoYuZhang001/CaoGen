@@ -4,21 +4,26 @@ import {
   STRATEGY_OPTIONS
 } from '../store'
 import { buildControlCenterView, type ControlCenterStatus } from '../controlCenter'
+import { formatCost } from '../format'
 import type {
   AppSettings,
   CaoGenDriveMode,
   EngineInfo,
+  HistoryEntry,
   McpProbeResult,
   PluginRegistryItem,
   PluginRegistryView,
   ProviderHealthView,
   ProviderView,
-  SchedulerStrategy
+  SchedulerStrategy,
+  SessionMeta
 } from '../../../shared/types'
 
 interface Props {
   settings: AppSettings
   providers: ProviderView[]
+  history: HistoryEntry[]
+  activeSessions: SessionMeta[]
   health: ProviderHealthView[]
   engines: EngineInfo[]
   pluginRegistry?: PluginRegistryView
@@ -33,9 +38,20 @@ interface Props {
   onEditProvider: (provider: ProviderView) => void
 }
 
+function healthTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
 export default function ControlCenter({
   settings,
   providers,
+  history,
+  activeSessions,
   health,
   engines,
   pluginRegistry,
@@ -52,12 +68,15 @@ export default function ControlCenter({
   const view = buildControlCenterView({
     settings,
     providers,
+    history,
+    activeSessions,
     health,
     engines,
     pluginRegistry,
     mcpProbeResults
   })
   const mcpItems = pluginRegistry?.items.filter((item) => item.kind === 'mcp') ?? []
+  const budgetExceeded = view.budget.report.monthlyExceeded || view.budget.report.activeSessions.some((session) => session.overBudget)
 
   const setBudget = (key: 'budgetUsdPerSession' | 'budgetUsdPerMonth', value: string): void => {
     const budget = Number(value)
@@ -98,8 +117,8 @@ export default function ControlCenter({
         <SummaryCard
           title="Budget"
           status={view.budget.status}
-          value={`Drive ${view.budget.driveSessionLabel}`}
-          detail={`Session ${view.budget.sessionLabel} · Month ${view.budget.monthlyLabel}`}
+          value={`${formatCost(view.budget.report.monthlySpentUsd)} / ${view.budget.report.monthlyLimitUsd > 0 ? formatCost(view.budget.report.monthlyLimitUsd) : '∞'}`}
+          detail={`${view.budget.report.monthKey} · ${view.budget.report.monthlyRemainingUsd === undefined ? 'unlimited' : `${formatCost(view.budget.report.monthlyRemainingUsd)} remaining`}`}
         />
         <SummaryCard
           title="Tools"
@@ -205,13 +224,27 @@ export default function ControlCenter({
           <span>{view.policy.toolPolicySummary}</span>
           <span>validation={view.policy.validationDepth}</span>
           <span>{view.route.crossValidationLabel}</span>
+          <span>{view.route.customRulesLabel}</span>
+        </div>
+        <div className="control-mini-list control-role-list">
+          {view.modelRoles.map((role) => (
+            <div key={role.key} className="control-mini-row">
+              <span>
+                {role.label}: {role.providerLabel} / {role.modelLabel}
+              </span>
+              <StatusPill status={role.status} label={statusLabel(role.status)} />
+            </div>
+          ))}
         </div>
       </section>
 
       <section className="control-section">
         <div className="settings-section-head">
           <h3 className="settings-h3">预算</h3>
-          <StatusPill status={view.budget.status} label={view.budget.status === 'unknown' ? 'unlimited' : 'configured'} />
+          <StatusPill
+            status={view.budget.status}
+            label={budgetExceeded ? 'over budget' : view.budget.status === 'unknown' ? 'unlimited' : 'configured'}
+          />
         </div>
         <div className="control-form-grid">
           <label className="field-label">
@@ -239,6 +272,66 @@ export default function ControlCenter({
             />
           </label>
         </div>
+        <div className="control-budget-stats">
+          <span>本月已用 {formatCost(view.budget.report.monthlySpentUsd)}</span>
+          <span>
+            剩余{' '}
+            {view.budget.report.monthlyRemainingUsd === undefined
+              ? '不限制'
+              : formatCost(view.budget.report.monthlyRemainingUsd)}
+          </span>
+          <span>活跃会话 {formatCost(view.budget.report.activeCostUsd)}</span>
+          <span>历史会话 {formatCost(view.budget.report.historicalCostUsd)}</span>
+        </div>
+        {view.budget.report.monthlyRatio !== undefined && (
+          <div
+            className={`control-budget-progress ${view.budget.report.monthlyExceeded ? 'is-over' : ''}`}
+            title={`${Math.round(view.budget.report.monthlyRatio * 100)}%`}
+          >
+            <span style={{ width: `${Math.max(2, view.budget.report.monthlyRatio * 100)}%` }} />
+          </div>
+        )}
+        <div className="control-budget-report-grid">
+          <div>
+            <div className="control-subhead">Provider 本月成本</div>
+            <div className="control-budget-list">
+              {view.budget.report.providers.map((provider) => (
+                <div key={provider.providerId} className="control-budget-row">
+                  <span>
+                    <strong>{provider.providerName}</strong>
+                    <small>
+                      {provider.sessionCount} sessions · {provider.activeSessions} active
+                      {provider.currentSessionLimitUsd
+                        ? ` · ${formatCost(provider.currentSessionLimitUsd)}/session cap`
+                        : ''}
+                    </small>
+                  </span>
+                  <strong>{formatCost(provider.spentUsd)}</strong>
+                </div>
+              ))}
+              {view.budget.report.providers.length === 0 && <div className="provider-empty">本月暂无成本记录</div>}
+            </div>
+          </div>
+          <div>
+            <div className="control-subhead">最高成本会话</div>
+            <div className="control-budget-list">
+              {view.budget.report.topSessions.map((session) => (
+                <div key={`${session.active ? 'active' : 'history'}:${session.id}`} className="control-budget-row">
+                  <span>
+                    <strong>{session.title}</strong>
+                    <small>
+                      {session.providerName} / {session.model}
+                      {session.active ? ' · active' : ' · history'}
+                      {session.sessionLimitUsd ? ` · ${formatCost(session.sessionLimitUsd)} cap` : ''}
+                    </small>
+                  </span>
+                  <strong className={session.overBudget ? 'control-budget-over' : ''}>{formatCost(session.costUsd)}</strong>
+                </div>
+              ))}
+              {view.budget.report.topSessions.length === 0 && <div className="provider-empty">本月暂无会话成本</div>}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="control-section">
@@ -249,7 +342,7 @@ export default function ControlCenter({
           </button>
         </div>
         <div className="control-provider-stats">
-          <span>{view.providerSummary.configuredKeys}/{view.providerSummary.total} hasToken</span>
+          <span>{view.providerSummary.totalKeys} keys / {view.providerSummary.configuredKeys} providers</span>
           <span>{view.providerSummary.healthy}/{view.providerSummary.total} healthy</span>
           <span>{view.providerSummary.missingKeys} missing key</span>
         </div>
@@ -267,7 +360,26 @@ export default function ControlCenter({
                   <div className="provider-row-sub">
                     {provider.endpoint} · {provider.modelCount} models · {provider.healthLabel}
                   </div>
+                  <div className="control-provider-health-meta">
+                    <span>{provider.successRateLabel}</span>
+                    <span>{provider.latencyLabel}</span>
+                  </div>
                   <div className="control-row-detail">{provider.detail}</div>
+                  {provider.recentFailures.length > 0 && (
+                    <details className="control-provider-failures">
+                      <summary>最近失败 {provider.recentFailures.length}</summary>
+                      <div className="control-provider-failure-list">
+                        {provider.recentFailures.map((failure, index) => (
+                          <div key={`${failure.at}:${failure.label}:${index}`} className="control-provider-failure-row">
+                            <span>{healthTime(failure.at)}</span>
+                            <strong>{failure.label}</strong>
+                            <span>{failure.switchable ? '可自动切换' : '需原地处理'}</span>
+                            <code>{failure.message}</code>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
                 <div className="provider-row-actions">
                   {rawProvider && (

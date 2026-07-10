@@ -9,7 +9,41 @@ export type SandboxMode = 'strictDocker' | 'standardSystem' | 'loose'
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
-export type SchedulerStrategy = 'quality' | 'cost' | 'balanced'
+export type SchedulerStrategy = 'quality' | 'cost' | 'speed' | 'balanced'
+
+export type ModelRoutingTaskKind =
+  | 'chat'
+  | 'coding'
+  | 'reasoning'
+  | 'vision'
+  | 'toolUse'
+  | 'longContext'
+  | 'review'
+  | 'summarization'
+
+export type ModelRoutingRiskLevel = 'low' | 'medium' | 'high'
+
+export type ModelRoutingKeywordMode = 'any' | 'all'
+
+export interface ModelRoutingRule {
+  id: string
+  enabled: boolean
+  name: string
+  /** 逗号、分号或换行分隔的关键词;任一关键词命中当前用户请求即应用该规则。 */
+  match: string
+  /** 默认 any;all 要求所有关键词都出现在当前用户请求中。 */
+  keywordMode?: ModelRoutingKeywordMode
+  /** 空数组 = 不限制任务类型;非空时命中任一推断任务类型即可。 */
+  taskKinds?: ModelRoutingTaskKind[]
+  /** 最低风险门槛;空值 = 不限制。 */
+  minRiskLevel?: ModelRoutingRiskLevel
+  /** 仅在当前有效调度策略一致时应用;空值 = 不限制。 */
+  whenStrategy?: SchedulerStrategy
+  /** 空字符串 = 不指定 Provider,只按模型或普通路由选择。 */
+  providerId: string
+  /** 空字符串 = 不指定模型,只固定 Provider 或普通路由选择。 */
+  model: string
+}
 
 export type CaoGenDriveMode = 'spark' | 'core' | 'forge' | 'command' | 'genesis'
 
@@ -36,6 +70,41 @@ export interface ModelRoutePlanView {
   validators: Array<{ providerId: string; providerName?: string; model: string }>
   policy: 'compare-answer' | 'review-primary' | 'skip'
   reason: string
+}
+
+export interface ModelRoutingAlternativeView {
+  providerId: string
+  providerName?: string
+  model: string
+  score: number
+  reliability: number
+  estimatedCostUsd: number
+  latencyEmaMs?: number
+}
+
+/** 一次自动调度的结构化决策日志，供聊天、控制面板和 3D 办公复用。 */
+export interface ModelRoutingDecisionView {
+  providerId: string
+  providerName?: string
+  model: string
+  strategy: SchedulerStrategy
+  taskKinds: string[]
+  complexity?: 'simple' | 'medium' | 'complex'
+  riskLevel: 'low' | 'medium' | 'high'
+  candidateCount: number
+  score?: number
+  reliability?: number
+  estimatedCostUsd?: number
+  latencyEmaMs?: number
+  remainingBudgetUsd?: number
+  manualOverrideApplied: boolean
+  selectionReason?: string
+  selectedReasons: string[]
+  budgetDowngraded: boolean
+  switchedProvider: boolean
+  warnings: string[]
+  alternatives: ModelRoutingAlternativeView[]
+  createdAt: number
 }
 
 /** 会话 model 字段取此哨兵值 = 启用智能自动调度 */
@@ -134,15 +203,24 @@ export interface ProviderHealthView {
   failures: number
   consecutiveFailures: number
   lastLatencyMs?: number
+  latencyEmaMs?: number
   lastError?: string
+  lastSuccessAt?: number
+  lastFailureAt?: number
   lastUsedAt?: number
+  recentFailures: Array<{
+    at: number
+    label: string
+    message: string
+    switchable: boolean
+  }>
   healthy: boolean
 }
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 
-/** Agent 引擎标识:claude = Claude Agent SDK;openai = OpenAI Responses API;codex / gemini 经 EngineAdapter 接入 */
-export type EngineKind = 'claude' | 'openai' | 'codex' | 'gemini'
+/** Agent 引擎标识:claude = Claude Agent SDK;openai = OpenAI-compatible API。 */
+export type EngineKind = 'claude' | 'openai'
 
 export interface EngineInfo {
   kind: string
@@ -192,7 +270,7 @@ export interface SessionMeta {
   worktreeState?: 'active' | 'removed'
   /** 空字符串表示跟随 CLI 默认模型 */
   model: string
-  /** 此会话绑定的 Provider ID;Claude/OpenAI 新会话必须显式选择。CLI 引擎可为空。 */
+  /** 此会话绑定的 Provider ID;新会话必须显式选择。 */
   providerId: string
   /** 本会话预算上限;0/undefined = 继承 Provider 或全局设置。 */
   budgetUsd?: number
@@ -532,6 +610,22 @@ export type TaskSnapshotReason =
   | 'shutdown'
   | 'recovered'
 
+/** 会话事件的耐久身份:seq 用于有序回放,eventId 用于跨重启去重。 */
+export interface AgentEventIdentity {
+  schemaVersion: 1
+  streamId: string
+  eventId: string
+  seq: number
+  occurredAt: number
+  causationId?: string
+  correlationId?: string
+}
+
+export interface AgentEventCursor {
+  seq: number
+  eventId?: string
+}
+
 export interface TaskSnapshotWorktreeInfo {
   isolated?: boolean
   sourceCwd?: string
@@ -546,6 +640,9 @@ export interface TaskSnapshotWorktreeInfo {
 export interface TaskSnapshotExecutionPosition {
   status: SessionStatus
   lastSeq: number
+  /** 显式恢复游标;旧快照只有 lastSeq 时仍可恢复。 */
+  cursor?: AgentEventCursor
+  lastEventId?: string
   lastEventKind?: AgentEvent['kind']
   lastEventAt: number
   sdkSessionId?: string
@@ -563,6 +660,104 @@ export interface TaskSnapshotReplayCandidate {
 }
 
 export type TaskSnapshotSubtaskStatus = 'pending' | 'running' | 'success' | 'failed' | 'closed'
+
+export type TaskRunStatus =
+  | 'queued'
+  | 'planning'
+  | 'executing'
+  | 'waiting_approval'
+  | 'verifying'
+  | 'recovering'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export type TaskStepStatus = TaskRunStatus
+
+export interface TaskStepRecord {
+  id: string
+  runId: string
+  sessionId: string
+  sequence: number
+  status: TaskStepStatus
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  messageId?: string
+  requestText?: string
+  pendingPermissionRequestId?: string
+  createdEventId?: string
+  lastEventId?: string
+  lastEventSeq?: number
+  lastEventKind?: AgentEvent['kind']
+  error?: string
+}
+
+export type ToolExecutionStatus =
+  | 'requested'
+  | 'running'
+  | 'waiting_approval'
+  | 'approved'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'superseded'
+  | 'unknown_outcome'
+
+export interface ToolExecutionRecord {
+  id: string
+  runId: string
+  stepId?: string
+  sessionId: string
+  toolUseId: string
+  toolName: string
+  status: ToolExecutionStatus
+  requestId?: string
+  permissionDecision?: 'allow' | 'deny'
+  inputDigest?: string
+  outputDigest?: string
+  idempotencyKey?: string
+  duplicateOfExecutionId?: string
+  supersededByExecutionId?: string
+  requestedEventId?: string
+  approvalRequestedEventId?: string
+  approvalResolvedEventId?: string
+  /** tool-start 表示模型已提出调用,不等于副作用已开始。 */
+  toolStartEventId?: string
+  resultEventId?: string
+  lastEventId?: string
+  lastEventSeq?: number
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  error?: string
+}
+
+export interface TaskRunRecord {
+  schemaVersion: 1
+  id: string
+  sessionId: string
+  taskId: string
+  status: TaskRunStatus
+  revision: number
+  attempt: number
+  recoveryCount: number
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  messageId?: string
+  pendingPermissionRequestId?: string
+  lastAppliedEventId?: string
+  lastAppliedEventSeq?: number
+  recentEventIds?: string[]
+  lastEventKind?: AgentEvent['kind']
+  error?: string
+  steps?: TaskStepRecord[]
+  toolExecutions?: ToolExecutionRecord[]
+}
 
 export interface TaskSnapshotSubtaskState {
   taskId?: string
@@ -590,6 +785,7 @@ export interface TaskSnapshotRecord {
   reason: TaskSnapshotReason
   meta: SessionMeta
   execution: TaskSnapshotExecutionPosition
+  run?: TaskRunRecord
   replayCandidate?: TaskSnapshotReplayCandidate
   worktree?: TaskSnapshotWorktreeInfo
   transcript: TranscriptEntry[]
@@ -762,8 +958,22 @@ export interface AppSettings {
   defaultPermissionMode: PermissionModeId
   /** 新会话默认使用的 Provider ID;空字符串 = 不设置默认,创建时必须显式选择。 */
   defaultProviderId: string
+  /** 自动调度备用 Provider/模型;空字符串 = 不设置。 */
+  fallbackProviderId: string
+  fallbackModel: string
+  /** 成本优先或轻量任务偏好的 Provider/模型;空字符串 = 交给自动路由。 */
+  lowCostProviderId: string
+  lowCostModel: string
+  /** 复杂推理/高风险任务偏好的 Provider/模型;空字符串 = 交给自动路由。 */
+  strongReasoningProviderId: string
+  strongReasoningModel: string
+  /** 审查/复核任务偏好的 Provider/模型;空字符串 = 交给自动路由。 */
+  reviewProviderId: string
+  reviewModel: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
+  /** 用户自定义调度规则;按顺序匹配用户请求关键词。 */
+  modelRoutingRules: ModelRoutingRule[]
   /** 多模型智能混合调度: 默认关闭, 开启后 auto 会话按任务/预算/覆盖路由 */
   smartModelRoutingEnabled: boolean
   /** P2-003 自动交叉验证执行开关；默认关闭，仅在智能调度生成复核计划后派发第二模型 */
@@ -840,8 +1050,12 @@ export interface Provider {
   name: string
   /** 空字符串 = 该 Provider 使用引擎/本机默认端点;不会作为新会话隐式默认。 */
   baseUrl: string
-  /** safeStorage 加密后的 token;空字符串 = 继承环境变量。仅存在于主进程 */
+  /** safeStorage 加密后的旧版/活动 token 镜像;空字符串 = 继承环境变量。仅存在于主进程 */
   encryptedToken: string
+  /** 多 API Key 存储;密钥值只在主进程以加密串存在。 */
+  apiKeys?: ProviderApiKey[]
+  /** 当前活动 API Key;为空时使用第一个可用 key。 */
+  activeKeyId?: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
   /**
@@ -862,6 +1076,28 @@ export interface Provider {
   createdAt: number
 }
 
+export interface ProviderApiKey {
+  id: string
+  label: string
+  encryptedToken: string
+  createdAt: number
+  lastUsedAt?: number
+  lastFailureAt?: number
+  lastFailureReason?: string
+  disabled?: boolean
+}
+
+export interface ProviderApiKeyView {
+  id: string
+  label: string
+  createdAt: number
+  lastUsedAt?: number
+  lastFailureAt?: number
+  lastFailureReason?: string
+  disabled: boolean
+  active: boolean
+}
+
 /** OpenAI 引擎可用的 API 协议 */
 export type OpenAIProtocol = 'responses' | 'chat'
 
@@ -877,6 +1113,10 @@ export interface ProviderView {
   note?: string
   createdAt: number
   hasToken: boolean
+  keyCount?: number
+  activeKeyId?: string
+  activeKeyLabel?: string
+  apiKeys?: ProviderApiKeyView[]
 }
 
 export interface ImageAttachmentView {
@@ -1003,6 +1243,18 @@ export interface QuickbarDispatchResult {
   error?: string
 }
 
+export interface ProviderApiKeyInput {
+  label?: string
+  token: string
+  disabled?: boolean
+}
+
+export interface ProviderApiKeyUpdateInput {
+  id: string
+  label?: string
+  disabled?: boolean
+}
+
 export interface ProviderInput {
   name: string
   baseUrl: string
@@ -1011,8 +1263,18 @@ export interface ProviderInput {
   budgetUsd?: number
   openaiProtocol?: OpenAIProtocol
   note?: string
-  /** 明文 token,经 IPC 传入主进程后加密落盘 */
-  token: string
+  /** 明文 token,经 IPC 传入主进程后加密落盘;编辑时 undefined = 不改动。 */
+  token?: string
+  /** 主/活动密钥标签;不含密钥值,可回传渲染进程。 */
+  tokenLabel?: string
+  /** 新增的明文 token 列表,经 IPC 传入主进程后逐条加密落盘。 */
+  additionalTokens?: ProviderApiKeyInput[]
+  /** 只更新密钥元数据,不包含明文 token。 */
+  keyUpdates?: ProviderApiKeyUpdateInput[]
+  /** 删除指定 key;删除后不会回传任何密钥值。 */
+  removeKeyIds?: string[]
+  /** 设置活动 key;为空或不存在时回落到第一个可用 key。 */
+  activeKeyId?: string
 }
 
 export type ProviderModelErrorKind =
@@ -1046,6 +1308,7 @@ export interface ProviderModelFetchResult {
   cacheKey: string
   models: string[]
   fetchedAt?: number
+  latencyMs?: number
   stale: boolean
   error?: ProviderModelFetchError
 }
@@ -1061,6 +1324,7 @@ export interface PermissionRequestInfo {
   input: unknown
   toolUseId?: string
   decisionReason?: string
+  duplicateExecutionId?: string
 }
 
 export type AgentEvent =
@@ -1095,6 +1359,8 @@ export type AgentEvent =
       model: string
       reason: string
       providerId: string
+      providerName?: string
+      decision?: ModelRoutingDecisionView
       crossValidationPlan?: ModelRoutePlanView
     }
   | {
@@ -1106,6 +1372,17 @@ export type AgentEvent =
       toName: string
       /** 切换后使用的模型(目标厂商无模型列表时为空,走其默认) */
       model?: string
+      reason: string
+    }
+  | {
+      /** 同一 Provider 内的 API Key 故障切换;仅包含标签和 id,绝不包含密钥值。 */
+      kind: 'provider-key-failover'
+      providerId: string
+      providerName: string
+      fromKeyId: string
+      fromKeyLabel: string
+      toKeyId: string
+      toKeyLabel: string
       reason: string
     }
   | { kind: 'text-delta'; text: string }
@@ -1598,7 +1875,7 @@ export interface WriteTextFileResult {
   error?: string
 }
 
-export type PreviewType = 'html' | 'markdown' | 'text' | 'csv' | 'json' | 'image' | 'pdf' | 'unknown'
+export type PreviewType = 'html' | 'markdown' | 'text' | 'csv' | 'json' | 'image' | 'pdf' | 'office' | 'unknown'
 export type PreviewMode = 'text' | 'asset' | 'unsupported'
 
 export interface PreparedPreview {
@@ -1611,6 +1888,21 @@ export interface PreparedPreview {
   mtimeMs?: number
   content?: string
   dataUrl?: string
+  error?: string
+}
+
+export interface OfficeVisualPreview {
+  ok: boolean
+  path?: string
+  dataUrl?: string
+  previewUrl?: string
+  width?: number
+  height?: number
+  bytes?: number
+  mtimeMs?: number
+  source: 'quick-look'
+  fidelity: 'system-document-preview' | 'first-page-thumbnail'
+  warning?: string
   error?: string
 }
 
@@ -1770,12 +2062,23 @@ export interface SessionEventPayload {
   sessionId: string
   /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
   seq: number
+  streamId: string
+  eventId: string
+  occurredAt: number
+  causationId?: string
+  correlationId?: string
   event: AgentEvent
 }
 
 /** 转录文件(JSONL)中的一行 */
 export interface TranscriptEntry {
   seq: number
+  /** 可选仅用于兼容旧 JSONL;新写入的转录总是携带身份。 */
+  eventId?: string
+  occurredAt?: number
+  streamId?: string
+  causationId?: string
+  correlationId?: string
   event: AgentEvent
 }
 
@@ -1918,6 +2221,7 @@ export interface AgentDeskApi {
   readTextFile(sessionId: string, path: string): Promise<ReadTextFileResult>
   writeTextFile(sessionId: string, path: string, content: string): Promise<WriteTextFileResult>
   preparePreview(sessionId: string, path: string): Promise<PreparedPreview>
+  preparePreviewVisual(sessionId: string, path: string): Promise<OfficeVisualPreview>
   savePreviewAnnotation(sessionId: string, input: PreviewAnnotationInput): Promise<PreviewAnnotation>
   listPreviewAnnotations(sessionId: string, path?: string): Promise<PreviewAnnotation[]>
   openBrowser(sessionId: string, url?: string): Promise<BrowserViewState>
@@ -1978,6 +2282,8 @@ export interface AgentDeskApi {
   quickbarPrepareFiles(input: QuickbarFileInput): Promise<QuickbarPayloadResult>
   onMenuCommand(cb: (command: MenuCommand) => void): () => void
   onQuickbarEvent(cb: (event: QuickbarEvent) => void): () => void
-  onSessionEvent(cb: (sessionId: string, event: AgentEvent, seq: number) => void): () => void
+  onSessionEvent(
+    cb: (sessionId: string, event: AgentEvent, seq: number, eventId?: string, occurredAt?: number) => void
+  ): () => void
   onMemorySuggestion(cb: (event: MemorySuggestionEvent) => void): () => void
 }

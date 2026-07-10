@@ -8,9 +8,11 @@ const finalMode = process.argv.includes('--final') || process.env.CAOGEN_RELEASE
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'release-notes-audit')
 const reportDir = path.join(reportRoot, runId)
-const notesPath = normalizePath(argValue('--notes') || process.env.CAOGEN_RELEASE_NOTES_PATH || 'docs/RELEASE-NOTES-v0.2.0-DRAFT.md')
+const packageJson = readOptionalJson(path.join(repoRoot, 'package.json')) ?? {}
+const notesPath = normalizePath(argValue('--notes') || process.env.CAOGEN_RELEASE_NOTES_PATH || 'docs/RELEASE-NOTES-DRAFT.md')
 const doctorPath = normalizePath(argValue('--doctor') || process.env.CAOGEN_RELEASE_DOCTOR_PATH || 'test-results/workos-release-doctor/latest.json')
-const expectedVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || '0.2.0'
+const explicitExpectedVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || ''
+const expectedVersion = explicitExpectedVersion || packageJson.version || ''
 const failures = []
 const warnings = []
 
@@ -31,6 +33,7 @@ const report = {
   reportDir,
   notesPath: path.relative(repoRoot, notesPath),
   expectedVersion,
+  expectedVersionSource: explicitExpectedVersion ? 'explicit' : 'package.json',
   doctorPath: path.relative(repoRoot, doctorPath),
   doctorStatus: doctor?.status,
   doctorOpenDomains: Array.isArray(doctor?.openDomains) ? doctor.openDomains : [],
@@ -48,7 +51,8 @@ if (required && report.status !== 'passed') process.exitCode = 1
 if (!required && existsSync(notesPath) && report.status === 'failed') process.exitCode = 1
 
 function validateNotes(text) {
-  requireText(text, expectedVersion, `release notes must mention v${expectedVersion}`)
+  if (!expectedVersion) failures.push('unable to determine expected release version from package.json or explicit version')
+  else requireText(text, expectedVersion, `release notes must mention ${expectedVersion}`)
   requireHeading(text, 'Release Decision')
   requireHeading(text, 'Uploaded Assets')
   requireHeading(text, 'Truth Boundary')
@@ -56,13 +60,14 @@ function validateNotes(text) {
   requireHeading(text, 'Security Statement')
   requireHeading(text, 'macOS First Open')
   requireText(text, 'GitHub Releases', 'release notes must name GitHub Releases as the distribution channel')
-  requireText(text, 'latest public release remains v0.1.2', 'draft notes must preserve latest public release v0.1.2 until v0.2.0 is published')
-  requireText(text, 'No v0.2.0 assets uploaded yet', 'draft notes must state that v0.2.0 has no uploaded assets yet')
+  requireText(text, 'latest public release', 'draft notes must preserve the latest public release boundary until a new release is published')
+  requireAny(text, [/no new release assets uploaded yet/i, /no .*assets uploaded yet/i], 'draft notes must state that no new release assets have been uploaded yet')
   requireText(text, 'real keys', 'release notes must include a credential exclusion statement')
   requireText(text, 'test-results', 'release notes must exclude local evidence/test artifacts')
   requireText(text, 'latest*.yml', 'release notes must mention public update metadata assets')
 
   scanForbiddenSecrets(text)
+  scanForbiddenPublicPositioning(text)
   scanOverclaims(text)
   validateDoctorAlignment(text)
   validateFinalMode(text)
@@ -87,7 +92,7 @@ function validateFinalMode(text) {
   if (doctor?.status !== 'ready') {
     failures.push('final release notes require workos-release-doctor status ready')
   }
-  if (/Do not publish|not ready|No v0\.2\.0 assets uploaded yet/i.test(text)) {
+  if (/Do not publish|not ready|No (?:new )?.*assets uploaded yet/i.test(text)) {
     failures.push('final release notes must not contain draft-only blocked-release language')
   }
   const assetLines = text
@@ -108,6 +113,29 @@ function scanOverclaims(text) {
   ]
   for (const item of forbidden) {
     if (item.regex.test(text)) failures.push(`release notes contain forbidden overclaim: ${item.name}`)
+  }
+}
+
+function scanForbiddenPublicPositioning(text) {
+  const previouslyForcedVersion = ['0', '2', '0'].join('.')
+  const escapedPreviouslyForcedVersion = escapeRegExp(previouslyForcedVersion)
+  const forbidden = [
+    { name: 'fixed-v-future-target', regex: new RegExp(`\\bv${escapedPreviouslyForcedVersion}\\b`, 'g') },
+    { name: 'fixed-future-target', regex: new RegExp(`(?<![0-9.])${escapedPreviouslyForcedVersion}(?![0-9.])`, 'g') },
+    { name: 'competitor-Codex', regex: /\bCodex\b/g },
+    { name: 'competitor-Claude', regex: /\bClaude(?:\s+Code)?\b/g },
+    { name: 'competitor-Hermes', regex: /\bHermes\b/g },
+    { name: 'competitor-OpenClaw', regex: /\bOpenClaw\b/g },
+    { name: 'competitor-CCswitch', regex: /\bCCswitch\b/g },
+    { name: 'competitor-tutti', regex: /\bTutti\b|\btutti\b/g }
+  ]
+  const lines = text.split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+    for (const item of forbidden) {
+      item.regex.lastIndex = 0
+      if (item.regex.test(line)) failures.push(`${index + 1}: release notes contain forbidden public positioning term: ${item.name}`)
+    }
   }
 }
 

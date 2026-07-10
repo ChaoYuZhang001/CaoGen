@@ -1,12 +1,24 @@
 import { useMemo, useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
-import type { OpenAIProtocol, ProviderView } from '../../../shared/types'
+import type {
+  OpenAIProtocol,
+  ProviderApiKeyInput,
+  ProviderApiKeyUpdateInput,
+  ProviderApiKeyView,
+  ProviderView
+} from '../../../shared/types'
 
 interface Props {
   /** null = 新建;否则编辑该 Provider */
   provider: ProviderView | null
   onClose: () => void
+}
+
+interface KeyDraft {
+  label: string
+  disabled: boolean
+  remove: boolean
 }
 
 export default function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
@@ -22,7 +34,18 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [openaiProtocol, setOpenaiProtocol] = useState<OpenAIProtocol>(provider?.openaiProtocol ?? 'responses')
   const [note, setNote] = useState(provider?.note ?? '')
   const [token, setToken] = useState('')
+  const [tokenLabel, setTokenLabel] = useState(provider?.activeKeyLabel ?? '')
   const [tokenTouched, setTokenTouched] = useState(false)
+  const [additionalKeysText, setAdditionalKeysText] = useState('')
+  const [activeKeyId, setActiveKeyId] = useState(provider?.activeKeyId ?? '')
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, KeyDraft>>(() =>
+    Object.fromEntries(
+      (provider?.apiKeys ?? []).map((key) => [
+        key.id,
+        { label: key.label, disabled: key.disabled, remove: false }
+      ])
+    )
+  )
   const [presetHint, setPresetHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -33,6 +56,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   )
 
   const isEdit = provider !== null
+  const savedKeys = provider?.apiKeys ?? []
 
   const currentModelSourceKey = useMemo(
     () => providerModelSourceKey(provider?.id, baseUrl, openaiProtocol),
@@ -59,7 +83,11 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
       }
       setModelsText(result.models.join('\n'))
       setModelSourceKey(result.cacheKey)
-      setFetchNote(t('fetchedModelsFrom', { n: result.models.length, baseUrl: result.baseUrl }))
+      setFetchNote(t('fetchedModelsFrom', {
+        n: result.models.length,
+        baseUrl: result.baseUrl,
+        latencyMs: result.latencyMs ?? 0
+      }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -89,6 +117,13 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
       .map((m) => m.trim())
       .filter(Boolean)
     const budget = Number(budgetUsd)
+    const additionalTokens = parseAdditionalKeys(additionalKeysText)
+    const keyUpdates = buildKeyUpdates(savedKeys, keyDrafts)
+    const removeKeyIds = savedKeys
+      .filter((key) => keyDrafts[key.id]?.remove)
+      .map((key) => key.id)
+    const requestedActiveKeyId = activeKeyId && !removeKeyIds.includes(activeKeyId) ? activeKeyId : undefined
+    const tokenLabelPatch = tokenLabel.trim()
     setBusy(true)
     setError('')
     try {
@@ -102,7 +137,11 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           openaiProtocol,
           note: note.trim(),
           // token 未改动则不传,避免清空已存密钥
-          ...(tokenTouched ? { token } : {})
+          ...(tokenTouched ? { token, tokenLabel: tokenLabelPatch } : tokenLabelPatch ? { tokenLabel: tokenLabelPatch } : {}),
+          ...(additionalTokens.length > 0 ? { additionalTokens } : {}),
+          ...(keyUpdates.length > 0 ? { keyUpdates } : {}),
+          ...(removeKeyIds.length > 0 ? { removeKeyIds } : {}),
+          ...(requestedActiveKeyId ? { activeKeyId: requestedActiveKeyId } : {})
         })
       } else {
         await createProvider({
@@ -113,7 +152,9 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           openaiProtocol,
           note: note.trim(),
-          token
+          token,
+          tokenLabel: tokenLabelPatch,
+          ...(additionalTokens.length > 0 ? { additionalTokens } : {})
         })
       }
       onClose()
@@ -168,7 +209,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         />
 
         <label className="field-label">
-          {t('apiKeyLabel')}
+          {t('apiKeyLabelPrimary')}
           {isEdit && provider.hasToken && !tokenTouched && (
             <span className="field-hint">{t('savedKeepEmpty')}</span>
           )}
@@ -183,6 +224,55 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
             setTokenTouched(true)
           }}
         />
+
+        <label className="field-label">{t('apiKeyNameLabel')}</label>
+        <input
+          className="input input-block"
+          value={tokenLabel}
+          placeholder={t('apiKeyNamePlaceholder')}
+          onChange={(e) => setTokenLabel(e.target.value)}
+        />
+
+        {isEdit && savedKeys.length > 0 && (
+          <div className="provider-key-panel">
+            <div className="field-label-row">
+              <label className="field-label">{t('apiKeyListLabel')}</label>
+              <span className="field-hint">{t('apiKeyCountLabel', { n: provider.keyCount ?? savedKeys.filter((key) => !key.disabled).length })}</span>
+            </div>
+            <div className="provider-key-list">
+              {savedKeys.map((key) => (
+                <SavedKeyRow
+                  key={key.id}
+                  apiKey={key}
+                  draft={keyDrafts[key.id] ?? { label: key.label, disabled: key.disabled, remove: false }}
+                  activeKeyId={activeKeyId || provider.activeKeyId || ''}
+                  onActive={() => setActiveKeyId(key.id)}
+                  onChange={(patch) => {
+                    setKeyDrafts((prev) => ({
+                      ...prev,
+                      [key.id]: {
+                        label: prev[key.id]?.label ?? key.label,
+                        disabled: prev[key.id]?.disabled ?? key.disabled,
+                        remove: prev[key.id]?.remove ?? false,
+                        ...patch
+                      }
+                    }))
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <label className="field-label">{t('additionalApiKeysLabel')}</label>
+        <textarea
+          className="input input-block textarea"
+          value={additionalKeysText}
+          rows={3}
+          placeholder={t('additionalApiKeysPlaceholder')}
+          onChange={(e) => setAdditionalKeysText(e.target.value)}
+        />
+        <div className="field-hint">{t('additionalApiKeysHint')}</div>
 
         <div className="field-label-row">
           <label className="field-label">{t('modelListLabel')}</label>
@@ -262,6 +352,106 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
       </div>
     </div>
   )
+}
+
+function SavedKeyRow({
+  apiKey,
+  draft,
+  activeKeyId,
+  onActive,
+  onChange
+}: {
+  apiKey: ProviderApiKeyView
+  draft: KeyDraft
+  activeKeyId: string
+  onActive: () => void
+  onChange: (patch: Partial<KeyDraft>) => void
+}): React.JSX.Element {
+  const t = useT()
+  const removed = draft.remove
+  const disabled = draft.disabled || removed
+  const lastUsed = apiKey.lastUsedAt
+    ? t('apiKeyLastUsed', { time: new Date(apiKey.lastUsedAt).toLocaleString() })
+    : t('apiKeyNeverUsed')
+  const lastFailure = apiKey.lastFailureAt
+    ? t('apiKeyLastFailure', {
+        reason: apiKey.lastFailureReason || '-',
+        time: new Date(apiKey.lastFailureAt).toLocaleString()
+      })
+    : ''
+  return (
+    <div className={`provider-key-row ${removed ? 'provider-key-row-removed' : ''}`}>
+      <label className="provider-key-active">
+        <input
+          type="radio"
+          name="provider-active-key"
+          checked={activeKeyId === apiKey.id}
+          disabled={disabled}
+          onChange={onActive}
+        />
+        <span>{t('apiKeyActive')}</span>
+      </label>
+      <div className="provider-key-main">
+        <input
+          className="input input-block provider-key-name"
+          value={draft.label}
+          disabled={removed}
+          onChange={(e) => onChange({ label: e.target.value })}
+        />
+        <div className="provider-key-meta">{[lastUsed, lastFailure].filter(Boolean).join(' · ')}</div>
+      </div>
+      <label className="provider-key-check">
+        <input
+          type="checkbox"
+          checked={draft.disabled}
+          disabled={removed}
+          onChange={(e) => onChange({ disabled: e.target.checked })}
+        />
+        <span>{t('apiKeyDisabled')}</span>
+      </label>
+      <label className="provider-key-check">
+        <input
+          type="checkbox"
+          checked={removed}
+          onChange={(e) => onChange({ remove: e.target.checked })}
+        />
+        <span>{t('apiKeyRemove')}</span>
+      </label>
+    </div>
+  )
+}
+
+function parseAdditionalKeys(value: string): ProviderApiKeyInput[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const eqIndex = line.indexOf('=')
+      if (eqIndex <= 0) return [{ token: line }]
+      const label = line.slice(0, eqIndex).trim()
+      const token = line.slice(eqIndex + 1).trim()
+      return token ? [{ label, token }] : []
+    })
+}
+
+function buildKeyUpdates(
+  savedKeys: ProviderApiKeyView[],
+  drafts: Record<string, KeyDraft>
+): ProviderApiKeyUpdateInput[] {
+  return savedKeys.flatMap((key) => {
+    const draft = drafts[key.id]
+    if (!draft || draft.remove) return []
+    const label = draft.label.trim()
+    const labelChanged = label !== key.label
+    const disabledChanged = draft.disabled !== key.disabled
+    if (!labelChanged && !disabledChanged) return []
+    return [{
+      id: key.id,
+      ...(labelChanged ? { label } : {}),
+      ...(disabledChanged ? { disabled: draft.disabled } : {})
+    }]
+  })
 }
 
 function providerModelSourceKey(providerId: string | undefined, baseUrl: string, protocol: OpenAIProtocol | undefined): string {

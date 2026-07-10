@@ -144,6 +144,8 @@ const api: AgentDeskApi = {
   writeTextFile: (sessionId: string, path: string, content: string) =>
     ipcRenderer.invoke('files:write', sessionId, path, content),
   preparePreview: (sessionId: string, path: string) => ipcRenderer.invoke('preview:prepare', sessionId, path),
+  preparePreviewVisual: (sessionId: string, path: string) =>
+    ipcRenderer.invoke('preview:prepareVisual', sessionId, path),
   savePreviewAnnotation: (sessionId: string, input: PreviewAnnotationInput) =>
     ipcRenderer.invoke('preview:saveAnnotation', sessionId, input),
   listPreviewAnnotations: (sessionId: string, path?: string) =>
@@ -262,7 +264,7 @@ const api: AgentDeskApi = {
   },
   onSessionEvent: (cb) => {
     const listener = (_e: IpcRendererEvent, payload: SessionEventPayload): void => {
-      cb(payload.sessionId, payload.event, payload.seq)
+      cb(payload.sessionId, payload.event, payload.seq, payload.eventId, payload.occurredAt)
     }
     ipcRenderer.on('session:event', listener)
     return () => {
