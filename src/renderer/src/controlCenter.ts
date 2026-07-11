@@ -56,7 +56,10 @@ export interface ControlCenterEngineStatus {
   kind: string
   label: string
   available: boolean
+  optional: boolean
+  configured: boolean
   status: ControlCenterStatus
+  statusLabel: string
 }
 
 export interface ControlCenterCapability {
@@ -139,10 +142,23 @@ export function buildControlCenterView(input: BuildControlCenterViewInput): Cont
     ? `${input.settings.defaultProviderId} (missing)`
     : (selectedProvider?.name ?? '未设置 Provider 偏好')
   const mcp = buildMcpStatus(input.pluginRegistry, input.mcpProbeResults ?? {})
-  const engines = input.engines.map((engine) => ({
-    ...engine,
-    status: engine.available ? 'available' : 'external-required'
-  }) satisfies ControlCenterEngineStatus)
+  const engines = input.engines.map((engine) => {
+    const optional = engine.optional === true
+    const configured = engine.configured !== false
+    return {
+      ...engine,
+      optional,
+      configured,
+      status: !engine.available ? 'external-required' : optional && !configured ? 'needs-config' : 'available',
+      statusLabel: !engine.available
+        ? '运行时不可用'
+        : optional
+          ? configured
+            ? '已配置，可选'
+            : '未配置，可选'
+          : '可用'
+    } satisfies ControlCenterEngineStatus
+  })
   const budgetReport = calculateBudgetReport({
     settings: input.settings,
     providers: input.providers,
@@ -384,7 +400,9 @@ function buildCapabilities(input: {
   mcp: ControlCenterMcpStatus
   engines: ControlCenterEngineStatus[]
 }): ControlCenterCapability[] {
-  const availableEngines = input.engines.filter((engine) => engine.available)
+  const availableEngines = input.engines.filter(
+    (engine) => engine.available && (!engine.optional || engine.configured)
+  )
   return [
     {
       title: 'Drive policy',
@@ -409,9 +427,9 @@ function buildCapabilities(input: {
       detail: input.mcp.label
     },
     {
-      title: 'CLI engines',
+      title: 'Agent engines',
       status: availableEngines.length > 0 ? 'available' : 'external-required',
-      detail: availableEngines.length > 0 ? availableEngines.map((engine) => engine.label).join(', ') : 'no local engine is currently available'
+      detail: availableEngines.length > 0 ? availableEngines.map((engine) => engine.label).join(', ') : 'no configured Agent engine is currently available'
     }
   ]
 }

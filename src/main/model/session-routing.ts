@@ -208,7 +208,7 @@ function routeableProviders(
   const compatible = providers.filter((provider) => {
     if (provider.baseUrl.trim().length === 0 || !provider.hasToken || provider.models.length === 0) return false
     if (engine === 'openai') return provider.openaiProtocol === 'chat' || provider.openaiProtocol === 'responses'
-    if (engine === undefined || engine === 'claude') return provider.openaiProtocol === undefined
+    if (engine === 'claude') return provider.openaiProtocol === undefined
     return false
   })
   const healthy = compatible.filter((provider) => getHealth(provider.id).healthy)

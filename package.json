@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:coding-standards": "node scripts/coding-standards-audit.mjs",
     "test:plan-contract": "node scripts/p0-p1-p2-contract-smoke.mjs",
+    "test:claude-optional": "node scripts/claude-optional-smoke.mjs",
     "test:product-positioning": "node scripts/product-positioning-audit.mjs",
     "test:product-positioning:required": "node scripts/product-positioning-audit.mjs --required",
     "test:search-replace": "node scripts/search-replace-smoke.mjs",

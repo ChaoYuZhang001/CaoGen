@@ -52,7 +52,7 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
   useEffect(() => {
     void window.agentDesk.listEngines().then(setEngines)
     void window.agentDesk.listRoutineTemplates().then(setTemplates).catch(() => undefined)
-  }, [])
+  }, [providers])
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
@@ -247,8 +247,9 @@ export default function RoutineEditor({ routine = null, onClose }: Props): React
             >
               <option value="">{t('routineEngineDefault')}</option>
               {engines.map((en) => (
-                <option key={en.kind} value={en.kind} disabled={!en.available}>
+                <option key={en.kind} value={en.kind} disabled={!en.available || (en.optional && !en.configured)}>
                   {en.label}
+                  {en.optional ? ` (${t(en.configured ? 'optionalEngine' : 'optionalEngineNotConfigured')})` : ''}
                 </option>
               ))}
             </select>

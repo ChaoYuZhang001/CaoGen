@@ -61,6 +61,10 @@ export interface EngineFactory {
   label: string
   /** 当前环境是否可用(CLI 是否安装等);不可用则 UI 置灰 */
   available(): boolean
+  /** 可选引擎不参与默认启动或发布门禁。 */
+  optional?: boolean
+  /** 当前是否已有用户配置；探测失败时按未配置处理，不阻塞引擎列表。 */
+  configured?(): boolean
   create(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string, initialEventSeq?: number): Engine
 }
 
@@ -70,12 +74,29 @@ export function registerEngine(factory: EngineFactory): void {
   registry.set(factory.kind, factory)
 }
 
-export function listEngines(): Array<{ kind: string; label: string; available: boolean }> {
+export function listEngines(): Array<{
+  kind: string
+  label: string
+  available: boolean
+  optional: boolean
+  configured: boolean
+}> {
   return [...registry.values()].map((f) => ({
     kind: f.kind,
     label: f.label,
-    available: f.available()
+    available: safeProbe(f.available, false),
+    optional: f.optional === true,
+    configured: safeProbe(f.configured, true)
   }))
+}
+
+function safeProbe(probe: (() => boolean) | undefined, fallback: boolean): boolean {
+  if (!probe) return fallback
+  try {
+    return probe()
+  } catch {
+    return false
+  }
 }
 
 /** 按 kind 创建引擎;未注册/不可用时直接失败,避免暗中换成别的模型/账号体系。 */
