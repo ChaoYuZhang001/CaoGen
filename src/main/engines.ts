@@ -18,8 +18,7 @@ export function registerBuiltinEngines(): void {
     label: 'Claude Agent SDK',
     available: () => true,
     optional: true,
-    configured: () =>
-      listProviders().some((provider) => provider.hasToken && provider.openaiProtocol === undefined),
+    configured: () => listProviders().some((provider) => provider.hasToken),
     create: (
       meta: SessionMeta,
       emit: EngineEmit,
