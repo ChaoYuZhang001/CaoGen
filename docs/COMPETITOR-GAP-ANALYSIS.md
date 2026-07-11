@@ -1,9 +1,10 @@
 # CaoGen 竞品差距与优化优先级
 
 > 快照日期: 2026-07-11
-> CaoGen 代码基线: `main@311470e1262a`
-> 对标范围: Codex Desktop、Claude Desktop / Claude Code、OpenClaw、Hermes Agent
-> 补充迁移参照: Cursor / Windsurf 的 IDE 内闭环，以及 Devin / OpenHands 类长任务交付；本轮未联网刷新其最新版本，不把映射写成最新竞品事实。
+> CaoGen 功能代码基线: `main@744f6826965a`
+> 核心对标: Codex Desktop / CLI、Claude Desktop / Code、Cursor / Windsurf
+> 扩展参照: OpenClaw、Hermes Agent，以及 Devin / OpenHands 类长任务交付
+> Cursor / Windsurf 仅采用仓库内迁移目标，本轮未联网刷新其最新版本，不把映射写成最新竞品事实。
 > 结论口径: 竞品事实只采用官方文档、官方仓库或当前 Codex Desktop 可调用能力; CaoGen 事实只采用当前代码和测试产物。
 
 ## 结论
@@ -14,13 +15,14 @@ CaoGen 已经具备真实差异化:
 
 - 多 Provider、多 API Key、健康度、预算、路由解释和跨厂商故障切换。
 - 真实 child session、DAG、worktree 隔离、自动合并和恢复快照。
+- `write_file`、`search_replace`、普通 `edit_file` 与 Git commit/merge/push 已进入可恢复 Effect 路径；文件编辑具备内容与 inode CAS、沙箱写入后置校验和 Effect 执行边界强杀恢复证据。
 - Git、Diff、终端、文件、浏览器、Office 预览和 3D 办公状态统一在一个桌面工作台。
 - 任务事件身份、恢复游标、SQLite 快照和强杀恢复已经明显强于普通聊天桌面壳。
 
 但以下五项会直接阻止 CaoGen 成为可信赖的长期 Agent Desktop:
 
-1. Effect Ledger 核心已经落地，自动 Reconciler 已覆盖 `write_file`、`git_commit`、`git_merge`、`git_push`；PR、Issue、消息、可查询 MCP、Code Forge 复合动作、直接 Renderer Git 入口、补偿执行和防篡改 evidence 链仍未闭环。
-2. 审计日志已改为 metadata/hash 并限制文件权限，权限卡也会完整展示脱敏输入；但 `safeStorage` 不可用时 API Key 仍会退化为可逆 Base64，scoped credential broker 和数据保留/删除策略尚未建立。
+1. Effect Ledger 核心已经落地，自动 Reconciler 已覆盖 `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push`；PR、Issue、消息、可查询 MCP、Code Forge 复合动作、直接 Renderer Git 入口、补偿执行和防篡改 evidence 链仍未闭环。
+2. 审计日志已改为 metadata/hash 并限制文件权限，权限卡也会完整展示脱敏输入；但 GUI 五分钟授权对所有 GUI 工具全局生效，严格 Docker 的设置文案与默认 fail-closed 运行时不一致，`safeStorage` 不可用时 API Key 仍会退化为可逆 Base64。
 3. MCP 子进程继承完整环境变量，内置模板使用未锁版本的 `npx -y`，插件安装缺少来源、哈希、签名、能力清单和运行时隔离。
 4. 本地深测仍把退出码为 0 的 `SKIP` 计为 `pass`；仓库没有托管 CI，macOS 包未签名，也没有 SBOM、provenance、安装升级验证和失败回滚证据。
 5. OpenAI Responses 的 `lastResponseId` 只在内存中，重启、换 Provider 或换 Key 会丢失服务端上下文链，尚无 Provider 无关的会话账本。
@@ -28,40 +30,41 @@ CaoGen 已经具备真实差异化:
 因此下一阶段不应继续追求更多可见功能。正确顺序是:
 
 ```text
-扩展 Effect Reconciler / evidence / compensation
+扩展剩余 Effect / evidence / compensation
+  -> 收紧审批作用域、凭据与插件/MCP 隔离
   -> 修正测试四态与 required gate
-  -> 凭据与审计安全
-  -> 插件/MCP 供应链
   -> 托管 CI、签名、SBOM 与回滚
-  -> Provider 无关上下文耐久性
-  -> Genesis 执行化与远程长期任务
+  -> Provider 无关上下文与可检查恢复时间线
+  -> Desktop observe-act-verify
+  -> Memory/Skill 治理与 Team/Supervisor 控制面
 ```
 
 总体判断信心: 高。竞品快速变化或官方材料内部冲突的地方已单独标注。
 
 ## 继续优化问题清单
 
-| 优先级 | 问题 | 当前状态 | 下一纵切 | 完成判据 |
-|---|---|---|---|---|
-| P0-1B | Reconciler 覆盖不足 | 文件写入、Git commit/merge/push 已自动回读；其他副作用仍 opaque fail-closed | 接入 `search_replace/edit_file`、PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 入口 | 所有高风险入口统一经过 Effect Runtime；外部成功后强杀不会重复执行 |
-| P0-1C | Evidence 与补偿不完整 | 有 generation/revision、resource lease/fencing 和 evidence digest；没有 append-only 哈希链及生产补偿器 | 独立 Effect 存储、审计关联、补偿计划/审批/执行 | 每次确认、重试、补偿均可追溯；篡改可检测；补偿失败仍 fail closed |
-| P0-4A | 测试结果语义失真 | 外层 84 项显示 pass，但 Claude/China 三项实际 `SKIP` | 建立 `pass / skip / blocked / fail` 四态和发布档位 required checks | `SKIP` 不计入 pass；required 项 skip/blocked 必须阻断发布 |
-| P0-2 | 凭据与本地数据安全 | 审计脱敏第一纵切完成；Base64 fallback、凭据代理和保留策略未完成 | safeStorage fail-closed、旧密钥迁移、scoped broker、导出/删除/保留周期 | 不再新增可逆编码密钥；插件/MCP 只能取得声明范围内的凭据 |
-| P0-3 | MCP/插件供应链 | 已能安装和调用，但缺 provenance、digest、能力约束和隔离 | Capability Manifest、固定版本/digest、最小环境、权限 diff | 恶意 fixture 不能读取无关环境、文件或凭据；内容变化必须重新批准 |
-| P0-4B | 发布可信度不足 | 有本地审计和双架构包；无 hosted CI、签名、SBOM/provenance、升级回滚证据 | 跨平台 CI、签名公证、制品证明和干净机安装/升级/回滚 | 每个制品绑定源码 SHA、哈希、签名、SBOM、provenance 和回滚版本 |
-| P0-5 | Provider 无关会话账本缺失 | 三套会话/checkpoint 语义仍分裂 | Canonical Conversation Ledger 和跨 Provider resume | 重启/换 Provider 后工具配对、附件、checkpoint 和已确认效果连续 |
-| P1-9 | 架构热点持续膨胀 | `store.ts`、`sessionManager.ts`、`ipc.ts`、shared types 超阈值 | 按 IPC domain、renderer slice、session service 和跨进程 contract 拆分 | strict standards audit 通过；新功能不再进入聚合热点 |
-| P1-2/3 | Agent 生命周期与 Supervisor 不统一 | child、DAG、Routine、恢复各自可用但生命周期分散 | 四类 Agent 原语 + 本地/远程 Supervisor | 长任务跨 Desktop 重启继续，状态、预算、审批和交付无缺口 |
-| P2-6 | 缺真实用户迁移证据 | N1 fixture/脚本已准备，尚无非项目用户 30 分钟实测 | 真人计时、录屏、失败点和回退次数记录 | 30 分钟主链路、资产零丢失，关键动作无需回退原工具 |
+| 优先级 | 问题 | 仓库证据 | 竞品基线 | 用户价值 | 完成判据 |
+|---|---|---|---|---|---|
+| P0-1B/C | 剩余外部副作用、evidence 与补偿未闭环 | `effect-reconciler.ts` 已覆盖主要文件编辑和 Git commit/merge/push，其他工具仍进入 `unsupported/opaque`；`TaskRecoveryModal.tsx` 主要提供目标、错误和人工确认 | Codex/Claude 已提供线程恢复、审批、checkpoint 与 PR/CI 工作流；CaoGen 应在“外部成功但本地未知”上形成领先能力 | 崩溃或断网后不会重复发 PR、消息、Issue 或复合交付动作 | 所有高风险入口经过 Effect Runtime；外部成功后强杀不重放；evidence 为 append-only 可验证链；补偿需审批且失败时 fail closed |
+| P0-2 | 审批作用域与沙箱真相不足 | `permission-manager.ts` 的五分钟 GUI grant 对所有 GUI 工具生效；设置页称严格 Docker 会自动降级，运行时默认却阻断；权限规则已支持 tool/path/risk/expiry | Codex sandbox/approval/Guardian 与 Claude permissions/OS sandbox 都把能力边界作为一等产品面 | 用户能准确知道“允许了什么、对哪个目标、持续多久”，不会误以为操作处于沙箱 | 授权绑定 app/window/action/path/diff/postcondition，可随时撤销；UI 展示实际 sandbox 状态；设置文案、运行时和审计完全一致 |
+| P0-3 | 凭据与 MCP/插件供应链隔离不足 | `providers.ts` 仍有 `b64:` fallback；`mcp-client.ts` 把完整 `process.env` 传给子进程；安装缺来源、digest、签名和能力 diff | Claude Managed MCP/MCPB 强调受管配置；Codex 对 Skill/Hook 有启用与信任状态 | 一个插件或 MCP 出问题时，不会带走全部密钥、环境变量和项目数据 | safeStorage 不可用时不持久化新密钥；恶意 fixture 读不到无关环境/文件/凭据；安装和内容变化都展示 provenance、digest 与 capability diff 并重新审批 |
+| P0-4 | 测试与发布结果不能代表真实可交付 | `deep-test.mjs` 仍按退出码 0 记 `pass`，无法区分脚本内部 `SKIP`；无 hosted CI、签名、SBOM/provenance、升级和回滚证据 | Claude 有 GitHub Actions/Code Review 交付面；成熟竞品用 CI、签名和制品证明建立发布信任 | 用户看到“通过”时可确信真实环境已验证，安装包可追溯、可升级、可回滚 | 统一 `pass/skip/blocked/fail`；required 项 skip/blocked 阻断；每个制品绑定源码 SHA、哈希、签名、SBOM、provenance 与干净机安装/升级/回滚记录 |
+| P0-5 | 恢复界面和会话账本不够可检查、不可跨 Provider | `TaskRecoveryModal.tsx` 未展示 causation、lease、generation、evidence 和完整状态时间线；`openaiEngine.ts` 的 `lastResponseId` 只在内存中 | Codex 支持 thread resume/fork/list/goals；Claude checkpoint 明确展示恢复能力与边界 | 重启、换模型或换 Provider 后，用户仍能解释任务做过什么、为什么停在这里 | 建立 Canonical Conversation Ledger；跨 Provider 恢复保持 tool-call 配对、附件和已确认 Effect；UI 展示 append-only 事件/effect 时间线和可恢复边界 |
+| P1-10 | Desktop 自动化缺 observe-act-verify | `gui-tools.ts` 的 click/type/scroll/hotkey 返回即时执行结果，没有自动观察后置状态；GUI 工具仍是 opaque Effect | 桌面自动化的有效基线是“观察 → 操作 → 验证”；当前仓库只有动作回执，没有后置状态证据 | 减少“点了但没生效”“输入到了错误窗口”这类假成功 | 每个动作可声明 postcondition；执行后自动截图/读取可访问性状态并断言；失败可恢复；权限绑定具体 app/window；Windows/macOS 真实 E2E 进入 required gate |
+| P1-11 | Existing-file writer 不是 crash-atomic | `search-replace.ts` 与 host/Docker writer 仍原地 `truncate/write`；CAS 可拒绝漂移目标，但写入中强杀、断电或 ENOSPC 可能留下空文件或半文件 | 可信编辑器应把一次已批准写入收敛为完整 pre-state 或完整 expected-state，而不是中间字节状态 | 避免恢复后源码损坏、构建失败或用户只能手工找回内容 | 进程在 truncate 后任意点强杀或注入 ENOSPC，重启后目标只能是完整 pre-state 或 expected-state；硬链接语义、备份恢复与原子替换边界有明确测试 |
+| P1-7 | Memory 与 Skill 自动学习缺统一治理 | `memory_add` 直接写入确认层；启用自动 Skill review 后，校验通过会直接写可执行 `SKILL.md` | Codex 的 Skill 启用与 Hook trust 强调显式信任；Claude 的受管扩展也强调策略边界 | 错误经验或提示注入不会静默变成长期记忆和可执行规则 | 所有自动学习先进入 draft，附来源、置信度、diff 和影响范围；人工批准后生效；支持版本、回滚、过期和按项目导出/删除 |
+| P1-2/3/8 | 多会话已有执行能力，但缺 Team/Supervisor/交付控制面 | DAG 支持 33 tasks、重试、超时、worktree 和 auto-merge；`TaskDagGraph.tsx` 只展示状态、尝试、依赖、结果和 merge，缺 owner/lease/budget/permission/pause/cancel/artifact | Codex multi-agent + durable thread/goal，Claude Subagents/Agent View/Teams + PR/CI/Code Review 已形成可管理工作面 | 用户可管理长时间并行工作，而不是只能观看 Agent 自己跑 | 明确 `Subtask/Durable Session/Team/Deterministic Workflow`；每个 lane 展示 owner、lease、预算、权限、验证和交付物；可 pause/cancel/resume；PR/CI/review/artifact 状态统一 |
+| P2-6 | Cursor/Windsurf 迁移价值缺真人证据，工具暴露仍可继续收敛 | `DESIGN-V2.md` 只有仓库定义的迁移矩阵；N1 fixture/计时脚本已准备，但没有非项目用户实测 | 仅把 Cursor/Windsurf 作为 IDE 内上下文、编辑、Diff、终端和 review 闭环的迁移目标，不宣称其当前版本事实 | 降低现有 IDE Agent 用户切换成本，避免工具过多挤占上下文 | 非项目相关重度用户在 30 分钟内完成主链路，资产零丢失并记录回退次数；大型插件集只渐进披露当前任务所需工具 |
 
 ## 产品类别校正
 
-这四个产品不能只按“有没有某个按钮”比较。
+这些产品不能只按“有没有某个按钮”比较。
 
 | 产品 | 实际产品形态 | 最值得对标的部分 | 不能直接类比的部分 |
 |---|---|---|---|
 | Codex Desktop | 软件工程 Agent Desktop，连接本地、worktree 和托管任务能力 | 多 Agent、线程/目标持久化、浏览器/Computer Use、插件与连接器、审批治理 | OpenAI 官方手册本次抓取被 403 阻断；部分结论来自同日官方源码和当前安装环境，不能外推到所有账号 |
-| Claude Desktop / Code | `Chat + Cowork + Code` 桌面工作面，Code 另含本地/云端/SSH、worktree、PR/CI | MCPB、权限与 OS 沙箱、Subagent/Agent View、Checkpoint、桌面 PR 生命周期 | Agent Teams 仍是实验能力；Computer Use 仍是受限研究预览 |
+| Claude Desktop / Code | `Chat + Cowork + Code` 桌面工作面，Code 另含本地/云端/SSH、worktree、PR/CI | MCPB、权限与 OS 沙箱、Subagent/Agent View、Checkpoint、桌面 PR 生命周期 | Agent Teams 仍是实验能力；桌面计算机操作的可用范围需以当前官方文档和账号权限为准 |
+| Cursor / Windsurf | IDE 内 Agent 与代码交付工作流，本轮只作为迁移参照 | 编辑器内上下文、文件编辑、Diff、终端、review 的短路径闭环 | 未联网刷新最新公开能力；只使用 `DESIGN-V2.md` 的仓库定义目标，不作为外部事实依据 |
 | OpenClaw | 本地常驻 Gateway + Agent runtime + 多渠道/多设备，Desktop 是控制和设备伴侣层 | Task Flow、长期自动化、Gateway/UI 解耦、插件供应链、跨平台发布 | 不是纯软件工程 Desktop；默认 sandbox 为 off，不支持敌对多租户 |
 | Hermes Agent | 开源单租户 Agent 平台，含 Electron Desktop、TUI、Web、Gateway、Cron、Kanban | SQLite durable Kanban、工具搜索、Skills/MCP、远程 backend、Agent 运维面 | Kanban 明确是单机；默认本地 backend 和进程内插件不是强隔离 |
 | CaoGen | 多厂商 AI 工作桌面，面向工程、文件、浏览器、Office、自动化和多 Agent | Provider 开放性、路由与成本透明、工作台统一、3D 状态可视化 | 安全、供应链、持续交付和长期任务证据尚未达到功能广度 |
@@ -70,7 +73,7 @@ CaoGen 已经具备真实差异化:
 
 | 维度 | CaoGen 当前状态 | 竞品基线 | 判断 |
 |---|---|---|---|
-| Agent 执行内核 | Claude Agent SDK + OpenAI-compatible API；Effect Ledger、资源级 lease/fencing、强杀恢复和四类 Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
+| Agent 执行内核 | Claude Agent SDK + OpenAI-compatible API；Effect Ledger、资源级 lease/fencing、强杀恢复、主要文件编辑与 Git commit/merge/push Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
 | 多 Agent | 33 child sessions、DAG、worktree、结果回传、自动合并 | Codex multi-agent 已标 stable；Claude 有 Subagent/Agent View/实验 Teams；OpenClaw/Hermes 有隔离 Agent | 强项；下一步应区分临时子任务、持久会话、Team 和确定性 Workflow |
 | Provider 开放性 | 多厂商、多 Key、健康度、预算、跨厂商 failover | 竞品通常围绕自家模型或单一 Gateway | CaoGen 领先，但上下文和成本账本仍不够耐久 |
 | 权限治理 | 风险分类、审批模式、资源级副作用门禁、文件边界、GUI 权限检查、审计 metadata/hash 和权限输入脱敏已接 | Claude 有宿主权限 + OS sandbox；Codex 有 sandbox/approval/Guardian；OpenClaw/Hermes 提供策略但默认姿态不总是安全 | 中等；缺凭证代理、统一保留策略和更强 OS 隔离 |
@@ -89,13 +92,13 @@ CaoGen 已经具备真实差异化:
 - `src/main/engine.ts` 和 `src/main/engines.ts` 已固定两条正式运行时路径。Codex CLI / Gemini CLI Adapter 已移除，不再作为未来方向。
 - `src/main/task/task-recovery.ts`、`src/main/task/task-snapshot.ts` 和 `src/main/task/task-runtime-registry.ts` 已形成事件回执、恢复游标、快照和幂等防重底座。
 - `src/main/task/effect-ledger.ts`、`effect-runtime.ts` 和 `effect-reconciler.ts` 已形成持久 EffectRecord、资源级 lease/fencing、字段级并发合并、自动/人工对账和 fail-closed 恢复底座。
-- `write_file`、`git_commit`、`git_merge`、`git_push` 已有只读 Reconciler；`git_merge` 固化 repo/ref/source SHA 与文件系统身份，在隔离 ODB 预检，并用 trusted reference-transaction hook 原子校验 old SHA、exact parents 和 expected tree。
+- `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已有只读 Reconciler；`search_replace dry_run=true` 不建立 Effect，Claude `MultiEdit/NotebookEdit` 仍为 opaque；`git_merge` 固化 repo/ref/source SHA 与文件系统身份，在隔离 ODB 预检，并用 trusted reference-transaction hook 原子校验 old SHA、exact parents 和 expected tree。
 - `src/main/sessionManager.ts` 与 `src/main/agent/dag-scheduler.ts` 已支持真实 child session、DAG 和 worktree 编排。
 - `src/main/providers.ts`、`src/main/providerKeyRouting.ts` 和 `src/main/model/session-routing.ts` 已支持 Provider/Key 选择、健康、预算和故障切换。
 - `src/main/permission/tool-permission.ts`、`src/main/permission/audit-log.ts` 和沙箱相关模块已形成权限治理基础；审计输入默认保存 metadata/hash，权限卡展示完整但递归脱敏的审批输入。
 - `src/main/skill`、`src/main/mcp`、`src/main/pluginInstall.ts` 已形成扩展生态底座。
 - `src/renderer/src/components/office` 已消费真实会话、审批、工具、路由、成本、worktree 和 checkpoint 状态。
-- 最新完整深测外层记录为 pass（`test-results/caogen-deep/2026-07-11T06-44-59-690Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
+- 当前代码基线的最新完整深测外层记录为 84/84 pass（`test-results/caogen-deep/2026-07-11T09-11-54-821Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
 
 ## P0: 必须先解决
 
@@ -105,19 +108,23 @@ CaoGen 已经具备真实差异化:
 
 - 持久 `EffectRecord` 已包含 `effectKey`、独立 `resourceKey`、generation/revision、lease、fencing token、状态、目标摘要和 evidence digest。
 - SQLite barrier 会跨会话阻止同一资源的并发 lease，并持久化每个资源的最大 fencing token。
-- `write_file`、`git_commit`、`git_merge`、`git_push` 已支持只读回读；不可查询操作在结果未知时 fail closed 并进入人工 CAS 处置。
+- `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已支持只读回读；不可查询操作在结果未知时 fail closed 并进入人工 CAS 处置。
+- 文件编辑 planner 与执行器共享冻结结果，保留原始字节/BOM，并用 root/file device+inode、内容摘要和预期摘要判断三态；同一路径或同一 inode 的硬链接别名不能并发获得 lease。
+- OpenAI 文件编辑的 host 与 strict Docker writer 都执行 identity/hash CAS；absent 写入还绑定审批时 root/parent 身份并用 hardlink 原子发布，Docker 容器返回后再复验原路径身份和内容。
 - `git_merge` 已冻结目标 ref、审批前 HEAD/tree、来源 ref/SHA 和 repo/common-dir/worktree-dir 身份；执行时只合并冻结 SHA，拒绝目录身份漂移、隐藏 index 状态、ignored/local path 覆盖和不安全 merge/filter 配置。
 - merge-tree 只在临时 ODB 中运行；真实 ref transaction 会在 prepared 阶段验证 old SHA、两父节点和 expected tree，失败后保持目标 ref、index 与 worktree 不变。
 - OpenAI-compatible 与 Claude SDK 两条正式工具执行路径均接入 prepare → persist barrier → execute → reconcile。
-- 强杀、关闭、中断、普通事件与 Effect 并发写、目标漂移和空 staged commit 已有回归测试。
+- 强杀、关闭、中断、普通事件与 Effect 并发写、目标漂移、路径替换、FIFO、超限 fail-closed、BOM、同内容换 inode、硬链接冲突、Claude prepared 恢复和空 staged commit 已有回归测试。
 - UI 会显示 `waiting_reconciliation`，阻止自动恢复、继续发送和删除恢复入口。
 
 继续问题:
 
-- `git_create_pr`、Issue、消息、可查询 MCP、`edit_file/search_replace`、Code Forge 复合动作和 Renderer 直接 Git/patch 入口尚无专用 Reconciler 或未统一经过 Effect Runtime。
+- `git_create_pr`、Issue、消息、可查询 MCP、Code Forge 复合动作和 Renderer 直接 Git/patch 入口尚无专用 Reconciler 或未统一经过 Effect Runtime。
+- Existing-file writer 仍原地 `truncate/write`，不具备 writer 内部 crash-atomic；当前强杀 E2E 证明的是 Effect 执行边界恢复，不能证明写入中断后文件一定完整。
+- Claude `MultiEdit/NotebookEdit` 尚无可信 planner；真实 Docker bind-mount 分支和 Claude AgentSession raw `Edit` hooks 全链仍缺有条件环境集成测试，不能把静态/模块 smoke 写成真实外部执行证明。
 - `markEffectCompensated` 只有账本状态能力，没有生产级补偿计划、审批和执行器。
 - evidence digest 尚未形成 append-only 哈希链、独立 Effect 表或审计事件关联，不能宣称防篡改不可变账本。
-- 真实强杀 E2E 已覆盖文件写入和 effect-bound `git_merge`；Git commit/push、PR、消息和 MCP 的“外部成功后强杀”仍需独立系统测试。
+- Effect Runtime 强杀 E2E 已覆盖文件写入、`search_replace/edit_file` 三态和 effect-bound `git_merge`；Git commit/push、PR、消息、MCP，以及 OpenAIEngine/Claude AgentSession 的完整工具链仍需独立系统测试。
 
 竞品信号:
 
@@ -128,7 +135,7 @@ CaoGen 已经具备真实差异化:
 
 下一纵切要求:
 
-- 把所有高风险入口统一接入 Effect Runtime，先完成 `search_replace/edit_file`、PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 操作。
+- 把所有高风险入口统一接入 Effect Runtime，下一纵切先完成 PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 操作。
 - 建立独立 Effect 持久表、append-only evidence 链和审计事件 ID，避免 evidence 只存在 TaskRun JSON 中。
 - 定义补偿动作的生成、审批、执行、失败恢复和二次补偿边界。
 - 对每类可查询副作用补真实强杀 E2E；无外部回读能力的操作继续禁止自动重试。
@@ -151,12 +158,14 @@ node scripts/effect-close-race-smoke.mjs
 
 Owner: Runtime / Task Kernel。
 
-### P0-2 凭据、审计与本地数据安全
+### P0-2 凭据、审批、沙箱与本地数据安全
 
 当前问题:
 
 - `src/main/providers.ts` 在 `safeStorage` 不可用时写入 `b64:`，这是编码，不是加密。
 - 审计日志已经停止保存 command/content/JSON 原文，改为 metadata、长度和 SHA-256；权限卡也会完整展示但递归脱敏输入。该纵切仍未覆盖所有日志、转录、插件和 MCP 数据出口。
+- GUI 五分钟临时授权只记录到期时间，对所有 GUI 工具全局放行，没有绑定 app、window、action 或 postcondition。
+- 设置页称严格 Docker 不可用时会自动降级，但运行时默认 `allowStrictDockerFallback !== true` 时阻断，用户看到的安全状态与实际行为不一致。
 - `providers.json`、会话转录、记忆、Routine、审计和插件配置缺少统一的保留、权限和加密策略。
 
 实现要求:
@@ -165,6 +174,8 @@ Owner: Runtime / Task Kernel。
 - 迁移并删除现有 `b64:` 密钥，迁移失败时要求用户重新输入。
 - 把现有审计 metadata/hash 规则抽成统一数据分类与递归脱敏组件，覆盖日志、转录、插件、MCP 和错误回传。
 - MCP/工具凭据通过 scoped broker 注入，避免把主进程完整环境传给子进程。
+- 把审批授权绑定到 capability、资源、目标应用/窗口、动作、diff/postcondition 和到期时间，并支持即时撤销。
+- UI 必须展示实际采用的 sandbox mode、是否降级及原因；设置文案不能承诺运行时默认不会发生的行为。
 - 为会话、记忆、Routine 和审计定义保留周期、导出和删除策略。
 
 验收标准:
@@ -172,6 +183,7 @@ Owner: Runtime / Task Kernel。
 - 全仓和运行产物中不存在可逆编码密钥。
 - 包含 `Authorization`、API Key、JWT、cookie、密码和私钥片段的输入不会出现在审计日志。
 - 渲染层、插件和 MCP 只能获得声明过的凭据范围。
+- GUI 临时授权不能跨 app/window/action 复用；严格沙箱未运行时不得显示为已隔离。
 - 权限不足或安全存储不可用时 fail closed，并给出可恢复提示。
 
 建议验证:
@@ -311,6 +323,8 @@ Owner: Runtime / Session。
 | P1-7 | 记忆/Skill 自动变化治理不足 | 所有自动学习先进入暂存，附来源、置信度、diff、审批和撤销 | 未批准变更不能成为稳定规则或执行代码 | Memory / Security |
 | P1-8 | 桌面交付状态不完整 | 把 Diff 评论、Artifact、验证、CI、PR、review、merge 和 release 状态接入统一控制面 | 用户不离开 CaoGen 即可判断是否可交付 | Desktop / Delivery |
 | P1-9 | 架构热点阻碍迭代 | 拆分 `store.ts`、`sessionManager.ts`、`ipc.ts` 和 shared types | 严格标准审计通过，新增功能不再进入超大聚合文件 | Architecture |
+| P1-10 | GUI 动作只有执行回执，没有 observe-act-verify | 为 click/type/scroll/hotkey 增加 app/window 作用域、postcondition、执行后截图/可访问性断言和恢复策略 | 假成功率可度量下降，真实 Windows/macOS required E2E 覆盖主链路 | Desktop Automation |
+| P1-11 | Existing-file writer 非 crash-atomic | 用原子替换、写前日志或可验证恢复协议消除 truncate/write 中间态，并明确硬链接策略 | 强杀/ENOSPC 后只能恢复为完整 pre-state 或 expected-state | Runtime / Files |
 
 ## P2: 差异化扩张
 
@@ -321,23 +335,23 @@ Owner: Runtime / Session。
 | P2-3 | 跨设备、移动节点、语音、Canvas 和多渠道入口 | 这是 OpenClaw 类扩张面，不是当前 Codex Desktop 对标阻塞项 |
 | P2-4 | 公共插件市场、评分、共享和组织目录 | 先完成供应链与隔离，再扩大数量 |
 | P2-5 | 跨主机 worker 和分布式 lease | 目标是超越 Hermes 单机 Kanban，而不是先复制其全部 UI |
-| P2-6 | N1 迁移实测和长期用户研究 | 必须用真人计时、录屏、失败点和回退次数作为证据 |
+| P2-6 | Cursor/Windsurf 迁移实测、Tool Search 和长期用户研究 | 只用仓库迁移目标，不宣称未核验竞品事实；必须用真人计时、录屏、失败点、工具暴露量和回退次数作为证据 |
 
 ## 推荐实施顺序
 
 ### 第一批: Trust Kernel
 
 1. P0-1B 剩余入口 + P0-1C：扩展 Reconciler、append-only evidence 和补偿执行。
-2. P0-4A 先修测试四态与 required gate，使后续安全完成度可被可信判断。
-3. P0-2 移除 Base64 fallback，完成 scoped credential broker 和数据生命周期。
-4. P0-3 MCP/插件 Capability Manifest、版本/digest 固定与隔离。
+2. P0-2 收紧 GUI/工具审批作用域，统一沙箱真相，并移除 Base64 fallback。
+3. P0-3 完成 scoped credential broker、MCP/插件 Capability Manifest、版本/digest 固定与隔离。
+4. P0-4A 修正测试四态与 required gate，使后续安全完成度可被可信判断。
 
 完成条件: 强杀、重复执行、恶意插件、凭据泄漏四类测试全部进入 required gate，且 `SKIP` 不再被统计为通过。
 
 ### 第二批: Durable Delivery
 
 1. P0-4B Hosted CI、签名、SBOM、provenance、安装升级和回滚。
-2. P0-5 Canonical Conversation Ledger 与跨 Provider resume。
+2. P0-5 Canonical Conversation Ledger、可检查恢复时间线与跨 Provider resume。
 
 完成条件: 任一提交、安装包和恢复会话都能从持久证据解释“做了什么、用什么版本、结果是否可信”。
 
@@ -345,8 +359,10 @@ Owner: Runtime / Session。
 
 1. P1-2 四类 Agent 原语。
 2. P1-3 统一 Supervisor 和远程 runner。
-3. P1-1 Genesis 执行化。
-4. P1-8 PR/CI/Artifact 桌面控制面。
+3. P1-10 Desktop observe-act-verify。
+4. P1-7 Memory/Skill draft、审批与回滚治理。
+5. P1-8 PR/CI/Artifact 桌面控制面。
+6. P1-1 Genesis 执行化。
 
 完成条件: 长任务可恢复、可审批、可验证、可交付，不依赖某个 UI 进程一直存活。
 
@@ -387,6 +403,11 @@ Owner: Runtime / Session。
 - [Hooks](https://code.claude.com/docs/en/hooks)
 - [GitHub Actions](https://code.claude.com/docs/en/github-actions)
 - [Code Review](https://code.claude.com/docs/en/code-review)
+
+### Cursor / Windsurf 迁移参照
+
+- 仓库定义目标: `DESIGN-V2.md` 的迁移矩阵与 IDE 内主链路要求。
+- 本轮未联网刷新 Cursor / Windsurf 官方材料；相关内容只作为待验证的迁移假设，信心为中等，不能作为当前竞品功能事实。
 
 ### OpenClaw
 
