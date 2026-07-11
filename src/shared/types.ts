@@ -228,6 +228,10 @@ export interface EngineInfo {
   label: string
   /** 该引擎在本机是否可用(CLI 已安装等) */
   available: boolean
+  /** 可选引擎不参与默认启动或发布门禁。 */
+  optional?: boolean
+  /** 用户是否已经为该引擎配置了可用的 Provider/凭据。 */
+  configured?: boolean
 }
 
 export interface UsageTotals {

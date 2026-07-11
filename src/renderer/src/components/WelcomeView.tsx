@@ -47,7 +47,7 @@ export default function WelcomeView(): React.JSX.Element {
 
   useEffect(() => {
     void window.agentDesk.listEngines().then(setEngines)
-  }, [])
+  }, [providers])
 
   const requiresProvider = engine === 'claude' || engine === 'openai'
 
@@ -147,8 +147,9 @@ export default function WelcomeView(): React.JSX.Element {
                   {t('selectEnginePlaceholder')}
                 </option>
                 {engines.map((en) => (
-                  <option key={en.kind} value={en.kind} disabled={!en.available}>
+                  <option key={en.kind} value={en.kind} disabled={!en.available || (en.optional && !en.configured)}>
                     {en.label}
+                    {en.optional ? ` (${t(en.configured ? 'optionalEngine' : 'optionalEngineNotConfigured')})` : ''}
                   </option>
                 ))}
               </select>

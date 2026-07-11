@@ -88,7 +88,7 @@ export default function ControlCenter({
       <div className="control-center-head">
         <div>
           <h3 className="settings-h3">Control Center</h3>
-          <p className="settings-hint">Drive / Provider / Model / Budget / MCP / CLI</p>
+          <p className="settings-hint">Drive / Provider / Model / Budget / MCP / Agent engines</p>
         </div>
         <div className="control-center-actions">
           <button className="btn btn-ghost btn-sm" disabled={loading} onClick={onRefresh}>
@@ -124,7 +124,7 @@ export default function ControlCenter({
           title="Tools"
           status={view.mcp.status}
           value={view.mcp.label}
-          detail={`${view.engines.filter((engine) => engine.available).length}/${view.engines.length} CLI engines available`}
+          detail={`${view.engines.filter((engine) => engine.status === 'available').length}/${view.engines.length} Agent engines ready`}
         />
       </div>
 
@@ -396,7 +396,7 @@ export default function ControlCenter({
 
       <section className="control-section">
         <div className="settings-section-head">
-          <h3 className="settings-h3">MCP / CLI 工具</h3>
+          <h3 className="settings-h3">MCP / Agent 引擎</h3>
           <StatusPill status={view.mcp.status} label={view.mcp.label} />
         </div>
         <div className="control-tool-grid">
@@ -416,12 +416,12 @@ export default function ControlCenter({
             )}
           </div>
           <div>
-            <div className="control-subhead">CLI</div>
+            <div className="control-subhead">Agent engines</div>
             <div className="control-mini-list">
               {view.engines.map((engine) => (
                 <div key={engine.kind} className="control-mini-row">
                   <span>{engine.label}</span>
-                  <StatusPill status={engine.status} label={engine.available ? 'available' : 'external credential'} />
+                  <StatusPill status={engine.status} label={engine.statusLabel} />
                 </div>
               ))}
               {view.engines.length === 0 && <div className="provider-empty">未注册本地引擎</div>}

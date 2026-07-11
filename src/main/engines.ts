@@ -1,6 +1,7 @@
 import { AgentSession } from './agentSession'
 import { registerEngine } from './engine'
 import { openAIEngineFactory } from './openaiEngine'
+import { listProviders } from './providers'
 import type { Engine, EngineEmit } from './engine'
 import type { SessionMeta } from '../shared/types'
 
@@ -16,6 +17,9 @@ export function registerBuiltinEngines(): void {
     kind: 'claude',
     label: 'Claude Agent SDK',
     available: () => true,
+    optional: true,
+    configured: () =>
+      listProviders().some((provider) => provider.hasToken && provider.openaiProtocol === undefined),
     create: (
       meta: SessionMeta,
       emit: EngineEmit,

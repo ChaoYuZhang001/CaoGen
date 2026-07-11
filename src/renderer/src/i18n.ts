@@ -206,6 +206,8 @@ const DICT: Dict = {
   explicitProviderRequired: { zh: '请选择已配置 API key 的 Provider', en: 'Select a Provider with an API key' },
   explicitModelRequired: { zh: '请选择模型或自动调度', en: 'Select a model or auto route' },
   selectEnginePlaceholder: { zh: '请选择 Agent 引擎', en: 'Select Agent engine' },
+  optionalEngine: { zh: '可选', en: 'Optional' },
+  optionalEngineNotConfigured: { zh: '未配置，可选', en: 'Not configured, optional' },
   selectProviderPlaceholder: { zh: '请选择 Provider', en: 'Select Provider' },
   selectModelPlaceholder: { zh: '请选择模型', en: 'Select model' },
   localAnthropicLogin: { zh: '未选择 Provider', en: 'No Provider selected' },

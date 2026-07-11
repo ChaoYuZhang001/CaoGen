@@ -69,6 +69,14 @@ const report = {
     label: releaseTargetLabel
   },
   redactionPolicy: 'No secret values are read or written; only report paths, status fields, env names, and commands are emitted.',
+  optionalEngines: [
+    {
+      id: 'claude',
+      releaseRequired: false,
+      defaultSelected: false,
+      policy: 'Authentication is required only when the user explicitly selects the optional Claude engine.'
+    }
+  ],
   refresh: {
     enabled: refresh,
     commands: refreshResults
@@ -511,6 +519,12 @@ function renderMarkdown(value) {
     }
     lines.push('')
   }
+  lines.push('## Optional Engines')
+  lines.push('')
+  for (const engine of value.optionalEngines) {
+    lines.push(`- ${engine.id}: release required=${engine.releaseRequired ? 'yes' : 'no'}; default selected=${engine.defaultSelected ? 'yes' : 'no'}. ${engine.policy}`)
+  }
+  lines.push('')
   lines.push('## Parallel Agents')
   lines.push('')
   lines.push('| Agent | Branch | Objective | Acceptance |')

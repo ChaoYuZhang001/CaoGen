@@ -36,7 +36,12 @@ try {
   const stats = await import(pathToFileURL(findCompiled(buildDir, 'modelStats.js')).href)
   const providerHealth = await import(pathToFileURL(findCompiled(buildDir, 'providerHealth.js')).href)
   const router = await import(pathToFileURL(findCompiled(buildDir, 'model-router.js')).href)
-  const sessionRouting = await import(pathToFileURL(findCompiled(buildDir, 'session-routing.js')).href)
+  const sessionRoutingModule = await import(pathToFileURL(findCompiled(buildDir, 'session-routing.js')).href)
+  const sessionRouting = {
+    ...sessionRoutingModule,
+    resolveSessionModelRoute: (input) =>
+      sessionRoutingModule.resolveSessionModelRoute({ engine: 'claude', ...input })
+  }
   stats.configureModelStatsDir(dataDir)
   providerHealth.configureProviderHealthDir(path.join(dataDir, 'provider-health'))
   for (let i = 0; i < 6; i += 1) stats.recordModelSuccess('deepseek-chat', 600)
@@ -557,6 +562,18 @@ try {
     settingsBudgetUsd: 0
   })
   assert(claudeChatOnlyRoute.kind === 'disabled', 'Claude routing must skip OpenAI/chat-only providers')
+
+  const unspecifiedEngineRoute = sessionRoutingModule.resolveSessionModelRoute({
+    enabled: true,
+    currentModel: 'auto',
+    providerId: 'deepseek-official',
+    providers,
+    payload: { text: 'do not infer an engine', images: [] },
+    strategy: 'balanced',
+    sessionCostUsd: 0,
+    settingsBudgetUsd: 0
+  })
+  assert(unspecifiedEngineRoute.kind === 'disabled', 'routing must not interpret an unspecified engine as Claude')
 
   const openaiChatRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,

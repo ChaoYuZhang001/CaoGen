@@ -1308,8 +1308,8 @@ class SessionManager {
 
   private handleEnginePowerBlocker(sessionId: string, event: AgentEvent): void {
     if (event.kind !== 'status') return
-    const engine = this.sessions.get(sessionId)?.meta.engine ?? 'claude'
-    if (engine === 'claude') return
+    const engine = this.sessions.get(sessionId)?.meta.engine
+    if (!engine || engine === 'claude') return
     if (event.status === 'running') {
       this.startEnginePowerBlocker(sessionId)
     } else if (event.status === 'idle' || event.status === 'error' || event.status === 'closed') {
@@ -1965,12 +1965,11 @@ function effectiveBudgetUsd(meta: SessionMeta): number {
 }
 
 function canTrackCost(meta: SessionMeta): boolean {
-  const engine = meta.engine ?? 'claude'
-  return engine === 'claude' || engine === 'openai'
+  return meta.engine === 'claude' || meta.engine === 'openai'
 }
 
 function estimateTurnCostUsd(meta: SessionMeta, event: Extract<AgentEvent, { kind: 'turn-result' }>): number | undefined {
-  if ((meta.engine ?? 'claude') !== 'openai' || !event.usage) return undefined
+  if (meta.engine !== 'openai' || !event.usage) return undefined
   const price = openAiPriceFor(meta.model)
   const inputTokens = event.usage.input + event.usage.cacheCreation
   const cachedInputTokens = event.usage.cacheRead
