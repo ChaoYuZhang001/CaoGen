@@ -258,11 +258,18 @@ function resolveCommandStatus({ statusPath, exit }) {
       details: structured.value.details
     }
   }
-  if (exit.error || exit.signal) {
+  if (exit.signal) {
+    return {
+      status: 'fail',
+      protocolSource: 'exit-code',
+      reason: `child terminated by signal ${exit.signal}`
+    }
+  }
+  if (exit.error) {
     return {
       status: 'blocked',
       protocolSource: 'exit-code',
-      reason: exit.error ? String(exit.error.message || exit.error) : `child terminated by signal ${exit.signal}`
+      reason: String(exit.error.message || exit.error)
     }
   }
   return {

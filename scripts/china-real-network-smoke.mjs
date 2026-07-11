@@ -42,9 +42,12 @@ if (!enabled) {
     results
   }
   writeReport(report)
-  reportDeepTestStatus('skip', { reason: report.reason, details: { reportDir } })
+  const deepStatusReported = reportDeepTestStatus(required ? 'blocked' : 'skip', {
+    reason: report.reason,
+    details: { reportDir }
+  })
   console.log('SKIP china real network smoke: set CAOGEN_CHINA_REAL_NETWORK=1 and provide target credentials')
-  if (required) process.exit(1)
+  if (required && !deepStatusReported) process.exit(1)
   process.exit(0)
 }
 
