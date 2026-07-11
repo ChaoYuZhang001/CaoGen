@@ -149,13 +149,19 @@ export function buildControlCenterView(input: BuildControlCenterViewInput): Cont
       ...engine,
       optional,
       configured,
-      status: !engine.available ? 'external-required' : optional && !configured ? 'needs-config' : 'available',
+      status: !engine.available
+        ? 'external-required'
+        : optional
+          ? configured
+            ? 'unknown'
+            : 'needs-config'
+          : 'available',
       statusLabel: !engine.available
         ? '运行时不可用'
         : optional
           ? configured
-            ? '已配置，可选'
-            : '未配置，可选'
+            ? '有凭据，兼容性未验证'
+            : '未保存凭据，可选'
           : '可用'
     } satisfies ControlCenterEngineStatus
   })
@@ -400,9 +406,7 @@ function buildCapabilities(input: {
   mcp: ControlCenterMcpStatus
   engines: ControlCenterEngineStatus[]
 }): ControlCenterCapability[] {
-  const availableEngines = input.engines.filter(
-    (engine) => engine.available && (!engine.optional || engine.configured)
-  )
+  const availableEngines = input.engines.filter((engine) => engine.status === 'available')
   return [
     {
       title: 'Drive policy',

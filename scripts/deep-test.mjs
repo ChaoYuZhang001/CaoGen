@@ -27,6 +27,8 @@ const commandDefinitions = [
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
   { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
+  { name: 'CaoGen Drive smoke', command: 'node', args: ['scripts/drive-smoke.mjs'], category: 'smoke' },
+  { name: 'Claude optional smoke', command: 'node', args: ['scripts/claude-optional-smoke.mjs'], category: 'smoke' },
   { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
   { name: 'integration wired modules', command: 'node', args: ['scripts/integration-test-3.cjs'], category: 'integration' },

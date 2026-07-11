@@ -234,7 +234,7 @@ try {
     activeSessions,
     health,
     engines: [
-      { kind: 'claude', label: 'Claude SDK', available: true, optional: true, configured: false },
+      { kind: 'claude', label: 'Claude SDK', available: true, optional: true, configured: true },
       { kind: 'openai', label: 'OpenAI-compatible', available: true }
     ],
     pluginRegistry,
@@ -277,8 +277,8 @@ try {
   assert(view.mcp.status === 'available', 'reachable enabled MCP should be available')
   assert(view.mcp.ok === 1, 'MCP ok count should be surfaced')
   assert(view.engines.every((engine) => engine.kind === 'claude' || engine.kind === 'openai'), 'only formal engines should be exposed')
-  assert(view.engines.find((engine) => engine.kind === 'claude')?.status === 'needs-config', 'unconfigured optional Claude must not be ready')
-  assert(view.engines.find((engine) => engine.kind === 'claude')?.statusLabel === '未配置，可选', 'Claude status must be explicit')
+  assert(view.engines.find((engine) => engine.kind === 'claude')?.status === 'unknown', 'unverified optional Claude must not be ready')
+  assert(view.engines.find((engine) => engine.kind === 'claude')?.statusLabel === '有凭据，兼容性未验证', 'Claude status must be explicit')
   assert(
     view.capabilities.find((capability) => capability.title === 'Agent engines')?.detail === 'OpenAI-compatible',
     'Agent engine capability must count only configured engines'
