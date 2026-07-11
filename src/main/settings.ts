@@ -107,8 +107,9 @@ function normalizeSchedulerStrategy(raw: unknown, fallback: SchedulerStrategy): 
 }
 
 function normalizeSandboxMode(raw: unknown): AppSettings['sandboxMode'] {
+  if (raw === 'disabled' || raw === 'strictDocker') return 'disabled'
   if (raw === 'loose') return 'loose'
-  if (raw === 'restrictedLocal' || raw === 'standardSystem' || raw === 'strictDocker') return 'restrictedLocal'
+  if (raw === 'restrictedLocal' || raw === 'standardSystem') return 'restrictedLocal'
   return DEFAULTS.sandboxMode
 }
 

@@ -424,8 +424,9 @@ export class AgentSession implements Engine {
       hooks: Array<(input: unknown, toolUseID?: string) => Promise<Record<string, unknown>>>
     }>
   > {
-    const postEditCmd = (settings.hookPostEditCommand ?? '').trim()
-    const turnEndCmd = (settings.hookTurnEndCommand ?? '').trim()
+    const localHooksEnabled = settings.sandboxMode !== 'disabled'
+    const postEditCmd = localHooksEnabled ? (settings.hookPostEditCommand ?? '').trim() : ''
+    const turnEndCmd = localHooksEnabled ? (settings.hookTurnEndCommand ?? '').trim() : ''
 
     const runShellHook = async (command: string, eventLabel: string, toolName?: string): Promise<void> => {
       if (!command) return
@@ -1884,6 +1885,11 @@ export class AgentSession implements Engine {
     if (policy.kind === 'deny') {
       audit('deny', 'policy', policy.reason)
       return Promise.resolve({ behavior: 'deny', message: policy.reason })
+    }
+    if (settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)) {
+      const message = 'Agent 本地变更工具已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。请先在设置 > 权限中确认启用。'
+      audit('deny', 'policy', message)
+      return Promise.resolve({ behavior: 'deny', message })
     }
     const guiDecision = decideGuiPermission(policyToolName, settings)
     if (guiDecision.kind === 'deny') {

@@ -5,8 +5,8 @@
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 
-/** 本地执行策略。当前不提供容器或操作系统级沙箱。 */
-export type SandboxMode = 'restrictedLocal' | 'loose'
+/** 本地执行策略。disabled 仅用于旧严格容器设置的 fail-closed 迁移。 */
+export type SandboxMode = 'disabled' | 'restrictedLocal' | 'loose'
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
@@ -1124,7 +1124,7 @@ export interface AppSettings {
   allowedTools: string
   /** 权限:工具黑名单(每行一个) */
   disallowedTools: string
-  /** 本地执行策略;restrictedLocal 为当前默认,loose 仅保留旧会话兼容。两者都不是系统级沙箱。 */
+  /** 本地执行策略;disabled 为旧严格容器设置的确认态,其他模式也都不是系统级沙箱。 */
   sandboxMode: SandboxMode
   /** 国产生态镜像:默认关闭;开启后才向本地命令注入 npm/pip 镜像配置 */
   chinaEcosystemMirrorEnabled: boolean

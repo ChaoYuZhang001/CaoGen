@@ -75,6 +75,7 @@ interface ExecFileResult {
 }
 
 export async function runLocalCommand(options: LocalCommandOptions): Promise<LocalCommandResult> {
+  if (options.mode === 'disabled') return localExecutionDisabledResult()
   if (options.signal?.aborted) return abortedResult(options.mode)
   const command = options.command.trim()
   if (!command) {
@@ -91,6 +92,7 @@ export async function runLocalCommand(options: LocalCommandOptions): Promise<Loc
 }
 
 export async function writeTextFileLocally(options: LocalFileWriteOptions): Promise<LocalCommandResult> {
+  if (options.mode === 'disabled') return localExecutionDisabledResult()
   if (options.signal?.aborted) return abortedResult(options.mode)
   const safePath = await resolveWritableProjectPath(options.cwd, options.targetPath).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error)
@@ -602,6 +604,19 @@ function abortedResult(modeUsed: SandboxMode): LocalCommandResult {
     exitCode: 1,
     modeUsed,
     sandboxed: false
+  }
+}
+
+function localExecutionDisabledResult(): LocalCommandResult {
+  const message =
+    '本地执行已禁用:旧严格 Docker 设置已下线,且不会自动降级为宿主机执行。请在设置 > 权限中确认启用宿主机本地执行。'
+  return {
+    ok: false,
+    output: message,
+    exitCode: 1,
+    modeUsed: 'disabled',
+    sandboxed: false,
+    fallbackReason: message
   }
 }
 

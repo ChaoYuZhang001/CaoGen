@@ -444,13 +444,18 @@ export class OpenAIEngine implements Engine {
       return { allow: false, message: policy.reason }
     }
 
+    const readOnlyCall = isReadOnlyToolCall(name, input)
+    if (settings.sandboxMode === 'disabled' && !readOnlyCall) {
+      const message = 'Agent 本地变更工具已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。请先在设置 > 权限中确认启用。'
+      this.auditGateDecision('deny', 'policy', name, input, message, policy.risk.level, policy.risk.reasons)
+      return { allow: false, message }
+    }
     const guiDecision = decideGuiPermission(name, settings)
     if (guiDecision.kind === 'deny') {
       this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
       return { allow: false, message: guiDecision.reason }
     }
     const mode = this.meta.permissionMode
-    const readOnlyCall = isReadOnlyToolCall(name, input)
     if (mode === 'plan' && !readOnlyCall) {
       const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
       this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
