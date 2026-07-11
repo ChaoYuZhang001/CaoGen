@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -125,6 +126,42 @@ async function verifySandbox(sandbox) {
   assert(fileFallback.sandboxed === false, 'file fallback must disclose that it was not sandboxed')
   assert(fileFallback.fallbackReason?.includes('Docker 不可用'), 'file fallback reason should mention Docker unavailable')
   assert(readFileSync(path.join(projectDir, 'sandbox-write.txt'), 'utf8') === 'sandbox-file-fallback-ok\n', 'file fallback content mismatch')
+
+  const guardedPath = path.join(projectDir, 'guarded-write.txt')
+  const guardedBefore = Buffer.from('guarded-before\n', 'utf8')
+  writeFileSync(guardedPath, guardedBefore)
+  const guardedStat = statSync(guardedPath, { bigint: true })
+  const guardedPrecondition = {
+    identity: { device: guardedStat.dev.toString(), inode: guardedStat.ino.toString() },
+    sha256: createHash('sha256').update(guardedBefore).digest('hex'),
+    bytes: guardedBefore.byteLength
+  }
+  const guardedWrite = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: guardedPath,
+    content: 'guarded-after\n',
+    expectedFile: guardedPrecondition,
+    mode: 'standardSystem',
+    timeoutMs: 10_000
+  })
+  assert(guardedWrite.ok, `guarded host write should pass: ${guardedWrite.output}`)
+  assert(readFileSync(guardedPath, 'utf8') === 'guarded-after\n', 'guarded host write content mismatch')
+
+  writeFileSync(guardedPath, guardedBefore)
+  const replacementPath = path.join(projectDir, 'guarded-replacement.txt')
+  writeFileSync(replacementPath, guardedBefore)
+  rmSync(guardedPath)
+  renameSync(replacementPath, guardedPath)
+  const replacedWrite = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: guardedPath,
+    content: 'must-not-write\n',
+    expectedFile: guardedPrecondition,
+    mode: 'standardSystem',
+    timeoutMs: 10_000
+  })
+  assert(!replacedWrite.ok, 'guarded host write must reject same-content inode replacement')
+  assert(readFileSync(guardedPath, 'utf8') === 'guarded-before\n', 'rejected guarded write must preserve replacement content')
 }
 
 async function verifySafeProjectPath(safePath, sandbox) {
@@ -166,6 +203,13 @@ function verifyPermission(permission) {
 
   const edit = permission.classifyToolRisk('write_file', { path: 'src/a.ts' }, projectDir)
   assert(edit.level === 'medium', `write_file should be medium risk, got ${edit.level}`)
+
+  const preview = permission.classifyToolRisk(
+    'search_replace',
+    { file_path: 'src/a.ts', replacements: [], dry_run: true },
+    projectDir
+  )
+  assert(preview.level === 'low', `search_replace dry_run should be low risk, got ${preview.level}`)
 
   const destructive = permission.classifyToolRisk('bash', { command: 'rm -rf /' }, projectDir)
   assert(destructive.level === 'critical', `destructive bash should be critical, got ${destructive.level}`)
@@ -271,6 +315,9 @@ function verifyDockerSandboxImage() {
     "'--pids-limit'",
     "'--user'",
     "'node'",
+    'verifyFileWritePostcondition',
+    'guarded target identity changed during Docker write',
+    'guarded target postcondition mismatch after Docker write',
     'if (forceKillTimer) clearTimeout(forceKillTimer)',
     'if (options.signal?.aborted) abort()',
     'terminationRequested = true'

@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -77,15 +78,62 @@ try {
     '}'
   ].join('\n')
 
-  const dryRun = await searchReplace.runSearchReplace(projectDir, {
-    file_path: target,
-    replacements: [{ old_str: oldStr, new_str: newStr }],
-    dry_run: true
-  })
+  let dryRunWrites = 0
+  const dryRunBackups = backupFiles(projectDir)
+  const dryRun = await searchReplace.runSearchReplace(
+    projectDir,
+    {
+      file_path: target,
+      replacements: [{ old_str: oldStr, new_str: newStr }],
+      dry_run: true
+    },
+    {
+      writeTextFile: async () => {
+        dryRunWrites++
+      }
+    }
+  )
   assertOk(dryRun, 'dry_run should succeed')
   assert(dryRun.diff.includes('-  return `hello ${normalized}`'), 'dry_run should include removed diff line')
   assert(dryRun.diff.includes('+  return `HELLO ${normalized}`'), 'dry_run should include added diff line')
   assertEqual(readFileSync(target, 'utf8'), original)
+  assertEqual(dryRunWrites, 0, 'dry_run must not invoke the file writer')
+  assertEqual(JSON.stringify(backupFiles(projectDir)), JSON.stringify(dryRunBackups), 'dry_run must not create a backup')
+
+  const noOpTarget = path.join(projectDir, 'src/no-op.ts')
+  const noOpContent = [
+    'export function unchanged() {',
+    '  const value = 1',
+    '  return value',
+    '}',
+    ''
+  ].join('\n')
+  const noOpOld = [
+    'export function unchanged() {',
+    '  const value = 1',
+    '  return value',
+    '}'
+  ].join('\n')
+  writeFileSync(noOpTarget, noOpContent, 'utf8')
+  let noOpWrites = 0
+  const noOpBackups = backupFiles(projectDir)
+  const noOp = await searchReplace.runSearchReplace(
+    projectDir,
+    {
+      file_path: noOpTarget,
+      replacements: [{ old_str: noOpOld, new_str: noOpOld }]
+    },
+    {
+      writeTextFile: async () => {
+        noOpWrites++
+      }
+    }
+  )
+  assertOk(noOp, 'no-op search_replace should succeed')
+  assertEqual(noOp.diff, '', 'no-op search_replace should report an empty diff')
+  assertEqual(noOpWrites, 0, 'no-op search_replace must not invoke the file writer')
+  assertEqual(readFileSync(noOpTarget, 'utf8'), noOpContent, 'no-op search_replace must preserve file content')
+  assertEqual(JSON.stringify(backupFiles(projectDir)), JSON.stringify(noOpBackups), 'no-op search_replace must not create a backup')
 
   const readOnlyTarget = path.join(projectDir, 'src/readonly.ts')
   writeFileSync(readOnlyTarget, original, 'utf8')
@@ -112,6 +160,22 @@ try {
   assertEqual(readFileSync(actual.backupPath, 'utf8'), original)
   assert(readFileSync(target, 'utf8').includes('return `HELLO ${normalized}`'), 'target should be edited')
   assert(actual.replacements[0].ranges[0].startLine === 1, 'line range should record start line')
+
+  const bomTarget = path.join(projectDir, 'src/bom.ts')
+  const bomBefore = 'alpha\nbeta\ngamma\n'
+  const bomAfter = 'alpha\nBETA\ngamma\n'
+  writeFileSync(bomTarget, Buffer.from(`\uFEFF${bomBefore}`, 'utf8'))
+  const bomEdit = await searchReplace.runSearchReplace(projectDir, {
+    file_path: bomTarget,
+    replacements: [{ old_str: 'alpha\nbeta\ngamma', new_str: 'alpha\nBETA\ngamma' }]
+  })
+  assertOk(bomEdit, 'search_replace should edit UTF-8 BOM files')
+  const bomObserved = readFileSync(bomTarget)
+  assert(
+    bomObserved[0] === 0xef && bomObserved[1] === 0xbb && bomObserved[2] === 0xbf,
+    'search_replace must preserve the UTF-8 BOM'
+  )
+  assertEqual(bomObserved.toString('utf8'), `\uFEFF${bomAfter}`)
 
   const driftTarget = path.join(projectDir, 'src/whitespace-drift.ts')
   writeFileSync(
@@ -189,6 +253,124 @@ try {
   assertOk(duplicateAll, 'replace_all should replace duplicates')
   assertEqual(readFileSync(duplicate, 'utf8'), 'changed\n\nchanged\n')
 
+  const exactTarget = path.join(projectDir, 'src/exact-edit.txt')
+  writeFileSync(exactTarget, 'alpha beta alpha beta\n', 'utf8')
+  const exactEdit = await tools.executeCodingTool(
+    'edit_file',
+    { path: exactTarget, old_string: 'alpha', new_string: 'omega', replace_all: true },
+    projectDir
+  )
+  assert(exactEdit.ok, `edit_file replace_all should succeed: ${exactEdit.output}`)
+  assertEqual(readFileSync(exactTarget, 'utf8'), 'omega beta omega beta\n')
+
+  const identicalEdit = await tools.executeCodingTool(
+    'edit_file',
+    { path: exactTarget, old_string: 'omega', new_string: 'omega', replace_all: true },
+    projectDir
+  )
+  assert(!identicalEdit.ok, 'edit_file must reject identical old_string/new_string inputs')
+  assertEqual(readFileSync(exactTarget, 'utf8'), 'omega beta omega beta\n')
+
+  const malformedEditBefore = readFileSync(exactTarget, 'utf8')
+  const malformedEdit = await tools.executeCodingTool(
+    'edit_file',
+    { path: exactTarget, old_string: 42, new_string: 'invalid' },
+    projectDir
+  )
+  assert(!malformedEdit.ok, 'edit_file must reject non-string replacement parameters')
+  assertEqual(readFileSync(exactTarget, 'utf8'), malformedEditBefore)
+
+  const malformedSearch = await tools.executeCodingTool(
+    'search_replace',
+    { file_path: exactTarget, replacements: [{ old_str: 'omega', new_str: 42 }] },
+    projectDir
+  )
+  assert(!malformedSearch.ok, 'search_replace must reject non-string replacement parameters')
+  assertEqual(readFileSync(exactTarget, 'utf8'), malformedEditBefore)
+
+  const guardedSearchTarget = path.join(projectDir, 'src/guarded-search.ts')
+  const guardedSearchOriginal = [
+    'export function guarded() {',
+    '  const value = 1',
+    '  return value',
+    '}',
+    '',
+    'export const tail = "v1"',
+    ''
+  ].join('\n')
+  const guardedSearchOld = [
+    'export function guarded() {',
+    '  const value = 1',
+    '  return value',
+    '}'
+  ].join('\n')
+  const guardedSearchNew = [
+    'export function guarded() {',
+    '  const value = 2',
+    '  return value',
+    '}'
+  ].join('\n')
+  const guardedSearchInput = {
+    file_path: guardedSearchTarget,
+    replacements: [{ old_str: guardedSearchOld, new_str: guardedSearchNew }]
+  }
+  writeFileSync(guardedSearchTarget, guardedSearchOriginal, 'utf8')
+  const guardedSearchPlan = await searchReplace.planSearchReplace(projectDir, guardedSearchInput)
+  assertOk(guardedSearchPlan, 'guarded search_replace plan should succeed')
+  const guardedSearchEffect = fileEffectTarget(guardedSearchPlan)
+  const guardedSearchDrift = guardedSearchOriginal.replace('tail = "v1"', 'tail = "v2"')
+  writeFileSync(guardedSearchTarget, guardedSearchDrift, 'utf8')
+  const guardedSearchBackups = backupFiles(projectDir)
+  const guardedSearch = await tools.executeCodingTool(
+    'search_replace',
+    guardedSearchInput,
+    projectDir,
+    { effectTarget: guardedSearchEffect }
+  )
+  assert(!guardedSearch.ok, 'search_replace must reject a target that drifted after Effect approval')
+  assert(guardedSearch.output.includes('Effect'), 'search_replace drift error should identify the frozen Effect target')
+  assertEqual(readFileSync(guardedSearchTarget, 'utf8'), guardedSearchDrift)
+  assertEqual(
+    JSON.stringify(backupFiles(projectDir)),
+    JSON.stringify(guardedSearchBackups),
+    'search_replace target drift must be rejected before backup creation'
+  )
+
+  const guardedEditTarget = path.join(projectDir, 'src/guarded-edit.ts')
+  const guardedEditOriginal = 'const value = "old"\nconst tail = "v1"\n'
+  const guardedEditInput = {
+    file_path: guardedEditTarget,
+    old_string: '"old"',
+    new_string: '"new"',
+    replace_all: false
+  }
+  writeFileSync(guardedEditTarget, guardedEditOriginal, 'utf8')
+  const guardedEditPlan = await searchReplace.planExactFileEdit(projectDir, guardedEditInput)
+  assertOk(guardedEditPlan, 'guarded edit_file plan should succeed')
+  const guardedEditEffect = fileEffectTarget(guardedEditPlan)
+  const guardedEditDrift = guardedEditOriginal.replace('tail = "v1"', 'tail = "v2"')
+  writeFileSync(guardedEditTarget, guardedEditDrift, 'utf8')
+  const guardedEditBackups = backupFiles(projectDir)
+  const guardedEdit = await tools.executeCodingTool(
+    'edit_file',
+    {
+      path: guardedEditTarget,
+      old_string: guardedEditInput.old_string,
+      new_string: guardedEditInput.new_string,
+      replace_all: false
+    },
+    projectDir,
+    { effectTarget: guardedEditEffect }
+  )
+  assert(!guardedEdit.ok, 'edit_file must reject a target that drifted after Effect approval')
+  assert(guardedEdit.output.includes('Effect'), 'edit_file drift error should identify the frozen Effect target')
+  assertEqual(readFileSync(guardedEditTarget, 'utf8'), guardedEditDrift)
+  assertEqual(
+    JSON.stringify(backupFiles(projectDir)),
+    JSON.stringify(guardedEditBackups),
+    'edit_file target drift must be rejected before backup creation'
+  )
+
   const viewed = await view.runView(projectDir, { file_path: target, start_line: 1, end_line: 4 })
   assertOk(viewed, 'view should read text range')
   assert(viewed.content.includes('1 | export function greet'), 'view should include line numbers')
@@ -213,8 +395,33 @@ function assertOk(result, message) {
   assert(result.ok, `${message}: ${result.error ?? 'unknown error'}`)
 }
 
-function assertEqual(actual, expected) {
-  assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+function fileEffectTarget(plan) {
+  const expected = Buffer.from(plan.writeContent, 'utf8')
+  return {
+    kind: 'file_content',
+    rootPath: plan.rootPath,
+    rootIdentity: plan.rootIdentity,
+    relativePath: plan.relativePath,
+    preState: 'file',
+    preFileIdentity: plan.fileIdentity,
+    preSha256: plan.originalSha256,
+    preBytes: plan.originalBytes,
+    expectedSha256: sha256(expected),
+    expectedBytes: expected.byteLength
+  }
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function backupFiles(root) {
+  const backupDir = path.join(root, '.caogen', 'tmp', 'backup')
+  return existsSync(backupDir) ? readdirSync(backupDir).sort() : []
+}
+
+function assertEqual(actual, expected, message) {
+  assert(actual === expected, message ?? `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
 
 function assert(condition, message = 'assertion failed') {

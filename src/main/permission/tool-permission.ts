@@ -74,6 +74,9 @@ export function classifyToolRisk(
   if (READ_TOOLS.has(toolName)) {
     level = 'low'
     reasons.push('只读工具')
+  } else if (toolName === 'search_replace' && input.dry_run === true) {
+    level = 'low'
+    reasons.push('只读替换预览')
   } else if (EDIT_TOOLS.has(toolName)) {
     level = 'medium'
     reasons.push('文件写入工具')

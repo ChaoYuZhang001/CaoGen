@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { link, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
 
@@ -45,6 +47,13 @@ export interface SandboxFileWriteOptions {
   dockerRegistryMirror?: string
   allowStrictDockerFallback?: boolean
   signal?: AbortSignal
+  expectedFile?: SandboxFileWritePrecondition
+}
+
+export interface SandboxFileWritePrecondition {
+  identity: { device: string; inode: string }
+  sha256: string
+  bytes: number
 }
 
 interface ExecFileResult {
@@ -61,16 +70,50 @@ const DEFAULT_DOCKER_MEMORY = '2g'
 const DEFAULT_DOCKER_PIDS = '256'
 const DOCKER_WORKSPACE = '/workspace'
 const SANDBOX_WRITE_SCRIPT = `
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const payload = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const payload = JSON.parse(fs.readFileSync('/caogen/payload.json', 'utf8'));
 const root = path.resolve('${DOCKER_WORKSPACE}');
-const target = path.resolve(root, payload.targetRelPath);
-if (target !== root && !target.startsWith(root + path.sep)) {
+const target = payload.guardedTarget ? '/caogen/target' : path.resolve(root, payload.targetRelPath);
+if (!payload.guardedTarget && target !== root && !target.startsWith(root + path.sep)) {
   throw new Error('target path escapes workspace');
 }
 fs.mkdirSync(path.dirname(target), { recursive: true });
-fs.writeFileSync(target, payload.content, 'utf8');
+if (!payload.expectedFile) {
+  fs.writeFileSync(target, payload.content, 'utf8');
+} else {
+  const targetInfo = fs.lstatSync(target);
+  if (targetInfo.isSymbolicLink() || !targetInfo.isFile()) {
+    throw new Error('guarded target is not a regular file');
+  }
+  const noFollow = process.platform !== 'win32' && typeof fs.constants.O_NOFOLLOW === 'number'
+    ? fs.constants.O_NOFOLLOW
+    : 0;
+  const fd = fs.openSync(target, fs.constants.O_RDWR | noFollow);
+  try {
+    const before = fs.fstatSync(fd, { bigint: true });
+    const current = fs.readFileSync(fd);
+    const digest = crypto.createHash('sha256').update(current).digest('hex');
+    if (current.byteLength !== payload.expectedFile.bytes || digest !== payload.expectedFile.sha256) {
+      throw new Error('guarded target content changed before write');
+    }
+    const output = Buffer.from(payload.content, 'utf8');
+    fs.ftruncateSync(fd, 0);
+    let offset = 0;
+    while (offset < output.length) {
+      offset += fs.writeSync(fd, output, offset, output.length - offset, offset);
+    }
+    fs.ftruncateSync(fd, output.length);
+    fs.fsyncSync(fd);
+    const after = fs.fstatSync(fd, { bigint: true });
+    if (before.dev !== after.dev || before.ino !== after.ino) {
+      throw new Error('guarded target identity changed during write');
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 `
 
 export async function runSandboxedCommand(options: SandboxCommandOptions): Promise<SandboxCommandResult> {
@@ -138,14 +181,27 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
     return writeTextFileWithFallback(safeOptions, `Docker image unavailable:${image}`)
   }
 
-  const payloadRelPath = `.caogen/tmp/sandbox-write/${randomUUID()}.json`
-  const payloadPath = join(cwd, payloadRelPath)
+  const payloadDir = await mkdtemp(join(tmpdir(), 'caogen-sandbox-write-'))
+  const payloadPath = join(payloadDir, `${randomUUID()}.json`)
+  const guardRelPath = options.expectedFile
+    ? `.caogen/tmp/sandbox-write/${randomUUID()}.guard`
+    : undefined
+  const guardPath = guardRelPath ? join(cwd, guardRelPath) : undefined
   try {
-    await mkdir(dirname(payloadPath), { recursive: true })
+    if (guardPath && options.expectedFile) {
+      await mkdir(dirname(guardPath), { recursive: true })
+      await link(targetPath, guardPath)
+      await verifyFileWritePrecondition(guardPath, options.expectedFile)
+    }
     await writeFile(
       payloadPath,
-      JSON.stringify({ targetRelPath: relPath.split(sep).join('/'), content: options.content }),
-      { encoding: 'utf8', signal: options.signal }
+      JSON.stringify({
+        targetRelPath: relPath.split(sep).join('/'),
+        content: options.content,
+        expectedFile: options.expectedFile,
+        guardedTarget: !!guardPath
+      }),
+      { encoding: 'utf8', mode: 0o644, signal: options.signal }
     )
     const mirrorEnv = buildChinaMirrorEnv(options)
     const result = await execFilePromise(
@@ -172,14 +228,16 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
         'node',
         ...dockerEnvArgs(mirrorEnv),
         '-v',
+        `${payloadPath}:/caogen/payload.json:ro`,
+        ...(guardPath ? ['-v', `${guardPath}:/caogen/target`] : []),
+        '-v',
         `${cwd}:${DOCKER_WORKSPACE}`,
         '-w',
         DOCKER_WORKSPACE,
         image,
         'node',
         '-e',
-        SANDBOX_WRITE_SCRIPT,
-        payloadRelPath
+        SANDBOX_WRITE_SCRIPT
       ],
       {
         cwd,
@@ -189,13 +247,27 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
         signal: options.signal
       }
     )
+    if (result.ok && options.expectedFile) {
+      try {
+        await verifyFileWritePostcondition(targetPath, options.expectedFile, options.content)
+      } catch (error) {
+        return {
+          ok: false,
+          output: error instanceof Error ? error.message : String(error),
+          exitCode: 1,
+          modeUsed: 'strictDocker',
+          sandboxed: true
+        }
+      }
+    }
     const formatted = formatResult(result, 'strictDocker', true)
     return {
       ...formatted,
       output: result.ok ? `已通过 Docker 沙箱写入 ${relPath}` : formatted.output
     }
   } finally {
-    await rm(payloadPath, { force: true }).catch(() => undefined)
+    if (guardPath) await rm(guardPath, { force: true }).catch(() => undefined)
+    await rm(payloadDir, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -319,7 +391,11 @@ async function writeTextFileOnHost(
   try {
     if (options.signal?.aborted) return abortedResult(modeUsed)
     await mkdir(dirname(options.targetPath), { recursive: true })
-    await writeFile(options.targetPath, options.content, { encoding: 'utf8', signal: options.signal })
+    if (options.expectedFile) {
+      await writeGuardedTextFileOnHost(options)
+    } else {
+      await writeFile(options.targetPath, options.content, { encoding: 'utf8', signal: options.signal })
+    }
     return {
       ok: true,
       output: `已写入 ${relative(resolve(options.cwd), resolve(options.targetPath))}`,
@@ -335,6 +411,106 @@ async function writeTextFileOnHost(
       modeUsed,
       sandboxed: false
     }
+  }
+}
+
+async function verifyFileWritePrecondition(
+  targetPath: string,
+  expected: SandboxFileWritePrecondition
+): Promise<void> {
+  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+    ? constants.O_NOFOLLOW
+    : 0
+  const handle = await open(targetPath, constants.O_RDONLY | noFollow)
+  try {
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile()) throw new Error('guarded target is not a regular file')
+    if (
+      info.dev.toString() !== expected.identity.device ||
+      info.ino.toString() !== expected.identity.inode
+    ) {
+      throw new Error('guarded target identity changed before write')
+    }
+    const current = await handle.readFile()
+    if (
+      current.byteLength !== expected.bytes ||
+      createHash('sha256').update(current).digest('hex') !== expected.sha256
+    ) {
+      throw new Error('guarded target content changed before write')
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function verifyFileWritePostcondition(
+  targetPath: string,
+  expected: SandboxFileWritePrecondition,
+  content: string
+): Promise<void> {
+  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+    ? constants.O_NOFOLLOW
+    : 0
+  const handle = await open(targetPath, constants.O_RDONLY | noFollow)
+  try {
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile()) throw new Error('guarded target is not a regular file after write')
+    if (
+      info.dev.toString() !== expected.identity.device ||
+      info.ino.toString() !== expected.identity.inode
+    ) {
+      throw new Error('guarded target identity changed during Docker write')
+    }
+    const observed = await handle.readFile()
+    const output = Buffer.from(content, 'utf8')
+    if (observed.byteLength !== output.byteLength || !observed.equals(output)) {
+      throw new Error('guarded target postcondition mismatch after Docker write')
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Promise<void> {
+  const expected = options.expectedFile
+  if (!expected) throw new Error('guarded file write is missing its precondition')
+  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+    ? constants.O_NOFOLLOW
+    : 0
+  const handle = await open(options.targetPath, constants.O_RDWR | noFollow)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) throw new Error('guarded target is not a regular file')
+    if (
+      before.dev.toString() !== expected.identity.device ||
+      before.ino.toString() !== expected.identity.inode
+    ) {
+      throw new Error('guarded target identity changed before write')
+    }
+    const current = await handle.readFile()
+    if (
+      current.byteLength !== expected.bytes ||
+      createHash('sha256').update(current).digest('hex') !== expected.sha256
+    ) {
+      throw new Error('guarded target content changed before write')
+    }
+    const output = Buffer.from(options.content, 'utf8')
+    await handle.truncate(0)
+    let offset = 0
+    while (offset < output.length) {
+      if (options.signal?.aborted) throw new Error('操作已中断')
+      const written = await handle.write(output, offset, output.length - offset, offset)
+      if (written.bytesWritten <= 0) throw new Error('guarded file write made no progress')
+      offset += written.bytesWritten
+    }
+    await handle.truncate(output.length)
+    await handle.sync()
+    const after = await handle.stat({ bigint: true })
+    if (before.dev !== after.dev || before.ino !== after.ino) {
+      throw new Error('guarded target identity changed during write')
+    }
+  } finally {
+    await handle.close()
   }
 }
 

@@ -13,6 +13,12 @@ import {
   withSafeMergeGitConfig,
   withSafeRemoteGitConfig
 } from '../git/safe-git'
+import {
+  planExactFileEdit,
+  planSearchReplace,
+  searchReplacementArgs,
+  type SearchReplacePlan
+} from '../agent/tools/search-replace'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
 
@@ -54,12 +60,33 @@ export async function buildEffectDescriptor(input: {
   toolInput: Record<string, unknown>
   cwd: string
 }): Promise<EffectDescriptor> {
+  const rawToolName = input.toolName.trim()
   const toolName = normalizeToolName(input.toolName)
   const inputDigest = stableValueDigest(input.toolInput)
   let target: EffectTarget
 
   if (toolName === 'write_file') {
     target = await fileWriteTarget(input.cwd, input.toolInput)
+  } else if (toolName === 'search_replace' && input.toolInput.dry_run !== true) {
+    target = await searchReplaceTarget(input.cwd, input.toolInput)
+  } else if (toolName === 'edit_file') {
+    if (rawToolName === 'MultiEdit' || rawToolName === 'NotebookEdit') {
+      target = { kind: 'unsupported', toolName }
+    } else {
+      if (
+        typeof input.toolInput.old_string !== 'string' ||
+        typeof input.toolInput.new_string !== 'string'
+      ) {
+        throw new Error('edit_file 效果描述要求 old_string 与 new_string 为字符串')
+      }
+      if (
+        input.toolInput.replace_all !== undefined &&
+        typeof input.toolInput.replace_all !== 'boolean'
+      ) {
+        throw new Error('edit_file 效果描述要求 replace_all 为布尔值')
+      }
+      target = await exactFileEditTarget(input.cwd, input.toolInput)
+    }
   } else if (toolName === 'git_commit') {
     target = await gitCommitTarget(input.cwd, input.toolInput)
   } else if (toolName === 'git_merge') {
@@ -113,12 +140,14 @@ async function fileWriteTarget(cwd: string, toolInput: Record<string, unknown>):
   const content = String(toolInput.content ?? '')
   const resolved = resolveWritableProjectPathSync(cwd, rawPath)
   let preState: 'absent' | 'file' = 'absent'
+  let preFileIdentity: FileSystemIdentity | undefined
   let preSha256: string | undefined
   let preBytes: number | undefined
   if (existsSync(resolved.fullPath)) {
     const info = lstatSync(resolved.fullPath)
     if (!info.isFile()) throw new Error('write_file 目标已存在但不是普通文件')
     preState = 'file'
+    preFileIdentity = fileSystemIdentity(resolved.fullPath)
     preBytes = info.size
     if (info.size <= MAX_FILE_RECONCILIATION_BYTES) {
       preSha256 = await sha256File(resolved.fullPath)
@@ -128,10 +157,49 @@ async function fileWriteTarget(cwd: string, toolInput: Record<string, unknown>):
   return {
     kind: 'file_content',
     rootPath: resolved.root,
+    rootIdentity: fileSystemIdentity(resolved.root),
     relativePath: resolved.relativePath,
     preState,
+    preFileIdentity,
     preSha256,
     preBytes,
+    expectedSha256: sha256(expected),
+    expectedBytes: expected.byteLength
+  }
+}
+
+async function searchReplaceTarget(cwd: string, toolInput: Record<string, unknown>): Promise<EffectTarget> {
+  const plan = await planSearchReplace(cwd, {
+    file_path: stringValue(toolInput.file_path ?? toolInput.path),
+    replacements: searchReplacementArgs(toolInput.replacements),
+    dry_run: false
+  })
+  if (plan.ok === false) throw new Error(`无法冻结 search_replace 目标:${plan.error}`)
+  return fileContentTarget(plan)
+}
+
+async function exactFileEditTarget(cwd: string, toolInput: Record<string, unknown>): Promise<EffectTarget> {
+  const plan = await planExactFileEdit(cwd, {
+    file_path: stringValue(toolInput.file_path ?? toolInput.path),
+    old_string: String(toolInput.old_string ?? ''),
+    new_string: String(toolInput.new_string ?? ''),
+    replace_all: toolInput.replace_all === true
+  })
+  if (plan.ok === false) throw new Error(`无法冻结 edit_file 目标:${plan.error}`)
+  return fileContentTarget(plan)
+}
+
+function fileContentTarget(plan: SearchReplacePlan): EffectTarget {
+  const expected = Buffer.from(plan.writeContent, 'utf8')
+  return {
+    kind: 'file_content',
+    rootPath: plan.rootPath,
+    rootIdentity: plan.rootIdentity,
+    relativePath: plan.relativePath,
+    preState: 'file',
+    preFileIdentity: plan.fileIdentity,
+    preSha256: plan.originalSha256,
+    preBytes: plan.originalBytes,
     expectedSha256: sha256(expected),
     expectedBytes: expected.byteLength
   }
@@ -251,6 +319,9 @@ async function reconcileFileContent(
   if (realpathSync(resolved.root) !== realpathSync(target.rootPath)) {
     return unresolved({ kind: target.kind, reason: '项目根目录身份已变化' })
   }
+  if (target.rootIdentity && !sameFileSystemIdentity(target.rootIdentity, fileSystemIdentity(resolved.root))) {
+    return unresolved({ kind: target.kind, reason: '项目根目录设备或 inode 已变化' })
+  }
   if (!existsSync(resolved.fullPath)) {
     const payload = { kind: target.kind, observedState: 'absent', relativePath: target.relativePath }
     return target.preState === 'absent'
@@ -261,12 +332,14 @@ async function reconcileFileContent(
   if (!info.isFile()) {
     return unresolved({ kind: target.kind, observedState: 'non_file', relativePath: target.relativePath })
   }
+  const observedIdentity = fileSystemIdentity(resolved.fullPath)
   const observedBytes = info.size
   const payload = {
     kind: target.kind,
     relativePath: target.relativePath,
     observedState: 'file',
-    observedBytes
+    observedBytes,
+    observedIdentity
   }
   const couldBeExpected = observedBytes === target.expectedBytes
   const couldBePreState =
@@ -290,7 +363,8 @@ async function reconcileFileContent(
   }
   if (
     target.preState === 'file' &&
-    target.preSha256 === observedSha256
+    target.preSha256 === observedSha256 &&
+    (!target.preFileIdentity || sameFileSystemIdentity(target.preFileIdentity, observedIdentity))
   ) {
     return notApplied(hashedPayload, '文件仍是执行前内容，已授权后续生成新 lease 重试')
   }

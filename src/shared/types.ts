@@ -751,8 +751,10 @@ export type EffectTarget =
   | {
       kind: 'file_content'
       rootPath: string
+      rootIdentity?: FileSystemIdentity
       relativePath: string
       preState: 'absent' | 'file'
+      preFileIdentity?: FileSystemIdentity
       preSha256?: string
       preBytes?: number
       expectedSha256: string

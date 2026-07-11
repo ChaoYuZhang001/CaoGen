@@ -577,8 +577,10 @@ function isEffectTarget(value: unknown): value is EffectTarget {
   if (record.kind === 'file_content') {
     return (
       isString(record.rootPath) &&
+      (record.rootIdentity === undefined || isFileSystemIdentity(record.rootIdentity)) &&
       isString(record.relativePath) &&
       (record.preState === 'absent' || record.preState === 'file') &&
+      (record.preFileIdentity === undefined || isFileSystemIdentity(record.preFileIdentity)) &&
       isOptionalString(record.preSha256) &&
       isString(record.expectedSha256) &&
       isOptionalNonNegativeInteger(record.expectedBytes) &&
