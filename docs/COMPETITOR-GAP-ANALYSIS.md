@@ -1,7 +1,7 @@
 # CaoGen 竞品差距与优化优先级
 
 > 快照日期: 2026-07-11
-> CaoGen 代码基线: `main@1712ca5c9fc0`
+> CaoGen 代码基线: `main@311470e1262a`
 > 对标范围: Codex Desktop、Claude Desktop / Claude Code、OpenClaw、Hermes Agent
 > 补充迁移参照: Cursor / Windsurf 的 IDE 内闭环，以及 Devin / OpenHands 类长任务交付；本轮未联网刷新其最新版本，不把映射写成最新竞品事实。
 > 结论口径: 竞品事实只采用官方文档、官方仓库或当前 Codex Desktop 可调用能力; CaoGen 事实只采用当前代码和测试产物。
@@ -95,7 +95,7 @@ CaoGen 已经具备真实差异化:
 - `src/main/permission/tool-permission.ts`、`src/main/permission/audit-log.ts` 和沙箱相关模块已形成权限治理基础；审计输入默认保存 metadata/hash，权限卡展示完整但递归脱敏的审批输入。
 - `src/main/skill`、`src/main/mcp`、`src/main/pluginInstall.ts` 已形成扩展生态底座。
 - `src/renderer/src/components/office` 已消费真实会话、审批、工具、路由、成本、worktree 和 checkpoint 状态。
-- 最新完整深测外层记录为 pass（`test-results/caogen-deep/2026-07-11T06-28-02-899Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
+- 最新完整深测外层记录为 pass（`test-results/caogen-deep/2026-07-11T06-44-59-690Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
 
 ## P0: 必须先解决
 
