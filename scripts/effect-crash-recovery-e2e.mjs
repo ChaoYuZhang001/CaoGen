@@ -127,6 +127,32 @@ async function runParent() {
     assertEqual(preparedGitResume.retryEvidenceCount, 1)
     assertEqual(countLines(preparedGitCase.counter), 0)
 
+    const claudePreparedEditCase = casePaths(tempRoot, 'claude-prepared-edit')
+    mkdirSync(claudePreparedEditCase.project, { recursive: true })
+    mkdirSync(claudePreparedEditCase.userData, { recursive: true })
+    writeFileSync(path.join(claudePreparedEditCase.project, 'state.txt'), 'alpha\nbefore\nomega\n', 'utf8')
+    const claudePreparedEdit = await forkWorker(
+      '--worker-claude-prepared-edit-crash',
+      outDir,
+      claudePreparedEditCase,
+      repoRoot
+    )
+    assertEqual(claudePreparedEdit.type, 'claude-prepared-edit')
+    assertEqual(claudePreparedEdit.effectStatus, 'prepared')
+    assertEqual(claudePreparedEdit.targetKind, 'file_content')
+    const claudePreparedEditResume = await forkWorker(
+      '--worker-claude-prepared-edit-resume',
+      outDir,
+      claudePreparedEditCase,
+      repoRoot
+    )
+    assertEqual(claudePreparedEditResume.type, 'claude-prepared-edit-resume')
+    assertEqual(claudePreparedEditResume.probeKind, 'not_applied')
+    assertEqual(claudePreparedEditResume.effectStatus, 'abandoned')
+    assertEqual(claudePreparedEditResume.toolStatus, 'cancelled')
+    assertEqual(claudePreparedEditResume.retryEvidenceCount, 1)
+    assertEqual(readFileSync(path.join(claudePreparedEditCase.project, 'state.txt'), 'utf8'), 'alpha\nbefore\nomega\n')
+
     const mergeNotAppliedCase = casePaths(tempRoot, 'git-merge-not-applied')
     mkdirSync(mergeNotAppliedCase.project, { recursive: true })
     mkdirSync(mergeNotAppliedCase.userData, { recursive: true })
@@ -204,6 +230,61 @@ async function runParent() {
     assertEqual(mergeConfirmedResume.decision, 'ask')
     assertEqual(git(mergeConfirmedCase.project, ['rev-parse', 'HEAD']).trim(), mergeHead)
     assertEqual(countLines(mergeConfirmedCase.counter), 1)
+
+    for (const toolName of ['search_replace', 'edit_file']) {
+      const fixture = openAiFileEffectFixture(toolName)
+      const toolSlug = toolName.replaceAll('_', '-')
+      for (const scenario of ['not-applied', 'confirmed', 'third-content']) {
+        const paths = casePaths(tempRoot, `openai-${toolSlug}-${scenario}`)
+        mkdirSync(paths.project, { recursive: true })
+        mkdirSync(paths.userData, { recursive: true })
+        writeFileSync(path.join(paths.project, 'state.txt'), fixture.originalContent, 'utf8')
+
+        const crash = await forkWorker(
+          `--worker-openai-${toolSlug}-${scenario}-crash`,
+          outDir,
+          paths,
+          repoRoot
+        )
+        assertEqual(crash.type, 'openai-file-effect-crash')
+        assertEqual(crash.toolName, toolName)
+        assertEqual(crash.scenario, scenario)
+        assertEqual(crash.effectStatus, 'executing')
+        assertEqual(crash.targetKind, 'file_content')
+        const expectedContent = scenario === 'confirmed'
+          ? fixture.expectedContent
+          : scenario === 'third-content'
+            ? fixture.thirdContent
+            : fixture.originalContent
+        assertEqual(readFileSync(path.join(paths.project, 'state.txt'), 'utf8'), expectedContent)
+        assertEqual(countLines(paths.counter), scenario === 'confirmed' ? 1 : 0)
+
+        const resume = await forkWorker(
+          `--worker-openai-${toolSlug}-${scenario}-resume`,
+          outDir,
+          paths,
+          repoRoot
+        )
+        assertEqual(resume.type, 'openai-file-effect-resume')
+        assertEqual(resume.toolName, toolName)
+        assertEqual(resume.scenario, scenario)
+        const expectation = scenario === 'not-applied'
+          ? { probe: 'not_applied', effect: 'abandoned', tool: 'cancelled', decision: 'neutral', retryEvidence: 1 }
+          : scenario === 'confirmed'
+            ? { probe: 'confirmed', effect: 'confirmed', tool: 'succeeded', decision: 'ask', retryEvidence: 0 }
+            : { probe: 'unresolved', effect: 'waiting_reconciliation', tool: 'unknown_outcome', decision: 'deny', retryEvidence: 0 }
+        assertEqual(resume.probeKind, expectation.probe)
+        assertEqual(resume.effectStatus, expectation.effect)
+        assertEqual(resume.toolStatus, expectation.tool)
+        assertEqual(resume.decision, expectation.decision)
+        assertEqual(resume.reconciliationEvidenceCount, 1)
+        assertEqual(resume.retryEvidenceCount, expectation.retryEvidence)
+        assertEqual(resume.retryPrepared, scenario === 'not-applied')
+        assertEqual(resume.retryGeneration, scenario === 'not-applied' ? 2 : undefined)
+        assertEqual(readFileSync(path.join(paths.project, 'state.txt'), 'utf8'), expectedContent)
+        assertEqual(countLines(paths.counter), scenario === 'confirmed' ? 1 : 0)
+      }
+    }
 
     const fileCase = casePaths(tempRoot, 'file')
     mkdirSync(fileCase.project, { recursive: true })
@@ -503,6 +584,56 @@ async function runWorker(workerMode) {
     return
   }
 
+  if (workerMode === '--worker-claude-prepared-edit-crash') {
+    const sessionId = 'claude-prepared-edit-session'
+    const toolUseId = 'claude-prepared-edit-tool'
+    const toolName = 'Edit'
+    const toolInput = { file_path: 'state.txt', old_string: 'before', new_string: 'after' }
+    const executionInput = await seedEffectRun({
+      taskRun,
+      taskExecution,
+      snapshotStore,
+      registryModule,
+      project,
+      sessionId,
+      toolUseId,
+      toolName,
+      toolInput,
+      prompt: 'Claude Edit prepared crash before execution',
+      engine: 'claude'
+    })
+    const handle = await effectRuntime.prepareEffectExecution(executionInput)
+    assert(handle?.target.kind === 'file_content', 'Claude Edit must produce a queryable file target')
+    const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+    assert(snapshot?.run, 'Claude prepared edit crash requires a persisted TaskRun')
+    process.send?.({
+      type: 'claude-prepared-edit',
+      effectStatus: snapshot.run.effects[0]?.status,
+      targetKind: handle.target.kind
+    })
+    setInterval(() => undefined, 1000)
+    return
+  }
+
+  if (workerMode === '--worker-claude-prepared-edit-resume') {
+    const snapshot = await snapshotStore.getTaskSnapshot('claude-prepared-edit-session')
+    assert(snapshot?.run, 'Claude prepared edit resume requires a persisted TaskRun')
+    const crashedEffect = snapshot.run.effects[0]
+    assert(crashedEffect, 'Claude prepared edit resume requires an EffectRecord')
+    const probe = await effectReconciler.reconcileEffect(crashedEffect)
+    const reconciled = await effectRuntime.reconcilePersistedTaskSnapshot(snapshot)
+    const effect = reconciled.run.effects[0]
+    const tool = reconciled.run.toolExecutions[0]
+    process.send?.({
+      type: 'claude-prepared-edit-resume',
+      probeKind: probe.kind,
+      effectStatus: effect.status,
+      toolStatus: tool.status,
+      retryEvidenceCount: effect.evidence.filter((item) => item.kind === 'retry_authorized').length
+    })
+    return
+  }
+
   if (workerMode === '--worker-git-merge-not-applied-crash') {
     const sessionId = 'git-merge-not-applied-session'
     const toolUseId = 'git-merge-not-applied-tool'
@@ -621,6 +752,96 @@ async function runWorker(workerMode) {
       toolStatus: tool.status,
       reconciliationEvidenceCount: effect.evidence.filter((item) => item.kind === 'reconciliation').length,
       decision
+    })
+    return
+  }
+
+  const openAiFileMode = /^--worker-openai-(search-replace|edit-file)-(not-applied|confirmed|third-content)-(crash|resume)$/.exec(workerMode)
+  if (openAiFileMode) {
+    const [, toolSlug, scenario, phase] = openAiFileMode
+    const toolName = toolSlug === 'search-replace' ? 'search_replace' : 'edit_file'
+    const fixture = openAiFileEffectFixture(toolName)
+    const sessionId = `openai-${toolSlug}-${scenario}-session`
+    const toolUseId = `openai-${toolSlug}-${scenario}-tool`
+
+    if (phase === 'crash') {
+      const executionInput = await seedEffectRun({
+        taskRun,
+        taskExecution,
+        snapshotStore,
+        registryModule,
+        project,
+        sessionId,
+        toolUseId,
+        toolName,
+        toolInput: fixture.toolInput,
+        prompt: `${toolName} ${scenario} crash recovery`
+      })
+      const handle = await effectRuntime.prepareEffectExecution(executionInput)
+      assert(handle?.target.kind === 'file_content', `${toolName} must produce a queryable file target`)
+      await effectRuntime.markEffectExecutionStarted(handle, executionInput)
+      if (scenario === 'confirmed') {
+        writeFileSync(path.join(project, 'state.txt'), fixture.expectedContent, 'utf8')
+        appendFileSync(counter, 'executed\n', 'utf8')
+      } else if (scenario === 'third-content') {
+        writeFileSync(path.join(project, 'state.txt'), fixture.thirdContent, 'utf8')
+      }
+      const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+      assert(snapshot?.run, `${toolName} crash requires persisted TaskRun`)
+      process.send?.({
+        type: 'openai-file-effect-crash',
+        toolName,
+        scenario,
+        effectStatus: snapshot.run.effects[0]?.status,
+        targetKind: handle.target.kind
+      })
+      setInterval(() => undefined, 1000)
+      return
+    }
+
+    const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+    assert(snapshot?.run, `${toolName} resume requires persisted TaskRun`)
+    const crashedEffect = snapshot.run.effects[0]
+    assert(crashedEffect, `${toolName} resume requires an EffectRecord`)
+    const probe = await effectReconciler.reconcileEffect(crashedEffect)
+    const reconciled = await effectRuntime.reconcilePersistedTaskSnapshot(snapshot)
+    const stable = await effectRuntime.reconcilePersistedTaskSnapshot(reconciled)
+    const effect = stable.run.effects[0]
+    const tool = stable.run.toolExecutions[0]
+    const retryToolUseId = `openai-${toolSlug}-${scenario}-retry`
+    const decision = registryModule.taskRuntimeRegistry.evaluateTool({
+      sessionId,
+      cwd: project,
+      toolName,
+      toolInput: fixture.toolInput,
+      toolUseId: retryToolUseId
+    }).kind
+    let retryPrepared = false
+    let retryGeneration
+    if (scenario === 'not-applied') {
+      const retryHandle = await effectRuntime.prepareEffectExecution({
+        sessionId,
+        cwd: project,
+        toolUseId: retryToolUseId,
+        toolName,
+        toolInput: fixture.toolInput
+      })
+      retryPrepared = retryHandle !== null
+      const retrySnapshot = await snapshotStore.getTaskSnapshot(sessionId)
+      retryGeneration = retrySnapshot?.run?.effects?.find((item) => item.id === retryHandle?.effectId)?.generation
+    }
+    process.send?.({
+      type: 'openai-file-effect-resume',
+      toolName,
+      scenario,
+      probeKind: probe.kind,
+      effectStatus: effect.status,
+      toolStatus: tool.status,
+      reconciliationEvidenceCount: effect.evidence.filter((item) => item.kind === 'reconciliation').length,
+      retryEvidenceCount: effect.evidence.filter((item) => item.kind === 'retry_authorized').length,
+      decision,
+      retryPrepared,
+      retryGeneration
     })
     return
   }
@@ -772,6 +993,7 @@ async function runWorker(workerMode) {
 
 function forkWorker(workerMode, outDir, paths, repoRoot) {
   return new Promise((resolve, reject) => {
+    const timeoutMs = 30_000
     const killAfterEvidence = workerMode.endsWith('-crash')
     const child = fork(process.argv[1], [workerMode], {
       env: {
@@ -788,10 +1010,23 @@ function forkWorker(workerMode, outDir, paths, repoRoot) {
     let evidence
     let killRequested = false
     let stderr = ''
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill('SIGKILL')
+      reject(new Error(`worker timed out after ${timeoutMs}ms: ${workerMode}\n${stderr}`))
+    }, timeoutMs)
+    const finish = (callback) => {
+      if (settled) return false
+      settled = true
+      clearTimeout(timer)
+      callback()
+      return true
+    }
     child.stderr?.on('data', (chunk) => {
       stderr += String(chunk)
     })
-    child.once('error', reject)
+    child.once('error', (error) => finish(() => reject(error)))
     child.on('message', (message) => {
       if (settled || evidence !== undefined) return
       if (killAfterEvidence) {
@@ -804,22 +1039,20 @@ function forkWorker(workerMode, outDir, paths, repoRoot) {
         }
         return
       }
-      settled = true
-      resolve(message)
-      child.disconnect()
+      finish(() => resolve(message))
+      if (child.connected) child.disconnect()
     })
     child.once('exit', (code, signal) => {
       if (settled) return
       if (killRequested && evidence !== undefined) {
         if (process.platform !== 'win32' && signal !== 'SIGKILL') {
-          reject(new Error(`worker did not exit via SIGKILL: code=${code} signal=${signal}\n${stderr}`))
+          finish(() => reject(new Error(`worker did not exit via SIGKILL: code=${code} signal=${signal}\n${stderr}`)))
           return
         }
-        settled = true
-        resolve(evidence)
+        finish(() => resolve(evidence))
         return
       }
-      reject(new Error(`worker exited before evidence: code=${code} signal=${signal}\n${stderr}`))
+      finish(() => reject(new Error(`worker exited before evidence: code=${code} signal=${signal}\n${stderr}`)))
     })
   })
 }
@@ -834,7 +1067,8 @@ async function seedEffectRun({
   toolUseId,
   toolName,
   toolInput,
-  prompt
+  prompt,
+  engine = 'openai'
 }) {
   const userEvent = {
     kind: 'user-message',
@@ -855,7 +1089,7 @@ async function seedEffectRun({
   run = taskExecution.reduceTaskExecutionEvent(run, assistantEvent, project, 1020)
   registryModule.taskRuntimeRegistry.set(sessionId, run)
   await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
-    meta: meta(sessionId, project),
+    meta: meta(sessionId, project, engine),
     transcript: [
       { seq: 1, event: userEvent },
       { seq: 2, event: assistantEvent }
@@ -878,13 +1112,43 @@ function casePaths(root, name) {
   }
 }
 
-function meta(id, cwd) {
+function openAiFileEffectFixture(toolName) {
+  const originalContent = 'alpha\nbefore\nomega\n'
+  const expectedContent = 'alpha\nafter\nomega\n'
+  const thirdContent = 'alpha\nother\nomega\n'
+  if (toolName === 'search_replace') {
+    return {
+      originalContent,
+      expectedContent,
+      thirdContent,
+      toolInput: {
+        file_path: 'state.txt',
+        replacements: [{ old_str: originalContent, new_str: expectedContent }]
+      }
+    }
+  }
+  if (toolName === 'edit_file') {
+    return {
+      originalContent,
+      expectedContent,
+      thirdContent,
+      toolInput: {
+        path: 'state.txt',
+        old_string: 'before',
+        new_string: 'after'
+      }
+    }
+  }
+  throw new Error(`unsupported OpenAI file tool fixture: ${toolName}`)
+}
+
+function meta(id, cwd, engine = 'openai') {
   return {
     id,
     title: 'Effect crash smoke',
     cwd,
     driveMode: 'core',
-    engine: 'openai',
+    engine,
     model: 'gpt-test',
     providerId: 'provider-test',
     permissionMode: 'bypassPermissions',

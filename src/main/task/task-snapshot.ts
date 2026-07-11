@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { constants } from 'node:fs'
 import initSqlJs from 'sql.js'
 import type {
@@ -235,16 +235,72 @@ function findConflictingEffectLease(
     UNRESOLVED_EFFECT_STATUSES.has(effect.status)
   )
   if (incoming.length === 0) return undefined
-  const incomingIds = new Set(incoming.map((effect) => effect.id))
-  const incomingKeys = new Set(incoming.map(effectResourceKey))
+  for (let leftIndex = 0; leftIndex < incoming.length; leftIndex++) {
+    for (let rightIndex = leftIndex + 1; rightIndex < incoming.length; rightIndex++) {
+      if (effectLeasesConflict(incoming[leftIndex], incoming[rightIndex])) {
+        return incoming[rightIndex]
+      }
+    }
+  }
   for (const persistedRun of persistedRuns) {
     for (const effect of persistedRun.effects ?? []) {
-      if (incomingIds.has(effect.id)) continue
-      if (!incomingKeys.has(effectResourceKey(effect))) continue
-      if (UNRESOLVED_EFFECT_STATUSES.has(effect.status)) return effect
+      if (!UNRESOLVED_EFFECT_STATUSES.has(effect.status)) continue
+      for (const candidate of incoming) {
+        if (candidate.id === effect.id) continue
+        if (effectLeasesConflict(candidate, effect)) return effect
+      }
     }
   }
   return undefined
+}
+
+function effectLeasesConflict(left: EffectRecord, right: EffectRecord): boolean {
+  if (left.id === right.id) return false
+  if (effectResourceKey(left) === effectResourceKey(right)) return true
+  if (
+    left.target.kind === 'file_content' &&
+    right.target.kind === 'file_content' &&
+    fileContentTargetsConflict(left.target, right.target)
+  ) {
+    return true
+  }
+  return (
+    (isOpaqueFileEdit(left) && isFileEdit(right)) ||
+    (isOpaqueFileEdit(right) && isFileEdit(left))
+  )
+}
+
+function fileContentTargetsConflict(
+  left: Extract<EffectRecord['target'], { kind: 'file_content' }>,
+  right: Extract<EffectRecord['target'], { kind: 'file_content' }>
+): boolean {
+  if (
+    left.preFileIdentity &&
+    right.preFileIdentity &&
+    left.preFileIdentity.device === right.preFileIdentity.device &&
+    left.preFileIdentity.inode === right.preFileIdentity.inode
+  ) {
+    return true
+  }
+  return (
+    resolve(left.rootPath, left.relativePath) ===
+    resolve(right.rootPath, right.relativePath)
+  )
+}
+
+function isFileEdit(effect: EffectRecord): boolean {
+  return isQueryableFileEdit(effect) || isOpaqueFileEdit(effect)
+}
+
+function isQueryableFileEdit(effect: EffectRecord): boolean {
+  return effect.target.kind === 'file_content'
+}
+
+function isOpaqueFileEdit(effect: EffectRecord): boolean {
+  return (
+    effect.target.kind === 'unsupported' &&
+    (effect.toolName === 'search_replace' || effect.toolName === 'edit_file')
+  )
 }
 
 function assignResourceFencingTokens(

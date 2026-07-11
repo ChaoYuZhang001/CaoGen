@@ -15,7 +15,7 @@ import { buildEffectDescriptor, reconcileEffect } from './effect-reconciler'
 import { getTaskSnapshot, saveTaskRunBarrier, saveTaskSnapshot } from './task-snapshot'
 import { taskRuntimeRegistry } from './task-runtime-registry'
 import { isTaskRunTerminal, transitionTaskRun } from './task-run'
-import { isSideEffectingTool, stableValueDigest } from './tool-idempotency'
+import { isSideEffectingToolCall, stableValueDigest } from './tool-idempotency'
 
 const PROCESS_OWNER_ID = `caogen:${process.pid}:${randomUUID()}`
 const sessionQueues = new Map<string, Promise<unknown>>()
@@ -36,7 +36,7 @@ export interface CompleteEffectExecutionInput {
 export async function prepareEffectExecution(
   input: PrepareEffectExecutionInput
 ): Promise<EffectExecutionHandle | null> {
-  if (!isSideEffectingTool(input.toolName)) return null
+  if (!isSideEffectingToolCall(input.toolName, input.toolInput)) return null
   return withSessionQueue(input.sessionId, async () => {
     const run = requireRun(input.sessionId)
     const descriptor = await buildEffectDescriptor({
@@ -163,7 +163,10 @@ export async function cancelEffectExecution(
   })
 }
 
-async function reconcileStoppedTaskRunEffects(run: TaskRunRecord): Promise<TaskRunRecord> {
+async function reconcileStoppedTaskRunEffects(
+  run: TaskRunRecord,
+  engine: TaskSnapshotRecord['engine']
+): Promise<TaskRunRecord> {
   let next = run
   const candidates = (run.effects ?? []).filter((effect) =>
     effect.status === 'prepared' ||
@@ -172,9 +175,9 @@ async function reconcileStoppedTaskRunEffects(run: TaskRunRecord): Promise<TaskR
   )
   for (const candidate of candidates) {
     const current = requireEffect(next, candidate.id)
-    if (current.status === 'prepared') {
+    if (current.status === 'prepared' && engine === 'openai') {
       const handle = effectHandleFromRecord(current)
-      next = abandonPreparedEffect(next, handle, '原执行进程已停止，且效果尚未进入 executing；已确认外部执行未开始')
+      next = abandonPreparedEffect(next, handle, 'OpenAI 工具仍处于审批前 prepared 状态，已确认外部执行未开始')
       continue
     }
     const probed = await reconcileEffect(current)
@@ -218,7 +221,10 @@ export async function reconcileTaskSnapshotEffects(
 ): Promise<TaskSnapshotRecord> {
   if (options.processStopped !== true) throw new Error('外部效果只能在确认原执行进程已停止后对账')
   if (!snapshot.run?.effects?.length) return snapshot
-  let run = await reconcileStoppedTaskRunEffects(snapshot.run)
+  let run = await reconcileStoppedTaskRunEffects(
+    snapshot.run,
+    snapshot.engine ?? snapshot.meta.engine
+  )
   if (hasWaitingReconciliation(run) && !isTaskRunTerminal(run.status) && run.status !== 'waiting_reconciliation') {
     run = transitionTaskRun(run, 'waiting_reconciliation', {
       lastEventKind: snapshot.execution.lastEventKind

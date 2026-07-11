@@ -55,6 +55,25 @@ export function isSideEffectingTool(toolName: string): boolean {
   return !EFFECT_FREE_TOOLS.has(normalizeToolName(toolName))
 }
 
+export function isSideEffectingToolCall(toolName: string, toolInput: unknown): boolean {
+  return !isReadOnlyToolCall(toolName, toolInput) && isSideEffectingTool(toolName)
+}
+
+export function isReadOnlyToolCall(toolName: string, toolInput: unknown): boolean {
+  const normalized = normalizeToolName(toolName)
+  if (OPENAI_PERMISSION_READ_ONLY_TOOLS.has(normalized)) return true
+  if (
+    normalized === 'search_replace' &&
+    toolInput &&
+    typeof toolInput === 'object' &&
+    !Array.isArray(toolInput) &&
+    (toolInput as Record<string, unknown>).dry_run === true
+  ) {
+    return true
+  }
+  return false
+}
+
 export function requiresDuplicateConfirmation(toolName: string, toolInput: unknown): boolean {
   const normalized = normalizeToolName(toolName)
   if (normalized === 'bash') return true
@@ -100,7 +119,7 @@ export function buildToolIdempotencyKey(input: {
   toolInput: unknown
 }): string | undefined {
   const toolName = normalizeToolName(input.toolName)
-  if (!isSideEffectingTool(toolName)) return undefined
+  if (!isSideEffectingToolCall(toolName, input.toolInput)) return undefined
   return `tool-v1:${stableValueDigest({
     scopeId: input.scopeId,
     cwd: resolve(input.cwd),
