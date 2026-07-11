@@ -444,6 +444,24 @@ check('OfficeView exposes clickable facility targets', () => {
   assert(wayfinding.includes('RestroomFixture') && wayfinding.includes('DiningFixture'), 'ServiceWayfinding must include restroom/dining facility fixtures')
 })
 
+check('walking agents use distance-locked foot contact gait', () => {
+  const animations = source('src/renderer/src/components/office/kit/AvatarAnimations.ts')
+  const walkers = source('src/renderer/src/components/office/kit/AgentWalkers.tsx')
+  const robotAsset = source('src/renderer/src/components/office/kit/RobotModelAsset.tsx')
+  assert(walkers.includes('walkedDistanceRef.current += frameDistance'), 'gait phase must advance from actual travelled distance')
+  assert(walkers.includes('const actualSpeed = delta > 0 ? frameDistance / delta : 0'), 'gait amplitude must follow actual walker speed')
+  assert(walkers.includes('Math.round(routeDistance / GAIT_STRIDE_LENGTH)'), 'each route must end on a complete double-support gait cycle')
+  assert(walkers.includes('function updateFootTarget'), 'walkers must maintain explicit stance and swing foot targets')
+  assert(walkers.includes('state.target.lerpVectors(state.swingStart, state.swingEnd, travel)'), 'swing feet must follow a planned landing arc')
+  assert(walkers.includes('name="walker-left-foot-contact-target"') && walkers.includes('name="walker-right-foot-contact-target"'), 'both feet must expose stable contact targets')
+  assert(animations.includes('function applyWalkingLegIK'), 'walking legs must solve hip and knee from foot contact targets')
+  assert(animations.includes('gaitAnklePitch'), 'walking gait must include heel-strike and toe-off ankle pitch')
+  assert(animations.includes('refs.waistYaw') && animations.includes('refs.waistRoll'), 'walking gait must balance pelvis and torso rotation')
+  assert(robotAsset.includes('function createFootContactMarker'), 'reference robot must expose foot-bottom contact markers')
+  assert(robotAsset.includes("'left_foot_contact_endpoint'") && robotAsset.includes("'right_foot_contact_endpoint'"), 'both GLB feet must expose contact endpoints')
+  assert(robotAsset.includes("getObjectByName('left_ankle_pitch_link')") && robotAsset.includes("getObjectByName('right_ankle_pitch_link')"), 'official ankle pitch joints must be animation controls')
+})
+
 check('failed office sessions expose a visible maintenance response', () => {
   const view = source('src/renderer/src/components/office/OfficeView.tsx')
   const workstation = source('src/renderer/src/components/office/kit/WorkstationPro.tsx')

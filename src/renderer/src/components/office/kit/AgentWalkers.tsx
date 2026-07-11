@@ -39,6 +39,11 @@ type WalkStage = 'toTarget' | 'target' | 'toHome' | 'home'
 const SPEED = 1.05
 const MIN_TRAVEL_SECONDS = 2.8
 const MAX_TRAVEL_SECONDS = 6
+const GAIT_STRIDE_LENGTH = 0.82
+const GAIT_STEP_HEIGHT = 0.105
+const GAIT_FOOT_SPACING = 0.105
+const GAIT_LANDING_LEAD = GAIT_STRIDE_LENGTH * 0.54
+const TAU = Math.PI * 2
 const DWELL_SECONDS: Record<AgentWalkReason, number> = {
   tea: 6.5,
   approval: 8.5,
@@ -224,6 +229,85 @@ function facingFromTo(from: Vector3, to: Vector3, fallback: number): number {
   return Math.atan2(dx, dz)
 }
 
+interface FootStepState {
+  initialized: boolean
+  inStance: boolean
+  target: Vector3
+  swingStart: Vector3
+  swingEnd: Vector3
+}
+
+function createFootStepState(): FootStepState {
+  return {
+    initialized: false,
+    inStance: true,
+    target: new Vector3(),
+    swingStart: new Vector3(),
+    swingEnd: new Vector3()
+  }
+}
+
+function wrapPhase(value: number): number {
+  const wrapped = value % TAU
+  return wrapped < 0 ? wrapped + TAU : wrapped
+}
+
+function footBase(
+  output: Vector3,
+  body: Vector3,
+  forward: Vector3,
+  right: Vector3,
+  lateralSign: number,
+  lead = 0
+): Vector3 {
+  return output
+    .copy(body)
+    .addScaledVector(right, lateralSign * GAIT_FOOT_SPACING)
+    .addScaledVector(forward, lead)
+    .setY(body.y)
+}
+
+function updateFootTarget(
+  state: FootStepState,
+  target: Group | null,
+  phase: number,
+  body: Vector3,
+  forward: Vector3,
+  right: Vector3,
+  lateralSign: number,
+  motion: number
+): void {
+  if (!target) return
+  const inStance = phase < Math.PI
+
+  if (!state.initialized) {
+    footBase(state.target, body, forward, right, lateralSign)
+    state.swingStart.copy(state.target)
+    footBase(state.swingEnd, body, forward, right, lateralSign, GAIT_LANDING_LEAD)
+    state.inStance = inStance
+    state.initialized = true
+  } else if (state.inStance !== inStance) {
+    if (inStance) {
+      state.target.copy(state.swingEnd).setY(body.y)
+    } else {
+      state.swingStart.copy(state.target).setY(body.y)
+      footBase(state.swingEnd, body, forward, right, lateralSign, GAIT_LANDING_LEAD)
+    }
+    state.inStance = inStance
+  }
+
+  if (inStance) {
+    target.position.copy(state.target).setY(body.y)
+    return
+  }
+
+  const progress = clamp((phase - Math.PI) / Math.PI, 0, 1)
+  const travel = smoothstep(progress)
+  state.target.lerpVectors(state.swingStart, state.swingEnd, travel)
+  state.target.y = body.y + Math.sin(progress * Math.PI) * GAIT_STEP_HEIGHT * motion
+  target.position.copy(state.target)
+}
+
 function skinKey(providerName?: string, modelName?: string, providerBaseUrl?: string): string {
   return [providerName, modelName, providerBaseUrl].filter(Boolean).join(' ')
 }
@@ -243,6 +327,8 @@ function OneAgentWalker({
 }): React.JSX.Element {
   const groupRef = useRef<Group>(null)
   const rigRef = useRef<AvatarRefs>(null)
+  const leftFootTargetRef = useRef<Group>(null)
+  const rightFootTargetRef = useRef<Group>(null)
   const stageRef = useRef<WalkStage>('toTarget')
   const awayRef = useRef(false)
   const startedAtRef = useRef<number | null>(null)
@@ -253,6 +339,13 @@ function OneAgentWalker({
   const target = useMemo(() => new Vector3(...spec.target), [spec.target])
   const targetLookAt = useMemo(() => new Vector3(...spec.targetLookAt), [spec.targetLookAt])
   const position = useMemo(() => home.clone(), [home])
+  const previousPositionRef = useRef(home.clone())
+  const walkedDistanceRef = useRef(0)
+  const wasWalkingRef = useRef(false)
+  const leftFootStepRef = useRef<FootStepState>(createFootStepState())
+  const rightFootStepRef = useRef<FootStepState>(createFootStepState())
+  const forwardRef = useRef(new Vector3(0, 0, 1))
+  const rightRef = useRef(new Vector3(1, 0, 0))
   const skin = useMemo(() => vendorSkin(skinKey(spec.providerName, spec.modelName, spec.providerBaseUrl)), [spec.providerName, spec.modelName, spec.providerBaseUrl])
   const providerLogo = useMemo(
     () => providerLogoFor([spec.providerName, spec.modelName, spec.providerBaseUrl]),
@@ -263,6 +356,11 @@ function OneAgentWalker({
     () => clamp(home.distanceTo(target) / SPEED, MIN_TRAVEL_SECONDS, MAX_TRAVEL_SECONDS),
     [home, target]
   )
+  const gaitStrideLength = useMemo(() => {
+    const routeDistance = home.distanceTo(target)
+    const strideCount = Math.max(1, Math.round(routeDistance / GAIT_STRIDE_LENGTH))
+    return Math.max(0.1, routeDistance / strideCount)
+  }, [home, target])
   const cycleSeconds =
     travelSeconds * 2 + DWELL_SECONDS[spec.reason] + REST_SECONDS[spec.reason]
 
@@ -288,7 +386,15 @@ function OneAgentWalker({
     }
   }, [onAwayChange, spec.sessionId])
 
-  useFrame((state) => {
+  useEffect(() => {
+    previousPositionRef.current.copy(home)
+    walkedDistanceRef.current = 0
+    wasWalkingRef.current = false
+    leftFootStepRef.current.initialized = false
+    rightFootStepRef.current.initialized = false
+  }, [home, target])
+
+  useFrame((state, delta) => {
     const group = groupRef.current
     const refs = rigRef.current
     if (!group || !refs) return
@@ -355,18 +461,73 @@ function OneAgentWalker({
           ? backEnd - local
           : 0
     const arrivalEase = walking ? smoothstep(clamp(secondsToStop / 0.9, 0, 1)) : 0
-    const animOpts = {
-      phase: spec.phase * 0.17,
-      liveliness: walking ? 0.2 + arrivalEase * 0.72 : 0.62
+    let gaitPhase = 0
+    let gaitMotion = 0
+    if (walking) {
+      if (!wasWalkingRef.current) {
+        previousPositionRef.current.copy(position)
+        walkedDistanceRef.current = 0
+        leftFootStepRef.current.initialized = false
+        rightFootStepRef.current.initialized = false
+      }
+
+      const frameDistance = previousPositionRef.current.distanceTo(position)
+      walkedDistanceRef.current += frameDistance
+      const actualSpeed = delta > 0 ? frameDistance / delta : 0
+      gaitMotion = clamp(actualSpeed / SPEED, 0.12, 1)
+      gaitPhase = (walkedDistanceRef.current / gaitStrideLength) * TAU
+
+      const forward = forwardRef.current.set(Math.sin(group.rotation.y), 0, Math.cos(group.rotation.y)).normalize()
+      const right = rightRef.current.set(Math.cos(group.rotation.y), 0, -Math.sin(group.rotation.y)).normalize()
+      updateFootTarget(
+        leftFootStepRef.current,
+        leftFootTargetRef.current,
+        wrapPhase(gaitPhase),
+        position,
+        forward,
+        right,
+        1,
+        gaitMotion
+      )
+      updateFootTarget(
+        rightFootStepRef.current,
+        rightFootTargetRef.current,
+        wrapPhase(gaitPhase + Math.PI),
+        position,
+        forward,
+        right,
+        -1,
+        gaitMotion
+      )
+      wasWalkingRef.current = true
+    } else {
+      wasWalkingRef.current = false
+      walkedDistanceRef.current = 0
+      leftFootStepRef.current.initialized = false
+      rightFootStepRef.current.initialized = false
     }
-    if (walking) applyWalking(refs, clock, animOpts)
-    else if (nextStage === 'target' && spec.reason === 'approval') applyStandingTalking(refs, clock, animOpts)
+    previousPositionRef.current.copy(position)
+
+    const animOpts = { phase: spec.phase * 0.17, liveliness: walking ? 0.2 + arrivalEase * 0.72 : 0.62 }
+    if (walking) {
+      applyWalking(refs, clock, {
+        ...animOpts,
+        gaitPhase,
+        gaitSpeed: gaitMotion,
+        walkFootTargets: {
+          left: leftFootTargetRef.current,
+          right: rightFootTargetRef.current
+        }
+      })
+    } else if (nextStage === 'target' && spec.reason === 'approval') applyStandingTalking(refs, clock, animOpts)
     else applyIdle(refs, clock, animOpts)
   })
 
   return (
     <>
       <WalkerRouteTrail home={home} target={target} reason={spec.reason} accent={WALKER_ACCENT} />
+      <group ref={leftFootTargetRef} name="walker-left-foot-contact-target" />
+      <group ref={rightFootTargetRef} name="walker-right-foot-contact-target" />
       <group
         ref={groupRef}
         onClick={clickSelect}

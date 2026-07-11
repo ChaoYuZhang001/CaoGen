@@ -24,6 +24,8 @@ export interface OfficeProp {
  * - armL / armR:肩部枢轴;elbowL / elbowR:肘部枢轴;wristL / wristR:腕部枢轴
  * - handL / handR:手掌中心的末端参考点(供双骨骼 IK 对齐输入目标)
  * - legL / legR:髋部枢轴;kneeL / kneeR:膝部枢轴
+ * - anklePitch* / ankleRoll*:脚踝俯仰/内外翻;footL / footR:脚底接触点
+ * - waistYaw / waistRoll:行走时的躯干反向旋转与重心平衡
  * 新增细分关节保持可选,兼容只提供旧六字段的调用方。
  */
 export type AvatarRefs = {
@@ -37,10 +39,18 @@ export type AvatarRefs = {
   wristR?: Object3D | null
   handL?: Object3D | null
   handR?: Object3D | null
+  waistYaw?: Object3D | null
+  waistRoll?: Object3D | null
   legL: Object3D | null
   legR: Object3D | null
   kneeL?: Object3D | null
   kneeR?: Object3D | null
+  anklePitchL?: Object3D | null
+  anklePitchR?: Object3D | null
+  ankleRollL?: Object3D | null
+  ankleRollR?: Object3D | null
+  footL?: Object3D | null
+  footR?: Object3D | null
 }
 
 type Props = OfficeProp & {
@@ -888,10 +898,18 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
           wristR: wristRRef.current,
           handL: handLRef.current,
           handR: handRRef.current,
+          waistYaw: null,
+          waistRoll: null,
           legL: legLRef.current,
           legR: legRRef.current,
           kneeL: kneeLRef.current,
-          kneeR: kneeRRef.current
+          kneeR: kneeRRef.current,
+          anklePitchL: null,
+          anklePitchR: null,
+          ankleRollL: null,
+          ankleRollR: null,
+          footL: null,
+          footR: null
         }
     if (refs) {
       refs.root = bag.root
@@ -904,10 +922,18 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
       refs.wristR = bag.wristR
       refs.handL = bag.handL
       refs.handR = bag.handR
+      refs.waistYaw = bag.waistYaw
+      refs.waistRoll = bag.waistRoll
       refs.legL = bag.legL
       refs.legR = bag.legR
       refs.kneeL = bag.kneeL
       refs.kneeR = bag.kneeR
+      refs.anklePitchL = bag.anklePitchL
+      refs.anklePitchR = bag.anklePitchR
+      refs.ankleRollL = bag.ankleRollL
+      refs.ankleRollR = bag.ankleRollR
+      refs.footL = bag.footL
+      refs.footR = bag.footR
     }
     return bag
   }

@@ -17,6 +17,14 @@ const REQUIRED_ANIMATION_ROOT_NAMES = [
   'left_leg',
   'right_leg'
 ]
+const REQUIRED_GAIT_CONTROL_NODE_NAMES = [
+  'waist_yaw_link',
+  'waist_roll_link',
+  'left_ankle_pitch_link',
+  'right_ankle_pitch_link',
+  'left_ankle_roll_link',
+  'right_ankle_roll_link'
+]
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
   {
     label: 'official head',
@@ -251,6 +259,16 @@ function inspectDocument(document) {
     }
   }
 
+  const gaitControlNodes = []
+  for (const name of REQUIRED_GAIT_CONTROL_NODE_NAMES) {
+    const matches = nodeEntries.filter((node) => node.name === name)
+    if (matches.length !== 1) {
+      failures.push(`gait control ${quote(name)} must appear exactly once; found ${matches.length}`)
+    } else {
+      gaitControlNodes.push(matches[0])
+    }
+  }
+
   const sourceRootMatches = nodeEntries.filter((node) => node.name === SOURCE_ROOT_NODE_NAME)
   const sourceRoot = sourceRootMatches.length === 1 ? sourceRootMatches[0] : null
   if (sourceRootMatches.length !== 1) {
@@ -400,6 +418,7 @@ function inspectDocument(document) {
     },
     animationRootNodes,
     missingAnimationRootNames,
+    gaitControlNodes,
     officialMeshBindings,
     materialEntries,
     referencedMaterials
@@ -452,6 +471,10 @@ function printDocumentSummary(inspection) {
   console.log(
     `Animation roots: ${inspection.animationRootNodes.length}/${REQUIRED_ANIMATION_ROOT_NAMES.length} present ` +
       `(${formatList(inspection.animationRootNodes.map((node) => node.name))})`
+  )
+  console.log(
+    `Gait controls: ${inspection.gaitControlNodes.length}/${REQUIRED_GAIT_CONTROL_NODE_NAMES.length} present ` +
+      `(${formatList(inspection.gaitControlNodes.map((node) => node.name))})`
   )
   console.log('Official mesh bindings:')
   for (const binding of inspection.officialMeshBindings) {

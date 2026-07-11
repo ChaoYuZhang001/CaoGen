@@ -593,6 +593,28 @@ try {
     )
   })
 
+  await check('3D office walking gait advances through distance-locked phases', async () => {
+    await page.click('.office-camera-button:nth-child(1)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'overview',
+      5_000,
+      'waiting for overview before walking gait frames'
+    )
+    await sleep(650)
+    const frames = []
+    for (let index = 0; index < 3; index += 1) {
+      frames.push(await screenshot(page, `02-office-walking-phase-${index + 1}`))
+      if (index < 2) await sleep(260)
+    }
+    const transitions = [comparePngFrames(frames[0], frames[1]), comparePngFrames(frames[1], frames[2])]
+    assert(
+      transitions.every((transition) => transition.changedRatio > 0.0004 && transition.changedRatio < 0.32),
+      `walking frames must show controlled phase changes without a camera jump: ${JSON.stringify(transitions)}`
+    )
+    report.officeWalkingFrames = { frames, transitions }
+  })
+
   await check('3D office camera presets switch without leaving the control room', async () => {
     await page.click('.office-camera-button:nth-child(3)')
     const facilities = await waitForValue(
@@ -1019,6 +1041,35 @@ async function screenshot(page, name) {
   await page.screenshot({ path: file, fullPage: false })
   report.screenshots.push(file)
   return file
+}
+
+function comparePngFrames(firstFile, secondFile) {
+  const first = PNG.sync.read(readFileSync(firstFile))
+  const second = PNG.sync.read(readFileSync(secondFile))
+  assert(first.width === second.width && first.height === second.height, 'walking gait frame dimensions must match')
+  const x0 = Math.floor(first.width * 0.16)
+  const x1 = Math.floor(first.width * 0.86)
+  const y0 = Math.floor(first.height * 0.2)
+  const y1 = Math.floor(first.height * 0.94)
+  let total = 0
+  let changed = 0
+  let differenceSum = 0
+  for (let y = y0; y < y1; y += 2) {
+    for (let x = x0; x < x1; x += 2) {
+      const offset = (y * first.width + x) * 4
+      const difference =
+        Math.abs(first.data[offset] - second.data[offset]) +
+        Math.abs(first.data[offset + 1] - second.data[offset + 1]) +
+        Math.abs(first.data[offset + 2] - second.data[offset + 2])
+      total += 1
+      differenceSum += difference
+      if (difference > 24) changed += 1
+    }
+  }
+  return {
+    changedRatio: total > 0 ? changed / total : 0,
+    meanChannelDifference: total > 0 ? differenceSum / (total * 3) : 0
+  }
 }
 
 function analyzeOfficeScreenshot(file) {
