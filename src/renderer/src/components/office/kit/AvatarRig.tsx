@@ -22,6 +22,7 @@ export interface OfficeProp {
  * - root:整体根节点(可做上下浮动 / 缩放)
  * - head:头部(点头 / 摇头)
  * - armL / armR:肩部枢轴;elbowL / elbowR:肘部枢轴;wristL / wristR:腕部枢轴
+ * - handL / handR:手掌中心的末端参考点(供双骨骼 IK 对齐输入目标)
  * - legL / legR:髋部枢轴;kneeL / kneeR:膝部枢轴
  * 新增细分关节保持可选,兼容只提供旧六字段的调用方。
  */
@@ -34,6 +35,8 @@ export type AvatarRefs = {
   elbowR?: Object3D | null
   wristL?: Object3D | null
   wristR?: Object3D | null
+  handL?: Object3D | null
+  handR?: Object3D | null
   legL: Object3D | null
   legR: Object3D | null
   kneeL?: Object3D | null
@@ -676,9 +679,9 @@ function RobotKnuckleFinger({ x, side }: { x: number; side: Side }): React.JSX.E
   )
 }
 
-function HumanoidHand({ side }: { side: Side }): React.JSX.Element {
+function HumanoidHand({ side, handRef }: { side: Side; handRef?: React.Ref<Group> }): React.JSX.Element {
   return (
-    <group position={[side * 0.01, 0.013, 0.04]} rotation={[0.05, side * -0.08, side * -0.03]}>
+    <group ref={handRef} position={[side * 0.01, 0.013, 0.04]} rotation={[0.05, side * -0.08, side * -0.03]}>
       <RoundedBox args={[0.08, 0.042, 0.088]} radius={0.014} smoothness={3} castShadow>
         <meshStandardMaterial color={JOINT_BLACK} roughness={0.34} metalness={0.66} />
       </RoundedBox>
@@ -705,13 +708,15 @@ function HumanoidArm({
   accent,
   body,
   elbowRef,
-  wristRef
+  wristRef,
+  handRef
 }: {
   side: Side
   accent: string
   body: string
   elbowRef?: React.Ref<Group>
   wristRef?: React.Ref<Group>
+  handRef?: React.Ref<Group>
 }): React.JSX.Element {
   return (
     <group>
@@ -752,7 +757,7 @@ function HumanoidArm({
           <RoundedBox args={[0.068, 0.032, 0.054]} radius={0.012} smoothness={3} castShadow>
             <meshStandardMaterial color={JOINT_BLACK} roughness={0.32} metalness={0.72} />
           </RoundedBox>
-          <HumanoidHand side={side} />
+          <HumanoidHand side={side} handRef={handRef} />
         </group>
       </group>
     </group>
@@ -859,6 +864,8 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
   const elbowRRef = useRef<Group>(null)
   const wristLRef = useRef<Group>(null)
   const wristRRef = useRef<Group>(null)
+  const handLRef = useRef<Group>(null)
+  const handRRef = useRef<Group>(null)
   const legLRef = useRef<Group>(null)
   const legRRef = useRef<Group>(null)
   const kneeLRef = useRef<Group>(null)
@@ -879,6 +886,8 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
           elbowR: elbowRRef.current,
           wristL: wristLRef.current,
           wristR: wristRRef.current,
+          handL: handLRef.current,
+          handR: handRRef.current,
           legL: legLRef.current,
           legR: legRRef.current,
           kneeL: kneeLRef.current,
@@ -893,6 +902,8 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
       refs.elbowR = bag.elbowR
       refs.wristL = bag.wristL
       refs.wristR = bag.wristR
+      refs.handL = bag.handL
+      refs.handR = bag.handR
       refs.legL = bag.legL
       refs.legR = bag.legR
       refs.kneeL = bag.kneeL
@@ -944,10 +955,24 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
 
         {/* ===== 双臂:肩枢轴 y≈1.03 ===== */}
         <group ref={armLRef} position={[-0.215, 1.032, 0]}>
-          <HumanoidArm side={-1} accent={accent} body={body} elbowRef={elbowLRef} wristRef={wristLRef} />
+          <HumanoidArm
+            side={-1}
+            accent={accent}
+            body={body}
+            elbowRef={elbowLRef}
+            wristRef={wristLRef}
+            handRef={handLRef}
+          />
         </group>
         <group ref={armRRef} position={[0.215, 1.032, 0]}>
-          <HumanoidArm side={1} accent={accent} body={body} elbowRef={elbowRRef} wristRef={wristRRef} />
+          <HumanoidArm
+            side={1}
+            accent={accent}
+            body={body}
+            elbowRef={elbowRRef}
+            wristRef={wristRRef}
+            handRef={handRRef}
+          />
         </group>
 
         {/* ===== 双腿:髋枢轴 y≈0.62 ===== */}

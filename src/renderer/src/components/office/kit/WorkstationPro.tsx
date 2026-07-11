@@ -51,6 +51,9 @@ const ACTIVITY_COLOR: Record<WorkstationActivity, string> = {
 const OFFICE_SIGNAL_ACCENT = '#59b8c8'
 const OFFICE_STRUCTURE_TRIM = '#697680'
 const OFFICE_NEUTRAL_LIGHT = '#9aa8b5'
+const OPERATOR_INPUT_ARRAY_Z = 0.16
+const DESK_HAND_TARGET_Y = 0.93
+const DESK_HAND_TARGET_Z = 0.28
 
 /** 待授权时头顶气泡文案 */
 const AWAITING_TEXT = '等待授权'
@@ -170,7 +173,7 @@ function OperatorInputArray({
   })
 
   return (
-    <group position={[0, 0.858, 0.34]} rotation={[-0.08, 0, 0]}>
+    <group position={[0, 0.858, OPERATOR_INPUT_ARRAY_Z]} rotation={[-0.08, 0, 0]}>
       <RoundedBox args={[0.78, 0.032, 0.28]} radius={0.024} smoothness={3} castShadow receiveShadow>
         <meshStandardMaterial color="#131f29" metalness={0.34} roughness={0.5} transparent opacity={0.92} />
       </RoundedBox>
@@ -706,6 +709,8 @@ export default function WorkstationPro({
 
   // AvatarRig 在挂载后把各关节写入该句柄;useFrame 内读取并驱动动画。
   const rigRef = useRef<AvatarRefs>(null)
+  const leftHandTargetRef = useRef<Group>(null)
+  const rightHandTargetRef = useRef<Group>(null)
 
   // 相位偏移:让同类工位的小人动作错峰,避免整齐划一。
   const phase = useMemo(
@@ -717,7 +722,14 @@ export default function WorkstationPro({
     const refs = rigRef.current
     if (!refs) return
     const t = state.clock.getElapsedTime()
-    const opts = { phase, liveliness: motionScale }
+    const opts = {
+      phase,
+      liveliness: motionScale,
+      deskHandTargets: {
+        left: leftHandTargetRef.current,
+        right: rightHandTargetRef.current
+      }
+    }
     if (activity === 'working') applyTyping(refs, t, opts)
     else if (activity === 'awaiting') applyTalking(refs, t, opts)
     else if (activity === 'error') applyThinking(refs, t, opts)
@@ -868,6 +880,18 @@ export default function WorkstationPro({
             accent={stationAccent}
             screenColor={screenColor}
             activity={activity}
+          />
+
+          {/* 机器人面向 -Z,手掌目标位于前移后的左右输入区中心。 */}
+          <group
+            ref={leftHandTargetRef}
+            name="desk-left-hand-ik-target"
+            position={[-0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
+          />
+          <group
+            ref={rightHandTargetRef}
+            name="desk-right-hand-ik-target"
+            position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
           />
 
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}

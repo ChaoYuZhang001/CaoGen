@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react'
 import { useLoader } from '@react-three/fiber'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { Group, Quaternion } from 'three'
+import { Box3, Group, Quaternion, Vector3 } from 'three'
 import type { Object3D } from 'three'
 import referenceRobotGlbUrl from '../../../assets/robots/reference-office-robot.glb?url'
 import ProviderLogoBadge from './ProviderLogoBadge'
@@ -31,6 +31,8 @@ const EMPTY_REFS = (): AvatarRefs => ({
   elbowR: null,
   wristL: null,
   wristR: null,
+  handL: null,
+  handR: null,
   legL: null,
   legR: null,
   kneeL: null,
@@ -81,8 +83,35 @@ function createAnimationControl(node: Object3D | undefined, controlName: string,
   return control
 }
 
+function createHandEndpointMarker(scene: Group, nodeNames: string[], markerName: string): Object3D | null {
+  const handNode = nodeNames.map((name) => scene.getObjectByName(name)).find(Boolean)
+  if (!handNode) return null
+
+  scene.updateWorldMatrix(true, true)
+  const bounds = new Box3().setFromObject(handNode)
+  if (bounds.isEmpty()) return handNode
+
+  const center = bounds.getCenter(new Vector3())
+  handNode.worldToLocal(center)
+  const marker = new Group()
+  marker.name = markerName
+  marker.position.copy(center)
+  handNode.add(marker)
+  return marker
+}
+
 function prepareModelScene(source: Group): { scene: Group; controls: Omit<AvatarRefs, 'root'> } {
   const scene = source.clone(true)
+  const handL = createHandEndpointMarker(
+    scene,
+    ['official_left_rubber_hand', 'official_left_wrist_roll_rubber_hand', 'left_rubber_hand'],
+    'left_hand_ik_endpoint'
+  )
+  const handR = createHandEndpointMarker(
+    scene,
+    ['official_right_rubber_hand', 'official_right_wrist_roll_rubber_hand', 'right_rubber_hand'],
+    'right_hand_ik_endpoint'
+  )
   return {
     scene,
     controls: {
@@ -93,6 +122,8 @@ function prepareModelScene(source: Group): { scene: Group; controls: Omit<Avatar
       elbowR: createAnimationControl(scene.getObjectByName('right_elbow_link'), 'right_elbow_link', scene),
       wristL: createAnimationControl(scene.getObjectByName('left_wrist_roll_link'), 'left_wrist_roll_link', scene),
       wristR: createAnimationControl(scene.getObjectByName('right_wrist_roll_link'), 'right_wrist_roll_link', scene),
+      handL,
+      handR,
       legL: createAnimationControl(scene.getObjectByName('left_leg'), 'left_leg', scene),
       legR: createAnimationControl(scene.getObjectByName('right_leg'), 'right_leg', scene),
       kneeL: createAnimationControl(scene.getObjectByName('left_knee_link'), 'left_knee_link', scene),
@@ -111,6 +142,8 @@ function writeRefs(target: AvatarRefs | undefined, value: AvatarRefs): void {
   target.elbowR = value.elbowR
   target.wristL = value.wristL
   target.wristR = value.wristR
+  target.handL = value.handL
+  target.handR = value.handR
   target.legL = value.legL
   target.legR = value.legR
   target.kneeL = value.kneeL
@@ -153,6 +186,8 @@ const ReferenceRobotModelAsset = forwardRef<AvatarRefs, ReferenceRobotModelAsset
         elbowR: modelControls.elbowR,
         wristL: modelControls.wristL,
         wristR: modelControls.wristR,
+        handL: modelControls.handL,
+        handR: modelControls.handR,
         legL: modelControls.legL ?? legLFallbackRef.current,
         legR: modelControls.legR ?? legRFallbackRef.current,
         kneeL: modelControls.kneeL,
