@@ -4,6 +4,9 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import deepTestStatus from './deep-test-status.cjs'
+
+const { reportDeepTestStatus } = deepTestStatus
 
 const repoRoot = process.cwd()
 const enabled = process.env.CAOGEN_CHINA_REAL_NETWORK === '1'
@@ -39,6 +42,7 @@ if (!enabled) {
     results
   }
   writeReport(report)
+  reportDeepTestStatus('skip', { reason: report.reason, details: { reportDir } })
   console.log('SKIP china real network smoke: set CAOGEN_CHINA_REAL_NETWORK=1 and provide target credentials')
   if (required) process.exit(1)
   process.exit(0)
@@ -187,10 +191,20 @@ try {
     failures
   }
   writeReport(report)
+  reportDeepTestStatus(deepStatus(report.status), {
+    ...(report.status === 'passed' ? {} : { reason: report.failures.join('; ') || 'no active real-network checks' }),
+    details: { reportDir, activeChecks: report.activeChecks }
+  })
   console.log(JSON.stringify(report, null, 2))
   if (failures.length > 0) process.exitCode = 1
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function deepStatus(status) {
+  if (status === 'passed') return 'pass'
+  if (status === 'skipped') return 'skip'
+  return 'fail'
 }
 
 async function runOptional(name, shouldRun, fn) {

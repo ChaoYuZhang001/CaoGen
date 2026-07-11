@@ -3,6 +3,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import deepTestStatus from './deep-test-status.cjs'
+
+const { reportDeepTestStatus } = deepTestStatus
 
 const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1'
 const required = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED === '1' || process.argv.includes('--required')
@@ -47,6 +50,7 @@ if (!enabled || !rawProviders?.trim()) {
     parityFailures: required ? ['required parity mode needs explicit baseline and China provider configuration'] : []
   }
   writeReport(report)
+  reportDeepTestStatus('skip', { reason: report.reason, details: { reportDir } })
   console.log('SKIP china tool-call parity: set CAOGEN_CHINA_TOOL_CALL_PARITY=1 and CAOGEN_CHINA_PARITY_PROVIDERS JSON')
   if (required) process.exit(1)
   process.exit(0)
@@ -147,6 +151,10 @@ const report = {
   parityFailures
 }
 writeReport(report)
+reportDeepTestStatus(report.status === 'passed' ? 'pass' : 'fail', {
+  ...(report.status === 'passed' ? {} : { reason: report.parityFailures.join('; ') || 'tool-call parity failed' }),
+  details: { reportDir, providers: report.results.length, goldenCases: report.goldenCases }
+})
 console.log(JSON.stringify(report, null, 2))
 if (parityFailures.length > 0) process.exitCode = 1
 

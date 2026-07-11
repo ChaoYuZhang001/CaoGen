@@ -113,6 +113,7 @@
     "test:preview-prompt": "node scripts/preview-prompt-smoke.mjs",
     "test:page": "node scripts/page-operation-smoke.mjs",
     "test:x1-s3": "node scripts/x1-s3-e2e.mjs",
+    "test:deep-four-state": "node scripts/deep-test-four-state-smoke.mjs",
     "test:deep": "node scripts/deep-test.mjs",
     "test:deep:install-hourly": "node scripts/install-hourly-deep-test.mjs",
     "dist": "npm run build && npm run prepare:native-build && electron-builder",
