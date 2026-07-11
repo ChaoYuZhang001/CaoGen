@@ -42,7 +42,7 @@ import {
   prepareEffectExecution
 } from './task/effect-runtime'
 import type { EffectExecutionHandle } from './task/effect-ledger'
-import { isSideEffectingTool } from './task/tool-idempotency'
+import { isSideEffectingToolCall } from './task/tool-idempotency'
 import {
   decideGuiPermission,
   GUI_TEMPORARY_GRANT_MESSAGE,
@@ -485,7 +485,7 @@ export class AgentSession implements Engine {
                   }
                 }
                 try {
-                  await this.ensureClaudeEffectPrepared(toolName, toolInput, toolUseId)
+                  await this.ensureClaudeEffectExecuting(toolName, toolInput, toolUseId)
                   if (!this.permissionSettlementIsCurrent(generation)) {
                     if (toolUseId) {
                       await this.cancelClaudeEffect(toolUseId, staleReason).catch(() => undefined)
@@ -1594,7 +1594,7 @@ export class AgentSession implements Engine {
       sessionId: this.meta.id,
       cwd: this.meta.cwd,
       toolUseId,
-      toolName: normalizeClaudeToolName(toolName),
+      toolName,
       toolInput: normalizeClaudeToolInput(toolName, input)
     })
   }
@@ -1604,9 +1604,8 @@ export class AgentSession implements Engine {
     input: Record<string, unknown>,
     toolUseId: string | undefined
   ): Promise<EffectExecutionHandle | null> {
-    const policyToolName = normalizeClaudeToolName(toolName)
     const policyInput = normalizeClaudeToolInput(toolName, input)
-    if (!isSideEffectingTool(policyToolName)) return null
+    if (!isSideEffectingToolCall(toolName, policyInput)) return null
     if (!toolUseId) throw new Error('Claude SDK 未提供 tool_use_id，无法建立效果 lease')
     let handle = this.effectHandles.get(toolUseId)
     if (!handle) {
@@ -1614,7 +1613,7 @@ export class AgentSession implements Engine {
         sessionId: this.meta.id,
         cwd: this.meta.cwd,
         toolUseId,
-        toolName: policyToolName,
+        toolName,
         toolInput: policyInput
       }) ?? undefined
       if (handle) this.effectHandles.set(toolUseId, handle)

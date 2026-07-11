@@ -28,7 +28,6 @@ import { canRotateProviderKey } from './providerKeyRouting'
 import {
   EDIT_TOOLS,
   OPENAI_CODING_TOOLS,
-  READONLY_TOOLS,
   RESPONSES_CODING_TOOLS,
   executeCodingTool
 } from './openaiTools'
@@ -58,6 +57,7 @@ import { isGuiToolName } from './agent/tools/gui-tools'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { isReadOnlyToolCall } from './task/tool-idempotency'
 import {
   cancelEffectExecution,
   completeEffectExecution,
@@ -450,8 +450,9 @@ export class OpenAIEngine implements Engine {
       return { allow: false, message: guiDecision.reason }
     }
     const mode = this.meta.permissionMode
-    if (mode === 'plan' && !READONLY_TOOLS.has(name)) {
-      const message = '规划模式:只允许只读工具(view/read_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose),不执行写入或命令'
+    const readOnlyCall = isReadOnlyToolCall(name, input)
+    if (mode === 'plan' && !readOnlyCall) {
+      const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
       this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
       return { allow: false, message }
     }
@@ -501,7 +502,7 @@ export class OpenAIEngine implements Engine {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
     }
-    if (READONLY_TOOLS.has(name)) {
+    if (readOnlyCall) {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
     }

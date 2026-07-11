@@ -9,8 +9,10 @@ import {
 } from './sandbox/docker-sandbox'
 import {
   formatSearchReplaceResult,
+  runExactFileEdit,
   runSearchReplace,
-  type SearchReplacementInput
+  searchReplacementArgs,
+  type TextFileWriteGuard
 } from './agent/tools/search-replace'
 import { GUI_TOOLS, executeGuiTool, isGuiToolName } from './agent/tools/gui-tools'
 import { formatViewResult, runView } from './agent/tools/view'
@@ -201,7 +203,8 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
         properties: {
           path: { type: 'string' },
           old_string: { type: 'string' },
-          new_string: { type: 'string' }
+          new_string: { type: 'string' },
+          replace_all: { type: 'boolean', description: '是否替换所有精确匹配项,默认 false' }
         },
         required: ['path', 'old_string', 'new_string']
       }
@@ -731,19 +734,6 @@ async function loadSessionManager() {
   } }).sessionManager
 }
 
-function replacementArgs(value: unknown): SearchReplacementInput[] {
-  if (!Array.isArray(value)) return []
-  return value.map((item) => {
-    const record = isRecord(item) ? item : {}
-    const replacement: SearchReplacementInput = {
-      old_str: typeof record.old_str === 'string' ? record.old_str : '',
-      new_str: typeof record.new_str === 'string' ? record.new_str : ''
-    }
-    if (typeof record.replace_all === 'boolean') replacement.replace_all = record.replace_all
-    return replacement
-  })
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -805,26 +795,36 @@ export async function executeCodingTool(
         let writeResult: SandboxCommandResult | undefined
         const result = await runSearchReplace(cwd, {
           file_path: stringArg(args, 'file_path', 'path'),
-          replacements: replacementArgs(args.replacements),
+          replacements: searchReplacementArgs(args.replacements),
           dry_run: args.dry_run === true
         }, {
-          writeTextFile: async (filePath, content) => {
-            writeResult = await sandboxedFileWrite(cwd, filePath, content, options)
+          effectTarget: options.effectTarget?.kind === 'file_content' ? options.effectTarget : undefined,
+          writeTextFile: async (filePath, content, guard) => {
+            writeResult = await sandboxedFileWrite(cwd, filePath, content, options, guard)
             if (!writeResult.ok) throw new Error(writeResult.output)
           }
         })
         return withSandboxMetadata({ ok: result.ok, output: clip(formatSearchReplaceResult(result)) }, writeResult, options.sandboxMode)
       }
       case 'edit_file': {
-        const oldStr = String(args.old_string ?? '')
-        const newStr = String(args.new_string ?? '')
+        if (typeof args.old_string !== 'string' || typeof args.new_string !== 'string') {
+          return { ok: false, output: 'edit_file 的 old_string 与 new_string 必须是字符串' }
+        }
+        if (args.replace_all !== undefined && typeof args.replace_all !== 'boolean') {
+          return { ok: false, output: 'edit_file 的 replace_all 必须是布尔值' }
+        }
+        const oldStr = args.old_string
+        const newStr = args.new_string
         let writeResult: SandboxCommandResult | undefined
-        const result = await runSearchReplace(cwd, {
+        const result = await runExactFileEdit(cwd, {
           file_path: stringArg(args, 'path', 'file_path'),
-          replacements: [{ old_str: oldStr, new_str: newStr }]
+          old_string: oldStr,
+          new_string: newStr,
+          replace_all: args.replace_all === true
         }, {
-          writeTextFile: async (filePath, content) => {
-            writeResult = await sandboxedFileWrite(cwd, filePath, content, options)
+          effectTarget: options.effectTarget?.kind === 'file_content' ? options.effectTarget : undefined,
+          writeTextFile: async (filePath, content, guard) => {
+            writeResult = await sandboxedFileWrite(cwd, filePath, content, options, guard)
             if (!writeResult.ok) throw new Error(writeResult.output)
           }
         })
@@ -1010,12 +1010,14 @@ async function sandboxedFileWrite(
   cwd: string,
   targetPath: string,
   content: string,
-  options: ToolExecutionOptions
+  options: ToolExecutionOptions,
+  guard?: TextFileWriteGuard
 ): Promise<SandboxCommandResult> {
   return writeTextFileWithSandbox({
     cwd,
     targetPath,
     content,
+    expectedFile: guard,
     mode: options.sandboxMode ?? 'loose',
     timeoutMs: BASH_TIMEOUT_MS,
     dockerImage: options.dockerImage,

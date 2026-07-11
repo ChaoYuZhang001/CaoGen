@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -230,6 +232,356 @@ try {
       evidenceDigest: 'compensation-evidence'
     })
   )
+
+  assert(
+    idempotency.isReadOnlyToolCall('search_replace', {
+      file_path: 'editable.ts',
+      replacements: [],
+      dry_run: true
+    }),
+    'search_replace dry_run must be treated as a read-only call'
+  )
+  assert(
+    !idempotency.isSideEffectingToolCall('search_replace', {
+      file_path: 'editable.ts',
+      replacements: [],
+      dry_run: true
+    }),
+    'search_replace dry_run must remain effect-free'
+  )
+  assertEqual(
+    idempotency.buildToolIdempotencyKey({
+      scopeId: 'dry-run-session',
+      cwd: fileRoot,
+      toolName: 'search_replace',
+      toolInput: { file_path: 'editable.ts', replacements: [], dry_run: true }
+    }),
+    undefined,
+    'search_replace dry_run must not receive a side-effect idempotency key'
+  )
+
+  const editablePath = path.join(fileRoot, 'editable.ts')
+  const editableBefore = [
+    'export function calculate() {',
+    '  const result = "before"',
+    '  return result',
+    '}',
+    ''
+  ].join('\n')
+  const editableAfter = [
+    'export function calculate() {',
+    '  const result = "after"',
+    '  return result',
+    '}',
+    ''
+  ].join('\n')
+  const searchOld = [
+    'export function calculate() {',
+    '  const result = "before"',
+    '  return result',
+    '}'
+  ].join('\n')
+  const searchNew = [
+    'export function calculate() {',
+    '  const result = "after"',
+    '  return result',
+    '}'
+  ].join('\n')
+  const searchInput = {
+    file_path: 'editable.ts',
+    replacements: [{ old_str: searchOld, new_str: searchNew }]
+  }
+  const editInput = {
+    path: 'editable.ts',
+    old_string: '"before"',
+    new_string: '"after"',
+    replace_all: false
+  }
+  writeFileSync(editablePath, editableBefore, 'utf8')
+
+  const searchDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'search_replace',
+    toolInput: searchInput,
+    cwd: fileRoot
+  })
+  assertEqual(searchDescriptor.reconcilability, 'queryable', 'search_replace must have a queryable descriptor')
+  assertEqual(searchDescriptor.target.kind, 'file_content', 'search_replace must freeze a file_content target')
+  assertEqual(searchDescriptor.target.preState, 'file')
+  assertEqual(searchDescriptor.target.preSha256, sha256Text(editableBefore))
+  assertEqual(searchDescriptor.target.expectedSha256, sha256Text(editableAfter))
+  assertIdentityRecord(searchDescriptor.target.rootIdentity, 'search_replace root')
+  assertIdentityRecord(searchDescriptor.target.preFileIdentity, 'search_replace pre-file')
+
+  const editDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'edit_file',
+    toolInput: editInput,
+    cwd: fileRoot
+  })
+  assertEqual(editDescriptor.reconcilability, 'queryable', 'edit_file must have a queryable descriptor')
+  assertEqual(editDescriptor.target.kind, 'file_content', 'edit_file must freeze a file_content target')
+  assertEqual(editDescriptor.target.preSha256, sha256Text(editableBefore))
+  assertEqual(editDescriptor.target.expectedSha256, sha256Text(editableAfter))
+
+  await assertRejectsMatching(
+    () => reconciler.buildEffectDescriptor({
+      toolName: 'edit_file',
+      toolInput: { path: 'editable.ts', old_string: 42, new_string: 'after' },
+      cwd: fileRoot
+    }),
+    /old_string.*new_string.*字符串/,
+    'malformed edit_file inputs must be rejected before approval'
+  )
+  await assertRejectsMatching(
+    () => reconciler.buildEffectDescriptor({
+      toolName: 'search_replace',
+      toolInput: { file_path: 'editable.ts', replacements: [{ old_str: searchOld, new_str: 42 }] },
+      cwd: fileRoot
+    }),
+    /new_str.*字符串/,
+    'malformed search_replace inputs must be rejected before approval'
+  )
+
+  const bomPath = path.join(fileRoot, 'bom-edit.txt')
+  const bomBefore = 'alpha\nbeta\ngamma\n'
+  const bomAfter = 'alpha\nBETA\ngamma\n'
+  const bomBytes = Buffer.from(`\uFEFF${bomBefore}`, 'utf8')
+  const bomExpectedBytes = Buffer.from(`\uFEFF${bomAfter}`, 'utf8')
+  writeFileSync(bomPath, bomBytes)
+  const bomInput = {
+    file_path: 'bom-edit.txt',
+    replacements: [{ old_str: 'alpha\nbeta\ngamma', new_str: 'alpha\nBETA\ngamma' }]
+  }
+  const bomDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'search_replace',
+    toolInput: bomInput,
+    cwd: fileRoot
+  })
+  assertEqual(bomDescriptor.target.preBytes, bomBytes.byteLength, 'BOM pre-state must use raw byte length')
+  assertEqual(bomDescriptor.target.preSha256, sha256Bytes(bomBytes), 'BOM pre-state must use raw byte hash')
+  assertEqual(bomDescriptor.target.expectedBytes, bomExpectedBytes.byteLength, 'BOM edit must preserve the preamble')
+  assertEqual(bomDescriptor.target.expectedSha256, sha256Bytes(bomExpectedBytes), 'BOM expected hash must preserve the preamble')
+  const bomPrepared = prepareExecutingEffect({
+    ledger,
+    taskRun,
+    taskExecution,
+    sessionId: 'bom-reconcile-session',
+    toolUseId: 'bom-reconcile',
+    toolName: 'search_replace',
+    toolInput: bomInput,
+    descriptor: bomDescriptor,
+    cwd: fileRoot,
+    now: 1050
+  })
+  const bomPreProbe = await reconciler.reconcileEffect(bomPrepared.run.effects[0])
+  assertEqual(bomPreProbe.kind, 'not_applied', 'unchanged BOM file must reconcile as not_applied')
+
+  const claudeEditPath = path.join(fileRoot, 'claude-edit.txt')
+  const claudeEditBefore = 'alpha beta alpha beta\n'
+  const claudeEditAfter = 'omega beta omega beta\n'
+  writeFileSync(claudeEditPath, claudeEditBefore, 'utf8')
+  const claudeEditInput = {
+    file_path: 'claude-edit.txt',
+    old_string: 'alpha',
+    new_string: 'omega',
+    replace_all: true
+  }
+  const claudeEditDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'Edit',
+    toolInput: claudeEditInput,
+    cwd: fileRoot
+  })
+  assertEqual(claudeEditDescriptor.reconcilability, 'queryable', 'Claude Edit must be queryable')
+  assertEqual(claudeEditDescriptor.target.kind, 'file_content', 'Claude Edit must freeze a file_content target')
+  assertEqual(claudeEditDescriptor.target.preSha256, sha256Text(claudeEditBefore))
+  assertEqual(
+    claudeEditDescriptor.target.expectedSha256,
+    sha256Text(claudeEditAfter),
+    'Claude Edit replace_all must freeze every exact replacement'
+  )
+
+  for (const claudeToolName of ['MultiEdit', 'NotebookEdit']) {
+    const descriptor = await reconciler.buildEffectDescriptor({
+      toolName: claudeToolName,
+      toolInput: claudeEditInput,
+      cwd: fileRoot
+    })
+    assertEqual(descriptor.target.kind, 'unsupported', `${claudeToolName} must remain opaque until it has a dedicated planner`)
+    assertEqual(descriptor.reconcilability, 'opaque', `${claudeToolName} must not inherit plain-text Edit reconciliation`)
+  }
+
+  const overwriteDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'write_file',
+    toolInput: { path: 'editable.ts', content: editableAfter },
+    cwd: fileRoot
+  })
+  const searchResource = ledger.prepareEffect(
+    runWithTool(taskRun, taskExecution, 'search-resource-session', 'search-resource', 'search_replace', searchInput, fileRoot),
+    {
+      sessionId: 'search-resource-session',
+      cwd: fileRoot,
+      toolUseId: 'search-resource',
+      toolName: 'search_replace',
+      descriptor: searchDescriptor,
+      ownerId: 'search-resource-worker',
+      now: 1100
+    }
+  )
+  const editResource = ledger.prepareEffect(
+    runWithTool(taskRun, taskExecution, 'edit-resource-session', 'edit-resource', 'edit_file', editInput, fileRoot),
+    {
+      sessionId: 'edit-resource-session',
+      cwd: fileRoot,
+      toolUseId: 'edit-resource',
+      toolName: 'edit_file',
+      descriptor: editDescriptor,
+      ownerId: 'edit-resource-worker',
+      now: 1100
+    }
+  )
+  const writeResource = ledger.prepareEffect(
+    runWithTool(
+      taskRun,
+      taskExecution,
+      'write-resource-session',
+      'write-resource',
+      'write_file',
+      { path: 'editable.ts', content: editableAfter },
+      fileRoot
+    ),
+    {
+      sessionId: 'write-resource-session',
+      cwd: fileRoot,
+      toolUseId: 'write-resource',
+      toolName: 'write_file',
+      descriptor: overwriteDescriptor,
+      ownerId: 'write-resource-worker',
+      now: 1100
+    }
+  )
+  assertEqual(
+    searchResource.handle.resourceKey,
+    editResource.handle.resourceKey,
+    'search_replace and edit_file on one file must share a resource key'
+  )
+  assertEqual(
+    searchResource.handle.resourceKey,
+    writeResource.handle.resourceKey,
+    'file patch tools and write_file on one file must share a resource key'
+  )
+
+  if (process.platform !== 'win32') {
+    const hardlinkSourcePath = path.join(fileRoot, 'hardlink-source.txt')
+    const hardlinkAliasPath = path.join(fileRoot, 'hardlink-alias.txt')
+    writeFileSync(hardlinkSourcePath, 'hardlink-before\n', 'utf8')
+    linkSync(hardlinkSourcePath, hardlinkAliasPath)
+    const hardlinkSourceInput = { path: 'hardlink-source.txt', content: 'source-after\n' }
+    const hardlinkAliasInput = { path: 'hardlink-alias.txt', content: 'alias-after\n' }
+    const hardlinkSourceDescriptor = await reconciler.buildEffectDescriptor({
+      toolName: 'write_file',
+      toolInput: hardlinkSourceInput,
+      cwd: fileRoot
+    })
+    const hardlinkAliasDescriptor = await reconciler.buildEffectDescriptor({
+      toolName: 'write_file',
+      toolInput: hardlinkAliasInput,
+      cwd: fileRoot
+    })
+    assertEqual(
+      JSON.stringify(hardlinkSourceDescriptor.target.preFileIdentity),
+      JSON.stringify(hardlinkAliasDescriptor.target.preFileIdentity),
+      'hard links must freeze the same device and inode identity'
+    )
+    const hardlinkSourceRun = runWithTool(
+      taskRun,
+      taskExecution,
+      'hardlink-source-session',
+      'hardlink-source-tool',
+      'write_file',
+      hardlinkSourceInput,
+      fileRoot
+    )
+    const hardlinkAliasRun = runWithTool(
+      taskRun,
+      taskExecution,
+      'hardlink-alias-session',
+      'hardlink-alias-tool',
+      'write_file',
+      hardlinkAliasInput,
+      fileRoot
+    )
+    const hardlinkSourcePrepared = ledger.prepareEffect(hardlinkSourceRun, {
+      sessionId: hardlinkSourceRun.sessionId,
+      cwd: fileRoot,
+      toolUseId: 'hardlink-source-tool',
+      toolName: 'write_file',
+      descriptor: hardlinkSourceDescriptor,
+      ownerId: 'hardlink-source-worker',
+      now: 1120
+    })
+    const hardlinkAliasPrepared = ledger.prepareEffect(hardlinkAliasRun, {
+      sessionId: hardlinkAliasRun.sessionId,
+      cwd: fileRoot,
+      toolUseId: 'hardlink-alias-tool',
+      toolName: 'write_file',
+      descriptor: hardlinkAliasDescriptor,
+      ownerId: 'hardlink-alias-worker',
+      now: 1121
+    })
+    assert(
+      hardlinkSourcePrepared.handle.resourceKey !== hardlinkAliasPrepared.handle.resourceKey,
+      'hard-link fixture must exercise inode conflict beyond path-derived resource keys'
+    )
+    const hardlinkStore = path.join(tempRoot, 'hardlink-resource-lock-store')
+    await snapshotStore.saveTaskSnapshot(
+      effectSnapshot(snapshotStore, hardlinkSourceRun, fileRoot, 1122),
+      hardlinkStore
+    )
+    await snapshotStore.saveTaskRunBarrier(hardlinkSourcePrepared.run, hardlinkStore)
+    await snapshotStore.saveTaskSnapshot(
+      effectSnapshot(snapshotStore, hardlinkAliasRun, fileRoot, 1123),
+      hardlinkStore
+    )
+    await assertRejectsMatching(
+      () => snapshotStore.saveTaskRunBarrier(hardlinkAliasPrepared.run, hardlinkStore),
+      /其他会话仍未收敛|same resource/,
+      'different paths to the same inode must not acquire concurrent cross-session leases'
+    )
+  }
+
+  const searchExecution = prepareExecutingEffect({
+    ledger,
+    taskRun,
+    taskExecution,
+    sessionId: 'search-reconcile-session',
+    toolUseId: 'search-reconcile',
+    toolName: 'search_replace',
+    toolInput: searchInput,
+    descriptor: searchDescriptor,
+    cwd: fileRoot,
+    now: 1200
+  })
+  const searchPreProbe = await reconciler.reconcileEffect(searchExecution.run.effects[0])
+  assertEqual(searchPreProbe.kind, 'not_applied', 'unchanged pre-edit content must reconcile as not_applied')
+  const sameContentReplacement = path.join(fileRoot, 'editable-same-content-replacement.ts')
+  writeFileSync(sameContentReplacement, editableBefore, 'utf8')
+  rmSync(editablePath)
+  renameSync(sameContentReplacement, editablePath)
+  assert(
+    searchDescriptor.target.preFileIdentity?.inode !== statSync(editablePath, { bigint: true }).ino.toString(),
+    'same-content replacement fixture must change the target inode'
+  )
+  const searchSameContentNewInodeProbe = await reconciler.reconcileEffect(searchExecution.run.effects[0])
+  assertEqual(
+    searchSameContentNewInodeProbe.kind,
+    'unresolved',
+    'same pre-state bytes on a different inode must not prove that the effect was not applied'
+  )
+  writeFileSync(editablePath, editableAfter, 'utf8')
+  const searchExpectedProbe = await reconciler.reconcileEffect(searchExecution.run.effects[0])
+  assertEqual(searchExpectedProbe.kind, 'confirmed', 'approved expected edit content must reconcile as confirmed')
+  writeFileSync(editablePath, 'third-party drift\n', 'utf8')
+  const searchDriftProbe = await reconciler.reconcileEffect(searchExecution.run.effects[0])
+  assertEqual(searchDriftProbe.kind, 'unresolved', 'content outside pre/expected states must remain unresolved')
 
   writeFileSync(path.join(fileRoot, 'fence.txt'), 'before\n', 'utf8')
   const fenceInput = { path: 'fence.txt', content: 'after\n' }
@@ -1556,6 +1908,14 @@ function gitFails(cwd, args) {
 function assertIdentityRecord(identity, name) {
   assert(identity && typeof identity.device === 'string' && identity.device.length > 0, `${name} must freeze device identity`)
   assert(identity && typeof identity.inode === 'string' && identity.inode.length > 0, `${name} must freeze inode identity`)
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function sha256Bytes(value) {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function assertThrowsMatching(fn, pattern, message) {
