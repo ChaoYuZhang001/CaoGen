@@ -5,7 +5,8 @@
 
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 
-export type SandboxMode = 'strictDocker' | 'standardSystem' | 'loose'
+/** 本地执行策略。当前不提供容器或操作系统级沙箱。 */
+export type SandboxMode = 'restrictedLocal' | 'loose'
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
@@ -1119,18 +1120,14 @@ export interface AppSettings {
   allowedTools: string
   /** 权限:工具黑名单(每行一个) */
   disallowedTools: string
-  /** 沙箱模式:strictDocker 优先 Docker,standardSystem 使用系统 shell,loose 保持最宽松兼容 */
+  /** 本地执行策略;restrictedLocal 为当前默认,loose 仅保留旧会话兼容。两者都不是系统级沙箱。 */
   sandboxMode: SandboxMode
-  /** Docker 沙箱镜像;strictDocker 模式使用,为空时使用内置默认镜像 */
-  sandboxDockerImage: string
-  /** 国产生态镜像:默认关闭;开启后才向沙箱命令注入 npm/pip/docker 镜像配置 */
+  /** 国产生态镜像:默认关闭;开启后才向本地命令注入 npm/pip 镜像配置 */
   chinaEcosystemMirrorEnabled: boolean
   /** 国产生态镜像:npm registry,仅 chinaEcosystemMirrorEnabled=true 时生效 */
   chinaNpmRegistry: string
   /** 国产生态镜像:pip index-url,仅 chinaEcosystemMirrorEnabled=true 时生效 */
   chinaPipIndexUrl: string
-  /** 国产生态镜像:Docker registry 前缀,仅 chinaEcosystemMirrorEnabled=true 时生效 */
-  chinaDockerRegistryMirror: string
   /** 权限白名单规则:支持 tool/path/risk 组合;空表示不额外放行 */
   permissionAllowlist: string
   /** 权限黑名单规则:支持 tool/path/risk 组合;空表示不额外拒绝 */

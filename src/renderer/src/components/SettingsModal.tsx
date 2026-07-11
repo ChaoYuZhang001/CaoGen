@@ -15,7 +15,6 @@ import type {
   PluginRegistryView,
   ProviderHealthView,
   ProviderView,
-  SandboxMode,
   SchedulerStrategy,
   SessionMeta
 } from '../../../shared/types'
@@ -805,17 +804,6 @@ export default function SettingsModal(): React.JSX.Element {
                     />
                   </label>
                 </div>
-                <label className="field-label">
-                  {t('chinaDockerRegistryMirror')}
-                  <input
-                    className="input input-block"
-                    value={draft.chinaDockerRegistryMirror}
-                    disabled={!draft.chinaEcosystemMirrorEnabled}
-                    placeholder="https://docker.1ms.run"
-                    onChange={(e) => set('chinaDockerRegistryMirror', e.target.value)}
-                  />
-                </label>
-
                 <label className="settings-check">
                   <input
                     type="checkbox"
@@ -948,27 +936,10 @@ export default function SettingsModal(): React.JSX.Element {
                   ))}
                 </select>
 
-                <label className="field-label">沙箱模式</label>
-                <select
-                  className="select select-block"
-                  value={draft.sandboxMode}
-                  onChange={(e) => set('sandboxMode', e.target.value as SandboxMode)}
-                >
-                  <option value="strictDocker">严格模式: Docker 容器</option>
-                  <option value="standardSystem">标准模式: 系统沙箱</option>
-                  <option value="loose">宽松模式: 路径牢笼</option>
-                </select>
+                <label className="field-label">本地执行</label>
                 <p className="settings-hint">
-                  默认宽松以兼容旧会话；严格模式在 Docker 不可用时会自动降级并记录原因。
+                  命令直接在本机运行，不是系统级沙箱。文件工具仍限制在项目目录，并执行写前与写后校验。
                 </p>
-
-                <label className="field-label">Docker 沙箱镜像</label>
-                <input
-                  className="input input-block"
-                  value={draft.sandboxDockerImage}
-                  placeholder="caogen-sandbox:latest 或 node:22-alpine"
-                  onChange={(e) => set('sandboxDockerImage', e.target.value)}
-                />
 
                 <label className="field-label">{t('allowedTools')}</label>
                 <textarea

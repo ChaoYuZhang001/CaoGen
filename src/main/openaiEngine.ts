@@ -575,11 +575,9 @@ export class OpenAIEngine implements Engine {
     const exec = await executeCodingTool(name, input, this.meta.cwd, {
       signal,
       sandboxMode: settings.sandboxMode,
-      dockerImage: settings.sandboxDockerImage,
       chinaMirrorEnabled: settings.chinaEcosystemMirrorEnabled,
       npmRegistry: settings.chinaNpmRegistry,
       pipIndexUrl: settings.chinaPipIndexUrl,
-      dockerRegistryMirror: settings.chinaDockerRegistryMirror,
       sessionId: this.meta.id,
       worktreeContext: {
         sessionId: this.meta.id,
@@ -595,7 +593,7 @@ export class OpenAIEngine implements Engine {
     const executionPolicy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
     writeAuditLog(this.meta.cwd, {
       action: 'execute',
-      source: 'sandbox',
+      source: 'local-execution',
       toolName: name,
       input,
       ok: exec.ok,

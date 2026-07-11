@@ -132,7 +132,6 @@ interface PendingPermission {
 
 const CLAUDE_READ_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'WebFetch'])
 const CLAUDE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
-const CLAUDE_HOST_MUTATION_TOOLS = new Set(['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 function normalizeClaudeToolName(toolName: string): string {
   if (toolName === 'Bash') return 'bash'
@@ -1885,11 +1884,6 @@ export class AgentSession implements Engine {
     if (policy.kind === 'deny') {
       audit('deny', 'policy', policy.reason)
       return Promise.resolve({ behavior: 'deny', message: policy.reason })
-    }
-    if (settings.sandboxMode === 'strictDocker' && CLAUDE_HOST_MUTATION_TOOLS.has(toolName)) {
-      const message = '严格 Docker 模式下 Claude SDK 本地工具无法由 CaoGen Docker 沙箱接管,已按 fail-closed 阻止;请改用 OpenAI 本地工具链或切换沙箱模式。'
-      audit('deny', 'policy', message)
-      return Promise.resolve({ behavior: 'deny', message })
     }
     const guiDecision = decideGuiPermission(policyToolName, settings)
     if (guiDecision.kind === 'deny') {

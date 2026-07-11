@@ -3,12 +3,11 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import {
-  runSandboxedCommand,
-  writeTextFileWithSandbox,
-  type SandboxCommandResult,
-  type SandboxFileWritePrecondition,
-  type SandboxMode
-} from './sandbox/docker-sandbox'
+  runLocalCommand,
+  writeTextFileLocally,
+  type LocalCommandResult,
+  type LocalFileWritePrecondition
+} from './sandbox/local-execution'
 import {
   formatSearchReplaceResult,
   runExactFileEdit,
@@ -48,6 +47,7 @@ import type {
   EngineKind,
   EffectTarget,
   PermissionModeId,
+  SandboxMode,
   TaskDag,
   TaskDagDispatchInput,
   TaskDagDispatchResult,
@@ -87,12 +87,9 @@ export interface ToolExecResult {
 export interface ToolExecutionOptions {
   signal?: AbortSignal
   sandboxMode?: SandboxMode
-  dockerImage?: string
-  dockerBinary?: string
   chinaMirrorEnabled?: boolean
   npmRegistry?: string
   pipIndexUrl?: string
-  dockerRegistryMirror?: string
   sessionId?: string
   worktreeContext?: CodeForgeWorktreeContext
   effectTarget?: EffectTarget
@@ -781,8 +778,8 @@ export async function executeCodingTool(
         const p = jailWritable(cwd, String(args.path ?? ''))
         const content = String(args.content ?? '')
         const guard = fileWritePrecondition(cwd, p, content, options.effectTarget)
-        const writeResult = await sandboxedFileWrite(cwd, p, content, options, guard)
-        return withSandboxMetadata(
+        const writeResult = await localFileWrite(cwd, p, content, options, guard)
+        return withExecutionMetadata(
           {
             ok: writeResult.ok,
             output: writeResult.ok
@@ -794,7 +791,7 @@ export async function executeCodingTool(
         )
       }
       case 'search_replace': {
-        let writeResult: SandboxCommandResult | undefined
+        let writeResult: LocalCommandResult | undefined
         const result = await runSearchReplace(cwd, {
           file_path: stringArg(args, 'file_path', 'path'),
           replacements: searchReplacementArgs(args.replacements),
@@ -802,11 +799,11 @@ export async function executeCodingTool(
         }, {
           effectTarget: options.effectTarget?.kind === 'file_content' ? options.effectTarget : undefined,
           writeTextFile: async (filePath, content, guard) => {
-            writeResult = await sandboxedFileWrite(cwd, filePath, content, options, guard)
+            writeResult = await localFileWrite(cwd, filePath, content, options, guard)
             if (!writeResult.ok) throw new Error(writeResult.output)
           }
         })
-        return withSandboxMetadata({ ok: result.ok, output: clip(formatSearchReplaceResult(result)) }, writeResult, options.sandboxMode)
+        return withExecutionMetadata({ ok: result.ok, output: clip(formatSearchReplaceResult(result)) }, writeResult, options.sandboxMode)
       }
       case 'edit_file': {
         if (typeof args.old_string !== 'string' || typeof args.new_string !== 'string') {
@@ -817,7 +814,7 @@ export async function executeCodingTool(
         }
         const oldStr = args.old_string
         const newStr = args.new_string
-        let writeResult: SandboxCommandResult | undefined
+        let writeResult: LocalCommandResult | undefined
         const result = await runExactFileEdit(cwd, {
           file_path: stringArg(args, 'path', 'file_path'),
           old_string: oldStr,
@@ -826,11 +823,11 @@ export async function executeCodingTool(
         }, {
           effectTarget: options.effectTarget?.kind === 'file_content' ? options.effectTarget : undefined,
           writeTextFile: async (filePath, content, guard) => {
-            writeResult = await sandboxedFileWrite(cwd, filePath, content, options, guard)
+            writeResult = await localFileWrite(cwd, filePath, content, options, guard)
             if (!writeResult.ok) throw new Error(writeResult.output)
           }
         })
-        return withSandboxMetadata({ ok: result.ok, output: clip(formatSearchReplaceResult(result)) }, writeResult, options.sandboxMode)
+        return withExecutionMetadata({ ok: result.ok, output: clip(formatSearchReplaceResult(result)) }, writeResult, options.sandboxMode)
       }
       case 'list_dir': {
         const p = jailExisting(cwd, String(args.path ?? '.'))
@@ -1008,26 +1005,23 @@ function clipExecResult(result: ToolExecResult): ToolExecResult {
   return { ...result, output: clip(result.output) }
 }
 
-async function sandboxedFileWrite(
+async function localFileWrite(
   cwd: string,
   targetPath: string,
   content: string,
   options: ToolExecutionOptions,
-  guard?: SandboxFileWritePrecondition
-): Promise<SandboxCommandResult> {
-  return writeTextFileWithSandbox({
+  guard?: LocalFileWritePrecondition
+): Promise<LocalCommandResult> {
+  return writeTextFileLocally({
     cwd,
     targetPath,
     content,
     expectedFile: guard,
-    mode: options.sandboxMode ?? 'loose',
+    mode: options.sandboxMode ?? 'restrictedLocal',
     timeoutMs: BASH_TIMEOUT_MS,
-    dockerImage: options.dockerImage,
-    dockerBinary: options.dockerBinary,
     chinaMirrorEnabled: options.chinaMirrorEnabled,
     npmRegistry: options.npmRegistry,
     pipIndexUrl: options.pipIndexUrl,
-    dockerRegistryMirror: options.dockerRegistryMirror,
     signal: options.signal
   })
 }
@@ -1037,7 +1031,7 @@ function fileWritePrecondition(
   targetPath: string,
   content: string,
   target: EffectTarget | undefined
-): SandboxFileWritePrecondition | undefined {
+): LocalFileWritePrecondition | undefined {
   if (!target) return undefined
   if (target.kind !== 'file_content') {
     throw new Error('write_file 缺少已冻结的文件效果目标')
@@ -1090,14 +1084,14 @@ function fileWritePrecondition(
   }
 }
 
-function withSandboxMetadata(
+function withExecutionMetadata(
   result: Pick<ToolExecResult, 'ok' | 'output'>,
-  execution: SandboxCommandResult | undefined,
+  execution: LocalCommandResult | undefined,
   sandboxMode: SandboxMode | undefined
 ): ToolExecResult {
   return {
     ...result,
-    sandboxMode: sandboxMode ?? 'loose',
+    sandboxMode: sandboxMode ?? 'restrictedLocal',
     modeUsed: execution?.modeUsed,
     sandboxed: execution?.sandboxed,
     fallbackReason: execution?.fallbackReason
@@ -1110,19 +1104,16 @@ async function runBash(
   options: ToolExecutionOptions
 ): Promise<ToolExecResult> {
   if (!command.trim()) return { ok: false, output: '命令不能为空' }
-  const sandboxMode = options.sandboxMode ?? 'loose'
-  const result = await runSandboxedCommand({
+  const sandboxMode = options.sandboxMode ?? 'restrictedLocal'
+  const result = await runLocalCommand({
     command,
     cwd,
     mode: sandboxMode,
     timeoutMs: BASH_TIMEOUT_MS,
     maxBufferBytes: 4 * 1024 * 1024,
-    dockerImage: options.dockerImage,
-    dockerBinary: options.dockerBinary,
     chinaMirrorEnabled: options.chinaMirrorEnabled,
     npmRegistry: options.npmRegistry,
     pipIndexUrl: options.pipIndexUrl,
-    dockerRegistryMirror: options.dockerRegistryMirror,
     signal: options.signal
   })
   return {

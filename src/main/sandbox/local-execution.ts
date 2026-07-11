@@ -1,30 +1,24 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { constants } from 'node:fs'
-import { link, lstat, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { link, lstat, mkdir, open, rm, writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
+import type { SandboxMode } from '../../shared/types'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
 
-export type SandboxMode = 'strictDocker' | 'standardSystem' | 'loose'
-
-export interface SandboxCommandOptions {
+export interface LocalCommandOptions {
   command: string
   cwd: string
   mode: SandboxMode
   timeoutMs: number
   maxBufferBytes: number
-  dockerImage?: string
-  dockerBinary?: string
   chinaMirrorEnabled?: boolean
   npmRegistry?: string
   pipIndexUrl?: string
-  dockerRegistryMirror?: string
-  allowStrictDockerFallback?: boolean
   signal?: AbortSignal
 }
 
-export interface SandboxCommandResult {
+export interface LocalCommandResult {
   ok: boolean
   output: string
   exitCode: number
@@ -33,21 +27,17 @@ export interface SandboxCommandResult {
   fallbackReason?: string
 }
 
-export interface SandboxFileWriteOptions {
+export interface LocalFileWriteOptions {
   cwd: string
   targetPath: string
   content: string
   mode: SandboxMode
   timeoutMs: number
-  dockerImage?: string
-  dockerBinary?: string
   chinaMirrorEnabled?: boolean
   npmRegistry?: string
   pipIndexUrl?: string
-  dockerRegistryMirror?: string
-  allowStrictDockerFallback?: boolean
   signal?: AbortSignal
-  expectedFile?: SandboxFileWritePrecondition
+  expectedFile?: LocalFileWritePrecondition
   beforeGuardedCommit?: () => Promise<void> | void
   beforeGuardedPathVerificationRead?: (
     phase: 'precondition' | 'postcondition',
@@ -55,7 +45,7 @@ export interface SandboxFileWriteOptions {
   ) => Promise<void> | void
 }
 
-export type SandboxFileWritePrecondition =
+export type LocalFileWritePrecondition =
   | {
       state?: 'file'
       identity: { device: string; inode: string }
@@ -84,74 +74,7 @@ interface ExecFileResult {
   errorMessage?: string
 }
 
-export const DEFAULT_DOCKER_IMAGE = 'caogen-sandbox:latest'
-const DEFAULT_DOCKER_CPUS = '2'
-const DEFAULT_DOCKER_MEMORY = '2g'
-const DEFAULT_DOCKER_PIDS = '256'
-const DOCKER_WORKSPACE = '/workspace'
-const SANDBOX_WRITE_SCRIPT = `
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
-const payload = JSON.parse(fs.readFileSync('/caogen/payload.json', 'utf8'));
-const root = path.resolve('${DOCKER_WORKSPACE}');
-const finalTarget = path.resolve(root, payload.targetRelPath);
-if (finalTarget !== root && !finalTarget.startsWith(root + path.sep)) {
-  throw new Error('target path escapes workspace');
-}
-const target = payload.guardedTarget ? '/caogen/target' : finalTarget;
-fs.mkdirSync(path.dirname(finalTarget), { recursive: true });
-if (!payload.expectedFile) {
-  fs.writeFileSync(target, payload.content, 'utf8');
-} else {
-  const targetInfo = fs.lstatSync(target);
-  if (targetInfo.isSymbolicLink() || !targetInfo.isFile()) {
-    throw new Error('guarded target is not a regular file');
-  }
-  const noFollow = process.platform !== 'win32' && typeof fs.constants.O_NOFOLLOW === 'number'
-    ? fs.constants.O_NOFOLLOW
-    : 0;
-  const nonBlock = process.platform !== 'win32' && typeof fs.constants.O_NONBLOCK === 'number'
-    ? fs.constants.O_NONBLOCK
-    : 0;
-  const fd = fs.openSync(target, fs.constants.O_RDWR | noFollow | nonBlock);
-  try {
-    const before = fs.fstatSync(fd, { bigint: true });
-    if (payload.expectedFile.state !== 'absent') {
-      const current = fs.readFileSync(fd);
-      const digest = crypto.createHash('sha256').update(current).digest('hex');
-      if (current.byteLength !== payload.expectedFile.bytes || digest !== payload.expectedFile.sha256) {
-        throw new Error('guarded target content changed before write');
-      }
-    }
-    const output = Buffer.from(payload.content, 'utf8');
-    fs.ftruncateSync(fd, 0);
-    let offset = 0;
-    while (offset < output.length) {
-      const written = fs.writeSync(fd, output, offset, output.length - offset, offset);
-      if (written <= 0) throw new Error('guarded file write made no progress');
-      offset += written;
-    }
-    fs.ftruncateSync(fd, output.length);
-    fs.fsyncSync(fd);
-    const after = fs.fstatSync(fd, { bigint: true });
-    if (before.dev !== after.dev || before.ino !== after.ino) {
-      throw new Error('guarded target identity changed during write');
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  if (payload.expectedFile.state === 'absent') {
-    const guardPath = path.resolve(root, payload.guardRelPath);
-    if (guardPath !== root && !guardPath.startsWith(root + path.sep)) {
-      throw new Error('guard path escapes workspace');
-    }
-    fs.linkSync(guardPath, finalTarget);
-  }
-}
-`
-
-export async function runSandboxedCommand(options: SandboxCommandOptions): Promise<SandboxCommandResult> {
+export async function runLocalCommand(options: LocalCommandOptions): Promise<LocalCommandResult> {
   if (options.signal?.aborted) return abortedResult(options.mode)
   const command = options.command.trim()
   if (!command) {
@@ -160,28 +83,14 @@ export async function runSandboxedCommand(options: SandboxCommandOptions): Promi
       output: '命令不能为空',
       exitCode: 1,
       modeUsed: options.mode,
-      sandboxed: options.mode === 'strictDocker'
+      sandboxed: false
     }
   }
 
-  if (options.mode === 'strictDocker') {
-    const dockerBinary = options.dockerBinary ?? 'docker'
-    const dockerAvailable = await isDockerAvailable(dockerBinary, options.signal)
-    if (dockerAvailable) {
-      const image = resolveDockerImage(options.dockerImage?.trim() || DEFAULT_DOCKER_IMAGE, options)
-      const imageAvailable = await isDockerImageAvailable(dockerBinary, image, options.signal)
-      if (!imageAvailable) return handleStrictDockerUnavailable(options, command, `Docker image unavailable:${image}`)
-      return runDockerCommand({ ...options, command, dockerBinary })
-    }
-
-    const fallbackReason = `Docker 不可用,已降级为 standardSystem:${dockerBinary}`
-    return handleStrictDockerUnavailable(options, command, fallbackReason)
-  }
-
-  return runSystemCommand({ ...options, command })
+  return runHostCommand({ ...options, command })
 }
 
-export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions): Promise<SandboxCommandResult> {
+export async function writeTextFileLocally(options: LocalFileWriteOptions): Promise<LocalCommandResult> {
   if (options.signal?.aborted) return abortedResult(options.mode)
   const safePath = await resolveWritableProjectPath(options.cwd, options.targetPath).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error)
@@ -197,265 +106,14 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
   }
   const cwd = safePath.root
   const targetPath = safePath.fullPath
-  const relPath = safePath.relativePath
   const safeOptions = { ...options, cwd, targetPath }
-
-  if (options.mode !== 'strictDocker') {
-    return writeTextFileOnHost(safeOptions, options.mode)
-  }
-
-  const dockerBinary = options.dockerBinary ?? 'docker'
-  const dockerAvailable = await isDockerAvailable(dockerBinary, options.signal)
-  if (!dockerAvailable) {
-    return writeTextFileWithFallback(safeOptions, `Docker 不可用,已降级为 standardSystem:${dockerBinary}`)
-  }
-
-  const image = resolveDockerImage(options.dockerImage?.trim() || DEFAULT_DOCKER_IMAGE, options)
-  const imageAvailable = await isDockerImageAvailable(dockerBinary, image, options.signal)
-  if (!imageAvailable) {
-    return writeTextFileWithFallback(safeOptions, `Docker image unavailable:${image}`)
-  }
-
-  const payloadDir = await mkdtemp(join(tmpdir(), 'caogen-sandbox-write-'))
-  const payloadPath = join(payloadDir, `${randomUUID()}.json`)
-  const guardPath = options.expectedFile
-    ? join(dirname(targetPath), `.${randomUUID()}.caogen-sandbox.guard`)
-    : undefined
-  const guardRelPath = guardPath ? relative(cwd, guardPath) : undefined
-  let guardIdentity: { device: string; inode: string } | undefined
-  let guardedParent: GuardedParentPath | undefined
-  try {
-    if (guardPath && options.expectedFile) {
-      guardedParent = await captureGuardedParentPath(
-        cwd,
-        targetPath,
-        isAbsentFilePrecondition(options.expectedFile)
-          ? { rootPath: options.expectedFile.rootPath, rootIdentity: options.expectedFile.rootIdentity }
-          : undefined
-      )
-      await verifyGuardedParentPath(guardedParent)
-      if (isAbsentFilePrecondition(options.expectedFile)) {
-        await verifyAbsentFilePrecondition(targetPath)
-        await writeFile(guardPath, '', { encoding: 'utf8', flag: 'wx', mode: 0o666, signal: options.signal })
-      } else {
-        await link(targetPath, guardPath)
-        await verifyFileWritePrecondition(guardPath, options.expectedFile)
-      }
-      guardIdentity = await readFileIdentity(guardPath)
-      await options.beforeGuardedCommit?.()
-      await verifyGuardedParentPath(guardedParent)
-      if (isAbsentFilePrecondition(options.expectedFile)) {
-        await verifyAbsentFilePrecondition(targetPath)
-      } else {
-        await verifyFileWritePrecondition(
-          targetPath,
-          options.expectedFile,
-          () => options.beforeGuardedPathVerificationRead?.('precondition', targetPath)
-        )
-      }
-    }
-    await writeFile(
-      payloadPath,
-      JSON.stringify({
-        targetRelPath: relPath.split(sep).join('/'),
-        content: options.content,
-        expectedFile: options.expectedFile,
-        guardedTarget: !!guardPath,
-        guardRelPath: guardRelPath?.split(sep).join('/')
-      }),
-      { encoding: 'utf8', mode: 0o644, signal: options.signal }
-    )
-    const mirrorEnv = buildChinaMirrorEnv(options)
-    const result = await execFilePromise(
-      dockerBinary,
-      [
-        'run',
-        '--rm',
-        '--network',
-        'none',
-        '--cap-drop',
-        'ALL',
-        '--security-opt',
-        'no-new-privileges',
-        '--read-only',
-        '--tmpfs',
-        '/tmp:rw,noexec,nosuid,size=512m',
-        '--cpus',
-        DEFAULT_DOCKER_CPUS,
-        '--memory',
-        DEFAULT_DOCKER_MEMORY,
-        '--pids-limit',
-        DEFAULT_DOCKER_PIDS,
-        '--user',
-        'node',
-        ...dockerEnvArgs(mirrorEnv),
-        '-v',
-        `${payloadPath}:/caogen/payload.json:ro`,
-        ...(guardPath ? ['-v', `${guardPath}:/caogen/target`] : []),
-        '-v',
-        `${cwd}:${DOCKER_WORKSPACE}`,
-        '-w',
-        DOCKER_WORKSPACE,
-        image,
-        'node',
-        '-e',
-        SANDBOX_WRITE_SCRIPT
-      ],
-      {
-        cwd,
-        timeoutMs: options.timeoutMs,
-        maxBufferBytes: 512 * 1024,
-        env: mergeProcessEnv(mirrorEnv),
-        signal: options.signal
-      }
-    )
-    if (result.ok && options.expectedFile && guardIdentity) {
-      try {
-        if (guardedParent) await verifyGuardedParentPath(guardedParent)
-        await verifyFileWritePostcondition(
-          targetPath,
-          guardIdentity,
-          options.content,
-          () => options.beforeGuardedPathVerificationRead?.('postcondition', targetPath)
-        )
-      } catch (error) {
-        return {
-          ok: false,
-          output: error instanceof Error ? error.message : String(error),
-          exitCode: 1,
-          modeUsed: 'strictDocker',
-          sandboxed: true
-        }
-      }
-    }
-    const formatted = formatResult(result, 'strictDocker', true)
-    return {
-      ...formatted,
-      output: result.ok ? `已通过 Docker 沙箱写入 ${relPath}` : formatted.output
-    }
-  } finally {
-    if (guardPath) await rm(guardPath, { force: true }).catch(() => undefined)
-    await rm(payloadDir, { recursive: true, force: true }).catch(() => undefined)
-  }
-}
-
-async function isDockerAvailable(dockerBinary: string, signal?: AbortSignal): Promise<boolean> {
-  const result = await execFilePromise(dockerBinary, ['version', '--format', '{{.Server.Version}}'], {
-    cwd: process.cwd(),
-    timeoutMs: 3_000,
-    maxBufferBytes: 256 * 1024,
-    signal
-  })
-  return result.ok
-}
-
-async function isDockerImageAvailable(dockerBinary: string, image: string, signal?: AbortSignal): Promise<boolean> {
-  const result = await execFilePromise(dockerBinary, ['image', 'inspect', image], {
-    cwd: process.cwd(),
-    timeoutMs: 3_000,
-    maxBufferBytes: 256 * 1024,
-    signal
-  })
-  return result.ok
-}
-
-async function handleStrictDockerUnavailable(
-  options: SandboxCommandOptions,
-  command: string,
-  fallbackReason: string
-): Promise<SandboxCommandResult> {
-  if (options.allowStrictDockerFallback !== true) {
-    return {
-      ok: false,
-      output: `[sandbox strictDocker blocked] ${fallbackReason}\n严格 Docker 沙箱未运行;为避免误以为处于隔离环境,默认不自动降级。`,
-      exitCode: 1,
-      modeUsed: 'strictDocker',
-      sandboxed: false,
-      fallbackReason
-    }
-  }
-  const fallback = await runSystemCommand({ ...options, command, mode: 'standardSystem' })
-  return {
-    ...fallback,
-    output: `[sandbox fallback] ${fallbackReason}\n${fallback.output}`,
-    fallbackReason
-  }
-}
-
-async function runDockerCommand(
-  options: SandboxCommandOptions & { command: string; dockerBinary: string }
-): Promise<SandboxCommandResult> {
-  const image = resolveDockerImage(options.dockerImage?.trim() || DEFAULT_DOCKER_IMAGE, options)
-  const mirrorEnv = buildChinaMirrorEnv(options)
-  const result = await execFilePromise(
-    options.dockerBinary,
-    [
-      'run',
-      '--rm',
-      '--network',
-      'none',
-      '--cap-drop',
-      'ALL',
-      '--security-opt',
-      'no-new-privileges',
-      '--read-only',
-      '--tmpfs',
-      '/tmp:rw,noexec,nosuid,size=512m',
-      '--cpus',
-      DEFAULT_DOCKER_CPUS,
-      '--memory',
-      DEFAULT_DOCKER_MEMORY,
-      '--pids-limit',
-      DEFAULT_DOCKER_PIDS,
-      '--user',
-      'node',
-      ...dockerEnvArgs(mirrorEnv),
-      '-v',
-      `${options.cwd}:/workspace`,
-      '-w',
-      '/workspace',
-      image,
-      '/bin/sh',
-      '-lc',
-      options.command
-    ],
-    {
-      cwd: options.cwd,
-      timeoutMs: options.timeoutMs,
-      maxBufferBytes: options.maxBufferBytes,
-      env: mergeProcessEnv(mirrorEnv),
-      signal: options.signal
-    }
-  )
-  return formatResult(result, 'strictDocker', true)
-}
-
-async function writeTextFileWithFallback(
-  options: SandboxFileWriteOptions,
-  fallbackReason: string
-): Promise<SandboxCommandResult> {
-  if (options.allowStrictDockerFallback !== true) {
-    return {
-      ok: false,
-      output: `[sandbox strictDocker blocked] ${fallbackReason}\n严格 Docker 沙箱未运行;为避免误以为处于隔离环境,默认不自动降级。`,
-      exitCode: 1,
-      modeUsed: 'strictDocker',
-      sandboxed: false,
-      fallbackReason
-    }
-  }
-  const fallback = await writeTextFileOnHost(options, 'standardSystem')
-  return {
-    ...fallback,
-    output: `[sandbox fallback] ${fallbackReason}\n${fallback.output}`,
-    fallbackReason
-  }
+  return writeTextFileOnHost(safeOptions, options.mode)
 }
 
 async function writeTextFileOnHost(
-  options: SandboxFileWriteOptions,
+  options: LocalFileWriteOptions,
   modeUsed: SandboxMode
-): Promise<SandboxCommandResult> {
+): Promise<LocalCommandResult> {
   try {
     if (options.signal?.aborted) return abortedResult(modeUsed)
     if (options.expectedFile) {
@@ -484,7 +142,7 @@ async function writeTextFileOnHost(
 
 async function verifyFileWritePrecondition(
   targetPath: string,
-  expected: Exclude<SandboxFileWritePrecondition, { state: 'absent' }>,
+  expected: Exclude<LocalFileWritePrecondition, { state: 'absent' }>,
   beforeRead?: () => Promise<void> | void
 ): Promise<void> {
   const observation = await readStablePathFile(
@@ -515,7 +173,7 @@ async function verifyFileWritePostcondition(
   )
   const output = Buffer.from(content, 'utf8')
   if (observation.content.byteLength !== output.byteLength || !observation.content.equals(output)) {
-    throw new Error('guarded target postcondition mismatch after Docker write')
+    throw new Error('guarded target postcondition mismatch after local write')
   }
 }
 
@@ -566,7 +224,7 @@ async function readStablePathFile(
   }
 }
 
-async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Promise<void> {
+async function writeGuardedTextFileOnHost(options: LocalFileWriteOptions): Promise<void> {
   const expected = options.expectedFile
   if (!expected) throw new Error('guarded file write is missing its precondition')
   if (isAbsentFilePrecondition(expected)) {
@@ -625,7 +283,7 @@ async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Pro
   }
 }
 
-async function writeAbsentTextFileOnHost(options: SandboxFileWriteOptions): Promise<void> {
+async function writeAbsentTextFileOnHost(options: LocalFileWriteOptions): Promise<void> {
   const expected = options.expectedFile
   if (!expected || !isAbsentFilePrecondition(expected)) {
     throw new Error('guarded absent write is missing its approved root identity')
@@ -678,17 +336,6 @@ async function writeAbsentTextFileOnHost(options: SandboxFileWriteOptions): Prom
   } finally {
     await handle.close().catch(() => undefined)
     await rm(tempPath, { force: true }).catch(() => undefined)
-  }
-}
-
-async function readFileIdentity(targetPath: string): Promise<{ device: string; inode: string }> {
-  const handle = await open(targetPath, safeOpenFlags(constants.O_RDONLY))
-  try {
-    const info = await handle.stat({ bigint: true })
-    if (!info.isFile()) throw new Error('guarded target is not a regular file')
-    return fileIdentity(info)
-  } finally {
-    await handle.close()
   }
 }
 
@@ -791,14 +438,14 @@ function safeOpenFlags(baseFlags: number): number {
 }
 
 function isAbsentFilePrecondition(
-  expected: SandboxFileWritePrecondition
-): expected is Extract<SandboxFileWritePrecondition, { state: 'absent' }> {
+  expected: LocalFileWritePrecondition
+): expected is Extract<LocalFileWritePrecondition, { state: 'absent' }> {
   return expected.state === 'absent'
 }
 
-async function runSystemCommand(
-  options: SandboxCommandOptions & { command: string }
-): Promise<SandboxCommandResult> {
+async function runHostCommand(
+  options: LocalCommandOptions & { command: string }
+): Promise<LocalCommandResult> {
   const shell = process.platform === 'win32' ? 'cmd' : '/bin/sh'
   const args = process.platform === 'win32' ? ['/c', options.command] : ['-c', options.command]
   const result = await execFilePromise(shell, args, {
@@ -811,7 +458,7 @@ async function runSystemCommand(
   return formatResult(result, options.mode, false)
 }
 
-function formatResult(result: ExecFileResult, modeUsed: SandboxMode, sandboxed: boolean): SandboxCommandResult {
+function formatResult(result: ExecFileResult, modeUsed: SandboxMode, sandboxed: boolean): LocalCommandResult {
   const output = [
     result.stdout,
     result.stderr ? `[stderr]\n${result.stderr}` : '',
@@ -843,28 +490,8 @@ export function buildChinaMirrorEnv(options: {
   return env
 }
 
-function dockerEnvArgs(env: Record<string, string>): string[] {
-  return Object.entries(env).flatMap(([name, value]) => ['-e', `${name}=${value}`])
-}
-
 function mergeProcessEnv(env: Record<string, string>): NodeJS.ProcessEnv | undefined {
   return Object.keys(env).length > 0 ? { ...process.env, ...env } : undefined
-}
-
-export function resolveDockerImage(
-  image: string,
-  options: { chinaMirrorEnabled?: boolean; dockerRegistryMirror?: string }
-): string {
-  const mirror = options.dockerRegistryMirror?.trim().replace(/\/+$/, '')
-  if (options.chinaMirrorEnabled !== true || !mirror || hasRegistryHost(image)) return image
-  return `${mirror}/${image}`
-}
-
-function hasRegistryHost(image: string): boolean {
-  const parts = image.split('/')
-  if (parts.length < 2) return false
-  const first = parts[0] ?? ''
-  return first.includes('.') || first.includes(':') || first === 'localhost'
 }
 
 function execFilePromise(
@@ -968,7 +595,7 @@ function execFilePromise(
   })
 }
 
-function abortedResult(modeUsed: SandboxMode): SandboxCommandResult {
+function abortedResult(modeUsed: SandboxMode): LocalCommandResult {
   return {
     ok: false,
     output: '操作已中断',

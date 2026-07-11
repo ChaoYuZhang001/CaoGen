@@ -93,7 +93,7 @@
 - Diff 审查、逐 hunk stage/discard、应用内 Git 提交。
 - Worktree 合并审查、patch 导出/应用、冲突文件查看、PR/MR 创建（`gh` / `glab`）。
 - `Esc Esc` / `/rewind` 检查点回溯；空闲时可即时重建引擎截断上下文，运行中下次 resume 截断。
-- 可配置 Docker 沙箱、系统 shell 模式和宽松模式；敏感操作进入权限审批。
+- 本地命令明确在宿主机执行，不宣称系统级沙箱；文件工具限制在项目目录，敏感操作进入权限审批。
 
 ### 多 Agent 与多任务
 

@@ -552,12 +552,11 @@ const DICT: Dict = {
   },
   chinaMirrorEnabled: { zh: '启用国产生态镜像', en: 'Enable China ecosystem mirrors' },
   chinaMirrorHint: {
-    zh: '默认关闭。开启后仅影响沙箱命令的 npm/pip/docker 镜像环境变量,不会自动触发外部网络通知。',
-    en: 'Off by default. When enabled, only sandbox npm/pip/docker mirror environment variables are injected; webhook notifications stay dry-run unless explicitly requested.'
+    zh: '默认关闭。开启后仅影响本地命令的 npm/pip 镜像环境变量,不会自动触发外部网络通知。',
+    en: 'Off by default. When enabled, only npm/pip mirror variables are injected into local commands; webhook notifications stay dry-run unless explicitly requested.'
   },
   chinaNpmRegistry: { zh: 'npm registry 镜像', en: 'npm registry mirror' },
   chinaPipIndexUrl: { zh: 'pip index-url 镜像', en: 'pip index-url mirror' },
-  chinaDockerRegistryMirror: { zh: 'Docker registry mirror', en: 'Docker registry mirror' },
   preventDisplaySleep: { zh: '运行时防止显示器休眠', en: 'Prevent display sleep while running' },
   preventDisplaySleepHint: {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
