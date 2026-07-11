@@ -74,6 +74,10 @@ try {
   const builtinEngines = source('src/main/engines.ts')
   assert(builtinEngines.includes('optional: true'), 'Claude factory must be marked optional')
   assert(builtinEngines.includes('configured: () =>'), 'Claude factory must expose configuration state')
+  assert(
+    builtinEngines.includes('listProviders().some((provider) => provider.hasToken)'),
+    'Claude configuration must follow saved credentials without misusing the OpenAI protocol field'
+  )
 
   const sessionManager = source('src/main/sessionManager.ts')
   assert(!sessionManager.includes("?? 'claude'"), 'SessionManager must not interpret a missing engine as Claude')
