@@ -1,8 +1,8 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-11(第 26 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-11(第 27 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ⚠️ **未达发布标准**(第 2 轮外部验收)。已通过:DeepSeek 全链路、32 并发 7/7、双架构打包、Intel x64 启动、npm audit 0 漏洞、窄屏响应式 Electron QA。未通过/条件性:Claude 真对话仅在有真实登录态时通过(无凭据环境须跳过,已修检测)。阻塞:arm64 真机启动需 Apple Silicon(Intel 不可替代)。
+> ⚠️ **未达完整发布标准**。本地代码、构建和四态 Deep 门禁已收口；正式签名/公证、Apple Silicon 真机启动、指定真实 Provider/中国网络证据仍取决于外部账号、机器或额度。Docker 已从产品模式删除；Claude 是可选引擎，不登录也不阻塞默认 OpenAI-compatible 路径、本地启动或发布门禁。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
 
@@ -13,10 +13,10 @@
 # Current Status
 
 - **v0.1.3 已公开发布**(2026-07-08,macOS x64/arm64 包与 Windows 安装包已上传;公开资产仍需每次发布后复审)——arm64 主二进制架构已验证,M 系真机启动待用户复验
-- 正式运行时保留专用 Agent SDK 与通用兼容 API 两类执行路径。已实测验证:原生编码 Agent、跨厂商智能路由(6/6)、子代理编排闭环(6/6)、双协议对话(9/9×2)、A3 子代理结果回传 + 3D 真实任务流(Electron mock E2E)、A4 开工建议真实渲染/交互(Electron mock E2E)、A5 记忆自动提议真实渲染/预填(Electron mock E2E)、回归 `test:deep` **84/84 外层检查通过**(2026-07-11,`test-results/caogen-deep/2026-07-11T09-11-54-821Z/deep-test-report.md`)。其中 Claude 真对话、China real-network 和 China tool-call parity 因未配置凭据/显式开关而在子脚本内跳过,不得解读为真实外部环境已验证。
-- Agent 恢复内核已升级为稳定事件身份 + 恢复游标 + 持久 Effect Ledger:每个外部效果包含独立 intent/effect/resource key、generation/revision、资源级 lease/fencing、状态与 evidence digest;SQLite barrier 会跨会话阻止同路径或同 device+inode 的并发执行,字段级合并避免普通事件覆盖 Effect 终态。`write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已支持只读自动对账;`search_replace dry_run=true` 保持只读且不建立 Effect,Claude `MultiEdit/NotebookEdit` 仍按 opaque fail-closed。文件编辑会冻结原始字节摘要、UTF-8 BOM、root/file 身份和预期内容;host 与 strict Docker 写入均用 identity/hash CAS,absent 写入还绑定审批时 root/parent 身份并原子发布,硬链接别名共享资源互斥。`git_merge` 还会冻结 repo/ref/source SHA 与目录身份,在隔离 ODB 预检,并在 trusted ref transaction 中原子校验 old SHA、两父节点和 expected tree。`npm run test:task-run`、`test:search-replace`、`test:effect-reconciliation`、`test:effect-crash-recovery` 已覆盖迁移、资源冲突、同内容换 inode、硬链接、BOM、路径替换、FIFO、超限 fail-closed、强杀三态、Claude prepared 恢复和关闭竞态。强杀证据证明的是 Effect 执行边界可恢复,不是 writer 内部 crash-atomic:existing-file writer 仍原地 `truncate/write`,进程在写入中被杀、断电或遇到 ENOSPC 时仍可能留下空文件或半文件。这仍不是任意外部系统的事务级 exactly-once:PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 入口尚未全部接入专用 Reconciler,补偿执行与 append-only evidence 也未完成;真实 Docker bind-mount 与 Claude SDK raw `Edit` hook 全链仍需有条件环境测试。
+- 正式运行时保留可选 Claude Agent SDK 与默认 OpenAI-compatible API 两类执行路径。最新完整四态门禁目标与当前基线为 `87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail`；本次不可变报告为 `test-results/caogen-deep/2026-07-11T13-56-12-426Z/deep-test-report.md`，滚动入口为 `test-results/caogen-deep/latest.md`。3 个 optional skip 分别保留真实 Claude、China real-network、China tool-call parity 的外部条件，不计入 pass，也不阻塞默认发布档位。
+- Agent 恢复内核已升级为稳定事件身份 + 恢复游标 + 持久 Effect Ledger:每个外部效果包含独立 intent/effect/resource key、generation/revision、资源级 lease/fencing、状态与 evidence digest;SQLite barrier 会跨会话阻止同路径或同 device+inode 的并发执行,字段级合并避免普通事件覆盖 Effect 终态。`write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已支持只读自动对账;`search_replace dry_run=true` 保持只读且不建立 Effect,Claude `MultiEdit/NotebookEdit` 仍按 opaque fail-closed。文件编辑会冻结原始字节摘要、UTF-8 BOM、root/file 身份和预期内容;本地 writer 使用 identity/hash CAS,absent 写入还绑定审批时 root/parent 身份并原子发布,硬链接别名共享资源互斥。`git_merge` 会冻结 repo/ref/source SHA 与目录身份,在隔离 ODB 预检,并在 trusted ref transaction 中原子校验 old SHA、两父节点和 expected tree。强杀证据证明的是 Effect 执行边界可恢复,不是 writer 内部 crash-atomic:existing-file writer 仍原地 `truncate/write`,进程在写入中被杀、断电或遇到 ENOSPC 时仍可能留下空文件或半文件。这仍不是任意外部系统的事务级 exactly-once:PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 入口尚未全部接入专用 Reconciler,补偿执行与 append-only evidence 也未完成。
 - ✅ **32 并发压测:修复后 7/7 error=0**(连跑 3 次稳定)。根因=瞬时并发打爆 socket 层;修:并发闸门(默认 8 在途)+ 瞬时网络重试。压力脚本口径已修(idle/error 分统计、error=0 独立断言)
-- ⚠️ **Claude 默认引擎真对话:仅在有真实登录态的环境通过(条件性)**。有 `ANTHROPIC_API_KEY` / 存在的 host-creds / `~/.claude/.credentials.json` 时 claude-real-e2e 3/3;**无凭据环境应干净跳过而非通过**(此前误把 `~/.claude.json` 配置文件当凭据,致外部验收环境 Not logged in)。已修:auth 检测只认真实凭据,无凭据时 E2E 跳过、产品给明确登录提示。**发布不得声称"Claude 开箱即用",须声明需登录。**
+- **Claude 登录不是必需项**。Claude 不再是默认引擎；未配置 Claude 兼容凭据时状态为 `unknown/optional skip`，不会被任意 Provider key 误判为 ready。只有用户显式选择 Claude 专项时才需要 `ANTHROPIC_API_KEY`、兼容网关或有效 Claude 登录态。
 - P1 全部可做项收口(2026-07-06):全文搜索、冲突三栏+合并回执、插件安装/卸载/版本/权限、CLI 真验
 - Work OS 第一波已进入 main:A1 Drive、A2 Quickbar、A3 Desktop Control、A4 Code Forge、A5 Skill Fabric、A6 Memory Loop、A7 Control Center、A8 Personal OS、A9 Genesis(计划层)。Genesis 只宣称编排/交付计划,不宣称真实外部子 Agent 执行、自动合并、推送或发布。
 - P2 本地 smoke 已刷新全绿;P2-005 IDE integrations 已由 `test:p2-ide-build-and-vscode:required`、`test:jetbrains-recorder-e2e:required`、`test:jetbrains-ide-interaction:required` 证明。最新 `npm run test:p2-audit` 报告中 P2-002/P2-003/P2-005 为 proved;`npm run test:p2-audit -- --required` 仍会失败,但失败范围只剩非本轮公开宣称的 P2-001 Windows GUI required evidence 与 P2-004 China external evidence。最新 release doctor 已把 `p2_required` 标记 ready,非阻塞开放项仍保留为 delegated/user-configured。提交/发布新增 `npm run secret:scan` / `npm run secret:scan:history` / `npm run test:github-release-audit` 门禁,用于阻止密钥、证书、签名材料、生成物和本地证据包进入公开仓库或公开 Release。
@@ -27,7 +27,7 @@
 - 多厂商配置口径更新:Provider 已支持多 API Key、活动 key 选择、行内连通性检测、模型列表同步和持久化健康状态;系统 `safeStorage` 可用时密钥加密落盘,但不可用时仍存在 `b64:` 可逆编码 fallback,这是未完成的 P0 安全问题,不能宣称所有环境均为加密持久化。会话启动、模型拉取、OpenAI/SDK Agent/DAG 路径统一经主进程活动 key helper 取密钥。活动 key 遇到鉴权、403、限流或余额/配额错误时,会先切到同 Provider 内未禁用、未处于 5 分钟失败冷却且本轮未尝试的备用 key;OpenAI 请求直接重试,SDK Agent 重建子进程并 resume 当前上下文;备用 key 池耗尽后才进入原有跨 Provider failover。聊天与 3D 办公只显示用户自定义 key 标签和失败分类,不暴露 token。`npm run test:provider-key-failover` 验证轮换策略、冷却、防打转和 Renderer 边界;`node scripts/openai-mock-e2e.mjs` 已用真实 Electron UI 验证“主 key 401 → 备用 key 成功 → 活动 key/失败元数据持久化”(`test-results/openai-mock-e2e/2026-07-10T07-27-01-023Z/openai-mock-e2e.json`)。当前不宣称主动额度探测、按 key 权重负载均衡或所有外部协议变体已验证。
 - 产品定位门禁新增: `npm run test:product-positioning:required` 会扫描 README、欢迎页入口文案、Release notes 草稿、Release gate 草稿和公开品牌入口,防止公开文案重新出现固定未来版本目标、外部产品名称/对比话术、开发者-only 定位、未验证的中转站/Office 版式过度宣称,以及旧的菱形占位 logo。最新通过报告见 `test-results/product-positioning-audit/latest.json`;`npm run workos:release-doctor -- --refresh` 已把 `product_positioning` 纳入发布域并标记 ready,但总发布状态仍为 not_ready,不得据此发布。
 - 自动调度口径更新:设置页已支持按顺序执行的用户自定义调度规则,可组合关键词任一/全部、请求推断任务类型、最低风险和当前有效策略,命中后优先路由到指定 Provider/模型;未配置的条件不限制,条件组之间取 AND,任务类型组内取 OR。旧关键词规则无需迁移;规则目标仍受硬预算和 Provider 健康约束。项目级模型调度策略可覆盖默认角色偏好且保持项目隔离,OpenAI 引擎自动路由也已纳入月度剩余预算。智能路由现读取持久化 Provider 健康状态:存在健康候选时会跳过连续失败 Provider;若全部候选均不健康则继续给出可执行候选,同时把警告写入调度日志,避免静默停摆。每次路由会生成结构化决策日志,保留厂商、模型、有效策略、任务类型、风险、候选数、可靠性、成本估算、剩余预算、规则命中、预算降级、跨厂商状态、健康过滤、靠前备选和警告;渲染层不再丢失 `providerId`,聊天消息可展开查看详情,3D 办公选中 Agent 面板同步显示真实厂商/模型与选择依据。控制中心现接入共享预算报告:活跃会话与当月历史按 `id/sdkSessionId` 去重,显示月度已用/剩余/进度、活跃与历史成本、Provider 成本聚合和最高成本会话;活跃会话预算按“会话显式上限 > Provider 单会话上限 > 全局单会话上限”生效,月度或任一活跃会话超额都会进入告警状态。历史记录未保存当时的显式会话预算,因此不会伪造历史预算比例。Electron 页面流已验证用户可在设置页启用智能混合调度,配置模型角色,新增结构化“发布审查”规则并把关键词关系、成本策略、高风险门槛和审查任务类型保存到 `settings.json`(17/17,`test-results/caogen-deep/2026-07-10T12-48-21-376Z/page-operation-smoke.json`)。`npm run test:failover-target` 已验证主 Provider 失败后优先命中配置的备用 Provider/模型、不健康备用目标会被跳过、仅配置备用模型时能找到声明该模型的 Provider、OpenAI 与 SDK AgentSession 两条 failover 路径都会更新固定模型,并且 UI 会显示可读的切换原因与重试目标(最新报告 `test-results/failover-target/latest.json`)。由 `npm run test:model-router`、`npm run test:routing-visibility`、`npm run test:provider-health-history`、`npm run test:budget-report`、`node scripts/control-center-smoke.mjs`、`npm run test:failover-target`、`npm run typecheck`、`npm run build`、主集成 33/33 与扩展集成 7/7 覆盖;预算报告见 `test-results/budget-report/latest.json`。当前不宣称自然语言策略编排器、按 key 额度调度、跨月精确成本账本或长期趋势分析。
-- 自动调度第五阶段最新闭环:均衡、成本优先、质量优先和速度优先已成为四个独立策略;速度优先先按延迟档排序,同档再参考历史延迟 EMA,专项测试证明它与质量优先会对同一复杂任务选择不同模型。策略优先级为“项目规则 > Core 用户策略 > 专用工作模式预设”;项目 `caogen.md` 的“速度优先”不会再折叠为均衡,Core 不再覆盖用户策略,专用模式仍保留自己的预设。设置页已真实保存 `schedulerStrategy: speed` 和自定义规则 `whenStrategy: speed`;聊天详情、控制中心和 3D 办公选中 Agent 面板均显示有效策略及延迟依据。最新页面流 17/17,主集成 33/33,完整深测 84/84(`test-results/caogen-deep/2026-07-11T09-11-54-821Z/deep-test-report.md`)。当前仍不宣称自然语言策略编排器、按 key 额度调度、跨月精确成本账本或长期趋势分析。
+- 自动调度第五阶段最新闭环:均衡、成本优先、质量优先和速度优先已成为四个独立策略;速度优先先按延迟档排序,同档再参考历史延迟 EMA,专项测试证明它与质量优先会对同一复杂任务选择不同模型。策略优先级为“项目规则 > Core 用户策略 > 专用工作模式预设”;项目 `caogen.md` 的“速度优先”不会再折叠为均衡,Core 不再覆盖用户策略,专用模式仍保留自己的预设。设置页已真实保存 `schedulerStrategy: speed` 和自定义规则 `whenStrategy: speed`;聊天详情、控制中心和 3D 办公选中 Agent 面板均显示有效策略及延迟依据。当前完整深测口径为 `87 total / 84 required pass / 3 optional skip`。当前仍不宣称自然语言策略编排器、按 key 额度调度、跨月精确成本账本或长期趋势分析。
 - macOS 顶部菜单栏图标已与 Dock/应用图标分离:菜单栏使用 18×18 / 36×36 Retina 的透明单色 `trayTemplate` 轮廓并启用 Electron Template 模式,可随 macOS 深浅色菜单栏自动着色;Dock、窗口、应用内品牌与安装包继续使用正式全彩人物 Logo。`npm run test:macos-tray-icon` 已验证 PNG 尺寸/透明通道、打包资源声明、Electron `nativeImage` 加载、Template 标志和真实 Tray bounds(`test-results/macos-tray-icon/latest.json`)。
 - 文件预览口径更新:HTML/Markdown/Text/CSV/JSON/图片/PDF 已有真实预览;PDF 已接入文本层 best-effort 提取并可发给 Agent;`.docx/.xlsx/.pptx` 已接入 OOXML 文本与结构提取。macOS 通过独立 Quick Look IPC 生成完整系统文档预览包,HTML/CSS/JS/图片附件全部内联,CSP 禁止网络,renderer iframe 仅开放 sandbox 脚本;完整预览失败时回退首屏 PNG,再失败则保留结构视图。结构视图已支持 Word 显式分页、Excel 工作表和 PowerPoint 幻灯片的上一项/下一项/选择器导航,可把当前页/表单独发给 Agent,批注会保存页码、摘录和结构选择器。`npm run test:office-visual-preview` 已用真实 DOCX 验证 625×980 系统文档预览、缓存、路径边界和附件/外链封锁(`test-results/office-visual-preview/latest.json`);`npm run test:page` 已验证完整 iframe、结构导航、当前单元发送和定位批注(17/17,`test-results/caogen-deep/2026-07-10T12-48-21-376Z/page-operation-smoke.json`)。发送给 Agent 的仍只有提取文本、元数据和批注,视觉 data URL 不会进入提示词。系统渲染可能与原应用中的完整原版式存在差异;编辑、复杂公式、动画和像素级一致性仍未完成,不得宣称。
 - 3D 办公口径更新:Office model 已从真实 `SessionState` 派生路由决策、Provider/密钥故障切换、预算/成本、最近耗时、审批、工具、子任务、worktree 隔离/分支/状态与 checkpoint 文件变化;同 Provider 密钥接管会进入选中 Agent 信号栈并点亮工位故障恢复指示,只显示 key 标签。OfficeView 打开时会对可见会话按需刷新 `git status`,并把分支、dirty 文件数、staged/unstaged/untracked、错误状态汇入顶部指标、选中 Agent 面板和工位低位 3D 指示条。设施区离席 Agent 已增加透明射线命中体,改善镜头过渡时的点击容错;真实 Electron 编排 E2E 连续 3 次通过,完整 `test:deep` 也覆盖工位、审批 Agent、设施 Agent 与会话打开链路。由 `npm run test:office-status-recheck`、`npm run test:provider-key-failover` 覆盖;Electron 页面流 `npm run test:page` 也已验证真实会话/worktree/Git 状态、可点击工位和非空 3D canvas。当前不宣称全量实时 git diff 轮询、完整项目交付驾驶舱、长期趋势图或可替代发布管理系统。
@@ -36,7 +36,7 @@
 
 # Current Focus
 
-**Trust Kernel 继续收口 + 滚动发布门禁**:P0-1B 文件编辑纵切与 `git_merge` Reconciler 已进入 main,下一顺序是 PR/Issue/消息/可查询 MCP/Code Forge/Renderer 入口 → append-only evidence/compensation → 收紧 GUI/工具审批作用域并统一沙箱真相 → 测试四态与 required gate → 移除凭据 Base64 fallback → MCP/插件 Capability Manifest。发布侧仍不绑定固定未来版本号;`npm run workos:release-doctor -- --refresh` 最新状态为 not_ready,最终 GitHub Release 正文和 exact uploaded assets 尚未形成并通过 final audit。Windows/VS Code GUI required evidence 交专门 Windows agent后续补;真实 China network/tool-call parity 由用户配置;N1 真人 30 分钟迁移记录不作为无 N1 宣称发布的阻塞。
+**Trust Kernel 继续收口 + 滚动发布门禁**:Docker 产品模式、Claude 默认依赖、Deep 四态误计数和本地执行迁移旁路已完成收口。下一顺序是 PR/Issue/消息/可查询 MCP/Code Forge/Renderer 入口 → append-only evidence/compensation → GUI/工具审批作用域 → Base64 fallback 与 scoped credential broker → MCP/插件 Capability Manifest。发布侧仍不绑定固定未来版本号；真实 China network/tool-call parity 由用户配置，N1 真人 30 分钟记录只阻塞 N1 达标宣称。
 
 # Goal
 
@@ -48,9 +48,9 @@
 
 1. 规划方连续 7 天日常使用,新毛刺 ≤1/天且当天修复
 2. ~~arm64 原生包发布~~ ✅ 2026-07-06(架构三重验证;M 系真机启动复验待用户)
-3. CLI 原生引擎各 ≥1 次真实对话验证 —— 已有一条 CLI 路径 ✅ 2026-07-06(真对话 3/3,修 3 个适配 bug);另一条 CLI 路径阻塞:等用户完成本机登录
+3. 默认 OpenAI-compatible 路径无需 Claude 登录；Claude 仅作为用户显式选择的可选专项验证
 4. N1 秒表实测 ≤30 分钟(真人,录屏留证)——北极星证据;无 N1 宣称的发布不以此为阻塞,未验证前不宣称通过
-5. `test:deep` 外层 84 项保持通过,同时完成四态改造,不再把外部 `SKIP` 计入 pass;新特性必配真实 E2E
+5. `test:deep` 保持 `87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail`;required 不得以 skip/blocked 通过
 
 # Priority Tasks
 
@@ -60,7 +60,7 @@
 - P0-1B:~~接入 `search_replace`、OpenAI `edit_file` 与 Claude `Edit` 的 queryable file Effect~~ ✅;继续接入 PR/Issue/消息/可查询 MCP、Code Forge 与直接 Renderer Git/patch 入口
 - P0-1C:建立独立 append-only evidence 链、审计关联与生产补偿计划/审批/执行
 - P0-2A:把 GUI/工具临时授权绑定 app/window/action/path/diff/postcondition,统一设置页与运行时的实际沙箱状态
-- P0-4A:把深测改为 `pass / skip / blocked / fail` 四态,required 项不得以 skip 通过
+- ~~P0-4A:把深测改为 `pass / skip / blocked / fail` 四态,required 项不得以 skip 通过~~ ✅
 - P0-2:移除 `b64:` 密钥 fallback,完成 scoped credential broker 与数据保留/导出/删除策略
 - P0-3:建立 MCP/插件 Capability Manifest、固定版本/digest、最小环境和恶意 fixture 隔离门禁
 - 凭据安全:所有疑似泄漏或曾经外发/公开上传的个人/仓库 token 必须在对应平台轮换或撤销;仓库和 GitHub Releases 内不得保存真实密钥、webhook、证书、keystore、provision profile、签名材料或本地证据包
@@ -87,7 +87,7 @@
 
 # Blockers
 
-**发布级阻塞(2026-07-06 外部验收,优先修):**
+**本地发布门禁与外部条件:**
 
 | 阻碍 | 等级 | 状态 |
 |---|---|---|
@@ -96,15 +96,19 @@
 | ~~Claude auth 误判~~ | High | ✅ 已修:auth 检测只认真实凭据;无凭据干净跳过/明确提示 |
 | ~~窄屏响应式布局未过人眼复核~~ | Medium | ✅ 已修:Electron 原生窗口 390/540px 侧栏抽屉、标题、controls、composer、overflow 全 PASS;证据:`test-results/caogen-responsive/2026-07-06T17-46-27-342Z/responsive-qa.json` |
 | arm64 包真机启动 | — | 需真实 Apple Silicon 机器(Intel 不可替代) |
-| Claude 真对话(无凭据环境) | — | 需用户提供 ANTHROPIC_API_KEY 或 claude 登录;有凭据时 3/3 |
+| Docker | — | 不需要；产品运行模式、资源和分支已删除 |
+| Claude 登录 | — | 不需要；只影响用户显式选择的 Claude 专项 |
 
 **需用户的外部阻塞:**
 
 | 阻碍 | 等什么 |
 |---|---|
-| 签名公证 DMG | 用户 Apple Developer 账号($99/年) |
-| Grok / OpenAI 官方真实 E2E | 两家 key 均无额度,等充值 |
-| N1 30 分钟计时 | 备好 fixture+脚本(docs/N1-MIGRATION-DRILL.md);需真人按秒表跑并留证 |
+| Apple Developer / 签名材料 | 仅签名、公证和正式分发需要；必须由账号持有人提供或操作 |
+| Apple Silicon 真机 | 只有要宣称 arm64 真机启动时需要；Intel 机器不能替代 |
+| 指定 Provider key / 额度 | 只有要补对应真实 Provider 或中国网络证据时需要 |
+| 凭据轮换 | 曾暴露或疑似外发的 token 必须由凭据持有人在对应平台撤销/重建 |
+| N1 30 分钟计时 | 只阻塞 N1 达标宣称；需真人按秒表跑并留证 |
+| push / GitHub Release | 当前只完成本地 `main`；推送和发布必须获得用户最终授权 |
 
 # Decisions
 
