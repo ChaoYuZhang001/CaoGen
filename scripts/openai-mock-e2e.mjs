@@ -183,7 +183,7 @@ try {
     await waitForAuditRecord((record) =>
       record.toolName === 'write_file' &&
       record.action === 'execute' &&
-      record.source === 'sandbox' &&
+      record.source === 'local-execution' &&
       record.ok === true &&
       String(record.inputSummary ?? '').includes(allowFileName)
     )
