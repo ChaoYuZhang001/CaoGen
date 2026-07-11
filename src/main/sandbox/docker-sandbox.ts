@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { constants } from 'node:fs'
-import { link, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { link, lstat, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
@@ -48,12 +48,32 @@ export interface SandboxFileWriteOptions {
   allowStrictDockerFallback?: boolean
   signal?: AbortSignal
   expectedFile?: SandboxFileWritePrecondition
+  beforeGuardedCommit?: () => Promise<void> | void
+  beforeGuardedPathVerificationRead?: (
+    phase: 'precondition' | 'postcondition',
+    targetPath: string
+  ) => Promise<void> | void
 }
 
-export interface SandboxFileWritePrecondition {
-  identity: { device: string; inode: string }
-  sha256: string
-  bytes: number
+export type SandboxFileWritePrecondition =
+  | {
+      state?: 'file'
+      identity: { device: string; inode: string }
+      sha256: string
+      bytes: number
+    }
+  | {
+      state: 'absent'
+      rootPath: string
+      rootIdentity: { device: string; inode: string }
+    }
+
+interface GuardedParentPath {
+  rootPath: string
+  rootIdentity: { device: string; inode: string }
+  parentPath: string
+  parentIdentity: { device: string; inode: string }
+  targetPath: string
 }
 
 interface ExecFileResult {
@@ -75,11 +95,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const payload = JSON.parse(fs.readFileSync('/caogen/payload.json', 'utf8'));
 const root = path.resolve('${DOCKER_WORKSPACE}');
-const target = payload.guardedTarget ? '/caogen/target' : path.resolve(root, payload.targetRelPath);
-if (!payload.guardedTarget && target !== root && !target.startsWith(root + path.sep)) {
+const finalTarget = path.resolve(root, payload.targetRelPath);
+if (finalTarget !== root && !finalTarget.startsWith(root + path.sep)) {
   throw new Error('target path escapes workspace');
 }
-fs.mkdirSync(path.dirname(target), { recursive: true });
+const target = payload.guardedTarget ? '/caogen/target' : finalTarget;
+fs.mkdirSync(path.dirname(finalTarget), { recursive: true });
 if (!payload.expectedFile) {
   fs.writeFileSync(target, payload.content, 'utf8');
 } else {
@@ -90,19 +111,26 @@ if (!payload.expectedFile) {
   const noFollow = process.platform !== 'win32' && typeof fs.constants.O_NOFOLLOW === 'number'
     ? fs.constants.O_NOFOLLOW
     : 0;
-  const fd = fs.openSync(target, fs.constants.O_RDWR | noFollow);
+  const nonBlock = process.platform !== 'win32' && typeof fs.constants.O_NONBLOCK === 'number'
+    ? fs.constants.O_NONBLOCK
+    : 0;
+  const fd = fs.openSync(target, fs.constants.O_RDWR | noFollow | nonBlock);
   try {
     const before = fs.fstatSync(fd, { bigint: true });
-    const current = fs.readFileSync(fd);
-    const digest = crypto.createHash('sha256').update(current).digest('hex');
-    if (current.byteLength !== payload.expectedFile.bytes || digest !== payload.expectedFile.sha256) {
-      throw new Error('guarded target content changed before write');
+    if (payload.expectedFile.state !== 'absent') {
+      const current = fs.readFileSync(fd);
+      const digest = crypto.createHash('sha256').update(current).digest('hex');
+      if (current.byteLength !== payload.expectedFile.bytes || digest !== payload.expectedFile.sha256) {
+        throw new Error('guarded target content changed before write');
+      }
     }
     const output = Buffer.from(payload.content, 'utf8');
     fs.ftruncateSync(fd, 0);
     let offset = 0;
     while (offset < output.length) {
-      offset += fs.writeSync(fd, output, offset, output.length - offset, offset);
+      const written = fs.writeSync(fd, output, offset, output.length - offset, offset);
+      if (written <= 0) throw new Error('guarded file write made no progress');
+      offset += written;
     }
     fs.ftruncateSync(fd, output.length);
     fs.fsyncSync(fd);
@@ -112,6 +140,13 @@ if (!payload.expectedFile) {
     }
   } finally {
     fs.closeSync(fd);
+  }
+  if (payload.expectedFile.state === 'absent') {
+    const guardPath = path.resolve(root, payload.guardRelPath);
+    if (guardPath !== root && !guardPath.startsWith(root + path.sep)) {
+      throw new Error('guard path escapes workspace');
+    }
+    fs.linkSync(guardPath, finalTarget);
   }
 }
 `
@@ -183,15 +218,41 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
 
   const payloadDir = await mkdtemp(join(tmpdir(), 'caogen-sandbox-write-'))
   const payloadPath = join(payloadDir, `${randomUUID()}.json`)
-  const guardRelPath = options.expectedFile
-    ? `.caogen/tmp/sandbox-write/${randomUUID()}.guard`
+  const guardPath = options.expectedFile
+    ? join(dirname(targetPath), `.${randomUUID()}.caogen-sandbox.guard`)
     : undefined
-  const guardPath = guardRelPath ? join(cwd, guardRelPath) : undefined
+  const guardRelPath = guardPath ? relative(cwd, guardPath) : undefined
+  let guardIdentity: { device: string; inode: string } | undefined
+  let guardedParent: GuardedParentPath | undefined
   try {
     if (guardPath && options.expectedFile) {
-      await mkdir(dirname(guardPath), { recursive: true })
-      await link(targetPath, guardPath)
-      await verifyFileWritePrecondition(guardPath, options.expectedFile)
+      guardedParent = await captureGuardedParentPath(
+        cwd,
+        targetPath,
+        isAbsentFilePrecondition(options.expectedFile)
+          ? { rootPath: options.expectedFile.rootPath, rootIdentity: options.expectedFile.rootIdentity }
+          : undefined
+      )
+      await verifyGuardedParentPath(guardedParent)
+      if (isAbsentFilePrecondition(options.expectedFile)) {
+        await verifyAbsentFilePrecondition(targetPath)
+        await writeFile(guardPath, '', { encoding: 'utf8', flag: 'wx', mode: 0o666, signal: options.signal })
+      } else {
+        await link(targetPath, guardPath)
+        await verifyFileWritePrecondition(guardPath, options.expectedFile)
+      }
+      guardIdentity = await readFileIdentity(guardPath)
+      await options.beforeGuardedCommit?.()
+      await verifyGuardedParentPath(guardedParent)
+      if (isAbsentFilePrecondition(options.expectedFile)) {
+        await verifyAbsentFilePrecondition(targetPath)
+      } else {
+        await verifyFileWritePrecondition(
+          targetPath,
+          options.expectedFile,
+          () => options.beforeGuardedPathVerificationRead?.('precondition', targetPath)
+        )
+      }
     }
     await writeFile(
       payloadPath,
@@ -199,7 +260,8 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
         targetRelPath: relPath.split(sep).join('/'),
         content: options.content,
         expectedFile: options.expectedFile,
-        guardedTarget: !!guardPath
+        guardedTarget: !!guardPath,
+        guardRelPath: guardRelPath?.split(sep).join('/')
       }),
       { encoding: 'utf8', mode: 0o644, signal: options.signal }
     )
@@ -247,9 +309,15 @@ export async function writeTextFileWithSandbox(options: SandboxFileWriteOptions)
         signal: options.signal
       }
     )
-    if (result.ok && options.expectedFile) {
+    if (result.ok && options.expectedFile && guardIdentity) {
       try {
-        await verifyFileWritePostcondition(targetPath, options.expectedFile, options.content)
+        if (guardedParent) await verifyGuardedParentPath(guardedParent)
+        await verifyFileWritePostcondition(
+          targetPath,
+          guardIdentity,
+          options.content,
+          () => options.beforeGuardedPathVerificationRead?.('postcondition', targetPath)
+        )
       } catch (error) {
         return {
           ok: false,
@@ -390,10 +458,10 @@ async function writeTextFileOnHost(
 ): Promise<SandboxCommandResult> {
   try {
     if (options.signal?.aborted) return abortedResult(modeUsed)
-    await mkdir(dirname(options.targetPath), { recursive: true })
     if (options.expectedFile) {
       await writeGuardedTextFileOnHost(options)
     } else {
+      await mkdir(dirname(options.targetPath), { recursive: true })
       await writeFile(options.targetPath, options.content, { encoding: 'utf8', signal: options.signal })
     }
     return {
@@ -416,56 +484,83 @@ async function writeTextFileOnHost(
 
 async function verifyFileWritePrecondition(
   targetPath: string,
-  expected: SandboxFileWritePrecondition
+  expected: Exclude<SandboxFileWritePrecondition, { state: 'absent' }>,
+  beforeRead?: () => Promise<void> | void
 ): Promise<void> {
-  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
-    ? constants.O_NOFOLLOW
-    : 0
-  const handle = await open(targetPath, constants.O_RDONLY | noFollow)
-  try {
-    const info = await handle.stat({ bigint: true })
-    if (!info.isFile()) throw new Error('guarded target is not a regular file')
-    if (
-      info.dev.toString() !== expected.identity.device ||
-      info.ino.toString() !== expected.identity.inode
-    ) {
-      throw new Error('guarded target identity changed before write')
-    }
-    const current = await handle.readFile()
-    if (
-      current.byteLength !== expected.bytes ||
-      createHash('sha256').update(current).digest('hex') !== expected.sha256
-    ) {
-      throw new Error('guarded target content changed before write')
-    }
-  } finally {
-    await handle.close()
+  const observation = await readStablePathFile(
+    targetPath,
+    expected.identity,
+    'before write',
+    beforeRead
+  )
+  if (
+    observation.content.byteLength !== expected.bytes ||
+    createHash('sha256').update(observation.content).digest('hex') !== expected.sha256
+  ) {
+    throw new Error('guarded target content changed before write')
   }
 }
 
 async function verifyFileWritePostcondition(
   targetPath: string,
-  expected: SandboxFileWritePrecondition,
-  content: string
+  expectedIdentity: { device: string; inode: string },
+  content: string,
+  beforeRead?: () => Promise<void> | void
 ): Promise<void> {
-  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
-    ? constants.O_NOFOLLOW
-    : 0
-  const handle = await open(targetPath, constants.O_RDONLY | noFollow)
+  const observation = await readStablePathFile(
+    targetPath,
+    expectedIdentity,
+    'after write',
+    beforeRead
+  )
+  const output = Buffer.from(content, 'utf8')
+  if (observation.content.byteLength !== output.byteLength || !observation.content.equals(output)) {
+    throw new Error('guarded target postcondition mismatch after Docker write')
+  }
+}
+
+async function readStablePathFile(
+  targetPath: string,
+  expectedIdentity: { device: string; inode: string },
+  phase: string,
+  beforeRead?: () => Promise<void> | void
+): Promise<{ content: Buffer }> {
+  const handle = await open(targetPath, safeOpenFlags(constants.O_RDONLY))
   try {
-    const info = await handle.stat({ bigint: true })
-    if (!info.isFile()) throw new Error('guarded target is not a regular file after write')
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) throw new Error(`guarded target is not a regular file ${phase}`)
     if (
-      info.dev.toString() !== expected.identity.device ||
-      info.ino.toString() !== expected.identity.inode
+      before.dev.toString() !== expectedIdentity.device ||
+      before.ino.toString() !== expectedIdentity.inode
     ) {
-      throw new Error('guarded target identity changed during Docker write')
+      throw new Error(`guarded target identity changed ${phase}`)
     }
-    const observed = await handle.readFile()
-    const output = Buffer.from(content, 'utf8')
-    if (observed.byteLength !== output.byteLength || !observed.equals(output)) {
-      throw new Error('guarded target postcondition mismatch after Docker write')
+    await beforeRead?.()
+    const content = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    const currentPath = await lstat(targetPath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (
+      !currentPath ||
+      currentPath.isSymbolicLink() ||
+      !currentPath.isFile() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs ||
+      before.dev !== currentPath.dev ||
+      before.ino !== currentPath.ino ||
+      after.size !== currentPath.size ||
+      after.mtimeNs !== currentPath.mtimeNs ||
+      after.ctimeNs !== currentPath.ctimeNs ||
+      BigInt(content.byteLength) !== before.size
+    ) {
+      throw new Error(`guarded target path or content changed ${phase}`)
     }
+    return { content }
   } finally {
     await handle.close()
   }
@@ -474,10 +569,12 @@ async function verifyFileWritePostcondition(
 async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Promise<void> {
   const expected = options.expectedFile
   if (!expected) throw new Error('guarded file write is missing its precondition')
-  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
-    ? constants.O_NOFOLLOW
-    : 0
-  const handle = await open(options.targetPath, constants.O_RDWR | noFollow)
+  if (isAbsentFilePrecondition(expected)) {
+    await writeAbsentTextFileOnHost(options)
+    return
+  }
+  const guardedParent = await captureGuardedParentPath(options.cwd, options.targetPath)
+  const handle = await open(options.targetPath, safeOpenFlags(constants.O_RDWR))
   try {
     const before = await handle.stat({ bigint: true })
     if (!before.isFile()) throw new Error('guarded target is not a regular file')
@@ -494,11 +591,18 @@ async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Pro
     ) {
       throw new Error('guarded target content changed before write')
     }
+    if (options.signal?.aborted) throw new Error('操作已中断')
+    await options.beforeGuardedCommit?.()
+    await verifyGuardedParentPath(guardedParent)
+    await verifyFileWritePrecondition(
+      options.targetPath,
+      expected,
+      () => options.beforeGuardedPathVerificationRead?.('precondition', options.targetPath)
+    )
     const output = Buffer.from(options.content, 'utf8')
     await handle.truncate(0)
     let offset = 0
     while (offset < output.length) {
-      if (options.signal?.aborted) throw new Error('操作已中断')
       const written = await handle.write(output, offset, output.length - offset, offset)
       if (written.bytesWritten <= 0) throw new Error('guarded file write made no progress')
       offset += written.bytesWritten
@@ -509,9 +613,187 @@ async function writeGuardedTextFileOnHost(options: SandboxFileWriteOptions): Pro
     if (before.dev !== after.dev || before.ino !== after.ino) {
       throw new Error('guarded target identity changed during write')
     }
+    await verifyGuardedParentPath(guardedParent)
+    await verifyFileWritePostcondition(
+      options.targetPath,
+      fileIdentity(before),
+      options.content,
+      () => options.beforeGuardedPathVerificationRead?.('postcondition', options.targetPath)
+    )
   } finally {
     await handle.close()
   }
+}
+
+async function writeAbsentTextFileOnHost(options: SandboxFileWriteOptions): Promise<void> {
+  const expected = options.expectedFile
+  if (!expected || !isAbsentFilePrecondition(expected)) {
+    throw new Error('guarded absent write is missing its approved root identity')
+  }
+  const guardedParent = await captureGuardedParentPath(options.cwd, options.targetPath, {
+    rootPath: expected.rootPath,
+    rootIdentity: expected.rootIdentity
+  })
+  await verifyAbsentFilePrecondition(options.targetPath)
+  const tempPath = join(dirname(options.targetPath), `.${randomUUID()}.caogen-write.tmp`)
+  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+    ? constants.O_NOFOLLOW
+    : 0
+  const handle = await open(
+    tempPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
+    0o666
+  )
+  try {
+    const output = Buffer.from(options.content, 'utf8')
+    let offset = 0
+    while (offset < output.length) {
+      if (options.signal?.aborted) throw new Error('操作已中断')
+      const written = await handle.write(output, offset, output.length - offset, offset)
+      if (written.bytesWritten <= 0) throw new Error('guarded file write made no progress')
+      offset += written.bytesWritten
+    }
+    await handle.sync()
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile()) throw new Error('guarded temporary target is not a regular file')
+    if (options.signal?.aborted) throw new Error('操作已中断')
+    await options.beforeGuardedCommit?.()
+    await verifyGuardedParentPath(guardedParent)
+    await verifyAbsentFilePrecondition(options.targetPath)
+    try {
+      await link(tempPath, options.targetPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error('guarded target appeared before write')
+      }
+      throw error
+    }
+    await verifyGuardedParentPath(guardedParent)
+    await verifyFileWritePostcondition(
+      options.targetPath,
+      fileIdentity(info),
+      options.content,
+      () => options.beforeGuardedPathVerificationRead?.('postcondition', options.targetPath)
+    )
+  } finally {
+    await handle.close().catch(() => undefined)
+    await rm(tempPath, { force: true }).catch(() => undefined)
+  }
+}
+
+async function readFileIdentity(targetPath: string): Promise<{ device: string; inode: string }> {
+  const handle = await open(targetPath, safeOpenFlags(constants.O_RDONLY))
+  try {
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile()) throw new Error('guarded target is not a regular file')
+    return fileIdentity(info)
+  } finally {
+    await handle.close()
+  }
+}
+
+async function verifyAbsentFilePrecondition(targetPath: string): Promise<void> {
+  const existing = await lstat(targetPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+  if (existing) throw new Error('guarded target appeared before write')
+}
+
+async function captureGuardedParentPath(
+  cwd: string,
+  targetPath: string,
+  approvedRoot?: { rootPath: string; rootIdentity: { device: string; inode: string } }
+): Promise<GuardedParentPath> {
+  const initial = await resolveWritableProjectPath(cwd, targetPath)
+  if (approvedRoot) await verifyApprovedRoot(initial.root, approvedRoot)
+  await mkdir(dirname(targetPath), { recursive: true })
+  const resolved = await resolveWritableProjectPath(cwd, targetPath)
+  if (approvedRoot) await verifyApprovedRoot(resolved.root, approvedRoot)
+  const parentPath = dirname(resolved.fullPath)
+  const [rootInfo, parentInfo] = await Promise.all([
+    lstat(resolved.root, { bigint: true }),
+    lstat(parentPath, { bigint: true })
+  ])
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+    throw new Error('guarded project root is not a stable directory')
+  }
+  if (parentInfo.isSymbolicLink() || !parentInfo.isDirectory()) {
+    throw new Error('guarded target parent is not a stable directory')
+  }
+  return {
+    rootPath: resolved.root,
+    rootIdentity: fileIdentity(rootInfo),
+    parentPath,
+    parentIdentity: fileIdentity(parentInfo),
+    targetPath: resolved.fullPath
+  }
+}
+
+async function verifyApprovedRoot(
+  observedRootPath: string,
+  expected: { rootPath: string; rootIdentity: { device: string; inode: string } }
+): Promise<void> {
+  if (observedRootPath !== expected.rootPath) {
+    throw new Error('guarded project root path differs from the approved Effect')
+  }
+  const info = await lstat(observedRootPath, { bigint: true })
+  if (
+    info.isSymbolicLink() ||
+    !info.isDirectory() ||
+    !sameFileIdentity(fileIdentity(info), expected.rootIdentity)
+  ) {
+    throw new Error('guarded project root identity differs from the approved Effect')
+  }
+}
+
+async function verifyGuardedParentPath(expected: GuardedParentPath): Promise<void> {
+  const resolved = await resolveWritableProjectPath(expected.rootPath, expected.targetPath)
+  if (
+    resolved.root !== expected.rootPath ||
+    resolved.fullPath !== expected.targetPath ||
+    dirname(resolved.fullPath) !== expected.parentPath
+  ) {
+    throw new Error('guarded target parent path changed before commit')
+  }
+  const [rootInfo, parentInfo] = await Promise.all([
+    lstat(resolved.root, { bigint: true }),
+    lstat(expected.parentPath, { bigint: true })
+  ])
+  if (
+    rootInfo.isSymbolicLink() ||
+    !rootInfo.isDirectory() ||
+    parentInfo.isSymbolicLink() ||
+    !parentInfo.isDirectory() ||
+    !sameFileIdentity(fileIdentity(rootInfo), expected.rootIdentity) ||
+    !sameFileIdentity(fileIdentity(parentInfo), expected.parentIdentity)
+  ) {
+    throw new Error('guarded target parent identity changed before commit')
+  }
+}
+
+function fileIdentity(info: { dev: number | bigint; ino: number | bigint }): { device: string; inode: string } {
+  return { device: String(info.dev), inode: String(info.ino) }
+}
+
+function sameFileIdentity(
+  left: { device: string; inode: string },
+  right: { device: string; inode: string }
+): boolean {
+  return left.device === right.device && left.inode === right.inode
+}
+
+function safeOpenFlags(baseFlags: number): number {
+  let flags = baseFlags
+  if (process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number') flags |= constants.O_NOFOLLOW
+  if (process.platform !== 'win32' && typeof constants.O_NONBLOCK === 'number') flags |= constants.O_NONBLOCK
+  return flags
+}
+
+function isAbsentFilePrecondition(
+  expected: SandboxFileWritePrecondition
+): expected is Extract<SandboxFileWritePrecondition, { state: 'absent' }> {
+  return expected.state === 'absent'
 }
 
 async function runSystemCommand(

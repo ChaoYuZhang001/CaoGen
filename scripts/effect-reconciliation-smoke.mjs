@@ -15,6 +15,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync
 } from 'node:fs'
 import { createServer } from 'node:http'
@@ -582,6 +583,116 @@ try {
   writeFileSync(editablePath, 'third-party drift\n', 'utf8')
   const searchDriftProbe = await reconciler.reconcileEffect(searchExecution.run.effects[0])
   assertEqual(searchDriftProbe.kind, 'unresolved', 'content outside pre/expected states must remain unresolved')
+
+  const plannerSplicePath = path.join(fileRoot, 'planner-splice.txt')
+  const plannerSpliceMoved = path.join(fileRoot, 'planner-splice-open-inode.txt')
+  const plannerSpliceReplacement = path.join(fileRoot, 'planner-splice-replacement.txt')
+  const plannerSpliceBefore = 'planner-before\n'
+  writeFileSync(plannerSplicePath, plannerSpliceBefore, 'utf8')
+  await assertRejectsMatching(
+    () => reconciler.buildEffectDescriptor(
+      {
+        toolName: 'write_file',
+        toolInput: { path: 'planner-splice.txt', content: 'planner-after\n' },
+        cwd: fileRoot
+      },
+      {
+        beforeRead: () => {
+          renameSync(plannerSplicePath, plannerSpliceMoved)
+          writeFileSync(plannerSpliceReplacement, plannerSpliceBefore, 'utf8')
+          renameSync(plannerSpliceReplacement, plannerSplicePath)
+        }
+      }
+    ),
+    /观察期间目标路径或内容发生变化/,
+    'write_file planner must reject an identity/hash splice caused by rename during observation'
+  )
+
+  const oversizedWritePath = path.join(fileRoot, 'oversized-write.bin')
+  writeFileSync(oversizedWritePath, '')
+  truncateSync(oversizedWritePath, 64 * 1024 * 1024 + 1)
+  await assertRejectsMatching(
+    () => reconciler.buildEffectDescriptor({
+      toolName: 'write_file',
+      toolInput: { path: 'oversized-write.bin', content: 'replacement' },
+      cwd: fileRoot
+    }),
+    /超过自动保护上限/,
+    'write_file must fail before preparing an Effect when the existing file cannot be hashed safely'
+  )
+
+  await assertRejectsMatching(
+    () => reconciler.buildEffectDescriptor({
+      toolName: 'write_file',
+      toolInput: { path: 'oversized-expected.txt', content: 'x'.repeat(64 * 1024 * 1024 + 1) },
+      cwd: fileRoot
+    }),
+    /预期内容超过自动保护上限/,
+    'write_file must fail before preparing an Effect when the expected content cannot be reconciled automatically'
+  )
+
+  if (process.platform !== 'win32') {
+    const fifoPath = path.join(fileRoot, 'planner-fifo')
+    execFileSync('mkfifo', [fifoPath])
+    const reconcilerUrl = pathToFileURL(findCompiledModule(outDir, 'effect-reconciler.js')).href
+    const fifoProbe = `
+      const reconciler = await import(${JSON.stringify(reconcilerUrl)});
+      try {
+        await reconciler.buildEffectDescriptor({
+          toolName: 'write_file',
+          toolInput: { path: 'planner-fifo', content: 'replacement' },
+          cwd: ${JSON.stringify(fileRoot)}
+        });
+        process.exitCode = 2;
+      } catch (error) {
+        if (!String(error?.message ?? error).includes('不是普通文件')) process.exitCode = 3;
+      }
+    `
+    execFileSync(process.execPath, ['--input-type=module', '--eval', fifoProbe], {
+      cwd: repoRoot,
+      timeout: 2_000,
+      stdio: 'pipe'
+    })
+  }
+
+  const reconcileSplicePath = path.join(fileRoot, 'reconcile-splice.txt')
+  const reconcileSpliceMoved = path.join(fileRoot, 'reconcile-splice-open-inode.txt')
+  const reconcileSpliceReplacement = path.join(fileRoot, 'reconcile-splice-replacement.txt')
+  const reconcileSpliceBefore = 'reconcile-before\n'
+  const reconcileSpliceInput = { path: 'reconcile-splice.txt', content: 'reconcile-after\n' }
+  writeFileSync(reconcileSplicePath, reconcileSpliceBefore, 'utf8')
+  const reconcileSpliceDescriptor = await reconciler.buildEffectDescriptor({
+    toolName: 'write_file',
+    toolInput: reconcileSpliceInput,
+    cwd: fileRoot
+  })
+  const reconcileSpliceExecution = prepareExecutingEffect({
+    ledger,
+    taskRun,
+    taskExecution,
+    sessionId: 'reconcile-splice-session',
+    toolUseId: 'reconcile-splice-tool',
+    toolName: 'write_file',
+    toolInput: reconcileSpliceInput,
+    descriptor: reconcileSpliceDescriptor,
+    cwd: fileRoot,
+    now: 5900
+  })
+  const reconcileSpliceProbe = await reconciler.reconcileEffect(
+    reconcileSpliceExecution.run.effects[0],
+    {
+      beforeRead: () => {
+        renameSync(reconcileSplicePath, reconcileSpliceMoved)
+        writeFileSync(reconcileSpliceReplacement, reconcileSpliceBefore, 'utf8')
+        renameSync(reconcileSpliceReplacement, reconcileSplicePath)
+      }
+    }
+  )
+  assertEqual(reconcileSpliceProbe.kind, 'unresolved')
+  assert(
+    reconcileSpliceProbe.reason.includes('观察期间目标路径或内容发生变化'),
+    'file reconciliation must reject an identity/hash splice caused by rename during observation'
+  )
 
   writeFileSync(path.join(fileRoot, 'fence.txt'), 'before\n', 'utf8')
   const fenceInput = { path: 'fence.txt', content: 'after\n' }

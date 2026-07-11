@@ -1,6 +1,18 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -371,6 +383,90 @@ try {
     'edit_file target drift must be rejected before backup creation'
   )
 
+  const guardedWriteTarget = path.join(projectDir, 'src/guarded-write-existing.txt')
+  const guardedWriteBefore = Buffer.from('same-content-before\n', 'utf8')
+  const guardedWriteAfter = 'approved-after\n'
+  writeFileSync(guardedWriteTarget, guardedWriteBefore)
+  const guardedWriteEffect = fileWriteEffectTarget(
+    projectDir,
+    guardedWriteTarget,
+    guardedWriteBefore,
+    guardedWriteAfter
+  )
+  const guardedWriteOriginalInode = guardedWriteEffect.preFileIdentity.inode
+  const guardedWriteReplacement = path.join(projectDir, 'src/guarded-write-replacement.txt')
+  writeFileSync(guardedWriteReplacement, guardedWriteBefore)
+  rmSync(guardedWriteTarget)
+  renameSync(guardedWriteReplacement, guardedWriteTarget)
+  assert(
+    statSync(guardedWriteTarget, { bigint: true }).ino.toString() !== guardedWriteOriginalInode,
+    'write_file replacement fixture must use a new inode'
+  )
+  const guardedWrite = await tools.executeCodingTool(
+    'write_file',
+    { path: guardedWriteTarget, content: guardedWriteAfter },
+    projectDir,
+    { effectTarget: guardedWriteEffect }
+  )
+  assert(!guardedWrite.ok, 'write_file must reject same-content replacement after Effect approval')
+  assertEqual(readFileSync(guardedWriteTarget, 'utf8'), guardedWriteBefore.toString('utf8'))
+
+  const absentWriteTarget = path.join(projectDir, 'src/guarded-write-absent.txt')
+  const absentWriteContent = 'created-from-approved-absent-effect\n'
+  const absentWriteEffect = absentFileWriteEffectTarget(projectDir, absentWriteTarget, absentWriteContent)
+  writeFileSync(absentWriteTarget, 'concurrent-creator\n', 'utf8')
+  const concurrentAbsentWrite = await tools.executeCodingTool(
+    'write_file',
+    { path: absentWriteTarget, content: absentWriteContent },
+    projectDir,
+    { effectTarget: absentWriteEffect }
+  )
+  assert(!concurrentAbsentWrite.ok, 'write_file absent Effect must reject a concurrently-created target')
+  assertEqual(readFileSync(absentWriteTarget, 'utf8'), 'concurrent-creator\n')
+  rmSync(absentWriteTarget)
+  const atomicAbsentWrite = await tools.executeCodingTool(
+    'write_file',
+    { path: absentWriteTarget, content: absentWriteContent },
+    projectDir,
+    { effectTarget: absentWriteEffect }
+  )
+  assert(atomicAbsentWrite.ok, `write_file absent Effect should create atomically: ${atomicAbsentWrite.output}`)
+  assertEqual(readFileSync(absentWriteTarget, 'utf8'), absentWriteContent)
+  assert(
+    !readdirSync(path.dirname(absentWriteTarget)).some((name) => name.includes('.caogen-write.tmp')),
+    'atomic absent create must clean its temporary inode link'
+  )
+
+  const defaultWriterTarget = path.join(projectDir, 'src/default-writer-rename.ts')
+  const defaultWriterMoved = path.join(projectDir, 'src/default-writer-open-inode.ts')
+  const defaultWriterReplacement = path.join(projectDir, 'src/default-writer-replacement.ts')
+  const defaultWriterBefore = [
+    'export function defaultWriter() {',
+    '  const value = 1',
+    '  return value',
+    '}',
+    ''
+  ].join('\n')
+  const defaultWriterAfter = defaultWriterBefore.replace('value = 1', 'value = 2')
+  writeFileSync(defaultWriterTarget, defaultWriterBefore, 'utf8')
+  const defaultWriterResult = await searchReplace.runSearchReplace(
+    projectDir,
+    {
+      file_path: defaultWriterTarget,
+      replacements: [{ old_str: defaultWriterBefore.trimEnd(), new_str: defaultWriterAfter.trimEnd() }]
+    },
+    {
+      beforeWriteCommit: () => {
+        renameSync(defaultWriterTarget, defaultWriterMoved)
+        writeFileSync(defaultWriterReplacement, defaultWriterBefore, 'utf8')
+        renameSync(defaultWriterReplacement, defaultWriterTarget)
+      }
+    }
+  )
+  assert(!defaultWriterResult.ok, 'default guarded writer must reject target-path replacement after open')
+  assertEqual(readFileSync(defaultWriterTarget, 'utf8'), defaultWriterBefore)
+  assertEqual(readFileSync(defaultWriterMoved, 'utf8'), defaultWriterBefore)
+
   const viewed = await view.runView(projectDir, { file_path: target, start_line: 1, end_line: 4 })
   assertOk(viewed, 'view should read text range')
   assert(viewed.content.includes('1 | export function greet'), 'view should include line numbers')
@@ -406,6 +502,40 @@ function fileEffectTarget(plan) {
     preFileIdentity: plan.fileIdentity,
     preSha256: plan.originalSha256,
     preBytes: plan.originalBytes,
+    expectedSha256: sha256(expected),
+    expectedBytes: expected.byteLength
+  }
+}
+
+function fileWriteEffectTarget(root, target, before, expectedContent) {
+  const normalizedRoot = realpathSync(root)
+  const rootInfo = statSync(normalizedRoot, { bigint: true })
+  const targetInfo = statSync(target, { bigint: true })
+  const expected = Buffer.from(expectedContent, 'utf8')
+  return {
+    kind: 'file_content',
+    rootPath: normalizedRoot,
+    rootIdentity: { device: rootInfo.dev.toString(), inode: rootInfo.ino.toString() },
+    relativePath: path.relative(root, target).split(path.sep).join('/'),
+    preState: 'file',
+    preFileIdentity: { device: targetInfo.dev.toString(), inode: targetInfo.ino.toString() },
+    preSha256: sha256(before),
+    preBytes: before.byteLength,
+    expectedSha256: sha256(expected),
+    expectedBytes: expected.byteLength
+  }
+}
+
+function absentFileWriteEffectTarget(root, target, expectedContent) {
+  const normalizedRoot = realpathSync(root)
+  const rootInfo = statSync(normalizedRoot, { bigint: true })
+  const expected = Buffer.from(expectedContent, 'utf8')
+  return {
+    kind: 'file_content',
+    rootPath: normalizedRoot,
+    rootIdentity: { device: rootInfo.dev.toString(), inode: rootInfo.ino.toString() },
+    relativePath: path.relative(root, target).split(path.sep).join('/'),
+    preState: 'absent',
     expectedSha256: sha256(expected),
     expectedBytes: expected.byteLength
   }
