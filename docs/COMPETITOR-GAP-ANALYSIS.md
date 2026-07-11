@@ -1,8 +1,9 @@
 # CaoGen 竞品差距与优化优先级
 
 > 快照日期: 2026-07-11
-> CaoGen 代码基线: `main@6ab58bf2e718`
+> CaoGen 代码基线: `main@1712ca5c9fc0`
 > 对标范围: Codex Desktop、Claude Desktop / Claude Code、OpenClaw、Hermes Agent
+> 补充迁移参照: Cursor / Windsurf 的 IDE 内闭环，以及 Devin / OpenHands 类长任务交付；本轮未联网刷新其最新版本，不把映射写成最新竞品事实。
 > 结论口径: 竞品事实只采用官方文档、官方仓库或当前 Codex Desktop 可调用能力; CaoGen 事实只采用当前代码和测试产物。
 
 ## 结论
@@ -18,7 +19,7 @@ CaoGen 已经具备真实差异化:
 
 但以下五项会直接阻止 CaoGen 成为可信赖的长期 Agent Desktop:
 
-1. Effect Ledger 核心已经落地，但自动 Reconciler 只覆盖 `write_file`、`git_commit`、`git_push`；PR、Issue、消息、可查询 MCP、直接 Renderer Git 入口、补偿执行和防篡改 evidence 链仍未闭环。
+1. Effect Ledger 核心已经落地，自动 Reconciler 已覆盖 `write_file`、`git_commit`、`git_merge`、`git_push`；PR、Issue、消息、可查询 MCP、Code Forge 复合动作、直接 Renderer Git 入口、补偿执行和防篡改 evidence 链仍未闭环。
 2. 审计日志已改为 metadata/hash 并限制文件权限，权限卡也会完整展示脱敏输入；但 `safeStorage` 不可用时 API Key 仍会退化为可逆 Base64，scoped credential broker 和数据保留/删除策略尚未建立。
 3. MCP 子进程继承完整环境变量，内置模板使用未锁版本的 `npx -y`，插件安装缺少来源、哈希、签名、能力清单和运行时隔离。
 4. 本地深测仍把退出码为 0 的 `SKIP` 计为 `pass`；仓库没有托管 CI，macOS 包未签名，也没有 SBOM、provenance、安装升级验证和失败回滚证据。
@@ -42,7 +43,7 @@ CaoGen 已经具备真实差异化:
 
 | 优先级 | 问题 | 当前状态 | 下一纵切 | 完成判据 |
 |---|---|---|---|---|
-| P0-1B | Reconciler 覆盖不足 | 文件写入、Git commit/push 已自动回读；其他副作用仍 opaque fail-closed | 接入 PR、Issue、消息、可查询 MCP、merge/Code Forge 和直接 Renderer Git 入口 | 所有高风险入口统一经过 Effect Runtime；外部成功后强杀不会重复执行 |
+| P0-1B | Reconciler 覆盖不足 | 文件写入、Git commit/merge/push 已自动回读；其他副作用仍 opaque fail-closed | 接入 `search_replace/edit_file`、PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 入口 | 所有高风险入口统一经过 Effect Runtime；外部成功后强杀不会重复执行 |
 | P0-1C | Evidence 与补偿不完整 | 有 generation/revision、resource lease/fencing 和 evidence digest；没有 append-only 哈希链及生产补偿器 | 独立 Effect 存储、审计关联、补偿计划/审批/执行 | 每次确认、重试、补偿均可追溯；篡改可检测；补偿失败仍 fail closed |
 | P0-4A | 测试结果语义失真 | 外层 84 项显示 pass，但 Claude/China 三项实际 `SKIP` | 建立 `pass / skip / blocked / fail` 四态和发布档位 required checks | `SKIP` 不计入 pass；required 项 skip/blocked 必须阻断发布 |
 | P0-2 | 凭据与本地数据安全 | 审计脱敏第一纵切完成；Base64 fallback、凭据代理和保留策略未完成 | safeStorage fail-closed、旧密钥迁移、scoped broker、导出/删除/保留周期 | 不再新增可逆编码密钥；插件/MCP 只能取得声明范围内的凭据 |
@@ -69,7 +70,7 @@ CaoGen 已经具备真实差异化:
 
 | 维度 | CaoGen 当前状态 | 竞品基线 | 判断 |
 |---|---|---|---|
-| Agent 执行内核 | Claude Agent SDK + OpenAI-compatible API；Effect Ledger、资源级 lease/fencing、强杀恢复和三类 Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
+| Agent 执行内核 | Claude Agent SDK + OpenAI-compatible API；Effect Ledger、资源级 lease/fencing、强杀恢复和四类 Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
 | 多 Agent | 33 child sessions、DAG、worktree、结果回传、自动合并 | Codex multi-agent 已标 stable；Claude 有 Subagent/Agent View/实验 Teams；OpenClaw/Hermes 有隔离 Agent | 强项；下一步应区分临时子任务、持久会话、Team 和确定性 Workflow |
 | Provider 开放性 | 多厂商、多 Key、健康度、预算、跨厂商 failover | 竞品通常围绕自家模型或单一 Gateway | CaoGen 领先，但上下文和成本账本仍不够耐久 |
 | 权限治理 | 风险分类、审批模式、资源级副作用门禁、文件边界、GUI 权限检查、审计 metadata/hash 和权限输入脱敏已接 | Claude 有宿主权限 + OS sandbox；Codex 有 sandbox/approval/Guardian；OpenClaw/Hermes 提供策略但默认姿态不总是安全 | 中等；缺凭证代理、统一保留策略和更强 OS 隔离 |
@@ -88,13 +89,13 @@ CaoGen 已经具备真实差异化:
 - `src/main/engine.ts` 和 `src/main/engines.ts` 已固定两条正式运行时路径。Codex CLI / Gemini CLI Adapter 已移除，不再作为未来方向。
 - `src/main/task/task-recovery.ts`、`src/main/task/task-snapshot.ts` 和 `src/main/task/task-runtime-registry.ts` 已形成事件回执、恢复游标、快照和幂等防重底座。
 - `src/main/task/effect-ledger.ts`、`effect-runtime.ts` 和 `effect-reconciler.ts` 已形成持久 EffectRecord、资源级 lease/fencing、字段级并发合并、自动/人工对账和 fail-closed 恢复底座。
-- `write_file`、`git_commit`、`git_push` 已有只读 Reconciler；Git 远端探针隔离仓库/global 配置、credential helper 和 askpass，确定性 preflight 失败不会生成未知结果。
+- `write_file`、`git_commit`、`git_merge`、`git_push` 已有只读 Reconciler；`git_merge` 固化 repo/ref/source SHA 与文件系统身份，在隔离 ODB 预检，并用 trusted reference-transaction hook 原子校验 old SHA、exact parents 和 expected tree。
 - `src/main/sessionManager.ts` 与 `src/main/agent/dag-scheduler.ts` 已支持真实 child session、DAG 和 worktree 编排。
 - `src/main/providers.ts`、`src/main/providerKeyRouting.ts` 和 `src/main/model/session-routing.ts` 已支持 Provider/Key 选择、健康、预算和故障切换。
 - `src/main/permission/tool-permission.ts`、`src/main/permission/audit-log.ts` 和沙箱相关模块已形成权限治理基础；审计输入默认保存 metadata/hash，权限卡展示完整但递归脱敏的审批输入。
 - `src/main/skill`、`src/main/mcp`、`src/main/pluginInstall.ts` 已形成扩展生态底座。
 - `src/renderer/src/components/office` 已消费真实会话、审批、工具、路由、成本、worktree 和 checkpoint 状态。
-- 完整深测外层记录为 84/84（`test-results/caogen-deep/2026-07-10T19-26-04-373Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
+- 最新完整深测外层记录为 pass（`test-results/caogen-deep/2026-07-11T06-28-02-899Z/deep-test-report.md`），但 `claude real e2e`、China real-network 和 China tool-call parity 的日志实际为 `SKIP`，不能算真实外部环境通过。
 
 ## P0: 必须先解决
 
@@ -104,17 +105,19 @@ CaoGen 已经具备真实差异化:
 
 - 持久 `EffectRecord` 已包含 `effectKey`、独立 `resourceKey`、generation/revision、lease、fencing token、状态、目标摘要和 evidence digest。
 - SQLite barrier 会跨会话阻止同一资源的并发 lease，并持久化每个资源的最大 fencing token。
-- `write_file`、`git_commit`、`git_push` 已支持只读回读；不可查询操作在结果未知时 fail closed 并进入人工 CAS 处置。
+- `write_file`、`git_commit`、`git_merge`、`git_push` 已支持只读回读；不可查询操作在结果未知时 fail closed 并进入人工 CAS 处置。
+- `git_merge` 已冻结目标 ref、审批前 HEAD/tree、来源 ref/SHA 和 repo/common-dir/worktree-dir 身份；执行时只合并冻结 SHA，拒绝目录身份漂移、隐藏 index 状态、ignored/local path 覆盖和不安全 merge/filter 配置。
+- merge-tree 只在临时 ODB 中运行；真实 ref transaction 会在 prepared 阶段验证 old SHA、两父节点和 expected tree，失败后保持目标 ref、index 与 worktree 不变。
 - OpenAI-compatible 与 Claude SDK 两条正式工具执行路径均接入 prepare → persist barrier → execute → reconcile。
 - 强杀、关闭、中断、普通事件与 Effect 并发写、目标漂移和空 staged commit 已有回归测试。
 - UI 会显示 `waiting_reconciliation`，阻止自动恢复、继续发送和删除恢复入口。
 
 继续问题:
 
-- `git_create_pr`、Issue、消息、可查询 MCP、`edit_file/search_replace`、merge/Code Forge 和 Renderer 直接 Git 入口尚无专用 Reconciler 或未统一经过 Effect Runtime。
+- `git_create_pr`、Issue、消息、可查询 MCP、`edit_file/search_replace`、Code Forge 复合动作和 Renderer 直接 Git/patch 入口尚无专用 Reconciler 或未统一经过 Effect Runtime。
 - `markEffectCompensated` 只有账本状态能力，没有生产级补偿计划、审批和执行器。
 - evidence digest 尚未形成 append-only 哈希链、独立 Effect 表或审计事件关联，不能宣称防篡改不可变账本。
-- 真实强杀 E2E 主要证明文件写入；Git commit/push、PR 和消息的“外部成功后强杀”仍需独立系统测试。
+- 真实强杀 E2E 已覆盖文件写入和 effect-bound `git_merge`；Git commit/push、PR、消息和 MCP 的“外部成功后强杀”仍需独立系统测试。
 
 竞品信号:
 
@@ -125,7 +128,7 @@ CaoGen 已经具备真实差异化:
 
 下一纵切要求:
 
-- 把所有高风险入口统一接入 Effect Runtime，先完成 PR、Issue、消息、可查询 MCP、merge/Code Forge 和直接 Git 操作。
+- 把所有高风险入口统一接入 Effect Runtime，先完成 `search_replace/edit_file`、PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 操作。
 - 建立独立 Effect 持久表、append-only evidence 链和审计事件 ID，避免 evidence 只存在 TaskRun JSON 中。
 - 定义补偿动作的生成、审批、执行、失败恢复和二次补偿边界。
 - 对每类可查询副作用补真实强杀 E2E；无外部回读能力的操作继续禁止自动重试。
@@ -324,7 +327,7 @@ Owner: Runtime / Session。
 
 ### 第一批: Trust Kernel
 
-1. P0-1B/C 扩展 Reconciler、append-only evidence 和补偿执行。
+1. P0-1B 剩余入口 + P0-1C：扩展 Reconciler、append-only evidence 和补偿执行。
 2. P0-4A 先修测试四态与 required gate，使后续安全完成度可被可信判断。
 3. P0-2 移除 Base64 fallback，完成 scoped credential broker 和数据生命周期。
 4. P0-3 MCP/插件 Capability Manifest、版本/digest 固定与隔离。
