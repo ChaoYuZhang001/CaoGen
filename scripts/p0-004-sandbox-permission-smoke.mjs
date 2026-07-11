@@ -2,7 +2,20 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -162,6 +175,169 @@ async function verifySandbox(sandbox) {
   })
   assert(!replacedWrite.ok, 'guarded host write must reject same-content inode replacement')
   assert(readFileSync(guardedPath, 'utf8') === 'guarded-before\n', 'rejected guarded write must preserve replacement content')
+
+  const renamedDuringWritePath = path.join(projectDir, 'guarded-renamed-during-write.txt')
+  const movedDuringWritePath = path.join(projectDir, 'guarded-original-after-rename.txt')
+  const replacementDuringWritePath = path.join(projectDir, 'guarded-path-replacement.txt')
+  writeFileSync(renamedDuringWritePath, guardedBefore)
+  const renamedDuringWriteStat = statSync(renamedDuringWritePath, { bigint: true })
+  const renamedDuringWrite = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: renamedDuringWritePath,
+    content: 'must-not-report-success\n',
+    expectedFile: {
+      identity: {
+        device: renamedDuringWriteStat.dev.toString(),
+        inode: renamedDuringWriteStat.ino.toString()
+      },
+      sha256: createHash('sha256').update(guardedBefore).digest('hex'),
+      bytes: guardedBefore.byteLength
+    },
+    mode: 'standardSystem',
+    timeoutMs: 10_000,
+    beforeGuardedCommit: () => {
+      renameSync(renamedDuringWritePath, movedDuringWritePath)
+      writeFileSync(replacementDuringWritePath, guardedBefore)
+      renameSync(replacementDuringWritePath, renamedDuringWritePath)
+    }
+  })
+  assert(!renamedDuringWrite.ok, 'guarded host write must reject target-path replacement after open')
+  assert(
+    readFileSync(renamedDuringWritePath, 'utf8') === 'guarded-before\n',
+    'replacement at the canonical target path must remain untouched'
+  )
+  assert(
+    readFileSync(movedDuringWritePath, 'utf8') === 'guarded-before\n',
+    'the opened inode must remain unchanged when canonical path verification fails before commit'
+  )
+
+  const renamedInsideCheckPath = path.join(projectDir, 'guarded-renamed-inside-check.txt')
+  const movedInsideCheckPath = path.join(projectDir, 'guarded-original-inside-check.txt')
+  const replacementInsideCheckPath = path.join(projectDir, 'guarded-path-inside-check.txt')
+  writeFileSync(renamedInsideCheckPath, guardedBefore)
+  const renamedInsideCheckStat = statSync(renamedInsideCheckPath, { bigint: true })
+  let injectedPreconditionRename = false
+  const renamedInsideCheck = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: renamedInsideCheckPath,
+    content: 'must-not-write-inside-check\n',
+    expectedFile: {
+      identity: {
+        device: renamedInsideCheckStat.dev.toString(),
+        inode: renamedInsideCheckStat.ino.toString()
+      },
+      sha256: createHash('sha256').update(guardedBefore).digest('hex'),
+      bytes: guardedBefore.byteLength
+    },
+    mode: 'standardSystem',
+    timeoutMs: 10_000,
+    beforeGuardedPathVerificationRead: (phase) => {
+      if (phase !== 'precondition' || injectedPreconditionRename) return
+      injectedPreconditionRename = true
+      renameSync(renamedInsideCheckPath, movedInsideCheckPath)
+      writeFileSync(replacementInsideCheckPath, guardedBefore)
+      renameSync(replacementInsideCheckPath, renamedInsideCheckPath)
+    }
+  })
+  assert(!renamedInsideCheck.ok, 'guarded path verification must reject rename after opening its read fd')
+  assert(readFileSync(renamedInsideCheckPath, 'utf8') === 'guarded-before\n', 'replacement path must stay unchanged')
+  assert(readFileSync(movedInsideCheckPath, 'utf8') === 'guarded-before\n', 'opened inode must stay unchanged')
+
+  const postCheckPath = path.join(projectDir, 'guarded-renamed-during-postcheck.txt')
+  const postCheckMoved = path.join(projectDir, 'guarded-written-inode-after-postcheck-rename.txt')
+  const postCheckReplacement = path.join(projectDir, 'guarded-postcheck-replacement.txt')
+  writeFileSync(postCheckPath, guardedBefore)
+  const postCheckStat = statSync(postCheckPath, { bigint: true })
+  let injectedPostconditionRename = false
+  const postCheckResult = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: postCheckPath,
+    content: 'written-before-postcheck\n',
+    expectedFile: {
+      identity: {
+        device: postCheckStat.dev.toString(),
+        inode: postCheckStat.ino.toString()
+      },
+      sha256: createHash('sha256').update(guardedBefore).digest('hex'),
+      bytes: guardedBefore.byteLength
+    },
+    mode: 'standardSystem',
+    timeoutMs: 10_000,
+    beforeGuardedPathVerificationRead: (phase) => {
+      if (phase !== 'postcondition' || injectedPostconditionRename) return
+      injectedPostconditionRename = true
+      renameSync(postCheckPath, postCheckMoved)
+      writeFileSync(postCheckReplacement, 'concurrent-postcheck-replacement\n')
+      renameSync(postCheckReplacement, postCheckPath)
+    }
+  })
+  assert(!postCheckResult.ok, 'guarded postcondition must not report success after canonical path replacement')
+  assert(
+    readFileSync(postCheckPath, 'utf8') === 'concurrent-postcheck-replacement\n',
+    'canonical replacement must remain untouched after postcondition failure'
+  )
+  assert(
+    readFileSync(postCheckMoved, 'utf8') === 'written-before-postcheck\n',
+    'the moved approved inode should expose the write that occurred before postcondition verification'
+  )
+
+  const absentParent = path.join(projectDir, 'guarded-absent-parent')
+  const absentParentMoved = path.join(projectDir, 'guarded-absent-parent-original')
+  const absentOutside = path.join(tempRoot, 'guarded-absent-outside')
+  const absentTarget = path.join(absentParent, 'new.txt')
+  const approvedProjectRoot = realpathSync(projectDir)
+  const approvedProjectRootInfo = statSync(approvedProjectRoot, { bigint: true })
+  mkdirSync(absentParent)
+  mkdirSync(absentOutside)
+  const absentParentEscape = await sandbox.writeTextFileWithSandbox({
+    cwd: projectDir,
+    targetPath: absentTarget,
+    content: 'must-stay-inside-project\n',
+    expectedFile: {
+      state: 'absent',
+      rootPath: approvedProjectRoot,
+      rootIdentity: {
+        device: approvedProjectRootInfo.dev.toString(),
+        inode: approvedProjectRootInfo.ino.toString()
+      }
+    },
+    mode: 'standardSystem',
+    timeoutMs: 10_000,
+    beforeGuardedCommit: () => {
+      const tempName = readdirSync(absentParent).find((name) => name.endsWith('.caogen-write.tmp'))
+      if (!tempName) throw new Error('absent parent race fixture could not find guarded temp file')
+      renameSync(absentParent, absentParentMoved)
+      symlinkSync(absentOutside, absentParent, 'dir')
+      linkSync(path.join(absentParentMoved, tempName), path.join(absentOutside, tempName))
+    }
+  })
+  assert(!absentParentEscape.ok, 'guarded absent write must reject parent replacement with an outside symlink')
+  assert(!existsSync(path.join(absentOutside, 'new.txt')), 'guarded absent write must not publish outside the project')
+
+  const approvedRoot = path.join(tempRoot, 'approved-root')
+  const approvedRootMoved = path.join(tempRoot, 'approved-root-original')
+  mkdirSync(approvedRoot)
+  const approvedRootPath = realpathSync(approvedRoot)
+  const approvedRootInfo = statSync(approvedRootPath, { bigint: true })
+  renameSync(approvedRoot, approvedRootMoved)
+  mkdirSync(approvedRoot)
+  const replacedRootWrite = await sandbox.writeTextFileWithSandbox({
+    cwd: approvedRoot,
+    targetPath: path.join(approvedRoot, 'nested', 'must-not-create.txt'),
+    content: 'unapproved-root\n',
+    expectedFile: {
+      state: 'absent',
+      rootPath: approvedRootPath,
+      rootIdentity: {
+        device: approvedRootInfo.dev.toString(),
+        inode: approvedRootInfo.ino.toString()
+      }
+    },
+    mode: 'standardSystem',
+    timeoutMs: 10_000
+  })
+  assert(!replacedRootWrite.ok, 'guarded absent write must stay bound to the Effect-approved project root')
+  assert(!existsSync(path.join(approvedRoot, 'nested')), 'replacement root must remain untouched')
 }
 
 async function verifySafeProjectPath(safePath, sandbox) {
@@ -316,7 +492,7 @@ function verifyDockerSandboxImage() {
     "'--user'",
     "'node'",
     'verifyFileWritePostcondition',
-    'guarded target identity changed during Docker write',
+    'guarded target path or content changed',
     'guarded target postcondition mismatch after Docker write',
     'if (forceKillTimer) clearTimeout(forceKillTimer)',
     'if (options.signal?.aborted) abort()',

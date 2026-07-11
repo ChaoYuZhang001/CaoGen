@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, lstatSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { constants, existsSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -55,18 +56,22 @@ export interface EffectReconciliationResult {
   reason: string
 }
 
+export interface EffectFileObservationOptions {
+  beforeRead?: (filePath: string) => Promise<void> | void
+}
+
 export async function buildEffectDescriptor(input: {
   toolName: string
   toolInput: Record<string, unknown>
   cwd: string
-}): Promise<EffectDescriptor> {
+}, observationOptions: EffectFileObservationOptions = {}): Promise<EffectDescriptor> {
   const rawToolName = input.toolName.trim()
   const toolName = normalizeToolName(input.toolName)
   const inputDigest = stableValueDigest(input.toolInput)
   let target: EffectTarget
 
   if (toolName === 'write_file') {
-    target = await fileWriteTarget(input.cwd, input.toolInput)
+    target = await fileWriteTarget(input.cwd, input.toolInput, observationOptions)
   } else if (toolName === 'search_replace' && input.toolInput.dry_run !== true) {
     target = await searchReplaceTarget(input.cwd, input.toolInput)
   } else if (toolName === 'edit_file') {
@@ -107,7 +112,10 @@ export async function buildEffectDescriptor(input: {
   }
 }
 
-export async function reconcileEffect(effect: EffectRecord): Promise<EffectReconciliationResult> {
+export async function reconcileEffect(
+  effect: EffectRecord,
+  observationOptions: EffectFileObservationOptions = {}
+): Promise<EffectReconciliationResult> {
   try {
     const observedTargetDigest = stableValueDigest(effect.target)
     const observedIntentDigest = stableValueDigest({
@@ -118,7 +126,7 @@ export async function reconcileEffect(effect: EffectRecord): Promise<EffectRecon
     if (observedTargetDigest !== effect.targetDigest || observedIntentDigest !== effect.intentDigest) {
       return unresolved({ kind: 'integrity_error', reason: 'EffectRecord 摘要校验失败，禁止读取或重放目标' })
     }
-    if (effect.target.kind === 'file_content') return await reconcileFileContent(effect.target)
+    if (effect.target.kind === 'file_content') return await reconcileFileContent(effect.target, observationOptions)
     if (effect.target.kind === 'git_commit') return await reconcileGitCommit(effect.target)
     if (effect.target.kind === 'git_merge') return await reconcileGitMerge(effect.target)
     if (effect.target.kind === 'git_push') return await reconcileGitPush(effect.target)
@@ -135,7 +143,11 @@ export async function reconcileEffect(effect: EffectRecord): Promise<EffectRecon
   }
 }
 
-async function fileWriteTarget(cwd: string, toolInput: Record<string, unknown>): Promise<EffectTarget> {
+async function fileWriteTarget(
+  cwd: string,
+  toolInput: Record<string, unknown>,
+  observationOptions: EffectFileObservationOptions
+): Promise<EffectTarget> {
   const rawPath = stringValue(toolInput.path ?? toolInput.file_path)
   const content = String(toolInput.content ?? '')
   const resolved = resolveWritableProjectPathSync(cwd, rawPath)
@@ -143,17 +155,18 @@ async function fileWriteTarget(cwd: string, toolInput: Record<string, unknown>):
   let preFileIdentity: FileSystemIdentity | undefined
   let preSha256: string | undefined
   let preBytes: number | undefined
-  if (existsSync(resolved.fullPath)) {
-    const info = lstatSync(resolved.fullPath)
-    if (!info.isFile()) throw new Error('write_file 目标已存在但不是普通文件')
-    preState = 'file'
-    preFileIdentity = fileSystemIdentity(resolved.fullPath)
-    preBytes = info.size
-    if (info.size <= MAX_FILE_RECONCILIATION_BYTES) {
-      preSha256 = await sha256File(resolved.fullPath)
+  const observation = await observeFile(resolved.fullPath, MAX_FILE_RECONCILIATION_BYTES, observationOptions)
+  if (observation.state === 'file') {
+    if (typeof observation.sha256 !== 'string') {
+      throw new Error(`write_file 目标超过自动保护上限 ${MAX_FILE_RECONCILIATION_BYTES} bytes`)
     }
+    preState = 'file'
+    preFileIdentity = observation.identity
+    preBytes = observation.bytes
+    preSha256 = observation.sha256
   }
   const expected = Buffer.from(content, 'utf8')
+  assertExpectedFileSize(expected, 'write_file')
   return {
     kind: 'file_content',
     rootPath: resolved.root,
@@ -191,6 +204,7 @@ async function exactFileEditTarget(cwd: string, toolInput: Record<string, unknow
 
 function fileContentTarget(plan: SearchReplacePlan): EffectTarget {
   const expected = Buffer.from(plan.writeContent, 'utf8')
+  assertExpectedFileSize(expected, 'file edit')
   return {
     kind: 'file_content',
     rootPath: plan.rootPath,
@@ -202,6 +216,12 @@ function fileContentTarget(plan: SearchReplacePlan): EffectTarget {
     preBytes: plan.originalBytes,
     expectedSha256: sha256(expected),
     expectedBytes: expected.byteLength
+  }
+}
+
+function assertExpectedFileSize(expected: Buffer, toolName: string): void {
+  if (expected.byteLength > MAX_FILE_RECONCILIATION_BYTES) {
+    throw new Error(`${toolName} 预期内容超过自动保护上限 ${MAX_FILE_RECONCILIATION_BYTES} bytes`)
   }
 }
 
@@ -313,7 +333,8 @@ async function gitPushTarget(cwd: string, toolInput: Record<string, unknown>): P
 }
 
 async function reconcileFileContent(
-  target: Extract<EffectTarget, { kind: 'file_content' }>
+  target: Extract<EffectTarget, { kind: 'file_content' }>,
+  observationOptions: EffectFileObservationOptions
 ): Promise<EffectReconciliationResult> {
   const resolved = resolveWritableProjectPathSync(target.rootPath, target.relativePath)
   if (realpathSync(resolved.root) !== realpathSync(target.rootPath)) {
@@ -322,18 +343,19 @@ async function reconcileFileContent(
   if (target.rootIdentity && !sameFileSystemIdentity(target.rootIdentity, fileSystemIdentity(resolved.root))) {
     return unresolved({ kind: target.kind, reason: '项目根目录设备或 inode 已变化' })
   }
-  if (!existsSync(resolved.fullPath)) {
+  const observation = await observeFile(
+    resolved.fullPath,
+    MAX_FILE_RECONCILIATION_BYTES,
+    observationOptions
+  )
+  if (observation.state === 'absent') {
     const payload = { kind: target.kind, observedState: 'absent', relativePath: target.relativePath }
     return target.preState === 'absent'
       ? notApplied(payload, '目标仍不存在，已证明写入没有发生')
       : unresolved({ ...payload, reason: '目标文件在对账时缺失' })
   }
-  const info = lstatSync(resolved.fullPath)
-  if (!info.isFile()) {
-    return unresolved({ kind: target.kind, observedState: 'non_file', relativePath: target.relativePath })
-  }
-  const observedIdentity = fileSystemIdentity(resolved.fullPath)
-  const observedBytes = info.size
+  const observedIdentity = observation.identity
+  const observedBytes = observation.bytes
   const payload = {
     kind: target.kind,
     relativePath: target.relativePath,
@@ -349,14 +371,14 @@ async function reconcileFileContent(
   if (!couldBeExpected && !couldBePreState) {
     return unresolved({ ...payload, reason: '文件大小既不匹配执行前状态，也不匹配预期状态' })
   }
-  if (observedBytes > MAX_FILE_RECONCILIATION_BYTES) {
+  if (typeof observation.sha256 !== 'string') {
     return unresolved({
       ...payload,
       maxHashBytes: MAX_FILE_RECONCILIATION_BYTES,
       reason: '目标文件超过自动对账哈希上限，已转人工确认'
     })
   }
-  const observedSha256 = await sha256File(resolved.fullPath)
+  const observedSha256 = observation.sha256
   const hashedPayload = { ...payload, observedSha256 }
   if (observedSha256 === target.expectedSha256 && couldBeExpected) {
     return confirmed(hashedPayload, '文件内容与预期摘要完全一致')
@@ -1109,14 +1131,81 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function sha256File(path: string): Promise<string> {
-  return new Promise((resolveHash, reject) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(path)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('error', reject)
-    stream.on('end', () => resolveHash(hash.digest('hex')))
-  })
+type ObservedFile =
+  | { state: 'absent' }
+  | {
+      state: 'file'
+      identity: FileSystemIdentity
+      bytes: number
+      sha256?: string
+    }
+
+async function observeFile(
+  filePath: string,
+  maxHashBytes: number,
+  options: EffectFileObservationOptions
+): Promise<ObservedFile> {
+  const openFlags = safeReadFlags()
+  let handle: Awaited<ReturnType<typeof open>>
+  try {
+    handle = await open(filePath, openFlags)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'absent' }
+    throw error
+  }
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) throw new Error('write_file 目标已存在但不是普通文件')
+    if (before.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error('文件大小超过可安全记录范围')
+    }
+    await options.beforeRead?.(filePath)
+    let digest: string | undefined
+    if (before.size <= BigInt(maxHashBytes)) {
+      const content = await handle.readFile()
+      if (BigInt(content.byteLength) !== before.size) {
+        throw new Error('文件观察期间读取长度发生变化')
+      }
+      digest = sha256(content)
+    }
+    const after = await handle.stat({ bigint: true })
+    const current = await lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (
+      !current ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs ||
+      before.dev !== current.dev ||
+      before.ino !== current.ino ||
+      after.size !== current.size ||
+      after.mtimeNs !== current.mtimeNs ||
+      after.ctimeNs !== current.ctimeNs
+    ) {
+      throw new Error('文件观察期间目标路径或内容发生变化')
+    }
+    return {
+      state: 'file',
+      identity: { device: before.dev.toString(), inode: before.ino.toString() },
+      bytes: Number(before.size),
+      sha256: digest
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+function safeReadFlags(): number {
+  let flags = constants.O_RDONLY
+  if (process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number') flags |= constants.O_NOFOLLOW
+  if (process.platform !== 'win32' && typeof constants.O_NONBLOCK === 'number') flags |= constants.O_NONBLOCK
+  return flags
 }
 
 function stringValue(value: unknown): string {

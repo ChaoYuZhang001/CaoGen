@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
@@ -5,14 +6,14 @@ import {
   runSandboxedCommand,
   writeTextFileWithSandbox,
   type SandboxCommandResult,
+  type SandboxFileWritePrecondition,
   type SandboxMode
 } from './sandbox/docker-sandbox'
 import {
   formatSearchReplaceResult,
   runExactFileEdit,
   runSearchReplace,
-  searchReplacementArgs,
-  type TextFileWriteGuard
+  searchReplacementArgs
 } from './agent/tools/search-replace'
 import { GUI_TOOLS, executeGuiTool, isGuiToolName } from './agent/tools/gui-tools'
 import { formatViewResult, runView } from './agent/tools/view'
@@ -779,7 +780,8 @@ export async function executeCodingTool(
       case 'write_file': {
         const p = jailWritable(cwd, String(args.path ?? ''))
         const content = String(args.content ?? '')
-        const writeResult = await sandboxedFileWrite(cwd, p, content, options)
+        const guard = fileWritePrecondition(cwd, p, content, options.effectTarget)
+        const writeResult = await sandboxedFileWrite(cwd, p, content, options, guard)
         return withSandboxMetadata(
           {
             ok: writeResult.ok,
@@ -1011,7 +1013,7 @@ async function sandboxedFileWrite(
   targetPath: string,
   content: string,
   options: ToolExecutionOptions,
-  guard?: TextFileWriteGuard
+  guard?: SandboxFileWritePrecondition
 ): Promise<SandboxCommandResult> {
   return writeTextFileWithSandbox({
     cwd,
@@ -1028,6 +1030,64 @@ async function sandboxedFileWrite(
     dockerRegistryMirror: options.dockerRegistryMirror,
     signal: options.signal
   })
+}
+
+function fileWritePrecondition(
+  cwd: string,
+  targetPath: string,
+  content: string,
+  target: EffectTarget | undefined
+): SandboxFileWritePrecondition | undefined {
+  if (!target) return undefined
+  if (target.kind !== 'file_content') {
+    throw new Error('write_file 缺少已冻结的文件效果目标')
+  }
+  const resolved = resolveWritableProjectPathSync(cwd, targetPath)
+  if (
+    target.rootPath !== resolved.root ||
+    target.relativePath !== resolved.relativePath
+  ) {
+    throw new Error('write_file 目标路径与已批准 Effect 不一致')
+  }
+  if (target.rootIdentity) {
+    const rootInfo = statSync(resolved.root, { bigint: true })
+    if (
+      rootInfo.dev.toString() !== target.rootIdentity.device ||
+      rootInfo.ino.toString() !== target.rootIdentity.inode
+    ) {
+      throw new Error('write_file 项目根目录身份与已批准 Effect 不一致')
+    }
+  }
+  const expected = Buffer.from(content, 'utf8')
+  if (
+    target.expectedBytes !== expected.byteLength ||
+    target.expectedSha256 !== createHash('sha256').update(expected).digest('hex')
+  ) {
+    throw new Error('write_file 内容与已批准 Effect 不一致')
+  }
+  if (target.preState === 'absent') {
+    if (!target.rootIdentity) {
+      throw new Error('write_file 已批准 Effect 缺少项目根目录身份')
+    }
+    return {
+      state: 'absent',
+      rootPath: target.rootPath,
+      rootIdentity: target.rootIdentity
+    }
+  }
+  if (
+    !target.preFileIdentity ||
+    typeof target.preSha256 !== 'string' ||
+    typeof target.preBytes !== 'number'
+  ) {
+    throw new Error('write_file 已批准 Effect 缺少现有文件前置条件')
+  }
+  return {
+    state: 'file',
+    identity: target.preFileIdentity,
+    sha256: target.preSha256,
+    bytes: target.preBytes
+  }
 }
 
 function withSandboxMetadata(

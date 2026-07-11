@@ -31,6 +31,7 @@ export interface SearchReplaceInput {
 export interface SearchReplaceRunOptions {
   writeTextFile?: (filePath: string, content: string, guard: TextFileWriteGuard) => Promise<void>
   effectTarget?: Extract<EffectTarget, { kind: 'file_content' }>
+  beforeWriteCommit?: () => Promise<void> | void
 }
 
 export interface TextFileWriteGuard {
@@ -155,8 +156,16 @@ async function applyTextPlan(
     sha256: plan.originalSha256,
     bytes: plan.originalBytes
   }
-  if (options.writeTextFile) await options.writeTextFile(plan.filePath, plan.writeContent, writeGuard)
-  else await writeGuardedTextFile(plan.filePath, plan.writeContent, writeGuard)
+  try {
+    if (options.writeTextFile) await options.writeTextFile(plan.filePath, plan.writeContent, writeGuard)
+    else await writeGuardedTextFile(plan.filePath, plan.writeContent, writeGuard, options.beforeWriteCommit)
+  } catch (error) {
+    return {
+      ok: false,
+      filePath: plan.filePath,
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
 
   return publicResult(plan, false, backup.backupPath)
 }
@@ -378,12 +387,10 @@ async function currentPlanError(plan: SearchReplacePlan): Promise<string | undef
 async function writeGuardedTextFile(
   filePath: string,
   content: string,
-  guard: TextFileWriteGuard
+  guard: TextFileWriteGuard,
+  beforeWriteCommit?: () => Promise<void> | void
 ): Promise<void> {
-  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
-    ? constants.O_NOFOLLOW
-    : 0
-  const handle = await open(filePath, constants.O_RDWR | noFollow)
+  const handle = await open(filePath, safeOpenFlags(constants.O_RDWR))
   try {
     const before = await handle.stat({ bigint: true })
     if (!before.isFile()) throw new Error('目标路径不是文件')
@@ -393,6 +400,16 @@ async function writeGuardedTextFile(
     const current = await handle.readFile()
     if (current.byteLength !== guard.bytes || sha256(current) !== guard.sha256) {
       throw new Error('目标文件内容在写入前发生变化，已阻止覆盖')
+    }
+    await beforeWriteCommit?.()
+    const commitTarget = await readUtf8TextFile(filePath)
+    if (
+      commitTarget.ok === false ||
+      !sameIdentity(commitTarget.identity, guard.identity) ||
+      commitTarget.bytes !== guard.bytes ||
+      commitTarget.sha256 !== guard.sha256
+    ) {
+      throw new Error('目标路径在提交写入前发生变化，已阻止覆盖')
     }
 
     const output = Buffer.from(content, 'utf8')
@@ -421,6 +438,15 @@ async function writeGuardedTextFile(
       !observed.equals(output)
     ) {
       throw new Error('目标文件写入后置条件不匹配')
+    }
+    const currentPath = await readUtf8TextFile(filePath)
+    if (
+      currentPath.ok === false ||
+      !sameIdentity(currentPath.identity, guard.identity) ||
+      currentPath.bytes !== output.byteLength ||
+      !currentPath.rawContent.equals(output)
+    ) {
+      throw new Error('目标路径在写入期间发生变化，写入结果未落在已批准路径')
     }
   } finally {
     await handle.close()
@@ -513,10 +539,7 @@ async function readUtf8TextFile(
 } | { ok: false; error: string }> {
   let handle: Awaited<ReturnType<typeof open>>
   try {
-    const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
-      ? constants.O_NOFOLLOW
-      : 0
-    handle = await open(filePath, constants.O_RDONLY | noFollow)
+    handle = await open(filePath, safeOpenFlags(constants.O_RDONLY))
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -531,12 +554,17 @@ async function readUtf8TextFile(
     const current = await lstat(filePath, { bigint: true })
     if (
       current.isSymbolicLink() ||
+      !current.isFile() ||
       before.dev !== after.dev ||
       before.ino !== after.ino ||
       before.size !== after.size ||
       before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs ||
       before.dev !== current.dev ||
-      before.ino !== current.ino
+      before.ino !== current.ino ||
+      after.size !== current.size ||
+      after.mtimeNs !== current.mtimeNs ||
+      after.ctimeNs !== current.ctimeNs
     ) {
       return { ok: false, error: '读取期间目标文件发生变化，请重新预览后再编辑' }
     }
@@ -557,6 +585,13 @@ async function readUtf8TextFile(
   } finally {
     await handle.close()
   }
+}
+
+function safeOpenFlags(baseFlags: number): number {
+  let flags = baseFlags
+  if (process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number') flags |= constants.O_NOFOLLOW
+  if (process.platform !== 'win32' && typeof constants.O_NONBLOCK === 'number') flags |= constants.O_NONBLOCK
+  return flags
 }
 
 function resolveMatches(content: string, needle: string, allowPreviewMatch: boolean): ResolvedMatchSet {
