@@ -22,8 +22,10 @@ const BEZEL_COLOR = '#15181e'
 const ARM_COLOR = '#2c313c'
 const BASE_COLOR = '#22262f'
 const HIGHLIGHT = '#b7c4ce'
+const SCREEN_SURFACE = '#17232d'
+const SCREEN_GLOW = '#243944'
 const SCREEN_INK = '#071018'
-const SCREEN_TEXT = '#dce7f2'
+const SCREEN_TEXT = '#b9c8d3'
 
 /**
  * 双显示器 + 显示器支架臂。
@@ -41,15 +43,15 @@ export default function MonitorSetup({
   const rightScreenRef = useRef<Mesh>(null)
 
   // 屏幕基准发光强度(闭包外语义,避免每帧重算)
-  const baseGlow = useMemo(() => 0.9 * glow, [glow])
+  const baseGlow = useMemo(() => 0.2 * glow, [glow])
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     // 两屏相位错开,产生轻微不同步的呼吸感
     const left = leftScreenRef.current?.material as MeshStandardMaterial | undefined
     const right = rightScreenRef.current?.material as MeshStandardMaterial | undefined
-    if (left) left.emissiveIntensity = baseGlow + Math.sin(t * 2.4) * 0.18 * glow
-    if (right) right.emissiveIntensity = baseGlow + Math.sin(t * 2.4 + 1.1) * 0.18 * glow
+    if (left) left.emissiveIntensity = baseGlow + Math.sin(t * 2.4) * 0.035 * glow
+    if (right) right.emissiveIntensity = baseGlow + Math.sin(t * 2.4 + 1.1) * 0.035 * glow
   })
 
   return (
@@ -139,9 +141,11 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
         <mesh ref={screenRef} position={[0, 0, 0.02]}>
           <planeGeometry args={[0.54, 0.32]} />
           <meshStandardMaterial
-            color={screenColor}
-            emissive={screenColor}
+            color={SCREEN_SURFACE}
+            emissive={SCREEN_GLOW}
             emissiveIntensity={baseGlow}
+            roughness={0.36}
+            metalness={0.08}
             toneMapped={false}
           />
         </mesh>
@@ -159,7 +163,7 @@ function Monitor({ side, screenRef, screenColor, baseGlow }: MonitorProps): Reac
           <meshStandardMaterial
             color={screenColor}
             emissive={screenColor}
-            emissiveIntensity={1.4}
+            emissiveIntensity={0.56}
             toneMapped={false}
           />
         </mesh>
@@ -181,22 +185,22 @@ function ScreenWorkspace({ side, screenColor }: { side: 'left' | 'right'; screen
       </mesh>
       <mesh position={[-0.16, 0.112, 0.004]}>
         <boxGeometry args={[0.12, 0.012, 0.006]} />
-        <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.28} toneMapped={false} />
+        <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.12} toneMapped={false} />
       </mesh>
       <mesh position={[0.15, 0.112, 0.004]}>
         <boxGeometry args={[0.1, 0.012, 0.006]} />
-        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.55} toneMapped={false} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.3} toneMapped={false} />
       </mesh>
 
       {lineYs.map((y, i) => (
         <group key={`${side}-line-${i}`} position={[-0.14 + i * 0.012 * dir, y, 0.004]}>
           <mesh position={[lineWidths[i] / 2, 0, 0]}>
             <boxGeometry args={[lineWidths[i], 0.012, 0.006]} />
-            <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.18} toneMapped={false} transparent opacity={0.82} />
+            <meshStandardMaterial color={SCREEN_TEXT} emissive={SCREEN_TEXT} emissiveIntensity={0.08} toneMapped={false} transparent opacity={0.78} />
           </mesh>
           <mesh position={[-0.038, 0, 0.002]}>
             <boxGeometry args={[0.026, 0.012, 0.007]} />
-            <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.42} toneMapped={false} />
+            <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.24} toneMapped={false} />
           </mesh>
         </group>
       ))}
@@ -208,12 +212,12 @@ function ScreenWorkspace({ side, screenColor }: { side: 'left' | 'right'; screen
       {[0.025, 0.052, 0.038, 0.068].map((h, i) => (
         <mesh key={`${side}-bar-${i}`} position={[0.075 * dir + i * 0.034 * dir, -0.12 + h / 2, 0.008]}>
           <boxGeometry args={[0.018, h, 0.007]} />
-          <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.48} toneMapped={false} transparent opacity={0.9} />
+          <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.26} toneMapped={false} transparent opacity={0.86} />
         </mesh>
       ))}
       <mesh position={[-0.15 * dir, -0.108, 0.006]}>
         <boxGeometry args={[0.16, 0.012, 0.006]} />
-        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.52} toneMapped={false} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={0.28} toneMapped={false} />
       </mesh>
     </group>
   )

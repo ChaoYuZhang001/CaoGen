@@ -4,7 +4,7 @@ import { Vector3 } from 'three'
 import type { Group } from 'three'
 import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
-import { applyIdle, applyTalking, applyWalking } from './AvatarAnimations'
+import { applyIdle, applyStandingTalking, applyWalking } from './AvatarAnimations'
 import { vendorSkin } from './VendorSkins'
 import { providerLogoFor } from './ProviderLogos'
 
@@ -23,6 +23,7 @@ export interface AgentWalkerSpec {
   modelName?: string
   phase: number
   holdAtTarget?: boolean
+  departureDelay?: number
 }
 
 interface AgentWalkersProps {
@@ -37,7 +38,7 @@ type WalkStage = 'toTarget' | 'target' | 'toHome' | 'home'
 
 const SPEED = 1.05
 const MIN_TRAVEL_SECONDS = 2.8
-const MAX_TRAVEL_SECONDS = 7.2
+const MAX_TRAVEL_SECONDS = 6
 const DWELL_SECONDS: Record<AgentWalkReason, number> = {
   tea: 6.5,
   approval: 8.5,
@@ -244,6 +245,7 @@ function OneAgentWalker({
   const rigRef = useRef<AvatarRefs>(null)
   const stageRef = useRef<WalkStage>('toTarget')
   const awayRef = useRef(false)
+  const startedAtRef = useRef<number | null>(null)
   const [stage, setStage] = useState<WalkStage>('toTarget')
 
   const home = useMemo(() => new Vector3(...spec.home), [spec.home])
@@ -293,14 +295,23 @@ function OneAgentWalker({
 
     const clock = state.clock.getElapsedTime()
     const elapsed = clock + spec.phase
-    const local = spec.reason === 'approval' || spec.holdAtTarget ? elapsed : elapsed % cycleSeconds
+    if (startedAtRef.current === null) startedAtRef.current = clock
+    const oneWayElapsed = Math.max(0, clock - startedAtRef.current)
+    const oneWay = spec.reason === 'approval' || spec.holdAtTarget
+    const departureDelay = Math.max(0, spec.departureDelay ?? 0)
+    const waitingToDepart = oneWay && oneWayElapsed < departureDelay
+    const local = oneWay ? Math.max(0, oneWayElapsed - departureDelay) : elapsed % cycleSeconds
     const dwellEnd = travelSeconds + DWELL_SECONDS[spec.reason]
     const backEnd = dwellEnd + travelSeconds
     let nextStage: WalkStage
     let desiredFacing = group.rotation.y
     let walking = false
 
-    if (local < travelSeconds) {
+    if (waitingToDepart) {
+      position.copy(home)
+      desiredFacing = facingFromTo(home, homeLookAt, desiredFacing)
+      nextStage = 'home'
+    } else if (local < travelSeconds) {
       const k = smoothstep(local / travelSeconds)
       position.copy(home).lerp(target, k)
       desiredFacing = facingFromTo(home, target, desiredFacing)
@@ -337,9 +348,19 @@ function OneAgentWalker({
     group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, 0.18)
     group.visible = nextAway
 
-    const animOpts = { phase: spec.phase * 0.17, liveliness: walking ? 0.92 : 0.62 }
+    const secondsToStop =
+      nextStage === 'toTarget'
+        ? travelSeconds - local
+        : nextStage === 'toHome'
+          ? backEnd - local
+          : 0
+    const arrivalEase = walking ? smoothstep(clamp(secondsToStop / 0.9, 0, 1)) : 0
+    const animOpts = {
+      phase: spec.phase * 0.17,
+      liveliness: walking ? 0.2 + arrivalEase * 0.72 : 0.62
+    }
     if (walking) applyWalking(refs, clock, animOpts)
-    else if (nextStage === 'target' && spec.reason === 'approval') applyTalking(refs, clock, animOpts)
+    else if (nextStage === 'target' && spec.reason === 'approval') applyStandingTalking(refs, clock, animOpts)
     else applyIdle(refs, clock, animOpts)
   })
 

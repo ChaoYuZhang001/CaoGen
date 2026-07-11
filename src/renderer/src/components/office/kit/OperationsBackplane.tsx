@@ -105,8 +105,8 @@ function DataTrunk(): React.JSX.Element {
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = 0.18 + Math.sin(t * 2.6) * 0.06
-      pulseRef.current.opacity = 0.34 + Math.sin(t * 1.8) * 0.05
+      pulseRef.current.emissiveIntensity = 0.08 + Math.sin(t * 2.6) * 0.025
+      pulseRef.current.opacity = 0.22 + Math.sin(t * 1.8) * 0.03
     }
   })
 
@@ -123,9 +123,9 @@ function DataTrunk(): React.JSX.Element {
           ref={pulseRef}
           color={STEEL_BLUE}
           emissive={STEEL_BLUE}
-          emissiveIntensity={0.18}
+          emissiveIntensity={0.08}
           transparent
-          opacity={0.34}
+          opacity={0.22}
           toneMapped={false}
         />
       </mesh>
@@ -142,19 +142,19 @@ function DataTrunk(): React.JSX.Element {
           </mesh>
           <mesh position={[x / 2, 0.06, z + dir * 0.08]} receiveShadow>
             <boxGeometry args={[Math.abs(x) * 0.82, 0.01, 0.02]} />
-            <meshStandardMaterial color={STEEL_BLUE} emissive={STEEL_BLUE} emissiveIntensity={0.12} transparent opacity={0.3} toneMapped={false} />
+            <meshStandardMaterial color={STEEL_BLUE} emissive={STEEL_BLUE} emissiveIntensity={0.05} transparent opacity={0.2} toneMapped={false} />
           </mesh>
         </group>
       ))}
       {[-3.82, -2.62, -1.42, -0.22, 0.98, 2.18].map((z, i) => (
         <mesh key={`node-${z}`} position={[0, 0.074, z]} receiveShadow>
-          <cylinderGeometry args={[0.08, 0.08, 0.012, 28]} />
+          <boxGeometry args={[i % 3 === 0 ? 0.18 : 0.12, 0.01, 0.035]} />
           <meshStandardMaterial
             color={i % 3 === 0 ? APPROVAL : SIGNAL_CYAN}
             emissive={i % 3 === 0 ? APPROVAL : SIGNAL_CYAN}
-            emissiveIntensity={0.28}
+            emissiveIntensity={0.08}
             transparent
-            opacity={0.42}
+            opacity={0.24}
             toneMapped={false}
           />
         </mesh>
@@ -209,11 +209,11 @@ export default function OperationsBackplane({
           <mesh key={`uplink-${x}`} position={[x, -0.76, 0.05]}>
             <boxGeometry args={[0.035, 0.3, 0.018]} />
             <meshStandardMaterial
-              color={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
-              emissive={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
-              emissiveIntensity={0.24}
-              transparent
-              opacity={0.48}
+            color={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
+            emissive={i % 2 === 0 ? SIGNAL_CYAN : APPROVAL}
+            emissiveIntensity={0.12}
+            transparent
+            opacity={0.3}
               toneMapped={false}
             />
           </mesh>

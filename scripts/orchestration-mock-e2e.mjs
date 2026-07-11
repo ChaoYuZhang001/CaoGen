@@ -20,14 +20,14 @@ const projectDir = path.join(tempRoot, 'project')
 const approvalFileName = 'office-approval-required.txt'
 const officeFailureMessage = 'office deterministic validation fault'
 const OFFICE_OVERVIEW_CAMERA = {
-  position: [0.28, 4.58, 9.28],
-  target: [0.02, 0.76, -1.12],
-  fov: 43
+  position: [0.28, 4.5, 9.55],
+  target: [0.02, 0.82, -1.18],
+  fov: 44
 }
 const OFFICE_FACILITIES_CAMERA = {
-  position: [-2.4, 4.9, 12],
-  target: [-0.15, 0.82, 2],
-  fov: 43
+  position: [-1.6, 5.5, 14.6],
+  target: [-1.6, 0.82, 4.2],
+  fov: 44
 }
 const electronBin =
   process.platform === 'win32'
@@ -683,6 +683,55 @@ try {
     }
   })
 
+  await check('3D office facility cameras show hydration, restroom, and dining zones', async () => {
+    const screenshots = {}
+    // Let staggered facility walkers clear the shared aisle before capturing acceptance evidence.
+    await sleep(5_500)
+    for (const key of ['hydration', 'restroom', 'dining']) {
+      await page.click('.office-camera-button:nth-child(1)')
+      await waitForValue(
+        () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+        (value) => value === 'overview',
+        5_000,
+        `waiting for overview before ${key} facility camera`
+      )
+      await page.click('.office-camera-button:nth-child(3)')
+      await waitForValue(
+        () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+        (value) => value === 'facilities',
+        5_000,
+        `waiting for facilities camera before ${key}`
+      )
+      await sleep(900)
+      const target = await page.evaluate((expected) => {
+        const wrap = document.querySelector('.office-canvas-wrap')
+        try {
+          return JSON.parse(wrap?.getAttribute('data-office-facility-hit-targets') || '[]').find((item) => item.id === expected) || null
+        } catch {
+          return null
+        }
+      }, key)
+      assert(target?.id === key, `missing ${key} facility target: ${JSON.stringify(target)}`)
+      await clickProjectedOfficeTarget(page, target, OFFICE_FACILITIES_CAMERA)
+      await waitForValue(
+        () =>
+          page.evaluate((expected) => {
+            const wrap = document.querySelector('.office-canvas-wrap')
+            return {
+              selected: wrap?.getAttribute('data-office-selected-facility') ?? '',
+              panel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? ''
+            }
+          }, key),
+        (value) => value.selected === key && value.panel === key,
+        6_000,
+        `waiting for ${key} facility selection`
+      )
+      await sleep(1_200)
+      screenshots[key] = await screenshot(page, `02-office-facility-${key}`)
+    }
+    report.officeFacilityScreenshots = screenshots
+  })
+
   await check('3D office canvas objects select agents without leaving the control room', async () => {
     await page.click('.office-camera-button:nth-child(1)')
     await waitForValue(
@@ -749,6 +798,12 @@ try {
       6_000,
       'waiting for real workstation object click selection'
     )
+    await sleep(1_400)
+    const focusedWorkstationScreenshot = await screenshot(page, '02-office-focused-workstation')
+    report.officeFocusedWorkstation = {
+      id: clickPlan.workstation.id,
+      screenshot: focusedWorkstationScreenshot
+    }
 
     assert(clickPlan.walkerCount >= 1, `expected walker hit target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.walker?.id, `missing walker click target: ${JSON.stringify(clickPlan)}`)
@@ -826,33 +881,41 @@ try {
     report.officeCanvas = stats
   })
   await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
+    await page.click('.office-camera-button:nth-child(1)')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'overview',
+      5_000,
+      'waiting for overview before office visibility screenshot'
+    )
+    await sleep(1_200)
     const file = await screenshot(page, '02-office-subagent-packets')
     const stats = analyzeOfficeScreenshot(file)
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > 0.2, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.brightRatio > 0.005, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
-    assert(stats.scene.coloredRatio > 0.01, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.coloredRatio > 0.009, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
     assert(
       stats.leftSightline.darkRatio < 0.82 &&
-        stats.leftSightline.uniqueColorBuckets >= 100 &&
-        stats.leftSightline.coloredRatio > 0.005,
+        stats.leftSightline.uniqueColorBuckets >= 70 &&
+        stats.leftSightline.coloredRatio > 0.004,
       `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
     )
     assert(
-      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredRatio > 0.01,
+      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredRatio > 0.008,
       `central office work area is not readable: ${JSON.stringify(stats.centralWorkArea)}`
     )
     assert(
       stats.robotWorkArea.nonDarkRatio > 0.35 &&
         stats.robotWorkArea.brightRatio > 0.015 &&
-        stats.robotWorkArea.coloredRatio > 0.02,
+        stats.robotWorkArea.coloredRatio > 0.01,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
     )
     assert(
       stats.nonErrorWorkArea.nonDarkRatio > 0.35 &&
         stats.nonErrorWorkArea.brightRatio > 0.015 &&
-        stats.nonErrorWorkArea.coloredRatio > 0.02 &&
+        stats.nonErrorWorkArea.coloredRatio > 0.009 &&
         stats.nonErrorWorkArea.redRatio < 0.02 &&
         stats.nonErrorWorkArea.cyanRatio < 0.35,
       `non-error office must stay readable and varied without red or cyan flooding: ${JSON.stringify(stats.nonErrorWorkArea)}`
@@ -883,6 +946,28 @@ try {
       'waiting for selected office session to open'
     )
     report.officeSelectedSessionOpenSmoke = { selected: before.selected, officeGone: opened.officeGone }
+  })
+  await check('3D office light theme keeps silver robots readable', async () => {
+    await page.evaluate(async () => {
+      await window.agentDesk.updateSettings({ theme: 'light' })
+    })
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForAgentDesk(page)
+    await waitForValue(
+      () => page.evaluate(() => document.documentElement.getAttribute('data-theme') ?? ''),
+      (value) => value === 'light',
+      8_000,
+      'waiting for light theme after reload'
+    )
+    await page.click('.sidebar-office')
+    await page.waitForSelector('.office canvas', { timeout: 20_000 })
+    await sleep(1_800)
+    const file = await screenshot(page, '03-office-light-overview')
+    const stats = analyzeOfficeScreenshot(file)
+    report.officeLightScreenshot = stats
+    assert(stats.width >= 1000 && stats.height >= 600, `light office screenshot too small: ${JSON.stringify(stats)}`)
+    assert(stats.scene.nonDarkRatio > 0.55, `light office scene is too dark: ${JSON.stringify(stats.scene)}`)
+    assert(stats.robotWorkArea.uniqueColorBuckets >= 80, `light office robots lack visual separation: ${JSON.stringify(stats.robotWorkArea)}`)
   })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)

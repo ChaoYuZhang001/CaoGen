@@ -16,8 +16,8 @@ export interface OfficeFacilitySpec {
 }
 
 export const OFFICE_FACILITY_OVERVIEW_CAMERA = {
-  position: [-2.4, 4.9, 12] as [number, number, number],
-  target: [-0.15, 0.82, 2] as [number, number, number]
+  position: [-1.6, 5.5, 14.6] as [number, number, number],
+  target: [-1.6, 0.82, 4.2] as [number, number, number]
 }
 
 export const OFFICE_FACILITY_SPECS: OfficeFacilitySpec[] = [
@@ -27,7 +27,7 @@ export const OFFICE_FACILITY_SPECS: OfficeFacilitySpec[] = [
     statusKey: 'officeFacilityReady',
     accent: '#8fe9ff',
     position: [4.86, 0, 1.82],
-    hit: [4.86, 0.74, 1.82],
+    hit: [4.86, 1.9, 1.82],
     cameraPosition: [3.1, 2.95, 5.72],
     cameraTarget: [4.78, 0.76, 1.72]
   },
@@ -36,20 +36,20 @@ export const OFFICE_FACILITY_SPECS: OfficeFacilitySpec[] = [
     labelKey: 'officeFacilityRestroom',
     statusKey: 'officeFacilityReady',
     accent: '#8fe9ff',
-    position: [-5.62, 0, 2.64],
-    hit: [-5.62, 0.52, 2.72],
-    cameraPosition: [-3.72, 2.85, 5.98],
-    cameraTarget: [-5.44, 0.64, 2.68]
+    position: [-8, 0, 4.65],
+    hit: [-8, 2.02, 4.71],
+    cameraPosition: [-6.45, 4.6, 9.15],
+    cameraTarget: [-8, 0.45, 5.35]
   },
   {
     key: 'dining',
     labelKey: 'officeFacilityDining',
     statusKey: 'officeFacilityReady',
     accent: '#5f7f8c',
-    position: [-4.74, 0, 2.78],
-    hit: [-4.74, 0.52, 2.86],
-    cameraPosition: [-3.2, 2.82, 6.04],
-    cameraTarget: [-4.7, 0.62, 2.8]
+    position: [-5, 0, 6],
+    hit: [-5, 2.02, 6.06],
+    cameraPosition: [-2, 4.5, 10.8],
+    cameraTarget: [-4.45, 0.55, 6.25]
   }
 ]
 
@@ -57,63 +57,6 @@ interface FacilityHotspotsProps {
   specs: OfficeFacilitySpec[]
   activeKey?: OfficeFacilityKey | null
   onSelect: (key: OfficeFacilityKey) => void
-}
-
-function FacilityGlyph({ kind, accent }: { kind: OfficeFacilityKey; accent: string }): React.JSX.Element {
-  if (kind === 'hydration') {
-    return (
-      <group position={[0, 0.18, 0]}>
-        {[-0.04, 0.02, 0.08].map((y, i) => (
-          <mesh key={`hydration-glyph-slat-${i}`} position={[0, y, 0]}>
-            <boxGeometry args={[0.16 - i * 0.035, 0.022, 0.018]} />
-            <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3 + i * 0.06} transparent opacity={0.78} toneMapped={false} />
-          </mesh>
-        ))}
-      </group>
-    )
-  }
-
-  if (kind === 'restroom') {
-    return (
-      <group position={[0, 0.2, 0]}>
-        {[-0.075, 0.075].map((x) => (
-          <group key={x} position={[x, 0, 0]}>
-            <mesh position={[0, 0.09, 0]}>
-              <boxGeometry args={[0.07, 0.07, 0.018]} />
-              <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.38} toneMapped={false} />
-            </mesh>
-            <mesh position={[0, -0.035, 0]}>
-              <boxGeometry args={[0.07, 0.16, 0.018]} />
-              <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.28} toneMapped={false} />
-            </mesh>
-          </group>
-        ))}
-      </group>
-    )
-  }
-
-  return (
-    <group position={[0, 0.2, 0]}>
-      <mesh position={[-0.06, 0, 0]}>
-        <boxGeometry args={[0.026, 0.28, 0.018]} />
-        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
-      </mesh>
-      {[-0.1, -0.06, -0.02].map((x) => (
-        <mesh key={x} position={[x, 0.13, 0]}>
-          <boxGeometry args={[0.014, 0.088, 0.016]} />
-          <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
-        </mesh>
-      ))}
-      <mesh position={[0.08, 0.02, 0]} rotation={[0, 0, -0.1]}>
-        <boxGeometry args={[0.03, 0.31, 0.018]} />
-        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.32} toneMapped={false} />
-      </mesh>
-      <mesh position={[0.1, 0.14, 0]} rotation={[0, 0, -0.1]}>
-        <boxGeometry args={[0.07, 0.09, 0.016]} />
-        <meshStandardMaterial color="#9fb2c2" emissive={accent} emissiveIntensity={0.3} toneMapped={false} />
-      </mesh>
-    </group>
-  )
 }
 
 function FacilityHotspot({
@@ -131,11 +74,11 @@ function FacilityHotspot({
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = (active ? 0.52 : 0.28) + Math.sin(t * 2.4) * (active ? 0.18 : 0.08)
-      pulseRef.current.opacity = (active ? 0.6 : 0.34) + Math.sin(t * 2.1) * 0.06
+      pulseRef.current.emissiveIntensity = (active ? 0.24 : 0.08) + Math.sin(t * 2.4) * (active ? 0.05 : 0.02)
+      pulseRef.current.opacity = (active ? 0.36 : 0.12) + Math.sin(t * 2.1) * 0.025
     }
     if (ringRef.current) {
-      ringRef.current.emissiveIntensity = (active ? 0.74 : 0.36) + Math.sin(t * 3.2) * (active ? 0.2 : 0.08)
+      ringRef.current.emissiveIntensity = (active ? 0.32 : 0.1) + Math.sin(t * 3.2) * (active ? 0.06 : 0.025)
     }
   })
 
@@ -153,39 +96,34 @@ function FacilityHotspot({
 
   return (
     <group position={spec.position} onClick={clickSelect} onDoubleClick={clickSelect} onPointerOver={cursorOver} onPointerOut={cursorOut}>
-      <mesh position={[0, 0.046, 0]} receiveShadow>
-        <boxGeometry args={[0.68, 0.02, 0.34]} />
+      <mesh position={[0, 0.024, 0]} receiveShadow>
+        <boxGeometry args={[0.82, 0.012, 0.48]} />
         <meshStandardMaterial
           ref={pulseRef}
           color={spec.accent}
           emissive={spec.accent}
-          emissiveIntensity={0.34}
+          emissiveIntensity={active ? 0.24 : 0.08}
           transparent
-          opacity={0.38}
+          opacity={active ? 0.36 : 0.12}
           toneMapped={false}
         />
       </mesh>
       {[-0.2, 0.2].map((x) => (
-        <mesh key={`facility-active-slat-${x}`} position={[x, 0.066, 0]}>
-          <boxGeometry args={[active ? 0.24 : 0.16, 0.014, 0.024]} />
+        <mesh key={`facility-active-slat-${x}`} position={[x, 0.042, 0.14]}>
+          <boxGeometry args={[active ? 0.28 : 0.16, 0.012, 0.022]} />
           <meshStandardMaterial
             ref={x < 0 ? ringRef : undefined}
             color={active ? '#b7c4ce' : spec.accent}
             emissive={spec.accent}
-            emissiveIntensity={active ? 0.78 : 0.36}
+            emissiveIntensity={active ? 0.32 : 0.1}
             transparent
-            opacity={active ? 0.7 : 0.48}
+            opacity={active ? 0.62 : 0.24}
             toneMapped={false}
           />
         </mesh>
       ))}
-      <mesh position={[0, 0.36, 0]} castShadow>
-        <boxGeometry args={[0.32, 0.035, 0.09]} />
-        <meshStandardMaterial color={spec.accent} emissive={spec.accent} emissiveIntensity={0.52} toneMapped={false} />
-      </mesh>
-      <FacilityGlyph kind={spec.key} accent={spec.accent} />
-      <mesh position={[0, 0.52, 0]} visible>
-        <boxGeometry args={[0.86, 1.04, 0.86]} />
+      <mesh position={[0, spec.hit[1], spec.hit[2] - spec.position[2]]} visible>
+        <boxGeometry args={[1.4, 0.36, 0.52]} />
         <meshBasicMaterial transparent opacity={0.01} depthWrite={false} />
       </mesh>
     </group>

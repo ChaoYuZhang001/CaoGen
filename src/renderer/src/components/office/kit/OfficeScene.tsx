@@ -40,13 +40,19 @@ const FACE_LEFT = -Math.PI / 2
 export default function OfficeScene({
   position = [0, 0, 0],
   rotation = [0, 0, 0],
-  scale = 1
-}: OfficeProp): React.JSX.Element {
+  scale = 1,
+  lightMode = false
+}: OfficeProp & { lightMode?: boolean }): React.JSX.Element {
   return (
     <group position={position} rotation={rotation} scale={scale}>
       {/* ---- 建筑外壳 ---- */}
       {/* 地板:略大于房间,铺到墙下 */}
-      <Floor size={ROOM + 2} color="#1d232b" />
+      <Floor
+        size={ROOM + 2}
+        color={lightMode ? '#a7b1b7' : '#1d232b'}
+        seamMainColor={lightMode ? '#6f7d86' : '#2a2a2a'}
+        seamSubColor={lightMode ? '#bcc4c9' : '#1c1c1c'}
+      />
 
       {/* 建筑光带:贴边/高位/贴地,提升夜间层次,不放在相机和工位之间。 */}
       <ArchitecturalLightBands presentationMode />
@@ -61,7 +67,7 @@ export default function OfficeScene({
       <Walls size={ROOM} height={WALL_H} openSide="back" openSides={['front', 'left', 'right']} cutaway cutawayHeight={0.12} />
 
       {/* 落地窗幕墙:填充后墙开口(玻璃贴内壁线 z=-10,窗外城市在更远 -Z) */}
-      <WindowWall position={[0, 0, -ROOM / 2]} minimalFrames />
+      <WindowWall position={[0, 0, -ROOM / 2]} minimalFrames lightMode={lightMode} />
 
       {/* 左侧剖切玻璃走廊:补足开放视角里的侧向外景,避免黑色空背景像墙面遮挡。 */}
       <SideGlassCorridor presentationMode />
@@ -74,9 +80,9 @@ export default function OfficeScene({
 
       {/* ---- 前左:休息区 ---- */}
       {/* 地毯划分休息区(青色发光边框呼吸) */}
-      <AreaRug position={[-2.5, 0, 8]} scale={1.5} />
+      <AreaRug position={[1.6, 0, 8.1]} scale={1.5} />
       {/* 沙发:背靠前墙(+Z),面朝室内 -Z */}
-      <LoungeSofa position={[-2.5, 0, 8.2]} />
+      <LoungeSofa position={[1.6, 0, 8.3]} />
 
       {/* ---- 前右角:会议桌 ---- */}
       <MeetingTable position={[7, 0, 6.5]} seats={4} />
@@ -97,8 +103,8 @@ export default function OfficeScene({
       <Plant position={[-8, 0, -8]} kind="tall" />
       <Plant position={[8, 0, -8]} kind="tall" />
       {/* 休息区两侧 */}
-      <Plant position={[-5, 0, 8.2]} kind="tall" />
-      <Plant position={[0.4, 0, 8.4]} kind="tall" />
+      <Plant position={[-9.25, 0, 8.95]} kind="tall" />
+      <Plant position={[4.1, 0, 8.7]} kind="tall" />
     </group>
   )
 }

@@ -32,7 +32,7 @@ function gridPositions(count: number): Array<[number, number, number]> {
   const SAFE_Z = 8 // 中央可用进深(z∈[-5,3])
   const gapX = cols > 1 ? Math.min(3.2, SAFE_X / (cols - 1)) : 0
   const gapZ = rowCount > 1 ? Math.min(3.2, SAFE_Z / (rowCount - 1)) : 0
-  const centerZ = -1.7 // 整体后移,避免前景家具遮挡工位
+  const centerZ = -2.1 // 整体后移,保证前排机器人与座椅完整入镜
   const out: Array<[number, number, number]> = []
   for (let i = 0; i < count; i++) {
     const col = i % cols
@@ -51,12 +51,13 @@ const TEA_STOPS: Array<[number, number, number]> = [
 const TEA_LOOK_AT: [number, number, number] = [5.48, 0, 2.02]
 const APPROVAL_STOPS: Array<[number, number, number]> = [[4.18, 0, 0.74]]
 const APPROVAL_LOOK_AT: [number, number, number] = [5.18, 0, 0.78]
-const RESTROOM_STOPS: Array<[number, number, number]> = [[-6.32, 0, 2.18]]
-const RESTROOM_LOOK_AT: [number, number, number] = [-5.62, 0, 2.64]
-const DINING_STOPS: Array<[number, number, number]> = [[-3.86, 0, 2.36]]
-const DINING_LOOK_AT: [number, number, number] = [-4.74, 0, 2.78]
-const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.58, 9.28]
-const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.76, -1.12]
+const RESTROOM_STOPS: Array<[number, number, number]> = [[-7.62, 0, 3.92]]
+const RESTROOM_LOOK_AT: [number, number, number] = [-8, 0, 4.65]
+const DINING_STOPS: Array<[number, number, number]> = [[-5.34, 0, 5.18]]
+const DINING_LOOK_AT: [number, number, number] = [-4.45, 0, 6.55]
+const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.5, 9.55]
+const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.82, -1.18]
+const OFFICE_CAMERA_FOV = 44
 const WALKER_VISUAL_SCALE = 1.18
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
@@ -149,7 +150,7 @@ export default function OfficeView(): React.JSX.Element {
     themePref === 'light' ||
     (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
   const scene = isLight
-    ? { bg: '#f0f2f3', floor: '#e4e7e8', grid1: '#cfd6da', grid2: '#dde2e5', ground: '#e9ecee' }
+    ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' }
     : { bg: '#10151b', floor: '#202832', grid1: '#34404c', grid2: '#26313a', ground: '#1d252d' }
 
   const ids = order.filter((id) => sessions[id])
@@ -273,8 +274,8 @@ export default function OfficeView(): React.JSX.Element {
           providerName,
           providerBaseUrl,
           modelName,
-          // 打开办公区时直接展示"已抵达审批台"的状态,避免验收截图停在半路。
-          phase: 8.4 + awaiting.length * 4.5
+          phase: 8.4 + awaiting.length * 4.5,
+          departureDelay: 0
         })
       } else if (activity === 'idle') {
         const target = TEA_STOPS[idle.length % TEA_STOPS.length]
@@ -289,8 +290,9 @@ export default function OfficeView(): React.JSX.Element {
           providerName,
           providerBaseUrl,
           modelName,
-          // 启动时先让离席 Agent 已经在茶水点,避免默认视角里像是站在工位前背对电脑。
-          phase: 8.4 + idle.length * 5.15
+          phase: 8.4 + idle.length * 5.15,
+          holdAtTarget: true,
+          departureDelay: 0.4
         })
       } else if (activity === 'completed') {
         const reason = completedFacility.length % 2 === 0 ? 'dining' : 'restroom'
@@ -309,9 +311,9 @@ export default function OfficeView(): React.JSX.Element {
           providerName,
           providerBaseUrl,
           modelName,
-          // 已完成 Agent 只抽样展示在餐厅/卫生间目标点,避免默认验收镜头里点击目标随循环漂移。
           phase: 8.4 + completedFacility.length * 4.85,
-          holdAtTarget: true
+          holdAtTarget: true,
+          departureDelay: 2.2 + completedFacility.length * 1.4
         })
       }
     })
@@ -394,16 +396,18 @@ export default function OfficeView(): React.JSX.Element {
       }
     }
     if (cameraPreset === 'agent' && activeOfficePosition) {
-      const focusX = activeOfficePosition[0] * 0.45
-      const focusZ = activeOfficePosition[2] * 0.72 + OFFICE_CAMERA_TARGET[2] * 0.28
+      const focusX = activeOfficePosition[0]
+      const focusZ = activeOfficePosition[2] + 0.34
       return {
-        position: [focusX + 2.7, 3.18, focusZ + 5.35] as [number, number, number],
-        target: [focusX, 0.96, focusZ] as [number, number, number]
+        position: [focusX + 1.58, 2.34, focusZ + 3.48] as [number, number, number],
+        target: [focusX - 0.18, 0.86, focusZ - 0.06] as [number, number, number]
       }
     }
     if (cameraPreset === 'incidents') return incidentCamera
     return { position: OFFICE_CAMERA_POSITION, target: OFFICE_CAMERA_TARGET }
   }, [activeOfficePosition, cameraPreset, incidentCamera, selectedFacilitySpec])
+  const cameraMinDistance =
+    cameraPreset === 'overview' || (cameraPreset === 'facilities' && !selectedFacilitySpec) ? 5.5 : 2.6
   const workstationHitTargets = ids.map((id, i) => ({
     id,
     x: positions[i]?.[0] ?? 0,
@@ -665,7 +669,7 @@ export default function OfficeView(): React.JSX.Element {
               </button>
             ))}
           </div>
-          {activeOfficeSession && activeOfficeId && activeOfficeActivity && (
+          {cameraPreset !== 'facilities' && activeOfficeSession && activeOfficeId && activeOfficeActivity && (
             <div className="office-selection-panel no-drag" data-office-selection-panel={activeOfficeId}>
               <div className="office-selection-kicker">{t('officeSelectedAgent')}</div>
               <div className="office-selection-title">{activeOfficeSession.meta.title}</div>
@@ -757,7 +761,7 @@ export default function OfficeView(): React.JSX.Element {
           )}
           <Canvas
             shadows
-            camera={{ position: OFFICE_CAMERA_POSITION, fov: 43, near: 0.1, far: 100 }}
+            camera={{ position: OFFICE_CAMERA_POSITION, fov: OFFICE_CAMERA_FOV, near: 0.1, far: 100 }}
             dpr={[1, 1.5]}
             frameloop="always"
             resize={{ offsetSize: true }}
@@ -789,7 +793,7 @@ export default function OfficeView(): React.JSX.Element {
 
           {/* 富场景背景层:地板/墙/落地窗/家具/休息区/会议桌/白板/机架/茶水角 */}
           <Suspense fallback={null}>
-            <OfficeScene />
+            <OfficeScene lightMode={isLight} />
           </Suspense>
           <ContactShadows
             position={[0, 0.02, 0]}
@@ -843,7 +847,12 @@ export default function OfficeView(): React.JSX.Element {
             />
           </Suspense>
 
-          <CameraRig position={cameraPose.position} target={cameraPose.target} auto={false} />
+          <CameraRig
+            position={cameraPose.position}
+            target={cameraPose.target}
+            auto={false}
+            minDistance={cameraMinDistance}
+          />
 
           </Canvas>
         </div>
