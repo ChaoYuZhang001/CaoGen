@@ -6,7 +6,7 @@
 
 ### 国产开源 · 多厂商不绑定 · AI 工作桌面
 
-<img src="https://img.shields.io/badge/version-v0.1.3-blue" alt="version">
+<img src="https://img.shields.io/badge/version-v0.1.4-blue" alt="version">
 <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
@@ -139,11 +139,11 @@
 
 从 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载最新版本：
 
-| 平台 | 当前公开包 | 状态 | 说明 |
+| 平台 | 当前/待发布包 | 状态 | 说明 |
 |---|---|---|---|
-| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 已发布 | 推荐 M 系列 Mac 使用 |
-| macOS Intel | `CaoGen-0.1.3.dmg` / `CaoGen-0.1.3-mac.zip` | 已发布 | 适合 Intel Mac |
-| Windows | `CaoGen.Setup.0.1.3.exe` | 已发布 | 请按 GitHub Release 资产和校验信息下载 |
+| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 上一版已发布 | v0.1.4 本次不发布 arm64 包 |
+| macOS Intel | `CaoGen-0.1.4.dmg` / `CaoGen-0.1.4-mac.zip` | v0.1.4 待发布 | 适合 Intel Mac |
+| Windows | `CaoGen.Setup.0.1.3.exe` | 上一版已发布 | v0.1.4 本次不发布 Windows 包 |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
 > **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
@@ -152,16 +152,13 @@
 
 ## 校验下载文件
 
-下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.3 macOS 资产的 SHA256 如下：
+下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.4 发布候选资产的 SHA256 如下（发布前以最终重打包结果为准）：
 
 | 文件 | SHA256 |
 |---|---|
-| `CaoGen-0.1.3-arm64.dmg` | `a6f4ec73f6e943a5a3e86007d83c38de4d2bbcf3e16cbbc85d0371a96359c136` |
-| `CaoGen-0.1.3-arm64-mac.zip` | `7faaa14ccda133b0094158c3445ca8ff191fb73bc5324c4c2512a7f7566839a5` |
-| `CaoGen-0.1.3.dmg` | `82ab21c0f629d24bdd4db02b19b982daaffa1f9be9f28ad7010813659e41099d` |
-| `CaoGen-0.1.3-mac.zip` | `66d522b5c90067edf3addfadbb6aa613bd272208cb105d03a836adc66af5f3a5` |
-| `CaoGen.Setup.0.1.3.exe` | 请以 GitHub Release 资产摘要或重新下载后本机 `shasum -a 256` 为准 |
-| `latest-mac.yml` | `0fb955d9dffcd708746c24c00c0167fa381d659a2fa9114e1f4094ffbed6560e` |
+| `CaoGen-0.1.4.dmg` | `f7c578787702fb9b5720d133c659ef62a8163759f401e1106527c9e1c4b098f0` |
+| `CaoGen-0.1.4-mac.zip` | `eedb671e96b46eb478f0c1fd41d46ee54d543e1926f9f9fe94393e46bb77c8b5` |
+| `latest-mac.yml` | `f9fb5e39bd328743950013907723cbd049e84cab01eb1bd10076b4a612fac1eb` |
 
 ## 常见问题
 
@@ -204,7 +201,7 @@ npm run dev
 npm run typecheck  # TypeScript 类型检查
 npm run build      # 构建生产产物到 out/
 npm start          # 预览构建产物
-npm run test:deep  # 深度测试矩阵，当前脚本编排 84 项，失败即停
+npm run test:deep  # 深度测试矩阵，当前为 84 required + 3 optional
 npm run secret:scan # 扫描当前工作树中的明显密钥
 ```
 
@@ -240,8 +237,8 @@ src/
 
 ## 项目状态
 
-- 当前版本：**v0.1.3 beta**。
-- v0.1.3 基于当前 `main` 打包，已发布 macOS 和 Windows 安装包。
+- 当前发布候选版本：**v0.1.4 beta**。
+- v0.1.4 只发布 macOS x64 候选安装包，待最终重打包和 GitHub Release 发布；arm64、Windows、Linux 不在本轮发布范围。
 - 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
 - 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
 

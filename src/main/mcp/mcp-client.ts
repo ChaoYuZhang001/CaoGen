@@ -4,6 +4,8 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
 
+declare const __CAOGEN_APP_VERSION__: string
+
 export type McpTransport = 'stdio' | 'sse' | 'http'
 
 export interface McpServerConfig {
@@ -76,6 +78,11 @@ interface SseEvent {
 
 const PROTOCOL_VERSION = '2024-11-05'
 const DEFAULT_TIMEOUT_MS = 10_000
+const CLIENT_VERSION =
+  typeof __CAOGEN_APP_VERSION__ === 'string'
+    ? __CAOGEN_APP_VERSION__
+    : process.env.CAOGEN_APP_VERSION || process.env.npm_package_version || '0.0.0'
+const CLIENT_INFO = { name: 'caogen', version: CLIENT_VERSION }
 
 export async function discoverMcpServer(config: McpServerConfig, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<McpDiscoveryResult> {
   const client = createClient(config, timeoutMs)
@@ -83,7 +90,7 @@ export async function discoverMcpServer(config: McpServerConfig, timeoutMs = DEF
     const initialize = await client.request('initialize', {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'caogen', version: '0.1.2' }
+      clientInfo: CLIENT_INFO
     })
     const [tools, resources, prompts] = await Promise.all([
       client.request('tools/list').catch(() => ({ tools: [] })),
@@ -112,7 +119,7 @@ export async function callMcpTool(
     await client.request('initialize', {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'caogen', version: '0.1.2' }
+      clientInfo: CLIENT_INFO
     })
     const result = await client.request('tools/call', { name, arguments: args })
     if (!isRecord(result)) return { content: [{ type: 'text', text: String(result) }] }
