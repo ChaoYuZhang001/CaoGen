@@ -936,10 +936,21 @@ export default function SettingsModal(): React.JSX.Element {
                   ))}
                 </select>
 
-                <label className="field-label">本地执行</label>
-                <p className="settings-hint">
-                  命令直接在本机运行，不是系统级沙箱。文件工具仍限制在项目目录，并执行写前与写后校验。
-                </p>
+                <label className="field-label">{t('localExecutionLabel')}</label>
+                {draft.sandboxMode === 'disabled' ? (
+                  <div className="notice notice-error">
+                    <p>{t('legacyDockerMigrationWarning')}</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => set('sandboxMode', 'restrictedLocal')}
+                    >
+                      {t('enableLocalExecution')}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="settings-hint">{t('localExecutionHint')}</p>
+                )}
 
                 <label className="field-label">{t('allowedTools')}</label>
                 <textarea

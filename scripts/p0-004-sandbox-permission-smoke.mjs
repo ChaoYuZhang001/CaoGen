@@ -73,6 +73,28 @@ function compileModules() {
 }
 
 async function verifyLocalExecution(localExecution) {
+  const disabledCommand = await localExecution.runLocalCommand({
+    command: 'echo must-not-run',
+    cwd: projectDir,
+    mode: 'disabled',
+    timeoutMs: 10_000,
+    maxBufferBytes: 1024 * 1024
+  })
+  assert(!disabledCommand.ok, 'legacy strict migration must keep local commands disabled')
+  assert(disabledCommand.modeUsed === 'disabled', 'disabled local command must report the migration mode')
+  assert(disabledCommand.output.includes('不会自动降级为宿主机执行'), 'disabled command must explain the safety boundary')
+
+  const disabledWritePath = path.join(projectDir, 'disabled-write.txt')
+  const disabledWrite = await localExecution.writeTextFileLocally({
+    cwd: projectDir,
+    targetPath: disabledWritePath,
+    content: 'must-not-write\n',
+    mode: 'disabled',
+    timeoutMs: 10_000
+  })
+  assert(!disabledWrite.ok, 'legacy strict migration must keep local file writes disabled')
+  assert(!existsSync(disabledWritePath), 'disabled local file write must not create a file')
+
   const standard = await localExecution.runLocalCommand({
     command: 'echo caogen-p0-004',
     cwd: projectDir,
@@ -419,6 +441,11 @@ function verifyOpenAiToolsBridge() {
   for (const marker of ["case 'bash'", "case 'read_file'", "case 'write_file'"]) {
     assert(text.includes(marker), `openaiTools missing ${marker}`)
   }
+  const engine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+  assert(
+    engine.includes("settings.sandboxMode === 'disabled' && !readOnlyCall"),
+    'OpenAI engine must block every mutating Agent tool while legacy local execution awaits confirmation'
+  )
 }
 
 function verifyLocalExecutionBoundary() {
@@ -438,14 +465,21 @@ function verifyLocalExecutionBoundary() {
   const settingsSource = readFileSync(path.join(repoRoot, 'src/main/settings.ts'), 'utf8')
   const legacyStrictMode = ['strict', 'Docker'].join('')
   assert(settingsSource.includes(`raw === '${legacyStrictMode}'`), 'settings must migrate the legacy strict mode')
-  assert(settingsSource.includes("return 'restrictedLocal'"), 'legacy modes must migrate to restrictedLocal')
+  assert(settingsSource.includes("return 'disabled'"), 'legacy strict mode must migrate to a fail-closed confirmation state')
+  assert(settingsSource.includes("raw === 'restrictedLocal' || raw === 'standardSystem'"), 'legacy standard mode should remain local')
   const packageJson = readFileSync(path.join(repoRoot, 'package.json'), 'utf8')
   assert(!packageJson.includes('resources/sandbox/**/*'), 'package must not ship removed container resources')
 }
 
 function verifyClaudePermissionBridge() {
   const text = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
-  for (const marker of ['evaluateToolPermission', 'writeAuditLog', 'authorizeClaudeTool']) {
+  for (const marker of [
+    'evaluateToolPermission',
+    'writeAuditLog',
+    'authorizeClaudeTool',
+    "settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)",
+    "settings.sandboxMode !== 'disabled'"
+  ]) {
     assert(text.includes(marker), `Claude permission bridge missing ${marker}`)
   }
 }
@@ -453,8 +487,9 @@ function verifyClaudePermissionBridge() {
 function verifySecuritySettingsUi() {
   const text = readFileSync(path.join(repoRoot, 'src/renderer/src/components/SettingsModal.tsx'), 'utf8')
   for (const marker of [
-    '本地执行',
-    '不是系统级沙箱',
+    'localExecutionLabel',
+    'legacyDockerMigrationWarning',
+    "set('sandboxMode', 'restrictedLocal')",
     'permissionAllowlist',
     'permissionDenylist',
     'permissionTemporaryAllowlist'

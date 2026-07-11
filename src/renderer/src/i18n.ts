@@ -559,6 +559,16 @@ const DICT: Dict = {
   },
   chinaNpmRegistry: { zh: 'npm registry 镜像', en: 'npm registry mirror' },
   chinaPipIndexUrl: { zh: 'pip index-url 镜像', en: 'pip index-url mirror' },
+  localExecutionLabel: { zh: '本地执行', en: 'Local execution' },
+  localExecutionHint: {
+    zh: '命令直接在本机运行，不是系统级沙箱。文件工具仍限制在项目目录，并执行写前与写后校验。',
+    en: 'Commands run directly on this computer, not in an OS sandbox. File tools stay inside the project and verify state before and after writes.'
+  },
+  legacyDockerMigrationWarning: {
+    zh: '旧“严格 Docker”设置已下线。为避免静默改成宿主机执行，Agent 的本地命令、shell hooks 和变更类工具保持禁用；确认理解新的执行边界后再启用。',
+    en: 'The former strict Docker setting was retired. Agent local commands, shell hooks, and mutating tools remain disabled instead of silently switching to host execution; enable them only after accepting the new boundary.'
+  },
+  enableLocalExecution: { zh: '确认启用宿主机执行', en: 'Enable host execution' },
   preventDisplaySleep: { zh: '运行时防止显示器休眠', en: 'Prevent display sleep while running' },
   preventDisplaySleepHint: {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
