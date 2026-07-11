@@ -37,7 +37,8 @@ async function runSmoke() {
       `const { reportDeepTestStatus } = deepTestStatus\n` +
       `const status = process.argv[2]\n` +
       `const exitCode = Number(process.argv[3] || 0)\n` +
-      `if (!status.startsWith('legacy-')) reportDeepTestStatus(status, {\n` +
+      `if (status === 'signal-crash') process.abort()\n` +
+      `if (!status.startsWith('legacy-') && status !== 'signal-crash') reportDeepTestStatus(status, {\n` +
       `  ...(status === 'pass' ? {} : { reason: 'fixture ' + status }),\n` +
       `  details: { fixture: true }\n` +
       `})\n` +
@@ -104,6 +105,13 @@ async function runSmoke() {
     assert.equal(resultByName(skipThenCrash.report, 'skip then exit one').status, 'fail')
     assert.match(resultByName(skipThenCrash.report, 'skip then exit one').reason, /reported skip but exited with code 1/)
 
+    const signalCrash = runScenario('signal-crash', tempRoot, fixturePath)
+    assert.equal(signalCrash.process.status, 1, signalCrash.process.output)
+    assert.equal(signalCrash.report.status, 'fail')
+    assert.equal(resultByName(signalCrash.report, 'signal crash').status, 'fail')
+    assert.match(resultByName(signalCrash.report, 'signal crash').reason, /terminated by signal/)
+    assert.equal(typeof resultByName(signalCrash.report, 'signal crash').signal, 'string')
+
     const optionalFail = runScenario('optional-fail', tempRoot, fixturePath)
     assert.equal(optionalFail.process.status, 1, optionalFail.process.output)
     assert.equal(optionalFail.report.status, 'fail')
@@ -138,6 +146,18 @@ async function runSmoke() {
       ANTHROPIC_API_KEY: '',
       CLAUDE_CODE_HOST_CREDS_FILE: ''
     })
+    assertRequiredExternalBlocked('china-real-required', tempRoot, fixturePath, 'chinaRealNetwork smoke')
+    assertRequiredExternalBlocked('china-parity-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
+    assertStandaloneRequiredFailure('china real network', {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
+      env: requiredExternalEnv('china-real-required')
+    })
+    assertStandaloneRequiredFailure('china tool-call parity', {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
+      env: requiredExternalEnv('china-parity-required')
+    })
 
     console.log('deep-test four-state smoke: pass')
   } finally {
@@ -156,7 +176,8 @@ function runScenario(scenario, tempRoot, fixturePath) {
       maxBuffer: 8 * 1024 * 1024,
       env: {
         ...process.env,
-        ...(scenario === 'runtime-env-required-skip' ? { CAOGEN_FIXTURE_REQUIRED: '1' } : {})
+        ...(scenario === 'runtime-env-required-skip' ? { CAOGEN_FIXTURE_REQUIRED: '1' } : {}),
+        ...requiredExternalEnv(scenario)
       }
     }
   )
@@ -214,6 +235,29 @@ function scenarioCommands(scenario, fixturePath) {
     }]
   }
   if (scenario === 'skip-then-exit-one') return [fixture('skip then exit one', 'skip', 'optional', 1)]
+  if (scenario === 'signal-crash') return [fixture('signal crash', 'signal-crash', 'optional')]
+  if (scenario === 'china-real-required') {
+    return [{
+      name: 'chinaRealNetwork smoke',
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
+      category: 'external',
+      requirement: 'optional',
+      requiredWhen: { env: ['CAOGEN_CHINA_REAL_NETWORK_REQUIRED'], args: ['--required'] },
+      statusReporter: 'scripts/china-real-network-smoke.mjs'
+    }]
+  }
+  if (scenario === 'china-parity-required') {
+    return [{
+      name: 'chinaToolCallParity smoke',
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
+      category: 'external',
+      requirement: 'optional',
+      requiredWhen: { env: ['CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED'], args: ['--required'] },
+      statusReporter: 'scripts/china-tool-call-parity.mjs'
+    }]
+  }
   if (scenario === 'optional-fail') return [fixture('optional fail', 'fail', 'optional')]
   if (scenario === 'legacy-fail') return [fixture('legacy fail', 'legacy-fail', 'required', 7)]
   throw new Error(`unknown deep-test scenario: ${scenario}`)
@@ -258,6 +302,50 @@ function assertExternalSkipProtocol(name, spec, tempRoot, extraEnv = {}) {
   assert.equal(status.status, 'skip')
   assert.equal(typeof status.reason, 'string')
   assert(status.reason.length > 0)
+}
+
+function assertRequiredExternalBlocked(scenario, tempRoot, fixturePath, resultName) {
+  const result = runScenario(scenario, tempRoot, fixturePath)
+  assert.equal(result.process.status, 1, result.process.output)
+  assert.equal(result.report.status, 'fail')
+  const check = resultByName(result.report, resultName)
+  assert.equal(check.status, 'blocked')
+  assert.equal(check.requirement, 'required')
+  assert.equal(check.requirementSource, 'runtime')
+  assert.equal(check.blocksGate, true)
+  assert.equal(check.exitCode, 0)
+  assert.equal(check.protocolSource, 'structured')
+}
+
+function assertStandaloneRequiredFailure(name, spec) {
+  const env = { ...process.env, ...spec.env }
+  delete env.CAOGEN_DEEP_TEST_STATUS_FILE
+  delete env.CAOGEN_DEEP_TEST_STATUS_REPORTER
+  const result = spawnSync(spec.command, spec.args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+    env
+  })
+  assert.equal(result.status, 1, `${name} standalone required must exit 1\n${commandOutput(result)}`)
+}
+
+function requiredExternalEnv(scenario) {
+  if (scenario === 'china-real-required') {
+    return {
+      CAOGEN_CHINA_REAL_NETWORK: '',
+      CAOGEN_CHINA_REAL_NETWORK_REQUIRED: '',
+      CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS: ''
+    }
+  }
+  if (scenario === 'china-parity-required') {
+    return {
+      CAOGEN_CHINA_TOOL_CALL_PARITY: '',
+      CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED: '',
+      CAOGEN_CHINA_PARITY_PROVIDERS: ''
+    }
+  }
+  return {}
 }
 
 function electronSpec() {

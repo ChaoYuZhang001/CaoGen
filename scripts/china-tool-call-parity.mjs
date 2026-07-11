@@ -50,9 +50,12 @@ if (!enabled || !rawProviders?.trim()) {
     parityFailures: required ? ['required parity mode needs explicit baseline and China provider configuration'] : []
   }
   writeReport(report)
-  reportDeepTestStatus('skip', { reason: report.reason, details: { reportDir } })
+  const deepStatusReported = reportDeepTestStatus(required ? 'blocked' : 'skip', {
+    reason: report.reason,
+    details: { reportDir }
+  })
   console.log('SKIP china tool-call parity: set CAOGEN_CHINA_TOOL_CALL_PARITY=1 and CAOGEN_CHINA_PARITY_PROVIDERS JSON')
-  if (required) process.exit(1)
+  if (required && !deepStatusReported) process.exit(1)
   process.exit(0)
 }
 
