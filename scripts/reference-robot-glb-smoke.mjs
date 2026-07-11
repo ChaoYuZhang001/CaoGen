@@ -42,6 +42,20 @@ const REQUIRED_NEUTRAL_ARM_POSES = [
     handNames: ['official_right_rubber_hand', 'official_right_wrist_roll_rubber_hand']
   }
 ]
+const REQUIRED_VISOR_ATTACHMENT_NODES = [
+  {
+    name: 'black_u_visor_frame',
+    attachment: 'helmet_black_smooth_cowl'
+  },
+  {
+    name: 'cyan_u_visor_light',
+    attachment: 'black_u_visor_frame'
+  }
+]
+const REFERENCE_COWL_NODE_NAME = 'helmet_black_smooth_cowl'
+const REFERENCE_COWL_SILHOUETTE = 'rounded_profile_open_face_cowl'
+const OFFICIAL_HEAD_NODE_NAME = 'official_head_link'
+const OFFICIAL_HEAD_VISUAL_ROLE = 'provenance_only'
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
   {
     label: 'official head',
@@ -287,6 +301,8 @@ function inspectDocument(document) {
   }
 
   const neutralArmPoses = inspectNeutralArmPoses(nodes, nodeEntries, failures)
+  const visorAttachmentNodes = inspectVisorAttachmentNodes(nodes, nodeEntries, failures)
+  const referenceHead = inspectReferenceHead(nodes, nodeEntries, failures)
 
   const sourceRootMatches = nodeEntries.filter((node) => node.name === SOURCE_ROOT_NODE_NAME)
   const sourceRoot = sourceRootMatches.length === 1 ? sourceRootMatches[0] : null
@@ -439,9 +455,92 @@ function inspectDocument(document) {
     missingAnimationRootNames,
     gaitControlNodes,
     neutralArmPoses,
+    visorAttachmentNodes,
+    referenceHead,
     officialMeshBindings,
     materialEntries,
     referencedMaterials
+  }
+}
+
+function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
+  const helmetIndex = nodes.findIndex((node) => node?.name === 'helmet_head')
+  const attachments = []
+  for (const contract of REQUIRED_VISOR_ATTACHMENT_NODES) {
+    const matches = nodeEntries.filter((entry) => entry.name === contract.name)
+    if (matches.length !== 1) {
+      failures.push(`visor attachment ${quote(contract.name)} must appear exactly once; found ${matches.length}`)
+      continue
+    }
+
+    const entry = matches[0]
+    const attachment = nodes[entry.index]?.extras?.visor_attachment
+    if (attachment !== contract.attachment) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} must declare ${quote(contract.attachment)}; ` +
+          `found ${formatValue(attachment)}`
+      )
+    }
+    if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
+      failures.push(`visor attachment ${quote(contract.name)} must descend from "helmet_head"`)
+    }
+    attachments.push({ name: contract.name, attachment })
+  }
+  return attachments
+}
+
+function inspectReferenceHead(nodes, nodeEntries, failures) {
+  const helmetIndex = nodes.findIndex((node) => node?.name === 'helmet_head')
+  const cowlMatches = nodeEntries.filter((entry) => entry.name === REFERENCE_COWL_NODE_NAME)
+  const officialHeadMatches = nodeEntries.filter((entry) => entry.name === OFFICIAL_HEAD_NODE_NAME)
+  const cowl = cowlMatches.length === 1 ? cowlMatches[0] : null
+  const officialHead = officialHeadMatches.length === 1 ? officialHeadMatches[0] : null
+
+  if (cowlMatches.length !== 1) {
+    failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must appear exactly once; found ${cowlMatches.length}`)
+  }
+  if (cowl) {
+    const silhouette = nodes[cowl.index]?.extras?.reference_silhouette
+    if (silhouette !== REFERENCE_COWL_SILHOUETTE) {
+      failures.push(
+        `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare silhouette ` +
+          `${quote(REFERENCE_COWL_SILHOUETTE)}; found ${formatValue(silhouette)}`
+      )
+    }
+    if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, cowl.index)) {
+      failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must descend from "helmet_head"`)
+    }
+  }
+
+  if (officialHeadMatches.length !== 1) {
+    failures.push(`official head ${quote(OFFICIAL_HEAD_NODE_NAME)} must appear exactly once; found ${officialHeadMatches.length}`)
+  }
+  if (officialHead) {
+    const node = nodes[officialHead.index]
+    const visualRole = node?.extras?.visual_role
+    const scale = Array.isArray(node?.scale) ? node.scale : [1, 1, 1]
+    if (visualRole !== OFFICIAL_HEAD_VISUAL_ROLE) {
+      failures.push(
+        `official head ${quote(OFFICIAL_HEAD_NODE_NAME)} must declare visual role ` +
+          `${quote(OFFICIAL_HEAD_VISUAL_ROLE)}; found ${formatValue(visualRole)}`
+      )
+    }
+    if (scale.length !== 3 || scale.some((value) => typeof value !== 'number' || value > 0.0011)) {
+      failures.push(
+        `official head ${quote(OFFICIAL_HEAD_NODE_NAME)} must stay visually hidden at 0.001 scale; ` +
+          `found ${formatValue(scale)}`
+      )
+    }
+    if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, officialHead.index)) {
+      failures.push(`official head ${quote(OFFICIAL_HEAD_NODE_NAME)} must descend from "helmet_head"`)
+    }
+  }
+
+  return {
+    cowlName: cowl?.name ?? null,
+    silhouette: cowl ? nodes[cowl.index]?.extras?.reference_silhouette ?? null : null,
+    officialHeadName: officialHead?.name ?? null,
+    officialHeadVisualRole: officialHead ? nodes[officialHead.index]?.extras?.visual_role ?? null : null
   }
 }
 
@@ -628,6 +727,15 @@ function printDocumentSummary(inspection) {
         `totalDrop=${pose.totalDrop.toFixed(4)}, totalDepth=${pose.totalDepth.toFixed(4)}`
     )
   }
+  console.log(
+    `Visor attachments: ${inspection.visorAttachmentNodes.length}/${REQUIRED_VISOR_ATTACHMENT_NODES.length} present ` +
+      `(${formatList(inspection.visorAttachmentNodes.map((node) => `${node.name}->${node.attachment}`))})`
+  )
+  console.log(
+    `Reference head: cowl=${formatValue(inspection.referenceHead.cowlName)}, ` +
+      `silhouette=${formatValue(inspection.referenceHead.silhouette)}, ` +
+      `officialRole=${formatValue(inspection.referenceHead.officialHeadVisualRole)}`
+  )
   console.log('Official mesh bindings:')
   for (const binding of inspection.officialMeshBindings) {
     console.log(

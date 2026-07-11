@@ -463,6 +463,7 @@ def add_lofted_helmet_cowl(
     material: bpy.types.Material,
     *,
     segments: int = 96,
+    cap_bottom: bool = True,
     parent: bpy.types.Object | None = None,
 ) -> bpy.types.Object:
     vertices: list[tuple[float, float, float]] = []
@@ -490,15 +491,75 @@ def add_lofted_helmet_cowl(
                     next_ring_start + index,
                 )
             )
-    faces.extend(
-        (bottom_center_index, (index + 1) % segments, index)
-        for index in range(segments)
-    )
+    if cap_bottom:
+        faces.extend(
+            (bottom_center_index, (index + 1) % segments, index)
+            for index in range(segments)
+        )
     top_ring_start = (len(rings) - 1) * segments
     faces.extend(
         (top_center_index, top_ring_start + index, top_ring_start + (index + 1) % segments)
         for index in range(segments)
     )
+
+    mesh = bpy.data.meshes.new(f"{name}_mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    smooth_mesh(obj)
+    assign_material(obj, material)
+    parent_object(obj, parent)
+    return obj
+
+
+def add_rounded_profile_shell_x(
+    name: str,
+    profile_yz: list[tuple[float, float]],
+    width: float,
+    material: bpy.types.Material,
+    *,
+    cross_sections: int = 25,
+    crown_rounding: float = 0.065,
+    depth_rounding: float = 0.06,
+    lower_width_taper: float = 0.30,
+    parent: bpy.types.Object | None = None,
+) -> bpy.types.Object:
+    vertices: list[tuple[float, float, float]] = []
+    half_width = width / 2
+    min_z = min(z for _, z in profile_yz)
+    max_z = max(z for _, z in profile_yz)
+    height = max(max_z - min_z, 1e-6)
+    for section_index in range(cross_sections):
+        normalized_x = -1.0 + 2.0 * section_index / (cross_sections - 1)
+        rounded_factor = math.sqrt(max(0.0, 1.0 - normalized_x * normalized_x))
+        y_scale = 1.0 - depth_rounding * (1.0 - rounded_factor)
+        z_offset = crown_rounding * rounded_factor
+        for y, z in profile_yz:
+            height_ratio = (z - min_z) / height
+            taper_weight = min(1.0, height_ratio / 0.62)
+            width_scale = 1.0 - lower_width_taper * (1.0 - taper_weight)
+            x = half_width * normalized_x * width_scale
+            vertices.append((x, y * y_scale, z + z_offset))
+
+    faces: list[tuple[int, ...]] = []
+    profile_count = len(profile_yz)
+    for section_index in range(cross_sections - 1):
+        section_start = section_index * profile_count
+        next_section_start = (section_index + 1) * profile_count
+        for index in range(profile_count):
+            next_index = (index + 1) % profile_count
+            faces.append(
+                (
+                    section_start + index,
+                    section_start + next_index,
+                    next_section_start + next_index,
+                    next_section_start + index,
+                )
+            )
+    faces.append(tuple(range(profile_count - 1, -1, -1)))
+    final_start = (cross_sections - 1) * profile_count
+    faces.append(tuple(final_start + index for index in range(profile_count)))
 
     mesh = bpy.data.meshes.new(f"{name}_mesh")
     mesh.from_pydata(vertices, [], faces)
@@ -565,6 +626,7 @@ def add_curve_tube(
     radius: float,
     material: bpy.types.Material,
     *,
+    cyclic: bool = False,
     parent: bpy.types.Object | None = None,
 ) -> bpy.types.Object:
     curve = bpy.data.curves.new(name=f"{name}_curve", type="CURVE")
@@ -574,6 +636,7 @@ def add_curve_tube(
     curve.bevel_resolution = 5
     spline = curve.splines.new("BEZIER")
     spline.bezier_points.add(len(points) - 1)
+    spline.use_cyclic_u = cyclic
     for point, coordinate in zip(spline.bezier_points, points):
         point.co = coordinate
         point.handle_left_type = "AUTO"
@@ -673,101 +736,97 @@ def build_reference_helmet(
     carbon = materials["carbon"]
     glass = materials["glass"]
     cyan = materials["cyan"]
-    silver_shadow = materials["silver_shadow"]
 
-    neck = add_empty("helmet_neck_assembly", (0, 0, base_z - 0.06), root)
-    add_frustum(
+    neck = add_empty("helmet_neck_assembly", (0, 0, base_z - 0.055), root)
+    add_lofted_helmet_cowl(
         "black_tapered_neck_shroud",
-        (0.15, 0.12),
-        (0.085, 0.09),
-        0.082,
-        (0, -0.014, 0),
-        black_soft,
-        bevel=0.017,
-        parent=neck,
-    )
-    add_box("rear_neck_service_channel", (0.04, 0.022, 0.075), (0, 0.047, -0.005), carbon, bevel=0.009, parent=neck)
-    add_panel(
-        "helmet_front_neck_bib",
         [
-            (-0.078, -0.045),
-            (-0.062, 0.0),
-            (-0.038, 0.027),
-            (0.038, 0.027),
-            (0.062, 0.0),
-            (0.078, -0.045),
+            (-0.078, 0.015, 0.098, 0.06),
+            (-0.062, 0.005, 0.082, 0.057),
+            (-0.045, -0.005, 0.066, 0.052),
+            (-0.025, -0.015, 0.052, 0.046),
+            (-0.005, -0.022, 0.044, 0.041),
+            (0.015, -0.028, 0.039, 0.037),
+            (0.03, -0.03, 0.037, 0.034),
         ],
-        -0.078,
-        0.02,
         black_soft,
-        bevel=0.011,
         parent=neck,
     )
+    add_box("rear_neck_service_channel", (0.038, 0.018, 0.076), (0, 0.018, -0.008), carbon, bevel=0.008, parent=neck)
 
     head = add_empty("helmet_head", (0, 0, base_z), root)
-    head.scale = (0.48, 0.56, 0.56)
-    head["reference_head_scale"] = 0.56
-    head["reference_head_scale_xyz"] = (0.48, 0.56, 0.56)
-    add_lofted_helmet_cowl(
+    head.scale = (0.72, 0.68, 0.70)
+    head["reference_head_scale"] = 0.70
+    head["reference_head_scale_xyz"] = (0.72, 0.68, 0.70)
+    cowl = add_rounded_profile_shell_x(
         "helmet_black_smooth_cowl",
         [
-            (0.052, 0.008, 0.112, 0.112),
-            (0.078, 0.008, 0.132, 0.138),
-            (0.11, 0.012, 0.146, 0.16),
-            (0.148, 0.02, 0.153, 0.178),
-            (0.184, 0.03, 0.147, 0.187),
-            (0.216, 0.038, 0.128, 0.176),
-            (0.244, 0.04, 0.095, 0.137),
-            (0.263, 0.034, 0.038, 0.06),
+            (-0.205, 0.165),
+            (-0.19, 0.19),
+            (-0.175, 0.22),
+            (-0.145, 0.255),
+            (-0.10, 0.285),
+            (-0.06, 0.305),
+            (-0.02, 0.32),
+            (0.03, 0.327),
+            (0.08, 0.325),
+            (0.125, 0.315),
+            (0.17, 0.30),
+            (0.205, 0.28),
+            (0.235, 0.255),
+            (0.248, 0.23),
+            (0.25, 0.215),
+            (0.245, 0.195),
+            (0.235, 0.18),
+            (0.17, 0.165),
+            (0.08, 0.155),
+            (-0.01, 0.145),
+            (-0.08, 0.125),
+            (-0.14, 0.105),
+            (-0.18, 0.115),
         ],
+        0.31,
         black,
         parent=head,
     )
-    add_box("helmet_low_forehead_brow_shell", (0.25, 0.038, 0.032), (0, -0.145, 0.147), black, bevel=0.014, parent=head)
-    add_box("helmet_rear_service_cap", (0.145, 0.025, 0.028), (0, 0.176, 0.148), black_soft, bevel=0.01, rotation=(math.radians(-3), 0, 0), parent=head)
-    for side in (-1, 1):
-        label = "left" if side < 0 else "right"
-        add_curve_tube(
-            f"{label}_sculpted_helmet_side_shell",
-            [
-                (side * 0.116, -0.154, 0.158),
-                (side * 0.121, -0.16, 0.075),
-                (side * 0.116, -0.151, -0.014),
-                (side * 0.102, -0.113, -0.072),
-                (side * 0.074, -0.046, -0.099),
-                (side * 0.09, 0.018, -0.078),
-                (side * 0.11, 0.062, -0.018),
-            ],
-            0.018,
-            black,
-            parent=head,
-        )
-        add_box(f"{label}_silver_occipital_hinge", (0.022, 0.044, 0.10), (side * 0.132, 0.074, 0.066), silver_shadow, bevel=0.009, rotation=(0, 0, side * math.radians(5)), parent=head)
-        add_cylinder(f"{label}_helmet_side_bearing", 0.023, 0.016, (side * 0.14, 0.015, 0.11), black_soft, rotation=(0, math.radians(90), 0), bevel=0.004, parent=head)
+    cowl.scale = (0.91, 0.84, 0.66)
+    cowl.location = (0.0, -0.205 * (1.0 - 0.84), 0.165 * (1.0 - 0.66))
+    cowl["reference_shape_scale"] = (0.91, 0.84, 0.66)
+    cowl["reference_silhouette"] = "rounded_profile_open_face_cowl"
+
     visor_points = [
-        (-0.112, -0.148, 0.154),
-        (-0.122, -0.152, 0.09),
-        (-0.108, -0.156, 0.018),
-        (-0.066, -0.158, -0.048),
-        (-0.035, -0.159, -0.068),
-        (0.0, -0.159, -0.072),
-        (0.035, -0.159, -0.068),
-        (0.066, -0.158, -0.048),
-        (0.108, -0.156, 0.018),
-        (0.122, -0.152, 0.09),
-        (0.112, -0.148, 0.154),
+        (0.0, -0.211, 0.172),
+        (-0.085, -0.212, 0.17),
+        (-0.122, -0.212, 0.148),
+        (-0.135, -0.207, 0.095),
+        (-0.134, -0.195, 0.025),
+        (-0.122, -0.17, -0.04),
+        (-0.095, -0.135, -0.09),
+        (-0.055, -0.108, -0.12),
+        (0.0, -0.09, -0.13),
+        (0.055, -0.108, -0.12),
+        (0.095, -0.135, -0.09),
+        (0.122, -0.17, -0.04),
+        (0.134, -0.195, 0.025),
+        (0.135, -0.207, 0.095),
+        (0.122, -0.212, 0.148),
+        (0.085, -0.212, 0.17),
     ]
-    add_curve_tube("black_u_visor_frame", visor_points, 0.013, joint, parent=head)
-    add_curve_tube("cyan_u_visor_light", [(x, y - 0.009, z) for x, y, z in visor_points], 0.0044, cyan, parent=head)
-    add_box("dark_glass_sensor_band", (0.224, 0.026, 0.044), (0, -0.164, 0.119), glass, bevel=0.011, parent=head)
-    add_box("cyan_horizontal_sensor_slit", (0.205, 0.01, 0.013), (0, -0.181, 0.111), cyan, bevel=0.006, parent=head)
-    add_box("bright_sensor_core", (0.142, 0.006, 0.006), (0, -0.188, 0.111), cyan, bevel=0.003, parent=head)
+    visor_frame = add_curve_tube("black_u_visor_frame", visor_points, 0.017, joint, cyclic=True, parent=head)
+    visor_frame["visor_attachment"] = "helmet_black_smooth_cowl"
+    visor_center_z = 0.03
+    visor_light_points = [
+        (x * 1.01, y - 0.019, visor_center_z + (z - visor_center_z) * 1.01)
+        for x, y, z in visor_points
+    ]
+    visor_light = add_curve_tube("cyan_u_visor_light", visor_light_points, 0.0046, cyan, cyclic=True, parent=head)
+    visor_light["visor_attachment"] = "black_u_visor_frame"
+    add_box("dark_glass_sensor_band", (0.21, 0.024, 0.044), (0, -0.216, 0.128), glass, bevel=0.012, parent=head)
+    add_box("cyan_horizontal_sensor_slit", (0.185, 0.008, 0.011), (0, -0.232, 0.12), cyan, bevel=0.005, parent=head)
+    add_box("bright_sensor_core", (0.126, 0.005, 0.005), (0, -0.237, 0.12), cyan, bevel=0.0025, parent=head)
     for index, x in enumerate((-0.066, -0.022, 0.022, 0.066)):
-        add_cylinder(f"front_sensor_camera_{index}", 0.0065, 0.006, (x, -0.178, 0.13), glass, rotation=(math.radians(90), 0, 0), bevel=0.0015, vertices=32, parent=head)
-    add_box("rear_graphite_sensor_panel", (0.145, 0.022, 0.115), (0, 0.174, 0.102), carbon, bevel=0.022, parent=head)
-    add_box("rear_silver_neck_yoke", (0.128, 0.048, 0.032), (0, 0.074, -0.008), silver_shadow, bevel=0.012, parent=head)
-    add_box("rear_cyan_helmet_edge_rail", (0.09, 0.01, 0.01), (0, 0.191, 0.139), cyan, bevel=0.004, parent=head)
-    add_box("black_open_lower_chin", (0.108, 0.07, 0.034), (0, -0.032, -0.052), joint, bevel=0.013, parent=head)
+        add_cylinder(f"front_sensor_camera_{index}", 0.0055, 0.005, (x, -0.229, 0.132), glass, rotation=(math.radians(90), 0, 0), bevel=0.0015, vertices=32, parent=head)
+    add_cylinder("lower_sensor_puck", 0.024, 0.018, (0, -0.213, 0.088), joint, rotation=(math.radians(90), 0, 0), bevel=0.004, vertices=48, parent=head)
     return head
 
 
@@ -1033,7 +1092,8 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
         "left_shoulder_pitch_link": "left_arm",
         "right_shoulder_pitch_link": "right_arm",
     }
-    head_control: bpy.types.Object | None = None
+    head_source_mesh: bpy.types.Object | None = None
+    head_source_parent: bpy.types.Object | None = None
     head_pivot = Vector((0.0039635, 0.0, 0.29))
 
     def material_for_mesh(mesh_name: str, color: tuple[float, float, float, float]) -> bpy.types.Material:
@@ -1047,7 +1107,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
         return materials["silver"] if color[0] >= 0.45 else materials["joint"]
 
     def build_body(element: ET.Element, parent: bpy.types.Object) -> bpy.types.Object:
-        nonlocal head_control
+        nonlocal head_source_mesh, head_source_parent
         original_name = element.get("name", "official_body")
         body = add_empty(body_name_map.get(original_name, original_name), parent=parent)
         body["unitree_body_name"] = original_name
@@ -1080,12 +1140,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
             if mesh_name == "torso_link":
                 mesh_location += Vector((0.0039635, 0.0, -0.044))
             if mesh_name == "head_link":
-                if head_control is None:
-                    head_control = add_empty("helmet_head", tuple(head_pivot), body)
-                    head_control.scale = (1.0, 0.88, 0.88)
-                    head_control["unitree_mesh_name"] = "head_link"
-                mesh_parent = head_control
-                mesh_location -= head_pivot
+                head_source_parent = body
             mesh_obj = import_official_mesh(
                 mesh_name,
                 mesh_path,
@@ -1097,6 +1152,8 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
             mesh_obj["unitree_mesh_name"] = mesh_name
             if mesh_name == "torso_link":
                 reshape_reference_torso(mesh_obj)
+            elif mesh_name == "head_link":
+                head_source_mesh = mesh_obj
             elif mesh_name.endswith("knee_link"):
                 mesh_obj.scale.x *= 0.88
                 mesh_obj.scale.y *= 0.92
@@ -1138,77 +1195,26 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
     for body_element in worldbody.findall("body"):
         build_body(body_element, official_frame)
 
-    if head_control is None:
-        raise RuntimeError("official Unitree G1 model did not create helmet_head")
-    add_box(
-        "official_dark_sensor_band",
-        (0.008, 0.108, 0.026),
-        (0.067, 0.0, 0.116),
-        materials["glass"],
-        bevel=0.006,
-        parent=head_control,
+    if head_source_mesh is None or head_source_parent is None:
+        raise RuntimeError("official Unitree G1 model did not provide the retained head source mesh")
+    bpy.context.view_layer.update()
+    head_mount = add_empty("reference_helmet_axis_mount", tuple(head_pivot), head_source_parent)
+    head_mount.rotation_mode = "QUATERNION"
+    head_mount.rotation_quaternion = (
+        head_source_parent.matrix_world.to_quaternion().inverted()
+        @ root.matrix_world.to_quaternion()
     )
-    add_curve_tube(
-        "official_cyan_u_visor_light",
-        [
-            (0.070, -0.052, 0.121),
-            (0.072, -0.056, 0.092),
-            (0.072, -0.050, 0.045),
-            (0.071, -0.030, 0.012),
-            (0.071, 0.0, 0.002),
-            (0.071, 0.030, 0.012),
-            (0.072, 0.050, 0.045),
-            (0.072, 0.056, 0.092),
-            (0.070, 0.052, 0.121),
-        ],
-        0.0023,
-        materials["cyan"],
-        parent=head_control,
-    )
-    add_box(
-        "official_cyan_sensor_slit",
-        (0.008, 0.104, 0.008),
-        (0.071, 0.0, 0.117),
-        materials["cyan"],
-        bevel=0.003,
-        parent=head_control,
-    )
-    add_panel_yz(
-        "official_inner_face_diffuser",
-        [
-            (-0.044, 0.006),
-            (-0.056, 0.036),
-            (-0.050, 0.078),
-            (-0.030, 0.094),
-            (0.030, 0.094),
-            (0.050, 0.078),
-            (0.056, 0.036),
-            (0.044, 0.006),
-        ],
-        0.034,
-        0.008,
-        materials["glass"],
-        bevel=0.008,
-        parent=head_control,
-    )
-    add_panel_yz(
-        "official_rear_head_closeout",
-        [
-            (-0.060, -0.004),
-            (-0.069, 0.035),
-            (-0.066, 0.104),
-            (-0.046, 0.151),
-            (0.046, 0.151),
-            (0.066, 0.104),
-            (0.069, 0.035),
-            (0.060, -0.004),
-        ],
-        -0.048,
-        0.020,
-        materials["black_soft"],
-        bevel=0.012,
-        parent=head_control,
-    )
+    head_control = build_reference_helmet(head_mount, materials, 0.025)
+    head_control["reference_style"] = "orthographic open-face service helmet"
+    head_control["reference_source"] = "docs/visual-references/reference-robot-orthographic-sheet.png"
+
+    # Retain the official source mesh for provenance without using its box-like
+    # silhouette as the visible office robot head.
+    head_source_mesh.parent = head_control
+    head_source_mesh.location = (0.0, 0.0, 0.0)
+    head_source_mesh.rotation_quaternion = Quaternion((1.0, 0.0, 0.0, 0.0))
+    head_source_mesh.scale = (0.001, 0.001, 0.001)
+    head_source_mesh["visual_role"] = "provenance_only"
 
     nameplate = add_empty("provider_nameplate_mount", (0, -0.082, 1.09), root)
     nameplate["provider_logo_slot"] = True
@@ -1333,7 +1339,7 @@ def main() -> None:
         "joint": make_material("JointBlack", "#080c11", metallic=0.5, roughness=0.38),
         "carbon": make_material("CarbonInsert", "#242c34", metallic=0.28, roughness=0.46),
         "glass": make_material("SensorGlass", "#03080d", metallic=0.12, roughness=0.16, coat=0.42),
-        "cyan": make_material("SensorCyan", "#43c8e6", metallic=0.04, roughness=0.3, emission="#43c8e6", emission_strength=0.62),
+        "cyan": make_material("SensorCyan", "#43c8e6", metallic=0.04, roughness=0.3, emission="#43c8e6", emission_strength=1.1),
         "seam": make_material("MechanicalSeam", "#73808b", metallic=0.48, roughness=0.4),
         "sole": make_material("ShoePolymer", "#05080c", metallic=0.18, roughness=0.52),
         "preview_floor": make_material("PreviewFloorMaterial", "#d8dde1", metallic=0.0, roughness=0.78),
