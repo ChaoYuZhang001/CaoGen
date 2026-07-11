@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +9,8 @@ const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-mcp-client-'))
 const outDir = path.join(tempRoot, 'compiled')
 const stdioServerPath = path.join(tempRoot, 'fake-mcp-server.cjs')
+const expectedClientVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version
+process.env.CAOGEN_APP_VERSION = expectedClientVersion
 
 try {
   writeFileSync(stdioServerPath, fakeStdioServer(), 'utf8')
@@ -36,6 +38,7 @@ try {
     assertEqual(httpDiscovery.prompts[0].name, 'review')
     const httpCall = await client.callMcpTool({ url: httpServer.url }, 'echo', { text: 'http' })
     assert(JSON.stringify(httpCall.content).includes('http'), 'http tool call should return content')
+    assertInitializeVersions(httpServer.initializeVersions, 2)
   } finally {
     await httpServer.close()
   }
@@ -47,6 +50,7 @@ try {
     assertEqual(sseDiscovery.resources[0].uri, 'memory://sse')
     const sseCall = await client.callMcpTool({ url: sseServer.url, transport: 'sse' }, 'echo', { text: 'sse' })
     assert(JSON.stringify(sseCall.content).includes('sse'), 'sse tool call should return content')
+    assertInitializeVersions(sseServer.initializeVersions, 2)
   } finally {
     await sseServer.close()
   }
@@ -101,6 +105,7 @@ function handle(method, params) {
 
 function startSseMcpServer() {
   let stream = null
+  const initializeVersions = []
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/sse') {
       res.writeHead(200, {
@@ -124,6 +129,7 @@ function startSseMcpServer() {
       })
       req.on('end', () => {
         const request = JSON.parse(raw || '{}')
+        recordInitializeVersion(initializeVersions, request)
         const result = mcpResult(request.method, request.params, 'sse-mcp')
         if (!stream) {
           res.writeHead(503)
@@ -146,6 +152,7 @@ function startSseMcpServer() {
       const address = server.address()
       resolve({
         url: `http://127.0.0.1:${address.port}/sse`,
+        initializeVersions,
         close: () =>
           new Promise((done) => {
             if (stream) stream.end()
@@ -166,6 +173,7 @@ function mcpResult(method, params, serverName) {
 }
 
 function startHttpMcpServer() {
+  const initializeVersions = []
   const server = createServer((req, res) => {
     let raw = ''
     req.on('data', (chunk) => {
@@ -173,6 +181,7 @@ function startHttpMcpServer() {
     })
     req.on('end', () => {
       const request = JSON.parse(raw || '{}')
+      recordInitializeVersion(initializeVersions, request)
       const result = mcpResult(request.method, request.params, 'http-mcp')
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }))
@@ -183,6 +192,7 @@ function startHttpMcpServer() {
       const address = server.address()
       resolve({
         url: `http://127.0.0.1:${address.port}`,
+        initializeVersions,
         close: () => new Promise((done) => server.close(done))
       })
     })
@@ -227,6 +237,15 @@ function findCompiled(root, fileName) {
 
 function assertEqual(actual, expected) {
   assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+}
+
+function recordInitializeVersion(versions, request) {
+  if (request.method === 'initialize') versions.push(request.params?.clientInfo?.version)
+}
+
+function assertInitializeVersions(versions, expectedCount) {
+  assertEqual(versions.length, expectedCount)
+  for (const version of versions) assertEqual(version, expectedClientVersion)
 }
 
 function assert(condition, message) {

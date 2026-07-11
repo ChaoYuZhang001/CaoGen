@@ -1,7 +1,7 @@
 {
   "name": "caogen",
   "productName": "CaoGen",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CaoGen — 多会话并行、多厂商可调度、3D 办公区的桌面 AI 工作台",
   "main": "./out/main/index.js",
   "private": true,
@@ -118,6 +118,7 @@
     "test:deep:install-hourly": "node scripts/install-hourly-deep-test.mjs",
     "dist": "npm run build && npm run prepare:native-build && electron-builder",
     "dist:mac": "npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --mac",
+    "dist:mac:x64": "npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --mac --x64",
     "dist:dir": "npm run build && npm run prepare:native-build && electron-builder --dir",
     "prepare:native-build": "node scripts/prepare-native-build.cjs",
     "prepare:mac-binaries": "node scripts/prepare-mac-binaries.cjs"
@@ -163,15 +164,13 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
-            "arm64"
+            "x64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
-            "arm64"
+            "x64"
           ]
         }
       ]

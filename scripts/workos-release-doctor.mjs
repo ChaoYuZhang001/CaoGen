@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -10,8 +11,10 @@ const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'workos-release-doctor')
 const reportDir = path.join(reportRoot, runId)
 const refreshResults = refresh ? refreshLocalEvidence() : []
+const gitState = readGitState()
 
 const reports = {
+  deepTest: readJson('test-results/caogen-deep/latest.json'),
   p2Required: readJson('test-results/p2-required/latest.json'),
   p2Audit: readJson('test-results/p2-completion-audit/latest.json'),
   idePlugins: readJson('test-results/ide-plugins/latest.json'),
@@ -46,6 +49,9 @@ const nonBlockingP2Ids = {
 }
 
 const domains = [
+  ...(refresh ? [refreshDomain()] : []),
+  releaseIdentityDomain(),
+  deepTestDomain(),
   p2Domain(),
   n1Domain(),
   packagingDomain(packageJson),
@@ -68,6 +74,7 @@ const report = {
     source: explicitReleaseVersion ? 'explicit' : 'package.json',
     label: releaseTargetLabel
   },
+  git: gitState,
   redactionPolicy: 'No secret values are read or written; only report paths, status fields, env names, and commands are emitted.',
   optionalEngines: [
     {
@@ -103,7 +110,7 @@ const report = {
     'Do not publish public product or release copy that mentions external product names, uses comparison framing, or forces a fixed future version target.',
     'Do not publish until npm run test:release-notes-audit:final passes for the exact GitHub Release body.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
-    'Do not claim public latest*.yml or other small text release metadata was content-scanned unless npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z passes for the actual tag.',
+    'Do not claim a published release passed until npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist proves the exact local dist asset set and public text metadata.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
   ]
 }
@@ -170,6 +177,90 @@ function p2Domain() {
   }
 }
 
+function releaseIdentityDomain() {
+  const checks = {
+    packageVersionMatchesTarget: currentPackageVersion === releaseTargetVersion,
+    commitResolved: /^[0-9a-f]{40}$/.test(gitState.commit),
+    worktreeClean: gitState.worktreeClean
+  }
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  return {
+    id: 'release_identity',
+    title: 'Release version and Git identity',
+    status: failures.length === 0 ? 'ready' : 'open',
+    targetVersion: releaseTargetVersion,
+    packageVersion: currentPackageVersion,
+    git: gitState,
+    checks,
+    failures,
+    commands: [
+      `git rev-parse HEAD`,
+      `git status --porcelain=v1 --untracked-files=all`,
+      `npm run workos:release-doctor -- --refresh --version ${releaseTargetVersion}`
+    ],
+    nextActions: failures.length === 0
+      ? ['Keep the release target, commit, and clean worktree unchanged through the final release-notes audit.']
+      : [
+          'Commit the exact release candidate and rerun the doctor from a clean worktree.',
+          'Do not reuse a doctor or final release-notes report from another version or commit.'
+        ]
+  }
+}
+
+function refreshDomain() {
+  const failed = refreshResults.filter((item) => item.status !== 'completed')
+  return {
+    id: 'evidence_refresh',
+    title: 'Current release evidence refresh',
+    status: failed.length === 0 ? 'ready' : 'open',
+    commands: refreshResults,
+    failures: failed.map((item) => ({ id: item.id, exitCode: item.exitCode, error: item.error })),
+    nextActions: failed.length === 0
+      ? ['Keep every refreshed audit green on the release commit.']
+      : ['Fix every failed refresh command; stale latest.json reports cannot satisfy the release gate.']
+  }
+}
+
+function deepTestDomain() {
+  const audit = reports.deepTest
+  const required = audit.data?.summary?.required
+  const checks = {
+    passed: audit.data?.status === 'pass',
+    everyRequiredPassed:
+      typeof required?.total === 'number' &&
+      required.total > 0 &&
+      required.counts?.pass === required.total &&
+      required.blocking === 0,
+    commitMatches: audit.data?.git?.commit === gitState.commit,
+    cleanCommitEvidence: audit.data?.git?.worktreeClean === true && gitState.worktreeClean,
+    gitStateUnchanged: audit.data?.git?.unchanged === true
+  }
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  return {
+    id: 'deep_test',
+    title: 'Full required deep-test gate',
+    status: failures.length === 0 ? 'ready' : 'open',
+    checks,
+    failures,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      runId: audit.data?.runId,
+      git: audit.data?.git,
+      summary: audit.data?.summary
+    },
+    commands: ['npm run test:deep'],
+    nextActions: failures.length === 0
+      ? ['Keep the full required deep-test report bound to the release commit.']
+      : ['Run npm run test:deep from the clean release commit; every required check must pass.']
+  }
+}
+
 function refreshLocalEvidence() {
   const commands = [
     {
@@ -181,11 +272,6 @@ function refreshLocalEvidence() {
       id: 'product_positioning_audit',
       command: 'node scripts/product-positioning-audit.mjs',
       args: ['scripts/product-positioning-audit.mjs']
-    },
-    {
-      id: 'release_notes_audit',
-      command: 'node scripts/release-notes-audit.mjs',
-      args: ['scripts/release-notes-audit.mjs']
     },
     {
       id: 'github_release_audit',
@@ -290,17 +376,38 @@ function packagingDomain(packageJson) {
   const version = stringField(packageJson, 'version') || 'unknown'
   const distPath = path.join(repoRoot, 'dist')
   const hasDist = existsSync(distPath)
+  const artifacts = releaseArtifactEvidence(version)
+  const checks = {
+    auditPassed: audit.data?.status === 'passed',
+    expectedVersionMatches: audit.data?.expectedVersion === releaseTargetVersion,
+    packageVersionMatches: audit.data?.packageVersion === releaseTargetVersion,
+    packageLockVersionMatches: audit.data?.packageLockVersion === releaseTargetVersion,
+    commitMatches: audit.data?.git?.commit === gitState.commit,
+    cleanCommitEvidence: audit.data?.git?.worktreeClean === true && gitState.worktreeClean,
+    artifactsComplete: artifacts.complete,
+    artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256
+  }
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
   return {
     id: 'packaging_release',
     title: 'Packaging and GitHub Release readiness',
-    status: audit.data?.status === 'passed' ? 'ready' : 'open',
+    status: failures.length === 0 ? 'ready' : 'open',
     currentPackageVersion: version,
     distPresent: hasDist,
+    checks,
+    failures,
+    artifacts,
     audit: {
       path: audit.relativePath,
       exists: audit.exists,
       status: evidenceStatus(audit),
       expectedVersion: audit.data?.expectedVersion,
+      packageVersion: audit.data?.packageVersion,
+      packageLockVersion: audit.data?.packageLockVersion,
+      git: audit.data?.git,
+      artifactSetSha256: audit.data?.artifactSetSha256,
       failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
       warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
     },
@@ -309,7 +416,7 @@ function packagingDomain(packageJson) {
       'npm run build',
       'npm run test:deep',
       'npm run secret:scan:history',
-      'npm run dist:mac',
+      'npm run dist:mac:x64',
       'npm run test:release-packaging-audit:required'
     ],
     nextActions: [
@@ -321,9 +428,46 @@ function packagingDomain(packageJson) {
   }
 }
 
+function releaseArtifactEvidence(version) {
+  const files = [
+    `CaoGen-${version}.dmg`,
+    `CaoGen-${version}.dmg.blockmap`,
+    `CaoGen-${version}-mac.zip`,
+    `CaoGen-${version}-mac.zip.blockmap`,
+    'latest-mac.yml'
+  ].sort()
+  const missing = files.filter((file) => !existsSync(path.join(repoRoot, 'dist', file)))
+  if (missing.length > 0) return { complete: false, missing, files: {}, artifactSetSha256: null }
+  const digests = Object.fromEntries(files.map((file) => {
+    const absolutePath = path.join(repoRoot, 'dist', file)
+    return [file, {
+      size: statSync(absolutePath).size,
+      sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
+    }]
+  }))
+  return {
+    complete: true,
+    missing: [],
+    files: digests,
+    artifactSetSha256: createHash('sha256').update(JSON.stringify(digests)).digest('hex')
+  }
+}
+
 function releaseNotesDomain() {
   const audit = reports.releaseNotesAudit
-  const finalPassed = audit.data?.status === 'passed' && audit.data?.mode === 'final'
+  const currentArtifactSetSha256 = releaseArtifactEvidence(releaseTargetVersion).artifactSetSha256
+  const expectedVersionMatches = audit.data?.expectedVersion === releaseTargetVersion
+  const commitMatches = audit.data?.git?.commit === gitState.commit
+  const cleanCommitEvidence = audit.data?.git?.worktreeClean === true && gitState.worktreeClean
+  const artifactSetMatches =
+    Boolean(currentArtifactSetSha256) && audit.data?.artifactSetSha256 === currentArtifactSetSha256
+  const finalPassed =
+    audit.data?.status === 'passed' &&
+    audit.data?.mode === 'final' &&
+    expectedVersionMatches &&
+    commitMatches &&
+    cleanCommitEvidence &&
+    artifactSetMatches
   const draftPassed = audit.data?.status === 'passed' && audit.data?.mode === 'draft'
   return {
     id: 'release_notes',
@@ -335,6 +479,14 @@ function releaseNotesDomain() {
       status: evidenceStatus(audit),
       mode: audit.data?.mode,
       notesPath: audit.data?.notesPath,
+      expectedVersion: audit.data?.expectedVersion,
+      git: audit.data?.git,
+      binding: {
+        expectedVersionMatches,
+        commitMatches,
+        cleanCommitEvidence,
+        artifactSetMatches
+      },
       failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
       warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
     },
@@ -344,7 +496,7 @@ function releaseNotesDomain() {
       'npm run test:release-notes-audit:final'
     ],
     nextActions: finalPassed
-      ? ['Keep the final release notes audit green on the exact GitHub Release body.']
+      ? ['Keep the final release notes audit green on the exact GitHub Release body and release commit.']
       : draftPassed
         ? [
             'Keep docs/RELEASE-NOTES-DRAFT.md aligned with current open gates.',
@@ -405,7 +557,8 @@ function githubReleaseDomain() {
       'npm run test:github-release-audit:required',
       'npm run test:github-release-audit:read-text',
       'npm run test:github-release-audit:required -- --tag vX.Y.Z',
-      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z'
+      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z',
+      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist'
     ],
     nextActions: audit.data?.status === 'passed'
       ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
@@ -557,6 +710,30 @@ function readJson(relativePath) {
       data: null,
       error: error instanceof Error ? error.message : String(error)
     }
+  }
+}
+
+function readGitState() {
+  const commit = gitOutput(['rev-parse', 'HEAD'])
+  const branch = gitOutput(['branch', '--show-current'])
+  const status = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+  return {
+    commit,
+    branch: branch || 'detached',
+    worktreeClean: status.length === 0,
+    statusEntryCount: status ? status.split(/\r?\n/).filter(Boolean).length : 0
+  }
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  } catch {
+    return ''
   }
 }
 

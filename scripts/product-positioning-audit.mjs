@@ -14,6 +14,7 @@ const publicFiles = [
   'README.md',
   'docs/CAOGEN-OPTIMIZATION-PLAN.md',
   'docs/RELEASE-NOTES-DRAFT.md',
+  'docs/RELEASE-NOTES-FINAL.md',
   'docs/RELEASE-GATE-DRAFT.md',
   'src/renderer/src/components/WelcomeView.tsx'
 ]

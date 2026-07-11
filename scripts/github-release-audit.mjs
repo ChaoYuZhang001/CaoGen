@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import https from 'node:https'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -12,8 +12,12 @@ const repo = argValue('--repo') || process.env.CAOGEN_GITHUB_REPO || 'ChaoYuZhan
 const tagFilter = argValue('--tag') || process.env.CAOGEN_GITHUB_RELEASE_TAG
 const fixturePath = argValue('--json') || process.env.CAOGEN_GITHUB_RELEASES_JSON
 const readTextAssets = process.argv.includes('--read-text-assets') || process.env.CAOGEN_GITHUB_RELEASE_AUDIT_READ_TEXT === '1'
+const expectedAssetsFromDist = process.argv.includes('--expected-assets-from-dist') || process.env.CAOGEN_GITHUB_RELEASE_EXPECT_DIST === '1'
 const failures = []
 const warnings = []
+const expectedAssets = expectedAssetsFromDist ? readExpectedDistAssets() : []
+
+if (expectedAssetsFromDist && !tagFilter) failures.push('--expected-assets-from-dist requires an explicit --tag')
 
 let releases = []
 let source = fixturePath ? `json:${path.relative(repoRoot, path.resolve(fixturePath))}` : `github:${repo}`
@@ -38,6 +42,12 @@ if (!fetchError) {
     if (required) failures.push('no GitHub Releases were found to audit')
     else warnings.push('no GitHub Releases were found to audit')
   }
+  if (expectedAssetsFromDist && tagFilter && checkedReleases.length === 1) {
+    const actualAssets = checkedReleases[0].assets.map((asset) => asset.name).sort()
+    if (JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)) {
+      failures.push(`${tagFilter}: release assets must exactly match local dist evidence; expected ${expectedAssets.join(', ')}`)
+    }
+  }
 }
 
 const status = fetchError && !required ? 'skipped' : failures.length === 0 ? 'passed' : 'failed'
@@ -50,6 +60,8 @@ const report = {
   tagFilter: tagFilter || null,
   source,
   readTextAssets,
+  expectedAssetsFromDist,
+  expectedAssets,
   releaseCount: checkedReleases.length,
   assetCount: checkedReleases.reduce((total, release) => total + release.assets.length, 0),
   redactionPolicy: 'No secret values are emitted. The audit reports release tags, asset names, sizes, states, and failure categories only.',
@@ -179,6 +191,18 @@ function versionFromTag(tagName) {
 
 function shouldReadSmallTextAsset(name, size) {
   return size > 0 && size <= 1024 * 1024 && /\.(ya?ml|json|txt|md)$/i.test(name)
+}
+
+function readExpectedDistAssets() {
+  const distDir = path.join(repoRoot, 'dist')
+  if (!existsSync(distDir)) {
+    failures.push('local dist directory is missing for expected asset comparison')
+    return []
+  }
+  return readdirSync(distDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && allowedReleaseAssetName(entry.name))
+    .map((entry) => entry.name)
+    .sort()
 }
 
 async function readTextAsset(tagName, assetName, url) {

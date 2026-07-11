@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -128,6 +128,7 @@ export async function runDeepTest(options = {}) {
   const log = options.log ?? console.log
   const stopOnBlocking = options.stopOnBlocking !== false
   const startedAt = new Date().toISOString()
+  const gitStart = readGitState(repoRoot)
   const results = []
 
   mkdirSync(runDir, { recursive: true })
@@ -146,6 +147,7 @@ export async function runDeepTest(options = {}) {
   }
 
   const finishedAt = new Date().toISOString()
+  const gitEnd = readGitState(repoRoot)
   const blockingResults = results.filter((item) => item.blocksGate)
   const status = blockingResults.length === 0 && results.length === plannedCommands.length ? 'pass' : 'fail'
   const report = {
@@ -162,6 +164,13 @@ export async function runDeepTest(options = {}) {
     },
     repoRoot,
     runDir,
+    git: {
+      commit: gitEnd.commit,
+      worktreeClean: gitStart.worktreeClean && gitEnd.worktreeClean,
+      unchanged: gitStart.commit === gitEnd.commit && gitStart.worktreeClean === gitEnd.worktreeClean,
+      start: gitStart,
+      end: gitEnd
+    },
     summary: buildSummary(results, plannedCommands.length),
     results,
     missingCommands: results.filter((item) => item.executed === false).map((item) => item.name),
@@ -427,6 +436,9 @@ export function renderMarkdown(report) {
   lines.push(`- Started: ${report.startedAt}`)
   lines.push(`- Finished: ${report.finishedAt}`)
   lines.push(`- Repo: ${report.repoRoot}`)
+  lines.push(`- Git commit: ${report.git.commit || 'unknown'}`)
+  lines.push(`- Clean worktree: ${report.git.worktreeClean ? 'yes' : 'no'}`)
+  lines.push(`- Git state unchanged: ${report.git.unchanged ? 'yes' : 'no'}`)
   lines.push('')
   lines.push('| Check | Category | Requirement | Status | Gate | Duration | Log |')
   lines.push('|---|---|---|---|---|---:|---|')
@@ -489,6 +501,28 @@ function commandSpec(command, args) {
   return process.platform === 'win32'
     ? { command: 'cmd', args: ['/c', command, ...args] }
     : { command, args }
+}
+
+function readGitState(repoRoot) {
+  const commit = gitOutput(repoRoot, ['rev-parse', 'HEAD'])
+  const status = gitOutput(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
+  return {
+    commit,
+    worktreeClean: status.length === 0,
+    statusEntryCount: status ? status.split(/\r?\n/).filter(Boolean).length : 0
+  }
+}
+
+function gitOutput(repoRoot, args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  } catch {
+    return ''
+  }
 }
 
 function escapePipe(value) {

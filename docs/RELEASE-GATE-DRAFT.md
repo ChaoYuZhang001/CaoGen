@@ -1,36 +1,36 @@
 # CaoGen Rolling Release Gate Draft
 
-> Updated: 2026-07-09 Asia/Shanghai. This is a draft checklist only. Do not publish a new GitHub Release until the owner chooses the version number and every blocking gate below is proved by current evidence.
+> Updated: 2026-07-12 Asia/Shanghai. v0.1.4 is the selected release candidate; publish only after every blocking gate below is proved on the exact release commit.
 
 ## Current Public Release
 
 | Item | State |
 |---|---|
 | Latest public GitHub Release | `v0.1.3` |
-| Current package version | `0.1.3` |
-| `origin/main` baseline | Check with `git rev-parse origin/main` on the release commit; last pulled baseline before this merge was `ce2e2ee` |
-| Release decision | Do not publish a new release until a version is explicitly chosen and gates pass |
+| Current package version | `0.1.4` |
+| `origin/main` baseline | Verify the release commit and remote tag immediately before publishing; pre-release main was `6711a5e` |
+| Release decision | v0.1.4 selected for macOS x64 only; arm64, Windows, and Linux are not part of this release |
 
 ## Required Before Publishing
 
 | Gate | Required command or evidence | Current status |
 |---|---|---|
-| Version decision | Owner chooses whether the next release keeps the current patch line or bumps to a new version; `package.json` and `package-lock.json` must match that chosen version | Open |
-| Local type/build | `npm run typecheck` and `npm run build` pass | Passed on current worktree; rerun on release commit |
-| Deep gate | `npm run test:deep` pass | Last known pass: 2026-07-08, 65 checks |
+| Version decision | Owner chooses the release version; `package.json` and `package-lock.json` must match it | Passed: 0.1.4 selected and both files match |
+| Local type/build | `npm run typecheck` and `npm run build` pass | Candidate worktree passed earlier; rerun after the final code changes |
+| Deep gate | `npm run test:deep` pass | Candidate baseline: 87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail; rerun on the release commit |
 | P2 local smoke | `npm run test:p2` pass | Passed on current worktree; latest run refreshed P2-002/P2-003 evidence |
 | P2 release scope | P2-002/P2-003/P2-005 proved by `npm run test:p2`, `npm run test:p2-ide-build-and-vscode:required`, and `npm run test:jetbrains-ide-interaction:required` | Ready in latest release doctor; full strict audit still reports delegated/user-configured gaps only |
 | IDE build + VS Code host | `npm run test:p2-ide-build-and-vscode:required` pass with VS Code and JetBrains plugin build evidence | Passed on current worktree with VS Code extension host evidence |
 | JetBrains real IDE | `npm run test:jetbrains-recorder-e2e:required` and `npm run test:jetbrains-ide-interaction:required` pass with recorder/runIde evidence | Passed on current worktree with JetBrains runIde recorder evidence |
-| P2-001 Windows GUI | Separate Windows agent will compile/run strict GUI evidence after this release-gate branch is submitted | Non-blocking for this commit; do not claim Windows strict GUI proof until it lands |
+| P2-001 Windows GUI | Separate Windows agent will run strict GUI evidence after this release-gate branch is submitted | Non-blocking because v0.1.4 has no Windows asset; do not claim Windows strict GUI proof until it lands |
 | P2-004 China external | User-configured real network/provider evidence via `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` | Non-blocking; release notes must frame it as requiring user credentials/config |
 | N1 migration | Human 30-minute migration audit | Not required unless the release claims N1 pass |
-| Packaging | `npm run dist:mac` produces expected DMG/zip assets and `npm run test:release-packaging-audit:required` passes; Windows/Linux only if actually verified | Passed on current worktree for macOS x64/arm64; unsigned and not uploaded |
-| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Draft guard added; rerun on release commit |
-| Release notes | `npm run test:release-notes-audit:final` passes against the final GitHub Release body before publishing | Draft exists; final audit still open |
-| Public GitHub Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:required -- --tag vX.Y.Z` plus `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z` for public small text metadata | Current public release assets audit must be rerun before publish |
-| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed on current worktree/history; rerun immediately before release |
-| Release doctor | `npm run workos:release-doctor -- --refresh --required` refreshes local lightweight audits and summarizes all domains as ready | Open only for final release notes in latest draft run |
+| Packaging | `npm run dist:mac:x64` and `npm run test:release-packaging-audit:required` produce the exact 5 x64 assets | Final x64 rebuild, DMG/ZIP integrity, launch, update metadata, and SHA256 remain |
+| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Rerun after the release-candidate wording update |
+| Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Final body prepared; audit only counts when version, commit, and clean-worktree binding match |
+| Public GitHub Release assets | `npm run test:github-release-audit:required` passes before release edits; after publishing, run `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` to require the exact local `dist` asset set and read public text metadata | Pre-publish audit passed; v0.1.4 exact-5 post-publish audit remains mandatory |
+| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed earlier; rerun immediately before commit and release |
+| Release doctor | Preflight doctor on clean commit, then final notes audit, then required doctor | Open until the release candidate is committed and all three reports bind to v0.1.4 and the same clean commit |
 
 ## Release Notes Requirements
 
@@ -54,7 +54,7 @@ Stop the release immediately if any of these is true:
 
 - Any real secret, webhook URL, private key, certificate, signing material, or filled `.env` appears in `git status`, staged diff, or release assets.
 - `npm run secret:scan:history` fails on a high-confidence real credential.
-- `npm run test:github-release-audit:required` or `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z` reports an unexpected, suspicious, forbidden, unreadable, or secret-bearing public Release asset. Delete the asset and rotate/revoke the credential if it contained a real secret.
+- `npm run test:github-release-audit:required` or `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` reports a missing, extra, suspicious, forbidden, unreadable, or secret-bearing public Release asset. Delete the asset and rotate/revoke the credential if it contained a real secret.
 - Release-scope P2 evidence for P2-002/P2-003/P2-005 is missing or stale.
 - Release notes claim P2-001 Windows GUI, P2-004 China external evidence, or N1 30-minute migration as proved before those separate audits pass.
 - Packaging produces assets for a platform that was not actually tested but the notes imply support.

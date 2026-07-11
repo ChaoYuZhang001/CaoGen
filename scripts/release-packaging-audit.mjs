@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -19,6 +21,10 @@ const rootFiles = distFiles
   .filter((file) => !file.relativePath.includes(path.sep))
   .map((file) => file.relativePath)
   .sort()
+const uploadableAssets = rootFiles.filter(isUploadableReleaseAsset)
+const uploadableAssetDigests = digestAssets(uploadableAssets)
+const artifactSetSha256 = digestJson(uploadableAssetDigests)
+const git = readGitState()
 
 validatePackage()
 validateDist()
@@ -35,9 +41,12 @@ const report = {
   distDir: path.relative(repoRoot, distDir),
   distPresent: existsSync(distDir),
   rootFiles,
-  uploadableAssets: rootFiles.filter(isUploadableReleaseAsset),
-  unexpectedUploadableAssets: rootFiles.filter(isUploadableReleaseAsset).filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
+  uploadableAssets,
+  uploadableAssetDigests,
+  artifactSetSha256,
+  unexpectedUploadableAssets: uploadableAssets.filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
   expectedMacAssets: expectedMacAssets(expectedVersion),
+  git,
   signing: packageJson.build?.mac?.identity === null ? 'unsigned' : 'configured-or-auto',
   publish: summarizePublish(packageJson.build?.publish),
   warnings,
@@ -88,12 +97,12 @@ function validateDist() {
   for (const file of distFiles) {
     if (forbiddenReleasePath(file.relativePath)) failures.push(`forbidden release artifact path: ${file.relativePath}`)
   }
-  for (const asset of expectedMacAssets(expectedVersion)) {
+  for (const asset of expectedReleaseAssets(expectedVersion)) {
     const file = distFiles.find((item) => item.relativePath === asset)
     if (!file) failures.push(`missing expected macOS release asset: ${asset}`)
     else if (file.size <= 0) failures.push(`release asset is empty: ${asset}`)
   }
-  const expected = new Set(expectedMacAssets(expectedVersion))
+  const expected = new Set(expectedReleaseAssets(expectedVersion))
   for (const asset of rootFiles.filter((file) => /^CaoGen-\d+\.\d+\.\d+/.test(file))) {
     if (!expected.has(asset)) failures.push(`stale or unexpected CaoGen release asset in dist root: ${asset}`)
   }
@@ -106,16 +115,16 @@ function validateDist() {
   }
 }
 
+function expectedReleaseAssets(version) {
+  return expectedMacAssets(version)
+}
+
 function expectedMacAssets(version) {
   return [
     `CaoGen-${version}.dmg`,
     `CaoGen-${version}.dmg.blockmap`,
     `CaoGen-${version}-mac.zip`,
     `CaoGen-${version}-mac.zip.blockmap`,
-    `CaoGen-${version}-arm64.dmg`,
-    `CaoGen-${version}-arm64.dmg.blockmap`,
-    `CaoGen-${version}-arm64-mac.zip`,
-    `CaoGen-${version}-arm64-mac.zip.blockmap`,
     'latest-mac.yml'
   ]
 }
@@ -136,7 +145,7 @@ function isUploadableReleaseAsset(file) {
 }
 
 function isExpectedUploadableReleaseAsset(file, version) {
-  const expected = new Set(expectedMacAssets(version))
+  const expected = new Set(expectedReleaseAssets(version))
   return expected.has(file)
 }
 
@@ -144,6 +153,42 @@ function summarizePublish(value) {
   return Array.isArray(value)
     ? value.map((item) => ({ provider: item?.provider, url: item?.url }))
     : []
+}
+
+function digestAssets(files) {
+  return Object.fromEntries(files.map((file) => {
+    const absolutePath = path.join(distDir, file)
+    return [file, {
+      size: statSync(absolutePath).size,
+      sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
+    }]
+  }))
+}
+
+function digestJson(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function readGitState() {
+  const commit = gitOutput(['rev-parse', 'HEAD'])
+  const status = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+  return {
+    commit,
+    worktreeClean: status.length === 0,
+    statusEntryCount: status ? status.split(/\r?\n/).filter(Boolean).length : 0
+  }
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  } catch {
+    return ''
+  }
 }
 
 function readDistText(relativePath) {
