@@ -377,6 +377,7 @@ check('office visual noise stays removed while packet semantics remain', () => {
 check('desk operators use a seated low-noise workstation presentation', () => {
   const animations = source('src/renderer/src/components/office/kit/AvatarAnimations.ts')
   const workstation = source('src/renderer/src/components/office/kit/WorkstationPro.tsx')
+  const robotAsset = source('src/renderer/src/components/office/kit/RobotModelAsset.tsx')
   const monitors = source('src/renderer/src/components/office/kit/MonitorSetup.tsx')
   const backplane = source('src/renderer/src/components/office/kit/OperationsBackplane.tsx')
   const windowWall = source('src/renderer/src/components/office/kit/WindowWall.tsx')
@@ -393,6 +394,13 @@ check('desk operators use a seated low-noise workstation presentation', () => {
   }
   assert(workstation.includes('<OfficeChair position={[0, 0, 0.65]} scale={0.88} />'), 'chair must sit directly under the operator hips')
   assert(workstation.includes('position={[0, 0, 0.52]}'), 'desk operator must remain centered behind the input surface')
+  assert(animations.includes('function applyDeskArmIK'), 'desk arms must use target-driven two-bone IK instead of fixed Euler poses only')
+  assert(animations.includes('ikPole.set(0, -0.58, 0)'), 'desk arm IK must keep elbows guided down and close to the torso')
+  assert(animations.includes('upperLength + lowerLength - ARM_IK_EPSILON'), 'desk arm IK must clamp unreachable hand targets')
+  assert(robotAsset.includes('function createHandEndpointMarker'), 'reference robot must expose real palm-center IK endpoints')
+  assert(robotAsset.includes("'left_hand_ik_endpoint'") && robotAsset.includes("'right_hand_ik_endpoint'"), 'both robot hands must expose IK endpoints')
+  assert(workstation.includes('const OPERATOR_INPUT_ARRAY_Z = 0.16'), 'operator input array must stay far enough forward for a human-like elbow angle')
+  assert(workstation.includes('name="desk-left-hand-ik-target"') && workstation.includes('name="desk-right-hand-ik-target"'), 'workstation must expose two physical hand targets')
   assert(monitors.includes("const SCREEN_SURFACE = '#17232d'"), 'monitor body must use a neutral screen surface')
   assert(monitors.includes('color={SCREEN_SURFACE}') && monitors.includes('emissive={SCREEN_GLOW}'), 'status color must not flood the full monitor panel')
   assert(!backplane.includes('<cylinderGeometry args={[0.08, 0.08, 0.012, 28]} />'), 'floor data nodes must not render circular pucks')
