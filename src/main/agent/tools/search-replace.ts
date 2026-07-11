@@ -1,6 +1,8 @@
-import { access, readFile, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { access, lstat, open, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { TextDecoder } from 'node:util'
+import type { EffectTarget, FileSystemIdentity } from '../../../shared/types'
 import { createFileBackup } from '../../utils/backup'
 import { resolveExistingProjectPath } from '../../utils/safe-project-path'
 
@@ -27,7 +29,21 @@ export interface SearchReplaceInput {
 }
 
 export interface SearchReplaceRunOptions {
-  writeTextFile?: (filePath: string, content: string) => Promise<void>
+  writeTextFile?: (filePath: string, content: string, guard: TextFileWriteGuard) => Promise<void>
+  effectTarget?: Extract<EffectTarget, { kind: 'file_content' }>
+}
+
+export interface TextFileWriteGuard {
+  identity: FileSystemIdentity
+  sha256: string
+  bytes: number
+}
+
+export interface ExactFileEditInput {
+  file_path: string
+  old_string: string
+  new_string: string
+  replace_all?: boolean
 }
 
 export interface ReplacementLineRange {
@@ -64,6 +80,26 @@ export interface SearchReplaceFailure {
 
 export type SearchReplaceResult = SearchReplaceSuccess | SearchReplaceFailure
 
+export interface SearchReplacePlan {
+  ok: true
+  rootPath: string
+  rootIdentity: FileSystemIdentity
+  filePath: string
+  relativePath: string
+  fileIdentity: FileSystemIdentity
+  originalContent: string
+  originalRawContent: Buffer
+  originalSha256: string
+  originalBytes: number
+  nextContent: string
+  writeContent: string
+  replacements: ReplacementResult[]
+  successCount: number
+  diff: string
+}
+
+export type SearchReplacePlanResult = SearchReplacePlan | SearchReplaceFailure
+
 type MatchType = 'exact' | 'whitespace' | 'fuzzy'
 
 interface ResolvedMatch {
@@ -83,25 +119,63 @@ export async function runSearchReplace(
   input: SearchReplaceInput,
   options: SearchReplaceRunOptions = {}
 ): Promise<SearchReplaceResult> {
-  let filePath: string
-  try {
-    filePath = (await resolveExistingProjectPath(projectRoot, input.file_path)).fullPath
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  const plan = await planSearchReplace(projectRoot, input)
+  if (plan.ok === false) return plan
+  if (input.dry_run === true) {
+    return publicResult(plan, true)
   }
+  return applyTextPlan(plan, options)
+}
+
+export async function runExactFileEdit(
+  projectRoot: string,
+  input: ExactFileEditInput,
+  options: SearchReplaceRunOptions = {}
+): Promise<SearchReplaceResult> {
+  const plan = await planExactFileEdit(projectRoot, input)
+  if (plan.ok === false) return plan
+  return applyTextPlan(plan, options)
+}
+
+async function applyTextPlan(
+  plan: SearchReplacePlan,
+  options: SearchReplaceRunOptions
+): Promise<SearchReplaceResult> {
+  const guardError = effectTargetError(plan, options.effectTarget)
+  if (guardError) return { ok: false, filePath: plan.filePath, error: guardError }
+  if (plan.originalContent === plan.nextContent) return publicResult(plan, false)
+  const writable = await ensureWritable(plan.filePath)
+  if (writable.ok === false) return { ok: false, filePath: plan.filePath, error: writable.error }
+
+  const backup = await createFileBackup(plan.rootPath, plan.filePath, plan.originalRawContent)
+  const driftError = await currentPlanError(plan)
+  if (driftError) return { ok: false, filePath: plan.filePath, error: driftError }
+  const writeGuard = {
+    identity: plan.fileIdentity,
+    sha256: plan.originalSha256,
+    bytes: plan.originalBytes
+  }
+  if (options.writeTextFile) await options.writeTextFile(plan.filePath, plan.writeContent, writeGuard)
+  else await writeGuardedTextFile(plan.filePath, plan.writeContent, writeGuard)
+
+  return publicResult(plan, false, backup.backupPath)
+}
+
+export async function planSearchReplace(
+  projectRoot: string,
+  input: SearchReplaceInput
+): Promise<SearchReplacePlanResult> {
+  const prepared = await prepareTextPlan(projectRoot, input.file_path)
+  if (prepared.ok === false) return prepared
   const replacements = validateReplacements(input.replacements)
-  if (replacements.ok === false) return { ok: false, filePath, error: replacements.error }
+  if (replacements.ok === false) return { ok: false, filePath: prepared.filePath, error: replacements.error }
 
-  const readable = await readUtf8TextFile(filePath)
-  if (readable.ok === false) return { ok: false, filePath, error: readable.error }
-
-  let nextContent = readable.content
+  let nextContent = prepared.originalContent
   const applied: ReplacementResult[] = []
-
   for (const [index, replacement] of replacements.value.entries()) {
     const contextCheck = validateReplacementContext(replacement)
     if (contextCheck.ok === false) {
-      return { ok: false, filePath, error: `第 ${index + 1} 个 old_str 上下文不足:${contextCheck.error}` }
+      return { ok: false, filePath: prepared.filePath, error: `第 ${index + 1} 个 old_str 上下文不足:${contextCheck.error}` }
     }
     const resolved = resolveMatches(nextContent, replacement.old_str, input.dry_run === true)
     if (resolved.matches.length === 0) {
@@ -109,7 +183,7 @@ export async function runSearchReplace(
         resolved.bestConfidence > 0 ? `最佳候选匹配度 ${formatConfidence(resolved.bestConfidence)}。` : ''
       return {
         ok: false,
-        filePath,
+        filePath: prepared.filePath,
         error:
           `第 ${index + 1} 个 old_str 未在文件中找到。${confidenceText}` +
           '匹配度低于自动应用阈值,请先 dry_run 预览或根据相似片段修正缩进、空白、换行或上下文。',
@@ -119,59 +193,250 @@ export async function runSearchReplace(
     if (resolved.matches.length > 1 && replacement.replace_all !== true) {
       return {
         ok: false,
-        filePath,
+        filePath: prepared.filePath,
         error: `第 ${index + 1} 个 old_str 出现 ${resolved.matches.length} 次。请增加上下文保证唯一匹配,或显式设置 replace_all=true。`,
         similarSnippets: snippetsForMatches(nextContent, resolved.matches)
       }
     }
-
     const selected = replacement.replace_all === true ? resolved.matches : [resolved.matches[0]]
-    const ranges = selected.map((match) => lineRangeForOffset(nextContent, match.offset, match.length))
+    applied.push(replacementResult(index, replacement.replace_all === true, nextContent, selected))
     nextContent = replaceResolvedMatches(nextContent, selected, replacement.new_str)
-    const minConfidence = Math.min(...selected.map((match) => match.confidence))
-    applied.push({
-      index,
-      replaceAll: replacement.replace_all === true,
-      matches: selected.length,
-      ranges,
-      matchType: selected.some((match) => match.type === 'fuzzy')
-        ? 'fuzzy'
-        : selected.some((match) => match.type === 'whitespace')
-          ? 'whitespace'
-          : 'exact',
-      confidence: minConfidence,
-      ...(minConfidence < AUTO_APPLY_CONFIDENCE ? { requiresPreview: true } : {})
-    })
   }
+  return completePlan(prepared, nextContent, applied)
+}
 
-  const diff = formatUnifiedDiff(filePath, readable.content, nextContent)
-  if (input.dry_run === true) {
-    return {
-      ok: true,
-      filePath,
-      dryRun: true,
-      replacements: applied,
-      successCount: totalMatches(applied),
-      diff
+export async function planExactFileEdit(
+  projectRoot: string,
+  input: ExactFileEditInput
+): Promise<SearchReplacePlanResult> {
+  const prepared = await prepareTextPlan(projectRoot, input.file_path)
+  if (prepared.ok === false) return prepared
+  if (!input.old_string) return { ok: false, filePath: prepared.filePath, error: 'old_string 不能为空' }
+  if (input.old_string === input.new_string) {
+    return { ok: false, filePath: prepared.filePath, error: 'new_string 必须与 old_string 不同' }
+  }
+  const matches = findExactMatches(prepared.originalContent, input.old_string)
+  if (matches.length === 0) return { ok: false, filePath: prepared.filePath, error: 'old_string 未在文件中找到' }
+  if (matches.length > 1 && input.replace_all !== true) {
+    return { ok: false, filePath: prepared.filePath, error: `old_string 出现 ${matches.length} 次，必须唯一匹配或设置 replace_all=true` }
+  }
+  const selected = input.replace_all === true ? matches : [matches[0]]
+  const applied = [replacementResult(0, input.replace_all === true, prepared.originalContent, selected)]
+  const nextContent = replaceResolvedMatches(prepared.originalContent, selected, input.new_string)
+  return completePlan(prepared, nextContent, applied)
+}
+
+export function searchReplacementArgs(value: unknown): SearchReplacementInput[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`replacement[${index}] 参数无效`)
     }
+    const record = item as Record<string, unknown>
+    if (typeof record.old_str !== 'string' || typeof record.new_str !== 'string') {
+      throw new Error(`replacement[${index}] 的 old_str 与 new_str 必须是字符串`)
+    }
+    if (record.replace_all !== undefined && typeof record.replace_all !== 'boolean') {
+      throw new Error(`replacement[${index}].replace_all 必须是布尔值`)
+    }
+    const replacement: SearchReplacementInput = {
+      old_str: record.old_str,
+      new_str: record.new_str
+    }
+    if (typeof record.replace_all === 'boolean') replacement.replace_all = record.replace_all
+    return replacement
+  })
+}
+
+interface PreparedTextPlan {
+  ok: true
+  rootPath: string
+  rootIdentity: FileSystemIdentity
+  filePath: string
+  relativePath: string
+  fileIdentity: FileSystemIdentity
+  originalContent: string
+  originalRawContent: Buffer
+  originalSha256: string
+  originalBytes: number
+  hasUtf8Bom: boolean
+}
+
+async function prepareTextPlan(
+  projectRoot: string,
+  rawPath: string
+): Promise<PreparedTextPlan | SearchReplaceFailure> {
+  let resolved: Awaited<ReturnType<typeof resolveExistingProjectPath>>
+  try {
+    resolved = await resolveExistingProjectPath(projectRoot, rawPath)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
-
-  const writable = await ensureWritable(filePath)
-  if (writable.ok === false) return { ok: false, filePath, error: writable.error }
-
-  const backup = await createFileBackup(projectRoot, filePath)
-  if (options.writeTextFile) await options.writeTextFile(filePath, nextContent)
-  else await writeFile(filePath, nextContent, 'utf8')
-
+  const readable = await readUtf8TextFile(resolved.fullPath)
+  if (readable.ok === false) return { ok: false, filePath: resolved.fullPath, error: readable.error }
+  const rootInfo = await stat(resolved.root, { bigint: true })
   return {
     ok: true,
-    filePath,
-    dryRun: false,
-    replacements: applied,
-    successCount: totalMatches(applied),
-    backupPath: backup.backupPath,
-    diff
+    rootPath: resolved.root,
+    rootIdentity: fileIdentity(rootInfo),
+    filePath: resolved.fullPath,
+    relativePath: resolved.relativePath,
+    fileIdentity: readable.identity,
+    originalContent: readable.content,
+    originalRawContent: readable.rawContent,
+    originalSha256: readable.sha256,
+    originalBytes: readable.bytes,
+    hasUtf8Bom: readable.hasUtf8Bom
   }
+}
+
+function completePlan(
+  prepared: PreparedTextPlan,
+  nextContent: string,
+  replacements: ReplacementResult[]
+): SearchReplacePlan {
+  const writeContent = prepared.hasUtf8Bom ? `\uFEFF${nextContent}` : nextContent
+  return {
+    ...prepared,
+    nextContent,
+    writeContent,
+    replacements,
+    successCount: totalMatches(replacements),
+    diff: formatUnifiedDiff(prepared.filePath, prepared.originalContent, nextContent)
+  }
+}
+
+function replacementResult(
+  index: number,
+  replaceAll: boolean,
+  content: string,
+  selected: ResolvedMatch[]
+): ReplacementResult {
+  const minConfidence = Math.min(...selected.map((match) => match.confidence))
+  return {
+    index,
+    replaceAll,
+    matches: selected.length,
+    ranges: selected.map((match) => lineRangeForOffset(content, match.offset, match.length)),
+    matchType: selected.some((match) => match.type === 'fuzzy')
+      ? 'fuzzy'
+      : selected.some((match) => match.type === 'whitespace')
+        ? 'whitespace'
+        : 'exact',
+    confidence: minConfidence,
+    ...(minConfidence < AUTO_APPLY_CONFIDENCE ? { requiresPreview: true } : {})
+  }
+}
+
+function publicResult(plan: SearchReplacePlan, dryRun: boolean, backupPath?: string): SearchReplaceSuccess {
+  return {
+    ok: true,
+    filePath: plan.filePath,
+    dryRun,
+    replacements: plan.replacements,
+    successCount: plan.successCount,
+    ...(backupPath ? { backupPath } : {}),
+    diff: plan.diff
+  }
+}
+
+function effectTargetError(
+  plan: SearchReplacePlan,
+  target: Extract<EffectTarget, { kind: 'file_content' }> | undefined
+): string | undefined {
+  if (!target) return undefined
+  const expected = Buffer.from(plan.writeContent, 'utf8')
+  if (
+    target.rootPath !== plan.rootPath ||
+    target.relativePath !== plan.relativePath ||
+    target.preState !== 'file' ||
+    target.preBytes !== plan.originalBytes ||
+    target.preSha256 !== plan.originalSha256 ||
+    target.expectedBytes !== expected.byteLength ||
+    target.expectedSha256 !== sha256(expected) ||
+    (target.rootIdentity && !sameIdentity(target.rootIdentity, plan.rootIdentity)) ||
+    (target.preFileIdentity && !sameIdentity(target.preFileIdentity, plan.fileIdentity))
+  ) {
+    return '文件编辑目标与审批时冻结的 Effect 不一致，已阻止执行'
+  }
+  return undefined
+}
+
+async function currentPlanError(plan: SearchReplacePlan): Promise<string | undefined> {
+  const current = await readUtf8TextFile(plan.filePath)
+  if (current.ok === false) return `备份后无法重新验证目标文件:${current.error}`
+  if (
+    current.bytes !== plan.originalBytes ||
+    current.sha256 !== plan.originalSha256 ||
+    !sameIdentity(current.identity, plan.fileIdentity)
+  ) {
+    return '目标文件在备份后、写入前发生变化，已阻止覆盖'
+  }
+  return undefined
+}
+
+async function writeGuardedTextFile(
+  filePath: string,
+  content: string,
+  guard: TextFileWriteGuard
+): Promise<void> {
+  const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+    ? constants.O_NOFOLLOW
+    : 0
+  const handle = await open(filePath, constants.O_RDWR | noFollow)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) throw new Error('目标路径不是文件')
+    if (!sameIdentity(fileIdentity(before), guard.identity)) {
+      throw new Error('目标文件身份在写入前发生变化，已阻止覆盖')
+    }
+    const current = await handle.readFile()
+    if (current.byteLength !== guard.bytes || sha256(current) !== guard.sha256) {
+      throw new Error('目标文件内容在写入前发生变化，已阻止覆盖')
+    }
+
+    const output = Buffer.from(content, 'utf8')
+    await handle.truncate(0)
+    let offset = 0
+    while (offset < output.length) {
+      const written = await handle.write(output, offset, output.length - offset, offset)
+      if (written.bytesWritten <= 0) throw new Error('目标文件写入未取得进展')
+      offset += written.bytesWritten
+    }
+    await handle.truncate(output.length)
+    await handle.sync()
+
+    const after = await handle.stat({ bigint: true })
+    if (before.dev !== after.dev || before.ino !== after.ino) {
+      throw new Error('目标文件身份在写入期间发生变化')
+    }
+    const observed = Buffer.alloc(output.length)
+    const bytesRead = output.length > 0
+      ? (await handle.read(observed, 0, observed.length, 0)).bytesRead
+      : 0
+    const verified = await handle.stat({ bigint: true })
+    if (
+      verified.size !== BigInt(output.length) ||
+      bytesRead !== output.length ||
+      !observed.equals(output)
+    ) {
+      throw new Error('目标文件写入后置条件不匹配')
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+function sha256(value: Buffer): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function fileIdentity(info: { dev: number | bigint; ino: number | bigint }): FileSystemIdentity {
+  return { device: String(info.dev), inode: String(info.ino) }
+}
+
+function sameIdentity(left: FileSystemIdentity, right: FileSystemIdentity): boolean {
+  return left.device === right.device && left.inode === right.inode
 }
 
 async function ensureWritable(filePath: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -235,17 +500,62 @@ function validateReplacementContext(item: SearchReplacementInput): { ok: true } 
   }
 }
 
-async function readUtf8TextFile(filePath: string): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
-  const info = await stat(filePath)
-  if (!info.isFile()) return { ok: false, error: '目标路径不是文件' }
-  if (info.size > MAX_FILE_BYTES) return { ok: false, error: `文件过大:${info.size} bytes, 上限 ${MAX_FILE_BYTES} bytes` }
-
-  const buffer = await readFile(filePath)
-  if (buffer.includes(0)) return { ok: false, error: '目标文件看起来是二进制内容,已跳过' }
+async function readUtf8TextFile(
+  filePath: string
+): Promise<{
+  ok: true
+  content: string
+  rawContent: Buffer
+  identity: FileSystemIdentity
+  sha256: string
+  bytes: number
+  hasUtf8Bom: boolean
+} | { ok: false; error: string }> {
+  let handle: Awaited<ReturnType<typeof open>>
   try {
-    return { ok: true, content: new TextDecoder('utf-8', { fatal: true }).decode(buffer) }
-  } catch {
-    return { ok: false, error: '目标文件不是有效 UTF-8 文本' }
+    const noFollow = process.platform !== 'win32' && typeof constants.O_NOFOLLOW === 'number'
+      ? constants.O_NOFOLLOW
+      : 0
+    handle = await open(filePath, constants.O_RDONLY | noFollow)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) return { ok: false, error: '目标路径不是文件' }
+    if (before.size > BigInt(MAX_FILE_BYTES)) {
+      return { ok: false, error: `文件过大:${before.size} bytes, 上限 ${MAX_FILE_BYTES} bytes` }
+    }
+    const buffer = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    const current = await lstat(filePath, { bigint: true })
+    if (
+      current.isSymbolicLink() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.dev !== current.dev ||
+      before.ino !== current.ino
+    ) {
+      return { ok: false, error: '读取期间目标文件发生变化，请重新预览后再编辑' }
+    }
+    if (buffer.includes(0)) return { ok: false, error: '目标文件看起来是二进制内容,已跳过' }
+    try {
+      return {
+        ok: true,
+        content: new TextDecoder('utf-8', { fatal: true }).decode(buffer),
+        rawContent: buffer,
+        identity: fileIdentity(before),
+        sha256: sha256(buffer),
+        bytes: buffer.byteLength,
+        hasUtf8Bom: buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf
+      }
+    } catch {
+      return { ok: false, error: '目标文件不是有效 UTF-8 文本' }
+    }
+  } finally {
+    await handle.close()
   }
 }
 

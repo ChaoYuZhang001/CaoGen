@@ -27,6 +27,7 @@ const sqliteFutureRoot = path.join(tempRoot, 'sqlite-future-store')
 const supersedeRoot = path.join(tempRoot, 'supersede-store')
 const barrierRoot = path.join(tempRoot, 'barrier-store')
 const crossSessionBarrierRoot = path.join(tempRoot, 'cross-session-barrier-store')
+const legacyFileEffectBarrierRoot = path.join(tempRoot, 'legacy-file-effect-barrier-store')
 const effectFirstRaceRoot = path.join(tempRoot, 'effect-first-race-store')
 const eventFirstRaceRoot = path.join(tempRoot, 'event-first-race-store')
 
@@ -479,6 +480,334 @@ try {
     'next lease for one resource must receive the next global fencing token'
   )
 
+  for (const [legacyIndex, toolName] of ['search_replace', 'edit_file'].entries()) {
+    const legacyStoreRoot = path.join(legacyFileEffectBarrierRoot, toolName)
+    const legacySessionId = `legacy-opaque-${toolName}`
+    const queryableSessionId = `queryable-${toolName}`
+    const observedAt = 3600 + legacyIndex * 100
+    const legacyTarget = { kind: 'unsupported', toolName }
+    const legacyTargetDigest = `legacy-${toolName}-target-digest`
+    const legacyIntentDigest = `legacy-${toolName}-intent-digest`
+    const legacyResourceKey = `resource-v1:legacy-opaque-${toolName}`
+    const legacyRun = {
+      schemaVersion: 1,
+      id: `${legacySessionId}-run`,
+      sessionId: legacySessionId,
+      taskId: legacySessionId,
+      status: 'waiting_reconciliation',
+      revision: 2,
+      attempt: 1,
+      recoveryCount: 0,
+      createdAt: observedAt,
+      updatedAt: observedAt + 1,
+      steps: [],
+      toolExecutions: [],
+      effects: []
+    }
+    const preparedLegacyEffect = preparedEffect(
+      legacyRun,
+      `effect-v1:legacy-opaque-${toolName}`,
+      30 + legacyIndex,
+      legacyResourceKey
+    )
+    const legacyEffect = {
+      ...preparedLegacyEffect,
+      toolName,
+      status: 'waiting_reconciliation',
+      reconcilability: 'opaque',
+      target: legacyTarget,
+      targetDigest: legacyTargetDigest,
+      intentDigest: legacyIntentDigest,
+      inputDigest: `legacy-${toolName}-input-digest`,
+      revision: 2,
+      lease: {
+        ...preparedLegacyEffect.lease,
+        releasedAt: observedAt + 1
+      },
+      createdAt: observedAt,
+      updatedAt: observedAt + 1,
+      error: 'legacy effect outcome is unknown'
+    }
+    legacyRun.effects = [legacyEffect]
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(legacySessionId, 'error'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: `legacy ${toolName}` } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run: legacyRun,
+      now: observedAt + 1
+    }), legacyStoreRoot)
+
+    const persistedLegacyEffect = (await snapshotStore.listTaskRuns(legacySessionId, legacyStoreRoot))[0].effects[0]
+    assertEqual(JSON.stringify(persistedLegacyEffect.target), JSON.stringify(legacyTarget))
+    assertEqual(persistedLegacyEffect.targetDigest, legacyTargetDigest)
+    assertEqual(persistedLegacyEffect.intentDigest, legacyIntentDigest)
+    assertEqual(persistedLegacyEffect.resourceKey, legacyResourceKey)
+
+    const queryableRun = {
+      schemaVersion: 1,
+      id: `${queryableSessionId}-run`,
+      sessionId: queryableSessionId,
+      taskId: queryableSessionId,
+      status: 'executing',
+      revision: 2,
+      attempt: 1,
+      recoveryCount: 0,
+      createdAt: observedAt + 10,
+      updatedAt: observedAt + 11,
+      steps: [],
+      toolExecutions: [],
+      effects: []
+    }
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(queryableSessionId, 'running'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: `queryable ${toolName}` } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run: queryableRun,
+      now: observedAt + 11
+    }), legacyStoreRoot)
+    const queryableEffect = {
+      ...preparedEffect(
+        queryableRun,
+        `effect-v1:queryable-${toolName}`,
+        40 + legacyIndex,
+        `resource-v1:queryable-file-${toolName}`
+      ),
+      toolName,
+      reconcilability: 'queryable',
+      target: {
+        kind: 'file_content',
+        rootPath: path.join(tempRoot, 'legacy-file-effect-project'),
+        rootIdentity: { device: '101', inode: '201' },
+        relativePath: `${toolName}.txt`,
+        preState: 'file',
+        preFileIdentity: { device: '101', inode: String(301 + legacyIndex) },
+        preSha256: `pre-${toolName}-sha256`,
+        preBytes: 6,
+        expectedSha256: `expected-${toolName}-sha256`,
+        expectedBytes: 7
+      },
+      targetDigest: `queryable-${toolName}-target-digest`,
+      intentDigest: `queryable-${toolName}-intent-digest`,
+      inputDigest: `queryable-${toolName}-input-digest`
+    }
+    const queryableEffectRun = { ...queryableRun, effects: [queryableEffect] }
+    assert(
+      queryableEffect.resourceKey !== legacyResourceKey,
+      'legacy opaque and queryable file effects must exercise the wildcard conflict path'
+    )
+    await assertRejects(
+      () => snapshotStore.saveTaskRunBarrier(queryableEffectRun, legacyStoreRoot),
+      '其他会话仍未收敛'
+    )
+    assertEqual(
+      (await snapshotStore.listTaskRuns(queryableSessionId, legacyStoreRoot))[0].effects.length,
+      0
+    )
+
+    const legacyAfterConflict = (await snapshotStore.listTaskRuns(legacySessionId, legacyStoreRoot))[0].effects[0]
+    assertEqual(JSON.stringify(legacyAfterConflict.target), JSON.stringify(legacyTarget))
+    assertEqual(legacyAfterConflict.targetDigest, legacyTargetDigest)
+    assertEqual(legacyAfterConflict.intentDigest, legacyIntentDigest)
+    assertEqual(legacyAfterConflict.resourceKey, legacyResourceKey)
+
+    const sameRunStoreRoot = path.join(legacyFileEffectBarrierRoot, `${toolName}-same-run`)
+    const sameRunSessionId = `same-run-legacy-${toolName}`
+    const sameRun = {
+      ...legacyRun,
+      id: `${sameRunSessionId}-run`,
+      sessionId: sameRunSessionId,
+      taskId: sameRunSessionId,
+      effects: []
+    }
+    const sameRunLegacyEffect = rebindEffect(legacyEffect, sameRun, 'legacy')
+    const persistedSameRun = { ...sameRun, effects: [sameRunLegacyEffect] }
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(sameRunSessionId, 'error'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: `same-run legacy ${toolName}` } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run: persistedSameRun,
+      now: observedAt + 2
+    }), sameRunStoreRoot)
+
+    const sameRunQueryableEffect = rebindEffect(
+      {
+        ...queryableEffect,
+        resourceKey: `resource-v1:same-run-queryable-${toolName}`
+      },
+      sameRun,
+      'queryable'
+    )
+    assert(
+      sameRunQueryableEffect.resourceKey !== sameRunLegacyEffect.resourceKey,
+      'same-run legacy and queryable effects must exercise the wildcard conflict path'
+    )
+    await assertRejects(
+      () => snapshotStore.saveTaskRunBarrier({
+        ...persistedSameRun,
+        revision: persistedSameRun.revision + 1,
+        updatedAt: observedAt + 3,
+        effects: [sameRunLegacyEffect, sameRunQueryableEffect]
+      }, sameRunStoreRoot),
+      '已阻止第二个执行 lease'
+    )
+    const sameRunAfterConflict = (await snapshotStore.listTaskRuns(sameRunSessionId, sameRunStoreRoot))[0]
+    assertEqual(sameRunAfterConflict.effects.length, 1)
+    assertEqual(sameRunAfterConflict.effects[0].id, sameRunLegacyEffect.id)
+
+    const opaquePeerSessionId = `opaque-peer-${toolName}`
+    const opaquePeerRun = {
+      ...queryableRun,
+      id: `${opaquePeerSessionId}-run`,
+      sessionId: opaquePeerSessionId,
+      taskId: opaquePeerSessionId,
+      effects: []
+    }
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(opaquePeerSessionId, 'running'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: `opaque peer ${toolName}` } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run: opaquePeerRun,
+      now: observedAt + 4
+    }), sameRunStoreRoot)
+    const opaquePeerEffect = {
+      ...preparedEffect(
+        opaquePeerRun,
+        `effect-v1:opaque-peer-${toolName}`,
+        50 + legacyIndex,
+        `resource-v1:opaque-peer-${toolName}`
+      ),
+      toolName,
+      target: { kind: 'unsupported', toolName },
+      targetDigest: `opaque-peer-${toolName}-target-digest`,
+      intentDigest: `opaque-peer-${toolName}-intent-digest`,
+      inputDigest: `opaque-peer-${toolName}-input-digest`
+    }
+    assert(
+      opaquePeerEffect.resourceKey !== sameRunLegacyEffect.resourceKey,
+      'opaque file effects must exercise the wildcard conflict path even when resource keys differ'
+    )
+    await assertRejects(
+      () => snapshotStore.saveTaskRunBarrier({ ...opaquePeerRun, effects: [opaquePeerEffect] }, sameRunStoreRoot),
+      '已阻止第二个执行 lease'
+    )
+    assertEqual(
+      (await snapshotStore.listTaskRuns(opaquePeerSessionId, sameRunStoreRoot))[0].effects.length,
+      0
+    )
+
+    const writePeerSessionId = `write-peer-${toolName}`
+    const writePeerRun = {
+      ...queryableRun,
+      id: `${writePeerSessionId}-run`,
+      sessionId: writePeerSessionId,
+      taskId: writePeerSessionId,
+      effects: []
+    }
+    await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+      meta: meta(writePeerSessionId, 'running'),
+      transcript: [{ seq: 1, event: { kind: 'user-message', text: `write peer ${toolName}` } }],
+      lastSeq: 1,
+      lastEventKind: 'user-message',
+      eventCount: 1,
+      reason: 'important-event',
+      run: writePeerRun,
+      now: observedAt + 5
+    }), sameRunStoreRoot)
+    const writePeerEffect = {
+      ...preparedEffect(
+        writePeerRun,
+        `effect-v1:write-peer-${toolName}`,
+        60 + legacyIndex,
+        `resource-v1:write-peer-${toolName}`
+      ),
+      toolName: 'write_file',
+      reconcilability: 'queryable',
+      target: {
+        ...queryableEffect.target,
+        relativePath: `write-peer-${toolName}.txt`
+      },
+      targetDigest: `write-peer-${toolName}-target-digest`,
+      intentDigest: `write-peer-${toolName}-intent-digest`,
+      inputDigest: `write-peer-${toolName}-input-digest`
+    }
+    assert(
+      writePeerEffect.resourceKey !== sameRunLegacyEffect.resourceKey,
+      'legacy opaque file edits must wildcard-conflict with write_file even when resource keys differ'
+    )
+    await assertRejects(
+      () => snapshotStore.saveTaskRunBarrier({ ...writePeerRun, effects: [writePeerEffect] }, sameRunStoreRoot),
+      '已阻止第二个执行 lease'
+    )
+    assertEqual(
+      (await snapshotStore.listTaskRuns(writePeerSessionId, sameRunStoreRoot))[0].effects.length,
+      0
+    )
+
+    const confirmedApplied = toolName === 'search_replace'
+    const terminalAt = observedAt + 20
+    const manualEvidence = {
+      id: `${legacySessionId}-manual-resolution`,
+      kind: 'manual_confirmation',
+      digest: `${legacySessionId}-manual-resolution-digest`,
+      observedAt: terminalAt,
+      verifier: 'human-v1',
+      generation: legacyAfterConflict.generation
+    }
+    const terminalLegacyEffect = {
+      ...legacyAfterConflict,
+      status: confirmedApplied ? 'confirmed' : 'abandoned',
+      revision: legacyAfterConflict.revision + 1,
+      evidence: [
+        ...legacyAfterConflict.evidence,
+        manualEvidence,
+        ...(!confirmedApplied
+          ? [{
+              id: `${legacySessionId}-retry-authorization`,
+              kind: 'retry_authorized',
+              digest: `${legacySessionId}-retry-authorization-digest`,
+              observedAt: terminalAt,
+              verifier: 'human-v1',
+              generation: legacyAfterConflict.generation
+            }]
+          : [])
+      ],
+      updatedAt: terminalAt,
+      terminalAt,
+      error: confirmedApplied ? undefined : '人工处置:confirmed_not_applied'
+    }
+    const terminalLegacyRun = {
+      ...legacyRun,
+      status: confirmedApplied ? 'completed' : 'failed',
+      revision: legacyRun.revision + 1,
+      updatedAt: terminalAt,
+      finishedAt: terminalAt,
+      effects: [terminalLegacyEffect],
+      error: confirmedApplied ? undefined : '人工确认外部效果未执行'
+    }
+    await snapshotStore.saveTaskRunBarrier(terminalLegacyRun, legacyStoreRoot)
+    const persistedTerminalEffect = (await snapshotStore.listTaskRuns(legacySessionId, legacyStoreRoot))[0].effects[0]
+    assertEqual(persistedTerminalEffect.status, confirmedApplied ? 'confirmed' : 'abandoned')
+    assertEqual(JSON.stringify(persistedTerminalEffect.target), JSON.stringify(legacyTarget))
+    assertEqual(persistedTerminalEffect.targetDigest, legacyTargetDigest)
+    assertEqual(persistedTerminalEffect.intentDigest, legacyIntentDigest)
+
+    const acceptedQueryableRun = await snapshotStore.saveTaskRunBarrier(queryableEffectRun, legacyStoreRoot)
+    assertEqual(acceptedQueryableRun.effects[0].status, 'prepared')
+    assertEqual(acceptedQueryableRun.effects[0].lease.fencingToken, 1)
+  }
+
   const independentRuns = ['independent-a', 'independent-b'].map((sessionId, index) => ({
     schemaVersion: 1,
     id: `${sessionId}-run`,
@@ -870,6 +1199,25 @@ function preparedEffect(run, effectKey, index, resourceKey = effectKey) {
     }],
     createdAt: observedAt,
     updatedAt: observedAt
+  }
+}
+
+function rebindEffect(effect, run, suffix) {
+  return {
+    ...effect,
+    id: `${run.sessionId}-${suffix}-effect`,
+    sessionId: run.sessionId,
+    runId: run.id,
+    toolUseId: `${run.sessionId}-${suffix}-tool`,
+    lease: {
+      ...effect.lease,
+      id: `${run.sessionId}-${suffix}-lease`,
+      ownerId: `${run.sessionId}-${suffix}-owner`
+    },
+    evidence: effect.evidence.map((item, index) => ({
+      ...item,
+      id: `${run.sessionId}-${suffix}-evidence-${index}`
+    }))
   }
 }
 

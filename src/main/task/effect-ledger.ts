@@ -60,7 +60,10 @@ export function prepareEffect(
   }
 
   const sameKey = (run.effects ?? []).filter((effect) => effect.effectKey === effectKey)
-  const sameResource = (run.effects ?? []).filter((effect) => effect.resourceKey === resourceKey)
+  const sameResource = (run.effects ?? []).filter((effect) =>
+    effect.resourceKey === resourceKey ||
+    effectTargetsShareFile(effect.target, input.descriptor.target)
+  )
   const unresolved = sameResource.find((effect) =>
     effect.status === 'prepared' ||
     effect.status === 'executing' ||
@@ -369,6 +372,23 @@ function buildResourceKey(
     toolName,
     effectKey
   })}`
+}
+
+function effectTargetsShareFile(left: EffectTarget, right: EffectTarget): boolean {
+  if (left.kind !== 'file_content' || right.kind !== 'file_content') return false
+  if (
+    left.preFileIdentity &&
+    right.preFileIdentity &&
+    left.preFileIdentity.device === right.preFileIdentity.device &&
+    left.preFileIdentity.inode === right.preFileIdentity.inode
+  ) {
+    return true
+  }
+  const leftRoot = realpathSync(resolve(left.rootPath))
+  const rightRoot = realpathSync(resolve(right.rootPath))
+  const leftPath = resolve(leftRoot, left.relativePath)
+  const rightPath = resolve(rightRoot, right.relativePath)
+  return leftPath === rightPath
 }
 
 function transitionEffect(
