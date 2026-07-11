@@ -36,6 +36,7 @@ async function runParent() {
         'src/main/task/task-run.ts',
         'src/main/task/task-execution.ts',
         'src/main/task/task-snapshot.ts',
+        'src/main/agent/tools/git-tools.ts',
         '--outDir',
         outDir,
         '--rootDir',
@@ -126,6 +127,84 @@ async function runParent() {
     assertEqual(preparedGitResume.retryEvidenceCount, 1)
     assertEqual(countLines(preparedGitCase.counter), 0)
 
+    const mergeNotAppliedCase = casePaths(tempRoot, 'git-merge-not-applied')
+    mkdirSync(mergeNotAppliedCase.project, { recursive: true })
+    mkdirSync(mergeNotAppliedCase.userData, { recursive: true })
+    initMergeRepo(mergeNotAppliedCase.project)
+    const mergeNotAppliedPreHead = git(mergeNotAppliedCase.project, ['rev-parse', 'HEAD']).trim()
+    const mergeNotAppliedSourceSha = git(mergeNotAppliedCase.project, ['rev-parse', 'feature^{commit}']).trim()
+    const mergeNotAppliedCrash = await forkWorker(
+      '--worker-git-merge-not-applied-crash',
+      outDir,
+      mergeNotAppliedCase,
+      repoRoot
+    )
+    assertEqual(mergeNotAppliedCrash.type, 'git-merge-not-applied-crash')
+    assertEqual(mergeNotAppliedCrash.effectStatus, 'executing')
+    assertEqual(mergeNotAppliedCrash.targetKind, 'git_merge')
+    assertEqual(mergeNotAppliedCrash.preHead, mergeNotAppliedPreHead)
+    assertEqual(mergeNotAppliedCrash.sourceSha, mergeNotAppliedSourceSha)
+    assertEqual(git(mergeNotAppliedCase.project, ['rev-parse', 'HEAD']).trim(), mergeNotAppliedPreHead)
+    assertEqual(git(mergeNotAppliedCase.project, ['status', '--porcelain']).trim(), '')
+    assertEqual(countLines(mergeNotAppliedCase.counter), 0)
+    const mergeNotAppliedResume = await forkWorker(
+      '--worker-git-merge-not-applied-resume',
+      outDir,
+      mergeNotAppliedCase,
+      repoRoot
+    )
+    assertEqual(mergeNotAppliedResume.type, 'git-merge-not-applied-resume')
+    assertEqual(mergeNotAppliedResume.probeKind, 'not_applied')
+    assertEqual(mergeNotAppliedResume.effectStatus, 'abandoned')
+    assertEqual(mergeNotAppliedResume.toolStatus, 'cancelled')
+    assertEqual(mergeNotAppliedResume.reconciliationEvidenceCount, 1)
+    assertEqual(mergeNotAppliedResume.retryEvidenceCount, 1)
+    assertEqual(git(mergeNotAppliedCase.project, ['rev-parse', 'HEAD']).trim(), mergeNotAppliedPreHead)
+    assertEqual(git(mergeNotAppliedCase.project, ['status', '--porcelain']).trim(), '')
+    assertEqual(countLines(mergeNotAppliedCase.counter), 0)
+
+    const mergeConfirmedCase = casePaths(tempRoot, 'git-merge-confirmed')
+    mkdirSync(mergeConfirmedCase.project, { recursive: true })
+    mkdirSync(mergeConfirmedCase.userData, { recursive: true })
+    initMergeRepo(mergeConfirmedCase.project)
+    const mergeConfirmedPreHead = git(mergeConfirmedCase.project, ['rev-parse', 'HEAD']).trim()
+    const mergeConfirmedSourceSha = git(mergeConfirmedCase.project, ['rev-parse', 'feature^{commit}']).trim()
+    const mergeConfirmedCrash = await forkWorker(
+      '--worker-git-merge-confirmed-crash',
+      outDir,
+      mergeConfirmedCase,
+      repoRoot
+    )
+    assertEqual(mergeConfirmedCrash.type, 'git-merge-confirmed-crash')
+    assertEqual(mergeConfirmedCrash.effectStatus, 'executing')
+    assertEqual(mergeConfirmedCrash.targetKind, 'git_merge')
+    assertEqual(mergeConfirmedCrash.preHead, mergeConfirmedPreHead)
+    assertEqual(mergeConfirmedCrash.sourceSha, mergeConfirmedSourceSha)
+    assertEqual(countLines(mergeConfirmedCase.counter), 1)
+    const mergeHead = git(mergeConfirmedCase.project, ['rev-parse', 'HEAD']).trim()
+    const mergeParents = git(
+      mergeConfirmedCase.project,
+      ['rev-list', '--parents', '-n', '1', mergeHead]
+    ).trim().split(/\s+/)
+    assertEqual(mergeParents.length, 3)
+    assertEqual(mergeParents[0], mergeHead)
+    assertEqual(mergeParents[1], mergeConfirmedPreHead)
+    assertEqual(mergeParents[2], mergeConfirmedSourceSha)
+    const mergeConfirmedResume = await forkWorker(
+      '--worker-git-merge-confirmed-resume',
+      outDir,
+      mergeConfirmedCase,
+      repoRoot
+    )
+    assertEqual(mergeConfirmedResume.type, 'git-merge-confirmed-resume')
+    assertEqual(mergeConfirmedResume.probeKind, 'confirmed')
+    assertEqual(mergeConfirmedResume.effectStatus, 'confirmed')
+    assertEqual(mergeConfirmedResume.toolStatus, 'succeeded')
+    assertEqual(mergeConfirmedResume.reconciliationEvidenceCount, 1)
+    assertEqual(mergeConfirmedResume.decision, 'ask')
+    assertEqual(git(mergeConfirmedCase.project, ['rev-parse', 'HEAD']).trim(), mergeHead)
+    assertEqual(countLines(mergeConfirmedCase.counter), 1)
+
     const fileCase = casePaths(tempRoot, 'file')
     mkdirSync(fileCase.project, { recursive: true })
     mkdirSync(fileCase.userData, { recursive: true })
@@ -194,6 +273,8 @@ async function runWorker(workerMode) {
   const taskExecution = await importModule(outDir, 'task-execution.js')
   const snapshotStore = await importModule(outDir, 'task-snapshot.js')
   const effectRuntime = await importModule(outDir, 'effect-runtime.js')
+  const effectReconciler = await importModule(outDir, 'effect-reconciler.js')
+  const gitTools = await importModule(outDir, 'git-tools.js')
   const registryModule = await importModule(outDir, 'task-runtime-registry.js')
 
   if (workerMode === '--worker-same-owner-negative') {
@@ -422,6 +503,128 @@ async function runWorker(workerMode) {
     return
   }
 
+  if (workerMode === '--worker-git-merge-not-applied-crash') {
+    const sessionId = 'git-merge-not-applied-session'
+    const toolUseId = 'git-merge-not-applied-tool'
+    const toolName = 'git_merge'
+    const toolInput = { branch: 'feature' }
+    const executionInput = await seedEffectRun({
+      taskRun,
+      taskExecution,
+      snapshotStore,
+      registryModule,
+      project,
+      sessionId,
+      toolUseId,
+      toolName,
+      toolInput,
+      prompt: 'merge crash before external execution'
+    })
+    const handle = await effectRuntime.prepareEffectExecution(executionInput)
+    assert(handle?.target.kind === 'git_merge', 'git_merge must produce a queryable merge target')
+    await effectRuntime.markEffectExecutionStarted(handle, executionInput)
+    const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+    assert(snapshot?.run, 'git merge pre-execution crash requires persisted TaskRun')
+    process.send?.({
+      type: 'git-merge-not-applied-crash',
+      effectStatus: snapshot.run.effects[0]?.status,
+      targetKind: handle.target.kind,
+      preHead: handle.target.preHead,
+      sourceSha: handle.target.sourceSha
+    })
+    setInterval(() => undefined, 1000)
+    return
+  }
+
+  if (workerMode === '--worker-git-merge-not-applied-resume') {
+    const snapshot = await snapshotStore.getTaskSnapshot('git-merge-not-applied-session')
+    assert(snapshot?.run, 'git merge not-applied resume requires persisted TaskRun')
+    const crashedEffect = snapshot.run.effects[0]
+    assert(crashedEffect, 'git merge not-applied resume requires an EffectRecord')
+    const probe = await effectReconciler.reconcileEffect(crashedEffect)
+    const reconciled = await effectRuntime.reconcilePersistedTaskSnapshot(snapshot)
+    const effect = reconciled.run.effects[0]
+    const tool = reconciled.run.toolExecutions[0]
+    process.send?.({
+      type: 'git-merge-not-applied-resume',
+      probeKind: probe.kind,
+      effectStatus: effect.status,
+      toolStatus: tool.status,
+      reconciliationEvidenceCount: effect.evidence.filter((item) => item.kind === 'reconciliation').length,
+      retryEvidenceCount: effect.evidence.filter((item) => item.kind === 'retry_authorized').length
+    })
+    return
+  }
+
+  if (workerMode === '--worker-git-merge-confirmed-crash') {
+    const sessionId = 'git-merge-confirmed-session'
+    const toolUseId = 'git-merge-confirmed-tool'
+    const toolName = 'git_merge'
+    const toolInput = { branch: 'feature' }
+    const executionInput = await seedEffectRun({
+      taskRun,
+      taskExecution,
+      snapshotStore,
+      registryModule,
+      project,
+      sessionId,
+      toolUseId,
+      toolName,
+      toolInput,
+      prompt: 'merge succeeds before completion record crash'
+    })
+    const handle = await effectRuntime.prepareEffectExecution(executionInput)
+    assert(handle?.target.kind === 'git_merge', 'git_merge must produce a queryable merge target')
+    await effectRuntime.markEffectExecutionStarted(handle, executionInput)
+    const target = handle.target
+    const merge = await gitTools.executeGitTool('git_merge', toolInput, project, {
+      effectTarget: target
+    })
+    assert(merge.ok, `effect-bound git_merge failed: ${merge.output ?? 'unknown error'}`)
+    appendFileSync(counter, 'executed\n', 'utf8')
+    const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+    assert(snapshot?.run, 'git merge confirmed crash requires persisted TaskRun')
+    process.send?.({
+      type: 'git-merge-confirmed-crash',
+      effectStatus: snapshot.run.effects[0]?.status,
+      targetKind: target.kind,
+      preHead: target.preHead,
+      sourceSha: target.sourceSha
+    })
+    setInterval(() => undefined, 1000)
+    return
+  }
+
+  if (workerMode === '--worker-git-merge-confirmed-resume') {
+    const sessionId = 'git-merge-confirmed-session'
+    const toolInput = { branch: 'feature' }
+    const snapshot = await snapshotStore.getTaskSnapshot(sessionId)
+    assert(snapshot?.run, 'git merge confirmed resume requires persisted TaskRun')
+    const crashedEffect = snapshot.run.effects[0]
+    assert(crashedEffect, 'git merge confirmed resume requires an EffectRecord')
+    const probe = await effectReconciler.reconcileEffect(crashedEffect)
+    const reconciled = await effectRuntime.reconcilePersistedTaskSnapshot(snapshot)
+    const stable = await effectRuntime.reconcilePersistedTaskSnapshot(reconciled)
+    const effect = stable.run.effects[0]
+    const tool = stable.run.toolExecutions[0]
+    const decision = registryModule.taskRuntimeRegistry.evaluateTool({
+      sessionId,
+      cwd: project,
+      toolName: 'git_merge',
+      toolInput,
+      toolUseId: 'git-merge-confirmed-retry'
+    }).kind
+    process.send?.({
+      type: 'git-merge-confirmed-resume',
+      probeKind: probe.kind,
+      effectStatus: effect.status,
+      toolStatus: tool.status,
+      reconciliationEvidenceCount: effect.evidence.filter((item) => item.kind === 'reconciliation').length,
+      decision
+    })
+    return
+  }
+
   if (workerMode.endsWith('-manual-cas')) {
     const snapshot = await snapshotStore.getTaskSnapshot('opaque-crash-session')
     assert(snapshot?.run, 'manual CAS worker requires persisted TaskRun')
@@ -569,6 +772,7 @@ async function runWorker(workerMode) {
 
 function forkWorker(workerMode, outDir, paths, repoRoot) {
   return new Promise((resolve, reject) => {
+    const killAfterEvidence = workerMode.endsWith('-crash')
     const child = fork(process.argv[1], [workerMode], {
       env: {
         ...process.env,
@@ -581,29 +785,89 @@ function forkWorker(workerMode, outDir, paths, repoRoot) {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc']
     })
     let settled = false
+    let evidence
+    let killRequested = false
     let stderr = ''
     child.stderr?.on('data', (chunk) => {
       stderr += String(chunk)
     })
     child.once('error', reject)
     child.on('message', (message) => {
-      if (settled) return
-      settled = true
-      resolve(message)
-      if (workerMode.endsWith('-crash')) {
+      if (settled || evidence !== undefined) return
+      if (killAfterEvidence) {
+        evidence = message
+        killRequested = true
         if (process.platform === 'win32') {
           execFileSync('taskkill', ['/pid', String(child.pid), '/f', '/t'], { stdio: 'ignore' })
         } else {
-          child.kill('SIGKILL')
+          assert(child.kill('SIGKILL'), `failed to SIGKILL worker ${child.pid}`)
         }
-      } else {
-        child.disconnect()
+        return
       }
+      settled = true
+      resolve(message)
+      child.disconnect()
     })
     child.once('exit', (code, signal) => {
-      if (!settled) reject(new Error(`worker exited before evidence: code=${code} signal=${signal}\n${stderr}`))
+      if (settled) return
+      if (killRequested && evidence !== undefined) {
+        if (process.platform !== 'win32' && signal !== 'SIGKILL') {
+          reject(new Error(`worker did not exit via SIGKILL: code=${code} signal=${signal}\n${stderr}`))
+          return
+        }
+        settled = true
+        resolve(evidence)
+        return
+      }
+      reject(new Error(`worker exited before evidence: code=${code} signal=${signal}\n${stderr}`))
     })
   })
+}
+
+async function seedEffectRun({
+  taskRun,
+  taskExecution,
+  snapshotStore,
+  registryModule,
+  project,
+  sessionId,
+  toolUseId,
+  toolName,
+  toolInput,
+  prompt
+}) {
+  const userEvent = {
+    kind: 'user-message',
+    messageId: `${sessionId}-message`,
+    text: prompt
+  }
+  const assistantEvent = {
+    kind: 'assistant-message',
+    blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }]
+  }
+  let run = taskRun.createTaskRun({
+    id: `${sessionId}-run`,
+    sessionId,
+    taskId: sessionId,
+    now: 1000
+  })
+  run = taskExecution.reduceTaskExecutionEvent(run, userEvent, project, 1010)
+  run = taskExecution.reduceTaskExecutionEvent(run, assistantEvent, project, 1020)
+  registryModule.taskRuntimeRegistry.set(sessionId, run)
+  await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
+    meta: meta(sessionId, project),
+    transcript: [
+      { seq: 1, event: userEvent },
+      { seq: 2, event: assistantEvent }
+    ],
+    lastSeq: 2,
+    lastEventKind: 'assistant-message',
+    eventCount: 2,
+    reason: 'important-event',
+    run,
+    now: 1030
+  }))
+  return { sessionId, cwd: project, toolUseId, toolName, toolInput }
 }
 
 function casePaths(root, name) {
@@ -658,6 +922,18 @@ function initRepo(dir) {
   git(dir, ['init', '-b', 'main'])
   git(dir, ['config', 'user.email', 'effect@example.test'])
   git(dir, ['config', 'user.name', 'Effect Crash Smoke'])
+}
+
+function initMergeRepo(dir) {
+  initRepo(dir)
+  writeFileSync(path.join(dir, 'base.txt'), 'base\n', 'utf8')
+  git(dir, ['add', 'base.txt'])
+  git(dir, ['commit', '-m', 'base'])
+  git(dir, ['checkout', '-b', 'feature'])
+  writeFileSync(path.join(dir, 'feature.txt'), 'feature\n', 'utf8')
+  git(dir, ['add', 'feature.txt'])
+  git(dir, ['commit', '-m', 'feature'])
+  git(dir, ['checkout', 'main'])
 }
 
 function git(cwd, args) {

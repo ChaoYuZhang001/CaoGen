@@ -588,7 +588,8 @@ export class OpenAIEngine implements Engine {
         branch: this.meta.branch,
         baseBranch: this.meta.baseBranch,
         baseSha: this.meta.baseSha
-      }
+      },
+      effectTarget: effectHandle?.target
     })
     const executionPolicy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
     writeAuditLog(this.meta.cwd, {

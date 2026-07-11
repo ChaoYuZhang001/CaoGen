@@ -742,6 +742,11 @@ export interface EffectEvidenceRecord {
   generation: number
 }
 
+export interface FileSystemIdentity {
+  device: string
+  inode: string
+}
+
 export type EffectTarget =
   | {
       kind: 'file_content'
@@ -760,6 +765,22 @@ export type EffectTarget =
       preHead: string
       stagedDiffDigest: string
       messageDigest: string
+    }
+  | {
+      kind: 'git_merge'
+      repoRoot: string
+      gitCommonDir: string
+      worktreeGitDir: string
+      repoRootIdentity: FileSystemIdentity
+      gitCommonDirIdentity: FileSystemIdentity
+      worktreeGitDirIdentity: FileSystemIdentity
+      destinationRef: string
+      preHead: string
+      preTree: string
+      sourceRef: string
+      sourceSha: string
+      sourceWasAncestor: boolean
+      mode: 'no_ff_v1'
     }
   | {
       kind: 'git_push'

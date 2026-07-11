@@ -6,6 +6,7 @@ import type {
   EffectEvidenceRecord,
   EffectRecord,
   EffectStatus,
+  EffectTarget,
   TaskRunRecord,
   ToolExecutionRecord
 } from '../../shared/types'
@@ -23,6 +24,8 @@ export interface EffectExecutionHandle {
   ownerId: string
   fencingToken: number
   toolUseId: string
+  target: EffectTarget
+  targetDigest: string
 }
 
 export interface PrepareEffectInput {
@@ -345,6 +348,14 @@ function buildResourceKey(
     const ref = target.branch.startsWith('refs/') ? target.branch : `refs/heads/${target.branch}`
     return `resource-v1:${stableValueDigest({ scope: 'git-local-ref', repoRoot, ref })}`
   }
+  if (target.kind === 'git_merge') {
+    const repoRoot = realpathSync(resolve(target.repoRoot))
+    return `resource-v1:${stableValueDigest({
+      scope: 'git-local-ref',
+      repoRoot,
+      ref: target.destinationRef
+    })}`
+  }
   if (target.kind === 'git_push') {
     return `resource-v1:${stableValueDigest({
       scope: 'git-remote-ref',
@@ -406,7 +417,9 @@ function requireEffect(run: TaskRunRecord, handle: EffectExecutionHandle): Effec
   if (
     effect.effectKey !== handle.effectKey ||
     effect.resourceKey !== handle.resourceKey ||
-    effect.toolUseId !== handle.toolUseId
+    effect.toolUseId !== handle.toolUseId ||
+    effect.targetDigest !== handle.targetDigest ||
+    stableValueDigest(handle.target) !== effect.targetDigest
   ) {
     throw new Error('Effect handle 与持久记录不一致')
   }
@@ -444,7 +457,9 @@ function handleForEffect(effect: EffectRecord): EffectExecutionHandle | null {
     leaseId: effect.lease.id,
     ownerId: effect.lease.ownerId,
     fencingToken: effect.lease.fencingToken,
-    toolUseId: effect.toolUseId
+    toolUseId: effect.toolUseId,
+    target: effect.target,
+    targetDigest: effect.targetDigest
   }
 }
 
