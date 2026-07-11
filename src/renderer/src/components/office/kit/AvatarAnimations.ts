@@ -16,10 +16,18 @@ export interface AvatarRefs {
   wristR?: Object3D | null
   handL?: Object3D | null
   handR?: Object3D | null
+  waistYaw?: Object3D | null
+  waistRoll?: Object3D | null
   legL?: Object3D | null
   legR?: Object3D | null
   kneeL?: Object3D | null
   kneeR?: Object3D | null
+  anklePitchL?: Object3D | null
+  anklePitchR?: Object3D | null
+  ankleRollL?: Object3D | null
+  ankleRollR?: Object3D | null
+  footL?: Object3D | null
+  footR?: Object3D | null
 }
 
 /** 动作可选参数:强度/速度倍率与相位偏移(供多个 avatar 错峰) */
@@ -32,6 +40,15 @@ export interface AnimOptions {
   facing?: number
   /** 工位左右手的实际输入目标,供双骨骼 IK 解算肩肘姿态。 */
   deskHandTargets?: {
+    left?: Object3D | null
+    right?: Object3D | null
+  }
+  /** 由实际行走距离推导的步态相位,避免脚步与位移脱节。 */
+  gaitPhase?: number
+  /** 当前速度相对标准行走速度的比例(0..1)。 */
+  gaitSpeed?: number
+  /** 父空间中的脚底目标;支撑相保持世界位置,摆动相走抬脚弧线。 */
+  walkFootTargets?: {
     left?: Object3D | null
     right?: Object3D | null
   }
@@ -61,6 +78,7 @@ const DESK_WRIST_Z = 1.876
 const DESK_WRIST_PRONATION = 1.52
 const ARM_IK_LERP = 0.22
 const ARM_IK_EPSILON = 0.0001
+const LEG_IK_LERP = 0.28
 
 const ikShoulder = new Vector3()
 const ikElbow = new Vector3()
@@ -81,6 +99,18 @@ const ikDesiredWorld = new Quaternion()
 const ikDesiredLocal = new Quaternion()
 const ikRootWorld = new Quaternion()
 
+const legHip = new Vector3()
+const legKnee = new Vector3()
+const legFoot = new Vector3()
+const legTarget = new Vector3()
+const legDirection = new Vector3()
+const legPole = new Vector3()
+const legKneeTarget = new Vector3()
+const legRoot = new Vector3()
+const legForward = new Vector3()
+const legOutward = new Vector3()
+const legTo = new Vector3()
+
 function amp(opts: AnimOptions | undefined): number {
   return opts?.liveliness ?? 1
 }
@@ -97,10 +127,16 @@ function neutralLimbs(refs: AvatarRefs): void {
   if (refs.elbowR) refs.elbowR.rotation.set(0, 0, 0)
   if (refs.wristL) refs.wristL.rotation.set(0, 0, 0)
   if (refs.wristR) refs.wristR.rotation.set(0, 0, 0)
+  if (refs.waistYaw) refs.waistYaw.rotation.set(0, 0, 0)
+  if (refs.waistRoll) refs.waistRoll.rotation.set(0, 0, 0)
   if (refs.legL) refs.legL.rotation.set(0, 0, 0)
   if (refs.legR) refs.legR.rotation.set(0, 0, 0)
   if (refs.kneeL) refs.kneeL.rotation.set(0, 0, 0)
   if (refs.kneeR) refs.kneeR.rotation.set(0, 0, 0)
+  if (refs.anklePitchL) refs.anklePitchL.rotation.set(0, 0, 0)
+  if (refs.anklePitchR) refs.anklePitchR.rotation.set(0, 0, 0)
+  if (refs.ankleRollL) refs.ankleRollL.rotation.set(0, 0, 0)
+  if (refs.ankleRollR) refs.ankleRollR.rotation.set(0, 0, 0)
 }
 
 function applyFacing(refs: AvatarRefs, opts: AnimOptions | undefined): void {
@@ -225,17 +261,114 @@ function applyDeskArmIK(
   return true
 }
 
+function wrapPhase(value: number): number {
+  const wrapped = value % TAU
+  return wrapped < 0 ? wrapped + TAU : wrapped
+}
+
+function gaitSwingLift(phase: number): number {
+  if (phase < Math.PI) return 0
+  return Math.sin(((phase - Math.PI) / Math.PI) * Math.PI)
+}
+
+function gaitAnklePitch(phase: number, motion: number): number {
+  if (phase < Math.PI) {
+    const stance = phase / Math.PI
+    return (0.12 - stance * 0.3) * motion
+  }
+  const swing = (phase - Math.PI) / Math.PI
+  return (0.09 + Math.sin(swing * Math.PI) * 0.06) * motion
+}
+
+/** 支撑脚保持落点、摆动脚追踪抬脚弧线的双骨骼腿部 IK。 */
+function applyWalkingLegIK(
+  refs: AvatarRefs,
+  hip: Object3D | null | undefined,
+  knee: Object3D | null | undefined,
+  foot: Object3D | null | undefined,
+  targetObject: Object3D | null | undefined
+): boolean {
+  if (!hip || !knee || !foot || !targetObject) return false
+
+  targetObject.getWorldPosition(legTarget)
+  hip.getWorldPosition(legHip)
+  knee.getWorldPosition(legKnee)
+  foot.getWorldPosition(legFoot)
+
+  const thighLength = legHip.distanceTo(legKnee)
+  const shinLength = legKnee.distanceTo(legFoot)
+  legDirection.copy(legTarget).sub(legHip)
+  const rawDistance = legDirection.length()
+  if (thighLength < ARM_IK_EPSILON || shinLength < ARM_IK_EPSILON || rawDistance < ARM_IK_EPSILON) return false
+
+  legDirection.multiplyScalar(1 / rawDistance)
+  const distance = Math.min(
+    thighLength + shinLength - ARM_IK_EPSILON,
+    Math.max(Math.abs(thighLength - shinLength) + ARM_IK_EPSILON, rawDistance)
+  )
+  const along = (thighLength * thighLength - shinLength * shinLength + distance * distance) / (2 * distance)
+  const height = Math.sqrt(Math.max(0, thighLength * thighLength - along * along))
+
+  if (refs.root) {
+    refs.root.getWorldPosition(legRoot)
+    refs.root.getWorldQuaternion(ikRootWorld)
+    legForward.set(0, 0, 1).applyQuaternion(ikRootWorld).setY(0)
+    if (legForward.lengthSq() < ARM_IK_EPSILON) legForward.set(0, 0, 1)
+    legForward.normalize()
+    legOutward.copy(legHip).sub(legRoot).setY(0)
+    if (legOutward.lengthSq() < ARM_IK_EPSILON) legOutward.set(Math.sign(legHip.x - legRoot.x) || 1, 0, 0)
+    legOutward.normalize()
+  } else {
+    legForward.set(0, 0, 1)
+    legOutward.set(Math.sign(legHip.x) || 1, 0, 0)
+  }
+
+  legPole.set(0, -0.08, 0).addScaledVector(legForward, 0.94).addScaledVector(legOutward, 0.12)
+  legPole.addScaledVector(legDirection, -legPole.dot(legDirection))
+  if (legPole.lengthSq() < ARM_IK_EPSILON) legPole.copy(legForward)
+  legPole.normalize()
+
+  legKneeTarget
+    .copy(legHip)
+    .addScaledVector(legDirection, along)
+    .addScaledVector(legPole, height)
+
+  rotateJointToward(
+    hip,
+    legKnee.subVectors(legKnee, legHip),
+    legTo.subVectors(legKneeTarget, legHip),
+    LEG_IK_LERP
+  )
+
+  knee.getWorldPosition(legKnee)
+  foot.getWorldPosition(legFoot)
+  rotateJointToward(
+    knee,
+    legFoot.subVectors(legFoot, legKnee),
+    legTo.subVectors(legTarget, legKnee),
+    LEG_IK_LERP * 1.08
+  )
+  return true
+}
+
 /** 桌面办公状态共用坐姿:髋部落到座垫上,大腿前伸,小腿自然下垂。 */
 function applyDeskSeatedLowerBody(refs: AvatarRefs, sway = 0): void {
   const root = refs.root
   if (root) {
     root.position.y = lerpValue(root.position.y, DESK_SEATED_ROOT_Y)
+    root.rotation.x = lerpAngle(root.rotation.x, 0)
     root.rotation.z = lerpAngle(root.rotation.z, sway)
   }
+  lerpRotation(refs.waistYaw, 0, 0, 0)
+  lerpRotation(refs.waistRoll, 0, 0, 0)
   lerpRotation(refs.legL, -1.05, 0, -0.055)
   lerpRotation(refs.legR, -1.05, 0, 0.055)
   lerpRotation(refs.kneeL, 1.34, 0, 0)
   lerpRotation(refs.kneeR, 1.34, 0, 0)
+  lerpRotation(refs.anklePitchL, 0, 0, 0)
+  lerpRotation(refs.anklePitchR, 0, 0, 0)
+  lerpRotation(refs.ankleRollL, 0, 0, 0)
+  lerpRotation(refs.ankleRollR, 0, 0, 0)
 }
 
 /**
@@ -284,6 +417,7 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
   const root = refs.root
   if (root) {
     root.position.y = lerpValue(root.position.y, 0)
+    root.rotation.x = lerpAngle(root.rotation.x, 0)
     root.rotation.z = lerpAngle(root.rotation.z, 0)
   }
   lerpRotation(refs.head, 0.04 + Math.sin(tt * 1.2 * L) * 0.03, Math.sin(tt * 0.5 * L) * 0.12, Math.sin(tt * 0.8 * L) * 0.05)
@@ -293,10 +427,16 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
   lerpRotation(refs.elbowR, 0, 0, 0)
   lerpRotation(refs.wristL, 0, 0, 0)
   lerpRotation(refs.wristR, 0, 0, 0)
+  lerpRotation(refs.waistYaw, 0, 0, 0)
+  lerpRotation(refs.waistRoll, 0, 0, 0)
   lerpRotation(refs.legL, 0, 0, 0)
   lerpRotation(refs.legR, 0, 0, 0)
   lerpRotation(refs.kneeL, 0, 0, 0)
   lerpRotation(refs.kneeR, 0, 0, 0)
+  lerpRotation(refs.anklePitchL, 0, 0, 0)
+  lerpRotation(refs.anklePitchR, 0, 0, 0)
+  lerpRotation(refs.ankleRollL, 0, 0, 0)
+  lerpRotation(refs.ankleRollR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -332,35 +472,54 @@ export function applyTyping(refs: AvatarRefs, t: number, opts?: AnimOptions): vo
   applyFacing(refs, opts)
 }
 
-/**
- * 行走:四肢对角摆动 + 身体上下起伏,root 仅做原地步态(位移由调用方控制)。
- */
+/** 距离驱动的人体化步态:脚底 IK 锁地、摆动腿抬脚、踝部滚动、骨盆/上身反向平衡。 */
 export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
-  const motion = Math.max(0.16, Math.min(1, L))
-  const stride = tt * 6 * (0.72 + motion * 0.28)
+  const motion = Math.max(0.08, Math.min(1, opts?.gaitSpeed ?? L))
+  const stride = opts?.gaitPhase ?? tt * 6 * (0.72 + motion * 0.28)
   const swing = Math.sin(stride) * motion
   const bendL = Math.max(0, swing)
   const bendR = Math.max(0, -swing)
+  const phaseL = wrapPhase(stride)
+  const phaseR = wrapPhase(stride + Math.PI)
+  const liftL = gaitSwingLift(phaseL)
+  const liftR = gaitSwingLift(phaseR)
   const root = refs.root
   if (root) {
-    // 步伐落点时的双峰起伏
-    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.014 * motion)
-    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(stride) * 0.018 * motion)
+    // 双支撑相重心最低,单脚支撑中段轻微升高。
+    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.012 * motion)
+    root.rotation.x = lerpAngle(root.rotation.x, 0.025 * motion)
+    root.rotation.z = lerpAngle(root.rotation.z, swing * 0.014)
   }
-  lerpRotation(refs.head, 0.05, 0, Math.sin(stride) * 0.024)
-  // 对角摆动:肩/髋控制步幅,肘/膝在摆动侧屈曲以形成清晰的回收步。
-  lerpRotation(refs.armL, swing * 0.26, 0, 0)
-  lerpRotation(refs.armR, -swing * 0.26, 0, 0)
-  lerpRotation(refs.elbowL, -0.1 - bendL * 0.14, 0, 0)
-  lerpRotation(refs.elbowR, -0.1 - bendR * 0.14, 0, 0)
-  lerpRotation(refs.wristL, swing * -0.04, 0, 0)
-  lerpRotation(refs.wristR, swing * 0.04, 0, 0)
-  lerpRotation(refs.legL, -swing * 0.28, 0, 0)
-  lerpRotation(refs.legR, swing * 0.28, 0, 0)
-  lerpRotation(refs.kneeL, 0.04 + bendL * 0.24, 0, 0)
-  lerpRotation(refs.kneeR, 0.04 + bendR * 0.24, 0, 0)
+  lerpRotation(refs.waistYaw, 0, -swing * 0.09, 0)
+  lerpRotation(refs.waistRoll, 0, 0, -swing * 0.025)
+  lerpRotation(refs.head, 0.045, -swing * 0.018, -swing * 0.012)
+
+  // 上肢与对侧腿同步,肘部保持类似人类步行的轻度屈曲。
+  lerpRotation(refs.armL, swing * 0.34, 0, 0.025)
+  lerpRotation(refs.armR, -swing * 0.34, 0, -0.025)
+  lerpRotation(refs.elbowL, -0.18 - bendL * 0.12, 0, 0)
+  lerpRotation(refs.elbowR, -0.18 - bendR * 0.12, 0, 0)
+  lerpRotation(refs.wristL, swing * -0.035, 0, 0)
+  lerpRotation(refs.wristR, swing * 0.035, 0, 0)
+
+  // 脚跟着地 -> 支撑滚动 -> 脚尖蹬地;摆动期脚踝背屈以避免拖地。
+  lerpRotation(refs.anklePitchL, gaitAnklePitch(phaseL, motion), 0, 0)
+  lerpRotation(refs.anklePitchR, gaitAnklePitch(phaseR, motion), 0, 0)
+  lerpRotation(refs.ankleRollL, 0, 0, -swing * 0.025)
+  lerpRotation(refs.ankleRollR, 0, 0, swing * 0.025)
+
+  const leftSolved = applyWalkingLegIK(refs, refs.legL, refs.kneeL, refs.footL, opts?.walkFootTargets?.left)
+  const rightSolved = applyWalkingLegIK(refs, refs.legR, refs.kneeR, refs.footR, opts?.walkFootTargets?.right)
+  if (!leftSolved) {
+    lerpRotation(refs.legL, -swing * 0.34, 0, -0.012)
+    lerpRotation(refs.kneeL, 0.08 + liftL * 0.7, 0, 0)
+  }
+  if (!rightSolved) {
+    lerpRotation(refs.legR, swing * 0.34, 0, 0.012)
+    lerpRotation(refs.kneeR, 0.08 + liftR * 0.7, 0, 0)
+  }
   applyFacing(refs, opts)
 }
 
@@ -386,8 +545,11 @@ export function applyStandingTalking(refs: AvatarRefs, t: number, opts?: AnimOpt
   const root = refs.root
   if (root) {
     root.position.y = lerpValue(root.position.y, 0)
+    root.rotation.x = lerpAngle(root.rotation.x, 0)
     root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.7 * L) * 0.008)
   }
+  lerpRotation(refs.waistYaw, 0, 0, 0)
+  lerpRotation(refs.waistRoll, 0, 0, 0)
   lerpRotation(
     refs.head,
     0.05 + Math.sin(tt * 4.8 * L) * 0.025,
@@ -404,6 +566,10 @@ export function applyStandingTalking(refs: AvatarRefs, t: number, opts?: AnimOpt
   lerpRotation(refs.legR, 0, 0, 0.015)
   lerpRotation(refs.kneeL, 0.02, 0, 0)
   lerpRotation(refs.kneeR, 0.02, 0, 0)
+  lerpRotation(refs.anklePitchL, 0, 0, 0)
+  lerpRotation(refs.anklePitchR, 0, 0, 0)
+  lerpRotation(refs.ankleRollL, 0, 0, 0)
+  lerpRotation(refs.ankleRollR, 0, 0, 0)
   applyFacing(refs, opts)
 }
 

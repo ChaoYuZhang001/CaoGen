@@ -33,10 +33,18 @@ const EMPTY_REFS = (): AvatarRefs => ({
   wristR: null,
   handL: null,
   handR: null,
+  waistYaw: null,
+  waistRoll: null,
   legL: null,
   legR: null,
   kneeL: null,
-  kneeR: null
+  kneeR: null,
+  anklePitchL: null,
+  anklePitchR: null,
+  ankleRollL: null,
+  ankleRollR: null,
+  footL: null,
+  footR: null
 })
 
 export function hasReferenceRobotModelAsset(modelUrl = REFERENCE_ROBOT_GLB_URL): boolean {
@@ -100,6 +108,27 @@ function createHandEndpointMarker(scene: Group, nodeNames: string[], markerName:
   return marker
 }
 
+function createFootContactMarker(scene: Group, nodeNames: string[], markerName: string): Object3D | null {
+  const footNode = nodeNames.map((name) => scene.getObjectByName(name)).find(Boolean)
+  if (!footNode) return null
+
+  scene.updateWorldMatrix(true, true)
+  const bounds = new Box3().setFromObject(footNode)
+  if (bounds.isEmpty()) return footNode
+
+  const contact = new Vector3(
+    (bounds.min.x + bounds.max.x) / 2,
+    bounds.min.y + 0.002,
+    (bounds.min.z + bounds.max.z) / 2
+  )
+  footNode.worldToLocal(contact)
+  const marker = new Group()
+  marker.name = markerName
+  marker.position.copy(contact)
+  footNode.add(marker)
+  return marker
+}
+
 function prepareModelScene(source: Group): { scene: Group; controls: Omit<AvatarRefs, 'root'> } {
   const scene = source.clone(true)
   const handL = createHandEndpointMarker(
@@ -112,9 +141,21 @@ function prepareModelScene(source: Group): { scene: Group; controls: Omit<Avatar
     ['official_right_rubber_hand', 'official_right_wrist_roll_rubber_hand', 'right_rubber_hand'],
     'right_hand_ik_endpoint'
   )
+  const footL = createFootContactMarker(
+    scene,
+    ['official_left_ankle_roll_link', 'left_ankle_roll_link'],
+    'left_foot_contact_endpoint'
+  )
+  const footR = createFootContactMarker(
+    scene,
+    ['official_right_ankle_roll_link', 'right_ankle_roll_link'],
+    'right_foot_contact_endpoint'
+  )
   return {
     scene,
     controls: {
+      waistYaw: createAnimationControl(scene.getObjectByName('waist_yaw_link'), 'waist_yaw_link', scene),
+      waistRoll: createAnimationControl(scene.getObjectByName('waist_roll_link'), 'waist_roll_link', scene),
       head: createAnimationControl(scene.getObjectByName('helmet_head'), 'helmet_head', scene),
       armL: createAnimationControl(scene.getObjectByName('left_arm'), 'left_arm', scene),
       armR: createAnimationControl(scene.getObjectByName('right_arm'), 'right_arm', scene),
@@ -127,7 +168,13 @@ function prepareModelScene(source: Group): { scene: Group; controls: Omit<Avatar
       legL: createAnimationControl(scene.getObjectByName('left_leg'), 'left_leg', scene),
       legR: createAnimationControl(scene.getObjectByName('right_leg'), 'right_leg', scene),
       kneeL: createAnimationControl(scene.getObjectByName('left_knee_link'), 'left_knee_link', scene),
-      kneeR: createAnimationControl(scene.getObjectByName('right_knee_link'), 'right_knee_link', scene)
+      kneeR: createAnimationControl(scene.getObjectByName('right_knee_link'), 'right_knee_link', scene),
+      anklePitchL: createAnimationControl(scene.getObjectByName('left_ankle_pitch_link'), 'left_ankle_pitch_link', scene),
+      anklePitchR: createAnimationControl(scene.getObjectByName('right_ankle_pitch_link'), 'right_ankle_pitch_link', scene),
+      ankleRollL: createAnimationControl(scene.getObjectByName('left_ankle_roll_link'), 'left_ankle_roll_link', scene),
+      ankleRollR: createAnimationControl(scene.getObjectByName('right_ankle_roll_link'), 'right_ankle_roll_link', scene),
+      footL,
+      footR
     }
   }
 }
@@ -144,10 +191,18 @@ function writeRefs(target: AvatarRefs | undefined, value: AvatarRefs): void {
   target.wristR = value.wristR
   target.handL = value.handL
   target.handR = value.handR
+  target.waistYaw = value.waistYaw
+  target.waistRoll = value.waistRoll
   target.legL = value.legL
   target.legR = value.legR
   target.kneeL = value.kneeL
   target.kneeR = value.kneeR
+  target.anklePitchL = value.anklePitchL
+  target.anklePitchR = value.anklePitchR
+  target.ankleRollL = value.ankleRollL
+  target.ankleRollR = value.ankleRollR
+  target.footL = value.footL
+  target.footR = value.footR
 }
 
 const ReferenceRobotModelAsset = forwardRef<AvatarRefs, ReferenceRobotModelAssetProps>(
@@ -188,10 +243,18 @@ const ReferenceRobotModelAsset = forwardRef<AvatarRefs, ReferenceRobotModelAsset
         wristR: modelControls.wristR,
         handL: modelControls.handL,
         handR: modelControls.handR,
+        waistYaw: modelControls.waistYaw,
+        waistRoll: modelControls.waistRoll,
         legL: modelControls.legL ?? legLFallbackRef.current,
         legR: modelControls.legR ?? legRFallbackRef.current,
         kneeL: modelControls.kneeL,
-        kneeR: modelControls.kneeR
+        kneeR: modelControls.kneeR,
+        anklePitchL: modelControls.anklePitchL,
+        anklePitchR: modelControls.anklePitchR,
+        ankleRollL: modelControls.ankleRollL,
+        ankleRollR: modelControls.ankleRollR,
+        footL: modelControls.footL,
+        footR: modelControls.footR
       }
       writeRefs(refs, bag)
       return bag
