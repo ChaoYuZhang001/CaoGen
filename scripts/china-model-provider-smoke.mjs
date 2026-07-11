@@ -12,13 +12,13 @@ try {
   compile(
     [
       'src/main/model/llm-providers/china-provider-adapter.ts',
-      'src/main/sandbox/docker-sandbox.ts'
+      'src/main/sandbox/local-execution.ts'
     ],
     outDir
   )
 
   const adapter = await import(pathToFileURL(findCompiled(outDir, 'china-provider-adapter.js')).href)
-  const sandbox = await import(pathToFileURL(findCompiled(outDir, 'docker-sandbox.js')).href)
+  const localExecution = await import(pathToFileURL(findCompiled(outDir, 'local-execution.js')).href)
 
   const providerCases = [
     ['deepseek', { id: 'deepseek-chat', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com' }, 'deepseek-chat'],
@@ -131,8 +131,7 @@ try {
     'draft.chinaEcosystemMirrorEnabled',
     "'chinaEcosystemMirrorEnabled'",
     "'chinaNpmRegistry'",
-    "'chinaPipIndexUrl'",
-    "'chinaDockerRegistryMirror'"
+    "'chinaPipIndexUrl'"
   ]) {
     assert(settingsSource.includes(marker), `china mirror settings UI missing ${marker}`)
   }
@@ -140,10 +139,10 @@ try {
   const i18nSource = readFileSync(path.join(repoRoot, 'src/renderer/src/i18n.ts'), 'utf8')
   assert(i18nSource.includes('webhook notifications stay dry-run'), 'mirror hint must distinguish webhook dry-run boundary')
 
-  const defaultEnv = await sandbox.runSandboxedCommand({
+  const defaultEnv = await localExecution.runLocalCommand({
     command: envEchoCommand(),
     cwd: tempRoot,
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     maxBufferBytes: 128 * 1024,
     chinaMirrorEnabled: false,
@@ -152,10 +151,10 @@ try {
   assert(defaultEnv.ok, defaultEnv.output)
   assert(!defaultEnv.output.includes('https://registry.npmmirror.com'), 'mirror env should be disabled by default')
 
-  const enabledEnv = await sandbox.runSandboxedCommand({
+  const enabledEnv = await localExecution.runLocalCommand({
     command: envEchoCommand(),
     cwd: tempRoot,
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     maxBufferBytes: 128 * 1024,
     chinaMirrorEnabled: true,
@@ -165,35 +164,13 @@ try {
   assert(enabledEnv.ok, enabledEnv.output)
   assert(enabledEnv.output.includes('https://registry.npmmirror.com'), 'npm mirror env missing when enabled')
   assert(enabledEnv.output.includes('https://pypi.tuna.tsinghua.edu.cn/simple'), 'pip mirror env missing when enabled')
-  const mirrorEnv = sandbox.buildChinaMirrorEnv({
+  const mirrorEnv = localExecution.buildChinaMirrorEnv({
     chinaMirrorEnabled: true,
     npmRegistry: 'https://registry.npmmirror.com',
     pipIndexUrl: 'https://pypi.tuna.tsinghua.edu.cn/simple'
   })
   assertEqual(mirrorEnv.NPM_CONFIG_REGISTRY, 'https://registry.npmmirror.com')
   assertEqual(mirrorEnv.PIP_INDEX_URL, 'https://pypi.tuna.tsinghua.edu.cn/simple')
-  assertEqual(
-    sandbox.resolveDockerImage('caogen-sandbox:latest', {
-      chinaMirrorEnabled: true,
-      dockerRegistryMirror: 'registry.cn-hangzhou.aliyuncs.com/caogen'
-    }),
-    'registry.cn-hangzhou.aliyuncs.com/caogen/caogen-sandbox:latest'
-  )
-  assertEqual(
-    sandbox.resolveDockerImage('registry.example.com/caogen-sandbox:latest', {
-      chinaMirrorEnabled: true,
-      dockerRegistryMirror: 'registry.cn-hangzhou.aliyuncs.com/caogen'
-    }),
-    'registry.example.com/caogen-sandbox:latest'
-  )
-  assertEqual(
-    sandbox.resolveDockerImage('caogen-sandbox:latest', {
-      chinaMirrorEnabled: false,
-      dockerRegistryMirror: 'registry.cn-hangzhou.aliyuncs.com/caogen'
-    }),
-    'caogen-sandbox:latest'
-  )
-
   console.log('china model provider smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })

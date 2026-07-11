@@ -46,12 +46,10 @@ const DEFAULTS: AppSettings = {
   persona: '',
   allowedTools: '',
   disallowedTools: '',
-  sandboxMode: 'loose',
-  sandboxDockerImage: 'caogen-sandbox:latest',
+  sandboxMode: 'restrictedLocal',
   chinaEcosystemMirrorEnabled: false,
   chinaNpmRegistry: '',
   chinaPipIndexUrl: '',
-  chinaDockerRegistryMirror: '',
   permissionAllowlist: '',
   permissionDenylist: '',
   permissionTemporaryAllowlist: '',
@@ -108,6 +106,12 @@ function normalizeSchedulerStrategy(raw: unknown, fallback: SchedulerStrategy): 
   return raw === 'quality' || raw === 'cost' || raw === 'speed' || raw === 'balanced' ? raw : fallback
 }
 
+function normalizeSandboxMode(raw: unknown): AppSettings['sandboxMode'] {
+  if (raw === 'loose') return 'loose'
+  if (raw === 'restrictedLocal' || raw === 'standardSystem' || raw === 'strictDocker') return 'restrictedLocal'
+  return DEFAULTS.sandboxMode
+}
+
 function normalizeModelRoutingRules(raw: unknown): ModelRoutingRule[] {
   if (!Array.isArray(raw)) return []
   return raw
@@ -159,11 +163,22 @@ function settingsFile(): string {
 export function getSettings(): AppSettings {
   if (cache) return cache
   try {
-    const raw = JSON.parse(readFileSync(settingsFile(), 'utf8')) as Partial<AppSettings>
+    const persisted = JSON.parse(readFileSync(settingsFile(), 'utf8')) as Partial<AppSettings> & {
+      sandboxMode?: unknown
+      sandboxDockerImage?: unknown
+      chinaDockerRegistryMirror?: unknown
+    }
+    const {
+      sandboxMode,
+      sandboxDockerImage: _legacyDockerImage,
+      chinaDockerRegistryMirror: _legacyDockerRegistryMirror,
+      ...raw
+    } = persisted
     cache = {
       ...DEFAULTS,
       ...raw,
       driveMode: normalizeCaoGenDriveMode(raw.driveMode),
+      sandboxMode: normalizeSandboxMode(sandboxMode),
       schedulerStrategy: normalizeSchedulerStrategy(raw.schedulerStrategy, DEFAULTS.schedulerStrategy),
       modelRoutingRules: normalizeModelRoutingRules(raw.modelRoutingRules),
       office: { ...DEFAULTS.office, ...(raw.office ?? {}) },
@@ -181,6 +196,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...prev,
     ...patch,
     driveMode: patch.driveMode === undefined ? prev.driveMode : normalizeCaoGenDriveMode(patch.driveMode),
+    sandboxMode: patch.sandboxMode === undefined ? prev.sandboxMode : normalizeSandboxMode(patch.sandboxMode),
     schedulerStrategy:
       patch.schedulerStrategy === undefined
         ? prev.schedulerStrategy

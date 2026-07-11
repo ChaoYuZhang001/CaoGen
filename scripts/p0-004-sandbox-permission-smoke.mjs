@@ -29,21 +29,21 @@ try {
   mkdirSync(projectDir)
   compileModules()
 
-  const sandbox = requireFromSmoke(findCompiled('docker-sandbox.js'))
+  const localExecution = requireFromSmoke(findCompiled('local-execution.js'))
   const safePath = requireFromSmoke(findCompiled('safe-project-path.js'))
   const permission = requireFromSmoke(findCompiled('tool-permission.js'))
   const audit = requireFromSmoke(findCompiled('audit-log.js'))
 
-  await verifySandbox(sandbox)
-  await verifySafeProjectPath(safePath, sandbox)
+  await verifyLocalExecution(localExecution)
+  await verifySafeProjectPath(safePath, localExecution)
   verifyPermission(permission)
   verifyAudit(audit)
   verifyOpenAiToolsBridge()
   verifyClaudePermissionBridge()
   verifySecuritySettingsUi()
-  verifyDockerSandboxImage()
+  verifyLocalExecutionBoundary()
 
-  console.log('p0-004 sandbox/permission smoke ok')
+  console.log('p0-004 local-execution/permission smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
 }
@@ -53,8 +53,7 @@ function compileModules() {
     process.execPath,
     [
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
-      'src/main/sandbox/docker-sandbox.ts',
-      'src/main/sandbox/system-sandbox.ts',
+      'src/main/sandbox/local-execution.ts',
       'src/main/permission/tool-permission.ts',
       'src/main/permission/audit-log.ts',
       '--outDir',
@@ -73,72 +72,18 @@ function compileModules() {
   )
 }
 
-async function verifySandbox(sandbox) {
-  const standard = await sandbox.runSandboxedCommand({
+async function verifyLocalExecution(localExecution) {
+  const standard = await localExecution.runLocalCommand({
     command: 'echo caogen-p0-004',
     cwd: projectDir,
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     maxBufferBytes: 1024 * 1024
   })
-  assert(standard.ok, `standard shell should pass: ${standard.output}`)
-  assert(standard.output.includes('caogen-p0-004'), 'standard shell output missing marker')
-  assert(standard.sandboxed === false, 'standard shell should not be marked sandboxed')
-
-  const blocked = await sandbox.runSandboxedCommand({
-    command: 'echo docker-fallback-ok',
-    cwd: projectDir,
-    mode: 'strictDocker',
-    timeoutMs: 10_000,
-    maxBufferBytes: 1024 * 1024,
-    dockerBinary: path.join(tempRoot, 'missing-docker-binary')
-  })
-  assert(!blocked.ok, 'strict Docker should fail closed when Docker is unavailable by default')
-  assert(blocked.modeUsed === 'strictDocker', `expected strictDocker blocked mode, got ${blocked.modeUsed}`)
-  assert(blocked.sandboxed === false, 'blocked strict Docker must disclose it was not sandboxed')
-  assert(blocked.output.includes('strictDocker blocked'), 'blocked strict Docker output should be explicit')
-
-  const fallback = await sandbox.runSandboxedCommand({
-    command: 'echo docker-fallback-ok',
-    cwd: projectDir,
-    mode: 'strictDocker',
-    timeoutMs: 10_000,
-    maxBufferBytes: 1024 * 1024,
-    dockerBinary: path.join(tempRoot, 'missing-docker-binary'),
-    allowStrictDockerFallback: true
-  })
-  assert(fallback.ok, `strict Docker fallback should run system command: ${fallback.output}`)
-  assert(fallback.modeUsed === 'standardSystem', `expected standardSystem fallback, got ${fallback.modeUsed}`)
-  assert(fallback.sandboxed === false, 'fallback must disclose that it was not sandboxed')
-  assert(fallback.fallbackReason?.includes('Docker 不可用'), 'fallback reason should mention Docker unavailable')
-  assert(fallback.output.includes('docker-fallback-ok'), 'fallback output missing marker')
-
-  const fileBlocked = await sandbox.writeTextFileWithSandbox({
-    cwd: projectDir,
-    targetPath: path.join(projectDir, 'sandbox-write-blocked.txt'),
-    content: 'should-not-write\n',
-    mode: 'strictDocker',
-    timeoutMs: 10_000,
-    dockerBinary: path.join(tempRoot, 'missing-docker-binary')
-  })
-  assert(!fileBlocked.ok, 'strict Docker file writes should fail closed when Docker is unavailable by default')
-  assert(fileBlocked.modeUsed === 'strictDocker', `expected file blocked mode strictDocker, got ${fileBlocked.modeUsed}`)
-  assert(!existsSync(path.join(projectDir, 'sandbox-write-blocked.txt')), 'blocked strict Docker write must not create file')
-
-  const fileFallback = await sandbox.writeTextFileWithSandbox({
-    cwd: projectDir,
-    targetPath: path.join(projectDir, 'sandbox-write.txt'),
-    content: 'sandbox-file-fallback-ok\n',
-    mode: 'strictDocker',
-    timeoutMs: 10_000,
-    dockerBinary: path.join(tempRoot, 'missing-docker-binary'),
-    allowStrictDockerFallback: true
-  })
-  assert(fileFallback.ok, `strict Docker file fallback should write: ${fileFallback.output}`)
-  assert(fileFallback.modeUsed === 'standardSystem', `expected file fallback mode standardSystem, got ${fileFallback.modeUsed}`)
-  assert(fileFallback.sandboxed === false, 'file fallback must disclose that it was not sandboxed')
-  assert(fileFallback.fallbackReason?.includes('Docker 不可用'), 'file fallback reason should mention Docker unavailable')
-  assert(readFileSync(path.join(projectDir, 'sandbox-write.txt'), 'utf8') === 'sandbox-file-fallback-ok\n', 'file fallback content mismatch')
+  assert(standard.ok, `local shell should pass: ${standard.output}`)
+  assert(standard.output.includes('caogen-p0-004'), 'local shell output missing marker')
+  assert(standard.modeUsed === 'restrictedLocal', `expected restrictedLocal mode, got ${standard.modeUsed}`)
+  assert(standard.sandboxed === false, 'local shell must not be marked sandboxed')
 
   const guardedPath = path.join(projectDir, 'guarded-write.txt')
   const guardedBefore = Buffer.from('guarded-before\n', 'utf8')
@@ -149,12 +94,12 @@ async function verifySandbox(sandbox) {
     sha256: createHash('sha256').update(guardedBefore).digest('hex'),
     bytes: guardedBefore.byteLength
   }
-  const guardedWrite = await sandbox.writeTextFileWithSandbox({
+  const guardedWrite = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: guardedPath,
     content: 'guarded-after\n',
     expectedFile: guardedPrecondition,
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000
   })
   assert(guardedWrite.ok, `guarded host write should pass: ${guardedWrite.output}`)
@@ -165,12 +110,12 @@ async function verifySandbox(sandbox) {
   writeFileSync(replacementPath, guardedBefore)
   rmSync(guardedPath)
   renameSync(replacementPath, guardedPath)
-  const replacedWrite = await sandbox.writeTextFileWithSandbox({
+  const replacedWrite = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: guardedPath,
     content: 'must-not-write\n',
     expectedFile: guardedPrecondition,
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000
   })
   assert(!replacedWrite.ok, 'guarded host write must reject same-content inode replacement')
@@ -181,7 +126,7 @@ async function verifySandbox(sandbox) {
   const replacementDuringWritePath = path.join(projectDir, 'guarded-path-replacement.txt')
   writeFileSync(renamedDuringWritePath, guardedBefore)
   const renamedDuringWriteStat = statSync(renamedDuringWritePath, { bigint: true })
-  const renamedDuringWrite = await sandbox.writeTextFileWithSandbox({
+  const renamedDuringWrite = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: renamedDuringWritePath,
     content: 'must-not-report-success\n',
@@ -193,7 +138,7 @@ async function verifySandbox(sandbox) {
       sha256: createHash('sha256').update(guardedBefore).digest('hex'),
       bytes: guardedBefore.byteLength
     },
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     beforeGuardedCommit: () => {
       renameSync(renamedDuringWritePath, movedDuringWritePath)
@@ -217,7 +162,7 @@ async function verifySandbox(sandbox) {
   writeFileSync(renamedInsideCheckPath, guardedBefore)
   const renamedInsideCheckStat = statSync(renamedInsideCheckPath, { bigint: true })
   let injectedPreconditionRename = false
-  const renamedInsideCheck = await sandbox.writeTextFileWithSandbox({
+  const renamedInsideCheck = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: renamedInsideCheckPath,
     content: 'must-not-write-inside-check\n',
@@ -229,7 +174,7 @@ async function verifySandbox(sandbox) {
       sha256: createHash('sha256').update(guardedBefore).digest('hex'),
       bytes: guardedBefore.byteLength
     },
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     beforeGuardedPathVerificationRead: (phase) => {
       if (phase !== 'precondition' || injectedPreconditionRename) return
@@ -249,7 +194,7 @@ async function verifySandbox(sandbox) {
   writeFileSync(postCheckPath, guardedBefore)
   const postCheckStat = statSync(postCheckPath, { bigint: true })
   let injectedPostconditionRename = false
-  const postCheckResult = await sandbox.writeTextFileWithSandbox({
+  const postCheckResult = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: postCheckPath,
     content: 'written-before-postcheck\n',
@@ -261,7 +206,7 @@ async function verifySandbox(sandbox) {
       sha256: createHash('sha256').update(guardedBefore).digest('hex'),
       bytes: guardedBefore.byteLength
     },
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     beforeGuardedPathVerificationRead: (phase) => {
       if (phase !== 'postcondition' || injectedPostconditionRename) return
@@ -289,7 +234,7 @@ async function verifySandbox(sandbox) {
   const approvedProjectRootInfo = statSync(approvedProjectRoot, { bigint: true })
   mkdirSync(absentParent)
   mkdirSync(absentOutside)
-  const absentParentEscape = await sandbox.writeTextFileWithSandbox({
+  const absentParentEscape = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: absentTarget,
     content: 'must-stay-inside-project\n',
@@ -301,7 +246,7 @@ async function verifySandbox(sandbox) {
         inode: approvedProjectRootInfo.ino.toString()
       }
     },
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000,
     beforeGuardedCommit: () => {
       const tempName = readdirSync(absentParent).find((name) => name.endsWith('.caogen-write.tmp'))
@@ -321,7 +266,7 @@ async function verifySandbox(sandbox) {
   const approvedRootInfo = statSync(approvedRootPath, { bigint: true })
   renameSync(approvedRoot, approvedRootMoved)
   mkdirSync(approvedRoot)
-  const replacedRootWrite = await sandbox.writeTextFileWithSandbox({
+  const replacedRootWrite = await localExecution.writeTextFileLocally({
     cwd: approvedRoot,
     targetPath: path.join(approvedRoot, 'nested', 'must-not-create.txt'),
     content: 'unapproved-root\n',
@@ -333,14 +278,14 @@ async function verifySandbox(sandbox) {
         inode: approvedRootInfo.ino.toString()
       }
     },
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000
   })
   assert(!replacedRootWrite.ok, 'guarded absent write must stay bound to the Effect-approved project root')
   assert(!existsSync(path.join(approvedRoot, 'nested')), 'replacement root must remain untouched')
 }
 
-async function verifySafeProjectPath(safePath, sandbox) {
+async function verifySafeProjectPath(safePath, localExecution) {
   const outsideDir = path.join(tempRoot, 'outside')
   const outsideFile = path.join(outsideDir, 'secret.txt')
   const linkDir = path.join(projectDir, 'linked-outside')
@@ -362,14 +307,14 @@ async function verifySafeProjectPath(safePath, sandbox) {
   }
   assert(readRejected, 'safe project path must reject symlink/junction read escape')
 
-  const writeAttempt = await sandbox.writeTextFileWithSandbox({
+  const writeAttempt = await localExecution.writeTextFileLocally({
     cwd: projectDir,
     targetPath: path.join(projectDir, 'linked-outside', 'secret.txt'),
     content: 'owned\n',
-    mode: 'standardSystem',
+    mode: 'restrictedLocal',
     timeoutMs: 10_000
   })
-  assert(!writeAttempt.ok, `standardSystem write must reject symlink/junction escape: ${writeAttempt.output}`)
+  assert(!writeAttempt.ok, `restricted local write must reject symlink/junction escape: ${writeAttempt.output}`)
   assert(readFileSync(outsideFile, 'utf8') === 'outside-secret\n', 'outside file must remain unchanged')
 }
 
@@ -430,14 +375,14 @@ function verifyPermission(permission) {
 function verifyAudit(audit) {
   audit.writeAuditLog(projectDir, {
     action: 'execute',
-    source: 'sandbox',
+    source: 'local-execution',
     toolName: 'bash',
     riskLevel: 'low',
     riskReasons: ['smoke'],
     input: { command: 'echo audit' },
     ok: true,
-    sandboxMode: 'standardSystem',
-    modeUsed: 'standardSystem',
+    sandboxMode: 'restrictedLocal',
+    modeUsed: 'restrictedLocal',
     sandboxed: false
   })
   const text = readFileSync(path.join(projectDir, '.caogen', 'audit.log'), 'utf8')
@@ -467,58 +412,40 @@ function verifyAudit(audit) {
 
 function verifyOpenAiToolsBridge() {
   const text = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
-  assert(text.includes("options.sandboxMode ?? 'loose'"), 'bash must default to loose')
-  assert(text.includes('runSandboxedCommand'), 'bash must call sandbox command wrapper')
-  assert(text.includes('writeTextFileWithSandbox'), 'file writes must call sandbox file writer')
-  assert(text.includes('sandboxedFileWrite'), 'OpenAI file tools must route through sandboxedFileWrite')
+  assert(text.includes("options.sandboxMode ?? 'restrictedLocal'"), 'bash must default to restricted local execution')
+  assert(text.includes('runLocalCommand'), 'bash must call local command wrapper')
+  assert(text.includes('writeTextFileLocally'), 'file writes must call guarded local writer')
+  assert(text.includes('localFileWrite'), 'OpenAI file tools must route through localFileWrite')
   for (const marker of ["case 'bash'", "case 'read_file'", "case 'write_file'"]) {
     assert(text.includes(marker), `openaiTools missing ${marker}`)
   }
 }
 
-function verifyDockerSandboxImage() {
-  const sandboxSource = readFileSync(path.join(repoRoot, 'src/main/sandbox/docker-sandbox.ts'), 'utf8')
+function verifyLocalExecutionBoundary() {
+  const executionSource = readFileSync(path.join(repoRoot, 'src/main/sandbox/local-execution.ts'), 'utf8')
   for (const marker of [
-    "DEFAULT_DOCKER_IMAGE = 'caogen-sandbox:latest'",
-    "'--cap-drop'",
-    "'ALL'",
-    "'--security-opt'",
-    "'no-new-privileges'",
-    "'--read-only'",
-    "'--tmpfs'",
-    "'--cpus'",
-    "'--memory'",
-    "'--pids-limit'",
-    "'--user'",
-    "'node'",
+    'resolveWritableProjectPath',
+    'safeOpenFlags(constants.O_RDWR)',
     'verifyFileWritePostcondition',
     'guarded target path or content changed',
-    'guarded target postcondition mismatch after Docker write',
+    'guarded target postcondition mismatch after local write',
     'if (forceKillTimer) clearTimeout(forceKillTimer)',
     'if (options.signal?.aborted) abort()',
     'terminationRequested = true'
   ]) {
-    assert(sandboxSource.includes(marker), `docker sandbox missing ${marker}`)
-  }
-  const dockerfile = readFileSync(path.join(repoRoot, 'resources/sandbox/Dockerfile'), 'utf8')
-  for (const marker of ['FROM node:22-alpine', 'ripgrep', 'git', 'python3', 'go', 'rust', 'USER node']) {
-    assert(dockerfile.includes(marker), `Dockerfile missing ${marker}`)
+    assert(executionSource.includes(marker), `local execution missing ${marker}`)
   }
   const settingsSource = readFileSync(path.join(repoRoot, 'src/main/settings.ts'), 'utf8')
-  assert(settingsSource.includes("sandboxDockerImage: 'caogen-sandbox:latest'"), 'settings should default to caogen-sandbox image')
+  const legacyStrictMode = ['strict', 'Docker'].join('')
+  assert(settingsSource.includes(`raw === '${legacyStrictMode}'`), 'settings must migrate the legacy strict mode')
+  assert(settingsSource.includes("return 'restrictedLocal'"), 'legacy modes must migrate to restrictedLocal')
   const packageJson = readFileSync(path.join(repoRoot, 'package.json'), 'utf8')
-  assert(packageJson.includes('resources/sandbox/**/*'), 'package should include sandbox resources')
+  assert(!packageJson.includes('resources/sandbox/**/*'), 'package must not ship removed container resources')
 }
 
 function verifyClaudePermissionBridge() {
   const text = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
-  for (const marker of [
-    'evaluateToolPermission',
-    'writeAuditLog',
-    'CLAUDE_HOST_MUTATION_TOOLS',
-    "settings.sandboxMode === 'strictDocker'",
-    'fail-closed'
-  ]) {
+  for (const marker of ['evaluateToolPermission', 'writeAuditLog', 'authorizeClaudeTool']) {
     assert(text.includes(marker), `Claude permission bridge missing ${marker}`)
   }
 }
@@ -526,14 +453,15 @@ function verifyClaudePermissionBridge() {
 function verifySecuritySettingsUi() {
   const text = readFileSync(path.join(repoRoot, 'src/renderer/src/components/SettingsModal.tsx'), 'utf8')
   for (const marker of [
-    'draft.sandboxMode',
-    'sandboxDockerImage',
+    '本地执行',
+    '不是系统级沙箱',
     'permissionAllowlist',
     'permissionDenylist',
     'permissionTemporaryAllowlist'
   ]) {
     assert(text.includes(marker), `settings UI missing ${marker}`)
   }
+  assert(!text.includes(['strict', 'Docker'].join('')), 'settings UI must not expose the removed strict mode')
 }
 
 function settings(patch = {}) {

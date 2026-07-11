@@ -5,7 +5,7 @@ import type { SandboxMode, ToolRiskLevel } from '../../shared/types'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
 
 export type AuditAction = 'allow' | 'deny' | 'ask' | 'execute'
-export type AuditSource = 'policy' | 'permission-mode' | 'idempotency' | 'user' | 'sandbox'
+export type AuditSource = 'policy' | 'permission-mode' | 'idempotency' | 'user' | 'local-execution'
 
 export interface ToolAuditEvent {
   action: AuditAction

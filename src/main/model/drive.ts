@@ -65,7 +65,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 1 },
     permissionAllowlistRules: ['risk<=low'],
     permissionDenylistRules: ['risk=critical', 'tool=genesis_orchestrate'],
-    sandboxMode: 'standardSystem'
+    sandboxMode: 'restrictedLocal'
   },
   command: {
     riskFloor: 'high',
@@ -74,7 +74,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 2 },
     permissionAllowlistRules: ['risk<=low'],
     permissionDenylistRules: ['risk=critical'],
-    sandboxMode: 'standardSystem',
+    sandboxMode: 'restrictedLocal',
     guiAutomationEnabled: true
   },
   genesis: {
@@ -84,7 +84,7 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
     crossValidation: { enabled: true, minRiskLevel: 'low', maxValidators: 2 },
     permissionAllowlistRules: ['risk<=low'],
     permissionDenylistRules: ['risk=critical'],
-    sandboxMode: 'standardSystem',
+    sandboxMode: 'restrictedLocal',
     guiAutomationEnabled: true
   }
 }

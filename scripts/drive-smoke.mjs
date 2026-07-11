@@ -71,7 +71,7 @@ try {
   assert(coreSpeed.schedulerStrategy === 'speed', 'Core should preserve an explicit user speed strategy')
   assert(corePolicy.sessionBudgetUsd > sparkPolicy.sessionBudgetUsd, 'Core policy budget should exceed Spark')
   assert(forge.defaultPermissionMode === 'acceptEdits', 'Forge should auto-accept edits')
-  assert(forge.sandboxMode === 'standardSystem', 'Forge should raise sandbox discipline')
+  assert(forge.sandboxMode === 'restrictedLocal', 'Forge should use restricted local execution')
   assert(command.modelCrossValidationAutoRunEnabled, 'Command should auto-run model review')
   assert(command.guiAutomationEnabled, 'Command should enable GUI tools behind approval')
   assert(genesisPolicy.sessionBudgetUsd > commandPolicy.sessionBudgetUsd, 'Genesis policy budget should exceed Command')

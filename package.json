@@ -129,7 +129,6 @@
     },
     "files": [
       "out/**/*",
-      "resources/sandbox/**/*",
       "package.json"
     ],
     "extraResources": [
