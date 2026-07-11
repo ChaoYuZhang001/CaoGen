@@ -292,6 +292,9 @@ function effectTargetDescription(effect: EffectRecord): string {
   if (effect.target.kind === 'git_commit') {
     return `${effect.target.branch} @ ${effect.target.preHead.slice(0, 12)}`
   }
+  if (effect.target.kind === 'git_merge') {
+    return `${effect.target.destinationRef} <- ${effect.target.sourceRef} @ ${effect.target.sourceSha.slice(0, 12)}`
+  }
   if (effect.target.kind === 'git_push') {
     return `${effect.target.remote}/${effect.target.branch} -> ${effect.target.intendedSha.slice(0, 12)}`
   }
@@ -304,6 +307,9 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
   }
   if (effect.target.kind === 'git_commit') {
     return `staged ${effect.target.stagedDiffDigest.slice(0, 16)} · message ${effect.target.messageDigest.slice(0, 16)}`
+  }
+  if (effect.target.kind === 'git_merge') {
+    return `${effect.target.mode} · parents ${effect.target.preHead.slice(0, 12)} + ${effect.target.sourceSha.slice(0, 12)}`
   }
   if (effect.target.kind === 'git_push') return `push ${effect.target.intendedSha.slice(0, 12)}`
   for (const entry of [...snapshot.transcript].reverse()) {
