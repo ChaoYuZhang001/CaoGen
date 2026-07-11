@@ -22,8 +22,11 @@ OFFICIAL_G1_MESH_DIR = OFFICIAL_G1_DIR / "meshes"
 OFFICIAL_G1_XML = OFFICIAL_G1_DIR / "g1_29dof_rev_1_0.xml"
 
 JOINT_POSE_RADIANS = {
-    "left_shoulder_pitch_joint": math.radians(90),
-    "right_shoulder_pitch_joint": math.radians(90),
+    # Keep the upper arms hanging from the shoulders. The source forearms point
+    # forward at zero, so a near-right-angle elbow pose produces a relaxed,
+    # almost straight arm without lifting the upper arm away from the torso.
+    "left_elbow_joint": math.radians(80),
+    "right_elbow_joint": math.radians(80),
 }
 
 HAND_MESH_PARTS = {

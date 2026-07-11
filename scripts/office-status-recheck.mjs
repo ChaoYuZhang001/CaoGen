@@ -457,6 +457,16 @@ check('walking agents use distance-locked foot contact gait', () => {
   assert(animations.includes('function applyWalkingLegIK'), 'walking legs must solve hip and knee from foot contact targets')
   assert(animations.includes('gaitAnklePitch'), 'walking gait must include heel-strike and toe-off ankle pitch')
   assert(animations.includes('refs.waistYaw') && animations.includes('refs.waistRoll'), 'walking gait must balance pelvis and torso rotation')
+  assert(
+    animations.includes('lerpRotation(refs.armL, swing * 0.34, 0, 0.025)') &&
+      animations.includes('lerpRotation(refs.armR, -swing * 0.34, 0, -0.025)'),
+    'walking arms must swing in the sagittal plane opposite the legs instead of lifting sideways'
+  )
+  assert(
+    animations.includes('lerpRotation(refs.elbowL, -0.08 - bendL * 0.05, 0, 0)') &&
+      animations.includes('lerpRotation(refs.elbowR, -0.08 - bendR * 0.05, 0, 0)'),
+    'walking elbows must remain close to straight with only mild dynamic flexion'
+  )
   assert(robotAsset.includes('function createFootContactMarker'), 'reference robot must expose foot-bottom contact markers')
   assert(robotAsset.includes("'left_foot_contact_endpoint'") && robotAsset.includes("'right_foot_contact_endpoint'"), 'both GLB feet must expose contact endpoints')
   assert(robotAsset.includes("getObjectByName('left_ankle_pitch_link')") && robotAsset.includes("getObjectByName('right_ankle_pitch_link')"), 'official ankle pitch joints must be animation controls')
@@ -539,6 +549,16 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
   ]) {
     assert(blender.includes(marker), `Blender generator missing ${marker}`)
   }
+  assert(
+    blender.includes('"left_elbow_joint": math.radians(80)') &&
+      blender.includes('"right_elbow_joint": math.radians(80)'),
+    'Blender generator must keep the neutral forearms nearly aligned below the elbows'
+  )
+  assert(
+    !blender.includes('"left_shoulder_pitch_joint": math.radians(90)') &&
+      !blender.includes('"right_shoulder_pitch_joint": math.radians(90)'),
+    'Blender generator must not lift the neutral upper arms with a 90-degree shoulder pose'
+  )
 
   assert(
     statSync(path.join(repoRoot, officialModelPath)).size > 15_000,
