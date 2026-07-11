@@ -206,7 +206,9 @@ function effectHandleFromRecord(effect: EffectRecord): EffectExecutionHandle {
     leaseId: effect.lease.id,
     ownerId: effect.lease.ownerId,
     fencingToken: effect.lease.fencingToken,
-    toolUseId: effect.toolUseId
+    toolUseId: effect.toolUseId,
+    target: effect.target,
+    targetDigest: effect.targetDigest
   }
 }
 

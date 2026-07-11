@@ -43,6 +43,7 @@ import {
 } from './mcp/mcp-client'
 import type {
   EngineKind,
+  EffectTarget,
   PermissionModeId,
   TaskDag,
   TaskDagDispatchInput,
@@ -91,6 +92,7 @@ export interface ToolExecutionOptions {
   dockerRegistryMirror?: string
   sessionId?: string
   worktreeContext?: CodeForgeWorktreeContext
+  effectTarget?: EffectTarget
 }
 
 const READ_MAX_BYTES = 200 * 1024
@@ -760,7 +762,8 @@ export async function executeCodingTool(
     if (isGitToolName(name)) {
       return clipExecResult(await executeGitTool(name, args, cwd, {
         sessionId: options.sessionId,
-        worktreeContext: options.worktreeContext
+        worktreeContext: options.worktreeContext,
+        effectTarget: options.effectTarget
       }))
     }
     if (isP2ToolName(name)) return clipExecResult(await executeP2Tool(name, args, cwd))

@@ -33,6 +33,9 @@ function waitingEffects(snapshot: TaskSnapshotRecord): EffectRecord[] {
 function effectTargetLabel(effect: EffectRecord): string {
   if (effect.target.kind === 'file_content') return effect.target.relativePath
   if (effect.target.kind === 'git_commit') return `${effect.target.branch} @ ${effect.target.preHead.slice(0, 8)}`
+  if (effect.target.kind === 'git_merge') {
+    return `${effect.target.destinationRef} <- ${effect.target.sourceRef}`
+  }
   if (effect.target.kind === 'git_push') return `${effect.target.remote}/${effect.target.branch}`
   return '无自动查询器'
 }

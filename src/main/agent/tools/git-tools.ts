@@ -13,6 +13,7 @@ import {
   type GitPushOperationResult,
   type GitStatusOperationResult
 } from '../../git/git-helper'
+import type { EffectTarget } from '../../../shared/types'
 import {
   formatCodeForgeDeliveryReport,
   runCodeForgeDelivery,
@@ -36,6 +37,7 @@ export type GitToolName = (typeof GIT_TOOL_NAMES)[number]
 export interface GitToolExecutionContext {
   sessionId?: string
   worktreeContext?: CodeForgeWorktreeContext
+  effectTarget?: EffectTarget
 }
 
 const GIT_TOOL_SET = new Set<string>(GIT_TOOL_NAMES)
@@ -125,7 +127,7 @@ export const GIT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'git_merge',
       description:
-        '显式把指定分支合并到当前分支。要求当前工作区干净，并先做无副作用冲突预检；有冲突时不会进入半合并状态。',
+        '显式把指定分支合并到当前分支。要求当前工作区干净，并在隔离对象库中做冲突预检；有冲突时不会进入半合并状态。当前安全模式拒绝命令可扩展的 merge/filter 属性。',
       parameters: {
         type: 'object',
         properties: {
@@ -200,7 +202,26 @@ export async function executeGitTool(
         )
       )
     case 'git_merge':
-      return stringifyResult(gitMerge(cwd, requiredString(args.branch, 'branch')))
+      return stringifyResult(gitMerge(
+        cwd,
+        requiredString(args.branch, 'branch'),
+        context.effectTarget?.kind === 'git_merge'
+          ? {
+              repoRoot: context.effectTarget.repoRoot,
+              gitCommonDir: context.effectTarget.gitCommonDir,
+              worktreeGitDir: context.effectTarget.worktreeGitDir,
+              repoRootIdentity: context.effectTarget.repoRootIdentity,
+              gitCommonDirIdentity: context.effectTarget.gitCommonDirIdentity,
+              worktreeGitDirIdentity: context.effectTarget.worktreeGitDirIdentity,
+              destinationRef: context.effectTarget.destinationRef,
+              preHead: context.effectTarget.preHead,
+              sourceRef: context.effectTarget.sourceRef,
+              sourceSha: context.effectTarget.sourceSha,
+              sourceWasAncestor: context.effectTarget.sourceWasAncestor,
+              mode: context.effectTarget.mode
+            }
+          : undefined
+      ))
     case 'code_forge_delivery':
       return stringifyCodeForgeResult(runCodeForgeDelivery({
         cwd,
