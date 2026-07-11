@@ -10,7 +10,7 @@ const { reportDeepTestStatus } = deepTestStatus
 const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1'
 const required = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED === '1' || process.argv.includes('--required')
 const repoRoot = process.cwd()
-const rawProviders = resolveProvidersInput(process.env.CAOGEN_CHINA_PARITY_PROVIDERS)
+const rawProvidersSetting = process.env.CAOGEN_CHINA_PARITY_PROVIDERS
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'china-tool-call-parity', runId)
 const configurationGuide = 'docs/P2-EXTERNAL-REQUIRED.md'
@@ -36,9 +36,18 @@ const providerTemplate = [
 ]
 mkdirSync(reportDir, { recursive: true })
 
+let rawProviders
+if (enabled) {
+  try {
+    rawProviders = resolveProvidersInput(rawProvidersSetting)
+  } catch (error) {
+    blockConfiguration(error instanceof Error ? error.message : String(error))
+  }
+}
+
 if (!enabled || !rawProviders?.trim()) {
   const report = {
-    status: required ? 'failed' : 'skipped',
+    status: required ? 'blocked' : 'skipped',
     required,
     reportDir,
     reason: 'set CAOGEN_CHINA_TOOL_CALL_PARITY=1 and CAOGEN_CHINA_PARITY_PROVIDERS JSON',
@@ -59,9 +68,23 @@ if (!enabled || !rawProviders?.trim()) {
   process.exit(0)
 }
 
-const providers = parseProviders(rawProviders)
 const requireBaseline = process.env.CAOGEN_CHINA_PARITY_REQUIRE_BASELINE !== '0'
-const maxGap = Number.parseFloat(process.env.CAOGEN_CHINA_PARITY_MAX_GAP ?? '0')
+let providers
+let maxGap
+try {
+  providers = parseProviders(rawProviders)
+  maxGap = parseMaxGap(process.env.CAOGEN_CHINA_PARITY_MAX_GAP)
+  const configurationFailures = []
+  if (requireBaseline && !providers.some((provider) => provider.group === 'baseline')) {
+    configurationFailures.push('missing baseline provider; add group=baseline or set CAOGEN_CHINA_PARITY_REQUIRE_BASELINE=0')
+  }
+  if (!providers.some((provider) => provider.group === 'china')) {
+    configurationFailures.push('missing China provider; add at least one provider with group=china')
+  }
+  if (configurationFailures.length > 0) throw new Error(configurationFailures.join('; '))
+} catch (error) {
+  blockConfiguration(error instanceof Error ? error.message : String(error))
+}
 const productTools = await loadProductToolMap()
 const goldenCases = expandToolChoiceModes([
   goldenCase(productTools, {
@@ -129,7 +152,9 @@ if (requireBaseline && baselines.length === 0) {
 if (chinaProviders.length === 0) parityFailures.push('missing China provider; add at least one provider with group=china')
 if (baselines.length > 0) {
   for (const provider of chinaProviders) {
-    if (provider.passRate + maxGap < bestBaseline) {
+    if (provider.passRate === 0) {
+      parityFailures.push(`${provider.id} did not pass any golden tool-call cases`)
+    } else if (provider.passRate + maxGap < bestBaseline) {
       parityFailures.push(`${provider.id} passRate ${provider.passRate.toFixed(3)} is below baseline ${bestBaseline.toFixed(3)}`)
     }
   }
@@ -160,6 +185,31 @@ reportDeepTestStatus(report.status === 'passed' ? 'pass' : 'fail', {
 })
 console.log(JSON.stringify(report, null, 2))
 if (parityFailures.length > 0) process.exitCode = 1
+
+function blockConfiguration(reason) {
+  const report = {
+    status: 'blocked',
+    required,
+    reportDir,
+    reason,
+    requiredEnvironment: ['CAOGEN_CHINA_TOOL_CALL_PARITY=1', 'CAOGEN_CHINA_PARITY_PROVIDERS'],
+    configurationGuide,
+    providerTemplate,
+    requireBaseline: process.env.CAOGEN_CHINA_PARITY_REQUIRE_BASELINE !== '0',
+    maxGap: null,
+    goldenCases: 0,
+    results: [],
+    parityFailures: [reason]
+  }
+  writeReport(report)
+  const deepStatusReported = reportDeepTestStatus('blocked', {
+    reason,
+    details: { reportDir }
+  })
+  console.log(JSON.stringify(report, null, 2))
+  if (required && !deepStatusReported) process.exit(1)
+  process.exit(0)
+}
 
 async function runGoldenCase(provider, item) {
   if (provider.apiFormat === 'anthropic') return runAnthropicGoldenCase(provider, item)
@@ -339,6 +389,17 @@ function parseProviders(text) {
     if (endpointFailure) throw new Error(endpointFailure)
     return { id, name, group, apiFormat, baseUrl, model, apiKey, anthropicVersion }
   })
+}
+
+function parseMaxGap(value) {
+  if (value === undefined) return 0
+  const text = value.trim()
+  if (!text) throw new Error('CAOGEN_CHINA_PARITY_MAX_GAP must be a finite number in [0, 1)')
+  const parsed = Number(text)
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 1) {
+    throw new Error('CAOGEN_CHINA_PARITY_MAX_GAP must be a finite number in [0, 1)')
+  }
+  return parsed
 }
 
 function resolveProvidersInput(value) {

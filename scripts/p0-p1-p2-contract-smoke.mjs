@@ -162,6 +162,8 @@ function verifySourceContracts() {
   assert(chinaParity.includes('search_code'), 'China tool-call parity must cover product search_code tool')
   assert(chinaParity.includes('search_replace'), 'China tool-call parity must cover product search_replace tool')
   assert(!chinaParity.includes("expectedName: 'search_files'"), 'China tool-call parity must not use removed search_files schema')
+  assert(chinaParity.includes('parseMaxGap'), 'China tool-call parity must validate max-gap configuration before requests')
+  assert(chinaParity.includes('provider.passRate === 0'), 'China providers with zero passing tool calls must never pass parity')
 
   const chinaRealNetwork = readFileSync(path.join(repoRoot, 'scripts/china-real-network-smoke.mjs'), 'utf8')
   assert(chinaRealNetwork.includes('assertRequiredPublicEndpoint'), 'China real-network required must reject mock/local endpoints')

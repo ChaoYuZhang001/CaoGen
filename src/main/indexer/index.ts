@@ -635,41 +635,53 @@ function clampLimit(value: number): number {
 }
 
 function runRipgrepBinary(root: string, query: string, glob: string | undefined, limit: number): Promise<CodeSearchMatch[]> {
-  const args = ['--json', '-F', query]
+  const args = ['--no-config', '--json', '-F', '-e', query]
   if (glob?.trim()) args.push('-g', glob.trim())
+  args.push('--', '.')
   return new Promise((resolvePromise, reject) => {
-    execFile('rg', args, { cwd: root, timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err && !stdout) {
-        const code = (err as { code?: number | string }).code
-        if (code === 1 || code === '1') {
-          resolvePromise([])
+    execFile(
+      'rg',
+      args,
+      { cwd: root, timeout: 5_000, maxBuffer: 4 * 1024 * 1024, env: isolatedRipgrepEnv() },
+      (err, stdout, stderr) => {
+        if (err && !stdout) {
+          const code = (err as { code?: number | string }).code
+          if (code === 1 || code === '1') {
+            resolvePromise([])
+            return
+          }
+          reject(new Error(stderr || err.message))
           return
         }
-        reject(new Error(stderr || err.message))
-        return
-      }
-      const matches: CodeSearchMatch[] = []
-      for (const line of stdout.split(/\r?\n/)) {
-        if (!line.trim()) continue
-        try {
-          const event = JSON.parse(line) as {
-            type?: string
-            data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number }
+        const matches: CodeSearchMatch[] = []
+        for (const line of stdout.split(/\r?\n/)) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line) as {
+              type?: string
+              data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number }
+            }
+            if (event.type !== 'match' || !event.data?.path?.text || typeof event.data.line_number !== 'number') continue
+            matches.push({
+              filePath: toProjectRelative(root, resolve(root, event.data.path.text)),
+              line: event.data.line_number,
+              snippet: (event.data.lines?.text ?? '').trim()
+            })
+            if (matches.length >= limit) break
+          } catch {
+            // 忽略 rg JSON 流中的异常行,保留已解析结果。
           }
-          if (event.type !== 'match' || !event.data?.path?.text || typeof event.data.line_number !== 'number') continue
-          matches.push({
-            filePath: toProjectRelative(root, resolve(root, event.data.path.text)),
-            line: event.data.line_number,
-            snippet: (event.data.lines?.text ?? '').trim()
-          })
-          if (matches.length >= limit) break
-        } catch {
-          // 忽略 rg JSON 流中的异常行,保留已解析结果。
         }
+        resolvePromise(matches)
       }
-      resolvePromise(matches)
-    })
+    )
   })
+}
+
+function isolatedRipgrepEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.RIPGREP_CONFIG_PATH
+  return env
 }
 
 function fuzzyMatch(target: string, query: string): boolean {
@@ -699,7 +711,7 @@ function formatExecError(err: unknown): string {
 
 export function hasRipgrepBinary(): Promise<boolean> {
   return new Promise((resolvePromise) => {
-    execFile('rg', ['--version'], { timeout: 3000 }, (err) => {
+    execFile('rg', ['--no-config', '--version'], { timeout: 3000, env: isolatedRipgrepEnv() }, (err) => {
       if (err) console.warn('[caogen] rg 不可用,search_code 将使用内置降级搜索:', formatExecError(err))
       resolvePromise(!err)
     })

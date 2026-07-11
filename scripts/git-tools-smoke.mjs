@@ -25,6 +25,8 @@ const outDir = path.join(tempRoot, 'compiled')
 const projectDir = path.join(tempRoot, 'project')
 const successfulMergeDir = path.join(tempRoot, 'successful-merge-project')
 const conflictingMergeDir = path.join(tempRoot, 'conflicting-merge-project')
+const structuredReadFilterDir = path.join(tempRoot, 'structured-read-filter-project')
+const structuredReadSubmoduleDir = path.join(tempRoot, 'structured-read-submodule-project')
 
 try {
   execFileSync(
@@ -130,6 +132,66 @@ try {
   assert(diffJson.unstagedDiff.includes('+changed'), 'unstaged diff should include changed line')
   assert(!existsSync(externalDiffMarker), 'git_diff must not execute diff.external')
   assert(!existsSync(textconvMarker), 'git_diff must not execute a configured textconv command')
+
+  initRepo(structuredReadFilterDir)
+  commitFiles(structuredReadFilterDir, 'base', { 'tracked.txt': 'before\n' })
+  const filterMarker = path.join(structuredReadFilterDir, 'filter-ran.txt')
+  const filterPath = writeExecutable(
+    structuredReadFilterDir,
+    'unsafe-filter.sh',
+    `#!/bin/sh\ntouch ${JSON.stringify(filterMarker)}\ncat\n`
+  )
+  writeFileSync(path.join(structuredReadFilterDir, '.gitattributes'), '*.txt filter=caogen-audit\n', 'utf8')
+  writeFileSync(path.join(structuredReadFilterDir, 'tracked.txt'), 'after\n', 'utf8')
+  git(structuredReadFilterDir, ['config', 'filter.caogen-audit.clean', filterPath])
+  const unsafeStatus = gitHelper.gitStatus(structuredReadFilterDir)
+  assert(!unsafeStatus.ok, 'git_status must fail closed when a repository clean filter is configured')
+  assert(unsafeStatus.error.includes('Git filter'), `git_status should explain blocked filter: ${unsafeStatus.error}`)
+  assert(!existsSync(filterMarker), 'git_status must not execute a repository clean filter')
+
+  git(structuredReadFilterDir, ['config', '--unset', 'filter.caogen-audit.clean'])
+  git(structuredReadFilterDir, ['config', 'filter.caogen-audit.process', filterPath])
+  const unsafeDiff = gitHelper.gitDiff(structuredReadFilterDir, 'tracked.txt')
+  assert(!unsafeDiff.ok, 'git_diff must fail closed when a repository process filter is configured')
+  assert(unsafeDiff.error.includes('Git filter'), `git_diff should explain blocked filter: ${unsafeDiff.error}`)
+  assert(!existsSync(filterMarker), 'git_diff must not execute a repository process filter')
+
+  const submoduleSourceDir = path.join(tempRoot, 'unsafe-filter-submodule-source')
+  initRepo(submoduleSourceDir)
+  commitFiles(submoduleSourceDir, 'submodule base', {
+    '.gitattributes': '*.txt filter=caogen-submodule-audit\n',
+    'tracked.txt': 'before\n'
+  })
+  initRepo(structuredReadSubmoduleDir)
+  commitFiles(structuredReadSubmoduleDir, 'parent base', { 'parent.txt': 'parent\n' })
+  git(structuredReadSubmoduleDir, [
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    submoduleSourceDir,
+    'vendor/sub'
+  ])
+  git(structuredReadSubmoduleDir, ['commit', '-am', 'add submodule'])
+  const checkedOutSubmodule = path.join(structuredReadSubmoduleDir, 'vendor', 'sub')
+  const submoduleFilterMarker = path.join(tempRoot, 'submodule-filter-ran.txt')
+  const submoduleFilterPath = writeExecutable(
+    tempRoot,
+    'unsafe-submodule-filter.sh',
+    `#!/bin/sh\ntouch ${JSON.stringify(submoduleFilterMarker)}\ncat\n`
+  )
+  git(checkedOutSubmodule, ['config', 'filter.caogen-submodule-audit.clean', submoduleFilterPath])
+  writeFileSync(path.join(checkedOutSubmodule, 'tracked.txt'), 'after!\n', 'utf8')
+  const submoduleStatus = gitHelper.gitStatus(structuredReadSubmoduleDir)
+  assert(submoduleStatus.ok, `git_status should safely ignore submodule worktree dirt: ${JSON.stringify(submoduleStatus)}`)
+  assert(!existsSync(submoduleFilterMarker), 'git_status must not execute filters from a dirty submodule')
+  const submoduleDiff = gitHelper.gitDiff(structuredReadSubmoduleDir)
+  assert(submoduleDiff.ok, `git_diff should safely ignore submodule worktree dirt: ${JSON.stringify(submoduleDiff)}`)
+  assert(!existsSync(submoduleFilterMarker), 'git_diff must not execute filters from a dirty submodule')
+  git(structuredReadSubmoduleDir, ['branch', 'safe-feature'])
+  const submoduleMerge = gitHelper.gitMerge(structuredReadSubmoduleDir, 'safe-feature')
+  assert(submoduleMerge.ok, `git_merge preflight should safely ignore submodule worktree dirt: ${JSON.stringify(submoduleMerge)}`)
+  assert(!existsSync(submoduleFilterMarker), 'git_merge preflight must not execute filters from a dirty submodule')
 
   const noStageCommit = await gitTools.executeGitTool('git_commit', { message: 'should not commit unstaged' }, projectDir)
   assert(!noStageCommit.ok, 'commit should fail without staged changes')

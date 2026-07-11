@@ -189,10 +189,17 @@ check('gui tools are not accidentally read-only or edit auto-allow tools', () =>
 check('openai gate evaluates gui permission before bypassPermissions', () => {
   const text = source('src/main/openaiEngine.ts')
   const gateStart = text.indexOf('private async gateTool')
-  const guiDecision = text.indexOf('decideGuiPermission(name,', gateStart)
-  const bypass = text.indexOf("mode === 'bypassPermissions'", gateStart)
-  assert(gateStart !== -1 && guiDecision !== -1 && bypass !== -1, 'gateTool markers not found')
-  assert(guiDecision < bypass, 'GUI decision must run before bypassPermissions check')
+  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+  const gateBlock = text.slice(gateStart, preflightStart)
+  const preflightCall = gateBlock.indexOf('this.preflightToolGate(name, input, toolUseId)')
+  const guiAllow = gateBlock.indexOf("guiDecision.kind === 'allow'")
+  const guiAsk = gateBlock.indexOf("guiDecision.kind === 'ask'")
+  const bypass = gateBlock.indexOf("mode === 'bypassPermissions'")
+  const preflightGuiDecision = text.indexOf('decideGuiPermission(name,', preflightStart)
+  assert(gateStart !== -1 && preflightStart !== -1, 'OpenAI gate/preflight markers not found')
+  assert(preflightCall !== -1 && preflightGuiDecision !== -1, 'gateTool must invoke GUI-aware preflight')
+  assert(guiAllow !== -1 && guiAsk !== -1 && bypass !== -1, 'gateTool GUI/bypass markers not found')
+  assert(preflightCall < guiAllow && guiAllow < bypass && guiAsk < bypass, 'GUI decision must run before bypassPermissions check')
 })
 
 check('claude gate evaluates gui permission before bypassPermissions', () => {
@@ -207,9 +214,10 @@ check('claude gate evaluates gui permission before bypassPermissions', () => {
 check('openai gate evaluates policy denylist before gui permission allow or ask', () => {
   const text = source('src/main/openaiEngine.ts')
   const gateStart = text.indexOf('private async gateTool')
-  const policy = text.indexOf('const policy = evaluateToolPermission', gateStart)
+  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+  const policy = text.indexOf('const policy = evaluateToolPermission', preflightStart)
   const policyDeny = text.indexOf("policy.kind === 'deny'", policy)
-  const guiDecision = text.indexOf('decideGuiPermission(name,', gateStart)
+  const guiDecision = text.indexOf('decideGuiPermission(name,', preflightStart)
   assert(policy !== -1 && policyDeny !== -1 && guiDecision !== -1, 'gateTool policy/gui markers not found')
   assert(policy < guiDecision && policyDeny < guiDecision, 'policy denylist must run before GUI allow/ask path')
 })
@@ -217,11 +225,22 @@ check('openai gate evaluates policy denylist before gui permission allow or ask'
 check('openai gui gate decisions are audit logged', () => {
   const text = source('src/main/openaiEngine.ts')
   const gateStart = text.indexOf('private async gateTool')
-  const guiDecision = text.indexOf('const guiDecision = decideGuiPermission', gateStart)
-  const guiBlock = text.slice(guiDecision, text.indexOf("if (policy.kind === 'allow')", guiDecision))
-  assert(guiBlock.includes("this.auditGateDecision('deny'"), 'OpenAI GUI deny decision must be audited')
-  assert(guiBlock.includes("this.auditGateDecision('allow'"), 'OpenAI GUI allow decision must be audited')
-  assert(guiBlock.includes("this.auditGateDecision('ask'"), 'OpenAI GUI ask decision must be audited')
+  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+  const auditStart = text.indexOf('private auditGateDecision', preflightStart)
+  const gateBlock = text.slice(gateStart, preflightStart)
+  const preflightBlock = text.slice(preflightStart, auditStart)
+  assert(
+    preflightBlock.includes("guiDecision.kind === 'deny'") && preflightBlock.includes("this.auditGateDecision('deny'"),
+    'OpenAI GUI deny decision must be audited'
+  )
+  assert(
+    gateBlock.includes("guiDecision.kind === 'allow'") && gateBlock.includes("this.auditGateDecision('allow'"),
+    'OpenAI GUI allow decision must be audited'
+  )
+  assert(
+    gateBlock.includes("guiDecision.kind === 'ask'") && gateBlock.includes("this.auditGateDecision('ask'"),
+    'OpenAI GUI ask decision must be audited'
+  )
 })
 
 check('permission policy classifies browser_navigate file URLs as paths', () => {

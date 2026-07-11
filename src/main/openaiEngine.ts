@@ -57,7 +57,7 @@ import { isGuiToolName } from './agent/tools/gui-tools'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
-import { isReadOnlyToolCall } from './task/tool-idempotency'
+import { isDisabledModeInspectionToolCall, isReadOnlyToolCall } from './task/tool-idempotency'
 import {
   cancelEffectExecution,
   completeEffectExecution,
@@ -87,6 +87,8 @@ type EffectExecutionHandle = Awaited<ReturnType<typeof prepareEffectExecution>>
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
+const LOCAL_EXECUTION_DISABLED_MESSAGE =
+  'Agent 本地执行能力已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。当前仅保留最小项目检查能力，请先在设置 > 权限中确认启用。'
 
 /** Chat Completions 多轮历史消息(text 或 text+图片混合内容) */
 type ChatContent = string | Array<Record<string, unknown>>
@@ -429,49 +431,10 @@ export class OpenAIEngine implements Engine {
 
   /** 按 permissionMode 决定工具是否需要人工审批;需要则挂起等 UI 决定 */
   private async gateTool(name: string, input: Record<string, unknown>, toolUseId: string): Promise<{ allow: boolean; message?: string }> {
-    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
-    const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
-    if (policy.kind === 'deny') {
-      writeAuditLog(this.meta.cwd, {
-        action: 'deny',
-        source: 'policy',
-        toolName: name,
-        input,
-        message: policy.reason,
-        riskLevel: policy.risk.level,
-        riskReasons: policy.risk.reasons
-      })
-      return { allow: false, message: policy.reason }
-    }
+    const preflight = this.preflightToolGate(name, input, toolUseId)
+    if (!preflight.allow) return preflight
+    const { policy, readOnlyCall, guiDecision, idempotency } = preflight
 
-    const readOnlyCall = isReadOnlyToolCall(name, input)
-    if (settings.sandboxMode === 'disabled' && !readOnlyCall) {
-      const message = 'Agent 本地变更工具已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。请先在设置 > 权限中确认启用。'
-      this.auditGateDecision('deny', 'policy', name, input, message, policy.risk.level, policy.risk.reasons)
-      return { allow: false, message }
-    }
-    const guiDecision = decideGuiPermission(name, settings)
-    if (guiDecision.kind === 'deny') {
-      this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: false, message: guiDecision.reason }
-    }
-    const mode = this.meta.permissionMode
-    if (mode === 'plan' && !readOnlyCall) {
-      const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
-      this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
-      return { allow: false, message }
-    }
-    const idempotency = taskRuntimeRegistry.evaluateTool({
-      sessionId: this.meta.id,
-      cwd: this.meta.cwd,
-      toolName: name,
-      toolInput: input,
-      toolUseId
-    })
-    if (idempotency.kind === 'deny') {
-      this.auditGateDecision('deny', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: false, message: idempotency.reason }
-    }
     if (idempotency.kind === 'ask') {
       this.auditGateDecision('ask', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
       return this.requestToolPermission(
@@ -503,6 +466,7 @@ export class OpenAIEngine implements Engine {
       return { allow: true, message: policy.reason }
     }
 
+    const mode = this.meta.permissionMode
     if (mode === 'bypassPermissions') {
       this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
       return { allow: true }
@@ -518,6 +482,53 @@ export class OpenAIEngine implements Engine {
     // default 模式的写入/bash,以及 acceptEdits 模式的 bash → 人工审批
     this.auditGateDecision('ask', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
     return this.requestToolPermission(name, input, toolUseId, policy.reason)
+  }
+
+  private preflightToolGate(name: string, input: Record<string, unknown>, toolUseId: string) {
+    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+    const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
+    if (policy.kind === 'deny') {
+      writeAuditLog(this.meta.cwd, {
+        action: 'deny',
+        source: 'policy',
+        toolName: name,
+        input,
+        message: policy.reason,
+        riskLevel: policy.risk.level,
+        riskReasons: policy.risk.reasons
+      })
+      return { allow: false as const, message: policy.reason }
+    }
+
+    const readOnlyCall = isReadOnlyToolCall(name, input)
+    const disabledModeInspectionCall = isDisabledModeInspectionToolCall(name)
+    if (settings.sandboxMode === 'disabled' && !disabledModeInspectionCall) {
+      this.auditGateDecision('deny', 'policy', name, input, LOCAL_EXECUTION_DISABLED_MESSAGE, policy.risk.level, policy.risk.reasons)
+      return { allow: false as const, message: LOCAL_EXECUTION_DISABLED_MESSAGE }
+    }
+    const guiDecision = decideGuiPermission(name, settings)
+    if (guiDecision.kind === 'deny') {
+      this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: false as const, message: guiDecision.reason }
+    }
+    const mode = this.meta.permissionMode
+    if (mode === 'plan' && !readOnlyCall) {
+      const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
+      this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
+      return { allow: false as const, message }
+    }
+    const idempotency = taskRuntimeRegistry.evaluateTool({
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      toolName: name,
+      toolInput: input,
+      toolUseId
+    })
+    if (idempotency.kind === 'deny') {
+      this.auditGateDecision('deny', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
+      return { allow: false as const, message: idempotency.reason }
+    }
+    return { allow: true as const, policy, readOnlyCall, guiDecision, idempotency }
   }
 
   private auditGateDecision(
@@ -630,6 +641,10 @@ export class OpenAIEngine implements Engine {
     signal?: AbortSignal
   ): Promise<EffectAwareToolExecResult> {
     if (signal?.aborted) return { ok: false, output: '操作已中断，未进入权限判断' }
+    const preflight = this.preflightToolGate(name, input, toolUseId)
+    if (!preflight.allow) {
+      return { ok: false, output: `操作已被权限策略拒绝${preflight.message ? `:${preflight.message}` : ''}` }
+    }
     const effectInput: PrepareEffectExecutionInput = {
       sessionId: this.meta.id,
       cwd: this.meta.cwd,

@@ -27,11 +27,12 @@ const supportedTargets = [
   'wechat_miniprogram_api'
 ]
 const unsupportedRequiredTargets = requiredTargets.filter((target) => !supportedTargets.includes(target))
+class ConfigurationError extends Error {}
 mkdirSync(reportDir, { recursive: true })
 
 if (!enabled) {
   const report = {
-    status: required ? 'failed' : 'skipped',
+    status: required ? 'blocked' : 'skipped',
     required,
     reportDir,
     supportedTargets,
@@ -172,17 +173,36 @@ try {
   )
 
   const active = results.filter((item) => item.status !== 'skipped')
-  const missingRequiredTargets = requiredTargets
-    .filter((target) => supportedTargets.includes(target))
-    .filter((target) => results.find((item) => item.name === target)?.status !== 'pass')
-  const failures = []
-  for (const target of unsupportedRequiredTargets) failures.push(`unsupported required target ${target}`)
-  if (required && requiredTargets.length === 0) failures.push('required mode needs CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS to declare real targets')
-  if (required && active.length === 0) failures.push('required mode needs at least one active real-network check')
-  for (const target of missingRequiredTargets) failures.push(`required target ${target} did not pass`)
-  if (results.some((item) => item.status === 'fail')) failures.push('one or more active real-network checks failed')
+  const configurationBlockers = []
+  const executionFailures = []
+  for (const target of unsupportedRequiredTargets) configurationBlockers.push(`unsupported required target ${target}`)
+  if (required && requiredTargets.length === 0) {
+    configurationBlockers.push('required mode needs CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS to declare real targets')
+  }
+  if (required && active.length === 0) configurationBlockers.push('required mode needs at least one active real-network check')
+  for (const target of requiredTargets.filter((item) => supportedTargets.includes(item))) {
+    const result = results.find((item) => item.name === target)
+    if (!result || result.status === 'skipped') configurationBlockers.push(`required target ${target} is missing configuration`)
+    else if (result.status === 'blocked') configurationBlockers.push(`required target ${target} has invalid configuration`)
+    else if (result.status === 'fail') executionFailures.push(`required target ${target} failed after execution`)
+  }
+  if (results.some((item) => item.status === 'blocked')) {
+    configurationBlockers.push('one or more configured real-network checks have invalid prerequisites')
+  }
+  if (results.some((item) => item.status === 'fail')) {
+    executionFailures.push('one or more active real-network checks failed')
+  }
+  const failures = [...new Set([...configurationBlockers, ...executionFailures])]
+  const status =
+    executionFailures.length > 0
+      ? 'failed'
+      : configurationBlockers.length > 0
+        ? 'blocked'
+        : active.length === 0
+          ? 'skipped'
+          : 'passed'
   const report = {
-    status: failures.length > 0 ? 'failed' : active.length === 0 ? 'skipped' : 'passed',
+    status,
     required,
     supportedTargets,
     requiredTargets,
@@ -191,15 +211,19 @@ try {
     activeChecks: active.length,
     reportDir,
     results,
+    configurationBlockers,
+    executionFailures,
     failures
   }
   writeReport(report)
-  reportDeepTestStatus(deepStatus(report.status), {
+  const deepStatusReported = reportDeepTestStatus(deepStatus(report.status), {
     ...(report.status === 'passed' ? {} : { reason: report.failures.join('; ') || 'no active real-network checks' }),
     details: { reportDir, activeChecks: report.activeChecks }
   })
   console.log(JSON.stringify(report, null, 2))
-  if (failures.length > 0) process.exitCode = 1
+  if (report.status === 'failed' || (report.status === 'blocked' && required && !deepStatusReported)) {
+    process.exitCode = 1
+  }
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
 }
@@ -207,6 +231,7 @@ try {
 function deepStatus(status) {
   if (status === 'passed') return 'pass'
   if (status === 'skipped') return 'skip'
+  if (status === 'blocked') return 'blocked'
   return 'fail'
 }
 
@@ -220,7 +245,12 @@ async function runOptional(name, shouldRun, fn) {
     const evidence = await fn()
     results.push({ name, status: evidence.ok === true ? 'pass' : 'fail', durationMs: Date.now() - started, ...evidence })
   } catch (error) {
-    results.push({ name, status: 'fail', durationMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) })
+    results.push({
+      name,
+      status: error instanceof ConfigurationError ? 'blocked' : 'fail',
+      durationMs: Date.now() - started,
+      error: error instanceof Error ? error.message : String(error)
+    })
   }
 }
 
@@ -313,7 +343,7 @@ function normalizeRequestBody(value) {
 
 function requiredEnvText(value, name) {
   const text = value?.trim()
-  if (!text) throw new Error(`missing ${name}`)
+  if (!text) throw new ConfigurationError(`missing ${name}`)
   return text
 }
 
@@ -424,11 +454,11 @@ function assertRequiredPublicEndpoint(rawUrl, target) {
   try {
     url = new URL(rawUrl)
   } catch {
-    throw new Error(`${target} endpoint must be a valid URL`)
+    throw new ConfigurationError(`${target} endpoint must be a valid URL`)
   }
-  if (url.protocol !== 'https:') throw new Error(`${target} endpoint must use https in required mode`)
+  if (url.protocol !== 'https:') throw new ConfigurationError(`${target} endpoint must use https in required mode`)
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (!host) throw new Error(`${target} endpoint host is empty`)
+  if (!host) throw new ConfigurationError(`${target} endpoint host is empty`)
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
@@ -440,7 +470,7 @@ function assertRequiredPublicEndpoint(rawUrl, target) {
     /(^|[-.])mock([-.]|$)/i.test(host) ||
     isPrivateHost(host)
   ) {
-    throw new Error(`${target} endpoint must be a public real-network host, got ${host}`)
+    throw new ConfigurationError(`${target} endpoint must be a public real-network host, got ${host}`)
   }
 }
 

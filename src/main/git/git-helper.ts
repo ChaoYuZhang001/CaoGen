@@ -188,14 +188,20 @@ interface MergeRepositoryIdentity {
 }
 
 export function gitStatus(cwd: string): GitStatusOperationResult {
-  const repo = resolveRepo(cwd)
+  const repo = resolveStructuredReadRepo(cwd)
   if (repo.ok === false) return repo
+  const readBoundary = structuredReadEnvironment(repo.repoRoot)
+  if (readBoundary.ok === false) return readBoundary
 
-  const status = runGit(repo.repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  const status = runBoundGit(
+    repo.repoRoot,
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=dirty'],
+    readBoundary.env
+  )
   if (!status.ok) return failure('读取 Git 状态失败', repo.repoRoot, status.error)
 
   const files = parsePorcelainStatus(status.stdout)
-  const branch = readBranchInfo(repo.repoRoot)
+  const branch = readBranchInfo(repo.repoRoot, readBoundary.env)
   return {
     ok: true,
     repoRoot: repo.repoRoot,
@@ -213,8 +219,10 @@ export function gitStatus(cwd: string): GitStatusOperationResult {
 }
 
 export function gitDiff(cwd: string, rawFile?: string): GitDiffOperationResult {
-  const repo = resolveRepo(cwd)
+  const repo = resolveStructuredReadRepo(cwd)
   if (repo.ok === false) return repo
+  const readBoundary = structuredReadEnvironment(repo.repoRoot)
+  if (readBoundary.ok === false) return readBoundary
 
   let file: NormalizedFilePath | undefined
   if (rawFile) {
@@ -224,14 +232,22 @@ export function gitDiff(cwd: string, rawFile?: string): GitDiffOperationResult {
   }
 
   const pathArgs = file?.relative ? ['--', file.relative] : ['--']
-  const staged = runGit(repo.repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--cached', ...pathArgs])
+  const staged = runBoundGit(
+    repo.repoRoot,
+    ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--cached', ...pathArgs],
+    readBoundary.env
+  )
   if (!staged.ok) return failure('读取 staged diff 失败', repo.repoRoot, staged.error)
-  const unstaged = runGit(repo.repoRoot, ['diff', '--no-ext-diff', '--no-textconv', ...pathArgs])
+  const unstaged = runBoundGit(
+    repo.repoRoot,
+    ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', ...pathArgs],
+    readBoundary.env
+  )
   if (!unstaged.ok) return failure('读取 unstaged diff 失败', repo.repoRoot, unstaged.error)
 
   const untracked = rawFile
-    ? untrackedFiles(repo.repoRoot).filter((item) => item === file?.relative)
-    : untrackedFiles(repo.repoRoot)
+    ? untrackedFiles(repo.repoRoot, readBoundary.env).filter((item) => item === file?.relative)
+    : untrackedFiles(repo.repoRoot, readBoundary.env)
   const stagedClip = clip(staged.stdout)
   const unstagedClip = clip(unstaged.stdout)
 
@@ -587,6 +603,33 @@ function resolveRepo(cwd: string): { ok: true; repoRoot: string } | GitFailure {
   return { ok: true, repoRoot: resolve(result.stdout.trim()) }
 }
 
+function resolveStructuredReadRepo(cwd: string): { ok: true; repoRoot: string } | GitFailure {
+  if (typeof cwd !== 'string' || !cwd.trim()) return failure('cwd 不能为空')
+  const result = runIsolatedGit(cwd, ['rev-parse', '--show-toplevel'])
+  if (!result.ok) return failure('当前目录不是 Git 工作区', undefined, result.error)
+  try {
+    return { ok: true, repoRoot: realpathSync(resolve(result.stdout.trim())) }
+  } catch (error) {
+    return failure('Git 工作区身份无法确认', undefined, error instanceof Error ? error.message : String(error))
+  }
+}
+
+function structuredReadEnvironment(repoRoot: string): { ok: true; env: NodeJS.ProcessEnv } | GitFailure {
+  const env = isolatedLocalGitEnv(process.env)
+  const config = runBoundGit(repoRoot, ['config', '--includes', '-z', '--list'], env)
+  if (!config.ok) return failure('无法检查结构化 Git 读取配置', repoRoot, config.error)
+  const unsafeFilters = unsafeMergeConfigKeys(config.stdout).filter((key) =>
+    /^filter\..+\.(?:clean|smudge|process)$/i.test(key)
+  )
+  if (unsafeFilters.length > 0) {
+    return failure(
+      `仓库配置了可执行 Git filter，已阻止结构化读取: ${unsafeFilters.join(', ')}`,
+      repoRoot
+    )
+  }
+  return { ok: true, env }
+}
+
 function resolveMergeRepo(cwd: string): { ok: true; repoRoot: string } | GitFailure {
   if (typeof cwd !== 'string' || !cwd.trim()) return failure('cwd 不能为空')
   const result = runIsolatedGit(cwd, ['rev-parse', '--show-toplevel'])
@@ -801,7 +844,7 @@ function safeMergeWorktreeState(
   })
   const worktree = runBoundGit(
     repoRoot,
-    ['diff-files', '--quiet', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--'],
+    ['diff-files', '--quiet', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--'],
     env,
     { allowExitCodes: [0, 1] }
   )
@@ -1203,8 +1246,12 @@ function runCommand(
   return { ok: true, stdout, stderr, status }
 }
 
-function gitText(cwd: string, args: string[]): { ok: true; text: string } | { ok: false; error: string } {
-  const result = runGit(cwd, args)
+function gitText(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv
+): { ok: true; text: string } | { ok: false; error: string } {
+  const result = env ? runBoundGit(cwd, args, env) : runGit(cwd, args)
   if (!result.ok) return { ok: false, error: result.error ?? `git ${args.join(' ')} 失败` }
   return { ok: true, text: result.stdout.trim() }
 }
@@ -1215,11 +1262,13 @@ function commandError(command: string, args: string[], status: number | null, st
   return output ? `${command} ${args.join(' ')} failed (${code}): ${output}` : `${command} ${args.join(' ')} failed (${code})`
 }
 
-function readBranchInfo(repoRoot: string): BranchInfo {
-  const branch = gitText(repoRoot, ['symbolic-ref', '--short', '-q', 'HEAD'])
-  const fallback = gitText(repoRoot, ['rev-parse', '--short', 'HEAD'])
-  const upstream = gitText(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
-  const counts = upstream.ok ? gitText(repoRoot, ['rev-list', '--left-right', '--count', `${upstream.text}...HEAD`]) : undefined
+function readBranchInfo(repoRoot: string, env?: NodeJS.ProcessEnv): BranchInfo {
+  const branch = gitText(repoRoot, ['symbolic-ref', '--short', '-q', 'HEAD'], env)
+  const fallback = gitText(repoRoot, ['rev-parse', '--short', 'HEAD'], env)
+  const upstream = gitText(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], env)
+  const counts = upstream.ok
+    ? gitText(repoRoot, ['rev-list', '--left-right', '--count', `${upstream.text}...HEAD`], env)
+    : undefined
   const [behindRaw, aheadRaw] = counts?.ok ? counts.text.split(/\s+/) : ['0', '0']
   return {
     branch: branch.ok && branch.text ? branch.text : fallback.ok ? fallback.text : '',
@@ -1289,8 +1338,10 @@ function normalizeRepoPath(repoRoot: string, rawPath: string): ({ ok: true } & N
   return { ok: true, absolute: target, relative: rel }
 }
 
-function untrackedFiles(repoRoot: string): string[] {
-  const result = runGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'])
+function untrackedFiles(repoRoot: string, env?: NodeJS.ProcessEnv): string[] {
+  const result = env
+    ? runBoundGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'], env)
+    : runGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'])
   if (!result.ok) return []
   return result.stdout.split('\0').filter(Boolean)
 }
