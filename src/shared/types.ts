@@ -230,7 +230,7 @@ export interface EngineInfo {
   available: boolean
   /** 可选引擎不参与默认启动或发布门禁。 */
   optional?: boolean
-  /** 用户是否已经为该引擎配置了可用的 Provider/凭据。 */
+  /** 用户是否已保存候选 Provider 凭据；不代表端点协议兼容该引擎。 */
   configured?: boolean
 }
 

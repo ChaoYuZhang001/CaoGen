@@ -18,6 +18,7 @@ export function registerBuiltinEngines(): void {
     label: 'Claude Agent SDK',
     available: () => true,
     optional: true,
+    // Provider 目前没有 engine capability 字段；这里只表示存在凭据，不宣称端点兼容 Claude。
     configured: () => listProviders().some((provider) => provider.hasToken),
     create: (
       meta: SessionMeta,

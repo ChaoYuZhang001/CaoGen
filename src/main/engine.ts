@@ -63,7 +63,7 @@ export interface EngineFactory {
   available(): boolean
   /** 可选引擎不参与默认启动或发布门禁。 */
   optional?: boolean
-  /** 当前是否已有用户配置；探测失败时按未配置处理，不阻塞引擎列表。 */
+  /** 当前是否存在用户凭据；不代表端点协议兼容，探测失败也不阻塞引擎列表。 */
   configured?(): boolean
   create(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string, initialEventSeq?: number): Engine
 }
