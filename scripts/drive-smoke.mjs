@@ -97,11 +97,25 @@ try {
     }
   ]
 
+  const missingEngineRoute = sessionRouting.resolveSessionModelRoute({
+    enabled: true,
+    currentModel: 'auto',
+    providerId: 'deepseek-official',
+    providers,
+    payload: { text: 'do not infer an engine', images: [] },
+    strategy: 'balanced',
+    sessionCostUsd: 0,
+    settingsBudgetUsd: spark.budgetUsdPerSession,
+    driveMode: 'spark'
+  })
+  assert(missingEngineRoute.kind === 'disabled', 'Drive routing must not infer Claude when engine is missing')
+
   const sparkRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
+    engine: 'claude',
     payload: { text: 'summarize this README quickly', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
@@ -118,6 +132,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
+    engine: 'claude',
     payload: { text: 'review and implement production database migration code', images: [] },
     strategy: coreSpeed.schedulerStrategy,
     sessionCostUsd: 0,
@@ -137,6 +152,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
+    engine: 'claude',
     payload: { text: 'review and implement production database migration release plan', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
@@ -154,6 +170,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
+    engine: 'claude',
     payload: { text: 'decompose full-stack launch work into DAG, implement, review, test, and summarize delivery', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
