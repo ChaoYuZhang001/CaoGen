@@ -33,12 +33,13 @@ try {
   const safePath = requireFromSmoke(findCompiled('safe-project-path.js'))
   const permission = requireFromSmoke(findCompiled('tool-permission.js'))
   const audit = requireFromSmoke(findCompiled('audit-log.js'))
+  const idempotency = requireFromSmoke(findCompiled('tool-idempotency.js'))
 
   await verifyLocalExecution(localExecution)
   await verifySafeProjectPath(safePath, localExecution)
   verifyPermission(permission)
   verifyAudit(audit)
-  verifyOpenAiToolsBridge()
+  verifyOpenAiToolsBridge(idempotency)
   verifyClaudePermissionBridge()
   verifySecuritySettingsUi()
   verifyLocalExecutionBoundary()
@@ -56,6 +57,7 @@ function compileModules() {
       'src/main/sandbox/local-execution.ts',
       'src/main/permission/tool-permission.ts',
       'src/main/permission/audit-log.ts',
+      'src/main/task/tool-idempotency.ts',
       '--outDir',
       outDir,
       '--target',
@@ -432,7 +434,7 @@ function verifyAudit(audit) {
   assert(sanitizedRecord.inputSummary.includes('path=src/private.txt'), 'write audit should retain safe target metadata')
 }
 
-function verifyOpenAiToolsBridge() {
+function verifyOpenAiToolsBridge(idempotency) {
   const text = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
   assert(text.includes("options.sandboxMode ?? 'restrictedLocal'"), 'bash must default to restricted local execution')
   assert(text.includes('runLocalCommand'), 'bash must call local command wrapper')
@@ -443,9 +445,27 @@ function verifyOpenAiToolsBridge() {
   }
   const engine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
   assert(
-    engine.includes("settings.sandboxMode === 'disabled' && !readOnlyCall"),
+    engine.includes("settings.sandboxMode === 'disabled' && !disabledModeInspectionCall"),
     'OpenAI engine must block every mutating Agent tool while legacy local execution awaits confirmation'
   )
+  const disabledAllowed = [...idempotency.OPENAI_DISABLED_MODE_INSPECTION_TOOLS].sort()
+  assert(
+    JSON.stringify(disabledAllowed) === JSON.stringify([
+      'find_file',
+      'list_dir',
+      'read_file',
+      'search_code',
+      'search_symbol',
+      'view'
+    ]),
+    `disabled OpenAI mode must expose only pure project reads: ${disabledAllowed.join(', ')}`
+  )
+  for (const blocked of ['git_status', 'git_diff', 'run_skill', 'browser_automation_status', 'genesis_orchestrate']) {
+    assert(
+      !idempotency.isDisabledModeInspectionToolCall(blocked),
+      `disabled OpenAI mode must not classify ${blocked} as a pure read`
+    )
+  }
 }
 
 function verifyLocalExecutionBoundary() {
@@ -477,11 +497,29 @@ function verifyClaudePermissionBridge() {
     'evaluateToolPermission',
     'writeAuditLog',
     'authorizeClaudeTool',
-    "settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)",
     "settings.sandboxMode !== 'disabled'"
   ]) {
     assert(text.includes(marker), `Claude permission bridge missing ${marker}`)
   }
+  const hookStart = text.indexOf('PreToolUse: [')
+  const requestPermissionStart = text.indexOf('private requestPermission(')
+  assert(hookStart >= 0 && requestPermissionStart > hookStart, 'Claude permission bridge regions missing')
+  assert(
+    text.slice(hookStart, requestPermissionStart).includes(
+      "liveSettings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)"
+    ),
+    'Claude PreToolUse must independently enforce the disabled migration gate'
+  )
+  assert(
+    text.slice(requestPermissionStart).includes(
+      "settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)"
+    ),
+    'Claude canUseTool callback must retain the disabled migration gate'
+  )
+  assert(
+    text.includes("{ settingSources: [], strictMcpConfig: true }"),
+    'disabled Claude query must isolate filesystem settings and MCP configuration'
+  )
 }
 
 function verifySecuritySettingsUi() {

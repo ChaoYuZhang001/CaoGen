@@ -173,7 +173,9 @@ function mockQuery({ prompt, options }) {
     model: options && options.model,
     resume: options && options.resume,
     resumeSessionAt: options && options.resumeSessionAt,
-    agents: options && options.agents ? Object.keys(options.agents) : []
+    agents: options && options.agents ? Object.keys(options.agents) : [],
+    settingSources: options && options.settingSources,
+    strictMcpConfig: options && options.strictMcpConfig
   })
   return {
     async *[Symbol.asyncIterator]() {
@@ -464,6 +466,162 @@ async function main() {
     assert(Math.abs(meta.costUsd - 0.0123) < 1e-9, `费用未入 meta:${meta.costUsd}`)
     eq(meta.status, 'idle', '轮后状态')
     s.dispose()
+  })
+
+  await test('P0 Claude disabled:SDK 自动放行与原生设置均不得绕过迁移闸门', async () => {
+    const previousSettings = { ...settingsMod.getSettings() }
+    settingsMod.updateSettings({ sandboxMode: 'disabled', allowedTools: 'Write' })
+    const { s } = newSession('prov-b', 'm-b')
+    try {
+      await s.start()
+      await waitFor(() => s.query, 2000, '等待 disabled Claude query')
+      const queryOptions = sdkLog.at(-1)
+      assert(Array.isArray(queryOptions.settingSources), 'disabled Claude 必须显式配置 settings isolation')
+      eq(queryOptions.settingSources.length, 0, 'disabled Claude 不得加载 user/project/local settings')
+      eq(queryOptions.strictMcpConfig, true, 'disabled Claude 不得从文件设置启动 MCP server')
+
+      const hooks = s.buildHooks(settingsMod.getSettings(), s.generation)
+      const preToolUse = hooks.PreToolUse?.[0]?.hooks?.[0]
+      assert(typeof preToolUse === 'function', '测试必须取得 Claude PreToolUse hook')
+      const hookDecision = await preToolUse({
+        tool_name: 'Write',
+        tool_input: { file_path: 'must-not-write.txt', content: 'blocked\n' },
+        tool_use_id: 'disabled-auto-allow-write'
+      }, 'disabled-auto-allow-write')
+      eq(
+        hookDecision?.hookSpecificOutput?.permissionDecision,
+        'deny',
+        'allowedTools 自动放行路径仍必须被 PreToolUse 拒绝'
+      )
+
+      const callbackDecision = await s.requestPermission(
+        'Write',
+        { file_path: 'must-not-write.txt', content: 'blocked\n' },
+        { toolUseID: 'disabled-callback-write' }
+      )
+      eq(callbackDecision.behavior, 'deny', 'canUseTool 路径也必须保留 disabled 拒绝')
+
+      const readDecision = await preToolUse({
+        tool_name: 'Read',
+        tool_input: { file_path: 'README.md' },
+        tool_use_id: 'disabled-read'
+      }, 'disabled-read')
+      eq(readDecision.continue, true, 'disabled 迁移态仍应允许 Claude 纯读取工具')
+
+      settingsMod.updateSettings({ sandboxMode: 'restrictedLocal' })
+      const originalEnsureExecuting = s.ensureClaudeEffectExecuting.bind(s)
+      s.ensureClaudeEffectExecuting = async () => undefined
+      try {
+        const enabledDecision = await preToolUse({
+          tool_name: 'Write',
+          tool_input: { file_path: 'enabled.txt', content: 'allowed by live setting\n' },
+          tool_use_id: 'enabled-existing-query-write'
+        }, 'enabled-existing-query-write')
+        eq(enabledDecision.continue, true, '用户确认启用后，现有 Claude query 不得继续使用旧 disabled 快照')
+      } finally {
+        s.ensureClaudeEffectExecuting = originalEnsureExecuting
+      }
+
+      const auditPath = path.join(tmpRoot, '.caogen', 'audit.log')
+      const auditRecords = fs.readFileSync(auditPath, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line))
+      assert(
+        auditRecords.some((record) => record.action === 'deny' && record.toolName === 'write_file'),
+        'PreToolUse disabled 拒绝必须写入审计日志'
+      )
+    } finally {
+      await s.dispose()
+      settingsMod.updateSettings(previousSettings)
+    }
+  })
+
+  await test('P0 OpenAI disabled/plan:硬拒绝必须先于效果预检', async () => {
+    const previousSettings = { ...settingsMod.getSettings() }
+    settingsMod.updateSettings({ sandboxMode: 'disabled' })
+    const { openAIEngineFactory } = M('main/openaiEngine.js')
+    const taskRun = M('main/task/task-run.js')
+    const runtime = M('main/task/task-runtime-registry.js').taskRuntimeRegistry
+    const sourceDir = path.join(tmpRoot, 'disabled-openai-submodule-source')
+    const repoDir = path.join(tmpRoot, 'disabled-openai-preflight')
+    fs.mkdirSync(sourceDir, { recursive: true })
+    fs.mkdirSync(repoDir, { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: sourceDir })
+    execFileSync('git', ['config', 'user.email', 'disabled@example.test'], { cwd: sourceDir })
+    execFileSync('git', ['config', 'user.name', 'Disabled Gate Test'], { cwd: sourceDir })
+    fs.writeFileSync(path.join(sourceDir, '.gitattributes'), '*.txt filter=caogen-disabled\n')
+    fs.writeFileSync(path.join(sourceDir, 'tracked.txt'), 'before\n')
+    execFileSync('git', ['add', '.gitattributes', 'tracked.txt'], { cwd: sourceDir })
+    execFileSync('git', ['commit', '-m', 'submodule base'], { cwd: sourceDir })
+
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoDir })
+    execFileSync('git', ['config', 'user.email', 'disabled@example.test'], { cwd: repoDir })
+    execFileSync('git', ['config', 'user.name', 'Disabled Gate Test'], { cwd: repoDir })
+    fs.writeFileSync(path.join(repoDir, 'parent.txt'), 'parent\n')
+    execFileSync('git', ['add', 'parent.txt'], { cwd: repoDir })
+    execFileSync('git', ['commit', '-m', 'parent base'], { cwd: repoDir })
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', sourceDir, 'vendor/sub'], { cwd: repoDir })
+    execFileSync('git', ['commit', '-am', 'add submodule'], { cwd: repoDir })
+    execFileSync('git', ['branch', 'feature'], { cwd: repoDir })
+
+    const filterMarker = path.join(tmpRoot, 'disabled-openai-filter-ran.txt')
+    const filterScript = path.join(tmpRoot, 'disabled-openai-filter.sh')
+    fs.writeFileSync(filterScript, `#!/bin/sh\ntouch ${JSON.stringify(filterMarker)}\ncat\n`)
+    fs.chmodSync(filterScript, 0o755)
+    const checkedOutSubmodule = path.join(repoDir, 'vendor', 'sub')
+    execFileSync('git', ['config', 'filter.caogen-disabled.clean', filterScript], { cwd: checkedOutSubmodule })
+    fs.writeFileSync(path.join(checkedOutSubmodule, 'tracked.txt'), 'after!\n')
+
+    const effectReconciler = M('main/task/effect-reconciler.js')
+    const descriptor = await effectReconciler.buildEffectDescriptor({
+      toolName: 'git_merge',
+      toolInput: { branch: 'feature' },
+      cwd: repoDir
+    })
+    eq(descriptor.target.kind, 'git_merge', 'git_merge effect descriptor should tolerate dirty submodule worktrees')
+    assert(!fs.existsSync(filterMarker), 'git_merge effect descriptor must not execute a dirty submodule clean filter')
+
+    const meta = AS.newSessionMeta({
+      cwd: repoDir,
+      model: 'm-b',
+      providerId: 'prov-b',
+      engine: 'openai',
+      permissionMode: 'bypassPermissions',
+      title: 'disabled OpenAI boundary'
+    })
+    runtime.set(meta.id, taskRun.createTaskRun({ id: 'disabled-openai-run', sessionId: meta.id, taskId: meta.id }))
+    const engine = openAIEngineFactory.create(meta, () => undefined)
+    try {
+      const pureRead = await engine.gateTool('read_file', { path: 'README.md' }, 'disabled-read-file')
+      assert(pureRead.allow, `disabled OpenAI should allow minimal project inspection: ${pureRead.message ?? ''}`)
+      for (const toolName of ['git_status', 'git_diff', 'run_skill', 'browser_automation_status', 'genesis_orchestrate']) {
+        const decision = await engine.gateTool(toolName, {}, `disabled-${toolName}`)
+        assert(!decision.allow, `disabled OpenAI must deny ${toolName} even in bypassPermissions mode`)
+      }
+      const disabledMerge = await engine.executeToolWithPermission(
+        'git_merge',
+        { branch: 'feature' },
+        'disabled-git-merge'
+      )
+      assert(!disabledMerge.ok, 'disabled OpenAI must reject git_merge')
+      assert(
+        disabledMerge.output.includes('Agent 本地执行能力已禁用'),
+        `disabled git_merge must be rejected before effect preparation: ${disabledMerge.output}`
+      )
+      assert(!fs.existsSync(filterMarker), 'disabled git_merge must not execute a dirty submodule clean filter')
+
+      settingsMod.updateSettings({ sandboxMode: 'restrictedLocal' })
+      meta.permissionMode = 'plan'
+      const planMerge = await engine.executeToolWithPermission('git_merge', { branch: 'feature' }, 'plan-git-merge')
+      assert(!planMerge.ok, 'plan mode must reject git_merge')
+      assert(
+        planMerge.output.includes('规划模式'),
+        `plan git_merge must be rejected before effect preparation: ${planMerge.output}`
+      )
+      assert(!fs.existsSync(filterMarker), 'plan git_merge must not execute a dirty submodule clean filter')
+    } finally {
+      runtime.delete(meta.id)
+      await engine.dispose()
+      settingsMod.updateSettings(previousSettings)
+    }
   })
 
   await test('P0 effect permission:Claude close 必须等待审批结算且旧代不得放行', async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -108,8 +108,33 @@ try {
   const utilDeps = indexer.dependencies('src/util.ts')
   assert(utilDeps.dependents.includes('src/math.ts'), 'util.ts should have reverse dependent math.ts')
 
-  const codeMatches = await indexer.searchCode('VERSION', 'src/**/*.ts', 10)
-  assert(codeMatches.some((item) => item.filePath === 'src/util.ts'), 'search_code should find VERSION')
+  const ripgrepConfigPath = path.join(tempRoot, 'malicious-ripgreprc')
+  const ripgrepPreprocessorPath = path.join(tempRoot, 'ripgrep-preprocessor.sh')
+  const ripgrepMarkerPath = path.join(tempRoot, 'ripgrep-preprocessor-ran')
+  writeFileSync(
+    ripgrepPreprocessorPath,
+    `#!/bin/sh\ntouch ${JSON.stringify(ripgrepMarkerPath)}\ncat\n`,
+    'utf8'
+  )
+  chmodSync(ripgrepPreprocessorPath, 0o700)
+  writeFileSync(
+    ripgrepConfigPath,
+    [`--pre=${ripgrepPreprocessorPath}`, '--pre-glob=*.ts', 'x', '.'].join('\n') + '\n',
+    'utf8'
+  )
+  const previousRipgrepConfigPath = process.env.RIPGREP_CONFIG_PATH
+  process.env.RIPGREP_CONFIG_PATH = ripgrepConfigPath
+  try {
+    const hasRipgrep = await indexerModule.hasRipgrepBinary()
+    const codeMatches = await indexer.searchCode('VERSION', 'src/**/*.ts', 10)
+    assert(codeMatches.some((item) => item.filePath === 'src/util.ts'), 'search_code should find VERSION')
+    if (hasRipgrep) {
+      assert(!existsSync(ripgrepMarkerPath), 'search_code must not execute commands from RIPGREP_CONFIG_PATH')
+    }
+  } finally {
+    if (previousRipgrepConfigPath === undefined) delete process.env.RIPGREP_CONFIG_PATH
+    else process.env.RIPGREP_CONFIG_PATH = previousRipgrepConfigPath
+  }
 
   writeFileSync(
     path.join(projectDir, 'src/util.ts'),

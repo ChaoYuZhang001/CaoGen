@@ -132,6 +132,8 @@ interface PendingPermission {
 
 const CLAUDE_READ_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'WebFetch'])
 const CLAUDE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const LOCAL_EXECUTION_DISABLED_MESSAGE =
+  'Agent 本地执行能力已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。当前仅保留最小项目检查能力，请先在设置 > 权限中确认启用。'
 
 function normalizeClaudeToolName(toolName: string): string {
   if (toolName === 'Bash') return 'bash'
@@ -484,6 +486,35 @@ export class AgentSession implements Engine {
                     }
                   }
                 }
+                const liveSettings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+                if (liveSettings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)) {
+                  const policyToolName = normalizeClaudeToolName(toolName)
+                  const policyInput = normalizeClaudeToolInput(toolName, toolInput)
+                  const policy = evaluateToolPermission(liveSettings, {
+                    toolName: policyToolName,
+                    input: policyInput,
+                    cwd: this.meta.cwd
+                  })
+                  writeAuditLog(this.meta.cwd, {
+                    action: 'deny',
+                    source: 'policy',
+                    toolName: policyToolName,
+                    input: policyInput,
+                    message: LOCAL_EXECUTION_DISABLED_MESSAGE,
+                    riskLevel: policy.risk.level,
+                    riskReasons: policy.risk.reasons
+                  })
+                  if (toolUseId) {
+                    await this.cancelClaudeEffect(toolUseId, LOCAL_EXECUTION_DISABLED_MESSAGE).catch(() => undefined)
+                  }
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse',
+                      permissionDecision: 'deny',
+                      permissionDecisionReason: LOCAL_EXECUTION_DISABLED_MESSAGE
+                    }
+                  }
+                }
                 try {
                   await this.ensureClaudeEffectExecuting(toolName, toolInput, toolUseId)
                   if (!this.permissionSettlementIsCurrent(generation)) {
@@ -632,6 +663,8 @@ export class AgentSession implements Engine {
           enableFileCheckpointing: true,
           env: this.buildEnv(),
           ...(execPath ? { pathToClaudeCodeExecutable: execPath } : {}),
+          // 历史 strict Docker 迁移态必须隔离文件设置，防止原生 hooks/statusLine/MCP 在宿主机执行。
+          ...(settings.sandboxMode === 'disabled' ? { settingSources: [], strictMcpConfig: true } : {}),
           // 人设 + 项目记忆:preset 之上追加
           systemPrompt: append
             ? { type: 'preset', preset: 'claude_code', append }
@@ -1887,9 +1920,8 @@ export class AgentSession implements Engine {
       return Promise.resolve({ behavior: 'deny', message: policy.reason })
     }
     if (settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)) {
-      const message = 'Agent 本地变更工具已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。请先在设置 > 权限中确认启用。'
-      audit('deny', 'policy', message)
-      return Promise.resolve({ behavior: 'deny', message })
+      audit('deny', 'policy', LOCAL_EXECUTION_DISABLED_MESSAGE)
+      return Promise.resolve({ behavior: 'deny', message: LOCAL_EXECUTION_DISABLED_MESSAGE })
     }
     const guiDecision = decideGuiPermission(policyToolName, settings)
     if (guiDecision.kind === 'deny') {

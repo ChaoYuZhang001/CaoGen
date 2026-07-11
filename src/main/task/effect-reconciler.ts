@@ -798,7 +798,7 @@ async function gitWorktreeClean(repoRoot: string): Promise<{ clean: boolean; rea
     gitRun(repoRoot, ['diff-index', '--cached', '--quiet', 'HEAD', '--'], [0, 1]),
     gitRun(
       repoRoot,
-      ['diff-files', '--quiet', '--no-ext-diff', '--no-textconv', '--ignore-submodules=none', '--'],
+      ['diff-files', '--quiet', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--'],
       [0, 1]
     ),
     gitRun(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.']),

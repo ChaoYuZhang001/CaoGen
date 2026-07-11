@@ -148,6 +148,11 @@ async function runSmoke() {
     })
     assertRequiredExternalBlocked('china-real-required', tempRoot, fixturePath, 'chinaRealNetwork smoke')
     assertRequiredExternalBlocked('china-parity-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
+    assertRequiredExternalBlocked('china-real-partial-required', tempRoot, fixturePath, 'chinaRealNetwork smoke')
+    assertRequiredExternalBlocked('china-parity-missing-key-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
+    assertRequiredExternalBlocked('china-parity-invalid-gap-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
+    assertRequiredExternalBlocked('china-parity-missing-baseline-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
+    assertRequiredExternalBlocked('china-parity-missing-china-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
     assertStandaloneRequiredFailure('china real network', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
@@ -157,6 +162,21 @@ async function runSmoke() {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
       env: requiredExternalEnv('china-parity-required')
+    })
+    assertStandaloneRequiredFailure('china real network partial configuration', {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
+      env: requiredExternalEnv('china-real-partial-required')
+    })
+    assertStandaloneRequiredFailure('china parity missing provider credential', {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
+      env: requiredExternalEnv('china-parity-missing-key-required')
+    })
+    assertStandaloneRequiredFailure('china parity invalid max gap', {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
+      env: requiredExternalEnv('china-parity-invalid-gap-required')
     })
 
     console.log('deep-test four-state smoke: pass')
@@ -236,7 +256,7 @@ function scenarioCommands(scenario, fixturePath) {
   }
   if (scenario === 'skip-then-exit-one') return [fixture('skip then exit one', 'skip', 'optional', 1)]
   if (scenario === 'signal-crash') return [fixture('signal crash', 'signal-crash', 'optional')]
-  if (scenario === 'china-real-required') {
+  if (scenario === 'china-real-required' || scenario === 'china-real-partial-required') {
     return [{
       name: 'chinaRealNetwork smoke',
       command: process.execPath,
@@ -247,7 +267,7 @@ function scenarioCommands(scenario, fixturePath) {
       statusReporter: 'scripts/china-real-network-smoke.mjs'
     }]
   }
-  if (scenario === 'china-parity-required') {
+  if (scenario.startsWith('china-parity-') && scenario.endsWith('-required')) {
     return [{
       name: 'chinaToolCallParity smoke',
       command: process.execPath,
@@ -345,7 +365,69 @@ function requiredExternalEnv(scenario) {
       CAOGEN_CHINA_PARITY_PROVIDERS: ''
     }
   }
+  if (scenario === 'china-real-partial-required') {
+    return {
+      CAOGEN_CHINA_REAL_NETWORK: '1',
+      CAOGEN_CHINA_REAL_NETWORK_REQUIRED: '1',
+      CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS: 'feishu',
+      FEISHU_WEBHOOK_URL: '',
+      FEISHU_WEBHOOK_SECRET: '',
+      DINGTALK_WEBHOOK_URL: '',
+      DINGTALK_WEBHOOK_SECRET: '',
+      WECOM_WEBHOOK_URL: '',
+      GITEE_ACCESS_TOKEN: '',
+      GITEE_OWNER: '',
+      GITEE_REPO: '',
+      GITEE_PR_HEAD: '',
+      GITEE_PR_BASE: '',
+      ALIYUN_YUNXIAO_API_URL: '',
+      ALIYUN_DEVOPS_CHECK_URL: '',
+      TENCENT_CODING_API_URL: '',
+      TENCENT_CODING_CHECK_URL: '',
+      WECHAT_MINIPROGRAM_API_URL: '',
+      WECHAT_MINIPROGRAM_CHECK_URL: ''
+    }
+  }
+  if (scenario === 'china-parity-missing-key-required') {
+    return parityRequiredEnv([
+      parityProvider('baseline'),
+      { ...parityProvider('china'), apiKey: '' }
+    ])
+  }
+  if (scenario === 'china-parity-invalid-gap-required') {
+    return {
+      ...parityRequiredEnv([parityProvider('baseline'), parityProvider('china')]),
+      CAOGEN_CHINA_PARITY_MAX_GAP: 'not-a-number'
+    }
+  }
+  if (scenario === 'china-parity-missing-baseline-required') {
+    return parityRequiredEnv([parityProvider('china')])
+  }
+  if (scenario === 'china-parity-missing-china-required') {
+    return parityRequiredEnv([parityProvider('baseline')])
+  }
   return {}
+}
+
+function parityRequiredEnv(providers) {
+  return {
+    CAOGEN_CHINA_TOOL_CALL_PARITY: '1',
+    CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED: '1',
+    CAOGEN_CHINA_PARITY_PROVIDERS: JSON.stringify(providers),
+    CAOGEN_CHINA_PARITY_MAX_GAP: '0'
+  }
+}
+
+function parityProvider(group) {
+  return {
+    id: `${group}-fixture`,
+    name: `${group} fixture`,
+    group,
+    apiFormat: 'openai-compatible',
+    baseUrl: group === 'baseline' ? 'https://api.openai.com/v1' : 'https://api.deepseek.com/v1',
+    model: group === 'baseline' ? 'gpt-fixture' : 'deepseek-fixture',
+    apiKey: 'fixture-key'
+  }
 }
 
 function electronSpec() {

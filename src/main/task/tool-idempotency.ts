@@ -22,6 +22,18 @@ export const OPENAI_PERMISSION_READ_ONLY_TOOLS = new Set([
   'git_diff'
 ])
 
+// Legacy strict-Docker migration is a fail-closed confirmation state, not the
+// normal plan-mode readonly surface. Keep only product-controlled project
+// inspection paths; exclude Git, skills, browser, MCP and orchestration entrypoints.
+export const OPENAI_DISABLED_MODE_INSPECTION_TOOLS = new Set([
+  'read_file',
+  'view',
+  'list_dir',
+  'search_symbol',
+  'search_code',
+  'find_file'
+])
+
 const EFFECT_FREE_TOOLS = new Set([
   ...OPENAI_PERMISSION_READ_ONLY_TOOLS,
   'web_fetch',
@@ -72,6 +84,10 @@ export function isReadOnlyToolCall(toolName: string, toolInput: unknown): boolea
     return true
   }
   return false
+}
+
+export function isDisabledModeInspectionToolCall(toolName: string): boolean {
+  return OPENAI_DISABLED_MODE_INSPECTION_TOOLS.has(normalizeToolName(toolName))
 }
 
 export function requiresDuplicateConfirmation(toolName: string, toolInput: unknown): boolean {
