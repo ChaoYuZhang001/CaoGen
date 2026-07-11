@@ -496,11 +496,11 @@ export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
   lerpRotation(refs.waistRoll, 0, 0, -swing * 0.025)
   lerpRotation(refs.head, 0.045, -swing * 0.018, -swing * 0.012)
 
-  // 上肢与对侧腿同步,肘部保持类似人类步行的轻度屈曲。
+  // 上肢只沿肩部俯仰轴与对侧腿同步;肘部保持接近伸直的自然松弛角度。
   lerpRotation(refs.armL, swing * 0.34, 0, 0.025)
   lerpRotation(refs.armR, -swing * 0.34, 0, -0.025)
-  lerpRotation(refs.elbowL, -0.18 - bendL * 0.12, 0, 0)
-  lerpRotation(refs.elbowR, -0.18 - bendR * 0.12, 0, 0)
+  lerpRotation(refs.elbowL, -0.08 - bendL * 0.05, 0, 0)
+  lerpRotation(refs.elbowR, -0.08 - bendR * 0.05, 0, 0)
   lerpRotation(refs.wristL, swing * -0.035, 0, 0)
   lerpRotation(refs.wristR, swing * 0.035, 0, 0)
 

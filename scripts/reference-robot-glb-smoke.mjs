@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Matrix4, Quaternion, Vector3 } from 'three'
 
 const GLB_MAGIC = 0x46546c67
 const GLB_VERSION = 2
@@ -24,6 +25,22 @@ const REQUIRED_GAIT_CONTROL_NODE_NAMES = [
   'right_ankle_pitch_link',
   'left_ankle_roll_link',
   'right_ankle_roll_link'
+]
+const REQUIRED_NEUTRAL_ARM_POSES = [
+  {
+    side: 'left',
+    shoulderName: 'left_arm',
+    elbowName: 'left_elbow_link',
+    wristName: 'left_wrist_roll_link',
+    handNames: ['official_left_rubber_hand', 'official_left_wrist_roll_rubber_hand']
+  },
+  {
+    side: 'right',
+    shoulderName: 'right_arm',
+    elbowName: 'right_elbow_link',
+    wristName: 'right_wrist_roll_link',
+    handNames: ['official_right_rubber_hand', 'official_right_wrist_roll_rubber_hand']
+  }
 ]
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
   {
@@ -269,6 +286,8 @@ function inspectDocument(document) {
     }
   }
 
+  const neutralArmPoses = inspectNeutralArmPoses(nodes, nodeEntries, failures)
+
   const sourceRootMatches = nodeEntries.filter((node) => node.name === SOURCE_ROOT_NODE_NAME)
   const sourceRoot = sourceRootMatches.length === 1 ? sourceRootMatches[0] : null
   if (sourceRootMatches.length !== 1) {
@@ -419,10 +438,136 @@ function inspectDocument(document) {
     animationRootNodes,
     missingAnimationRootNames,
     gaitControlNodes,
+    neutralArmPoses,
     officialMeshBindings,
     materialEntries,
     referencedMaterials
   }
+}
+
+function inspectNeutralArmPoses(nodes, nodeEntries, failures) {
+  let worldMatrices
+  try {
+    worldMatrices = computeNodeWorldMatrices(nodes)
+  } catch (error) {
+    failures.push(`cannot resolve neutral arm world transforms: ${errorMessage(error)}`)
+    return []
+  }
+
+  const expectedElbowPose = (80 * Math.PI) / 180
+  const poses = []
+  for (const contract of REQUIRED_NEUTRAL_ARM_POSES) {
+    const shoulder = findUniqueNode(nodeEntries, contract.shoulderName)
+    const elbow = findUniqueNode(nodeEntries, contract.elbowName)
+    const wrist = findUniqueNode(nodeEntries, contract.wristName)
+    const handMatches = nodeEntries.filter((entry) => contract.handNames.includes(entry.name))
+    const hand = handMatches.length === 1 ? handMatches[0] : null
+
+    if (!shoulder || !elbow || !wrist || !hand) {
+      failures.push(
+        `${contract.side} neutral arm requires unique shoulder, elbow, wrist, and hand nodes; ` +
+          `found shoulder=${shoulder ? 1 : 0}, elbow=${elbow ? 1 : 0}, wrist=${wrist ? 1 : 0}, ` +
+          `hand=${handMatches.length}`
+      )
+      continue
+    }
+
+    const shoulderPosition = new Vector3().setFromMatrixPosition(worldMatrices[shoulder.index])
+    const elbowPosition = new Vector3().setFromMatrixPosition(worldMatrices[elbow.index])
+    const wristPosition = new Vector3().setFromMatrixPosition(worldMatrices[wrist.index])
+    const handPosition = new Vector3().setFromMatrixPosition(worldMatrices[hand.index])
+    const upperDrop = shoulderPosition.y - elbowPosition.y
+    const lowerDrop = elbowPosition.y - handPosition.y
+    const totalDrop = shoulderPosition.y - handPosition.y
+    const upperDepth = Math.abs(elbowPosition.z - shoulderPosition.z)
+    const totalDepth = Math.abs(handPosition.z - shoulderPosition.z)
+    const outwardDrop = Math.abs(elbowPosition.x) - Math.abs(shoulderPosition.x)
+    const elbowPose = nodes[elbow.index]?.extras?.reference_pose_radians
+    const shoulderPose = nodes[shoulder.index]?.extras?.reference_pose_radians
+
+    if (typeof elbowPose !== 'number' || Math.abs(elbowPose - expectedElbowPose) > 0.01) {
+      failures.push(
+        `${contract.side} elbow neutral pose must be 80 degrees; found ${formatValue(elbowPose)}`
+      )
+    }
+    if (shoulderPose !== undefined) {
+      failures.push(
+        `${contract.side} shoulder must keep the official neutral pitch without a reference pose; ` +
+          `found ${formatValue(shoulderPose)}`
+      )
+    }
+    if (upperDrop < 0.16 || lowerDrop < 0.2 || totalDrop < 0.4) {
+      failures.push(
+        `${contract.side} neutral arm must hang down from shoulder to hand; ` +
+          `drops upper=${upperDrop.toFixed(4)}, lower=${lowerDrop.toFixed(4)}, total=${totalDrop.toFixed(4)}`
+      )
+    }
+    if (upperDepth > 0.08 || totalDepth > 0.12) {
+      failures.push(
+        `${contract.side} neutral arm must stay beside the torso instead of projecting forward; ` +
+          `depth upper=${upperDepth.toFixed(4)}, total=${totalDepth.toFixed(4)}`
+      )
+    }
+    if (outwardDrop < 0.02) {
+      failures.push(
+        `${contract.side} neutral elbow must descend slightly outside the shoulder; ` +
+          `outward=${outwardDrop.toFixed(4)}`
+      )
+    }
+
+    poses.push({
+      side: contract.side,
+      shoulder: shoulderPosition.toArray(),
+      elbow: elbowPosition.toArray(),
+      wrist: wristPosition.toArray(),
+      hand: handPosition.toArray(),
+      upperDrop,
+      lowerDrop,
+      totalDrop,
+      upperDepth,
+      totalDepth
+    })
+  }
+  return poses
+}
+
+function findUniqueNode(nodeEntries, name) {
+  const matches = nodeEntries.filter((entry) => entry.name === name)
+  return matches.length === 1 ? matches[0] : null
+}
+
+function computeNodeWorldMatrices(nodes) {
+  const parents = new Map()
+  for (const [parentIndex, node] of nodes.entries()) {
+    for (const childIndex of Array.isArray(node?.children) ? node.children : []) {
+      if (Number.isInteger(childIndex)) parents.set(childIndex, parentIndex)
+    }
+  }
+
+  const cache = new Map()
+  const resolving = new Set()
+  const resolve = (index) => {
+    if (cache.has(index)) return cache.get(index)
+    if (resolving.has(index)) throw new Error(`node hierarchy cycle at index ${index}`)
+    resolving.add(index)
+
+    const node = nodes[index] ?? {}
+    const local = Array.isArray(node.matrix) && node.matrix.length === 16
+      ? new Matrix4().fromArray(node.matrix)
+      : new Matrix4().compose(
+          new Vector3().fromArray(Array.isArray(node.translation) ? node.translation : [0, 0, 0]),
+          new Quaternion().fromArray(Array.isArray(node.rotation) ? node.rotation : [0, 0, 0, 1]),
+          new Vector3().fromArray(Array.isArray(node.scale) ? node.scale : [1, 1, 1])
+        )
+    const parentIndex = parents.get(index)
+    if (parentIndex !== undefined) local.premultiply(resolve(parentIndex))
+
+    resolving.delete(index)
+    cache.set(index, local)
+    return local
+  }
+
+  return nodes.map((_, index) => resolve(index))
 }
 
 function nodeContains(nodes, ancestorIndex, descendantIndex) {
@@ -476,6 +621,13 @@ function printDocumentSummary(inspection) {
     `Gait controls: ${inspection.gaitControlNodes.length}/${REQUIRED_GAIT_CONTROL_NODE_NAMES.length} present ` +
       `(${formatList(inspection.gaitControlNodes.map((node) => node.name))})`
   )
+  console.log('Neutral arm poses:')
+  for (const pose of inspection.neutralArmPoses) {
+    console.log(
+      `  ${pose.side}: upperDrop=${pose.upperDrop.toFixed(4)}, lowerDrop=${pose.lowerDrop.toFixed(4)}, ` +
+        `totalDrop=${pose.totalDrop.toFixed(4)}, totalDepth=${pose.totalDepth.toFixed(4)}`
+    )
+  }
   console.log('Official mesh bindings:')
   for (const binding of inspection.officialMeshBindings) {
     console.log(
