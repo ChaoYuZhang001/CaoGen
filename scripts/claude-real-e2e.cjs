@@ -12,6 +12,7 @@ const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
 const { app, ipcMain } = require('electron')
+const { reportDeepTestStatus } = require('./deep-test-status.cjs')
 
 const repoOut = path.resolve(__dirname, '..', 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-claude-e2e-'))
@@ -33,6 +34,7 @@ async function invoke(channel, ...args) {
 async function run() {
   const apiKey = process.env.ANTHROPIC_API_KEY || ''
   if (!apiKey) {
+    reportDeepTestStatus('skip', { reason: 'missing explicit ANTHROPIC_API_KEY' })
     console.log('[SKIP] Claude 真对话需显式 ANTHROPIC_API_KEY;当前未配置,跳过。')
     console.log('\nclaude-real e2e: skipped (no explicit api key)')
     app.exit(0)
@@ -47,6 +49,7 @@ async function run() {
     (!!hostCreds && fs.existsSync(hostCreds)) ||
     fs.existsSync(path.join(os.homedir(), '.claude', '.credentials.json'))
   if (!hasAuth) {
+    reportDeepTestStatus('skip', { reason: 'missing Claude host credentials or login state' })
     console.log('[SKIP] Claude 真对话需真实登录态(host-creds / ~/.claude/.credentials.json)')
     console.log('       ~/.claude.json 是配置文件,不算凭据。当前环境无有效凭据,跳过。')
     console.log('\nclaude-real e2e: skipped (no auth)')
@@ -106,6 +109,10 @@ async function run() {
 }
 function finish(code) {
   const pass = results.filter((r) => r.ok).length
+  reportDeepTestStatus(code === 0 ? 'pass' : 'fail', {
+    ...(code === 0 ? {} : { reason: 'Claude real conversation assertions failed' }),
+    details: { passed: pass, total: results.length }
+  })
   console.log(`\nclaude-real e2e: ${pass}/${results.length} 通过`)
   try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
   app.exit(code)

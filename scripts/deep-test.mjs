@@ -1,18 +1,31 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import deepTestStatus from './deep-test-status.cjs'
 
-const repoRoot = process.cwd()
-const outRoot = path.join(repoRoot, 'test-results', 'caogen-deep')
-const runId = new Date().toISOString().replace(/[:.]/g, '-')
-const runDir = path.join(outRoot, runId)
+const { DEEP_TEST_STATUS_PROTOCOL, DEEP_TEST_STATUSES } = deepTestStatus
+const OPTIONAL_CHECKS = new Set([
+  'chinaRealNetwork smoke',
+  'chinaToolCallParity smoke',
+  'claude real e2e'
+])
+const RUNTIME_REQUIRED = {
+  'chinaRealNetwork smoke': {
+    env: ['CAOGEN_CHINA_REAL_NETWORK_REQUIRED'],
+    args: ['--required']
+  },
+  'chinaToolCallParity smoke': {
+    env: ['CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED'],
+    args: ['--required']
+  }
+}
 
-mkdirSync(runDir, { recursive: true })
-
-const commands = [
+const commandDefinitions = [
   { name: 'typecheck', ...commandSpec('npm', ['run', 'typecheck']), category: 'static' },
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
+  { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
   { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
@@ -81,13 +94,13 @@ const commands = [
   { name: 'modelCrossValidation smoke', command: 'node', args: ['scripts/model-cross-validation-smoke.mjs'], category: 'smoke' },
   { name: 'chinaEcosystem smoke', command: 'node', args: ['scripts/china-ecosystem-smoke.mjs'], category: 'smoke' },
   { name: 'chinaModelProvider smoke', command: 'node', args: ['scripts/china-model-provider-smoke.mjs'], category: 'smoke' },
-  { name: 'chinaRealNetwork smoke', command: 'node', args: ['scripts/china-real-network-smoke.mjs'], category: 'smoke' },
-  { name: 'chinaToolCallParity smoke', command: 'node', args: ['scripts/china-tool-call-parity.mjs'], category: 'smoke' },
+  { name: 'chinaRealNetwork smoke', command: 'node', args: ['scripts/china-real-network-smoke.mjs'], category: 'smoke', statusReporter: 'scripts/china-real-network-smoke.mjs' },
+  { name: 'chinaToolCallParity smoke', command: 'node', args: ['scripts/china-tool-call-parity.mjs'], category: 'smoke', statusReporter: 'scripts/china-tool-call-parity.mjs' },
   { name: 'ideBridge smoke', command: 'node', args: ['scripts/ide-bridge-smoke.mjs'], category: 'smoke' },
   { name: 'openai P2 tools smoke', command: 'node', args: ['scripts/openai-p2-tools-smoke.mjs'], category: 'smoke' },
   { name: 'responses tools e2e', ...commandSpec('npx', ['electron', 'scripts/responses-tools-e2e.cjs']), category: 'system' },
   { name: 'history compress e2e', ...commandSpec('npx', ['electron', 'scripts/history-compress-e2e.cjs']), category: 'system' },
-  { name: 'claude real e2e', ...commandSpec('npx', ['electron', 'scripts/claude-real-e2e.cjs']), category: 'system' },
+  { name: 'claude real e2e', ...commandSpec('npx', ['electron', 'scripts/claude-real-e2e.cjs']), category: 'system', statusReporter: 'scripts/claude-real-e2e.cjs' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
   { name: 'taskDag autoMerge e2e', ...commandSpec('npx', ['electron', 'scripts/task-dag-automerge-e2e.cjs']), category: 'system' },
   { name: 'Electron main IPC smoke', ...commandSpec('npx', ['electron', 'scripts/electron-smoke.cjs']), category: 'system' },
@@ -97,59 +110,97 @@ const commands = [
   { name: 'page operations smoke', command: 'node', args: ['scripts/page-operation-smoke.mjs'], category: 'ui' }
 ]
 
-const startedAt = new Date().toISOString()
-const results = []
+export const commands = commandDefinitions.map((item) => ({
+  ...item,
+  requirement: OPTIONAL_CHECKS.has(item.name) ? 'optional' : 'required',
+  ...(RUNTIME_REQUIRED[item.name] ? { requiredWhen: RUNTIME_REQUIRED[item.name] } : {})
+}))
 
-for (const item of commands) {
-  const result = await runCommand(item)
-  results.push(result)
-  const icon = result.status === 'pass' ? 'PASS' : 'FAIL'
-  console.log(`[${icon}] ${item.name} (${result.durationMs}ms)`)
-  if (result.status === 'fail') break
+export async function runDeepTest(options = {}) {
+  const repoRoot = path.resolve(options.repoRoot ?? process.cwd())
+  const outRoot = path.resolve(options.outRoot ?? path.join(repoRoot, 'test-results', 'caogen-deep'))
+  const runId = options.runId ?? new Date().toISOString().replace(/[:.]/g, '-')
+  const runDir = path.join(outRoot, runId)
+  const baseEnv = options.env ?? process.env
+  const plannedCommands = normalizeCommands(options.commands ?? commands, baseEnv)
+  const log = options.log ?? console.log
+  const stopOnBlocking = options.stopOnBlocking !== false
+  const startedAt = new Date().toISOString()
+  const results = []
+
+  mkdirSync(runDir, { recursive: true })
+
+  for (let index = 0; index < plannedCommands.length; index += 1) {
+    const item = plannedCommands[index]
+    const result = await runCommand(item, { repoRoot, runDir, baseEnv })
+    results.push(result)
+    log(`[${result.status.toUpperCase()}] ${item.name} [${item.requirement}] (${result.durationMs}ms)`)
+    if (stopOnBlocking && result.blocksGate) {
+      for (const pending of plannedCommands.slice(index + 1)) {
+        results.push(blockedResult(pending, result))
+      }
+      break
+    }
+  }
+
+  const finishedAt = new Date().toISOString()
+  const blockingResults = results.filter((item) => item.blocksGate)
+  const status = blockingResults.length === 0 && results.length === plannedCommands.length ? 'pass' : 'fail'
+  const report = {
+    schemaVersion: 2,
+    runId,
+    startedAt,
+    finishedAt,
+    status,
+    exitCode: status === 'pass' ? 0 : 1,
+    gatePolicy: {
+      fail: 'always-blocking',
+      required: 'must-pass',
+      optional: 'skip-or-blocked-is-non-blocking; fail-is-blocking'
+    },
+    repoRoot,
+    runDir,
+    summary: buildSummary(results, plannedCommands.length),
+    results,
+    missingCommands: results.filter((item) => item.executed === false).map((item) => item.name),
+    recommendations: buildRecommendations(results, plannedCommands.length)
+  }
+
+  writeReports(report, outRoot)
+  return report
 }
 
-const finishedAt = new Date().toISOString()
-const failed = results.filter((item) => item.status === 'fail')
-const status = failed.length === 0 && results.length === commands.length ? 'pass' : 'fail'
-const report = {
-  runId,
-  startedAt,
-  finishedAt,
-  status,
-  repoRoot,
-  runDir,
-  results,
-  missingCommands: commands.slice(results.length).map((item) => item.name),
-  recommendations: buildRecommendations(results)
-}
-
-writeFileSync(path.join(runDir, 'deep-test-report.json'), JSON.stringify(report, null, 2))
-writeFileSync(path.join(runDir, 'deep-test-report.md'), renderMarkdown(report))
-writeFileSync(path.join(outRoot, 'latest.json'), JSON.stringify(report, null, 2))
-writeFileSync(path.join(outRoot, 'latest.md'), renderMarkdown(report))
-
-console.log(`deep test report: ${path.join(runDir, 'deep-test-report.md')}`)
-process.exitCode = status === 'pass' ? 0 : 1
-
-async function runCommand(item) {
+async function runCommand(item, context) {
   const started = Date.now()
-  const outputPath = path.join(runDir, `${slug(item.name)}.log`)
+  const baseName = slug(item.name)
+  const outputPath = path.join(context.runDir, `${baseName}.log`)
+  const statusPath = path.join(context.runDir, `${baseName}.status.json`)
   let stdout = ''
   let stderr = ''
+  let spawnError = null
+  const childEnv = { ...context.baseEnv, ...(item.env ?? {}) }
+  delete childEnv.CAOGEN_DEEP_TEST_STATUS_FILE
+  delete childEnv.CAOGEN_DEEP_TEST_STATUS_REPORTER
+  if (item.statusReporter) {
+    childEnv.CAOGEN_DEEP_TEST_STATUS_FILE = statusPath
+    childEnv.CAOGEN_DEEP_TEST_STATUS_REPORTER = path.resolve(context.repoRoot, item.statusReporter)
+  }
   const child = spawn(item.command, item.args, {
-    cwd: repoRoot,
-    env: process.env,
+    cwd: context.repoRoot,
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe']
   })
-  child.stdout.on('data', (chunk) => {
+  child.stdout?.on('data', (chunk) => {
     stdout += chunk.toString()
   })
-  child.stderr.on('data', (chunk) => {
+  child.stderr?.on('data', (chunk) => {
     stderr += chunk.toString()
   })
   const exit = await new Promise((resolve) => {
-    child.on('error', (error) => resolve({ code: 1, signal: null, error }))
-    child.on('close', (code, signal) => resolve({ code, signal, error: null }))
+    child.on('error', (error) => {
+      spawnError = error
+    })
+    child.on('close', (code, signal) => resolve({ code, signal, error: spawnError }))
   })
   const durationMs = Date.now() - started
   const output = [
@@ -161,59 +212,225 @@ async function runCommand(item) {
     .filter(Boolean)
     .join('\n')
   writeFileSync(outputPath, output)
+
+  const resolved = resolveCommandStatus({ statusPath, exit })
   return {
     ...item,
     commandLine: `${item.command} ${item.args.join(' ')}`,
-    status: exit.code === 0 ? 'pass' : 'fail',
+    status: resolved.status,
+    requirement: item.requirement,
+    blocksGate: blocksGate(item.requirement, resolved.status),
+    executed: true,
     exitCode: exit.code,
     signal: exit.signal,
     durationMs,
     outputPath,
+    statusPath: resolved.protocolSource === 'structured' ? statusPath : null,
+    protocolSource: resolved.protocolSource,
+    reason: resolved.reason,
+    details: resolved.details,
     summary: summarize(stdout, stderr, exit.error)
   }
 }
 
-function buildRecommendations(items) {
-  const recommendations = []
-  const failed = items.filter((item) => item.status === 'fail')
-  if (failed.length === 0 && items.length === commands.length) {
-    recommendations.push('本轮静态检查、构建、模块集成、真 Electron IPC、mock OpenAI 流式 E2E 与页面操作深测全绿。')
-    recommendations.push('下一步应补真实 API key/真实 Claude SDK 提测,用于覆盖外部账号/额度/网络不确定性。')
+function resolveCommandStatus({ statusPath, exit }) {
+  const structured = readStructuredStatus(statusPath)
+  if (structured.error) {
+    return {
+      status: 'fail',
+      protocolSource: 'structured',
+      reason: `invalid deep-test status protocol: ${structured.error}`
+    }
+  }
+  if (structured.value) {
+    if (structured.value.status !== 'fail' && (exit.code !== 0 || exit.signal || exit.error)) {
+      return {
+        status: 'fail',
+        protocolSource: 'structured',
+        reason: `child reported ${structured.value.status} but exited with ${describeExit(exit)}`,
+        details: structured.value.details
+      }
+    }
+    return {
+      status: structured.value.status,
+      protocolSource: 'structured',
+      reason: structured.value.reason,
+      details: structured.value.details
+    }
+  }
+  if (exit.error || exit.signal) {
+    return {
+      status: 'blocked',
+      protocolSource: 'exit-code',
+      reason: exit.error ? String(exit.error.message || exit.error) : `child terminated by signal ${exit.signal}`
+    }
+  }
+  return {
+    status: exit.code === 0 ? 'pass' : 'fail',
+    protocolSource: 'exit-code',
+    reason: exit.code === 0 ? undefined : `child exited with code ${exit.code}`
+  }
+}
+
+function readStructuredStatus(statusPath) {
+  if (!existsSync(statusPath)) return { value: null, error: null }
+  try {
+    const parsed = JSON.parse(readFileSync(statusPath, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('payload must be an object')
+    if (parsed.protocol !== DEEP_TEST_STATUS_PROTOCOL) throw new Error(`unsupported protocol ${String(parsed.protocol)}`)
+    if (!DEEP_TEST_STATUSES.has(parsed.status)) throw new Error(`unsupported status ${String(parsed.status)}`)
+    if (parsed.status !== 'pass' && (typeof parsed.reason !== 'string' || !parsed.reason.trim())) {
+      throw new Error(`${parsed.status} requires a reason`)
+    }
+    return {
+      value: {
+        status: parsed.status,
+        reason: typeof parsed.reason === 'string' ? parsed.reason.trim() : undefined,
+        details: parsed.details
+      },
+      error: null
+    }
+  } catch (error) {
+    return { value: null, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function blockedResult(item, blocker) {
+  const reason = `not run because ${blocker.name} blocked the gate with status ${blocker.status}`
+  return {
+    ...item,
+    commandLine: `${item.command} ${item.args.join(' ')}`,
+    status: 'blocked',
+    requirement: item.requirement,
+    blocksGate: blocksGate(item.requirement, 'blocked'),
+    executed: false,
+    exitCode: null,
+    signal: null,
+    durationMs: 0,
+    outputPath: null,
+    statusPath: null,
+    protocolSource: 'runner',
+    reason,
+    blockedBy: blocker.name,
+    summary: reason
+  }
+}
+
+function blocksGate(requirement, status) {
+  return status === 'fail' || (requirement === 'required' && status !== 'pass')
+}
+
+function normalizeCommands(items, baseEnv) {
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') throw new Error('deep-test command must be an object')
+    if (!item.name || !item.command || !Array.isArray(item.args)) throw new Error('deep-test command needs name, command, and args')
+    if (item.requirement !== 'required' && item.requirement !== 'optional') {
+      throw new Error(`deep-test command ${item.name} needs explicit requirement: required or optional`)
+    }
+    const runtimeRequired = matchesRuntimeRequirement(item, { ...baseEnv, ...(item.env ?? {}) })
+    return {
+      ...item,
+      declaredRequirement: item.requirement,
+      requirement: runtimeRequired ? 'required' : item.requirement,
+      requirementSource: runtimeRequired && item.requirement !== 'required' ? 'runtime' : 'declared'
+    }
+  })
+}
+
+function matchesRuntimeRequirement(item, env) {
+  const rule = item.requiredWhen
+  if (!rule) return false
+  const envMatch = Array.isArray(rule.env) && rule.env.some((name) => env[name] === '1')
+  const argMatch = Array.isArray(rule.args) && rule.args.some((arg) => item.args.includes(arg))
+  return envMatch || argMatch
+}
+
+function buildSummary(items, total) {
+  const counts = countStatuses(items)
+  return {
+    total,
+    executed: items.filter((item) => item.executed).length,
+    counts,
+    required: summarizeRequirement(items, 'required'),
+    optional: summarizeRequirement(items, 'optional'),
+    blocking: items.filter((item) => item.blocksGate).map((item) => item.name)
+  }
+}
+
+function summarizeRequirement(items, requirement) {
+  const scoped = items.filter((item) => item.requirement === requirement)
+  return {
+    total: scoped.length,
+    counts: countStatuses(scoped),
+    blocking: scoped.filter((item) => item.blocksGate).length
+  }
+}
+
+function countStatuses(items) {
+  const counts = { pass: 0, skip: 0, blocked: 0, fail: 0 }
+  for (const item of items) counts[item.status] += 1
+  return counts
+}
+
+function buildRecommendations(items, total) {
+  const blocking = items.filter((item) => item.blocksGate && item.executed !== false)
+  if (blocking.length === 0 && items.length === total) {
+    const optionalUnavailable = items.filter(
+      (item) => item.requirement === 'optional' && (item.status === 'skip' || item.status === 'blocked')
+    )
+    const recommendations = ['本轮所有 required 检查通过。']
+    if (optionalUnavailable.length > 0) {
+      recommendations.push(
+        `以下 optional 外部检查未形成通过证据,不得计作已验证: ${optionalUnavailable.map((item) => `${item.name}(${item.status})`).join(', ')}。`
+      )
+    }
     return recommendations
   }
-  for (const item of failed) {
-    if (item.category === 'ui') {
+
+  const recommendations = []
+  for (const item of blocking) {
+    if (item.status === 'skip' || item.status === 'blocked') {
+      recommendations.push(`${item.name} 是 required 检查但状态为 ${item.status}: ${item.reason || '缺少执行条件'}。`)
+    } else if (item.category === 'ui') {
       recommendations.push('页面操作 smoke 失败:优先查看截图与 JSON 报告,确认是否为选择器漂移、Electron 启动失败或真实 UI 回归。')
     } else if (item.category === 'system') {
       recommendations.push('真 Electron/IPC 系统冒烟失败:优先确认 build 产物、Electron runtime 与 ipcMain handler 注册是否一致。')
     } else if (item.category === 'build' || item.category === 'static') {
       recommendations.push('编译/类型检查失败:阻断提测,先修复 TS/build 输出再跑后续 smoke。')
     } else {
-      recommendations.push(`${item.name} 失败:从 ${item.outputPath} 定位模块级回归,修复后单跑该脚本再跑 test:deep。`)
+      recommendations.push(`${item.name} 失败:从 ${item.outputPath || 'runner report'} 定位模块级回归,修复后单跑该脚本再跑 test:deep。`)
     }
   }
   return [...new Set(recommendations)]
 }
 
-function renderMarkdown(report) {
+export function renderMarkdown(report) {
+  const counts = report.summary.counts
   const lines = []
   lines.push(`# CaoGen Deep Test ${report.runId}`)
   lines.push('')
   lines.push(`- Status: ${report.status}`)
+  lines.push(`- Exit code: ${report.exitCode}`)
+  lines.push(`- Checks: ${report.summary.total} total; ${counts.pass} pass; ${counts.skip} skip; ${counts.blocked} blocked; ${counts.fail} fail`)
+  lines.push('- Gate policy: fail always blocks; required checks must pass; optional skip/blocked is retained but does not block')
+  lines.push(`- Required blocking checks: ${report.summary.required.blocking}`)
+  lines.push(`- Optional blocking checks: ${report.summary.optional.blocking}`)
   lines.push(`- Started: ${report.startedAt}`)
   lines.push(`- Finished: ${report.finishedAt}`)
   lines.push(`- Repo: ${report.repoRoot}`)
   lines.push('')
-  lines.push('| Check | Category | Status | Duration | Log |')
-  lines.push('|---|---|---|---:|---|')
+  lines.push('| Check | Category | Requirement | Status | Gate | Duration | Log |')
+  lines.push('|---|---|---|---|---|---:|---|')
   for (const item of report.results) {
+    const logPath = item.outputPath ? path.relative(report.repoRoot, item.outputPath) : '(not run)'
+    const requirement = item.requirementSource === 'runtime' ? `${item.requirement} (runtime)` : item.requirement
     lines.push(
-      `| ${escapePipe(item.name)} | ${item.category} | ${item.status} | ${item.durationMs}ms | ${path.relative(report.repoRoot, item.outputPath)} |`
+      `| ${escapePipe(item.name)} | ${item.category} | ${requirement} | ${item.status} | ${item.blocksGate ? 'blocking' : 'non-blocking'} | ${item.durationMs}ms | ${escapePipe(logPath)} |`
     )
   }
   if (report.missingCommands.length > 0) {
     lines.push('')
-    lines.push(`Skipped after first failure: ${report.missingCommands.join(', ')}`)
+    lines.push(`Blocked after gate failure: ${report.missingCommands.join(', ')}`)
   }
   lines.push('')
   lines.push('## Recommendations')
@@ -221,13 +438,23 @@ function renderMarkdown(report) {
   lines.push('')
   lines.push('## Latest Output Summaries')
   for (const item of report.results) {
-    lines.push(`### ${item.name}`)
+    lines.push(`### ${item.name} [${item.status}]`)
+    if (item.reason) lines.push(`Reason: ${item.reason}`)
     lines.push('```text')
     lines.push(item.summary || '(no output)')
     lines.push('```')
   }
   lines.push('')
   return lines.join('\n')
+}
+
+function writeReports(report, outRoot) {
+  const json = `${JSON.stringify(report, null, 2)}\n`
+  const markdown = renderMarkdown(report)
+  writeFileSync(path.join(report.runDir, 'deep-test-report.json'), json)
+  writeFileSync(path.join(report.runDir, 'deep-test-report.md'), markdown)
+  writeFileSync(path.join(outRoot, 'latest.json'), json)
+  writeFileSync(path.join(outRoot, 'latest.md'), markdown)
 }
 
 function summarize(stdout, stderr, error) {
@@ -239,18 +466,14 @@ function summarize(stdout, stderr, error) {
   return lines.slice(-30).join('\n')
 }
 
-function slug(value) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'command'
+function describeExit(exit) {
+  if (exit.error) return String(exit.error.message || exit.error)
+  if (exit.signal) return `signal ${exit.signal}`
+  return `code ${exit.code}`
 }
 
-function electronCommand() {
-  if (process.env.ELECTRON_BIN) return process.env.ELECTRON_BIN
-  return path.join(
-    repoRoot,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'electron.cmd' : 'electron'
-  )
+function slug(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'command'
 }
 
 function commandSpec(command, args) {
@@ -261,4 +484,14 @@ function commandSpec(command, args) {
 
 function escapePipe(value) {
   return String(value).replace(/\|/g, '\\|')
+}
+
+function isMainModule() {
+  return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+}
+
+if (isMainModule()) {
+  const report = await runDeepTest()
+  console.log(`deep test report: ${path.join(report.runDir, 'deep-test-report.md')}`)
+  process.exitCode = report.exitCode
 }
