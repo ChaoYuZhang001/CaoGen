@@ -559,6 +559,22 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
       !blender.includes('"right_shoulder_pitch_joint": math.radians(90)'),
     'Blender generator must not lift the neutral upper arms with a 90-degree shoulder pose'
   )
+  assert(
+    blender.includes('"black_u_visor_frame"') &&
+      blender.includes('visor_frame["visor_attachment"] = "helmet_black_smooth_cowl"'),
+    'Blender generator must attach the black face frame directly to the swept helmet cowl'
+  )
+  assert(
+    blender.includes('y - 0.019') &&
+      blender.includes('visor_light["visor_attachment"] = "black_u_visor_frame"'),
+    'Blender generator must place the cyan perimeter light on the visible face of the black frame'
+  )
+  assert(
+    blender.includes('cowl["reference_silhouette"] = "rounded_profile_open_face_cowl"') &&
+      blender.includes('head_source_mesh["visual_role"] = "provenance_only"') &&
+      blender.includes('head_source_mesh.scale = (0.001, 0.001, 0.001)'),
+    'Blender generator must use the custom swept cowl while retaining the official head only as hidden provenance'
+  )
 
   assert(
     statSync(path.join(repoRoot, officialModelPath)).size > 15_000,
