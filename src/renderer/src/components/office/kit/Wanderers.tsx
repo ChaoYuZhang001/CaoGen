@@ -4,7 +4,7 @@ import { Vector3 } from 'three'
 import type { Group } from 'three'
 import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
-import { applyWalking, applyTalking, applyIdle } from './AvatarAnimations'
+import { applyWalking, applyStandingTalking, applyIdle } from './AvatarAnimations'
 
 /** 漫游小人:离开工位 → 走到会议点 → 开会/交流 → 走回,循环。纯氛围。 */
 export interface WandererSpec {
@@ -83,7 +83,7 @@ function OneWanderer({ spec }: { spec: WandererSpec }): React.JSX.Element {
         }
         // 面向会议中心(略朝 -Z)交流;转向交给外层 group,动画不覆盖
         facing.current = Math.PI
-        applyTalking(refs.current, t, { phase: spec.phase, facing: 0 })
+        applyStandingTalking(refs.current, t, { phase: spec.phase, facing: 0 })
         break
       case 'toHome':
         if (walkTo(home)) {

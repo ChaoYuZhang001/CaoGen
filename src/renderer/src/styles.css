@@ -4644,10 +4644,13 @@ textarea {
 
 .office-selection-panel {
   position: absolute;
+  top: 50px;
   right: 12px;
-  bottom: 12px;
+  bottom: auto;
   z-index: 3;
-  width: min(280px, calc(100% - 24px));
+  width: min(250px, calc(100% - 24px));
+  max-height: min(260px, calc(100% - 64px));
+  overflow: auto;
   padding: 10px;
   border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
   border-radius: 8px;
@@ -4810,10 +4813,12 @@ textarea {
   }
 
   .office-selection-panel {
+    top: auto;
     left: 12px;
     right: 12px;
     bottom: 12px;
     width: auto;
+    max-height: min(220px, calc(100% - 116px));
   }
 
   .office-facility-panel {

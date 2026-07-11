@@ -374,6 +374,33 @@ check('office visual noise stays removed while packet semantics remain', () => {
   assert(!workstation.includes('octahedronGeometry'), 'WorkstationPro must not render an octahedron fault orb')
 })
 
+check('desk operators use a seated low-noise workstation presentation', () => {
+  const animations = source('src/renderer/src/components/office/kit/AvatarAnimations.ts')
+  const workstation = source('src/renderer/src/components/office/kit/WorkstationPro.tsx')
+  const monitors = source('src/renderer/src/components/office/kit/MonitorSetup.tsx')
+  const backplane = source('src/renderer/src/components/office/kit/OperationsBackplane.tsx')
+  const windowWall = source('src/renderer/src/components/office/kit/WindowWall.tsx')
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const css = source('src/renderer/src/styles.css')
+
+  assert(animations.includes('function applyDeskSeatedLowerBody'), 'desktop animation states must share a seated lower-body pose')
+  assert(animations.includes('const DESK_SEATED_ROOT_Y = -0.24'), 'desk operator hip height must stay aligned with the chair')
+  for (const state of ['applyMonitoring', 'applyTyping', 'applyTalking', 'applyThinking']) {
+    const start = animations.indexOf(`export function ${state}`)
+    const end = animations.indexOf('\nexport function ', start + 1)
+    const body = animations.slice(start, end < 0 ? animations.length : end)
+    assert(body.includes('applyDeskSeatedLowerBody'), `${state} must retain the shared desk seated pose`)
+  }
+  assert(workstation.includes('<OfficeChair position={[0, 0, 0.65]} scale={0.88} />'), 'chair must sit directly under the operator hips')
+  assert(workstation.includes('position={[0, 0, 0.52]}'), 'desk operator must remain centered behind the input surface')
+  assert(monitors.includes("const SCREEN_SURFACE = '#17232d'"), 'monitor body must use a neutral screen surface')
+  assert(monitors.includes('color={SCREEN_SURFACE}') && monitors.includes('emissive={SCREEN_GLOW}'), 'status color must not flood the full monitor panel')
+  assert(!backplane.includes('<cylinderGeometry args={[0.08, 0.08, 0.012, 28]} />'), 'floor data nodes must not render circular pucks')
+  assert(windowWall.includes('剖切展示模式不渲染孤立亮点'), 'cutaway window wall must suppress isolated city light points')
+  assert(view.includes('[0.28, 4.5, 9.55]') && view.includes('const OFFICE_CAMERA_FOV = 44'), 'overview camera must keep the front row inside frame')
+  assert(css.includes('top: 50px;') && css.includes('max-height: min(260px'), 'selected agent panel must stay clear of front-row robots')
+})
+
 check('clicking a workstation selects in office and double-click opens the session', () => {
   const text = source('src/renderer/src/components/office/OfficeView.tsx')
   assert(text.includes('selectSession(id)'), 'focus() must call selectSession(id)')
@@ -385,6 +412,7 @@ check('clicking a workstation selects in office and double-click opens the sessi
 check('OfficeView exposes clickable facility targets', () => {
   const view = source('src/renderer/src/components/office/OfficeView.tsx')
   const facilities = source('src/renderer/src/components/office/kit/FacilityHotspots.tsx')
+  const cameraRig = source('src/renderer/src/components/office/kit/CameraRig.tsx')
   assert(view.includes('data-office-clickable-facilities'), 'missing clickable facilities semantic attribute')
   assert(view.includes('data-office-facility-hit-targets'), 'missing facility hit target semantic attribute')
   assert(view.includes('data-office-restroom-walkers'), 'missing restroom walker semantic attribute')
@@ -398,7 +426,12 @@ check('OfficeView exposes clickable facility targets', () => {
   const walkers = source('src/renderer/src/components/office/kit/AgentWalkers.tsx')
   assert(walkers.includes("'restroom'") && walkers.includes("'dining'"), 'AgentWalkers must support restroom/dining route reasons')
   assert(walkers.includes('holdAtTarget'), 'AgentWalkers must support stable facility target presentation')
+  assert(walkers.includes('departureDelay') && walkers.includes('waitingToDepart'), 'facility walkers must stagger departures instead of overlapping at startup')
+  assert(walkers.includes('applyStandingTalking'), 'approval walkers must use a standing interaction pose away from the desk')
   assert(walkers.includes('walker-select-hitbox'), 'AgentWalkers must expose a stable pointer hit target')
+  assert(cameraRig.includes('minDistance?: number') && view.includes('minDistance={cameraMinDistance}'), 'camera presets must support real close focus instead of a fixed six-unit clamp')
+  assert(facilities.includes('cameraPosition: [-6.45, 4.6, 9.15]'), 'restroom camera must use an unobstructed elevated fixture view')
+  assert(facilities.includes('cameraPosition: [-2, 4.5, 10.8]'), 'dining camera must use an unobstructed elevated fixture view')
   const wayfinding = source('src/renderer/src/components/office/kit/ServiceWayfinding.tsx')
   assert(wayfinding.includes('RestroomFixture') && wayfinding.includes('DiningFixture'), 'ServiceWayfinding must include restroom/dining facility fixtures')
 })
@@ -728,7 +761,7 @@ check('AvatarRig uses reference robot design language', () => {
   assert(workstation.includes('const stationAccent = OFFICE_STRUCTURE_TRIM'), 'station structure accent must remain neutral per workstation')
   assert(workstation.includes('accent={OFFICE_SIGNAL_ACCENT}'), 'cyan signal accent must stay scoped to compact status indicators')
   assert(workstation.includes("const showFaultStrip = activity === 'error'"), 'workstations must scope the error-only red strip to the failed session')
-  assert(workstation.includes("const FAULT_COLOR = '#a94842'") && workstation.includes('<boxGeometry args={[0.52, 0.024, 0.062]} />'), 'fault indicators must stay small and muted instead of large bright red rails')
+  assert(workstation.includes("const FAULT_COLOR = '#a94842'") && workstation.includes('<boxGeometry args={[0.24, 0.018, 0.046]} />'), 'fault indicators must stay small and muted instead of large bright red rails')
   assert(workstation.includes("awaiting: '#7f9aac'") && workstation.includes("completed: '#8ba2b0'"), 'non-error work screens must stay in the neutral blue-gray family')
   assert(workstation.includes('operator-position-slat'), 'workstations must mark operator position with slats instead of glowing ball-like discs')
   assert(!workstation.includes('<cylinderGeometry args={[0.72, 0.72, 0.012, 48]} />'), 'workstations must not render large glowing operator discs')

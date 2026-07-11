@@ -40,6 +40,16 @@ export interface AnimOptions {
 // —— 复用常量,避免闭包内分配 —— //
 const TAU = Math.PI * 2
 const JOINT_LERP = 0.1
+const DESK_SEATED_ROOT_Y = -0.24
+const DESK_SHOULDER_X = -0.862
+const DESK_SHOULDER_Y = 0.581
+const DESK_SHOULDER_Z = -0.608
+const DESK_ELBOW_X = -0.883
+const DESK_ELBOW_Y = -0.209
+const DESK_ELBOW_Z = 0.373
+const DESK_WRIST_X = -0.066
+const DESK_WRIST_Y = 0.007
+const DESK_WRIST_Z = 1.876
 
 function amp(opts: AnimOptions | undefined): number {
   return opts?.liveliness ?? 1
@@ -86,6 +96,32 @@ function lerpRotation(obj: Object3D | null | undefined, x: number, y: number, z:
   obj.rotation.z = lerpAngle(obj.rotation.z, z)
 }
 
+/** 桌面办公状态共用坐姿:髋部落到座垫上,大腿前伸,小腿自然下垂。 */
+function applyDeskSeatedLowerBody(refs: AvatarRefs, sway = 0): void {
+  const root = refs.root
+  if (root) {
+    root.position.y = lerpValue(root.position.y, DESK_SEATED_ROOT_Y)
+    root.rotation.z = lerpAngle(root.rotation.z, sway)
+  }
+  lerpRotation(refs.legL, -1.05, 0, -0.055)
+  lerpRotation(refs.legR, -1.05, 0, 0.055)
+  lerpRotation(refs.kneeL, 1.34, 0, 0)
+  lerpRotation(refs.kneeR, 1.34, 0, 0)
+}
+
+/**
+ * 双手落在工位输入阵列上。角度由 GLB 实际层级和手掌包围盒反算,
+ * 最终手掌中心约为 x=+/-0.18、y=0.93、z=0.45,与输入目标重合。
+ */
+function applyDeskControlPose(refs: AvatarRefs, leftTap = 0, rightTap = 0): void {
+  lerpRotation(refs.armL, DESK_SHOULDER_X + leftTap * 0.012, -DESK_SHOULDER_Y, -DESK_SHOULDER_Z)
+  lerpRotation(refs.armR, DESK_SHOULDER_X + rightTap * 0.012, DESK_SHOULDER_Y, DESK_SHOULDER_Z)
+  lerpRotation(refs.elbowL, DESK_ELBOW_X + leftTap * 0.03, DESK_ELBOW_Y, DESK_ELBOW_Z)
+  lerpRotation(refs.elbowR, DESK_ELBOW_X + rightTap * 0.03, -DESK_ELBOW_Y, -DESK_ELBOW_Z)
+  lerpRotation(refs.wristL, DESK_WRIST_X + leftTap * 0.035, DESK_WRIST_Y, -DESK_WRIST_Z)
+  lerpRotation(refs.wristR, DESK_WRIST_X + rightTap * 0.035, -DESK_WRIST_Y, DESK_WRIST_Z)
+}
+
 /**
  * 待机:轻微呼吸起伏 + 头部缓慢摆动,手臂自然垂放。
  */
@@ -118,27 +154,14 @@ export function applyIdle(refs: AvatarRefs, t: number, opts?: AnimOptions): void
 export function applyMonitoring(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
-  const root = refs.root
-  if (root) {
-    root.position.y = lerpValue(root.position.y, 0)
-    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.7 * L) * 0.008)
-  }
+  applyDeskSeatedLowerBody(refs, Math.sin(tt * 0.7 * L) * 0.006)
   lerpRotation(
     refs.head,
-    0.16 + Math.sin(tt * 0.9 * L) * 0.018,
-    Math.sin(tt * 0.45 * L) * 0.075,
-    Math.sin(tt * 0.6 * L) * 0.015
+    0.14 + Math.sin(tt * 0.9 * L) * 0.014,
+    Math.sin(tt * 0.45 * L) * 0.055,
+    Math.sin(tt * 0.6 * L) * 0.01
   )
-  lerpRotation(refs.armL, -0.46 + Math.sin(tt * 1.4 * L) * 0.025, 0, 0.1)
-  lerpRotation(refs.armR, -0.49 + Math.cos(tt * 1.25 * L) * 0.025, 0, -0.1)
-  lerpRotation(refs.elbowL, -0.66 + Math.sin(tt * 1.1 * L) * 0.04, 0, 0)
-  lerpRotation(refs.elbowR, -0.7 + Math.cos(tt * 1.05 * L) * 0.04, 0, 0)
-  lerpRotation(refs.wristL, 0.16 + Math.sin(tt * 1.3 * L) * 0.025, 0, 0.025)
-  lerpRotation(refs.wristR, 0.16 + Math.cos(tt * 1.2 * L) * 0.025, 0, -0.025)
-  lerpRotation(refs.legL, 0.02, 0, 0)
-  lerpRotation(refs.legR, -0.02, 0, 0)
-  lerpRotation(refs.kneeL, 0.04, 0, 0)
-  lerpRotation(refs.kneeR, 0.04, 0, 0)
+  applyDeskControlPose(refs, Math.sin(tt * 1.1 * L) * 0.12, Math.cos(tt * 1.05 * L) * 0.12)
   applyFacing(refs, opts)
 }
 
@@ -148,24 +171,11 @@ export function applyMonitoring(refs: AvatarRefs, t: number, opts?: AnimOptions)
 export function applyTyping(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
-  const beat = tt * 16 * L
-  const root = refs.root
-  if (root) {
-    root.position.y = lerpValue(root.position.y, 0)
-    root.rotation.z = lerpAngle(root.rotation.z, 0)
-  }
-  lerpRotation(refs.head, 0.22 + Math.sin(beat) * 0.05, Math.sin(tt * 2 * L) * 0.06, 0)
-  // 肩部负责前伸,肘和腕承担主要敲击幅度,避免整条手臂刚性摆动。
-  lerpRotation(refs.armL, -0.58 + Math.sin(beat) * 0.035, 0, 0.12)
-  lerpRotation(refs.armR, -0.58 + Math.cos(beat) * 0.035, 0, -0.12)
-  lerpRotation(refs.elbowL, -0.78 + Math.sin(beat) * 0.16, 0, 0)
-  lerpRotation(refs.elbowR, -0.78 + Math.cos(beat) * 0.16, 0, 0)
-  lerpRotation(refs.wristL, 0.18 + Math.sin(beat + Math.PI / 3) * 0.2, 0, 0.035)
-  lerpRotation(refs.wristR, 0.18 + Math.cos(beat + Math.PI / 3) * 0.2, 0, -0.035)
-  lerpRotation(refs.legL, 0, 0, 0)
-  lerpRotation(refs.legR, 0, 0, 0)
-  lerpRotation(refs.kneeL, 0.06, 0, 0)
-  lerpRotation(refs.kneeR, 0.06, 0, 0)
+  const beat = tt * 12 * L
+  applyDeskSeatedLowerBody(refs)
+  lerpRotation(refs.head, 0.18 + Math.sin(beat) * 0.025, Math.sin(tt * 2 * L) * 0.04, 0)
+  // 双手保持在两个输入区内,敲击只由很小的肘腕位移表达。
+  applyDeskControlPose(refs, Math.sin(beat), Math.cos(beat))
   applyFacing(refs, opts)
 }
 
@@ -175,28 +185,29 @@ export function applyTyping(refs: AvatarRefs, t: number, opts?: AnimOptions): vo
 export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
-  const stride = tt * 6 * L
-  const swing = Math.sin(stride)
+  const motion = Math.max(0.16, Math.min(1, L))
+  const stride = tt * 6 * (0.72 + motion * 0.28)
+  const swing = Math.sin(stride) * motion
   const bendL = Math.max(0, swing)
   const bendR = Math.max(0, -swing)
   const root = refs.root
   if (root) {
     // 步伐落点时的双峰起伏
-    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.022)
-    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(stride) * 0.03)
+    root.position.y = lerpValue(root.position.y, Math.abs(Math.sin(stride)) * 0.014 * motion)
+    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(stride) * 0.018 * motion)
   }
-  lerpRotation(refs.head, 0.06, 0, Math.sin(stride) * 0.04)
+  lerpRotation(refs.head, 0.05, 0, Math.sin(stride) * 0.024)
   // 对角摆动:肩/髋控制步幅,肘/膝在摆动侧屈曲以形成清晰的回收步。
-  lerpRotation(refs.armL, swing * 0.4, 0, 0)
-  lerpRotation(refs.armR, -swing * 0.4, 0, 0)
-  lerpRotation(refs.elbowL, -0.12 - bendL * 0.22, 0, 0)
-  lerpRotation(refs.elbowR, -0.12 - bendR * 0.22, 0, 0)
-  lerpRotation(refs.wristL, swing * -0.06, 0, 0)
-  lerpRotation(refs.wristR, swing * 0.06, 0, 0)
-  lerpRotation(refs.legL, -swing * 0.5, 0, 0)
-  lerpRotation(refs.legR, swing * 0.5, 0, 0)
-  lerpRotation(refs.kneeL, 0.08 + bendL * 0.48, 0, 0)
-  lerpRotation(refs.kneeR, 0.08 + bendR * 0.48, 0, 0)
+  lerpRotation(refs.armL, swing * 0.26, 0, 0)
+  lerpRotation(refs.armR, -swing * 0.26, 0, 0)
+  lerpRotation(refs.elbowL, -0.1 - bendL * 0.14, 0, 0)
+  lerpRotation(refs.elbowR, -0.1 - bendR * 0.14, 0, 0)
+  lerpRotation(refs.wristL, swing * -0.04, 0, 0)
+  lerpRotation(refs.wristR, swing * 0.04, 0, 0)
+  lerpRotation(refs.legL, -swing * 0.28, 0, 0)
+  lerpRotation(refs.legR, swing * 0.28, 0, 0)
+  lerpRotation(refs.kneeL, 0.04 + bendL * 0.24, 0, 0)
+  lerpRotation(refs.kneeR, 0.04 + bendR * 0.24, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -206,25 +217,40 @@ export function applyWalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
 export function applyTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
+  applyDeskSeatedLowerBody(refs, Math.sin(tt * 0.8 * L) * 0.006)
+  // 叠加两个频率模拟说话时的自然点头/侧偏
+  lerpRotation(refs.head, 0.08 + Math.sin(tt * 6 * L) * 0.03 + Math.sin(tt * 11 * L) * 0.012, Math.sin(tt * 3 * L) * 0.09, Math.sin(tt * 2 * L) * 0.025)
+  // 视频沟通时仍保持控制台接触,用头部动作表达交流,避免手臂穿过桌面。
+  applyDeskControlPose(refs, Math.sin(tt * 1.7 * L) * 0.08, Math.sin(tt * 1.3 * L) * 0.14)
+  applyFacing(refs, opts)
+}
+
+/** 离开工位后的站立交流:双脚保持落地,用头部和前臂表达确认/讨论。 */
+export function applyStandingTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
+  const L = amp(opts)
+  const tt = time(t, opts)
+  const gesture = (Math.sin(tt * 2.1 * L) + 1) * 0.5
   const root = refs.root
   if (root) {
     root.position.y = lerpValue(root.position.y, 0)
-    root.rotation.z = lerpAngle(root.rotation.z, 0)
+    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.7 * L) * 0.008)
   }
-  // 叠加两个频率模拟说话时的自然点头/侧偏
-  lerpRotation(refs.head, 0.05 + Math.sin(tt * 6 * L) * 0.05 + Math.sin(tt * 11 * L) * 0.02, Math.sin(tt * 3 * L) * 0.14, Math.sin(tt * 2 * L) * 0.04)
-  // 右手抬起比划(以正弦门控成"偶尔"的手势)
-  const gesture = Math.max(0, Math.sin(tt * 1.3 * L))
-  lerpRotation(refs.armR, -0.5 - gesture * 0.7, 0, -0.2 - gesture * 0.25)
-  lerpRotation(refs.armL, -0.1, 0, 0.08)
-  lerpRotation(refs.elbowL, 0, 0, 0)
-  lerpRotation(refs.elbowR, 0, 0, 0)
+  lerpRotation(
+    refs.head,
+    0.05 + Math.sin(tt * 4.8 * L) * 0.025,
+    Math.sin(tt * 1.8 * L) * 0.08,
+    Math.sin(tt * 1.2 * L) * 0.018
+  )
+  lerpRotation(refs.armL, -0.08 + Math.sin(tt * 1.3 * L) * 0.04, 0, 0.08)
+  lerpRotation(refs.armR, -0.12 - gesture * 0.16, 0, -0.12)
+  lerpRotation(refs.elbowL, -0.08, 0, 0)
+  lerpRotation(refs.elbowR, -0.12 - gesture * 0.18, 0, 0)
   lerpRotation(refs.wristL, 0, 0, 0)
-  lerpRotation(refs.wristR, 0, 0, 0)
-  lerpRotation(refs.legL, 0, 0, 0)
-  lerpRotation(refs.legR, 0, 0, 0)
-  lerpRotation(refs.kneeL, 0, 0, 0)
-  lerpRotation(refs.kneeR, 0, 0, 0)
+  lerpRotation(refs.wristR, Math.sin(tt * 2.4 * L) * 0.05, 0, 0)
+  lerpRotation(refs.legL, 0, 0, -0.015)
+  lerpRotation(refs.legR, 0, 0, 0.015)
+  lerpRotation(refs.kneeL, 0.02, 0, 0)
+  lerpRotation(refs.kneeR, 0.02, 0, 0)
   applyFacing(refs, opts)
 }
 
@@ -234,23 +260,10 @@ export function applyTalking(refs: AvatarRefs, t: number, opts?: AnimOptions): v
 export function applyThinking(refs: AvatarRefs, t: number, opts?: AnimOptions): void {
   const L = amp(opts)
   const tt = time(t, opts)
-  const root = refs.root
-  if (root) {
-    root.position.y = lerpValue(root.position.y, 0)
-    root.rotation.z = lerpAngle(root.rotation.z, Math.sin(tt * 0.4 * L) * 0.02)
-  }
-  lerpRotation(refs.head, -0.12 + Math.sin(tt * 0.7 * L) * 0.03, 0.1 + Math.sin(tt * 0.5 * L) * 0.05, 0.18)
-  // 右手托腮:大幅抬起并内收
-  lerpRotation(refs.armR, -2.3, 0, -0.55)
-  lerpRotation(refs.armL, -0.08, 0, 0.05)
-  lerpRotation(refs.elbowL, 0, 0, 0)
-  lerpRotation(refs.elbowR, 0, 0, 0)
-  lerpRotation(refs.wristL, 0, 0, 0)
-  lerpRotation(refs.wristR, 0, 0, 0)
-  lerpRotation(refs.legL, 0, 0, 0)
-  lerpRotation(refs.legR, 0, 0, 0)
-  lerpRotation(refs.kneeL, 0, 0, 0)
-  lerpRotation(refs.kneeR, 0, 0, 0)
+  applyDeskSeatedLowerBody(refs, Math.sin(tt * 0.4 * L) * 0.008)
+  lerpRotation(refs.head, 0.02 + Math.sin(tt * 0.7 * L) * 0.02, 0.08 + Math.sin(tt * 0.5 * L) * 0.035, 0.07)
+  // 故障诊断仍在双侧输入区操作,只降低节奏并增加观察停顿。
+  applyDeskControlPose(refs, Math.sin(tt * 0.7 * L) * 0.06, Math.cos(tt * 0.55 * L) * 0.06)
   applyFacing(refs, opts)
 }
 

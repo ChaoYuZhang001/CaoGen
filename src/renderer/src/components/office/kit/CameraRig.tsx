@@ -11,13 +11,23 @@ interface Props {
   target?: [number, number, number]
   /** 是否缓慢自动环绕 */
   auto?: boolean
+  /** 允许近景预设靠近目标；总览仍可传入更保守的距离 */
+  minDistance?: number
+  /** 用户缩放的最远距离 */
+  maxDistance?: number
 }
 
 /**
  * 电影感相机:封装 OrbitControls + 缓慢自动环绕 + 平滑聚焦 target。
  * 目标点每帧向传入 target 做 lerp,切换聚焦对象时相机平顺过渡,不生硬跳切。
  */
-export default function CameraRig({ position, target, auto = true }: Props): React.JSX.Element {
+export default function CameraRig({
+  position,
+  target,
+  auto = true,
+  minDistance = 5.5,
+  maxDistance = 22
+}: Props): React.JSX.Element {
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null)
 
   // 闭包外复用:期望聚焦点 + 临时向量,避免 useFrame 内 new 对象
@@ -48,8 +58,8 @@ export default function CameraRig({ position, target, auto = true }: Props): Rea
     <OrbitControls
       ref={controlsRef}
       enablePan={false}
-      minDistance={6}
-      maxDistance={22}
+      minDistance={minDistance}
+      maxDistance={maxDistance}
       maxPolarAngle={Math.PI / 2.2}
       enableDamping
       dampingFactor={0.08}

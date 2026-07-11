@@ -15,6 +15,9 @@ interface FloorProps extends OfficeProp {
   seams?: boolean
   /** 基础地板色,默认深灰 */
   color?: string
+  /** 主/次接缝颜色,用于白天与夜间主题分别保持可读对比。 */
+  seamMainColor?: string
+  seamSubColor?: string
 }
 
 const DEFAULT_SIZE = 40
@@ -34,12 +37,14 @@ export default function Floor({
   scale = 1,
   size = DEFAULT_SIZE,
   seams = true,
-  color = DEFAULT_COLOR
+  color = DEFAULT_COLOR,
+  seamMainColor = SEAM_MAIN,
+  seamSubColor = SEAM_SUB
 }: FloorProps): React.JSX.Element {
   // 每米一格接缝;闭包外复用 Color,避免每帧/每次渲染 new
   const divisions = useMemo(() => Math.max(1, Math.round(size)), [size])
-  const seamMain = useMemo(() => new Color(SEAM_MAIN), [])
-  const seamSub = useMemo(() => new Color(SEAM_SUB), [])
+  const seamMain = useMemo(() => new Color(seamMainColor), [seamMainColor])
+  const seamSub = useMemo(() => new Color(seamSubColor), [seamSubColor])
 
   return (
     <group position={position} rotation={rotation} scale={scale}>

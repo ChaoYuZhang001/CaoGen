@@ -82,10 +82,10 @@ function OperatorWorkSurface({
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = (active ? 0.54 : 0.22) + Math.sin(t * 3.1) * (active ? 0.16 : 0.05)
+      pulseRef.current.emissiveIntensity = (active ? 0.3 : 0.1) + Math.sin(t * 3.1) * (active ? 0.08 : 0.025)
     }
     if (railRef.current) {
-      railRef.current.emissiveIntensity = (active ? 0.7 : 0.28) + Math.sin(t * 4.2 + 0.8) * (active ? 0.18 : 0.06)
+      railRef.current.emissiveIntensity = (active ? 0.36 : 0.13) + Math.sin(t * 4.2 + 0.8) * (active ? 0.09 : 0.03)
     }
   })
 
@@ -99,9 +99,9 @@ function OperatorWorkSurface({
           ref={pulseRef}
           color={screenColor}
           emissive={screenColor}
-          emissiveIntensity={active ? 0.58 : 0.26}
+          emissiveIntensity={active ? 0.3 : 0.1}
           transparent
-          opacity={active ? 0.38 : 0.24}
+          opacity={active ? 0.24 : 0.14}
           roughness={0.24}
           metalness={0.18}
           toneMapped={false}
@@ -109,11 +109,11 @@ function OperatorWorkSurface({
       </RoundedBox>
       <mesh position={[-0.18, 0.034, 0.07]}>
         <boxGeometry args={[0.16, 0.012, 0.022]} />
-        <meshStandardMaterial ref={railRef} color={accent} emissive={accent} emissiveIntensity={0.72} toneMapped={false} />
+        <meshStandardMaterial ref={railRef} color={accent} emissive={accent} emissiveIntensity={0.36} toneMapped={false} />
       </mesh>
       <mesh position={[0.18, 0.034, 0.07]}>
         <boxGeometry args={[0.16, 0.012, 0.022]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.58} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.28} toneMapped={false} />
       </mesh>
       <RoundedBox args={[0.13, 0.032, 0.07]} radius={0.018} smoothness={3} position={[-0.18, 0.072, 0.19]} castShadow>
         <meshStandardMaterial color={OFFICE_NEUTRAL_LIGHT} emissive="#6f8794" emissiveIntensity={0.08} roughness={0.24} metalness={0.4} />
@@ -123,27 +123,27 @@ function OperatorWorkSurface({
       </RoundedBox>
       <mesh position={[-0.18, 0.093, 0.19]}>
         <boxGeometry args={[0.088, 0.012, 0.018]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.72 : 0.34} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.34 : 0.14} toneMapped={false} />
       </mesh>
       <mesh position={[0.18, 0.093, 0.19]}>
         <boxGeometry args={[0.088, 0.012, 0.018]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.72 : 0.34} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.34 : 0.14} toneMapped={false} />
       </mesh>
       <mesh position={[0, 0.036, -0.08]}>
         <boxGeometry args={[0.42, 0.01, 0.018]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.54 : 0.28} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.28 : 0.11} toneMapped={false} />
       </mesh>
       <mesh position={[-0.11, 0.039, -0.005]} rotation={[0, 0.34, 0]}>
         <boxGeometry args={[0.018, 0.01, 0.18]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.5 : 0.24} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.24 : 0.1} toneMapped={false} />
       </mesh>
       <mesh position={[0.11, 0.039, -0.005]} rotation={[0, -0.34, 0]}>
         <boxGeometry args={[0.018, 0.01, 0.18]} />
-        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.5 : 0.24} toneMapped={false} />
+        <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={active ? 0.24 : 0.1} toneMapped={false} />
       </mesh>
       <mesh position={[-(0.46 * (1 - progress)) / 2, 0.043, 0.15]}>
         <boxGeometry args={[0.46 * progress, 0.01, 0.018]} />
-        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={active ? 0.68 : 0.3} toneMapped={false} />
+        <meshStandardMaterial color={screenColor} emissive={screenColor} emissiveIntensity={active ? 0.34 : 0.14} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -164,8 +164,8 @@ function OperatorInputArray({
   useFrame((state) => {
     const t = state.clock.getElapsedTime()
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = (active ? 0.74 : 0.34) + Math.sin(t * 5.4) * (active ? 0.2 : 0.08)
-      pulseRef.current.opacity = (active ? 0.78 : 0.48) + Math.sin(t * 3.6) * 0.08
+      pulseRef.current.emissiveIntensity = (active ? 0.4 : 0.16) + Math.sin(t * 5.4) * (active ? 0.1 : 0.04)
+      pulseRef.current.opacity = (active ? 0.64 : 0.38) + Math.sin(t * 3.6) * 0.05
     }
   })
 
@@ -180,9 +180,9 @@ function OperatorInputArray({
             <meshStandardMaterial
               color={screenColor}
               emissive={screenColor}
-              emissiveIntensity={active ? 0.54 : 0.3}
+              emissiveIntensity={active ? 0.28 : 0.13}
               transparent
-              opacity={active ? 0.46 : 0.3}
+              opacity={active ? 0.28 : 0.17}
               roughness={0.28}
               metalness={0.18}
               toneMapped={false}
@@ -194,7 +194,7 @@ function OperatorInputArray({
               <meshStandardMaterial
                 color={i % 2 === 0 ? accent : OFFICE_NEUTRAL_LIGHT}
                 emissive={i % 2 === 0 ? accent : screenColor}
-                emissiveIntensity={active ? 0.78 : 0.38}
+                emissiveIntensity={active ? 0.38 : 0.16}
                 transparent
                 opacity={0.9}
                 toneMapped={false}
@@ -209,9 +209,9 @@ function OperatorInputArray({
           ref={pulseRef}
           color={accent}
           emissive={accent}
-          emissiveIntensity={active ? 0.86 : 0.42}
+          emissiveIntensity={active ? 0.4 : 0.16}
           transparent
-          opacity={active ? 0.84 : 0.56}
+          opacity={active ? 0.64 : 0.38}
           toneMapped={false}
         />
       </mesh>
@@ -242,9 +242,9 @@ function OperatorContactLinks({
             <meshStandardMaterial
               color={accent}
               emissive={accent}
-              emissiveIntensity={active ? 0.5 : 0.24}
+              emissiveIntensity={active ? 0.24 : 0.1}
               transparent
-              opacity={active ? 0.62 : 0.34}
+              opacity={active ? 0.34 : 0.18}
               roughness={0.3}
               metalness={0.16}
               toneMapped={false}
@@ -268,7 +268,7 @@ function OperatorFocusLinks({
   activity: WorkstationActivity
 }): React.JSX.Element {
   const active = activity === 'working' || activity === 'awaiting'
-  const opacity = active ? 0.22 : 0.11
+  const opacity = active ? 0.1 : 0.04
   return (
     <group position={[0, 0, 0]}>
       {[-1, 1].map((dir) => (
@@ -278,7 +278,7 @@ function OperatorFocusLinks({
             <meshStandardMaterial
               color={accent}
               emissive={accent}
-              emissiveIntensity={active ? 0.36 : 0.16}
+              emissiveIntensity={active ? 0.16 : 0.06}
               transparent
               opacity={opacity}
               roughness={0.26}
@@ -292,9 +292,9 @@ function OperatorFocusLinks({
             <meshStandardMaterial
               color={accent}
               emissive={accent}
-              emissiveIntensity={active ? 0.48 : 0.22}
+              emissiveIntensity={active ? 0.2 : 0.08}
               transparent
-              opacity={active ? 0.38 : 0.18}
+              opacity={active ? 0.18 : 0.08}
               depthWrite={false}
               toneMapped={false}
             />
@@ -313,40 +313,40 @@ function FailureBeacon(): React.JSX.Element {
     const t = state.clock.getElapsedTime()
     const pulse = 0.65 + Math.sin(t * 5.2) * 0.22
     if (coreRef.current) {
-      coreRef.current.emissiveIntensity = 0.42 + pulse * 0.24
-      coreRef.current.opacity = 0.68 + Math.sin(t * 4.4) * 0.04
+      coreRef.current.emissiveIntensity = 0.24 + pulse * 0.12
+      coreRef.current.opacity = 0.42 + Math.sin(t * 4.4) * 0.03
     }
     if (railRef.current) {
-      railRef.current.emissiveIntensity = 0.38 + pulse * 0.18
+      railRef.current.emissiveIntensity = 0.2 + pulse * 0.1
     }
   })
 
   return (
     <group position={[0, 0, 0]}>
       <mesh position={[0, 0.09, -0.78]} castShadow>
-        <boxGeometry args={[1.2, 0.024, 0.046]} />
+        <boxGeometry args={[0.62, 0.018, 0.036]} />
         <meshStandardMaterial
           ref={railRef}
           color={FAULT_COLOR}
           emissive={FAULT_COLOR}
-          emissiveIntensity={0.42}
+          emissiveIntensity={0.24}
           toneMapped={false}
         />
       </mesh>
-      <group position={[0, 1.5, 0.5]}>
+      <group position={[0.58, 0.94, -0.36]}>
         <mesh position={[0, -0.09, 0]} castShadow>
           <cylinderGeometry args={[0.035, 0.045, 0.12, 12]} />
           <meshStandardMaterial color="#303845" roughness={0.36} metalness={0.62} />
         </mesh>
         <mesh castShadow>
-          <boxGeometry args={[0.24, 0.11, 0.09]} />
+          <boxGeometry args={[0.14, 0.05, 0.055]} />
           <meshStandardMaterial
             ref={coreRef}
             color={FAULT_COLOR}
             emissive={FAULT_COLOR}
-            emissiveIntensity={0.46}
+            emissiveIntensity={0.28}
             transparent
-            opacity={0.68}
+            opacity={0.42}
             roughness={0.38}
             metalness={0.5}
             toneMapped={false}
@@ -354,8 +354,8 @@ function FailureBeacon(): React.JSX.Element {
         </mesh>
       </group>
       <mesh position={[0, 0.098, 0.94]} castShadow>
-        <boxGeometry args={[0.32, 0.024, 0.042]} />
-        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.38} toneMapped={false} />
+        <boxGeometry args={[0.18, 0.018, 0.034]} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.2} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -373,28 +373,27 @@ function FaultDiagnosticRig(): React.JSX.Element {
       scannerRef.current.position.y = 0.42 + Math.sin(t * 3.1) * 0.018
     }
     if (pulseRef.current) {
-      pulseRef.current.emissiveIntensity = 0.62 + Math.sin(t * 4.8) * 0.22
-      pulseRef.current.opacity = 0.56 + Math.sin(t * 3.6) * 0.08
+      pulseRef.current.emissiveIntensity = 0.34 + Math.sin(t * 4.8) * 0.12
+      pulseRef.current.opacity = 0.38 + Math.sin(t * 3.6) * 0.05
     }
     if (beamRef.current) {
-      beamRef.current.emissiveIntensity = 0.48 + Math.sin(t * 6.4) * 0.18
-      beamRef.current.opacity = 0.22 + Math.sin(t * 5.7) * 0.05
+      beamRef.current.emissiveIntensity = 0.22 + Math.sin(t * 6.4) * 0.08
+      beamRef.current.opacity = 0.1 + Math.sin(t * 5.7) * 0.025
     }
   })
 
   return (
     <group position={[-0.72, 0, 0.74]} rotation={[0, -0.22, 0]}>
-      <mesh position={[0, 0.035, 0]} receiveShadow>
-        <cylinderGeometry args={[0.34, 0.34, 0.018, 36]} />
+      <RoundedBox args={[0.5, 0.018, 0.4]} radius={0.035} smoothness={3} position={[0, 0.035, 0]} receiveShadow>
         <meshStandardMaterial
-          color={FAULT_COLOR}
+          color="#20262e"
           emissive={FAULT_COLOR}
-          emissiveIntensity={0.28}
+          emissiveIntensity={0.08}
           transparent
-          opacity={0.24}
+          opacity={0.72}
           toneMapped={false}
         />
-      </mesh>
+      </RoundedBox>
       <RoundedBox args={[0.44, 0.18, 0.36]} radius={0.045} smoothness={4} position={[0, 0.13, 0]} castShadow receiveShadow>
         <meshStandardMaterial color="#151a22" roughness={0.52} metalness={0.38} />
       </RoundedBox>
@@ -409,7 +408,7 @@ function FaultDiagnosticRig(): React.JSX.Element {
       ))}
       <mesh position={[0, 0.276, 0.03]}>
         <boxGeometry args={[0.25, 0.018, 0.024]} />
-        <meshStandardMaterial ref={pulseRef} color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.42} transparent opacity={0.48} toneMapped={false} />
+        <meshStandardMaterial ref={pulseRef} color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.28} transparent opacity={0.38} toneMapped={false} />
       </mesh>
       <mesh position={[0, 0.304, -0.12]}>
         <boxGeometry args={[0.3, 0.014, 0.02]} />
@@ -442,9 +441,9 @@ function FaultDiagnosticRig(): React.JSX.Element {
             ref={x < 0 ? beamRef : undefined}
             color={FAULT_COLOR}
             emissive={FAULT_COLOR}
-            emissiveIntensity={0.5}
+            emissiveIntensity={0.22}
             transparent
-            opacity={0.22}
+            opacity={0.1}
             depthWrite={false}
             toneMapped={false}
           />
@@ -456,11 +455,11 @@ function FaultDiagnosticRig(): React.JSX.Element {
       </mesh>
       <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, 0.7]} castShadow>
         <boxGeometry args={[0.22, 0.025, 0.025]} />
-        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.22} toneMapped={false} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.14} toneMapped={false} />
       </mesh>
       <mesh position={[0.24, 0.2, -0.2]} rotation={[0, 0, -0.7]} castShadow>
         <boxGeometry args={[0.22, 0.025, 0.025]} />
-        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.22} toneMapped={false} />
+        <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.14} toneMapped={false} />
       </mesh>
     </group>
   )
@@ -688,6 +687,7 @@ export default function WorkstationPro({
     [brandName, modelName, providerBaseUrl]
   )
   const screenColor = ACTIVITY_COLOR[activity]
+  const progressColor = activity === 'error' ? OFFICE_STRUCTURE_TRIM : screenColor
   const stationAccent = OFFICE_STRUCTURE_TRIM
   const showFaultStrip = activity === 'error'
   const motionScale = Math.min(Math.max(liveliness, 0.2), 1.2)
@@ -761,9 +761,9 @@ export default function WorkstationPro({
           <meshStandardMaterial
             color={stationAccent}
             emissive={stationAccent}
-            emissiveIntensity={active ? 0.86 : 0.58}
+            emissiveIntensity={active ? 0.32 : 0.14}
             transparent
-            opacity={active ? 0.94 : 0.72}
+            opacity={active ? 0.72 : 0.44}
             toneMapped={false}
           />
         </mesh>
@@ -771,8 +771,8 @@ export default function WorkstationPro({
       {showFaultStrip &&
         [-0.44, 0.44].map((x) => (
           <mesh key={`fault-edge-${x}`} position={[x, 0.092, 0.92]} castShadow>
-            <boxGeometry args={[0.52, 0.024, 0.062]} />
-            <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.34} toneMapped={false} />
+            <boxGeometry args={[0.24, 0.018, 0.046]} />
+            <meshStandardMaterial color={FAULT_COLOR} emissive={FAULT_COLOR} emissiveIntensity={0.2} toneMapped={false} />
           </mesh>
         ))}
       <mesh position={[0, 0.052, 0.92]} castShadow>
@@ -782,9 +782,9 @@ export default function WorkstationPro({
       <mesh position={[-(1.72 * (1 - progress)) / 2, 0.068, 0.92]} castShadow>
         <boxGeometry args={[1.72 * progress, 0.026, 0.064]} />
         <meshStandardMaterial
-          color={screenColor}
-          emissive={screenColor}
-          emissiveIntensity={activity === 'idle' ? 0.34 : 0.58}
+          color={progressColor}
+          emissive={progressColor}
+          emissiveIntensity={activity === 'idle' ? 0.16 : 0.36}
           toneMapped={false}
         />
       </mesh>
@@ -794,7 +794,7 @@ export default function WorkstationPro({
           <meshStandardMaterial
             color={stationAccent}
             emissive={stationAccent}
-            emissiveIntensity={0.28}
+            emissiveIntensity={0.14}
             toneMapped={false}
           />
         </mesh>
@@ -836,9 +836,9 @@ export default function WorkstationPro({
               <meshStandardMaterial
                 color={stationAccent}
                 emissive={stationAccent}
-                emissiveIntensity={activity === 'idle' ? 0.18 : 0.34}
+                emissiveIntensity={activity === 'idle' ? 0.08 : 0.18}
                 transparent
-                opacity={activity === 'idle' ? 0.24 : 0.42}
+                opacity={activity === 'idle' ? 0.16 : 0.28}
                 toneMapped={false}
               />
             </mesh>
@@ -848,15 +848,15 @@ export default function WorkstationPro({
             <meshStandardMaterial
               color={stationAccent}
               emissive={stationAccent}
-              emissiveIntensity={activity === 'idle' ? 0.26 : 0.4}
+              emissiveIntensity={activity === 'idle' ? 0.12 : 0.22}
               roughness={0.32}
               metalness={0.24}
               toneMapped={false}
             />
           </mesh>
 
-          {/* 转椅后撤并缩小,让机器人轮廓与面向显示器的姿态保持完整可见。 */}
-          <OfficeChair position={[-0.34, 0, 0.9]} scale={0.78} />
+          {/* 转椅与髋部对齐,座面承托桌面状态下的机器人坐姿。 */}
+          <OfficeChair position={[0, 0, 0.65]} scale={0.88} />
 
           <OperatorWorkSurface
             accent={stationAccent}
@@ -873,7 +873,7 @@ export default function WorkstationPro({
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
           <AvatarRig
             ref={rigRef}
-            position={[0, 0.02, 0.52]}
+            position={[0, 0, 0.52]}
             rotation={[0, Math.PI, 0]}
             scale={1.2}
             bodyColor={skin.bodyColor}

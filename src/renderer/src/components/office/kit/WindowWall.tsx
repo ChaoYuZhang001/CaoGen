@@ -11,6 +11,8 @@ export interface OfficeProp {
 interface WindowWallProps extends OfficeProp {
   /** 展示视角里的侧向窗墙:减少窗框密度,避免像一整面墙挡住工位 */
   minimalFrames?: boolean
+  /** 白天主题使用更柔和的天空与城市剪影。 */
+  lightMode?: boolean
 }
 
 // 幕墙尺寸(米):宽 × 高。本地空间下底边贴地(y=0),外侧(城市)朝 -Z。
@@ -33,6 +35,9 @@ const dummy = new Object3D()
 const skyTop = new Color('#0a1226')
 const skyBottom = new Color('#243a5e')
 const horizonGlow = new Color('#71879a')
+const daylightTop = new Color('#cbd7dd')
+const daylightBottom = new Color('#9fb2bd')
+const daylightHorizon = new Color('#eef3f5')
 
 // 确定性伪随机(避免每次渲染抖动)
 function hash(n: number): number {
@@ -48,7 +53,8 @@ export default function WindowWall({
   position = [0, 0, 0],
   rotation = [0, 0, 0],
   scale = 1,
-  minimalFrames = false
+  minimalFrames = false,
+  lightMode = false
 }: WindowWallProps): React.JSX.Element {
   const groupRef = useRef<Group>(null)
   const mullionsRef = useRef<InstancedMesh>(null)
@@ -65,19 +71,22 @@ export default function WindowWall({
     const colors = new Float32Array(pos.count * 3)
     const c = new Color()
     const half = skyHeight / 2
+    const top = lightMode ? daylightTop : skyTop
+    const bottom = lightMode ? daylightBottom : skyBottom
+    const horizonColor = lightMode ? daylightHorizon : horizonGlow
     for (let i = 0; i < pos.count; i++) {
       const y = pos.getY(i)
       const t = (y + half) / skyHeight
-      c.copy(skyBottom).lerp(skyTop, t)
+      c.copy(bottom).lerp(top, t)
       const horizon = Math.max(0, 1 - Math.abs(t - 0.1) / 0.14)
-      c.lerp(horizonGlow, horizon * (minimalFrames ? 0.14 : 0.35))
+      c.lerp(horizonColor, horizon * (minimalFrames ? 0.14 : 0.35))
       colors[i * 3] = c.r
       colors[i * 3 + 1] = c.g
       colors[i * 3 + 2] = c.b
     }
     g.setAttribute('color', new BufferAttribute(colors, 3))
     return g
-  }, [minimalFrames])
+  }, [lightMode, minimalFrames])
 
   // 城市楼群 + 窗户光点的实例数据
   const cityData = useMemo(() => {
@@ -158,7 +167,7 @@ export default function WindowWall({
           vertexColors
           toneMapped={false}
           transparent={minimalFrames}
-          opacity={minimalFrames ? 0.18 : 1}
+          opacity={minimalFrames ? (lightMode ? 0.3 : 0.18) : 1}
           depthWrite={!minimalFrames}
         />
       </mesh>
@@ -170,27 +179,27 @@ export default function WindowWall({
       >
         <boxGeometry args={[1, 1, 1]} />
         <meshStandardMaterial
-          color={minimalFrames ? '#101c2e' : '#0b1120'}
+          color={lightMode ? '#66737c' : minimalFrames ? '#101c2e' : '#0b1120'}
           roughness={0.9}
           metalness={0.1}
           transparent={minimalFrames}
-          opacity={minimalFrames ? 0.28 : 1}
+          opacity={minimalFrames ? (lightMode ? 0.24 : 0.28) : 1}
           depthWrite={!minimalFrames}
         />
       </instancedMesh>
 
-      {/* 城市发光窗点(供 Bloom) */}
-      <instancedMesh ref={windowsRef} args={[undefined, undefined, Math.max(1, cityData.windows.length)]}>
-        <planeGeometry args={[1, 1]} />
-        <meshStandardMaterial
-          color="#8fa0ac"
-          emissive="#8fa0ac"
-          emissiveIntensity={minimalFrames ? 0.72 : 1.8}
-          transparent={minimalFrames}
-          opacity={minimalFrames ? 0.46 : 1}
-          toneMapped={false}
-        />
-      </instancedMesh>
+      {/* 完整窗景保留建筑窗光;剖切展示模式不渲染孤立亮点,避免误读为漂浮粒子。 */}
+      {!minimalFrames && (
+        <instancedMesh ref={windowsRef} args={[undefined, undefined, Math.max(1, cityData.windows.length)]}>
+          <planeGeometry args={[1, 1]} />
+          <meshStandardMaterial
+            color="#8fa0ac"
+            emissive="#8fa0ac"
+            emissiveIntensity={1.35}
+            toneMapped={false}
+          />
+        </instancedMesh>
+      )}
 
       {/* 半透明玻璃幕墙(整面) */}
       {!minimalFrames && (
@@ -234,9 +243,9 @@ export default function WindowWall({
         <meshStandardMaterial
           color="#71879a"
           emissive="#71879a"
-          emissiveIntensity={minimalFrames ? 0.18 : 0.72}
+          emissiveIntensity={minimalFrames ? 0.08 : 0.46}
           transparent={minimalFrames}
-          opacity={minimalFrames ? 0.28 : 1}
+          opacity={minimalFrames ? 0.2 : 1}
           toneMapped={false}
         />
       </mesh>
