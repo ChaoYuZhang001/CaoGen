@@ -1,14 +1,14 @@
 # CaoGen Rolling Release Draft Notes
 
-> Status: Do not publish this rolling draft. Current package version: 0.1.4. Latest public release remains v0.1.3 on GitHub Releases.
+> Status: Do not publish this rolling draft. Current package version and latest public release are v0.1.4 on GitHub Releases; no newer release is selected.
 
 ## Release Decision
 
-v0.1.4 is the selected release candidate. The exact candidate body is `docs/RELEASE-NOTES-FINAL.md`; this rolling draft preserves the blocked-release state until that body passes against the exact clean release commit.
+v0.1.4 was published for macOS x64 from release commit `a14c623`. Its exact public body is preserved in `docs/RELEASE-NOTES-FINAL.md`; this rolling draft is reserved for the next release decision.
 
 ## Uploaded Assets
 
-No new release assets uploaded yet.
+No new release assets uploaded yet for a release after v0.1.4.
 
 Future release assets must be listed here exactly after a version is selected. Allowed public assets are installer and update metadata files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`. Local build output and evidence directories are never release assets.
 
@@ -23,10 +23,10 @@ Future release assets must be listed here exactly after a version is selected. A
 
 ## Known Blockers
 
-- release_identity: the candidate changes are not committed yet, so the final commit and clean-worktree binding are still open.
-- deep_test: the complete required suite must pass from that exact clean release commit.
-- packaging_release: code changed after the last package build, so the final assets and checksums must be regenerated and rebound.
-- release_notes: the exact final body must pass against that same v0.1.4 commit before publishing.
+- release_identity: no release after v0.1.4 has been selected or bound to a clean release commit.
+- deep_test: any future release must rerun the complete required suite from its exact clean release commit.
+- packaging_release: any future assets and checksums must be regenerated and rebound after its code is final.
+- release_notes: any future exact body must pass against that same future release commit before publishing.
 - macOS packages remain unsigned unless signing and notarization are completed for a future release.
 - Windows GUI and user-configured external-network evidence remain separate, non-default validation tracks.
 
