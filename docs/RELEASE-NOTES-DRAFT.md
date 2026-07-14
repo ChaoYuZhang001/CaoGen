@@ -14,6 +14,7 @@ v0.1.6 is selected for macOS x64 distribution through GitHub Releases. It will b
 - New-session actions from the 3D office and project/session navigation share the same creation path.
 - Start suggestions remain closed on session activation and load only after an explicit user action.
 - Provider settings remain a full-page workspace, and new sessions retain the three explicit routing scopes introduced in v0.1.5.
+- The packaged app now declares the `tree-sitter` runtime loader directly and is rejected by the release gate if `node-gyp-build` is missing from `app.asar` or the packaged renderer cannot start.
 - The root license is `AGPL-3.0-only`; releases through v0.1.5 retain their historical MIT terms.
 
 ## Uploaded Assets
@@ -37,8 +38,10 @@ Future release assets must be listed here exactly after a version is selected. A
 
 - release_identity: v0.1.6 is selected but is not yet bound to a clean release commit and remote tag.
 - deep_test: v0.1.6 must rerun the complete required suite from its exact clean release commit.
+- p2_required: release-scope P2 evidence must be refreshed and bound to the exact clean v0.1.6 candidate.
 - packaging_release: v0.1.6 assets and checksums must be regenerated after the candidate code and documentation are final.
 - release_notes: the exact v0.1.6 body must pass against that same release commit before publishing.
+- github_release_assets: no v0.1.6 GitHub Release assets exist yet; the exact uploaded set and public text metadata require a post-upload audit.
 - macOS packages remain unsigned unless signing and notarization are completed for a future release.
 - Windows GUI and user-configured external-network evidence remain separate, non-default validation tracks.
 
@@ -58,6 +61,7 @@ If a future macOS build remains unsigned, its final release notes must tell user
 - `npm run build`
 - `npm run test:deep`
 - `npm run test:release-packaging-audit:required`
+- `npm run test:packaged-app:mac`
 - `npm run test:product-positioning:required`
 - `npm run workos:release-doctor -- --refresh --version 0.1.6`
 - `npm run test:release-notes-audit:final`

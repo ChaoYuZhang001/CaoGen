@@ -26,7 +26,7 @@
 | P2-001 Windows GUI | Separate real-Windows evidence is required before adding a v0.1.6 Windows asset | Non-blocking for the macOS-only candidate; v0.1.5 Windows limitations remain documented publicly |
 | P2-004 China external | User-configured real network/provider evidence via `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` | Non-blocking; release notes must frame it as requiring user credentials/config |
 | N1 migration | Human 30-minute migration audit | Not required unless the release claims N1 pass |
-| Packaging | `npm run dist:mac:x64` and `npm run test:release-packaging-audit:required` produce the exact 5 x64 assets | Open: regenerate from the exact clean v0.1.6 candidate |
+| Packaging | `npm run dist:mac:x64`, `npm run test:release-packaging-audit:required`, and `npm run test:packaged-app:mac` produce the exact 5 x64 assets, verify required `app.asar` runtime files, and launch a real renderer | Open: bind the regenerated and successfully launched artifacts to the exact clean v0.1.6 candidate |
 | Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Open: rerun after candidate documentation is final |
 | Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Draft only; final hashes and asset names wait for packaging evidence |
 | Public GitHub Release assets | `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` requires the exact local `dist` asset set and reads public text metadata | Current v0.1.5 inventory has 8 allowed assets; latest combined read-text retry timed out on both `latest*.yml`, so no combined pass is claimed |
@@ -48,6 +48,7 @@ The final GitHub Release body must include:
 - A list of exact uploaded asset names. Allowed public assets are installer/update files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`.
 - A note that public `latest*.yml`/small text metadata passed the read-text release audit; if the network cannot read those assets, do not claim their contents were scanned.
 - A passing `npm run test:release-notes-audit:final` report for the exact body used on GitHub.
+- A passing `npm run test:packaged-app:mac` report bound to the clean release commit; a package that cannot create the CaoGen renderer must not be published.
 
 ## Stop Conditions
 
@@ -59,5 +60,6 @@ Stop the release immediately if any of these is true:
 - Release-scope P2 evidence for P2-002/P2-003/P2-005 is missing or stale.
 - Release notes claim P2-001 Windows GUI, P2-004 China external evidence, or N1 30-minute migration as proved before those separate audits pass.
 - Packaging produces assets for a platform that was not actually tested but the notes imply support.
+- The packaged application exits early, emits a main-process module-loading error, or fails to create the CaoGen renderer from a fresh user-data directory.
 - Release notes claim Genesis can execute, merge, push, or publish through external child Agents before that is proved by implementation and tests.
 - Public product or release copy mentions external product names, uses comparison framing, forces a fixed future version target, narrows CaoGen to developers only, or claims complete Office layout rendering / live relay availability before proof.
