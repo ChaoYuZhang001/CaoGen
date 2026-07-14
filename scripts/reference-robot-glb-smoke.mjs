@@ -52,8 +52,19 @@ const REQUIRED_VISOR_ATTACHMENT_NODES = [
     attachment: 'black_u_visor_frame'
   }
 ]
+const REQUIRED_REAR_SUPPORT_NODES = [
+  {
+    name: 'helmet_rear_occipital_spine_left',
+    translationX: -0.095
+  },
+  {
+    name: 'helmet_rear_occipital_spine_right',
+    translationX: 0.095
+  }
+]
+const REAR_SUPPORT_COMPONENT = 'paired_rear_neck_support'
 const REFERENCE_COWL_NODE_NAME = 'helmet_black_smooth_cowl'
-const REFERENCE_COWL_SILHOUETTE = 'rounded_profile_open_face_cowl'
+const REFERENCE_COWL_SILHOUETTE = 'dual_orthographic_three_piece_cowl'
 const OFFICIAL_HEAD_NODE_NAME = 'official_head_link'
 const OFFICIAL_HEAD_VISUAL_ROLE = 'provenance_only'
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
@@ -302,6 +313,7 @@ function inspectDocument(document) {
 
   const neutralArmPoses = inspectNeutralArmPoses(nodes, nodeEntries, failures)
   const visorAttachmentNodes = inspectVisorAttachmentNodes(nodes, nodeEntries, failures)
+  const rearSupportNodes = inspectRearSupportNodes(nodes, nodeEntries, failures)
   const referenceHead = inspectReferenceHead(nodes, nodeEntries, failures)
 
   const sourceRootMatches = nodeEntries.filter((node) => node.name === SOURCE_ROOT_NODE_NAME)
@@ -456,6 +468,7 @@ function inspectDocument(document) {
     gaitControlNodes,
     neutralArmPoses,
     visorAttachmentNodes,
+    rearSupportNodes,
     referenceHead,
     officialMeshBindings,
     materialEntries,
@@ -484,9 +497,55 @@ function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
     if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
       failures.push(`visor attachment ${quote(contract.name)} must descend from "helmet_head"`)
     }
+    const parentIndex = nodeParentIndex(nodes, entry.index)
+    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
+    if (parentName !== contract.attachment) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} must be parented to ${quote(contract.attachment)}; ` +
+          `found ${formatValue(parentName)}`
+      )
+    }
     attachments.push({ name: contract.name, attachment })
   }
   return attachments
+}
+
+function inspectRearSupportNodes(nodes, nodeEntries, failures) {
+  const supports = []
+  for (const contract of REQUIRED_REAR_SUPPORT_NODES) {
+    const matches = nodeEntries.filter((entry) => entry.name === contract.name)
+    if (matches.length !== 1) {
+      failures.push(`rear support ${quote(contract.name)} must appear exactly once; found ${matches.length}`)
+      continue
+    }
+
+    const entry = matches[0]
+    const node = nodes[entry.index]
+    const component = node?.extras?.reference_component
+    const translation = Array.isArray(node?.translation) ? node.translation : [0, 0, 0]
+    const parentIndex = nodeParentIndex(nodes, entry.index)
+    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
+    if (component !== REAR_SUPPORT_COMPONENT) {
+      failures.push(
+        `rear support ${quote(contract.name)} must declare component ${quote(REAR_SUPPORT_COMPONENT)}; ` +
+          `found ${formatValue(component)}`
+      )
+    }
+    if (parentName !== 'helmet_head') {
+      failures.push(
+        `rear support ${quote(contract.name)} must be parented to "helmet_head"; ` +
+          `found ${formatValue(parentName)}`
+      )
+    }
+    if (translation.length !== 3 || Math.abs(translation[0] - contract.translationX) > 0.0001) {
+      failures.push(
+        `rear support ${quote(contract.name)} must use symmetric x translation ${contract.translationX}; ` +
+          `found ${formatValue(translation)}`
+      )
+    }
+    supports.push({ name: contract.name, translation, component })
+  }
+  return supports
 }
 
 function inspectReferenceHead(nodes, nodeEntries, failures) {
@@ -685,6 +744,10 @@ function nodeContains(nodes, ancestorIndex, descendantIndex) {
   return false
 }
 
+function nodeParentIndex(nodes, childIndex) {
+  return nodes.findIndex((node) => Array.isArray(node?.children) && node.children.includes(childIndex))
+}
+
 function printGlbSummary(filePath, fileLength, glb) {
   console.log(`Reference robot GLB: ${filePath}`)
   console.log(
@@ -730,6 +793,10 @@ function printDocumentSummary(inspection) {
   console.log(
     `Visor attachments: ${inspection.visorAttachmentNodes.length}/${REQUIRED_VISOR_ATTACHMENT_NODES.length} present ` +
       `(${formatList(inspection.visorAttachmentNodes.map((node) => `${node.name}->${node.attachment}`))})`
+  )
+  console.log(
+    `Rear supports: ${inspection.rearSupportNodes.length}/${REQUIRED_REAR_SUPPORT_NODES.length} present ` +
+      `(${formatList(inspection.rearSupportNodes.map((node) => node.name))})`
   )
   console.log(
     `Reference head: cowl=${formatValue(inspection.referenceHead.cowlName)}, ` +
