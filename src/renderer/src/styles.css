@@ -606,7 +606,8 @@ textarea {
   width: auto;
 }
 
-.sidebar-group-new {
+.sidebar-group-new,
+.sidebar-group-more {
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
@@ -621,9 +622,14 @@ textarea {
   line-height: 1;
 }
 
-.sidebar-group-new:hover {
+.sidebar-group-new:hover,
+.sidebar-group-more:hover {
   background: var(--bg-card);
   color: var(--text);
+}
+
+.sidebar-group-more {
+  font-size: 16px;
 }
 
 .sidebar-unassigned-group {

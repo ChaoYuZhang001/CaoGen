@@ -956,6 +956,13 @@ export interface Project {
   name: string
   path: string
   lastUsedAt: number
+  /** 归档项目保留会话关联，但不参与新建会话选择。 */
+  archived?: boolean
+}
+
+export interface ProjectUpdate {
+  name?: string
+  archived?: boolean
 }
 
 export type ProjectContextFileName = 'caogen.md' | '.caogen.md' | 'README.md'
@@ -2428,7 +2435,7 @@ export interface AgentDeskApi {
   scanMigration(cwd: string): Promise<MigrationScan>
   importMigrationAssets(cwd: string, paths: string[]): Promise<string>
   listProjects(): Promise<Project[]>
-  updateProject(id: string, patch: { name?: string }): Promise<Project | null>
+  updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>
   deleteProject(id: string): Promise<void>
   readProjectContext(projectPath: string): Promise<ProjectContextReadResult>
   writeProjectContext(projectPath: string, content: string): Promise<ProjectContextReadResult>

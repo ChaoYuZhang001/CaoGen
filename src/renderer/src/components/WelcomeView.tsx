@@ -36,7 +36,8 @@ export default function WelcomeView(): React.JSX.Element {
   const requestedProjectId = useStore((s) => s.newSessionProjectId)
   const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
 
-  const initialProject = projects.find((project) => project.id === requestedProjectId) ?? projects[0]
+  const availableProjects = useMemo(() => projects.filter((project) => !project.archived), [projects])
+  const initialProject = availableProjects.find((project) => project.id === requestedProjectId) ?? availableProjects[0]
   const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.hasToken)
   const [text, setText] = useState('')
   const [projectChoice, setProjectChoice] = useState(initialProject?.id ?? NEW_PROJECT)
@@ -59,18 +60,25 @@ export default function WelcomeView(): React.JSX.Element {
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    if (projectChoice !== NEW_PROJECT || cwd || projects.length === 0) return
-    setProjectChoice(projects[0].id)
-    setCwd(projects[0].path)
-  }, [cwd, projectChoice, projects])
+    if (projectChoice !== NEW_PROJECT || cwd || availableProjects.length === 0) return
+    setProjectChoice(availableProjects[0].id)
+    setCwd(availableProjects[0].path)
+  }, [availableProjects, cwd, projectChoice])
 
   useEffect(() => {
     if (!requestedProjectId) return
-    const requested = projects.find((project) => project.id === requestedProjectId)
+    const requested = availableProjects.find((project) => project.id === requestedProjectId)
     if (!requested) return
     setProjectChoice(requested.id)
     setCwd(requested.path)
-  }, [projects, requestedProjectId])
+  }, [availableProjects, requestedProjectId])
+
+  useEffect(() => {
+    if (projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED) return
+    if (availableProjects.some((project) => project.id === projectChoice)) return
+    setProjectChoice(UNASSIGNED)
+    setCwd('')
+  }, [availableProjects, projectChoice])
 
   useEffect(() => {
     if (providerId) return
@@ -172,7 +180,7 @@ export default function WelcomeView(): React.JSX.Element {
       await startSessionWithPrompt(
         {
           cwd: cwd.trim(),
-          projectId: projects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
+          projectId: availableProjects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
           unassigned: projectChoice === UNASSIGNED,
           driveMode,
           model: routingMode === 'fixed' ? model : AUTO_MODEL,
@@ -229,7 +237,7 @@ export default function WelcomeView(): React.JSX.Element {
               value={projectChoice}
               onChange={(e) => onProjectChange(e.target.value)}
             >
-              {projects.map((project) => (
+              {availableProjects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
                 </option>
