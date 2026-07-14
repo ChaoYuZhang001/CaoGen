@@ -15,7 +15,16 @@ const DICT: Dict = {
   listView: { zh: '列表视图', en: 'List View' },
   ongoing: { zh: '进行中', en: 'Active' },
   projects: { zh: '项目', en: 'Projects' },
+  archivedProjects: { zh: '已归档项目', en: 'Archived projects' },
   newSessionHere: { zh: '在此项目新建会话', en: 'New session here' },
+  projectActions: { zh: '项目操作: {name}', en: 'Project actions: {name}' },
+  archiveProject: { zh: '归档项目', en: 'Archive project' },
+  unarchiveProject: { zh: '恢复项目', en: 'Restore project' },
+  deleteProject: { zh: '删除项目', en: 'Delete project' },
+  deleteProjectConfirm: {
+    zh: '删除项目「{name}」? 项目目录和会话不会被删除，相关会话将移入「未关联项目」。',
+    en: 'Delete project "{name}"? Its directory and sessions will be kept; related sessions will move to "No project".'
+  },
   unassignedSessions: { zh: '未关联项目', en: 'No project' },
   recent: { zh: '最近会话', en: 'Recent' },
   pinned: { zh: '置顶', en: 'Pinned' },
@@ -476,6 +485,9 @@ const DICT: Dict = {
     en: 'Stops the next Routine send after the limit is reached; 0 means unlimited.'
   },
   memoryShort: { zh: '记忆', en: 'Memory' },
+  startSuggestionsShort: { zh: '开工建议', en: 'Start suggestions' },
+  startSuggestionsLoading: { zh: '正在分析当前工作目录…', en: 'Analyzing the current working directory…' },
+  startSuggestionsEmpty: { zh: '当前工作目录没有可用的开工建议', en: 'No start suggestions for this working directory' },
   filePanelTitle: { zh: '文件编辑器', en: 'File editor' },
   filesTruncated: { zh: '文件过多,已截断', en: 'File list truncated' },
   fileSearchPlaceholder: { zh: '搜索文件…', en: 'Search files…' },

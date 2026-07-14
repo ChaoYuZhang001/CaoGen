@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { Project } from '../shared/types'
+import type { Project, ProjectUpdate } from '../shared/types'
 
 const MAX_PROJECTS = 50
 
@@ -47,6 +47,7 @@ export function touchProject(path: string): Project {
   const existing = list.find((p) => p.path === path)
   if (existing) {
     existing.lastUsedAt = Date.now()
+    existing.archived = false
     persist()
     return existing
   } else {
@@ -62,11 +63,12 @@ export function getProject(id: string): Project | undefined {
   return load().find((project) => project.id === id)
 }
 
-export function updateProject(id: string, patch: { name?: string }): Project | null {
+export function updateProject(id: string, patch: ProjectUpdate): Project | null {
   const list = load()
   const proj = list.find((p) => p.id === id)
   if (!proj) return null
   if (patch.name !== undefined) proj.name = patch.name.trim() || baseName(proj.path)
+  if (patch.archived !== undefined) proj.archived = patch.archived
   persist()
   return proj
 }
