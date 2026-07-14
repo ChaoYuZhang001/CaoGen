@@ -28,6 +28,7 @@ const reports = {
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
   n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
   releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
+  packagedAppSmoke: readJson('test-results/packaged-app-smoke/latest.json'),
   releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
   productPositioningAudit: readJson('test-results/product-positioning-audit/latest.json'),
   githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
@@ -373,6 +374,7 @@ function n1Domain() {
 
 function packagingDomain(packageJson) {
   const audit = reports.releasePackagingAudit
+  const launchAudit = reports.packagedAppSmoke
   const version = stringField(packageJson, 'version') || 'unknown'
   const distPath = path.join(repoRoot, 'dist')
   const hasDist = existsSync(distPath)
@@ -384,6 +386,10 @@ function packagingDomain(packageJson) {
     packageLockVersionMatches: audit.data?.packageLockVersion === releaseTargetVersion,
     commitMatches: audit.data?.git?.commit === gitState.commit,
     cleanCommitEvidence: audit.data?.git?.worktreeClean === true && gitState.worktreeClean,
+    packagedLaunchPassed: launchAudit.data?.status === 'passed',
+    packagedLaunchVersionMatches: launchAudit.data?.packageVersion === releaseTargetVersion,
+    packagedLaunchCommitMatches: launchAudit.data?.git?.commit === gitState.commit,
+    packagedLaunchCleanEvidence: launchAudit.data?.git?.worktreeClean === true && gitState.worktreeClean,
     artifactsComplete: artifacts.complete,
     artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256
   }
@@ -411,18 +417,29 @@ function packagingDomain(packageJson) {
       failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined,
       warnings: Array.isArray(audit.data?.warnings) ? audit.data.warnings : undefined
     },
+    packagedAppSmoke: {
+      path: launchAudit.relativePath,
+      exists: launchAudit.exists,
+      status: evidenceStatus(launchAudit),
+      packageVersion: launchAudit.data?.packageVersion,
+      git: launchAudit.data?.git,
+      target: launchAudit.data?.target,
+      failure: launchAudit.data?.failure
+    },
     commands: [
       'npm run typecheck',
       'npm run build',
       'npm run test:deep',
       'npm run secret:scan:history',
       'npm run dist:mac:x64',
-      'npm run test:release-packaging-audit:required'
+      'npm run test:release-packaging-audit:required',
+      'npm run test:packaged-app:mac'
     ],
     nextActions: [
       'Bump package.json and package-lock.json only when all required evidence gates are proved.',
       'Run macOS packaging and inspect dist assets before uploading.',
       'Run the packaging audit against the intended release version before creating GitHub Release assets.',
+      'Launch the packaged macOS app from a fresh user-data directory and require a real renderer target.',
       'Publish only the intended installer/update assets; never upload test-results, out, node_modules, .env files, certs, private keys, or local evidence packs.'
     ]
   }

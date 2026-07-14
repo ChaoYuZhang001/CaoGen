@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { listPackage } from '@electron/asar'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -25,6 +26,7 @@ const uploadableAssets = rootFiles.filter(isUploadableReleaseAsset)
 const uploadableAssetDigests = digestAssets(uploadableAssets)
 const artifactSetSha256 = digestJson(uploadableAssetDigests)
 const git = readGitState()
+const packagedRuntime = inspectPackagedRuntime()
 
 validatePackage()
 validateDist()
@@ -46,6 +48,7 @@ const report = {
   artifactSetSha256,
   unexpectedUploadableAssets: uploadableAssets.filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
   expectedMacAssets: expectedMacAssets(expectedVersion),
+  packagedRuntime,
   git,
   signing: packageJson.build?.mac?.identity === null ? 'unsigned' : 'configured-or-auto',
   publish: summarizePublish(packageJson.build?.publish),
@@ -112,6 +115,49 @@ function validateDist() {
   const latestMac = readDistText('latest-mac.yml')
   if (latestMac !== undefined && !latestMac.includes(`version: ${expectedVersion}`)) {
     failures.push(`latest-mac.yml does not reference version ${expectedVersion}`)
+  }
+  if (!packagedRuntime.asarPresent) {
+    failures.push(`packaged app archive is missing: ${packagedRuntime.asarPath}`)
+  } else if (packagedRuntime.error) {
+    failures.push(`unable to inspect packaged app archive: ${packagedRuntime.error}`)
+  } else {
+    for (const missing of packagedRuntime.missingRuntimeFiles) {
+      failures.push(`packaged app is missing required runtime file: ${missing}`)
+    }
+  }
+}
+
+function inspectPackagedRuntime() {
+  const asarPath = path.join(distDir, 'mac', 'CaoGen.app', 'Contents', 'Resources', 'app.asar')
+  const requiredRuntimeFiles = [
+    '/node_modules/tree-sitter/index.js',
+    '/node_modules/node-gyp-build/index.js',
+    '/node_modules/node-gyp-build/package.json'
+  ]
+  if (!existsSync(asarPath)) {
+    return {
+      asarPath: path.relative(repoRoot, asarPath),
+      asarPresent: false,
+      requiredRuntimeFiles,
+      missingRuntimeFiles: requiredRuntimeFiles
+    }
+  }
+  try {
+    const entries = new Set(listPackage(asarPath))
+    return {
+      asarPath: path.relative(repoRoot, asarPath),
+      asarPresent: true,
+      requiredRuntimeFiles,
+      missingRuntimeFiles: requiredRuntimeFiles.filter((file) => !entries.has(file))
+    }
+  } catch (error) {
+    return {
+      asarPath: path.relative(repoRoot, asarPath),
+      asarPresent: true,
+      requiredRuntimeFiles,
+      missingRuntimeFiles: requiredRuntimeFiles,
+      error: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
