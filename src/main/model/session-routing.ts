@@ -28,6 +28,8 @@ export interface SessionRouteInput {
   providerId: string
   providers: ProviderView[]
   engine?: EngineKind
+  /** 仅用于会话创建前的首次选路;已运行会话不得跨引擎热切换。 */
+  allowAnyEngine?: boolean
   driveMode?: CaoGenDriveMode
   payload: SendMessagePayload
   strategy: SchedulerStrategy
@@ -44,6 +46,16 @@ export interface SessionRouteInput {
   strongReasoningModel?: string
   reviewProviderId?: string
   reviewModel?: string
+  researchProviderId?: string
+  researchModel?: string
+  planningProviderId?: string
+  planningModel?: string
+  codingProviderId?: string
+  codingModel?: string
+  testingProviderId?: string
+  testingModel?: string
+  documentationProviderId?: string
+  documentationModel?: string
   modelRoutingRules?: ModelRoutingRule[]
   projectPath?: string
 }
@@ -63,7 +75,7 @@ export type SessionRouteResult =
 
 export function resolveSessionModelRoute(input: SessionRouteInput): SessionRouteResult {
   if (!input.enabled || input.currentModel !== AUTO_MODEL) return { kind: 'disabled' }
-  const providerSelection = routeableProviders(input.providers, input.engine)
+  const providerSelection = routeableProviders(input.providers, input.engine, input.allowAnyEngine === true)
   const providers = providerSelection.providers
   if (providers.length === 0) return { kind: 'disabled' }
   const prompt = input.payload.text
@@ -203,13 +215,13 @@ function buildRoutingDecisionView(
 
 function routeableProviders(
   providers: ProviderView[],
-  engine: EngineKind | undefined
+  engine: EngineKind | undefined,
+  allowAnyEngine: boolean
 ): { providers: ProviderView[]; warnings: string[] } {
   const compatible = providers.filter((provider) => {
-    if (provider.baseUrl.trim().length === 0 || !provider.hasToken || provider.models.length === 0) return false
-    if (engine === 'openai') return provider.openaiProtocol === 'chat' || provider.openaiProtocol === 'responses'
-    if (engine === 'claude') return provider.openaiProtocol === undefined
-    return false
+    if (!provider.hasToken || provider.models.length === 0) return false
+    if (allowAnyEngine) return true
+    return engine !== undefined && provider.engine === engine
   })
   const healthy = compatible.filter((provider) => getHealth(provider.id).healthy)
   if (healthy.length > 0) {
@@ -247,6 +259,11 @@ function inferRouteRisk(prompt: string): 'low' | 'medium' | 'high' {
 
 function modelRoleOverride(input: SessionRouteInput): ManualModelOverride | undefined {
   const prompt = input.payload.text.toLowerCase()
+  const wantsResearch = hasAny(prompt, ['research', 'investigate', '调研', '调查', '资料搜集'])
+  const wantsPlanning = hasAny(prompt, ['plan', 'proposal', 'roadmap', '策划', '方案', '路线图'])
+  const wantsTesting = hasAny(prompt, ['test', 'testing', 'qa', '测试', '验收'])
+  const wantsDocumentation = hasAny(prompt, ['documentation', 'readme', 'spec', '文档', '需求文档'])
+  const wantsCoding = hasAny(prompt, ['code', 'coding', 'implement', 'typescript', 'refactor', '代码', '开发', '实现', '重构'])
   const wantsReview = hasAny(prompt, ['review', '审查', '复核', 'diff', '风险'])
   const wantsStrong =
     input.driveMode === 'forge' ||
@@ -258,6 +275,26 @@ function modelRoleOverride(input: SessionRouteInput): ManualModelOverride | unde
     input.strategy === 'cost' ||
     hasAny(prompt, ['quick', 'simple', 'summarize', '轻量', '快速', '简单', '总结'])
 
+  if (wantsResearch) {
+    const override = buildRoleOverride(input.researchProviderId, input.researchModel, '调研任务偏好')
+    if (override) return override
+  }
+  if (wantsPlanning) {
+    const override = buildRoleOverride(input.planningProviderId, input.planningModel, '策划任务偏好')
+    if (override) return override
+  }
+  if (wantsTesting) {
+    const override = buildRoleOverride(input.testingProviderId, input.testingModel, '测试任务偏好')
+    if (override) return override
+  }
+  if (wantsDocumentation) {
+    const override = buildRoleOverride(input.documentationProviderId, input.documentationModel, '文档任务偏好')
+    if (override) return override
+  }
+  if (wantsCoding) {
+    const override = buildRoleOverride(input.codingProviderId, input.codingModel, '开发任务偏好')
+    if (override) return override
+  }
   if (wantsReview) {
     const override = buildRoleOverride(input.reviewProviderId, input.reviewModel, '审查模型偏好')
     if (override) return override

@@ -18,7 +18,11 @@ const MODEL_ROUTING_TASK_KINDS = new Set<ModelRoutingTaskKind>([
   'toolUse',
   'longContext',
   'review',
-  'summarization'
+  'summarization',
+  'research',
+  'planning',
+  'testing',
+  'documentation'
 ])
 
 const DEFAULTS: AppSettings = {
@@ -34,6 +38,16 @@ const DEFAULTS: AppSettings = {
   strongReasoningModel: '',
   reviewProviderId: '',
   reviewModel: '',
+  researchProviderId: '',
+  researchModel: '',
+  planningProviderId: '',
+  planningModel: '',
+  codingProviderId: '',
+  codingModel: '',
+  testingProviderId: '',
+  testingModel: '',
+  documentationProviderId: '',
+  documentationModel: '',
   schedulerStrategy: 'balanced',
   modelRoutingRules: [],
   smartModelRoutingEnabled: false,

@@ -84,11 +84,7 @@ try {
   const sessionRouting = source('src/main/model/session-routing.ts')
   assert(!sessionRouting.includes("engine === undefined || engine === 'claude'"), 'routing must not treat an unspecified engine as Claude')
 
-  for (const file of [
-    'src/renderer/src/components/NewSessionModal.tsx',
-    'src/renderer/src/components/WelcomeView.tsx',
-    'src/renderer/src/components/RoutineEditor.tsx'
-  ]) {
+  for (const file of ['src/renderer/src/components/RoutineEditor.tsx']) {
     const ui = source(file)
     assert(ui.includes('optionalEngineNotConfigured'), `${file} must label unconfigured Claude as optional`)
     assert(
@@ -96,6 +92,12 @@ try {
       `${file} must disable an optional engine until it is configured`
     )
     assert(ui.includes('[providers]'), `${file} must refresh engine configuration after Provider changes`)
+  }
+
+  for (const file of ['src/renderer/src/components/WelcomeView.tsx']) {
+    const ui = source(file)
+    assert(!ui.includes('listEngines'), `${file} must not ask users to choose a conversation engine`)
+    assert(!ui.includes('EngineKind'), `${file} must derive the engine from Provider configuration`)
   }
 
   const doctor = source('scripts/workos-release-doctor.mjs')

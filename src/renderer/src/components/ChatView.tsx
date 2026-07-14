@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { modelOptionsForProvider, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { formatCost, formatTokens } from '../format'
@@ -167,7 +167,7 @@ export default function ChatView(): React.JSX.Element | null {
   if (!session || !activeId) return null
   const { meta } = session
   const running = meta.status === 'running' || meta.status === 'starting'
-  const modelKnown = MODEL_OPTIONS.some((o) => o.value === meta.model)
+  const modelOptions = modelOptionsForProvider(providers, meta.providerId, t('autoRoute'), meta.model)
   const providerName = meta.providerId
     ? providers.find((p) => p.id === meta.providerId)?.name ?? t('unknownProvider')
     : t('providerOfficial')
@@ -201,12 +201,11 @@ export default function ChatView(): React.JSX.Element | null {
             onChange={(e) => void setModel(e.target.value)}
             title={t('switchModel')}
           >
-            {MODEL_OPTIONS.map((o) => (
+            {modelOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
             ))}
-            {!modelKnown && <option value={meta.model}>{meta.model}</option>}
           </select>
           <select
             className="select"

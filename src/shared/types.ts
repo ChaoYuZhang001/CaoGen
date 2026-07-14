@@ -21,6 +21,10 @@ export type ModelRoutingTaskKind =
   | 'longContext'
   | 'review'
   | 'summarization'
+  | 'research'
+  | 'planning'
+  | 'testing'
+  | 'documentation'
 
 export type ModelRoutingRiskLevel = 'low' | 'medium' | 'high'
 
@@ -110,6 +114,9 @@ export interface ModelRoutingDecisionView {
 
 /** 会话 model 字段取此哨兵值 = 启用智能自动调度 */
 export const AUTO_MODEL = 'auto'
+/** 新会话 providerId 取此哨兵值 = 先跨厂商选路再创建会话。 */
+export const AUTO_PROVIDER_ID = 'auto-provider'
+export type SessionRoutingScope = 'fixed' | 'provider' | 'global'
 export const DEEPSEEK_PROVIDER_ID = 'deepseek-official'
 export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-chat'
 
@@ -261,6 +268,10 @@ export interface SessionMeta {
   isolated?: boolean
   /** 用户最初选择的目录;隔离会话中 cwd 会改为 worktree 内对应目录。 */
   sourceCwd?: string
+  /** 显式关联的 CaoGen 项目;旧会话缺失时可按目录兼容匹配。 */
+  projectId?: string
+  /** 明确不归属项目的会话;仍保留工作目录供工具执行。 */
+  unassigned?: boolean
   /** 原仓库根目录。 */
   repoRoot?: string
   /** CaoGen 管理的 worktree 根目录。 */
@@ -275,13 +286,15 @@ export interface SessionMeta {
   worktreeState?: 'active' | 'removed'
   /** 空字符串表示跟随 CLI 默认模型 */
   model: string
-  /** 此会话绑定的 Provider ID;新会话必须显式选择。 */
+  /** 此会话当前绑定的 Provider ID;全局自动模式会在创建时选定。 */
   providerId: string
+  /** fixed=指定模型;provider=仅厂商内调度;global=跨厂商调度。 */
+  routingScope?: SessionRoutingScope
   /** 本会话预算上限;0/undefined = 继承 Provider 或全局设置。 */
   budgetUsd?: number
   /** 下次 resume SDK 会话时截断到此用户消息/检查点。 */
   resumeSessionAt?: string
-  /** Agent 引擎;新会话必须显式选择。 */
+  /** Agent 引擎;由会话 Provider 配置自动决定。 */
   engine?: EngineKind
   permissionMode: PermissionModeId
   status: SessionStatus
@@ -308,6 +321,8 @@ export interface HistoryEntry {
   childRole?: string
   isolated?: boolean
   sourceCwd?: string
+  projectId?: string
+  unassigned?: boolean
   repoRoot?: string
   worktreePath?: string
   branch?: string
@@ -316,6 +331,7 @@ export interface HistoryEntry {
   worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
+  routingScope?: SessionRoutingScope
   engine?: EngineKind
   permissionMode: PermissionModeId
   sdkSessionId: string
@@ -331,6 +347,8 @@ export interface HistoryEntry {
 
 export interface CreateSessionOptions {
   cwd: string
+  projectId?: string
+  unassigned?: boolean
   driveMode?: CaoGenDriveMode
   parentSessionId?: string
   orchestrationId?: string
@@ -340,9 +358,12 @@ export interface CreateSessionOptions {
   isolated?: boolean
   model?: string
   providerId?: string
+  routingScope?: SessionRoutingScope
+  /** 全局自动调度在创建引擎前用首条请求选定初始 Provider。 */
+  initialPrompt?: string
   budgetUsd?: number
   resumeSessionAt?: string
-  /** Agent 引擎;新会话必须显式传入。 */
+  /** 兼容旧调用;新会话会忽略此值并从 Provider 解析引擎。 */
   engine?: EngineKind
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
@@ -1100,6 +1121,21 @@ export interface AppSettings {
   /** 审查/复核任务偏好的 Provider/模型;空字符串 = 交给自动路由。 */
   reviewProviderId: string
   reviewModel: string
+  /** 调研任务偏好;空字符串 = 按长上下文/视觉/总结能力自动选择。 */
+  researchProviderId: string
+  researchModel: string
+  /** 策划与方案任务偏好。 */
+  planningProviderId: string
+  planningModel: string
+  /** 开发与编码任务偏好。 */
+  codingProviderId: string
+  codingModel: string
+  /** 测试、QA 与验收任务偏好。 */
+  testingProviderId: string
+  testingModel: string
+  /** 文档、README 与规格编写任务偏好。 */
+  documentationProviderId: string
+  documentationModel: string
   /** 自动调度策略 */
   schedulerStrategy: SchedulerStrategy
   /** 用户自定义调度规则;按顺序匹配用户请求关键词。 */
@@ -1184,6 +1220,8 @@ export interface Provider {
   activeKeyId?: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
+  /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
+  engine?: EngineKind
   /**
    * 自定义请求头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
    * 某些网关需要额外头(如自定义鉴权、路由标签)。
@@ -1233,6 +1271,7 @@ export interface ProviderView {
   name: string
   baseUrl: string
   models: string[]
+  engine: EngineKind
   customHeaders?: string
   budgetUsd: number
   openaiProtocol?: OpenAIProtocol
@@ -1385,6 +1424,7 @@ export interface ProviderInput {
   name: string
   baseUrl: string
   models: string[]
+  engine?: EngineKind
   customHeaders?: string
   budgetUsd?: number
   openaiProtocol?: OpenAIProtocol

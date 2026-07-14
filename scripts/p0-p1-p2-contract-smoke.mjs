@@ -228,14 +228,16 @@ function verifySourceContracts() {
   assert(providers.includes('recordFailure(providerId, message)'), 'failed model fetch must record provider failure reason')
   assert(providers.includes('latencyMs,'), 'model fetch result must expose latencyMs')
 
-  const newSessionModal = readFileSync(path.join(repoRoot, 'src/renderer/src/components/NewSessionModal.tsx'), 'utf8')
-  assert(newSessionModal.includes("useState<EngineKind | ''>('')"), 'new session UI must not default to Claude engine')
+  const welcome = readFileSync(path.join(repoRoot, 'src/renderer/src/components/WelcomeView.tsx'), 'utf8')
+  const app = readFileSync(path.join(repoRoot, 'src/renderer/src/App.tsx'), 'utf8')
   assert(
-    newSessionModal.includes("useState('')") &&
-      newSessionModal.includes("t('selectProviderPlaceholder')") &&
-      newSessionModal.includes("t('selectModelPlaceholder')"),
-    'new session UI must start with explicit provider/model placeholders'
+    !welcome.includes('EngineKind') &&
+      !welcome.includes('listEngines') &&
+      welcome.includes('modelOptionsForProvider'),
+    'new session UI must derive engine/model choices from the selected Provider'
   )
+  assert(!app.includes('<NewSessionModal'), 'new session must render as an inline workspace, not a modal')
+  assert(providers.includes('resolveProviderEngine'), 'Provider configuration must own execution engine resolution')
 
   const agentSession = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
   const hiddenAnthropicName = '\u5b98\u65b9 Anthropic'

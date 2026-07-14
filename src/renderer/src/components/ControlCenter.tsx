@@ -1,10 +1,11 @@
 import {
   DRIVE_MODE_OPTIONS,
-  MODEL_OPTIONS,
+  modelOptionsForProvider,
   STRATEGY_OPTIONS
 } from '../store'
 import { buildControlCenterView, type ControlCenterStatus } from '../controlCenter'
 import { formatCost } from '../format'
+import { AUTO_MODEL } from '../../../shared/types'
 import type {
   AppSettings,
   CaoGenDriveMode,
@@ -153,7 +154,10 @@ export default function ControlCenter({
             <select
               className="select select-block"
               value={settings.defaultProviderId}
-              onChange={(event) => onSettingsPatch({ defaultProviderId: event.target.value })}
+              onChange={(event) => {
+                const defaultProviderId = event.target.value
+                onSettingsPatch({ defaultProviderId, defaultModel: defaultProviderId ? AUTO_MODEL : '' })
+              }}
             >
               <option value="">不设置 Provider 偏好</option>
               {providers.map((provider) => (
@@ -171,7 +175,12 @@ export default function ControlCenter({
               onChange={(event) => onSettingsPatch({ defaultModel: event.target.value })}
             >
               <option value="">不设置模型偏好</option>
-              {MODEL_OPTIONS.map((option) => (
+              {modelOptionsForProvider(
+                providers,
+                settings.defaultProviderId,
+                '🧭 自动调度',
+                settings.defaultModel
+              ).map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>

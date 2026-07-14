@@ -310,6 +310,7 @@ function providerViews(value: unknown): ProviderView[] | undefined {
       name,
       baseUrl: optionalString(item.baseUrl) ?? '',
       models,
+      engine: item.engine === 'claude' ? 'claude' : 'openai',
       budgetUsd: optionalNumber(item.budgetUsd) ?? 0,
       customHeaders: optionalString(item.customHeaders),
       openaiProtocol: item.openaiProtocol === 'chat' || item.openaiProtocol === 'responses' ? item.openaiProtocol : undefined,

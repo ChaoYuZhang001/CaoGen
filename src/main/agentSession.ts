@@ -76,6 +76,7 @@ import type {
   SdkAgentInfo,
   SendMessagePayload,
   SessionMeta,
+  SessionRoutingScope,
   UserMessageAttachmentView,
   UsageTotals
 } from '../shared/types'
@@ -827,7 +828,7 @@ export class AgentSession implements Engine {
     try {
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
       const strategy = settings.schedulerStrategy
-      if (settings.smartModelRoutingEnabled) {
+      if (settings.smartModelRoutingEnabled || this.meta.routingScope === 'provider' || this.meta.routingScope === 'global') {
         const monthlyBudget = calculateMonthlyBudgetSnapshot({
           settings,
           history: listHistory(),
@@ -837,7 +838,10 @@ export class AgentSession implements Engine {
           enabled: true,
           currentModel: this.meta.model,
           providerId: this.meta.providerId,
-          providers: listProviders(),
+          providers:
+            this.meta.routingScope === 'provider'
+              ? listProviders().filter((provider) => provider.id === this.meta.providerId)
+              : listProviders(),
           engine: this.meta.engine,
           driveMode: this.meta.driveMode,
           payload,
@@ -854,6 +858,16 @@ export class AgentSession implements Engine {
           strongReasoningModel: settings.strongReasoningModel,
           reviewProviderId: settings.reviewProviderId,
           reviewModel: settings.reviewModel,
+          researchProviderId: settings.researchProviderId,
+          researchModel: settings.researchModel,
+          planningProviderId: settings.planningProviderId,
+          planningModel: settings.planningModel,
+          codingProviderId: settings.codingProviderId,
+          codingModel: settings.codingModel,
+          testingProviderId: settings.testingProviderId,
+          testingModel: settings.testingModel,
+          documentationProviderId: settings.documentationProviderId,
+          documentationModel: settings.documentationModel,
           modelRoutingRules: settings.modelRoutingRules,
           projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
@@ -2042,6 +2056,8 @@ export function newSessionMeta(opts: {
   childRole?: string
   isolated?: boolean
   sourceCwd?: string
+  projectId?: string
+  unassigned?: boolean
   repoRoot?: string
   worktreePath?: string
   branch?: string
@@ -2050,6 +2066,7 @@ export function newSessionMeta(opts: {
   worktreeState?: 'active' | 'removed'
   model: string
   providerId: string
+  routingScope?: SessionRoutingScope
   budgetUsd?: number
   resumeSessionAt?: string
   engine?: EngineKind
@@ -2067,6 +2084,8 @@ export function newSessionMeta(opts: {
     childRole: opts.childRole,
     isolated: opts.isolated,
     sourceCwd: opts.sourceCwd,
+    projectId: opts.projectId,
+    unassigned: opts.unassigned,
     repoRoot: opts.repoRoot,
     worktreePath: opts.worktreePath,
     branch: opts.branch,
@@ -2075,6 +2094,7 @@ export function newSessionMeta(opts: {
     worktreeState: opts.worktreeState,
     model: opts.model,
     providerId: opts.providerId,
+    routingScope: opts.routingScope,
     budgetUsd: normalizeBudget(opts.budgetUsd),
     resumeSessionAt: opts.resumeSessionAt,
     engine: opts.engine,

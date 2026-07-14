@@ -301,7 +301,7 @@ export class OpenAIEngine implements Engine {
   private autoRoute(payload: SendMessagePayload): void {
     try {
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
-      if (settings.smartModelRoutingEnabled) {
+      if (settings.smartModelRoutingEnabled || this.meta.routingScope === 'provider' || this.meta.routingScope === 'global') {
         const monthlyBudget = calculateMonthlyBudgetSnapshot({
           settings,
           history: listHistory(),
@@ -311,7 +311,10 @@ export class OpenAIEngine implements Engine {
           enabled: true,
           currentModel: this.meta.model,
           providerId: this.meta.providerId,
-          providers: listProviders(),
+          providers:
+            this.meta.routingScope === 'provider'
+              ? listProviders().filter((provider) => provider.id === this.meta.providerId)
+              : listProviders(),
           engine: this.meta.engine,
           driveMode: this.meta.driveMode,
           payload,
@@ -328,6 +331,16 @@ export class OpenAIEngine implements Engine {
           strongReasoningModel: settings.strongReasoningModel,
           reviewProviderId: settings.reviewProviderId,
           reviewModel: settings.reviewModel,
+          researchProviderId: settings.researchProviderId,
+          researchModel: settings.researchModel,
+          planningProviderId: settings.planningProviderId,
+          planningModel: settings.planningModel,
+          codingProviderId: settings.codingProviderId,
+          codingModel: settings.codingModel,
+          testingProviderId: settings.testingProviderId,
+          testingModel: settings.testingModel,
+          documentationProviderId: settings.documentationProviderId,
+          documentationModel: settings.documentationModel,
           modelRoutingRules: settings.modelRoutingRules,
           projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
