@@ -102,7 +102,8 @@ assertEqual(recorderPreflightCheck.evidenceSummary.source, 'recorder')
 
 const weakRecorderPreflight = runNodeScript('scripts/p2-external-preflight.mjs', readyPreflightEnv(path.join(reportRoot, 'preflight-weak-recorder'), {
   CAOGEN_JETBRAINS_IDE_EVIDENCE_JSON: '',
-  CAOGEN_JETBRAINS_IDE_RECORDER_JSONL: weakRecorderPath
+  CAOGEN_JETBRAINS_IDE_RECORDER_JSONL: weakRecorderPath,
+  CAOGEN_JETBRAINS_NATIVE_UNDO_VERIFIED: ''
 }))
 assert(weakRecorderPreflight.status === 1, weakRecorderPreflight.output)
 const weakRecorderPreflightReport = readJson(path.join(reportRoot, 'preflight-weak-recorder', 'latest.json'))
