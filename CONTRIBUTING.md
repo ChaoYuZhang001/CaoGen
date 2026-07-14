@@ -66,6 +66,12 @@ docs: clarify macOS unsigned install
 test: cover release asset audit
 ```
 
+## 贡献许可
+
+提交 Issue 不会转让任何版权。当你提交 Pull Request 时，你确认自己有权提交相关代码和资料，并同意该贡献至少可按本项目的 [AGPL-3.0-only](./LICENSE) 许可使用。
+
+CaoGen 同时提供独立商业授权。如果某项外部贡献将被纳入商业授权版本，维护者会在合并前另行要求贡献者签署明确的贡献者许可协议（CLA）。提交 PR 本身不会自动转让版权，也不会自动授予项目方重新许可的权利。
+
 ## 发布说明
 
 发布相关 PR 需要同步检查：
