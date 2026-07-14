@@ -142,7 +142,7 @@
 | 平台 | 当前发布包 | 状态 | 说明 |
 |---|---|---|---|
 | macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 上一版已发布 | v0.1.5 本次不发布 arm64 包 |
-| macOS Intel | `CaoGen-0.1.5.dmg` / `CaoGen-0.1.5-mac.zip` | v0.1.5 发布候选 | 适合 Intel Mac |
+| macOS Intel | `CaoGen-0.1.5.dmg` / `CaoGen-0.1.5-mac.zip` | [v0.1.5 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) | 适合 Intel Mac |
 | Windows | `CaoGen.Setup.0.1.3.exe` | 上一版已发布 | v0.1.5 本次不发布 Windows 包 |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
@@ -152,7 +152,7 @@
 
 ## 校验下载文件
 
-下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.5 发布候选主要资产的 SHA256 如下：
+下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.5 已发布主要资产的 SHA256 如下：
 
 | 文件 | SHA256 |
 |---|---|
@@ -237,7 +237,7 @@ src/
 
 ## 项目状态
 
-- 当前发布候选：**v0.1.5 beta**。
+- 当前公开版本：[**v0.1.5**](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5)。
 - v0.1.5 只发布 macOS x64 安装包；arm64、Windows、Linux 不在本轮发布范围。
 - 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
 - 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
