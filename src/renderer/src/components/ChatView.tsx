@@ -66,7 +66,9 @@ export default function ChatView(): React.JSX.Element | null {
   const scrollFrame = useRef<number | null>(null)
   const [scrollSnapshot, setScrollSnapshot] = useState<ScrollSnapshot>({ top: 0, height: 0 })
   const [moreOpen, setMoreOpen] = useState(false)
+  const [startSuggestionsSessionId, setStartSuggestionsSessionId] = useState<string | null>(null)
   const moreRef = useRef<HTMLDivElement>(null)
+  const startSuggestionsOpen = startSuggestionsSessionId === activeId
 
   const updateScrollSnapshot = useCallback((): void => {
     const el = scrollRef.current
@@ -144,8 +146,9 @@ export default function ChatView(): React.JSX.Element | null {
   }, [activeId, updateScrollSnapshot])
 
   useEffect(() => {
-    if (activeId) void refreshStartSuggestions()
-  }, [activeId, refreshStartSuggestions])
+    setMoreOpen(false)
+    setStartSuggestionsSessionId(null)
+  }, [activeId])
 
   useEffect(() => {
     let lastEsc = 0
@@ -301,6 +304,7 @@ export default function ChatView(): React.JSX.Element | null {
             {moreOpen && (
               <div className="header-more-menu" role="menu">
                 <MenuItem
+                  action="subagents"
                   icon="subagents"
                   label={t('subagentsShort')}
                   onSelect={() => {
@@ -309,6 +313,7 @@ export default function ChatView(): React.JSX.Element | null {
                   }}
                 />
                 <MenuItem
+                  action="plugins"
                   icon="plugins"
                   label={t('pluginsShort')}
                   onSelect={() => {
@@ -317,6 +322,7 @@ export default function ChatView(): React.JSX.Element | null {
                   }}
                 />
                 <MenuItem
+                  action="routines"
                   icon="routines"
                   label={t('routinesShort')}
                   onSelect={() => {
@@ -325,6 +331,21 @@ export default function ChatView(): React.JSX.Element | null {
                   }}
                 />
                 <MenuItem
+                  action="start-suggestions"
+                  icon="suggestions"
+                  label={t('startSuggestionsShort')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    if (startSuggestionsOpen) {
+                      setStartSuggestionsSessionId(null)
+                      return
+                    }
+                    setStartSuggestionsSessionId(activeId)
+                    void refreshStartSuggestions()
+                  }}
+                />
+                <MenuItem
+                  action="memory"
                   icon="memory"
                   label={t('memoryShort')}
                   onSelect={() => {
@@ -349,18 +370,33 @@ export default function ChatView(): React.JSX.Element | null {
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">
-          {startSuggestionsError && (
+          {startSuggestionsOpen && startSuggestionsLoading && (
+            <div className="notice start-suggestions-chat-notice" data-start-suggestions-status="loading">
+              {t('startSuggestionsLoading')}
+            </div>
+          )}
+          {startSuggestionsOpen && startSuggestionsError && (
             <div className="notice notice-error start-suggestions-chat-notice">{startSuggestionsError}</div>
           )}
-          <StartSuggestionsPanel
-            suggestions={startSuggestions}
-            compact
-            disabled={running || startSuggestionsLoading}
-            maxVisible={3}
-            onSendToAgent={(suggestion) => void sendStartSuggestion(suggestion)}
-            onLater={(suggestion) => laterStartSuggestion(suggestion.id)}
-            onIgnore={(suggestion) => ignoreStartSuggestion(suggestion.id)}
-          />
+          {startSuggestionsOpen &&
+            !startSuggestionsLoading &&
+            !startSuggestionsError &&
+            startSuggestions.length === 0 && (
+              <div className="notice start-suggestions-chat-notice" data-start-suggestions-status="empty">
+                {t('startSuggestionsEmpty')}
+              </div>
+            )}
+          {startSuggestionsOpen && (
+            <StartSuggestionsPanel
+              suggestions={startSuggestions}
+              compact
+              disabled={running || startSuggestionsLoading}
+              maxVisible={3}
+              onSendToAgent={(suggestion) => void sendStartSuggestion(suggestion)}
+              onLater={(suggestion) => laterStartSuggestion(suggestion.id)}
+              onIgnore={(suggestion) => ignoreStartSuggestion(suggestion.id)}
+            />
+          )}
           <MessageList
             activeId={activeId}
             items={session.items}
@@ -688,14 +724,21 @@ function IconButton({ icon, label, onClick }: IconButtonProps): React.JSX.Elemen
 }
 
 interface MenuItemProps {
+  action: string
   icon: HeaderIconName
   label: string
   onSelect: () => void
 }
 
-function MenuItem({ icon, label, onSelect }: MenuItemProps): React.JSX.Element {
+function MenuItem({ action, icon, label, onSelect }: MenuItemProps): React.JSX.Element {
   return (
-    <button type="button" className="header-more-item" role="menuitem" onClick={onSelect}>
+    <button
+      type="button"
+      className="header-more-item"
+      role="menuitem"
+      data-header-action={action}
+      onClick={onSelect}
+    >
       <HeaderIcon name={icon} />
       <span>{label}</span>
     </button>

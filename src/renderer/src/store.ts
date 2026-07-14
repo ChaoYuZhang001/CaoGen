@@ -895,6 +895,7 @@ interface AppStore {
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
   deleteProvider(id: string): Promise<void>
   refreshProjects(): Promise<void>
+  archiveProject(id: string, archived: boolean): Promise<void>
   deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean, projectId?: string): void
   setShowSettings(v: boolean): void
@@ -1667,19 +1668,37 @@ export const useStore = create<AppStore>((set, get) => {
     closeNativeBrowserView(id)
     await window.agentDesk.closeSession(id)
     pendingEvents.delete(id)
+    const [historyResult, taskSnapshotsResult] = await Promise.allSettled([
+      window.agentDesk.listHistory(),
+      window.agentDesk.listTaskSnapshots()
+    ])
     set((s) => {
       const sessions = { ...s.sessions }
       delete sessions[id]
       const order = s.order.filter((x) => x !== id)
+      const requestedActiveId = s.activeId === id ? null : s.activeId
+      const activeId = requestedActiveId && sessions[requestedActiveId]
+        ? requestedActiveId
+        : (order[order.length - 1] ?? null)
       return {
         sessions,
         order,
-        activeId: s.activeId === id ? (order[order.length - 1] ?? null) : s.activeId
+        activeId,
+        history: historyResult.status === 'fulfilled' ? historyResult.value : s.history,
+        taskSnapshots: taskSnapshotsResult.status === 'fulfilled' ? taskSnapshotsResult.value : s.taskSnapshots,
+        taskSnapshotsLoading: false,
+        taskSnapshotsError:
+          taskSnapshotsResult.status === 'rejected'
+            ? taskSnapshotsResult.reason instanceof Error
+              ? taskSnapshotsResult.reason.message
+              : String(taskSnapshotsResult.reason)
+            : undefined,
+        showNewSession: activeId === null ? true : s.showNewSession,
+        newSessionProjectId: activeId === null ? null : s.newSessionProjectId,
+        showTaskRecovery: false,
+        view: activeId === null ? 'list' : s.view
       }
     })
-    const history = await window.agentDesk.listHistory()
-    set({ history })
-    void get().refreshTaskSnapshots()
   },
 
   async respondPermission(sessionId, requestId, allow, message) {
@@ -3550,12 +3569,14 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({
       workbench: {
         ...s.workbench,
+        startSuggestions: [],
         startSuggestionsLoading: true,
         startSuggestionsError: undefined
       }
     }))
     try {
       const suggestions = await window.agentDesk.getStartSuggestions(id)
+      if (get().activeId !== id) return
       set((s) => ({
         workbench: {
           ...s.workbench,
@@ -3565,6 +3586,7 @@ export const useStore = create<AppStore>((set, get) => {
         }
       }))
     } catch (err) {
+      if (get().activeId !== id) return
       set((s) => ({
         workbench: {
           ...s.workbench,
@@ -3774,13 +3796,32 @@ export const useStore = create<AppStore>((set, get) => {
     set({ projects })
   },
 
+  async archiveProject(id, archived) {
+    await window.agentDesk.updateProject(id, { archived })
+    const projects = await window.agentDesk.listProjects()
+    set((s) => ({
+      projects,
+      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
+    }))
+  },
+
   async deleteProject(id) {
     await window.agentDesk.deleteProject(id)
-    await get().refreshProjects()
+    const projects = await window.agentDesk.listProjects()
+    set((s) => ({
+      projects,
+      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
+    }))
   },
 
   setShowNewSession(v, projectId) {
-    set({ showNewSession: v, newSessionProjectId: v ? projectId ?? null : null })
+    set((s) => ({
+      showNewSession: v,
+      newSessionProjectId: v ? projectId ?? null : null,
+      showSettings: v ? false : s.showSettings,
+      showTaskRecovery: v ? false : s.showTaskRecovery,
+      view: v ? 'list' : s.view
+    }))
   },
 
   setShowSettings(v) {

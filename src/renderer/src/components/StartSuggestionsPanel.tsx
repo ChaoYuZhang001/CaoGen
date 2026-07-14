@@ -25,7 +25,7 @@ export interface StartSuggestionsPanelProps {
 
 const DEFAULT_LABELS: StartSuggestionsPanelLabels = {
   title: '开工建议',
-  subtitle: '基于当前项目状态，先挑一个能直接推进的动作。',
+  subtitle: '基于当前工作目录状态，先挑一个能直接推进的动作。',
   reason: '理由',
   promptPreview: '将发送',
   sendToAgent: '发送给 Agent',

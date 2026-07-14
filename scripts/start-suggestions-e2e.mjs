@@ -97,7 +97,7 @@ try {
   await page.waitForSelector('.app', { timeout: 20_000 })
   await waitForAgentDesk(page)
 
-  await check('seed session, memory failure, and failed routine through preload IPC', async () => {
+  await check('seed session, scoped memory, and routines through preload IPC', async () => {
     session = await page.evaluate((cwd) => {
       return window.agentDesk.createSession({
         cwd,
@@ -120,6 +120,17 @@ try {
         reason: 'failure smoke'
       })
       const memory = await window.agentDesk.acceptMemoryDraft(sessionId, draft.id)
+      const unrelatedRoutine = await window.agentDesk.createRoutine({
+        id: 'routine-unrelated-failed',
+        name: 'Unrelated failed routine marker',
+        prompt: 'failed unrelated routine marker must stay out of this project',
+        projectCwd: `${cwd}-unrelated`,
+        schedule: '@daily',
+        enabled: true,
+        providerId: 'unrelated-provider',
+        model: 'unrelated-model',
+        engine: 'openai'
+      })
       const routine = await window.agentDesk.createRoutine({
         id: 'routine-a4-failed',
         name: 'Failed nightly routine',
@@ -131,10 +142,11 @@ try {
         model: 'mock-responses',
         engine: 'openai'
       })
-      return { memory, routine }
+      return { memory, routine, unrelatedRoutine }
     }, session.id, projectDir)
     assert(seeded.memory?.id, 'accepted memory entry missing')
     assert(seeded.routine?.id === 'routine-a4-failed', 'routine seed mismatch')
+    assert(seeded.unrelatedRoutine?.id === 'routine-unrelated-failed', 'unrelated routine seed mismatch')
   })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -142,7 +154,19 @@ try {
   await waitForAgentDesk(page)
   await page.waitForFunction(() => document.body.innerText.includes('A4 start suggestions'), { timeout: 15_000 })
 
-  await check('session activation renders start suggestions panel', async () => {
+  await check('session activation does not render start suggestions by default', async () => {
+    await sleep(750)
+    const rendered = await readRenderedSuggestions(page)
+    assert(rendered.panel === false, `start suggestions opened automatically: ${JSON.stringify(rendered)}`)
+    assert(rendered.status === '', `start suggestions started loading automatically: ${JSON.stringify(rendered)}`)
+    report.renderedBeforeOpen = rendered
+  })
+  await screenshot(page, '01-session-default-no-suggestions')
+
+  await check('manual menu action loads and renders scoped start suggestions', async () => {
+    await page.click('.header-more > button')
+    await page.waitForSelector('[data-header-action="start-suggestions"]', { visible: true, timeout: 5_000 })
+    await page.click('[data-header-action="start-suggestions"]')
     const rendered = await waitForValue(
       () => readRenderedSuggestions(page),
       (value) => value.panel && value.visible > 0 && value.items.length > 0,
@@ -156,7 +180,7 @@ try {
     )
     report.renderedInitial = rendered
   })
-  await screenshot(page, '01-start-suggestions-panel')
+  await screenshot(page, '02-start-suggestions-panel')
 
   await check('start suggestion IPC maps memory, routine, history, worktree, git, and package sources', async () => {
     const result = await page.evaluate(async (sessionId) => {
@@ -173,12 +197,24 @@ try {
     assert(result.durationMs < 3000, `startSuggestions:get took too long: ${result.durationMs}ms`)
     assertHasSuggestion(suggestions, 'memory-failure', 'memory')
     assertHasSuggestion(suggestions, 'routine-failure', 'routine')
+    assertHasSuggestion(suggestions, 'recent-failure', 'recent-failure')
     assertHasSuggestion(suggestions, 'history-continue', 'history')
     assertHasSuggestion(suggestions, 'worktree-review', 'worktree')
     assertHasSuggestion(suggestions, 'git-dirty', 'git-status')
     assert(
       suggestions.some((item) => item.id === 'package-verify' && item.source === 'package-json'),
       `missing package-json verification suggestion: ${describeSuggestions(suggestions)}`
+    )
+    const scopedSignals = ['recent-failure', 'routine-failure', 'history-continue']
+      .map((suggestionId) => suggestions.find((item) => item.id === suggestionId)?.body || '')
+      .join('\n')
+    assert(
+      !/unrelated (provider|routine|history)/i.test(scopedSignals),
+      `unrelated project/provider signals leaked into suggestions: ${scopedSignals}`
+    )
+    assert(
+      scopedSignals.includes('current provider failure marker'),
+      `current provider failure was not retained: ${scopedSignals}`
     )
   })
 
@@ -232,7 +268,7 @@ try {
     report.userMessages = transcript
     report.renderedAfterSend = after
   })
-  await screenshot(page, '02-start-suggestion-sent')
+  await screenshot(page, '03-start-suggestion-sent')
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   if (!report.checks.some((item) => item.status === 'fail')) {
@@ -288,11 +324,13 @@ async function readRenderedSuggestions(page) {
       title: item.querySelector('.start-suggestions-item-title')?.textContent?.trim() || ''
     }))
     const sendButton = document.querySelector('[data-start-suggestion-action="send"]')
+    const status = document.querySelector('[data-start-suggestions-status]')
     return {
       panel: Boolean(panel),
       visible: Number(panel?.getAttribute('data-start-suggestions-visible') || 0),
       total: Number(panel?.getAttribute('data-start-suggestions-total') || 0),
       items,
+      status: status?.getAttribute('data-start-suggestions-status') || '',
       sendButtonDisabled: sendButton ? sendButton.disabled === true : true,
       bodyText: document.body.innerText.slice(0, 800)
     }
@@ -333,7 +371,6 @@ function prepareProject() {
     '# A4 start suggestions\n\nTODO: failed validation branch must be repaired.\n',
     'utf8'
   )
-  writeFileSync(path.join(projectDir, 'TODO.md'), 'FIXME: cover git dirty state in rendered start suggestions.\n', 'utf8')
 }
 
 function writeSeedHistory() {
@@ -341,6 +378,18 @@ function writeSeedHistory() {
     path.join(userDataDir, 'sessions.json'),
     JSON.stringify(
       [
+        {
+          id: 'hist-unrelated-start-suggestions',
+          title: 'Continue unrelated history marker',
+          cwd: `${projectDir}-unrelated`,
+          model: 'unrelated-model',
+          providerId: 'unrelated-provider',
+          permissionMode: 'default',
+          sdkSessionId: 'hist-sdk-unrelated-start-suggestions',
+          createdAt: Date.now() - 40_000,
+          updatedAt: Date.now() - 20_000,
+          costUsd: 0
+        },
         {
           id: 'hist-a4-start-suggestions',
           title: 'Continue unfinished validation branch',
@@ -442,6 +491,38 @@ function writeMockUserData(port) {
         disallowedTools: '',
         autoSkillLearningEnabled: false,
         office: { showBadges: true, liveliness: 1, catEars: false }
+      },
+      null,
+      2
+    )
+  )
+  writeFileSync(
+    path.join(userDataDir, 'provider-health.json'),
+    JSON.stringify(
+      {
+        version: 1,
+        providers: {
+          'unrelated-provider': {
+            providerId: 'unrelated-provider',
+            failures: 1,
+            consecutiveFailures: 1,
+            lastError: 'unrelated provider failure marker',
+            lastFailureAt: Date.now() - 1_000,
+            lastUsedAt: Date.now() - 1_000,
+            recentFailures: [],
+            healthy: true
+          },
+          'mock-openai': {
+            providerId: 'mock-openai',
+            failures: 1,
+            consecutiveFailures: 1,
+            lastError: 'current provider failure marker',
+            lastFailureAt: Date.now() - 2_000,
+            lastUsedAt: Date.now() - 2_000,
+            recentFailures: [],
+            healthy: true
+          }
+        }
       },
       null,
       2

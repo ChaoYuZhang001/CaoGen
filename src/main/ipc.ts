@@ -1008,17 +1008,25 @@ export function registerIpc(): void {
     const session = sessionManager.get(id)
     if (!session) return []
     const projectRoot = session.meta.sourceCwd ?? session.meta.cwd
+    const resolvedProjectRoot = resolve(projectRoot)
+    const belongsToCurrentProject = (cwd: unknown): cwd is string =>
+      typeof cwd === 'string' && cwd.trim().length > 0 && resolve(cwd) === resolvedProjectRoot
     const memory = await readProjectMemory(projectRoot, memoryRoot()).catch(() => ({ entries: [] }))
     const worktree = getManagedWorktreeSummary(id)
-    const historySignals: StartSuggestionSignal[] = listHistory().slice(0, 8).map((entry) => ({
-      id: entry.id,
-      title: entry.title,
-      body: entry.cwd,
-      source: 'history',
-      updatedAt: entry.updatedAt,
-      ok: true
-    }))
-    const routines = await listRoutines(routineStoreRoot())
+    const historySignals: StartSuggestionSignal[] = listHistory()
+      .filter((entry) => belongsToCurrentProject(entry.sourceCwd ?? entry.cwd))
+      .slice(0, 8)
+      .map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        body: entry.sourceCwd ?? entry.cwd,
+        source: 'history',
+        updatedAt: entry.updatedAt,
+        ok: true
+      }))
+    const routines = (await listRoutines(routineStoreRoot())).filter((routine) =>
+      belongsToCurrentProject(routine.projectCwd)
+    )
     const routineSignals: StartSuggestionSignal[] = routines.map((routine) => ({
       id: routine.id,
       title: routine.name,
@@ -1044,7 +1052,9 @@ export function registerIpc(): void {
       }))
     // recentFailures:用 Provider 健康度作为唯一可靠的失败来源。
     // 成功恢复会清掉 lastError,历史失败仍保留在 recentFailures 供控制中心审计。
+    const activeProviderId = session.meta.providerId || 'local-login'
     const recentFailureSignals: StartSuggestionSignal[] = listHealth()
+      .filter((health) => health.providerId === activeProviderId)
       .filter((h) => !h.healthy || (typeof h.lastError === 'string' && h.lastError.trim() !== ''))
       .map((h) => {
         const latest = h.recentFailures[0]
@@ -1099,9 +1109,13 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('projects:list', () => listProjects())
-  ipcMain.handle('projects:update', (_e, id: string, patch: { name?: string }) =>
-    updateProject(id, patch ?? {})
-  )
+  ipcMain.handle('projects:update', (_e, id: string, patch: { name?: string; archived?: boolean }) => {
+    if (typeof id !== 'string' || id.length === 0) throw new Error('必须指定项目')
+    return updateProject(id, {
+      ...(typeof patch?.name === 'string' ? { name: patch.name } : {}),
+      ...(typeof patch?.archived === 'boolean' ? { archived: patch.archived } : {})
+    })
+  })
   ipcMain.handle('projects:delete', (_e, id: string) => {
     deleteProject(id)
   })
