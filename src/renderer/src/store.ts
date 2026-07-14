@@ -15,6 +15,7 @@ import type {
   CreateSessionOptions,
   DispatchSubagentsInput,
   EffectStatus,
+  EngineKind,
   GitCommitResult,
   GitOperationResult,
   GitStatus,
@@ -745,6 +746,7 @@ interface AppStore {
   workbench: WorkbenchState
   rewindPanel: RewindPanelState
   showNewSession: boolean
+  newSessionProjectId: string | null
   showSettings: boolean
   showCommandPalette: boolean
   showTaskRecovery: boolean
@@ -894,7 +896,7 @@ interface AppStore {
   deleteProvider(id: string): Promise<void>
   refreshProjects(): Promise<void>
   deleteProject(id: string): Promise<void>
-  setShowNewSession(v: boolean): void
+  setShowNewSession(v: boolean, projectId?: string): void
   setShowSettings(v: boolean): void
   setShowCommandPalette(v: boolean): void
   setShowTaskRecovery(v: boolean): void
@@ -976,6 +978,16 @@ export const useStore = create<AppStore>((set, get) => {
     strongReasoningModel: '',
     reviewProviderId: '',
     reviewModel: '',
+    researchProviderId: '',
+    researchModel: '',
+    planningProviderId: '',
+    planningModel: '',
+    codingProviderId: '',
+    codingModel: '',
+    testingProviderId: '',
+    testingModel: '',
+    documentationProviderId: '',
+    documentationModel: '',
     schedulerStrategy: 'balanced',
     modelRoutingRules: [],
     smartModelRoutingEnabled: false,
@@ -1072,6 +1084,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
   rewindPanel: { open: false },
   showNewSession: false,
+  newSessionProjectId: null,
   showSettings: false,
   showCommandPalette: false,
   showTaskRecovery: true,
@@ -1307,7 +1320,8 @@ export const useStore = create<AppStore>((set, get) => {
       },
       order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
       activeId: meta.id,
-      showNewSession: false
+      showNewSession: false,
+      newSessionProjectId: null
     }))
     // M2 缺陷修复:resume 会话的 init 事件先于本 IPC 返回抵达,被 stash 后
     // drain 只做 reduce,不会触发 handleEvent 里的 init→转录回放副作用,
@@ -1484,8 +1498,11 @@ export const useStore = create<AppStore>((set, get) => {
   async resumeFromHistory(entry) {
     await get().createSession({
       cwd: entry.cwd,
+      projectId: entry.projectId,
+      unassigned: entry.unassigned,
       model: entry.model,
       providerId: entry.providerId,
+      routingScope: entry.routingScope,
       engine: entry.engine,
       permissionMode: entry.permissionMode,
       resumeSdkSessionId: entry.sdkSessionId,
@@ -1499,6 +1516,8 @@ export const useStore = create<AppStore>((set, get) => {
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
     set((s) => ({
       activeId: id,
+      showNewSession: false,
+      newSessionProjectId: null,
       workbench:
         previousId && previousId !== id
           ? {
@@ -3760,8 +3779,8 @@ export const useStore = create<AppStore>((set, get) => {
     await get().refreshProjects()
   },
 
-  setShowNewSession(v) {
-    set({ showNewSession: v })
+  setShowNewSession(v, projectId) {
+    set({ showNewSession: v, newSessionProjectId: v ? projectId ?? null : null })
   },
 
   setShowSettings(v) {
@@ -3778,12 +3797,32 @@ export const useStore = create<AppStore>((set, get) => {
   }
 })
 
+/** 全局只定义调度哨兵;真实模型必须来自当前 Provider。 */
 export const MODEL_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: AUTO_MODEL, label: '🧭 自动调度' },
-  { value: 'opus', label: 'Opus' },
-  { value: 'sonnet', label: 'Sonnet' },
-  { value: 'haiku', label: 'Haiku' }
+  { value: AUTO_MODEL, label: '🧭 自动调度' }
 ]
+
+export function modelOptionsForProvider(
+  providers: ProviderView[],
+  providerId: string,
+  autoLabel = MODEL_OPTIONS[0].label,
+  currentModel = ''
+): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = [
+    { value: AUTO_MODEL, label: autoLabel }
+  ]
+  const seen = new Set([AUTO_MODEL])
+  const provider = providers.find((item) => item.id === providerId)
+  for (const model of provider?.models ?? []) {
+    const value = model.trim()
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    options.push({ value, label: value })
+  }
+  const current = currentModel.trim()
+  if (current && !seen.has(current)) options.push({ value: current, label: current })
+  return options
+}
 
 export const DRIVE_MODE_OPTIONS = CAOGEN_DRIVE_POLICIES.map((policy) => ({
   value: policy.mode,
@@ -3820,6 +3859,7 @@ export interface ProviderPreset {
   label: string
   baseUrl: string
   models: string[]
+  engine: EngineKind
   hint: string
   /** 该预设推荐的 OpenAI 引擎协议(undefined = responses) */
   openaiProtocol?: OpenAIProtocol
@@ -3831,6 +3871,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'CaoGen 中转站模板(需配置 Key)',
     baseUrl: 'https://gpt.zhangrui.xyz/dashboard',
     models: [],
+    engine: 'openai',
     hint: 'CaoGen 中转站预设入口。服务暂不作为默认可用 Provider;请填写自己的 API Key,再用“获取模型”确认可用模型。若控制台给出的 API 路径不同,按实际路径调整 Base URL。',
     openaiProtocol: 'chat'
   },
@@ -3839,6 +3880,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Anthropic Messages 端点',
     baseUrl: '',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
+    engine: 'claude',
     hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
   },
   {
@@ -3846,6 +3888,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'OpenAI(厂商直连)',
     baseUrl: 'https://api.openai.com',
     models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
+    engine: 'openai',
     hint: '选择 OpenAI 引擎时原生直连(Responses 协议),填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
   },
   {
@@ -3853,6 +3896,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'DeepSeek(厂商直连)',
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: ['deepseek-chat', 'deepseek-reasoner'],
+    engine: 'claude',
     hint: 'DeepSeek 厂商 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
   },
   {
@@ -3860,7 +3904,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'DeepSeek(OpenAI 引擎 · Chat 协议)',
     baseUrl: 'https://api.deepseek.com',
     models: ['deepseek-chat', 'deepseek-reasoner'],
-    hint: '走 OpenAI 引擎的 Chat Completions 协议直连 DeepSeek。新建会话时引擎选 OpenAI。',
+    engine: 'openai',
+    hint: '走 OpenAI 引擎的 Chat Completions 协议直连 DeepSeek。会话会自动继承此处配置的执行引擎。',
     openaiProtocol: 'chat'
   },
   {
@@ -3868,6 +3913,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Kimi / 月之暗面(厂商直连)',
     baseUrl: 'https://api.moonshot.cn/anthropic',
     models: ['kimi-k2-0711-preview', 'moonshot-v1-auto'],
+    engine: 'claude',
     hint: 'Moonshot 厂商 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
   },
   {
@@ -3875,6 +3921,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '智谱 GLM(厂商直连)',
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: ['glm-4.5', 'glm-4.5-air'],
+    engine: 'claude',
     hint: '智谱厂商 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
   },
   {
@@ -3882,6 +3929,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Grok / xAI(厂商直连)',
     baseUrl: 'https://api.x.ai',
     models: ['grok-4', 'grok-4-fast'],
+    engine: 'openai',
     hint: 'xAI 厂商端点同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
     openaiProtocol: 'chat'
   },
@@ -3890,6 +3938,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '通义千问 Qwen(DashScope)',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+    engine: 'openai',
     hint: '阿里 DashScope OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。bailian.console.aliyun.com 申请 Key。',
     openaiProtocol: 'chat'
   },
@@ -3898,6 +3947,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '百川智能 Baichuan',
     baseUrl: 'https://api.baichuan-ai.com/v1',
     models: ['Baichuan4-Turbo', 'Baichuan4-Air'],
+    engine: 'openai',
     hint: '百川 OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。若端点或模型名变化,按控制台文档调整。',
     openaiProtocol: 'chat'
   },
@@ -3906,6 +3956,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '豆包 Doubao / 火山方舟',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     models: ['doubao-seed-1-6', 'doubao-1-5-pro-32k'],
+    engine: 'openai',
     hint: '火山方舟 OpenAI 兼容端点,配 OpenAI 引擎 Chat 协议。模型 ID 以方舟控制台实际 endpoint 为准。',
     openaiProtocol: 'chat'
   },
@@ -3914,6 +3965,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '本地 / 自部署(vLLM · Ollama · LM Studio)',
     baseUrl: 'http://localhost:11434',
     models: ['qwen3', 'llama3.3', 'deepseek-r1'],
+    engine: 'openai',
     hint: '任何自部署 OpenAI 兼容服务(vLLM/Ollama/LM Studio 等),配 OpenAI 引擎 Chat 协议。按你的服务地址改 baseUrl。',
     openaiProtocol: 'chat'
   },
@@ -3922,6 +3974,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'one-api / new-api 网关',
     baseUrl: 'http://localhost:3000',
     models: ['gpt-4o', 'gpt-4o-mini', 'gemini-1.5-pro', 'deepseek-chat'],
+    engine: 'claude',
     hint: '经 one-api/new-api 网关转译:请求走 Anthropic 协议,网关翻译到 OpenAI/Gemini 等后端。模型名需与网关映射一致。'
   },
   {
@@ -3929,6 +3982,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'LiteLLM 网关',
     baseUrl: 'http://localhost:4000',
     models: ['gpt-4o', 'claude-3-5-sonnet', 'gemini/gemini-1.5-pro'],
+    engine: 'claude',
     hint: 'LiteLLM 以 /v1/messages 暴露 Anthropic 兼容端点,后端可接 OpenAI/Azure/Bedrock 等。'
   },
   {
@@ -3936,6 +3990,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '自定义',
     baseUrl: '',
     models: [],
+    engine: 'openai',
     hint: '手动填写全部字段。'
   }
 ]

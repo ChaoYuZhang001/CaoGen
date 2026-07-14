@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
+  EngineKind,
   OpenAIProtocol,
   Provider,
   ProviderApiKey,
@@ -306,6 +307,7 @@ function toView(p: Provider): ProviderView {
   const keyCount = keys.filter((key) => key.encryptedToken && !key.disabled).length
   return {
     ...rest,
+    engine: resolveProviderEngine(p),
     budgetUsd: normalizeBudget(p.budgetUsd),
     hasToken: keyCount > 0,
     keyCount,
@@ -348,6 +350,13 @@ export function getProvider(id: string): Provider | undefined {
   return load().find((p) => p.id === id)
 }
 
+export function resolveProviderEngine(provider: Pick<Provider, 'engine' | 'name' | 'baseUrl' | 'models' | 'openaiProtocol'>): EngineKind {
+  if (provider.engine === 'claude' || provider.engine === 'openai') return provider.engine
+  if (provider.openaiProtocol === 'chat') return 'openai'
+  const identity = `${provider.name}\n${provider.baseUrl}\n${provider.models.join('\n')}`.toLowerCase()
+  return /anthropic|claude|\/anthropic(?:\/|$)/.test(identity) ? 'claude' : 'openai'
+}
+
 /**
  * 已知厂商端点的 Anthropic 兼容 API 在 /anthropic 子路径下(如 DeepSeek/Kimi/智谱)。
  * 用户常误填裸域名(如 https://api.deepseek.com),导致 SDK 打到 /v1/messages
@@ -360,12 +369,12 @@ const ANTHROPIC_SUBPATH_HOSTS = [
   'open.bigmodel.cn' // 智谱 GLM
 ]
 
-function normalizeBaseUrl(baseUrl: string, openaiProtocol?: OpenAIProtocol): string {
+function normalizeBaseUrl(baseUrl: string, engine: EngineKind, openaiProtocol?: OpenAIProtocol): string {
   const url = (baseUrl || '').trim().replace(/\/+$/, '')
   if (!url) return url
   // chat 协议走 OpenAI 引擎的 /v1/chat/completions,裸域名才是对的;
   // /anthropic 补全仅服务 Claude 引擎的 Anthropic 兼容路径。
-  if (openaiProtocol === 'chat') return url
+  if (engine === 'openai') return url
   try {
     const parsed = new URL(url)
     const needsSubpath = ANTHROPIC_SUBPATH_HOSTS.some((h) => parsed.host === h)
@@ -388,11 +397,12 @@ export function createProvider(input: ProviderInput): ProviderView {
   const provider: Provider = {
     id: randomUUID(),
     name: input.name,
-    baseUrl: normalizeBaseUrl(input.baseUrl, input.openaiProtocol),
+    baseUrl: normalizeBaseUrl(input.baseUrl, input.engine ?? 'openai', input.openaiProtocol),
     encryptedToken: activeKey?.encryptedToken ?? '',
     apiKeys,
     activeKeyId,
     models: input.models,
+    engine: input.engine ?? 'openai',
     customHeaders: input.customHeaders,
     budgetUsd: normalizeBudget(input.budgetUsd),
     openaiProtocol: input.openaiProtocol,
@@ -420,8 +430,11 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
   const next: Provider = {
     ...prev,
     name: patch.name ?? prev.name,
-    baseUrl: patch.baseUrl === undefined ? prev.baseUrl : normalizeBaseUrl(patch.baseUrl, patch.openaiProtocol ?? prev.openaiProtocol),
+    baseUrl: patch.baseUrl === undefined
+      ? prev.baseUrl
+      : normalizeBaseUrl(patch.baseUrl, patch.engine ?? resolveProviderEngine(prev), patch.openaiProtocol ?? prev.openaiProtocol),
     models: patch.models ?? prev.models,
+    engine: patch.engine ?? resolveProviderEngine(prev),
     customHeaders: patch.customHeaders ?? prev.customHeaders,
     budgetUsd: patch.budgetUsd === undefined ? normalizeBudget(prev.budgetUsd) : normalizeBudget(patch.budgetUsd),
     openaiProtocol: patch.openaiProtocol ?? prev.openaiProtocol,

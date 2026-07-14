@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { MODEL_OPTIONS, useStore } from '../store'
+import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import type { ImageAttachmentView } from '../../../shared/types'
 import ImageAttachmentTray from './ImageAttachmentTray'
@@ -71,6 +71,8 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const setModel = useStore((s) => s.setModel)
   const theme = useStore((s) => s.settings.theme)
   const activeId = useStore((s) => s.activeId)
+  const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
+  const providers = useStore((s) => s.providers)
   const pluginRegistry = useStore((s) => s.workbench.pluginRegistry)
   const pluginRegistryLoading = useStore((s) => s.workbench.pluginRegistryLoading)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -124,7 +126,12 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const slashCommands: CommandDescriptor[] = [
     ...buildComposerSlashCommands({
       t,
-      modelOptions: MODEL_OPTIONS,
+      modelOptions: modelOptionsForProvider(
+        providers,
+        activeSession?.meta.providerId ?? '',
+        t('autoRoute'),
+        activeSession?.meta.model
+      ),
       theme,
       openLatestRewindPanel,
       openDiffPanel,

@@ -42,17 +42,24 @@ export function listProjects(): Project[] {
 }
 
 /** 建会话时自动收藏/更新项目目录 */
-export function touchProject(path: string): void {
-  if (!path) return
+export function touchProject(path: string): Project {
   const list = load()
   const existing = list.find((p) => p.path === path)
   if (existing) {
     existing.lastUsedAt = Date.now()
+    persist()
+    return existing
   } else {
-    list.push({ id: randomUUID(), name: baseName(path), path, lastUsedAt: Date.now() })
+    const project = { id: randomUUID(), name: baseName(path), path, lastUsedAt: Date.now() }
+    list.push(project)
+    cache = list.slice(-MAX_PROJECTS)
+    persist()
+    return project
   }
-  cache = list.slice(-MAX_PROJECTS)
-  persist()
+}
+
+export function getProject(id: string): Project | undefined {
+  return load().find((project) => project.id === id)
 }
 
 export function updateProject(id: string, patch: { name?: string }): Project | null {

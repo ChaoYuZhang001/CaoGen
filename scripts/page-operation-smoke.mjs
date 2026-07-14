@@ -196,13 +196,72 @@ try {
   })
   await screenshot(cdp, '01-welcome')
 
-  await check(cdp, 'settings modal opens and plugin/migration tabs are reachable', async () => {
+  await check(cdp, 'settings page replaces the workspace and plugin/migration tabs are reachable', async () => {
     await clickByText(cdp, '设置')
     await waitForText(cdp, '设置')
+    const settingsSurface = await evalValue(
+      cdp,
+      `({
+        pageCount: document.querySelectorAll('.settings-page').length,
+        settingsBackdropCount: document.querySelectorAll('.settings-page .modal-backdrop').length,
+        workspaceCount: document.querySelectorAll('.workbench, .welcome, .office-view').length
+      })`
+    )
+    assert(settingsSurface?.pageCount === 1, `settings page missing: ${JSON.stringify(settingsSurface)}`)
+    assert(settingsSurface?.settingsBackdropCount === 0, `settings still uses a modal backdrop: ${JSON.stringify(settingsSurface)}`)
+    assert(settingsSurface?.workspaceCount === 0, `workspace should be replaced while settings is open: ${JSON.stringify(settingsSurface)}`)
     await clickByText(cdp, '控制室 / 外观')
     await waitForText(cdp, '工作台布局')
-    await waitForAriaLabel(cdp, '拖拽调整侧栏宽度')
     await waitForText(cdp, '聊天缩放')
+    const layoutControls = await evalValue(
+      cdp,
+      `({
+        rangeCount: document.querySelectorAll('.settings-pane input[type="range"]').length,
+        backgroundResizeHandleCount: document.querySelectorAll('.sidebar-resize-handle').length
+      })`
+    )
+    assert(layoutControls?.rangeCount >= 3, `settings layout controls missing: ${JSON.stringify(layoutControls)}`)
+    assert(layoutControls?.backgroundResizeHandleCount === 0, `background sidebar is still mounted: ${JSON.stringify(layoutControls)}`)
+    await screenshot(cdp, '02-settings-page')
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 1,
+        mobile: false
+      })
+      await sleep(300)
+      const mobileLayout = await evalValue(
+        cdp,
+        `(() => {
+          const rect = (selector) => {
+            const node = document.querySelector(selector);
+            if (!node) return null;
+            const value = node.getBoundingClientRect();
+            return { top: value.top, right: value.right, bottom: value.bottom, left: value.left, width: value.width, height: value.height };
+          };
+          return {
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            bodyScrollWidth: document.body.scrollWidth,
+            page: rect('.settings-page'),
+            header: rect('.settings-page-header'),
+            tabs: rect('.settings-tabs'),
+            pane: rect('.settings-pane'),
+            actions: rect('.settings-page-actions')
+          };
+        })()`
+      )
+      assert(mobileLayout?.viewport?.width === 390, `mobile viewport not applied: ${JSON.stringify(mobileLayout)}`)
+      assert(mobileLayout?.bodyScrollWidth <= 390, `settings page overflows horizontally: ${JSON.stringify(mobileLayout)}`)
+      assert(mobileLayout?.header?.bottom <= mobileLayout?.tabs?.top + 1, `settings tabs overlap header: ${JSON.stringify(mobileLayout)}`)
+      assert(mobileLayout?.tabs?.bottom <= mobileLayout?.pane?.top + 1, `settings content overlaps tabs: ${JSON.stringify(mobileLayout)}`)
+      assert(mobileLayout?.pane?.bottom <= mobileLayout?.actions?.top + 1, `settings actions overlap content: ${JSON.stringify(mobileLayout)}`)
+      assert(mobileLayout?.actions?.bottom <= 845, `settings actions leave the viewport: ${JSON.stringify(mobileLayout)}`)
+      await screenshot(cdp, '02-settings-page-mobile')
+    } finally {
+      await cdp.send('Emulation.clearDeviceMetricsOverride')
+      await sleep(250)
+    }
     await clickByText(cdp, '插件')
     await waitForText(cdp, '插件')
     await clickByText(cdp, '迁移')
@@ -219,6 +278,18 @@ try {
     await waitForText(cdp, '+ 添加', 10_000)
     await clickByText(cdp, '+ 添加')
     await waitForText(cdp, '添加 Provider', 10_000)
+    const providerEditorSurface = await evalValue(
+      cdp,
+      `({
+        editorCount: document.querySelectorAll('.provider-editor').length,
+        nestedBackdropCount: document.querySelectorAll('.modal-backdrop-nested').length,
+        globalSettingsActionsCount: document.querySelectorAll('.settings-page-actions').length
+      })`
+    )
+    assert(providerEditorSurface?.editorCount === 1, `inline provider editor missing: ${JSON.stringify(providerEditorSurface)}`)
+    assert(providerEditorSurface?.nestedBackdropCount === 0, `provider editor still uses a modal backdrop: ${JSON.stringify(providerEditorSurface)}`)
+    assert(providerEditorSurface?.globalSettingsActionsCount === 0, `global settings actions should hide while editing a provider: ${JSON.stringify(providerEditorSurface)}`)
+    await screenshot(cdp, '02-provider-editor-page')
     await chooseProviderEditorSelectOption(cdp, 'CaoGen 中转站模板')
     await waitForText(cdp, 'CaoGen 中转站预设入口', 10_000)
     await setInputByPlaceholder(cdp, '例如:公司网关 / OpenRouter', 'CaoGen Relay UI Smoke')
@@ -226,6 +297,7 @@ try {
     await setInputByPlaceholder(cdp, '例如:主账号 / 备用额度 / 中转站 A', '主账号')
     await setInputByPlaceholder(cdp, '备用额度=sk-...\n中转站 A=sk-...', '备用额度=sk-page-smoke-backup')
     await setInputByPlaceholder(cdp, 'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro', 'caogen-relay-fast\ncaogen-relay-strong')
+    await screenshot(cdp, '02-provider-editor-filled')
     await clickProviderEditorSave(cdp)
     await waitForText(cdp, 'CaoGen Relay UI Smoke', 10_000)
     await waitForText(cdp, 'https://gpt.zhangrui.xyz/dashboard', 10_000)
@@ -264,6 +336,26 @@ try {
     await chooseSettingsSelectByLabel(cdp, '自动调度策略', '速度优先')
     await chooseSettingsSelectByLabel(cdp, '低成本 · Provider', 'CaoGen Relay UI Smoke')
     await chooseSettingsSelectByLabel(cdp, '低成本 · 模型', 'caogen-relay-fast')
+    await chooseSettingsSelectByLabel(cdp, '调研 · Provider', 'CaoGen Relay UI Smoke')
+    await chooseSettingsSelectByLabel(cdp, '调研 · 模型', 'caogen-relay-strong')
+    await chooseSettingsSelectByLabel(cdp, '策划 · Provider', 'CaoGen Relay UI Smoke')
+    await chooseSettingsSelectByLabel(cdp, '策划 · 模型', 'caogen-relay-strong')
+    await chooseSettingsSelectByLabel(cdp, '开发 · Provider', 'CaoGen Relay UI Smoke')
+    await chooseSettingsSelectByLabel(cdp, '开发 · 模型', 'caogen-relay-strong')
+    await chooseSettingsSelectByLabel(cdp, '测试 · Provider', 'CaoGen Relay UI Smoke')
+    await chooseSettingsSelectByLabel(cdp, '测试 · 模型', 'caogen-relay-fast')
+    await chooseSettingsSelectByLabel(cdp, '文档 · Provider', 'CaoGen Relay UI Smoke')
+    await chooseSettingsSelectByLabel(cdp, '文档 · 模型', 'caogen-relay-fast')
+    await evalValue(
+      cdp,
+      `(() => {
+        const target = document.querySelector('.model-task-role-list');
+        target?.scrollIntoView({ block: 'start' });
+        return Boolean(target);
+      })()`
+    )
+    await sleep(250)
+    await screenshot(cdp, '02-routing-settings')
     await chooseSettingsSelectByLabel(cdp, '强推理 · Provider', 'CaoGen Relay UI Smoke')
     await chooseSettingsSelectByLabel(cdp, '强推理 · 模型', 'caogen-relay-strong')
     await chooseSettingsSelectByLabel(cdp, '审查 · Provider', 'CaoGen Relay UI Smoke')
@@ -281,6 +373,7 @@ try {
     await chooseLatestRoutingRuleSelect(cdp, 3, '速度优先')
     await chooseLatestRoutingRuleSelect(cdp, 4, '高')
     await setLatestRoutingRuleTask(cdp, '审查', true)
+    await screenshot(cdp, '02-custom-routing-rule')
     await clickSettingsSave(cdp)
 
     const settings = JSON.parse(readFileSync(path.join(userDataDir, 'settings.json'), 'utf8'))
@@ -288,6 +381,11 @@ try {
     assert(settings.schedulerStrategy === 'speed', `scheduler strategy should be speed: ${settings.schedulerStrategy}`)
     assert(settings.lowCostProviderId === relay.id, 'low-cost provider should be the saved relay')
     assert(settings.lowCostModel === 'caogen-relay-fast', 'low-cost model should be saved')
+    assert(settings.researchProviderId === relay.id && settings.researchModel === 'caogen-relay-strong', 'research role should be saved')
+    assert(settings.planningProviderId === relay.id && settings.planningModel === 'caogen-relay-strong', 'planning role should be saved')
+    assert(settings.codingProviderId === relay.id && settings.codingModel === 'caogen-relay-strong', 'coding role should be saved')
+    assert(settings.testingProviderId === relay.id && settings.testingModel === 'caogen-relay-fast', 'testing role should be saved')
+    assert(settings.documentationProviderId === relay.id && settings.documentationModel === 'caogen-relay-fast', 'documentation role should be saved')
     assert(settings.strongReasoningProviderId === relay.id, 'strong reasoning provider should be the saved relay')
     assert(settings.strongReasoningModel === 'caogen-relay-strong', 'strong reasoning model should be saved')
     assert(settings.reviewProviderId === relay.id, 'review provider should be the saved relay')
@@ -304,16 +402,16 @@ try {
     assert(rule.minRiskLevel === 'high', `custom routing risk condition not saved: ${rule.minRiskLevel}`)
     assert(rule.taskKinds?.includes('review'), `custom routing task condition not saved: ${JSON.stringify(rule.taskKinds)}`)
   })
-  await screenshot(cdp, '02-routing-settings')
 
-  await check(cdp, 'new session can be created without external model call', async () => {
+  await check(cdp, 'inline new session workspace creates a Provider-scoped project session', async () => {
     await clickByText(cdp, '+ 新建会话')
-    await waitForText(cdp, '新建会话')
+    await waitForText(cdp, '今天想做点什么?')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
+    await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_PROVIDER_NAME)
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_MODEL)
-    await clickByText(cdp, '创建')
+    await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', '请检查项目状态')
+    await clickSelector(cdp, '.welcome-send')
     await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
   })
   await screenshot(cdp, '03-session')
@@ -688,6 +786,7 @@ function writePageSmokeUserData() {
           id: PAGE_SMOKE_PROVIDER_ID,
           name: PAGE_SMOKE_PROVIDER_NAME,
           baseUrl: 'http://127.0.0.1:1',
+          engine: 'openai',
           encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
           models: [PAGE_SMOKE_MODEL],
           openaiProtocol: 'responses',
@@ -838,6 +937,22 @@ async function clickByText(cdp, text) {
     })()`
   )
   assert(result?.ok, `button/text not found: ${text}\n${result?.text ?? ''}`)
+  await sleep(250)
+}
+
+async function clickSelector(cdp, selector) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const selector = ${JSON.stringify(selector)};
+      const element = document.querySelector(selector);
+      if (!element) return { ok: false, text: document.body.innerText.slice(0, 2000) };
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+      element.click();
+      return { ok: true };
+    })()`
+  )
+  assert(result?.ok, `selector not found: ${selector}\n${result?.text ?? ''}`)
   await sleep(250)
 }
 
@@ -1154,8 +1269,8 @@ async function clickProviderEditorSave(cdp) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const modal = document.querySelector('.modal-backdrop-nested .modal');
-      const buttons = [...(modal?.querySelectorAll('.modal-actions button') ?? [])];
+      const editor = document.querySelector('.provider-editor');
+      const buttons = [...(editor?.querySelectorAll('.provider-editor-actions button') ?? [])];
       const button = buttons.find((candidate) =>
         (candidate.innerText || candidate.textContent || '').trim().includes('保存') && !candidate.disabled
       );
@@ -1173,8 +1288,8 @@ async function clickSettingsSave(cdp) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const modal = [...document.querySelectorAll('.modal.settings-center')].at(-1);
-      const actions = modal?.querySelector(':scope > .modal-actions');
+      const page = document.querySelector('.settings-page');
+      const actions = page?.querySelector(':scope > .settings-page-actions');
       const button = [...(actions?.querySelectorAll('button') ?? [])].find((candidate) =>
         (candidate.innerText || candidate.textContent || '').trim().includes('保存') && !candidate.disabled
       );
@@ -1459,9 +1574,9 @@ async function chooseProviderEditorSelectOption(cdp, text) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const modal = document.querySelector('.modal-backdrop-nested .modal');
+      const editor = document.querySelector('.provider-editor');
       const needle = ${JSON.stringify(text)};
-      for (const select of modal?.querySelectorAll('select') ?? []) {
+      for (const select of editor?.querySelectorAll('select') ?? []) {
         const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
         if (!option) continue;
         select.value = option.value;
@@ -1469,7 +1584,7 @@ async function chooseProviderEditorSelectOption(cdp, text) {
         select.dispatchEvent(new Event('change', { bubbles: true }));
         return { ok: true };
       }
-      return { ok: false, text: modal?.innerText || document.body.innerText.slice(0, 2000) };
+      return { ok: false, text: editor?.innerText || document.body.innerText.slice(0, 2000) };
     })()`
   )
   assert(result?.ok, `provider editor select option not found: ${text}\n${result?.text ?? ''}`)

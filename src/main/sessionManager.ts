@@ -11,14 +11,15 @@ import { configureModelStatsDir } from './modelStats'
 import { configureProviderHealthDir } from './providerHealth'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
-import { decryptProviderToken, getProvider } from './providers'
+import { decryptProviderToken, getProvider, listProviders, resolveProviderEngine } from './providers'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import {
   getCaoGenDrivePolicy,
   settingsForCaoGenDrive
 } from './model/drive'
+import { resolveSessionModelRoute } from './model/session-routing'
 import { cleanupTranscripts, restoreTranscriptIfMissing } from './transcript'
-import { touchProject } from './projects'
+import { getProject, touchProject } from './projects'
 import { prepareWorktree } from './worktrees'
 import { showDesktopNotification } from './desktopNotify'
 import { scheduleAutoSkillReview } from './skill/auto-skill-review'
@@ -90,6 +91,7 @@ import type {
   TaskSnapshotSubtaskState,
   TranscriptEntry
 } from '../shared/types'
+import { AUTO_MODEL, AUTO_PROVIDER_ID } from '../shared/types'
 
 interface SessionNotificationState {
   turnActive: boolean
@@ -226,11 +228,59 @@ class SessionManager {
     const resumeHistory = opts.resumeSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === opts.resumeSdkSessionId)
       : undefined
+    const parentMeta = opts.parentSessionId ? this.sessions.get(opts.parentSessionId)?.meta : undefined
     const driveMode = opts.driveMode ?? resumeHistory?.driveMode ?? settings.driveMode
     const drivePolicy = getCaoGenDrivePolicy(driveMode)
-    this.assertExplicitSessionChoice(opts)
+    const routingScope =
+      opts.routingScope ??
+      resumeHistory?.routingScope ??
+      parentMeta?.routingScope ??
+      (opts.model === AUTO_MODEL ? 'provider' : 'fixed')
+    let selectedProviderId = opts.providerId ?? ''
     const selectedModel = opts.model ?? ''
-    const selectedProviderId = opts.providerId ?? ''
+    if (selectedProviderId === AUTO_PROVIDER_ID) {
+      const routeSettings = settingsForCaoGenDrive(settings, driveMode)
+      const initialRoute = resolveSessionModelRoute({
+        enabled: true,
+        currentModel: AUTO_MODEL,
+        providerId: '',
+        providers: listProviders(),
+        allowAnyEngine: true,
+        driveMode,
+        payload: { text: opts.initialPrompt?.trim() || opts.title?.trim() || '通用任务' },
+        strategy: routeSettings.schedulerStrategy,
+        sessionCostUsd: 0,
+        settingsBudgetUsd: routeSettings.budgetUsdPerSession,
+        fallbackProviderId: routeSettings.fallbackProviderId,
+        fallbackModel: routeSettings.fallbackModel,
+        lowCostProviderId: routeSettings.lowCostProviderId,
+        lowCostModel: routeSettings.lowCostModel,
+        strongReasoningProviderId: routeSettings.strongReasoningProviderId,
+        strongReasoningModel: routeSettings.strongReasoningModel,
+        reviewProviderId: routeSettings.reviewProviderId,
+        reviewModel: routeSettings.reviewModel,
+        researchProviderId: routeSettings.researchProviderId,
+        researchModel: routeSettings.researchModel,
+        planningProviderId: routeSettings.planningProviderId,
+        planningModel: routeSettings.planningModel,
+        codingProviderId: routeSettings.codingProviderId,
+        codingModel: routeSettings.codingModel,
+        testingProviderId: routeSettings.testingProviderId,
+        testingModel: routeSettings.testingModel,
+        documentationProviderId: routeSettings.documentationProviderId,
+        documentationModel: routeSettings.documentationModel,
+        modelRoutingRules: routeSettings.modelRoutingRules,
+        projectPath: opts.cwd
+      })
+      if (initialRoute.kind !== 'routed') throw new Error('没有可用的跨厂商调度候选')
+      selectedProviderId = initialRoute.providerId
+    }
+    const provider = this.assertExplicitSessionChoice(selectedProviderId, selectedModel)
+    const selectedEngine = resolveProviderEngine(provider)
+    const unassigned = opts.unassigned ?? resumeHistory?.unassigned ?? parentMeta?.unassigned ?? false
+    let projectId = opts.projectId ?? resumeHistory?.projectId ?? parentMeta?.projectId
+    if (projectId && !getProject(projectId)) throw new Error('关联项目不存在，请重新选择项目')
+    if (!projectId && !unassigned) projectId = touchProject(opts.cwd).id
     const resumeSessionAt = opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt
     const budgetUsd = normalizePositiveNumber(opts.budgetUsd)
     const permissionMode = opts.permissionMode ?? drivePolicy.defaultPermissionMode
@@ -241,11 +291,14 @@ class SessionManager {
       orchestrationId: opts.orchestrationId,
       childTaskId: opts.childTaskId,
       childRole: opts.childRole,
+      projectId,
+      unassigned,
       model: selectedModel,
       providerId: selectedProviderId,
+      routingScope,
       budgetUsd,
       resumeSessionAt,
-      engine: opts.engine,
+      engine: selectedEngine,
       permissionMode,
       title: opts.title
     })
@@ -263,6 +316,8 @@ class SessionManager {
       childRole: opts.childRole,
       isolated: worktree.isolated,
       sourceCwd: worktree.record?.sourceCwd,
+      projectId,
+      unassigned,
       repoRoot: worktree.record?.repoRoot,
       worktreePath: worktree.record?.worktreePath,
       branch: worktree.record?.branch,
@@ -271,15 +326,16 @@ class SessionManager {
       worktreeState: worktree.record?.state,
       model: selectedModel,
       providerId: selectedProviderId,
+      routingScope,
       budgetUsd,
       resumeSessionAt,
-      engine: opts.engine,
+      engine: selectedEngine,
       permissionMode,
       title: opts.title
     })
     meta.id = baseMeta.id
     const session = createEngine(
-      opts.engine,
+      selectedEngine,
       meta,
       (event, seq, identity) => this.dispatch(meta.id, event, seq, identity),
       opts.resumeSdkSessionId
@@ -287,21 +343,23 @@ class SessionManager {
     this.sessions.set(meta.id, session)
     void this.writeTaskSnapshot(meta.id, 'created', 0)
     void session.start()
-    touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
   }
 
-  private assertExplicitSessionChoice(opts: CreateSessionOptions): void {
-    if (!opts.engine) throw new Error('请选择 Agent 引擎')
-    if (!opts.model) throw new Error('请选择模型或显式选择自动调度')
+  private assertExplicitSessionChoice(
+    providerIdInput: string,
+    model: string
+  ): NonNullable<ReturnType<typeof getProvider>> {
+    if (!model) throw new Error('请选择模型或显式选择自动调度')
 
-    const providerId = opts.providerId?.trim()
+    const providerId = providerIdInput.trim()
     if (!providerId) throw new Error('请选择已配置 API key 的 Provider')
     const provider = getProvider(providerId)
     if (!provider) throw new Error(`Provider 不存在:${providerId}`)
     if (!decryptProviderToken(provider)) {
       throw new Error(`请先在设置里为 ${provider.name} 填写 API key`)
     }
+    return provider
   }
 
   send(id: string, input: string | SendMessagePayload): void {
@@ -874,6 +932,7 @@ class SessionManager {
       sdkSessionId: snapshot.execution.sdkSessionId,
       resumeSessionAt: snapshot.execution.resumeSessionAt
     }
+    if (!meta.unassigned && !meta.projectId) meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
     restoreTranscriptIfMissing(snapshot.execution.sdkSessionId, snapshot.transcript)
     this.taskRuns.set(snapshot.sessionId, recoveredRun)
     this.snapshotCounts.set(meta.id, {
@@ -902,7 +961,6 @@ class SessionManager {
       snapshot.execution.cursor?.eventId ?? snapshot.execution.lastEventId
     )
     this.startRecoveredSession(session, recoveredSnapshot, restoredDagRuntimeCount > 0)
-    touchProject(meta.sourceCwd ?? meta.cwd)
     return { ...meta }
   }
 
@@ -1741,6 +1799,8 @@ class SessionManager {
       childRole: meta.childRole,
       isolated: meta.isolated,
       sourceCwd: meta.sourceCwd,
+      projectId: meta.projectId,
+      unassigned: meta.unassigned,
       repoRoot: meta.repoRoot,
       worktreePath: meta.worktreePath,
       branch: meta.branch,
@@ -1749,6 +1809,7 @@ class SessionManager {
       worktreeState: meta.worktreeState,
       model: meta.model,
       providerId: meta.providerId,
+      routingScope: meta.routingScope,
       engine: meta.engine,
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
@@ -1781,6 +1842,7 @@ class SessionManager {
             ? '应用上次退出时该任务尚未完成；会话已恢复，请确认当前文件状态后继续。'
             : record.lastError
       }
+      if (!meta.unassigned && !meta.projectId) meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
       try {
         this.snapshotCounts.set(meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
         const session = createEngine(
@@ -1791,7 +1853,6 @@ class SessionManager {
         )
         this.sessions.set(meta.id, session)
         void session.start()
-        touchProject(meta.sourceCwd ?? meta.cwd)
         restored += 1
       } catch (err) {
         console.error('[caogen] 恢复 active session 失败:', err)
