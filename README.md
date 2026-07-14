@@ -6,7 +6,7 @@
 
 ### 国产开源 · 多厂商不绑定 · AI 工作桌面
 
-<img src="https://img.shields.io/badge/version-v0.1.4-blue" alt="version">
+<img src="https://img.shields.io/badge/version-v0.1.5-blue" alt="version">
 <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
@@ -141,9 +141,9 @@
 
 | 平台 | 当前发布包 | 状态 | 说明 |
 |---|---|---|---|
-| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 上一版已发布 | v0.1.4 本次不发布 arm64 包 |
-| macOS Intel | `CaoGen-0.1.4.dmg` / `CaoGen-0.1.4-mac.zip` | [v0.1.4 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.4) | 适合 Intel Mac |
-| Windows | `CaoGen.Setup.0.1.3.exe` | 上一版已发布 | v0.1.4 本次不发布 Windows 包 |
+| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 上一版已发布 | v0.1.5 本次不发布 arm64 包 |
+| macOS Intel | `CaoGen-0.1.5.dmg` / `CaoGen-0.1.5-mac.zip` | v0.1.5 发布候选 | 适合 Intel Mac |
+| Windows | `CaoGen.Setup.0.1.3.exe` | 上一版已发布 | v0.1.5 本次不发布 Windows 包 |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
 > **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
@@ -152,13 +152,13 @@
 
 ## 校验下载文件
 
-下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.4 正式发布主要资产的 SHA256 如下：
+下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.5 发布候选主要资产的 SHA256 如下：
 
 | 文件 | SHA256 |
 |---|---|
-| `CaoGen-0.1.4.dmg` | `f7c578787702fb9b5720d133c659ef62a8163759f401e1106527c9e1c4b098f0` |
-| `CaoGen-0.1.4-mac.zip` | `eedb671e96b46eb478f0c1fd41d46ee54d543e1926f9f9fe94393e46bb77c8b5` |
-| `latest-mac.yml` | `f9fb5e39bd328743950013907723cbd049e84cab01eb1bd10076b4a612fac1eb` |
+| `CaoGen-0.1.5.dmg` | `686754dd7b79ed51d4c5434436e04f0a0fa592aade8d1db8bb6fe4e89a90c93b` |
+| `CaoGen-0.1.5-mac.zip` | `ff818c3a3b8ed9af9b921d7ca8505f77df3b9830654d1b07dc514ad8143d8301` |
+| `latest-mac.yml` | `b416bc7661f0d0d4088666bb97e66387948abcb7832a960a660d22716507ee67` |
 
 ## 常见问题
 
@@ -237,8 +237,8 @@ src/
 
 ## 项目状态
 
-- 当前公开版本：**v0.1.4 beta**。
-- v0.1.4 已在 GitHub Releases 发布 macOS x64 安装包；arm64、Windows、Linux 不在本轮发布范围。
+- 当前发布候选：**v0.1.5 beta**。
+- v0.1.5 只发布 macOS x64 安装包；arm64、Windows、Linux 不在本轮发布范围。
 - 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
 - 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
 

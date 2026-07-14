@@ -90,6 +90,8 @@ try {
   await cdp.send('Page.enable')
   await installErrorCapture(cdp)
   await sleep(1200)
+  const prompt = `openai mock e2e ${runId}`
+  const expected = `Mock Responses OK: ${prompt}`
 
   await check(cdp, 'app opens with mock OpenAI provider available', async () => {
     await assertIsolatedRenderer(cdp)
@@ -97,9 +99,10 @@ try {
     await clickByText(cdp, '+ 新建会话')
     await waitForText(cdp, '新建会话')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await chooseSelectOptionByText(cdp, 'OpenAI 协议(Responses / Chat Completions)')
+    await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, 'CaoGen OpenAI Mock')
     await chooseSelectOptionByText(cdp, 'mock-responses')
+    await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', prompt)
     await screenshot(cdp, '01-new-session-openai-mock')
   })
 
@@ -110,12 +113,7 @@ try {
     await waitForText(cdp, '模型 mock-responses', 10_000)
   })
 
-  const prompt = `openai mock e2e ${runId}`
-  const expected = `Mock Responses OK: ${prompt}`
   await check(cdp, 'real UI send receives streamed OpenAI Responses reply', async () => {
-    await focusComposer(cdp)
-    await typeText(cdp, prompt)
-    await press(cdp, 'Enter')
     await waitForText(cdp, '已切换 → 备用密钥', 15_000)
     await waitForText(cdp, expected, 15_000)
     await waitForText(cdp, '本轮完成', 10_000)
@@ -499,7 +497,7 @@ async function clickCreateSession(cdp, expectedProjectDir) {
       const bodyText = document.body.innerText || '';
       if (bodyText.includes(${JSON.stringify(expectedProjectDir)})) return { ok: true, alreadyCreated: true };
       const modal = document.querySelector('.modal');
-      const el = modal?.querySelector('.modal-actions .btn-primary:not([disabled])');
+      const el = document.querySelector('.welcome-send:not([disabled])') || modal?.querySelector('.modal-actions .btn-primary:not([disabled])');
       if (!el) return { ok: false, text: document.body.innerText.slice(0, 2000) };
       el.scrollIntoView({ block: 'center', inline: 'center' });
       el.click();

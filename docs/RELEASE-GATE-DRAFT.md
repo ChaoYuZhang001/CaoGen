@@ -1,36 +1,36 @@
 # CaoGen Rolling Release Gate
 
-> Updated: 2026-07-12 Asia/Shanghai. v0.1.4 was published for macOS x64 after every blocking gate passed on release commit `a14c623`; the exact-five public asset audit passed after publication.
+> Updated: 2026-07-14 Asia/Shanghai. v0.1.5 is selected as a macOS x64 release candidate; the latest public release remains v0.1.4 until the clean release commit, tag, upload, and public asset audit pass.
 
 ## Current Public Release
 
 | Item | State |
 |---|---|
 | Latest public GitHub Release | [`v0.1.4`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.4) |
-| Current package version | `0.1.4` |
-| Release identity | Annotated tag `v0.1.4` resolves to `a14c623`; `origin/main` contains that commit and may advance independently for post-release documentation |
-| Release decision | v0.1.4 published for macOS x64 only; arm64, Windows, and Linux are not part of this release |
+| Current package version | `0.1.5` |
+| Release identity | Candidate is not yet tagged; `v0.1.5` must resolve to the exact clean release commit before upload |
+| Release decision | v0.1.5 selected for macOS x64 only; arm64, Windows, and Linux are not part of this release |
 
 ## Required Before Publishing
 
 | Gate | Required command or evidence | Current status |
 |---|---|---|
-| Version decision | Owner chooses the release version; `package.json` and `package-lock.json` must match it | Passed: 0.1.4 selected and both files match |
-| Local type/build | `npm run typecheck` and `npm run build` pass | Passed on release commit `a14c623` |
-| Deep gate | `npm run test:deep` pass | Passed on `a14c623`: 87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail |
+| Version decision | Owner chooses the release version; `package.json` and `package-lock.json` must match it | Passed: 0.1.5 selected and both files match |
+| Local type/build | `npm run typecheck` and `npm run build` pass | Pending rerun on the clean v0.1.5 release commit |
+| Deep gate | `npm run test:deep` pass | Pending rerun on the clean v0.1.5 release commit |
 | P2 local smoke | `npm run test:p2` pass | Passed on current worktree; latest run refreshed P2-002/P2-003 evidence |
 | P2 release scope | P2-002/P2-003/P2-005 proved by `npm run test:p2`, `npm run test:p2-ide-build-and-vscode:required`, and `npm run test:jetbrains-ide-interaction:required` | Ready in latest release doctor; full strict audit still reports delegated/user-configured gaps only |
 | IDE build + VS Code host | `npm run test:p2-ide-build-and-vscode:required` pass with VS Code and JetBrains plugin build evidence | Passed on current worktree with VS Code extension host evidence |
 | JetBrains real IDE | `npm run test:jetbrains-recorder-e2e:required` and `npm run test:jetbrains-ide-interaction:required` pass with recorder/runIde evidence | Passed on current worktree with JetBrains runIde recorder evidence |
-| P2-001 Windows GUI | Separate Windows agent will run strict GUI evidence after this release-gate branch is submitted | Non-blocking because v0.1.4 has no Windows asset; do not claim Windows strict GUI proof until it lands |
+| P2-001 Windows GUI | Separate Windows agent will run strict GUI evidence after this release-gate branch is submitted | Non-blocking because v0.1.5 has no Windows asset; do not claim Windows strict GUI proof until it lands |
 | P2-004 China external | User-configured real network/provider evidence via `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` | Non-blocking; release notes must frame it as requiring user credentials/config |
 | N1 migration | Human 30-minute migration audit | Not required unless the release claims N1 pass |
-| Packaging | `npm run dist:mac:x64` and `npm run test:release-packaging-audit:required` produce the exact 5 x64 assets | Passed: DMG/ZIP integrity, x86_64 architecture, launch, update metadata, and SHA256 verified |
-| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Passed for the release; rerun after subsequent public-copy changes |
-| Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Passed on release commit `a14c623`; the audited file is the public body |
-| Public GitHub Release assets | `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` requires the exact local `dist` asset set and reads public text metadata | Passed for v0.1.4: exactly 5 assets, all digests matched, and `latest-mac.yml` was readable |
-| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Passed immediately before the release |
-| Release doctor | Preflight doctor on clean commit, then final notes audit, then required doctor | Passed with `status: ready`, version 0.1.4, commit `a14c623`, and a clean worktree |
+| Packaging | `npm run dist:mac:x64` and `npm run test:release-packaging-audit:required` produce the exact 5 x64 assets | Candidate passed: DMG/ZIP integrity, x86_64 architecture, update metadata, and SHA256 verified; clean-commit audit still required |
+| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Pending rerun after v0.1.5 public-copy changes |
+| Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Pending clean-commit preflight doctor and final audit |
+| Public GitHub Release assets | `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` requires the exact local `dist` asset set and reads public text metadata | Pending v0.1.5 upload; v0.1.4 remains the latest audited public release |
+| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Worktree scan passed; history scan remains required before upload |
+| Release doctor | Preflight doctor on clean commit, then final notes audit, then required doctor | Pending on the clean v0.1.5 release commit |
 
 ## Release Notes Requirements
 

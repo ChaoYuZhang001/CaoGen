@@ -1,14 +1,14 @@
 # CaoGen Rolling Release Draft Notes
 
-> Status: Do not publish this rolling draft. Current package version and latest public release are v0.1.4 on GitHub Releases; no newer release is selected.
+> Status: Do not publish this rolling draft. Package version v0.1.5 is selected as a macOS x64 release candidate for distribution through GitHub Releases; the latest public release remains v0.1.4 until all gates pass.
 
 ## Release Decision
 
-v0.1.4 was published for macOS x64 from release commit `a14c623`. Its exact public body is preserved in `docs/RELEASE-NOTES-FINAL.md`; this rolling draft is reserved for the next release decision.
+v0.1.5 is selected for macOS x64. Its proposed exact public body is in `docs/RELEASE-NOTES-FINAL.md`; it must not be published before the clean release commit and final gates are verified.
 
 ## Uploaded Assets
 
-No new release assets uploaded yet for a release after v0.1.4.
+The v0.1.5 candidate assets exist locally. No new release assets uploaded yet.
 
 Future release assets must be listed here exactly after a version is selected. Allowed public assets are installer and update metadata files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`. Local build output and evidence directories are never release assets.
 
@@ -23,7 +23,7 @@ Future release assets must be listed here exactly after a version is selected. A
 
 ## Known Blockers
 
-- release_identity: no release after v0.1.4 has been selected or bound to a clean release commit.
+- release_identity: v0.1.5 is selected but is not yet bound to a clean release commit and remote tag.
 - deep_test: any future release must rerun the complete required suite from its exact clean release commit.
 - packaging_release: any future assets and checksums must be regenerated and rebound after its code is final.
 - release_notes: any future exact body must pass against that same future release commit before publishing.
@@ -47,8 +47,8 @@ If a future macOS build remains unsigned, its final release notes must tell user
 - `npm run test:deep`
 - `npm run test:release-packaging-audit:required`
 - `npm run test:product-positioning:required`
-- `npm run workos:release-doctor -- --refresh --version 0.1.4`
+- `npm run workos:release-doctor -- --refresh --version 0.1.5`
 - `npm run test:release-notes-audit:final`
-- `npm run workos:release-doctor -- --required --version 0.1.4`
+- `npm run workos:release-doctor -- --required --version 0.1.5`
 - `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist`
 - `npm run secret:scan:history`
