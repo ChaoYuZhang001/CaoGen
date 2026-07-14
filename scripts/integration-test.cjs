@@ -400,15 +400,16 @@ async function main() {
   const settingsMod = M('main/settings.js')
   // 写入两个 Provider(A 恒 429,B 正常)
   fs.writeFileSync(path.join(userData, 'providers.json'), JSON.stringify([
-    { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), models: ['m-a'], createdAt: 1 },
-    { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), models: ['m-b'], createdAt: 2 },
-    { id: 'prov-slow', name: '慢网关', baseUrl: 'http://slow429.mock', encryptedToken: 'b64:' + Buffer.from('k3').toString('base64'), models: ['m-s'], createdAt: 3 },
-    { id: 'prov-crash', name: '崩网关', baseUrl: 'http://crashmid.mock', encryptedToken: 'b64:' + Buffer.from('k4').toString('base64'), models: ['m-c'], createdAt: 4 },
+    { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), engine: 'claude', models: ['m-a'], createdAt: 1 },
+    { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), engine: 'claude', models: ['m-b'], createdAt: 2 },
+    { id: 'prov-slow', name: '慢网关', baseUrl: 'http://slow429.mock', encryptedToken: 'b64:' + Buffer.from('k3').toString('base64'), engine: 'claude', models: ['m-s'], createdAt: 3 },
+    { id: 'prov-crash', name: '崩网关', baseUrl: 'http://crashmid.mock', encryptedToken: 'b64:' + Buffer.from('k4').toString('base64'), engine: 'claude', models: ['m-c'], createdAt: 4 },
     {
       id: 'prov-keys',
       name: '多密钥网关',
       baseUrl: 'http://always429.mock',
       encryptedToken: 'b64:' + Buffer.from('key-primary').toString('base64'),
+      engine: 'claude',
       apiKeys: [
         { id: 'key-primary', label: 'Primary', encryptedToken: 'b64:' + Buffer.from('key-primary').toString('base64'), createdAt: 5, disabled: false },
         { id: 'key-backup', label: 'Backup', encryptedToken: 'b64:' + Buffer.from('key-backup').toString('base64'), createdAt: 6, disabled: false }
@@ -1953,8 +1954,8 @@ async function main() {
     const hist = M('main/history.js')
     sm.init()
     fs.writeFileSync(path.join(userData, 'providers.json'), JSON.stringify([
-      { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), models: ['m-a'], createdAt: 1 },
-      { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), models: ['m-b'], createdAt: 2 }
+      { id: 'prov-a', name: '甲网关', baseUrl: 'http://always429.mock', encryptedToken: 'b64:' + Buffer.from('k1').toString('base64'), engine: 'claude', models: ['m-a'], createdAt: 1 },
+      { id: 'prov-b', name: '乙网关', baseUrl: 'http://ok.mock', encryptedToken: 'b64:' + Buffer.from('k2').toString('base64'), engine: 'claude', models: ['m-b'], createdAt: 2 }
     ], null, 2))
     const bucket = []
     const win = fakeWindow(bucket)
@@ -2442,7 +2443,7 @@ async function main() {
       dispose() { this.meta.status = 'closed' }
     }
     engineMod.registerEngine({
-      kind: 'p2-cross-validation-mock',
+      kind: 'claude',
       label: 'P2 cross-validation mock',
       available: () => true,
       create: (meta, emit) => new CrossValidationMockEngine(meta, emit)
@@ -2466,7 +2467,7 @@ async function main() {
 	        isolated: false,
 	        providerId: 'prov-b',
 	        model: 'primary-model',
-	        engine: 'p2-cross-validation-mock',
+	        engine: 'claude',
 	        title: 'p2 cross validation behavior'
 	      })
       createdIds.push(meta.id)
@@ -2501,6 +2502,7 @@ async function main() {
         autoSkillLearningEnabled: previousSettings.autoSkillLearningEnabled,
         budgetUsdPerSession: previousSettings.budgetUsdPerSession
       })
+      M('main/engines.js').registerBuiltinEngines()
     }
   })
 

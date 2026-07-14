@@ -41,8 +41,8 @@ npm run secret:scan
 
 ```bash
 npm run test:deep
-npm run test:release-packaging-audit:required -- --version 0.1.4
-npm run test:github-release-audit:read-text:required -- --tag v0.1.4 --expected-assets-from-dist
+npm run test:release-packaging-audit:required -- --version X.Y.Z
+npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist
 ```
 
 需要真实模型 Key 的端到端脚本请只在本机运行，不要把 Key、请求内容或私有仓库日志提交到 PR。
