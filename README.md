@@ -6,7 +6,7 @@
 
 ### 国产开源 · 多厂商不绑定 · AI 工作桌面
 
-<img src="https://img.shields.io/badge/version-v0.1.5-blue" alt="version">
+<img src="https://img.shields.io/badge/version-v0.1.6-blue" alt="version">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
@@ -147,8 +147,8 @@
 
 | 平台 | 当前发布包 | 状态 | 说明 |
 |---|---|---|---|
-| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 上一版已发布 | v0.1.5 本次不发布 arm64 包 |
-| macOS Intel | `CaoGen-0.1.5.dmg` / `CaoGen-0.1.5-mac.zip` | [v0.1.5 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) | 适合 Intel Mac |
+| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 历史版本 | v0.1.6 不发布 arm64 包 |
+| macOS Intel | `CaoGen-0.1.6.dmg` / `CaoGen-0.1.6-mac.zip` | [v0.1.6 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) | 修复打包启动时缺少 `node-gyp-build` 的崩溃 |
 | Windows x64 | `CaoGen.Setup.0.1.5.exe` | [v0.1.5 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) | 未签名，首次运行可能触发 SmartScreen |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
@@ -160,13 +160,13 @@
 
 ## 校验下载文件
 
-下载后可用 `shasum -a 256 <文件名>` 校验安装包。v0.1.5 已发布主要资产的 SHA256 如下：
+下载后可用 `shasum -a 256 <文件名>` 校验安装包。当前已发布主要资产的 SHA256 如下：
 
 | 文件 | SHA256 |
 |---|---|
-| `CaoGen-0.1.5.dmg` | `686754dd7b79ed51d4c5434436e04f0a0fa592aade8d1db8bb6fe4e89a90c93b` |
-| `CaoGen-0.1.5-mac.zip` | `ff818c3a3b8ed9af9b921d7ca8505f77df3b9830654d1b07dc514ad8143d8301` |
-| `latest-mac.yml` | `b416bc7661f0d0d4088666bb97e66387948abcb7832a960a660d22716507ee67` |
+| `CaoGen-0.1.6.dmg` | `7b193469e2c3b87546c797436652c8d73121f2bcdd7357850fa5521d605ef1f9` |
+| `CaoGen-0.1.6-mac.zip` | `4ac838081f17ae2a645909171a7370bc348840894156f20d8ee76ba8c1a19b75` |
+| `latest-mac.yml` | `419a2f6266cee414b44c0a608c6f3b9cd0469c47f293c2d6317782c4697aa4de` |
 | `CaoGen.Setup.0.1.5.exe` | `0787db30200018355e848f83f035c6ff87f115a2db3aef8f07b20be049e2b43a` |
 | `latest.yml` | `5073a2921e43fd45532817208771a879ce23cc06bb9429951a77e6fcc7eb0817` |
 
@@ -251,9 +251,9 @@ src/
 
 ## 项目状态
 
-- 当前公开版本：[**v0.1.5**](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5)。
-- v0.1.5 已发布 macOS x64 和 Windows x64 安装包；macOS arm64 与 Linux 不在本轮发布范围。
-- `main` 已合并 v0.1.5 发布后的会话与项目管理改进：未关联项目会话、项目归档/恢复/删除、3D 办公新建会话和手动开工建议；这些改进尚未进入新的公开安装包。
+- 当前公开版本：[**v0.1.6**](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)。
+- v0.1.6 发布 macOS x64 安装包；Windows x64 继续使用 v0.1.5，macOS arm64 与 Linux 不在本轮发布范围。
+- v0.1.6 包含未关联项目会话、项目归档/恢复/删除、3D 办公新建会话、手动开工建议，以及打包运行时完整性与真实启动回归门禁。
 - 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
 - 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
 

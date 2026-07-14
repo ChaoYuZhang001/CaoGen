@@ -1,24 +1,24 @@
 # CaoGen Rolling Release Gate
 
-> Updated: 2026-07-14 Asia/Shanghai. v0.1.5 is the latest public release. v0.1.6 is selected as a macOS x64 stability candidate and is not ready to publish.
+> Updated: 2026-07-14 Asia/Shanghai. v0.1.6 is the current macOS x64 release; Windows x64 remains on v0.1.5.
 
 ## Current Public Release
 
 | Item | State |
 |---|---|
-| Latest public GitHub Release | [`v0.1.5`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) |
+| Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Current package version | `0.1.6` |
-| Release identity | Annotated tag `v0.1.5` resolves to exact release commit `d9969e3e47db98dc630797755f816cd0859b4ef6` |
-| Current public assets | v0.1.5 has macOS x64 and Windows x64 assets; macOS arm64 and Linux are not published |
-| Release decision | v0.1.6 macOS x64 stability candidate selected; no v0.1.6 assets or tag exist yet |
+| Release identity | Tag `v0.1.6` must resolve to the exact release commit validated by the final doctor |
+| Current public assets | v0.1.6 has 5 macOS x64 assets; Windows x64 remains on v0.1.5; macOS arm64 and Linux are not published in v0.1.6 |
+| Release decision | v0.1.6 is the selected macOS x64 stability release |
 
 ## Required Before Publishing
 
 | Gate | Required command or evidence | Current status |
 |---|---|---|
 | Version decision | Owner chooses the release version; `package.json` and `package-lock.json` must match it | Passed: 0.1.6 selected and both files match |
-| Local type/build | `npm run typecheck` and `npm run build` pass | Open: rerun on the exact v0.1.6 candidate |
-| Deep gate | `npm run test:deep` pass | Open: rerun on the exact v0.1.6 candidate; required checks may not pass through skip/blocked |
+| Local type/build | `npm run typecheck` and `npm run build` pass | Required on the exact v0.1.6 release commit |
+| Deep gate | `npm run test:deep` pass | Required on the exact v0.1.6 release commit; required checks may not pass through skip/blocked |
 | P2 local smoke | `npm run test:p2` pass | Passed on current worktree; latest run refreshed P2-002/P2-003 evidence |
 | P2 release scope | P2-002/P2-003/P2-005 proved by `npm run test:p2`, `npm run test:p2-ide-build-and-vscode:required`, and `npm run test:jetbrains-ide-interaction:required` | Ready in latest release doctor; full strict audit still reports delegated/user-configured gaps only |
 | IDE build + VS Code host | `npm run test:p2-ide-build-and-vscode:required` pass with VS Code and JetBrains plugin build evidence | Passed on current worktree with VS Code extension host evidence |
@@ -26,12 +26,12 @@
 | P2-001 Windows GUI | Separate real-Windows evidence is required before adding a v0.1.6 Windows asset | Non-blocking for the macOS-only candidate; v0.1.5 Windows limitations remain documented publicly |
 | P2-004 China external | User-configured real network/provider evidence via `npm run test:china-real-network:required` and `npm run test:china-tool-call-parity:required` | Non-blocking; release notes must frame it as requiring user credentials/config |
 | N1 migration | Human 30-minute migration audit | Not required unless the release claims N1 pass |
-| Packaging | `npm run dist:mac:x64`, `npm run test:release-packaging-audit:required`, and `npm run test:packaged-app:mac` produce the exact 5 x64 assets, verify required `app.asar` runtime files, and launch a real renderer | Open: bind the regenerated and successfully launched artifacts to the exact clean v0.1.6 candidate |
-| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Open: rerun after candidate documentation is final |
-| Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Draft only; final hashes and asset names wait for packaging evidence |
+| Packaging | `npm run dist:mac:x64`, `npm run test:release-packaging-audit:required`, and `npm run test:packaged-app:mac` produce the exact 5 x64 assets, verify required `app.asar` runtime files, and launch a real renderer | 5 expected assets and SHA256 are fixed in final notes; exact release-commit binding remains mandatory |
+| Product positioning | `npm run test:product-positioning:required` passes across README, welcome copy, release notes, and release gate | Required after final documentation changes |
+| Release notes | `npm run test:release-notes-audit:final` passes against `docs/RELEASE-NOTES-FINAL.md`, the exact GitHub Release body | Exact v0.1.6 assets and SHA256 are recorded; final clean-commit audit remains mandatory |
 | Public GitHub Release assets | `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist` requires the exact local `dist` asset set and reads public text metadata | Current v0.1.5 inventory has 8 allowed assets; latest combined read-text retry timed out on both `latest*.yml`, so no combined pass is claimed |
-| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Open for v0.1.6 candidate |
-| Release doctor | Preflight doctor on clean commit, then final notes audit, then required doctor | Open for v0.1.6 candidate |
+| Secret hygiene | `npm run secret:scan` before commit, `npm run secret:scan:history` before release | Required for every release commit |
+| Release doctor | Preflight doctor on clean commit, then final notes audit, then required doctor | Must be `ready` on the exact v0.1.6 release commit |
 
 ## Release Notes Requirements
 

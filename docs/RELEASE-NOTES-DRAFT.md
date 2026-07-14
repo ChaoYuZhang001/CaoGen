@@ -1,25 +1,20 @@
 # CaoGen Rolling Release Draft Notes
 
-> Status: Do not publish this rolling draft. Package version v0.1.6 is selected as a macOS x64 stability release candidate; the latest public release remains v0.1.5 until every required gate passes.
+> Status: Do not publish this rolling draft. v0.1.6 is the latest public release; no later release version or platform set has been selected.
 
 ## Release Decision
 
-v0.1.6 is selected for macOS x64 distribution through GitHub Releases. It will be the first release of the current source tree under `AGPL-3.0-only` with a separate written commercial-license inquiry path. The exact public body must not be finalized or published before the clean release commit, artifact hashes, and final gates are verified.
+The current package version is 0.1.6. No later release is selected. The next GitHub Releases body must be finalized only after the owner chooses a version and platform scope, a clean release commit passes every required gate, and the exact artifact hashes are available.
 
 ## Candidate Highlights
 
-- Creating a session no longer requires selecting a project; unassigned sessions remain available in a dedicated collection.
-- Deleting the last session returns to a usable empty state, and a newly created session accepts input immediately.
-- Project archive, restore, and delete actions are available from the project collection.
-- New-session actions from the 3D office and project/session navigation share the same creation path.
-- Start suggestions remain closed on session activation and load only after an explicit user action.
-- Provider settings remain a full-page workspace, and new sessions retain the three explicit routing scopes introduced in v0.1.5.
-- The packaged app now declares the `tree-sitter` runtime loader directly and is rejected by the release gate if `node-gyp-build` is missing from `app.asar` or the packaged renderer cannot start.
-- The root license is `AGPL-3.0-only`; releases through v0.1.5 retain their historical MIT terms.
+- No next-release feature or fix list is committed yet.
+- Add only behavior that is implemented and verified on the selected release commit.
+- Keep platform, signing, external-provider, and migration claims conditional on their own evidence.
 
 ## Uploaded Assets
 
-No new release assets uploaded yet. The v0.1.6 candidate assets do not exist until the exact clean release commit passes the required gates and macOS x64 packaging is regenerated.
+No new release assets uploaded yet. The five v0.1.6 macOS x64 assets are documented in `docs/RELEASE-NOTES-FINAL.md`; they are not placeholders for a later release.
 
 Future release assets must be listed here exactly after a version is selected. Allowed public assets are installer and update metadata files only: DMG, mac zip, Windows installer, AppImage, blockmap, and `latest*.yml`. Local build output and evidence directories are never release assets.
 
@@ -30,20 +25,20 @@ Future release assets must be listed here exactly after a version is selected. A
 - Provider and CLI capabilities depend on real keys, provider authentication, and locally configured tools when those integrations are selected.
 - Multiple encrypted keys and error-driven same-provider failover are locally verified. Proactive quota probing and weighted key load balancing are not claimed.
 - macOS document viewing provides a sandboxed system preview with extracted-structure fallback. Pixel-identical editing, complex formula execution, and presentation animation are not claimed.
-- v0.1.6 currently targets macOS x64 only. A Windows x64 asset must not be added without a separate real-Windows verification run.
+- Platform support must follow real platform-specific packaging and runtime evidence.
 - User-configured external-network parity and the private 30-minute migration drill remain outside public claims until their separate evidence passes.
 - AGPL-compliant commercial use does not require a separate license; proprietary integration or distribution rights require a signed written commercial agreement.
 
 ## Known Blockers
 
-- release_identity: v0.1.6 is selected but is not yet bound to a clean release commit and remote tag.
-- deep_test: v0.1.6 must rerun the complete required suite from its exact clean release commit.
-- p2_required: release-scope P2 evidence must be refreshed and bound to the exact clean v0.1.6 candidate.
-- packaging_release: v0.1.6 assets and checksums must be regenerated after the candidate code and documentation are final.
-- release_notes: the exact v0.1.6 body must pass against that same release commit before publishing.
-- github_release_assets: no v0.1.6 GitHub Release assets exist yet; the exact uploaded set and public text metadata require a post-upload audit.
+- release_identity: no later release version, clean release commit, or remote tag is selected.
+- deep_test: a future candidate must rerun the complete required suite from its exact clean release commit.
+- p2_required: release-scope P2 evidence must be refreshed and bound to the selected candidate.
+- packaging_release: future assets and checksums do not exist until packaging is regenerated from the selected candidate.
+- release_notes: the next exact release body has not been written or audited.
+- github_release_assets: no later GitHub Release asset set exists; uploaded files and public text metadata require post-upload audit.
 - macOS packages remain unsigned unless signing and notarization are completed for a future release.
-- Windows GUI and user-configured external-network evidence remain separate, non-default validation tracks.
+- Windows GUI and user-configured external-network evidence remain separate validation tracks.
 
 ## Security Statement
 
@@ -63,8 +58,8 @@ If a future macOS build remains unsigned, its final release notes must tell user
 - `npm run test:release-packaging-audit:required`
 - `npm run test:packaged-app:mac`
 - `npm run test:product-positioning:required`
-- `npm run workos:release-doctor -- --refresh --version 0.1.6`
-- `npm run test:release-notes-audit:final`
-- `npm run workos:release-doctor -- --required --version 0.1.6`
+- `npm run workos:release-doctor -- --refresh --version X.Y.Z`
+- `npm run test:release-notes-audit:final -- --version X.Y.Z`
+- `npm run workos:release-doctor -- --required --version X.Y.Z`
 - `npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist`
 - `npm run secret:scan:history`
