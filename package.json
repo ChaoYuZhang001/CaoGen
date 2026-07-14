@@ -36,6 +36,7 @@
     "test:gui-tool-status-recheck": "node scripts/gui-tool-status-recheck.mjs",
     "test:office-status-recheck": "node scripts/office-status-recheck.mjs",
     "test:reference-robot-glb": "node scripts/reference-robot-glb-smoke.mjs",
+    "test:reference-robot-silhouette": "node scripts/reference-robot-silhouette-audit.mjs",
     "test:office-preview-renderer": "node scripts/office-preview-renderer-smoke.mjs",
     "test:office-visual-preview": "node scripts/office-visual-preview-smoke.mjs",
     "test:quickbar-attachment-recheck": "node scripts/quickbar-attachment-recheck.mjs",

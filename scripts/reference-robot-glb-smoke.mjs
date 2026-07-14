@@ -45,26 +45,41 @@ const REQUIRED_NEUTRAL_ARM_POSES = [
 const REQUIRED_VISOR_ATTACHMENT_NODES = [
   {
     name: 'black_u_visor_frame',
-    attachment: 'helmet_black_smooth_cowl'
+    attachment: 'helmet_black_smooth_cowl',
+    component: 'beveled_annular_face_shell'
   },
   {
     name: 'cyan_u_visor_light',
-    attachment: 'black_u_visor_frame'
+    attachment: 'black_u_visor_frame',
+    component: 'flush_inset_light_tube',
+    maximumSurfaceOffset: 0.001
   }
 ]
 const REQUIRED_REAR_SUPPORT_NODES = [
   {
     name: 'helmet_rear_occipital_spine_left',
-    translationX: -0.095
+    side: -1
   },
   {
     name: 'helmet_rear_occipital_spine_right',
-    translationX: 0.095
+    side: 1
   }
 ]
 const REAR_SUPPORT_COMPONENT = 'paired_rear_neck_support'
 const REFERENCE_COWL_NODE_NAME = 'helmet_black_smooth_cowl'
-const REFERENCE_COWL_SILHOUETTE = 'dual_orthographic_three_piece_cowl'
+const REFERENCE_COWL_SILHOUETTE = 'orthographic_annular_frame_occipital_bridge'
+const REQUIRED_OCCIPITAL_BRIDGE_NODES = [
+  {
+    name: 'helmet_occipital_neck_bridge_left',
+    side: -1
+  },
+  {
+    name: 'helmet_occipital_neck_bridge_right',
+    side: 1
+  }
+]
+const OCCIPITAL_BRIDGE_COMPONENT = 'paired_occipital_neck_bridge'
+const VISOR_CONTOUR_OFFSET_PROFILE = 'visor_contour_following'
 const OFFICIAL_HEAD_NODE_NAME = 'official_head_link'
 const OFFICIAL_HEAD_VISUAL_ROLE = 'provenance_only'
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
@@ -487,11 +502,29 @@ function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
     }
 
     const entry = matches[0]
-    const attachment = nodes[entry.index]?.extras?.visor_attachment
+    const extras = nodes[entry.index]?.extras ?? {}
+    const attachment = extras.visor_attachment
+    const component = extras.reference_component
     if (attachment !== contract.attachment) {
       failures.push(
         `visor attachment ${quote(contract.name)} must declare ${quote(contract.attachment)}; ` +
           `found ${formatValue(attachment)}`
+      )
+    }
+    if (component !== contract.component) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} must declare component ${quote(contract.component)}; ` +
+          `found ${formatValue(component)}`
+      )
+    }
+    if (
+      contract.maximumSurfaceOffset !== undefined &&
+      (typeof extras.surface_offset_m !== 'number' ||
+        extras.surface_offset_m > contract.maximumSurfaceOffset)
+    ) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} surface offset must be at most ` +
+          `${contract.maximumSurfaceOffset}m; found ${formatValue(extras.surface_offset_m)}`
       )
     }
     if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
@@ -505,7 +538,7 @@ function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
           `found ${formatValue(parentName)}`
       )
     }
-    attachments.push({ name: contract.name, attachment })
+    attachments.push({ name: contract.name, attachment, component })
   }
   return attachments
 }
@@ -522,7 +555,8 @@ function inspectRearSupportNodes(nodes, nodeEntries, failures) {
     const entry = matches[0]
     const node = nodes[entry.index]
     const component = node?.extras?.reference_component
-    const translation = Array.isArray(node?.translation) ? node.translation : [0, 0, 0]
+    const side = node?.extras?.reference_side
+    const offsetProfile = node?.extras?.reference_offset_profile
     const parentIndex = nodeParentIndex(nodes, entry.index)
     const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
     if (component !== REAR_SUPPORT_COMPONENT) {
@@ -537,13 +571,14 @@ function inspectRearSupportNodes(nodes, nodeEntries, failures) {
           `found ${formatValue(parentName)}`
       )
     }
-    if (translation.length !== 3 || Math.abs(translation[0] - contract.translationX) > 0.0001) {
+    if (side !== contract.side || offsetProfile !== VISOR_CONTOUR_OFFSET_PROFILE) {
       failures.push(
-        `rear support ${quote(contract.name)} must use symmetric x translation ${contract.translationX}; ` +
-          `found ${formatValue(translation)}`
+        `rear support ${quote(contract.name)} must follow side ${contract.side} with profile ` +
+          `${quote(VISOR_CONTOUR_OFFSET_PROFILE)}; found side=${formatValue(side)}, ` +
+          `profile=${formatValue(offsetProfile)}`
       )
     }
-    supports.push({ name: contract.name, translation, component })
+    supports.push({ name: contract.name, side, offsetProfile, component })
   }
   return supports
 }
@@ -557,6 +592,43 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
 
   if (cowlMatches.length !== 1) {
     failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must appear exactly once; found ${cowlMatches.length}`)
+  }
+
+  const bridges = []
+  for (const contract of REQUIRED_OCCIPITAL_BRIDGE_NODES) {
+    const matches = nodeEntries.filter((entry) => entry.name === contract.name)
+    if (matches.length !== 1) {
+      failures.push(
+        `occipital bridge ${quote(contract.name)} must appear exactly once; found ${matches.length}`
+      )
+      continue
+    }
+    const entry = matches[0]
+    const node = nodes[entry.index]
+    const side = node?.extras?.reference_side
+    const offsetProfile = node?.extras?.reference_offset_profile
+    const parentIndex = nodeParentIndex(nodes, entry.index)
+    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
+    if (node?.extras?.reference_component !== OCCIPITAL_BRIDGE_COMPONENT) {
+      failures.push(
+        `occipital bridge ${quote(contract.name)} must declare component ` +
+          `${quote(OCCIPITAL_BRIDGE_COMPONENT)}; found ${formatValue(node?.extras?.reference_component)}`
+      )
+    }
+    if (parentName !== 'helmet_head') {
+      failures.push(
+        `occipital bridge ${quote(contract.name)} must be parented to "helmet_head"; ` +
+          `found ${formatValue(parentName)}`
+      )
+    }
+    if (side !== contract.side || offsetProfile !== VISOR_CONTOUR_OFFSET_PROFILE) {
+      failures.push(
+        `occipital bridge ${quote(contract.name)} must follow side ${contract.side} with profile ` +
+          `${quote(VISOR_CONTOUR_OFFSET_PROFILE)}; found side=${formatValue(side)}, ` +
+          `profile=${formatValue(offsetProfile)}`
+      )
+    }
+    bridges.push({ name: contract.name, side, offsetProfile })
   }
   if (cowl) {
     const silhouette = nodes[cowl.index]?.extras?.reference_silhouette
@@ -598,6 +670,7 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
   return {
     cowlName: cowl?.name ?? null,
     silhouette: cowl ? nodes[cowl.index]?.extras?.reference_silhouette ?? null : null,
+    bridgeNames: bridges.map((bridge) => bridge.name),
     officialHeadName: officialHead?.name ?? null,
     officialHeadVisualRole: officialHead ? nodes[officialHead.index]?.extras?.visual_role ?? null : null
   }
@@ -801,6 +874,7 @@ function printDocumentSummary(inspection) {
   console.log(
     `Reference head: cowl=${formatValue(inspection.referenceHead.cowlName)}, ` +
       `silhouette=${formatValue(inspection.referenceHead.silhouette)}, ` +
+      `bridges=${formatList(inspection.referenceHead.bridgeNames)}, ` +
       `officialRole=${formatValue(inspection.referenceHead.officialHeadVisualRole)}`
   )
   console.log('Official mesh bindings:')
