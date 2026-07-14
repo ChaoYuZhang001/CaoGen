@@ -105,6 +105,7 @@ async function inspectAsset(tagName, tagVersion, asset) {
   const size = numberField(asset, 'size') || 0
   const state = stringField(asset, 'state') || 'unknown'
   const contentType = stringField(asset, 'content_type') || ''
+  const apiDownloadUrl = stringField(asset, 'url') || ''
   const browserDownloadUrl = stringField(asset, 'browser_download_url') || ''
   const categories = {
     allowedName: allowedReleaseAssetName(name),
@@ -125,7 +126,8 @@ async function inspectAsset(tagName, tagVersion, asset) {
   }
 
   if (readTextAssets && shouldReadSmallTextAsset(name, size)) {
-    const text = asset.textContent ?? (browserDownloadUrl ? await readTextAsset(tagName, name, browserDownloadUrl) : undefined)
+    const downloadUrls = [apiDownloadUrl, browserDownloadUrl].filter(Boolean)
+    const text = asset.textContent ?? (downloadUrls.length > 0 ? await readTextAsset(tagName, name, downloadUrls) : undefined)
     if (typeof text === 'string') {
       scanText(text, `${tagName}/${name}`)
       if (/^latest.*\.ya?ml$/i.test(name) && tagVersion && !text.includes(`version: ${tagVersion}`)) {
@@ -205,15 +207,19 @@ function readExpectedDistAssets() {
     .sort()
 }
 
-async function readTextAsset(tagName, assetName, url) {
-  try {
-    return await httpGetText(url, { Accept: 'application/octet-stream' })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (required) failures.push(`${tagName}/${assetName}: unable to read text release asset: ${message}`)
-    else warnings.push(`${tagName}/${assetName}: unable to read text release asset: ${message}`)
-    return undefined
+async function readTextAsset(tagName, assetName, urls) {
+  let lastError
+  for (const url of urls) {
+    try {
+      return await httpGetText(url, { Accept: 'application/octet-stream' })
+    } catch (error) {
+      lastError = error
+    }
   }
+  const message = lastError instanceof Error ? lastError.message : String(lastError)
+  if (required) failures.push(`${tagName}/${assetName}: unable to read text release asset: ${message}`)
+  else warnings.push(`${tagName}/${assetName}: unable to read text release asset: ${message}`)
+  return undefined
 }
 
 function scanText(text, label) {
