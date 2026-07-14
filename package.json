@@ -1,7 +1,7 @@
 {
   "name": "caogen",
   "productName": "CaoGen",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "license": "AGPL-3.0-only",
   "author": {
     "name": "Chaoyu Zhang",
@@ -92,6 +92,7 @@
     "test:n1-migration-audit:required": "node scripts/n1-migration-audit.mjs --required",
     "test:release-packaging-audit": "node scripts/release-packaging-audit.mjs",
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
+    "test:packaged-app:mac": "node scripts/packaged-app-smoke.mjs",
     "test:release-notes-audit": "node scripts/release-notes-audit.mjs",
     "test:release-notes-audit:required": "node scripts/release-notes-audit.mjs --required",
     "test:release-notes-audit:final": "node scripts/release-notes-audit.mjs --required --final",
@@ -228,6 +229,7 @@
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.11.1",
     "node-cron": "^4.6.0",
+    "node-gyp-build": "^4.8.4",
     "node-pty": "^1.1.0",
     "postprocessing": "^6.39.2",
     "puppeteer-core": "^25.3.0",
@@ -251,6 +253,7 @@
     "@nut-tree-fork/nut-js": "^4.2.6"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
