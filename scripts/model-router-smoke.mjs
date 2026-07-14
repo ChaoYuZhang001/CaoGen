@@ -35,6 +35,7 @@ try {
 
   const stats = await import(pathToFileURL(findCompiled(buildDir, 'modelStats.js')).href)
   const providerHealth = await import(pathToFileURL(findCompiled(buildDir, 'providerHealth.js')).href)
+  const profiles = await import(pathToFileURL(findCompiled(buildDir, 'model-profile.js')).href)
   const router = await import(pathToFileURL(findCompiled(buildDir, 'model-router.js')).href)
   const sessionRoutingModule = await import(pathToFileURL(findCompiled(buildDir, 'session-routing.js')).href)
   const sessionRouting = {
@@ -52,6 +53,7 @@ try {
       id: 'deepseek-official',
       name: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com',
+      engine: 'claude',
       models: ['deepseek-chat', 'deepseek-reasoner'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -61,6 +63,7 @@ try {
       id: 'premium',
       name: 'Premium',
       baseUrl: 'https://example.test',
+      engine: 'claude',
       models: ['expensive-reasoner', 'gpt-4o-mini'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -73,6 +76,7 @@ try {
       id: 'chat-only',
       name: 'Chat Only',
       baseUrl: 'https://example.test/v1',
+      engine: 'openai',
       models: ['gpt-4o-mini'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -80,6 +84,164 @@ try {
       openaiProtocol: 'chat'
     }
   ]
+
+  const familyProfiles = profiles.buildModelProfiles({
+    providerId: 'model-family-fixture',
+    models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4', 'gemini-2.5-flash', 'gpt-5.6', 'kimi-k2'],
+    engine: 'claude'
+  })
+  const opus = familyProfiles.find((profile) => profile.model.includes('opus'))
+  const sonnet = familyProfiles.find((profile) => profile.model.includes('sonnet'))
+  const haiku = familyProfiles.find((profile) => profile.model.includes('haiku'))
+  const flash = familyProfiles.find((profile) => profile.model.includes('flash'))
+  const gpt = familyProfiles.find((profile) => profile.model.includes('gpt-5'))
+  const kimi = familyProfiles.find((profile) => profile.model.includes('kimi'))
+  assert(opus?.cost.tier === 'high' && opus.latency === 'slow', 'Opus should keep the quality/high-cost profile')
+  assert(sonnet?.cost.tier === 'medium' && sonnet.latency === 'balanced', 'Sonnet should keep the balanced coding profile')
+  assert(haiku?.cost.tier === 'low' && haiku.latency === 'fast', 'Haiku should keep the fast low-cost profile')
+  assert(flash?.supportsVision && flash.capabilities.longContext === 'high', 'Gemini Flash should expose vision and long-context strengths')
+  assert(gpt?.capabilities.coding === 'high' && gpt.supportsTools, 'GPT-5 family should expose coding and tool strengths')
+  assert(kimi?.capabilities.summarization === 'high' && kimi.capabilities.longContext === 'high', 'Kimi should expose documentation and long-context strengths')
+
+  const defaultRoleProviders = [
+    {
+      id: 'google-fixture',
+      name: 'Google Gemini',
+      baseUrl: 'https://example.test/google',
+      engine: 'openai',
+      models: ['gemini-2.5-flash'],
+      budgetUsd: 0,
+      createdAt: Date.now(),
+      hasToken: true
+    },
+    {
+      id: 'anthropic-fixture',
+      name: 'Anthropic Claude',
+      baseUrl: 'https://example.test/anthropic',
+      engine: 'claude',
+      models: ['claude-sonnet-4'],
+      budgetUsd: 0,
+      createdAt: Date.now(),
+      hasToken: true
+    },
+    {
+      id: 'openai-fixture',
+      name: 'OpenAI',
+      baseUrl: 'https://example.test/openai',
+      engine: 'openai',
+      models: ['gpt-5.6'],
+      budgetUsd: 0,
+      createdAt: Date.now(),
+      hasToken: true
+    },
+    {
+      id: 'deepseek-fixture',
+      name: 'DeepSeek',
+      baseUrl: 'https://example.test/deepseek',
+      engine: 'openai',
+      models: ['deepseek-reasoner'],
+      budgetUsd: 0,
+      createdAt: Date.now(),
+      hasToken: true
+    },
+    {
+      id: 'moonshot-fixture',
+      name: 'Moonshot Kimi',
+      baseUrl: 'https://example.test/moonshot',
+      engine: 'openai',
+      models: ['kimi-k2'],
+      budgetUsd: 0,
+      createdAt: Date.now(),
+      hasToken: true
+    }
+  ]
+  const defaultRoleCases = [
+    { prompt: '调研竞品并整理资料', expectedProviderId: 'google-fixture' },
+    { prompt: '策划下个版本的路线图', expectedProviderId: 'anthropic-fixture' },
+    { prompt: '开发并实现新的 TypeScript 功能', expectedProviderId: 'openai-fixture' },
+    { prompt: '运行测试并完成 QA 验收', expectedProviderId: 'deepseek-fixture' },
+    { prompt: '编写 README 和需求文档', expectedProviderId: 'moonshot-fixture' }
+  ]
+  for (const roleCase of defaultRoleCases) {
+    const roleRoute = sessionRoutingModule.resolveSessionModelRoute({
+      enabled: true,
+      currentModel: 'auto',
+      providerId: '',
+      providers: defaultRoleProviders,
+      allowAnyEngine: true,
+      payload: { text: roleCase.prompt, images: [] },
+      strategy: 'balanced',
+      sessionCostUsd: 0,
+      settingsBudgetUsd: 0
+    })
+    assert(roleRoute.kind === 'routed', `default task role should route: ${roleCase.prompt}`)
+    assert(
+      roleRoute.providerId === roleCase.expectedProviderId,
+      `default task role mismatch: ${JSON.stringify(roleRoute)}`
+    )
+    assert(!roleRoute.decision.manualOverrideApplied, `default task role must remain an automatic decision: ${roleCase.prompt}`)
+  }
+
+  const globalInitialRoute = sessionRoutingModule.resolveSessionModelRoute({
+    enabled: true,
+    currentModel: 'auto',
+    providerId: '',
+    providers: [...providers, ...chatOnlyProviders],
+    allowAnyEngine: true,
+    payload: { text: 'summarize the project and suggest next steps', images: [] },
+    strategy: 'balanced',
+    sessionCostUsd: 0,
+    settingsBudgetUsd: 0
+  })
+  assert(globalInitialRoute.kind === 'routed', 'global initial routing should consider providers across engines')
+  assert(
+    globalInitialRoute.decision.candidateCount === 5,
+    `global initial routing should include every configured provider model: ${JSON.stringify(globalInitialRoute)}`
+  )
+
+  const taskRoleCases = [
+    {
+      prompt: '调研竞品并整理资料',
+      preferences: { researchProviderId: 'premium', researchModel: 'gpt-4o-mini' },
+      expectedModel: 'gpt-4o-mini'
+    },
+    {
+      prompt: '策划下个版本的路线图',
+      preferences: { planningProviderId: 'deepseek-official', planningModel: 'deepseek-reasoner' },
+      expectedModel: 'deepseek-reasoner'
+    },
+    {
+      prompt: '开发并实现新的 TypeScript 功能',
+      preferences: { codingProviderId: 'premium', codingModel: 'expensive-reasoner' },
+      expectedModel: 'expensive-reasoner'
+    },
+    {
+      prompt: '运行测试并完成 QA 验收',
+      preferences: { testingProviderId: 'deepseek-official', testingModel: 'deepseek-chat' },
+      expectedModel: 'deepseek-chat'
+    },
+    {
+      prompt: '编写 README 和需求文档',
+      preferences: { documentationProviderId: 'premium', documentationModel: 'gpt-4o-mini' },
+      expectedModel: 'gpt-4o-mini'
+    }
+  ]
+  for (const roleCase of taskRoleCases) {
+    const roleRoute = sessionRouting.resolveSessionModelRoute({
+      enabled: true,
+      currentModel: 'auto',
+      providerId: 'deepseek-official',
+      providers,
+      payload: { text: roleCase.prompt, images: [] },
+      strategy: 'balanced',
+      sessionCostUsd: 0,
+      settingsBudgetUsd: 0,
+      ...roleCase.preferences
+    })
+    assert(roleRoute.kind === 'routed', `task role should route: ${roleCase.prompt}`)
+    assert(roleRoute.model === roleCase.expectedModel, `task role mismatch: ${JSON.stringify(roleRoute)}`)
+    assert(roleRoute.decision.manualOverrideApplied, `task role should be visible as an explicit preference: ${roleCase.prompt}`)
+  }
 
   const manual = router.routeModel({
     providers,

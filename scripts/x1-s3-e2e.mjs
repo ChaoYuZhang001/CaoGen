@@ -72,25 +72,38 @@ async function runX1Scenario() {
         assert(providers.length === 0, `first launch must not inject provider defaults: ${JSON.stringify(providers)}`)
       })
 
-      await check(cdp, 'X1 new session modal starts with explicit engine choice', async () => {
+      await check(cdp, 'X1 new session is an inline workspace with no engine selector', async () => {
         await clickByText(cdp, '+ 新建会话')
-        await waitForText(cdp, '新建会话')
+        await waitForText(cdp, '今天想做点什么?')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
         const selected = await selectedNewSessionValues(cdp)
-        assert(selected.engineValue === '', `engine must start unselected: ${JSON.stringify(selected)}`)
-        assert(selected.engineText.includes('请选择 Agent 引擎'), `engine placeholder missing: ${JSON.stringify(selected)}`)
-        assert(selected.providerSelectCount === 0, `provider select should be hidden until engine is explicit: ${JSON.stringify(selected)}`)
-        assert(selected.modelSelectCount === 0, `model select should be hidden until provider engine is explicit: ${JSON.stringify(selected)}`)
+        assert(selected.modalCount === 0, `new session must not open a modal: ${JSON.stringify(selected)}`)
+        assert(selected.engineSelectCount === 0, `conversation engine selector must be absent: ${JSON.stringify(selected)}`)
+        assert(selected.routingModeCount === 3, `three routing modes must be available: ${JSON.stringify(selected)}`)
+        assert(selected.activeRoutingMode.includes('跨厂商自动'), `global auto should be the default: ${JSON.stringify(selected)}`)
+        assert(selected.providerSelectCount === 0, `global auto should not require a Provider selector: ${JSON.stringify(selected)}`)
+        assert(selected.modelSelectCount === 0, `global auto should not require a model selector: ${JSON.stringify(selected)}`)
+
+        await clickByText(cdp, '厂商内自动')
+        const providerAuto = await selectedNewSessionValues(cdp)
+        assert(providerAuto.providerSelectCount === 1, `provider auto must ask for one Provider: ${JSON.stringify(providerAuto)}`)
+        assert(providerAuto.modelSelectCount === 0, `provider auto must not ask for a fixed model: ${JSON.stringify(providerAuto)}`)
+
+        await clickByText(cdp, '指定模型')
+        const fixed = await selectedNewSessionValues(cdp)
+        assert(fixed.providerSelectCount === 1, `fixed mode must ask for one Provider: ${JSON.stringify(fixed)}`)
+        assert(fixed.modelSelectCount === 1, `fixed mode must ask for one model: ${JSON.stringify(fixed)}`)
+        await clickByText(cdp, '跨厂商自动')
       })
 
-      await check(cdp, 'X1 create is blocked until engine and keyed Provider are explicit', async () => {
-        await clickByText(cdp, '创建')
-        await waitForText(cdp, '请选择 Agent 引擎', 10_000)
-        await selectNewSessionEngine(cdp, 'claude')
-        await clickByText(cdp, '创建')
+      await check(cdp, 'X1 send is blocked only until a keyed Provider is selected', async () => {
+        await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', '检查项目')
+        await clickSelector(cdp, '.welcome-send')
         await waitForText(cdp, '请选择已配置 API key 的 Provider', 10_000)
+        const body = await visibleText(cdp)
+        assert(!body.includes('请选择 Agent 引擎'), 'engine selection error must not be shown')
       })
-      await screenshot(cdp, 'x1-02-explicit-engine-required')
+      await screenshot(cdp, 'x1-02-inline-provider-required')
     })
   } finally {
     await stopElectron(app)
@@ -111,10 +124,11 @@ async function runS3Scenario() {
 
   const now = Date.now()
   const history = [
-    historyEntry('hist-alpha', 'Alpha Keep Current', alphaDir, 'sdk-alpha', now - 1_000),
-    historyEntry('hist-beta', 'Beta Pin Candidate', betaDir, 'sdk-beta', now - 2_000),
-    historyEntry('hist-gamma', 'Gamma Archive Candidate', alphaDir, 'sdk-gamma', now - 3_000),
-    historyEntry('hist-delete', 'Delete Target', betaDir, 'sdk-delete', now - 4_000)
+    historyEntry('hist-alpha', 'Alpha Keep Current', alphaDir, 'sdk-alpha', now - 1_000, 'project-alpha'),
+    historyEntry('hist-beta', 'Beta Pin Candidate', betaDir, 'sdk-beta', now - 2_000, 'project-beta'),
+    historyEntry('hist-gamma', 'Gamma Archive Candidate', alphaDir, 'sdk-gamma', now - 3_000, 'project-alpha'),
+    historyEntry('hist-delete', 'Delete Target', betaDir, 'sdk-delete', now - 4_000, 'project-beta'),
+    { ...historyEntry('hist-loose', 'Loose Conversation', alphaDir, 'sdk-loose', now - 5_000), unassigned: true }
   ]
   writeFileSync(path.join(userDataDir, 'sessions.json'), JSON.stringify(history, null, 2))
   writeFileSync(
@@ -144,6 +158,17 @@ async function runS3Scenario() {
         assert(alpha?.cards.includes('Gamma Archive Candidate'), `Alpha group missing gamma: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Beta Pin Candidate'), `Beta group wrong: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Delete Target'), `Beta group missing delete target: ${JSON.stringify(groups)}`)
+        const unassigned = groups.find((group) => group.title === '未关联项目')
+        assert(unassigned?.cards.includes('Loose Conversation'), `unassigned group wrong: ${JSON.stringify(groups)}`)
+      })
+
+      await check(cdp, 'S3 project plus opens inline new session with project preselected', async () => {
+        await clickProjectNew(cdp, 'Alpha Project')
+        await waitForText(cdp, '今天想做点什么?')
+        const state = await inlineNewSessionState(cdp)
+        assert(state.modalCount === 0, `project new session must not open a modal: ${JSON.stringify(state)}`)
+        assert(state.projectText === 'Alpha Project', `project context was not preselected: ${JSON.stringify(state)}`)
+        assert(state.engineSelectCount === 0, `project new session must not expose engine choice: ${JSON.stringify(state)}`)
       })
 
       await check(cdp, 'S3 search filters by title/project/path', async () => {
@@ -167,7 +192,7 @@ async function runS3Scenario() {
       await check(cdp, 'S3 archive hides from recent, expands archive section, and persists', async () => {
         await openMoreForCard(cdp, 'Gamma Archive Candidate')
         await clickMenuItem(cdp, '归档')
-        await waitForNoSectionCard(cdp, '最近会话', 'Gamma Archive Candidate')
+        await waitForNoProjectCard(cdp, 'Alpha Project', 'Gamma Archive Candidate')
         await clickArchiveToggle(cdp)
         await waitForSectionCard(cdp, '归档', 'Gamma Archive Candidate')
         const after = readHistory(userDataDir)
@@ -189,7 +214,7 @@ async function runS3Scenario() {
   }
 }
 
-function historyEntry(id, title, cwd, sdkSessionId, updatedAt) {
+function historyEntry(id, title, cwd, sdkSessionId, updatedAt, projectId) {
   return {
     id,
     title,
@@ -200,7 +225,8 @@ function historyEntry(id, title, cwd, sdkSessionId, updatedAt) {
     sdkSessionId,
     createdAt: updatedAt - 10_000,
     updatedAt,
-    costUsd: 0
+    costUsd: 0,
+    ...(projectId ? { projectId } : {})
   }
 }
 
@@ -337,36 +363,21 @@ async function selectedNewSessionValues(cdp) {
   return evalValue(
     cdp,
     `(() => {
-      const modalSelects = [...document.querySelectorAll('.modal select')];
-      const selects = modalSelects.length > 0 ? modalSelects : [...document.querySelectorAll('select')];
-      const engine = selects.find((select) => [...select.options].some((option) => option.value === 'claude' || option.value === 'openai'));
+      const selects = [...document.querySelectorAll('.welcome select')];
+      const engineSelects = selects.filter((select) => [...select.options].some((option) => option.value === 'claude' || option.value === 'openai'));
       const providerSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择 Provider')));
       const modelSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择模型')));
+      const routingModes = [...document.querySelectorAll('.welcome-routing-modes button')];
       return {
-        engineValue: engine?.value || '',
-        engineText: engine?.selectedOptions?.[0]?.textContent || '',
+        modalCount: document.querySelectorAll('.modal-backdrop').length,
+        engineSelectCount: engineSelects.length,
         providerSelectCount: providerSelects.length,
-        modelSelectCount: modelSelects.length
+        modelSelectCount: modelSelects.length,
+        routingModeCount: routingModes.length,
+        activeRoutingMode: routingModes.find((button) => button.classList.contains('active'))?.textContent?.trim() || ''
       };
     })()`
   )
-}
-
-async function selectNewSessionEngine(cdp, value) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const value = ${JSON.stringify(value)};
-      const select = [...document.querySelectorAll('.modal select')]
-        .find((candidate) => [...candidate.options].some((option) => option.value === value));
-      if (!select) return { ok: false, text: document.body.innerText.slice(0, 2000) };
-      select.value = value;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: true };
-    })()`
-  )
-  assert(result?.ok, `engine select not found for ${value}\n${result?.text ?? ''}`)
-  await sleep(250)
 }
 
 async function sidebarGroups(cdp) {
@@ -377,6 +388,50 @@ async function sidebarGroups(cdp) {
       cards: [...group.querySelectorAll('.session-card-title')].map((item) => item.textContent.trim())
     })))()`
   )
+}
+
+async function clickProjectNew(cdp, projectTitle) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const title = ${JSON.stringify(projectTitle)};
+      const groups = [...document.querySelectorAll('.sidebar-project-group')];
+      const group = groups.find((item) => item.querySelector('.sidebar-group-title')?.textContent?.trim() === title);
+      const button = group?.querySelector('.sidebar-group-new');
+      if (!button) return { ok: false, text: document.body.innerText.slice(0, 2000) };
+      button.click();
+      return { ok: true };
+    })()`
+  )
+  assert(result?.ok, `project new-session button not found for ${projectTitle}\n${result?.text ?? ''}`)
+  await sleep(250)
+}
+
+async function inlineNewSessionState(cdp) {
+  return evalValue(
+    cdp,
+    `(() => {
+      const project = document.querySelector('.welcome-project-select');
+      const selects = [...document.querySelectorAll('.welcome select')];
+      return {
+        modalCount: document.querySelectorAll('.modal-backdrop').length,
+        projectText: project?.selectedOptions?.[0]?.textContent?.trim() || '',
+        engineSelectCount: selects.filter((select) => [...select.options].some((option) => option.value === 'claude' || option.value === 'openai')).length
+      };
+    })()`
+  )
+}
+
+async function waitForNoProjectCard(cdp, projectTitle, cardTitle, timeout = 5_000) {
+  const start = Date.now()
+  let last = []
+  while (Date.now() - start < timeout) {
+    last = await sidebarGroups(cdp)
+    const group = last.find((item) => item.title === projectTitle)
+    if (!group || !group.cards.some((card) => card.includes(cardTitle))) return
+    await sleep(150)
+  }
+  throw new Error(`card ${cardTitle} still visible in project ${projectTitle}: ${JSON.stringify(last)}`)
 }
 
 async function openMoreForCard(cdp, title) {
@@ -476,6 +531,21 @@ async function clickByText(cdp, text) {
     })()`
   )
   assert(result?.ok, `button/text not found: ${text}\n${result?.text ?? ''}`)
+  await sleep(250)
+}
+
+async function clickSelector(cdp, selector) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const selector = ${JSON.stringify(selector)};
+      const element = document.querySelector(selector);
+      if (!element) return { ok: false, text: document.body.innerText.slice(0, 2000) };
+      element.click();
+      return { ok: true };
+    })()`
+  )
+  assert(result?.ok, `selector not found: ${selector}\n${result?.text ?? ''}`)
   await sleep(250)
 }
 

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
 import type {
+  EngineKind,
   OpenAIProtocol,
   ProviderApiKeyInput,
   ProviderApiKeyUpdateInput,
@@ -29,6 +30,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [name, setName] = useState(provider?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
+  const [engine, setEngine] = useState<EngineKind>(provider?.engine ?? 'openai')
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
   const [budgetUsd, setBudgetUsd] = useState(provider?.budgetUsd ? String(provider.budgetUsd) : '')
   const [openaiProtocol, setOpenaiProtocol] = useState<OpenAIProtocol>(provider?.openaiProtocol ?? 'responses')
@@ -103,6 +105,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     if (!name.trim()) setName(preset.label)
     setBaseUrl(preset.baseUrl)
     setModelsText(preset.models.join('\n'))
+    setEngine(preset.engine)
     setOpenaiProtocol(preset.openaiProtocol ?? 'responses')
     setModelSourceKey(providerModelSourceKey(provider?.id, preset.baseUrl, preset.openaiProtocol ?? 'responses'))
   }
@@ -132,6 +135,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           models,
+          engine,
           customHeaders: customHeaders.trim(),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           openaiProtocol,
@@ -148,6 +152,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           models,
+          engine,
           customHeaders: customHeaders.trim(),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           openaiProtocol,
@@ -165,9 +170,19 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   }
 
   return (
-    <div className="modal-backdrop modal-backdrop-nested" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">{isEdit ? t('providerEditTitle') : t('providerAddTitle')}</h2>
+    <section className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')}>
+        <header className="provider-editor-header">
+          <button
+            type="button"
+            className="provider-editor-back"
+            aria-label={t('backToProviders')}
+            title={t('backToProviders')}
+            onClick={onClose}
+          >
+            ←
+          </button>
+          <h2 className="provider-editor-title">{isEdit ? t('providerEditTitle') : t('providerAddTitle')}</h2>
+        </header>
 
         {!isEdit && (
           <>
@@ -207,6 +222,16 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           placeholder="https://your-gateway.example.com"
           onChange={(e) => setBaseUrl(e.target.value)}
         />
+
+        <label className="field-label">{t('providerEngineLabel')}</label>
+        <select
+          className="select select-block"
+          value={engine}
+          onChange={(e) => setEngine(e.target.value as EngineKind)}
+        >
+          <option value="openai">{t('providerEngineOpenAI')}</option>
+          <option value="claude">{t('providerEngineClaude')}</option>
+        </select>
 
         <label className="field-label">
           {t('apiKeyLabelPrimary')}
@@ -341,7 +366,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         {error && <div className="notice notice-error">{error}</div>}
 
-        <div className="modal-actions">
+        <div className="provider-editor-actions">
           <button className="btn btn-ghost" onClick={onClose}>
             {t('cancel')}
           </button>
@@ -349,8 +374,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
             {busy ? t('saving') : t('save')}
           </button>
         </div>
-      </div>
-    </div>
+    </section>
   )
 }
 

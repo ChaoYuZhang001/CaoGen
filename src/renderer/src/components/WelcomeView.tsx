@@ -1,23 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, useStore } from '../store'
+import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
-import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { CaoGenDriveMode, EngineInfo, EngineKind, PermissionModeId } from '../../../shared/types'
+import { AUTO_MODEL, AUTO_PROVIDER_ID, caogenDrivePolicyView } from '../../../shared/types'
+import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+
+const NEW_PROJECT = '__new_project__'
+const UNASSIGNED = '__unassigned__'
+type RoutingMode = 'fixed' | 'provider' | 'global'
 
 interface WelcomeTool {
   key: string
   labelKey: string
+  promptKey: string
   icon: HeaderIconName
 }
 
 const WELCOME_TOOLS: WelcomeTool[] = [
-  { key: 'review', labelKey: 'deskReview', icon: 'review' },
-  { key: 'terminal', labelKey: 'deskTerminal', icon: 'terminal' },
-  { key: 'browser', labelKey: 'deskBrowser', icon: 'browser' },
-  { key: 'files', labelKey: 'deskFiles', icon: 'files' },
-  { key: 'sideChat', labelKey: 'deskSideChat', icon: 'subagents' }
+  { key: 'explore', labelKey: 'welcomeExploreCode', promptKey: 'welcomeExploreCodePrompt', icon: 'files' },
+  { key: 'build', labelKey: 'welcomeBuildFeature', promptKey: 'welcomeBuildFeaturePrompt', icon: 'terminal' },
+  { key: 'review', labelKey: 'welcomeReviewCode', promptKey: 'welcomeReviewCodePrompt', icon: 'review' },
+  { key: 'fix', labelKey: 'welcomeFixIssue', promptKey: 'welcomeFixIssuePrompt', icon: 'subagents' }
 ]
 
 /**
@@ -29,15 +33,24 @@ export default function WelcomeView(): React.JSX.Element {
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
   const projects = useStore((s) => s.projects)
+  const requestedProjectId = useStore((s) => s.newSessionProjectId)
   const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
 
+  const initialProject = projects.find((project) => project.id === requestedProjectId) ?? projects[0]
+  const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.hasToken)
   const [text, setText] = useState('')
-  const [cwd, setCwd] = useState('')
+  const [projectChoice, setProjectChoice] = useState(initialProject?.id ?? NEW_PROJECT)
+  const [cwd, setCwd] = useState(initialProject?.path ?? '')
   const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [providerId, setProviderId] = useState('')
-  const [model, setModel] = useState('')
-  const [engine, setEngine] = useState<EngineKind | ''>('')
-  const [engines, setEngines] = useState<EngineInfo[]>([])
+  const [routingMode, setRoutingMode] = useState<RoutingMode>('global')
+  const [providerId, setProviderId] = useState(initialProvider?.id ?? '')
+  const [model, setModel] = useState(
+    initialProvider
+      ? settings.defaultModel && initialProvider.models.includes(settings.defaultModel)
+        ? settings.defaultModel
+        : AUTO_MODEL
+      : ''
+  )
   const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
     caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
   )
@@ -46,32 +59,89 @@ export default function WelcomeView(): React.JSX.Element {
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    void window.agentDesk.listEngines().then(setEngines)
-  }, [providers])
+    if (projectChoice !== NEW_PROJECT || cwd || projects.length === 0) return
+    setProjectChoice(projects[0].id)
+    setCwd(projects[0].path)
+  }, [cwd, projectChoice, projects])
 
-  const requiresProvider = engine === 'claude' || engine === 'openai'
+  useEffect(() => {
+    if (!requestedProjectId) return
+    const requested = projects.find((project) => project.id === requestedProjectId)
+    if (!requested) return
+    setProjectChoice(requested.id)
+    setCwd(requested.path)
+  }, [projects, requestedProjectId])
+
+  useEffect(() => {
+    if (providerId) return
+    const preferred = providers.find(
+      (provider) => provider.id === settings.defaultProviderId && provider.hasToken
+    )
+    if (!preferred) return
+    setProviderId(preferred.id)
+    setModel(
+      settings.defaultModel && preferred.models.includes(settings.defaultModel)
+        ? settings.defaultModel
+        : AUTO_MODEL
+    )
+  }, [providerId, providers, settings.defaultModel, settings.defaultProviderId])
+
+  const routingStrategy = driveMode === 'core'
+    ? settings.schedulerStrategy
+    : caogenDrivePolicyView(driveMode).schedulerStrategy
+  const routingStrategyLabel = t(
+    routingStrategy === 'quality'
+      ? 'routingStrategyQuality'
+      : routingStrategy === 'cost'
+        ? 'routingStrategyCost'
+        : routingStrategy === 'speed'
+          ? 'routingStrategySpeed'
+          : 'routingStrategyBalanced'
+  )
 
   const modelOptions = useMemo(() => {
-    const p = providers.find((x) => x.id === providerId)
-    if (p && p.models.length > 0) {
-      return [
-        { value: AUTO_MODEL, label: t('autoRoute') },
-        ...p.models.map((m) => ({ value: m, label: m }))
-      ]
+    return modelOptionsForProvider(
+      providers,
+      providerId,
+      `${t('autoRoute')} · ${routingStrategyLabel}`,
+      model
+    )
+  }, [model, providerId, providers, routingStrategyLabel, t])
+
+  const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
+
+  const onRoutingModeChange = (mode: RoutingMode): void => {
+    setRoutingMode(mode)
+    if (mode === 'fixed') {
+      setModel(fixedModelOptions[0]?.value ?? '')
+      return
     }
-    return [{ value: AUTO_MODEL, label: t('autoRoute') }, ...MODEL_OPTIONS.filter((item) => item.value !== AUTO_MODEL)]
-  }, [providers, providerId, t])
+    setModel(AUTO_MODEL)
+  }
+
+  const onProviderChange = (id: string): void => {
+    setProviderId(id)
+    const provider = providers.find((item) => item.id === id)
+    setModel(routingMode === 'fixed' ? provider?.models[0] ?? '' : AUTO_MODEL)
+  }
 
   const onDriveChange = (mode: CaoGenDriveMode): void => {
     const policy = caogenDrivePolicyView(mode)
     setDriveMode(mode)
-    setModel('')
+    setModel(providerId ? AUTO_MODEL : '')
     setPermissionMode(policy.defaultPermissionMode)
+  }
+
+  const onProjectChange = (choice: string): void => {
+    setProjectChoice(choice)
+    const project = projects.find((item) => item.id === choice)
+    setCwd(project?.path ?? '')
   }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (dir) {
+      setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT)
       setCwd(dir)
       setError('')
     }
@@ -80,23 +150,39 @@ export default function WelcomeView(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     const prompt = text.trim()
     if (!prompt || busy) return
-    if (!engine) {
-      setError(t('explicitEngineRequired'))
+    if (!cwd.trim()) {
+      setError(t('errNeedProjectDir'))
       return
     }
-    if (requiresProvider && !providerId) {
+    if (routingMode === 'global' && !providers.some((provider) => provider.hasToken && provider.models.length > 0)) {
       setError(t('explicitProviderRequired'))
       return
     }
-    if (requiresProvider && !model) {
+    if (routingMode !== 'global' && !providerId) {
+      setError(t('explicitProviderRequired'))
+      return
+    }
+    if (routingMode === 'fixed' && (!model || model === AUTO_MODEL)) {
       setError(t('explicitModelRequired'))
       return
     }
-    // 未选项目目录也可发起:走"对话分组"(主进程回退到用户主目录、不隔离)
     setBusy(true)
     setError('')
     try {
-      await startSessionWithPrompt({ cwd: cwd.trim(), driveMode, model, providerId, engine, permissionMode }, prompt)
+      await startSessionWithPrompt(
+        {
+          cwd: cwd.trim(),
+          projectId: projects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
+          unassigned: projectChoice === UNASSIGNED,
+          driveMode,
+          model: routingMode === 'fixed' ? model : AUTO_MODEL,
+          providerId: routingMode === 'global' ? AUTO_PROVIDER_ID : providerId,
+          routingScope: routingMode,
+          initialPrompt: prompt,
+          permissionMode
+        },
+        prompt
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -110,15 +196,66 @@ export default function WelcomeView(): React.JSX.Element {
     }
   }
 
-  const projectName = cwd ? cwd.split('/').filter(Boolean).pop() : ''
-
   return (
     <div className="welcome welcome-hero">
       <div className="welcome-stage">
         <div className="welcome-hero-inner">
           <img className="welcome-logo" src={APP_ICON_URL} alt={APP_NAME} />
           <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
+          <div className="welcome-suggestion-grid">
+            {WELCOME_TOOLS.map((tool) => (
+              <button
+                key={tool.key}
+                type="button"
+                className="welcome-suggestion"
+                onClick={() => {
+                  setText(t(tool.promptKey))
+                  requestAnimationFrame(() => taRef.current?.focus())
+                }}
+              >
+                <HeaderIcon name={tool.icon} />
+                <span>{t(tool.labelKey)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
+        <div className="welcome-compose-dock">
+          <div className="welcome-project-bar">
+            <select
+              className="welcome-project-select"
+              aria-label={t('project')}
+              title={cwd || t('welcomePickProject')}
+              value={projectChoice}
+              onChange={(e) => onProjectChange(e.target.value)}
+            >
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+              <option value={NEW_PROJECT}>{t('newProjectDirectory')}</option>
+              <option value={UNASSIGNED}>{t('unassignedSessions')}</option>
+            </select>
+            {projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED ? (
+              <>
+                <input
+                  className="welcome-project-path"
+                  value={cwd}
+                  placeholder="/path/to/project"
+                  aria-label={t('projectDir')}
+                  onChange={(event) => setCwd(event.target.value)}
+                />
+                <button className="welcome-project-browse" onClick={() => void browse()}>
+                  {t('browse')}
+                </button>
+              </>
+            ) : (
+              <span className="welcome-project-current" title={cwd}>
+                {cwd}
+              </span>
+            )}
+          </div>
           <div className="welcome-composer">
             <textarea
               ref={taRef}
@@ -131,36 +268,29 @@ export default function WelcomeView(): React.JSX.Element {
               autoFocus
             />
             <div className="welcome-composer-bar">
-              <button className="welcome-chip" onClick={() => void browse()} title={cwd || t('welcomePickProject')}>
-                📁 {projectName || t('welcomePickProject')}
-              </button>
-              <select
-                className="welcome-mini-select"
-                value={engine}
-                onChange={(e) => {
-                  setEngine(e.target.value as EngineKind | '')
-                  setProviderId('')
-                  setModel('')
-                }}
-              >
-                <option value="" disabled>
-                  {t('selectEnginePlaceholder')}
-                </option>
-                {engines.map((en) => (
-                  <option key={en.kind} value={en.kind} disabled={!en.available || (en.optional && !en.configured)}>
-                    {en.label}
-                    {en.optional ? ` (${t(en.configured ? 'optionalEngine' : 'optionalEngineNotConfigured')})` : ''}
-                  </option>
+              <div className="welcome-routing-modes" role="group" aria-label={t('routingMode')}>
+                {(['fixed', 'provider', 'global'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={routingMode === mode ? 'active' : ''}
+                    onClick={() => onRoutingModeChange(mode)}
+                  >
+                    {t(
+                      mode === 'fixed'
+                        ? 'routingModeFixed'
+                        : mode === 'provider'
+                          ? 'routingModeProvider'
+                          : 'routingModeGlobal'
+                    )}
+                  </button>
                 ))}
-              </select>
-              {requiresProvider && (
+              </div>
+              {routingMode !== 'global' && (
                 <select
                   className="welcome-mini-select"
                   value={providerId}
-                  onChange={(e) => {
-                    setProviderId(e.target.value)
-                    setModel('')
-                  }}
+                  onChange={(e) => onProviderChange(e.target.value)}
                 >
                   <option value="" disabled>
                     {t('selectProviderPlaceholder')}
@@ -184,17 +314,23 @@ export default function WelcomeView(): React.JSX.Element {
                   </option>
                 ))}
               </select>
-              {requiresProvider && (
+              {routingMode === 'fixed' ? (
                 <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
                   <option value="" disabled>
                     {t('selectModelPlaceholder')}
                   </option>
-                  {modelOptions.map((o) => (
+                  {fixedModelOptions.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>
                   ))}
                 </select>
+              ) : (
+                <span className="welcome-routing-summary">
+                  {routingMode === 'global' ? t('routingModeGlobalSummary') : t('routingModeProviderSummary')}
+                  {' · '}
+                  {routingStrategyLabel}
+                </span>
               )}
               <select
                 className="welcome-mini-select"
@@ -212,33 +348,8 @@ export default function WelcomeView(): React.JSX.Element {
               </button>
             </div>
           </div>
-
-          {projects.length > 0 && !cwd && (
-            <div className="welcome-recent">
-              {projects.slice(0, 5).map((p) => (
-                <button key={p.id} className="welcome-recent-chip" title={p.path} onClick={() => setCwd(p.path)}>
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          )}
-
           {error && <div className="notice notice-error welcome-error">{error}</div>}
         </div>
-
-        <aside className="welcome-tools" aria-label={t('deskToolDrawer')}>
-          {WELCOME_TOOLS.map((tool) => (
-            <button
-              key={tool.key}
-              type="button"
-              className="welcome-tool-row"
-              onClick={() => setError(t('welcomeToolRequiresSession'))}
-            >
-              <HeaderIcon name={tool.icon} />
-              <span>{t(tool.labelKey)}</span>
-            </button>
-          ))}
-        </aside>
       </div>
     </div>
   )

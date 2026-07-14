@@ -594,6 +594,48 @@ textarea {
   margin-bottom: 3px;
 }
 
+.sidebar-group-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-group-row .sidebar-group-head {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+.sidebar-group-new {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sidebar-group-new:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.sidebar-unassigned-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.sidebar-group-empty {
+  padding-left: 28px;
+}
+
 .sidebar-section-toggle:hover,
 .sidebar-group-head:hover {
   background: var(--bg-card);
@@ -1084,45 +1126,149 @@ textarea {
 }
 
 .welcome-stage {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(260px, 34vw);
-}
-
-.welcome-hero-inner {
-  width: min(760px, calc(100% - 56px));
-  place-self: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
+  padding: 64px clamp(20px, 5vw, 72px) 18px;
+}
+
+.welcome-hero-inner {
+  width: min(860px, 100%);
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  padding: 24px 0 44px;
 }
 
 .welcome-logo {
-  width: 76px;
-  height: 76px;
+  width: 58px;
+  height: 58px;
   display: block;
   object-fit: contain;
-  border-radius: 18px;
+  border-radius: 14px;
 }
 
 .welcome-ask {
   margin: 0;
   font-size: 30px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   text-align: center;
+}
+
+.welcome-suggestion-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.welcome-suggestion {
+  min-width: 0;
+  min-height: 98px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.welcome-suggestion:hover {
+  border-color: var(--border);
+  background: var(--bg-card);
+}
+
+.welcome-suggestion .header-icon-glyph {
+  color: var(--accent);
+}
+
+.welcome-compose-dock {
+  width: min(860px, 100%);
+  flex: 0 0 auto;
+}
+
+.welcome-project-bar {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 28px);
+  margin: 0 auto -1px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-soft);
+  border-bottom-color: transparent;
+  border-radius: 10px 10px 0 0;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+}
+
+.welcome-project-select,
+.welcome-project-path {
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.welcome-project-select {
+  max-width: 190px;
+  cursor: pointer;
+}
+
+.welcome-project-path {
+  flex: 1;
+  color: var(--text);
+}
+
+.welcome-project-current {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.welcome-project-browse {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.welcome-project-browse:hover {
+  color: var(--text);
 }
 
 .welcome-composer {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--bg-raised);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-  padding: 12px 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  padding: 14px;
   transition: border-color 0.14s;
 }
 
@@ -1140,6 +1286,7 @@ textarea {
   font-size: 15px;
   line-height: 1.5;
   font-family: inherit;
+  min-height: 54px;
 }
 
 .welcome-composer-bar {
@@ -1174,6 +1321,45 @@ textarea {
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
+}
+
+.welcome-routing-modes {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+}
+
+.welcome-routing-modes button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.welcome-routing-modes button:hover {
+  color: var(--text);
+}
+
+.welcome-routing-modes button.active {
+  background: var(--bg-card);
+  color: var(--text);
+}
+
+.welcome-routing-summary {
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .welcome-send {
@@ -1224,6 +1410,7 @@ textarea {
 
 .welcome-error {
   width: 100%;
+  margin-top: 8px;
 }
 
 .welcome-tools {
@@ -3327,31 +3514,88 @@ textarea {
   color: var(--text-faint);
 }
 
-/* ---------- 设置中心(分类 tab) ---------- */
+/* ---------- 设置页面 ---------- */
 
-.settings-center {
-  width: 680px;
+.settings-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.settings-page-header {
+  flex: 0 0 auto;
+  min-height: 76px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 38px 24px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg);
+}
+
+.settings-page-back {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-page-back:hover {
+  border-color: var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.settings-page-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 30px;
 }
 
 .settings-body {
+  width: 100%;
+  max-width: 1180px;
+  flex: 1;
+  min-height: 0;
   display: flex;
-  gap: 16px;
-  margin-top: 14px;
-  min-height: 340px;
+  align-self: center;
+  overflow: hidden;
 }
 
 .settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex-shrink: 0;
-  width: 120px;
+  gap: 3px;
+  flex: 0 0 210px;
+  width: 210px;
+  padding: 24px 18px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-soft);
+  scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .settings-tab {
   text-align: left;
-  padding: 8px 12px;
-  border-radius: 8px;
+  min-height: 36px;
+  padding: 7px 11px;
+  border-radius: 7px;
   border: none;
   background: none;
   color: var(--text-dim);
@@ -3365,20 +3609,90 @@ textarea {
 }
 
 .settings-tab.active {
-  background: var(--bg-input);
+  background: var(--accent-soft);
   color: var(--text);
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .settings-pane {
   flex: 1;
   min-width: 0;
-  padding-left: 16px;
-  border-left: 1px solid var(--border);
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px clamp(24px, 5vw, 64px) 40px;
 }
 
-.settings-pane .field-label:first-child {
+.settings-pane-content {
+  width: 100%;
+  max-width: 780px;
+}
+
+.settings-pane-content > .field-label:first-child {
   margin-top: 0;
+}
+
+.settings-page-actions {
+  flex: 0 0 auto;
+  min-height: 58px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 10px max(24px, calc((100vw - 1180px) / 2 + 40px));
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+
+.provider-editor {
+  width: 100%;
+  min-width: 0;
+}
+
+.provider-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.provider-editor-back {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-content: center;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.provider-editor-back:hover {
+  border-color: var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.provider-editor-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.provider-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+  margin-top: 24px;
+  border-top: 1px solid var(--border-soft);
 }
 
 .settings-check {
@@ -3491,6 +3805,24 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
+}
+
+.model-task-role-list {
+  display: grid;
+  gap: 10px;
+}
+
+.model-task-role-row {
+  align-items: end;
+}
+
+.model-role-advanced-title {
+  margin: 18px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .routing-rule-card {
@@ -7120,6 +7452,42 @@ button.task-dag-node:hover {
     position: relative;
   }
 
+  .settings-page-header {
+    min-height: 66px;
+    padding: 28px 14px 8px;
+  }
+
+  .settings-body {
+    flex-direction: column;
+  }
+
+  .settings-tabs {
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 4px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .settings-tab {
+    flex: 0 0 auto;
+    min-height: 34px;
+    white-space: nowrap;
+  }
+
+  .settings-pane {
+    padding: 20px 16px 32px;
+  }
+
+  .settings-page-actions {
+    min-height: 54px;
+    padding: 8px 14px;
+  }
+
   .mobile-sidebar-toggle {
     position: fixed;
     top: 10px;
@@ -7367,8 +7735,7 @@ button.task-dag-node:hover {
 
   .modal,
   .modal-wide,
-  .rewind-panel,
-  .settings-center {
+  .rewind-panel {
     width: min(100%, 620px);
     max-width: 100%;
     max-height: calc(100vh - 24px);
@@ -7377,21 +7744,28 @@ button.task-dag-node:hover {
 }
 
 @media (max-width: 540px) {
+  .settings-page-title {
+    font-size: 17px;
+  }
+
+  .settings-page-actions .btn {
+    min-width: 80px;
+  }
+
   .welcome {
     padding: 0;
     overflow-y: auto;
   }
 
   .welcome-stage {
-    display: flex;
     min-height: 100%;
+    padding: 52px 12px 12px;
   }
 
   .welcome-hero-inner {
     width: 100%;
-    place-self: auto;
-    padding: 22px 12px;
-    margin: auto;
+    min-height: 260px;
+    padding: 18px 0 28px;
     gap: 14px;
   }
 
@@ -7410,6 +7784,33 @@ button.task-dag-node:hover {
     line-height: 1.25;
   }
 
+  .welcome-suggestion-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .welcome-suggestion {
+    min-height: 84px;
+    gap: 10px;
+    padding: 11px;
+    font-size: 12px;
+  }
+
+  .welcome-compose-dock {
+    width: 100%;
+  }
+
+  .welcome-project-bar {
+    width: calc(100% - 14px);
+    flex-wrap: wrap;
+  }
+
+  .welcome-project-select,
+  .welcome-project-path {
+    flex: 1 1 140px;
+    max-width: 100%;
+  }
+
   .welcome-composer {
     border-radius: 12px;
     padding: 10px;
@@ -7423,6 +7824,21 @@ button.task-dag-node:hover {
   .welcome-mini-select {
     flex: 1 1 100%;
     max-width: 100%;
+  }
+
+  .welcome-routing-modes {
+    width: 100%;
+  }
+
+  .welcome-routing-modes button {
+    flex: 1;
+    min-width: 0;
+    padding: 0 4px;
+  }
+
+  .welcome-routing-summary {
+    flex: 1 1 100%;
+    white-space: normal;
   }
 
   .welcome-send {
@@ -7455,30 +7871,6 @@ button.task-dag-node:hover {
 
   .modal-actions {
     flex-wrap: wrap;
-  }
-
-  .settings-body {
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .settings-tabs {
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-
-  .settings-tab {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
-
-  .settings-pane {
-    padding-top: 14px;
-    padding-left: 0;
-    border-top: 1px solid var(--border);
-    border-left: 0;
   }
 
   .field-row {

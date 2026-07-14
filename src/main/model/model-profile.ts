@@ -119,10 +119,29 @@ export function buildModelProfiles(input: {
 export function inferTaskProfile(input: TaskProfileInput): TaskProfile {
   const prompt = input.prompt.toLowerCase()
   const requested = new Set<ModelTaskKind>(input.requestedTasks ?? [])
-  if (hasAny(prompt, ['code', 'typescript', 'bug', 'refactor', '测试', '修复', '代码', '实现'])) requested.add('coding')
+  if (hasAny(prompt, ['code', 'coding', 'implement', 'typescript', 'bug', 'refactor', '修复', '代码', '开发', '实现', '重构'])) {
+    requested.add('coding')
+  }
   if (hasAny(prompt, ['reason', '推理', '规划', '架构', '分析', 'why'])) requested.add('reasoning')
   if (hasAny(prompt, ['review', '审查', 'diff', '风险'])) requested.add('review')
   if (hasAny(prompt, ['总结', '摘要', 'summarize'])) requested.add('summarization')
+  if (hasAny(prompt, ['research', 'investigate', '调研', '调查', '资料搜集'])) {
+    requested.add('research')
+    requested.add('longContext')
+    requested.add('summarization')
+  }
+  if (hasAny(prompt, ['plan', 'proposal', 'roadmap', '策划', '方案', '路线图'])) {
+    requested.add('planning')
+    requested.add('reasoning')
+  }
+  if (hasAny(prompt, ['documentation', 'readme', 'spec', '文档', '需求文档'])) {
+    requested.add('documentation')
+    requested.add('summarization')
+  }
+  if (hasAny(prompt, ['test', 'testing', 'qa', '测试', '验收'])) {
+    requested.add('testing')
+    requested.add('review')
+  }
   if ((input.contextTokens ?? 0) > 96_000 || hasAny(prompt, ['长上下文', 'large context', '全仓'])) requested.add('longContext')
   if (input.requiresTools || hasAny(prompt, ['tool', 'shell', '文件', '执行', '读取'])) requested.add('toolUse')
 
@@ -148,6 +167,7 @@ export function inferTaskProfile(input: TaskProfileInput): TaskProfile {
 export function scoreProfileForTask(profile: ModelProfile, task: TaskProfile): number {
   let score = 0
   for (const kind of task.taskKinds) score += capabilityScore(profile, kind)
+  score += defaultTaskAffinity(profile, task.taskKinds)
   if (profile.contextWindowTokens >= task.minContextTokens) score += 16
   if (task.requiresTools && profile.supportsTools) score += 10
   if (task.requiresVision && profile.supportsVision) score += 16
@@ -194,6 +214,127 @@ function knownProfile(providerId: string, model: string, providerName?: string):
       tags: ['reasoning']
     }
   }
+  if (lower.includes('haiku')) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        ...MEDIUM_CAPABILITY,
+        toolUse: 'high',
+        vision: 'medium',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 0.8, outputUsdPerMTok: 4, tier: 'low' },
+      latency: 'fast',
+      contextWindowTokens: 200_000,
+      supportsTools: true,
+      supportsVision: true,
+      tags: ['anthropic', 'fast', 'budget']
+    }
+  }
+  if (lower.includes('gemini') && lower.includes('flash')) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        ...MEDIUM_CAPABILITY,
+        vision: 'high',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 0.35, outputUsdPerMTok: 1.5, tier: 'low' },
+      latency: 'fast',
+      contextWindowTokens: 1_000_000,
+      supportsTools: true,
+      supportsVision: true,
+      tags: ['google', 'fast', 'budget', 'vision', 'long-context']
+    }
+  }
+  if (/gpt-5(?:[.\-]|$)/.test(lower)) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        coding: 'high',
+        reasoning: 'high',
+        toolUse: 'high',
+        vision: 'high',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 4, outputUsdPerMTok: 20, tier: 'high' },
+      latency: 'balanced',
+      contextWindowTokens: 256_000,
+      supportsTools: true,
+      supportsVision: true,
+      tags: ['openai', 'quality', 'coding', 'reasoning']
+    }
+  }
+  if (lower.includes('kimi') || lower.includes('moonshot')) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        ...MEDIUM_CAPABILITY,
+        reasoning: 'high',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 1, outputUsdPerMTok: 4, tier: 'medium' },
+      latency: 'balanced',
+      contextWindowTokens: 200_000,
+      supportsTools: true,
+      supportsVision: false,
+      tags: ['moonshot', 'long-context', 'documentation']
+    }
+  }
+  if (lower.includes('opus')) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        coding: 'high',
+        reasoning: 'high',
+        toolUse: 'high',
+        vision: 'high',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 5, outputUsdPerMTok: 25, tier: 'high' },
+      latency: 'slow',
+      contextWindowTokens: 200_000,
+      supportsTools: true,
+      supportsVision: true,
+      tags: ['anthropic', 'quality', 'reasoning']
+    }
+  }
+  if (lower.includes('sonnet')) {
+    return {
+      providerId,
+      providerName,
+      model,
+      capabilities: {
+        coding: 'high',
+        reasoning: 'high',
+        toolUse: 'high',
+        vision: 'high',
+        longContext: 'high',
+        summarization: 'high'
+      },
+      cost: { inputUsdPerMTok: 3, outputUsdPerMTok: 15, tier: 'medium' },
+      latency: 'balanced',
+      contextWindowTokens: 200_000,
+      supportsTools: true,
+      supportsVision: true,
+      tags: ['anthropic', 'balanced', 'coding']
+    }
+  }
   if (lower.includes('gpt-4o-mini') || lower.includes('mini')) {
     return {
       providerId,
@@ -208,7 +349,7 @@ function knownProfile(providerId: string, model: string, providerName?: string):
       tags: ['budget', 'vision']
     }
   }
-  if (lower.includes('gpt-4o') || lower.includes('sonnet') || lower.includes('opus')) {
+  if (lower.includes('gpt-4o')) {
     return {
       providerId,
       providerName,
@@ -216,9 +357,9 @@ function knownProfile(providerId: string, model: string, providerName?: string):
       capabilities: { coding: 'high', reasoning: 'high', toolUse: 'high', vision: 'high', longContext: 'high', summarization: 'high' },
       cost: { inputUsdPerMTok: 3, outputUsdPerMTok: 15, tier: 'high' },
       latency: 'balanced',
-      contextWindowTokens: lower.includes('claude') || lower.includes('sonnet') || lower.includes('opus') ? 200_000 : 128_000,
+      contextWindowTokens: 128_000,
       supportsTools: true,
-      supportsVision: !lower.includes('claude'),
+      supportsVision: true,
       tags: ['quality']
     }
   }
@@ -233,7 +374,42 @@ function capabilityScore(profile: ModelProfile, kind: ModelTaskKind): number {
   if (kind === 'toolUse') return strengthScore(profile.capabilities.toolUse)
   if (kind === 'longContext') return strengthScore(profile.capabilities.longContext)
   if (kind === 'review') return Math.round((strengthScore(profile.capabilities.coding) + strengthScore(profile.capabilities.reasoning)) / 2)
+  if (kind === 'research') {
+    return Math.round(
+      (strengthScore(profile.capabilities.longContext) +
+        strengthScore(profile.capabilities.reasoning) +
+        strengthScore(profile.capabilities.summarization)) /
+        3
+    )
+  }
+  if (kind === 'planning') return strengthScore(profile.capabilities.reasoning)
+  if (kind === 'testing') {
+    return Math.round((strengthScore(profile.capabilities.coding) + strengthScore(profile.capabilities.reasoning)) / 2)
+  }
+  if (kind === 'documentation') return strengthScore(profile.capabilities.summarization)
   return strengthScore(profile.capabilities.summarization)
+}
+
+function defaultTaskAffinity(profile: ModelProfile, taskKinds: ModelTaskKind[]): number {
+  const family = modelFamily(profile)
+  const affinities: Partial<Record<ModelTaskKind, ReturnType<typeof modelFamily>>> = {
+    research: 'google',
+    planning: 'anthropic',
+    coding: 'openai',
+    testing: 'deepseek',
+    documentation: 'moonshot'
+  }
+  return taskKinds.some((kind) => affinities[kind] === family) ? 12 : 0
+}
+
+function modelFamily(profile: ModelProfile): 'google' | 'anthropic' | 'openai' | 'deepseek' | 'moonshot' | 'other' {
+  const identity = `${profile.providerId} ${profile.providerName ?? ''} ${profile.model} ${profile.tags.join(' ')}`.toLowerCase()
+  if (hasAny(identity, ['gemini', 'google'])) return 'google'
+  if (hasAny(identity, ['claude', 'anthropic', 'opus', 'sonnet', 'haiku'])) return 'anthropic'
+  if (hasAny(identity, ['openai', 'gpt-', 'codex'])) return 'openai'
+  if (identity.includes('deepseek')) return 'deepseek'
+  if (hasAny(identity, ['kimi', 'moonshot'])) return 'moonshot'
+  return 'other'
 }
 
 function strengthScore(strength: ModelStrength): number {

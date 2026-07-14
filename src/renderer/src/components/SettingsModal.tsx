@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { DRIVE_MODE_OPTIONS, MODEL_OPTIONS, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
+import { AUTO_MODEL } from '../../../shared/types'
 import type {
   AppLanguage,
   AppTheme,
@@ -25,13 +26,25 @@ import ProjectSettings from '../pages/ProjectSettings'
 type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
 const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
 const ROUTING_RULE_TASK_OPTIONS: Array<{ value: ModelRoutingTaskKind; labelKey: string }> = [
+  { value: 'research', labelKey: 'routingTaskResearch' },
+  { value: 'planning', labelKey: 'routingTaskPlanning' },
   { value: 'coding', labelKey: 'routingTaskCoding' },
+  { value: 'testing', labelKey: 'routingTaskTesting' },
+  { value: 'documentation', labelKey: 'routingTaskDocumentation' },
   { value: 'reasoning', labelKey: 'routingTaskReasoning' },
   { value: 'review', labelKey: 'routingTaskReview' },
   { value: 'summarization', labelKey: 'routingTaskSummarization' },
   { value: 'vision', labelKey: 'routingTaskVision' },
   { value: 'longContext', labelKey: 'routingTaskLongContext' }
 ]
+
+const TASK_MODEL_ROLE_OPTIONS = [
+  { labelKey: 'modelRoleResearch', providerKey: 'researchProviderId', modelKey: 'researchModel' },
+  { labelKey: 'modelRolePlanning', providerKey: 'planningProviderId', modelKey: 'planningModel' },
+  { labelKey: 'modelRoleCoding', providerKey: 'codingProviderId', modelKey: 'codingModel' },
+  { labelKey: 'modelRoleTesting', providerKey: 'testingProviderId', modelKey: 'testingModel' },
+  { labelKey: 'modelRoleDocumentation', providerKey: 'documentationProviderId', modelKey: 'documentationModel' }
+] as const
 
 function createRoutingRule(): ModelRoutingRule {
   const suffix =
@@ -63,9 +76,6 @@ function uniqueModelOptions(
     seen.add(clean)
     options.push({ value: clean, label })
   }
-  for (const option of MODEL_OPTIONS) {
-    if (option.value !== 'auto') add(option.value, option.label)
-  }
   const scopedProviders = providerId ? providers.filter((provider) => provider.id === providerId) : providers
   for (const provider of scopedProviders) {
     for (const model of provider.models) add(model)
@@ -74,7 +84,7 @@ function uniqueModelOptions(
   return options
 }
 
-export default function SettingsModal(): React.JSX.Element {
+export default function SettingsPage(): React.JSX.Element {
   const t = useT()
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
@@ -88,6 +98,7 @@ export default function SettingsModal(): React.JSX.Element {
   const setShowSettings = useStore((s) => s.setShowSettings)
 
   const [tab, setTab] = useState<Tab>('control')
+  const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
@@ -126,6 +137,12 @@ export default function SettingsModal(): React.JSX.Element {
   useEffect(() => {
     if (tab === 'control') void refreshControlCenter()
   }, [tab, activeId])
+
+  useEffect(() => {
+    tabsRef.current
+      ?.querySelector<HTMLElement>(`[data-settings-tab="${tab}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tab])
 
   // 打开迁移页时,默认用当前会话 cwd 或最近项目
   useEffect(() => {
@@ -269,6 +286,11 @@ export default function SettingsModal(): React.JSX.Element {
     await deleteProvider(p.id)
   }
 
+  const openProviderEditor = (target: ProviderView | 'new'): void => {
+    setTab('providers')
+    setEditing(target)
+  }
+
   const probeProvider = async (p: ProviderView): Promise<void> => {
     setCheckingProviderId(p.id)
     setProviderProbe(null)
@@ -325,24 +347,48 @@ export default function SettingsModal(): React.JSX.Element {
   ]
 
   return (
-    <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
-      <div className="modal modal-wide settings-center" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">{t('settingsTitle')}</h2>
+    <section className="settings-page" aria-label={t('settingsTitle')}>
+      <header className="settings-page-header drag-region">
+        <button
+          type="button"
+          className="settings-page-back no-drag"
+          aria-label={t('backToWorkspace')}
+          title={t('backToWorkspace')}
+          onClick={() => setShowSettings(false)}
+        >
+          ←
+        </button>
+        <h1 className="settings-page-title">{t('settingsTitle')}</h1>
+      </header>
 
-        <div className="settings-body">
-          <nav className="settings-tabs">
+      <div className="settings-body">
+          <nav ref={tabsRef} className="settings-tabs" aria-label={t('settingsNavigation')}>
             {TABS.map((tb) => (
               <button
+                type="button"
                 key={tb.id}
+                data-settings-tab={tb.id}
                 className={`settings-tab ${tab === tb.id ? 'active' : ''}`}
-                onClick={() => setTab(tb.id)}
+                aria-current={tab === tb.id ? 'page' : undefined}
+                onClick={() => {
+                  setEditing(null)
+                  setTab(tb.id)
+                }}
               >
                 {tb.label}
               </button>
             ))}
           </nav>
 
-          <div className="settings-pane">
+          <main className="settings-pane">
+            <div className="settings-pane-content">
+            {editing ? (
+              <ProviderEditor
+                provider={editing === 'new' ? null : editing}
+                onClose={() => setEditing(null)}
+              />
+            ) : (
+              <>
             {tab === 'control' && (
               <ControlCenter
                 settings={draft}
@@ -359,8 +405,8 @@ export default function SettingsModal(): React.JSX.Element {
                 onRefresh={() => void refreshControlCenter()}
                 onProbeMcp={(items) => void probeControlMcp(items)}
                 onSettingsPatch={patchDraft}
-                onAddProvider={() => setEditing('new')}
-                onEditProvider={(provider) => setEditing(provider)}
+                onAddProvider={() => openProviderEditor('new')}
+                onEditProvider={(provider) => openProviderEditor(provider)}
               />
             )}
 
@@ -411,7 +457,10 @@ export default function SettingsModal(): React.JSX.Element {
                 <select
                   className="select select-block"
                   value={draft.defaultProviderId}
-                  onChange={(e) => set('defaultProviderId', e.target.value)}
+                  onChange={(e) => {
+                    const defaultProviderId = e.target.value
+                    patchDraft({ defaultProviderId, defaultModel: defaultProviderId ? AUTO_MODEL : '' })
+                  }}
                 >
                   <option value="">{t('noDefaultProvider')}</option>
                   {providers.map((p) => (
@@ -428,7 +477,12 @@ export default function SettingsModal(): React.JSX.Element {
                   onChange={(e) => set('defaultModel', e.target.value)}
                 >
                   <option value="">{t('noDefaultModel')}</option>
-                  {MODEL_OPTIONS.map((o) => (
+                  {modelOptionsForProvider(
+                    providers,
+                    draft.defaultProviderId,
+                    t('autoRoute'),
+                    draft.defaultModel
+                  ).map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>
@@ -440,6 +494,52 @@ export default function SettingsModal(): React.JSX.Element {
                     <h3 className="settings-h3">{t('modelRolesSection')}</h3>
                   </div>
                   <p className="settings-hint">{t('modelRolesHint')}</p>
+                  <div className="model-task-role-list">
+                    {TASK_MODEL_ROLE_OPTIONS.map((role) => {
+                      const providerId = draft[role.providerKey]
+                      const model = draft[role.modelKey]
+                      return (
+                        <div key={role.providerKey} className="settings-grid-2 model-task-role-row">
+                          <label className="field-label">
+                            {t(role.labelKey)} · {t('modelRoleProvider')}
+                            <select
+                              className="select select-block"
+                              value={providerId}
+                              onChange={(e) =>
+                                patchDraft({
+                                  [role.providerKey]: e.target.value,
+                                  [role.modelKey]: ''
+                                })
+                              }
+                            >
+                              <option value="">{t('noRoleProvider')}</option>
+                              {providers.map((provider) => (
+                                <option key={provider.id} value={provider.id}>
+                                  {provider.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field-label">
+                            {t(role.labelKey)} · {t('modelRoleModel')}
+                            <select
+                              className="select select-block"
+                              value={model}
+                              onChange={(e) => patchDraft({ [role.modelKey]: e.target.value })}
+                            >
+                              <option value="">{t('noRoleModel')}</option>
+                              {uniqueModelOptions(providers, providerId, model).map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <h4 className="settings-h4 model-role-advanced-title">{t('modelRolesAdvanced')}</h4>
                   <div className="settings-grid-2">
                     <label className="field-label">
                       {t('modelRoleLowCost')} · {t('modelRoleProvider')}
@@ -1142,7 +1242,7 @@ export default function SettingsModal(): React.JSX.Element {
               <>
                 <div className="settings-section-head">
                   <h3 className="settings-h3">{t('tabProviders')}</h3>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setEditing('new')}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => openProviderEditor('new')}>
                     {t('addProvider')}
                   </button>
                 </div>
@@ -1199,7 +1299,7 @@ export default function SettingsModal(): React.JSX.Element {
                           >
                             {checkingProviderId === p.id ? t('providerProbing') : t('providerProbe')}
                           </button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(p)}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => openProviderEditor(p)}>
                             {t('rename')}
                           </button>
                           <button className="btn btn-ghost btn-sm" onClick={() => void remove(p)}>
@@ -1298,25 +1398,20 @@ export default function SettingsModal(): React.JSX.Element {
                 )}
               </>
             )}
-          </div>
-        </div>
+              </>
+            )}
+            </div>
+          </main>
+      </div>
 
-        <div className="modal-actions">
+        {!editing && <footer className="settings-page-actions">
           <button className="btn btn-ghost" onClick={() => setShowSettings(false)}>
             {t('cancel')}
           </button>
           <button className="btn btn-primary" onClick={() => void save()}>
             {t('save')}
           </button>
-        </div>
-      </div>
-
-      {editing && (
-        <ProviderEditor
-          provider={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
-    </div>
+        </footer>}
+    </section>
   )
 }

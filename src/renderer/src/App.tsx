@@ -7,8 +7,7 @@ import type { MenuCommand } from '../../shared/types'
 import Sidebar from './components/Sidebar'
 import WorkbenchRoot from './components/workbench/WorkbenchRoot'
 import WelcomeView from './components/WelcomeView'
-import NewSessionModal from './components/NewSessionModal'
-import SettingsModal from './components/SettingsModal'
+import SettingsPage from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
@@ -49,10 +48,13 @@ export default function App(): React.JSX.Element {
   const handleMenuCommand = useCallback(
     (command: MenuCommand): void => {
       if (command.type === 'new-session') {
+        setShowSettings(false)
         setShowNewSession(true)
         return
       }
       if (command.type === 'settings') {
+        setShowNewSession(false)
+        setShowCommandPalette(false)
         setShowSettings(true)
         return
       }
@@ -61,11 +63,15 @@ export default function App(): React.JSX.Element {
         return
       }
       if (command.type === 'open-search') {
+        setShowSettings(false)
         focusSidebarSearch()
         return
       }
       const id = order[command.index]
-      if (id) selectSession(id)
+      if (id) {
+        setShowSettings(false)
+        selectSession(id)
+      }
     },
     [focusSidebarSearch, order, selectSession, setShowCommandPalette, setShowNewSession, setShowSettings]
   )
@@ -130,7 +136,9 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      {view === 'office' ? (
+      {showSettings ? (
+        <SettingsPage />
+      ) : view === 'office' ? (
         <Suspense fallback={<div className="office-loading">加载办公区…</div>}>
           <OfficeView />
         </Suspense>
@@ -156,14 +164,14 @@ export default function App(): React.JSX.Element {
             />
           )}
           <Sidebar mobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
-          <main className="main">{hasActive ? <WorkbenchRoot key={activeId} /> : <WelcomeView />}</main>
+          <main className="main">
+            {showNewSession || !hasActive ? <WelcomeView /> : <WorkbenchRoot key={activeId} />}
+          </main>
         </>
       )}
       {showCommandPalette && <CommandPalette />}
-      <TaskRecoveryModal />
-      <Quickbar />
-      {showNewSession && <NewSessionModal />}
-      {showSettings && <SettingsModal />}
+      {!showSettings && <TaskRecoveryModal />}
+      {!showSettings && <Quickbar />}
     </div>
   )
 }
