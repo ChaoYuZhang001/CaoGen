@@ -18,7 +18,7 @@ import type {
  * 吃进用户消息的 CLI/SDK 都可以成为一个引擎。
  *
  * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)、OpenAIEngine。
- * 注意:创建会话必须显式选择引擎;这里不再静默回退 Claude。
+ * 会话引擎由 SessionManager 根据 Provider 配置解析;这里不静默回退 Claude。
  */
 export interface Engine {
   readonly meta: SessionMeta
@@ -57,7 +57,7 @@ export type EngineEmit = (event: AgentEvent, seq: number, identity?: AgentEventI
 export interface EngineFactory {
   /** 引擎标识,会话按 meta.engine 选择。 */
   kind: string
-  /** 人类可读名(设置/新建会话下拉用) */
+  /** 人类可读名(设置和状态面板使用) */
   label: string
   /** 当前环境是否可用(CLI 是否安装等);不可用则 UI 置灰 */
   available(): boolean

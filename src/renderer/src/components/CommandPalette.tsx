@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MODEL_OPTIONS, useStore } from '../store'
+import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import {
   buildPaletteCommands,
@@ -21,8 +21,10 @@ export default function CommandPalette(): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const order = useStore((s) => s.order)
+  const activeId = useStore((s) => s.activeId)
   const sessions = useStore((s) => s.sessions)
   const history = useStore((s) => s.history)
+  const providers = useStore((s) => s.providers)
   const theme = useStore((s) => s.settings.theme)
   const pluginRegistry = useStore((s) => s.workbench.pluginRegistry)
   const pluginRegistryLoading = useStore((s) => s.workbench.pluginRegistryLoading)
@@ -73,9 +75,15 @@ export default function CommandPalette(): React.JSX.Element {
     const openSdkIds = new Set(
       order.map((id) => sessions[id]?.meta.sdkSessionId).filter((id): id is string => Boolean(id))
     )
+    const activeMeta = activeId ? sessions[activeId]?.meta : undefined
     const commandItems: PaletteItem[] = buildPaletteCommands({
       t,
-      modelOptions: MODEL_OPTIONS,
+      modelOptions: modelOptionsForProvider(
+        providers,
+        activeMeta?.providerId ?? '',
+        t('autoRoute'),
+        activeMeta?.model
+      ),
       theme,
       setShowNewSession,
       setShowSettings,
@@ -127,6 +135,7 @@ export default function CommandPalette(): React.JSX.Element {
 
     return [...commandItems, ...activeSessionItems, ...historyItems, ...pluginItems]
   }, [
+    activeId,
     dispatchPluginAgent,
     history,
     openBrowserPanel,
@@ -141,6 +150,7 @@ export default function CommandPalette(): React.JSX.Element {
     openWorktreePanel,
     order,
     pluginRegistry,
+    providers,
     resumeFromHistory,
     selectSession,
     sendPluginRegistryItemToAgent,

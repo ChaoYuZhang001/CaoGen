@@ -34,10 +34,12 @@ type ActiveSidebarEntry = Extract<SidebarEntry, { kind: 'active' }>
 
 interface ProjectGroup {
   key: string
+  projectId?: string
   label: string
   path: string
-  entries: HistoryEntry[]
+  entries: SidebarEntry[]
   updatedAt: number
+  unassigned?: boolean
 }
 
 interface EditingTarget {
@@ -232,7 +234,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   const pinnedActiveIds = new Set(
     pinnedEntries.filter((entry) => entry.kind === 'active').map((entry) => entry.id)
   )
-  const ongoingEntries = activeEntries.filter((entry) => !pinnedActiveIds.has(entry.id))
+  const projectActiveEntries = activeEntries.filter((entry) => !pinnedActiveIds.has(entry.id))
   const recentHistory = historyEntries
     .filter((entry) => !entry.pinned && !entry.archived)
     .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
@@ -247,26 +249,59 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     )
     .filter(matchesTaskSnapshot)
 
-  const projectGroups = useMemo<ProjectGroup[]>(() => {
+  const groupedEntries = useMemo(() => {
     const groups = new Map<string, ProjectGroup>()
-    for (const entry of recentHistory) {
-      const path = historyPath(entry)
-      const current = groups.get(path)
-      if (current) {
-        current.entries.push(entry)
-        current.updatedAt = Math.max(current.updatedAt, entry.updatedAt)
-      } else {
-        groups.set(path, {
-          key: path,
-          label: projectNameForPath(path),
-          path,
-          entries: [entry],
-          updatedAt: entry.updatedAt
-        })
+    const groupsByPath = new Map<string, ProjectGroup>()
+    for (const project of projects) {
+      const group: ProjectGroup = {
+        key: project.id,
+        projectId: project.id,
+        label: project.name,
+        path: project.path,
+        entries: [],
+        updatedAt: project.lastUsedAt
       }
+      groups.set(project.id, group)
+      groupsByPath.set(project.path, group)
     }
-    return [...groups.values()].sort((a, b) => b.updatedAt - a.updatedAt)
-  }, [recentHistory, projects])
+
+    const unassigned: ProjectGroup = {
+      key: '__unassigned__',
+      label: t('unassignedSessions'),
+      path: '',
+      entries: [],
+      updatedAt: 0,
+      unassigned: true
+    }
+    const candidates: SidebarEntry[] = [
+      ...projectActiveEntries,
+      ...recentHistory.map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
+    ]
+    for (const entry of candidates) {
+      const record = entry.kind === 'active' ? entry.meta : entry.history
+      const path = entryPath(entry)
+      const group = record.unassigned
+        ? undefined
+        : record.projectId
+          ? groups.get(record.projectId)
+          : groupsByPath.get(path)
+      const target = group ?? unassigned
+      target.entries.push(entry)
+      target.updatedAt = Math.max(
+        target.updatedAt,
+        entry.kind === 'active' ? entry.meta.createdAt : entry.history.updatedAt
+      )
+    }
+
+    const q = query.trim().toLowerCase()
+    const projectGroups = [...groups.values()]
+      .filter((group) => !q || group.entries.length > 0 || normalized(`${group.label}\n${group.path}`).includes(q))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    const showUnassigned = !q || unassigned.entries.length > 0 || normalized(unassigned.label).includes(q)
+    return { projectGroups, unassigned, showUnassigned }
+  }, [projectActiveEntries, projects, query, recentHistory, t])
+
+  const { projectGroups, unassigned, showUnassigned } = groupedEntries
 
   const startRename = (entry: SidebarEntry): void => {
     setEditing({ kind: entry.kind, id: entry.id })
@@ -465,6 +500,9 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     )
   }
 
+  const renderSidebarEntry = (entry: SidebarEntry): React.ReactNode =>
+    entry.kind === 'active' ? renderActiveEntry(entry) : renderHistoryEntry(entry.history)
+
   const renderSearchHit = (result: TranscriptSearchResult): React.ReactNode => {
     const first = result.hits[0]
     return (
@@ -537,12 +575,11 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
 
   const totalVisible =
     pinnedEntries.length +
-    ongoingEntries.length +
     visibleTaskSnapshots.length +
-    recentHistory.length +
+    projectGroups.reduce((count, group) => count + group.entries.length, 0) +
+    unassigned.entries.length +
     archivedHistory.length
   const archiveExpanded = archiveOpen || query.trim().length > 0
-  const isInitialEmpty = totalVisible === 0 && query.trim().length === 0
   const contentSearchActive = query.trim().length >= 2
 
   return (
@@ -608,92 +645,113 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
       </div>
 
       <div className="sidebar-scroll">
-        {isInitialEmpty ? (
-          <div className="sidebar-empty-hero">
-            <div className="sidebar-empty-title">{t('sidebarEmptyHeroTitle')}</div>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowNewSession(true)}>
-              {t('newSession')}
-            </button>
-          </div>
-        ) : (
-          <>
-            {pinnedEntries.length > 0 && (
-              <section className="sidebar-section">
-                <div className="sidebar-section-title">{t('pinned')}</div>
-                {pinnedEntries.map((entry) =>
-                  entry.kind === 'active' ? renderActiveEntry(entry) : renderHistoryEntry(entry.history)
-                )}
-              </section>
-            )}
+        {pinnedEntries.length > 0 && (
+          <section className="sidebar-section">
+            <div className="sidebar-section-title">{t('pinned')}</div>
+            {pinnedEntries.map(renderSidebarEntry)}
+          </section>
+        )}
 
-            {ongoingEntries.length > 0 && (
-              <section className="sidebar-section">
-                <div className="sidebar-section-title">{t('ongoing')}</div>
-                {ongoingEntries.map((entry) => renderActiveEntry(entry))}
-              </section>
+        {(visibleTaskSnapshots.length > 0 || taskSnapshotsLoading || taskSnapshotsError) && (
+          <section className="sidebar-section">
+            <div className="sidebar-section-title">{t('recoverableTasks')}</div>
+            {visibleTaskSnapshots.map((snapshot) => renderTaskSnapshot(snapshot))}
+            {visibleTaskSnapshots.length === 0 && taskSnapshotsLoading && (
+              <div className="sidebar-empty">{t('loadingTaskSnapshots')}</div>
             )}
-
-            {(visibleTaskSnapshots.length > 0 || taskSnapshotsLoading || taskSnapshotsError) && (
-              <section className="sidebar-section">
-                <div className="sidebar-section-title">{t('recoverableTasks')}</div>
-                {visibleTaskSnapshots.map((snapshot) => renderTaskSnapshot(snapshot))}
-                {visibleTaskSnapshots.length === 0 && taskSnapshotsLoading && (
-                  <div className="sidebar-empty">{t('loadingTaskSnapshots')}</div>
-                )}
-                {visibleTaskSnapshots.length === 0 && taskSnapshotsError && (
-                  <div className="sidebar-empty">{taskSnapshotsError}</div>
-                )}
-              </section>
+            {visibleTaskSnapshots.length === 0 && taskSnapshotsError && (
+              <div className="sidebar-empty">{taskSnapshotsError}</div>
             )}
+          </section>
+        )}
 
-            {projectGroups.length > 0 && (
-              <section className="sidebar-section">
-                <div className="sidebar-section-title">{t('recent')}</div>
-                {projectGroups.map((group) => {
-                  const collapsed = collapsedProjects[group.key] === true
+        {(projectGroups.length > 0 || showUnassigned) && (
+          <section className="sidebar-section sidebar-projects-section">
+            <div className="sidebar-section-title">{t('projects')}</div>
+            {projectGroups.map((group) => {
+              const collapsed = collapsedProjects[group.key] === true
+              return (
+                <div key={group.key} className="sidebar-project-group" data-project-id={group.projectId}>
+                  <div className="sidebar-group-row">
+                    <button
+                      className="sidebar-group-head"
+                      title={group.path}
+                      onClick={() =>
+                        setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))
+                      }
+                    >
+                      <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
+                      <span className="sidebar-group-title">{group.label}</span>
+                      <span className="sidebar-group-count">{group.entries.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-group-new"
+                      aria-label={`${t('newSessionHere')}: ${group.label}`}
+                      title={t('newSessionHere')}
+                      onClick={() => {
+                        closeMobile()
+                        setShowNewSession(true, group.projectId)
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                  {!collapsed && group.entries.map(renderSidebarEntry)}
+                </div>
+              )
+            })}
+            {showUnassigned && (
+              <div className="sidebar-project-group sidebar-unassigned-group" data-project-id="unassigned">
+                {(() => {
+                  const collapsed = collapsedProjects[unassigned.key] === true
                   return (
-                    <div key={group.key} className="sidebar-project-group">
+                    <>
                       <button
                         className="sidebar-group-head"
-                        title={group.path}
                         onClick={() =>
-                          setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))
+                          setCollapsedProjects((state) => ({ ...state, [unassigned.key]: !collapsed }))
                         }
                       >
                         <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
-                        <span className="sidebar-group-title">{group.label}</span>
-                        <span className="sidebar-group-count">{group.entries.length}</span>
+                        <span className="sidebar-group-title">{unassigned.label}</span>
+                        <span className="sidebar-group-count">{unassigned.entries.length}</span>
                       </button>
-                      {!collapsed && group.entries.map((entry) => renderHistoryEntry(entry))}
-                    </div>
+                      {!collapsed && unassigned.entries.map(renderSidebarEntry)}
+                      {!collapsed && unassigned.entries.length === 0 && (
+                        <div className="sidebar-empty sidebar-group-empty">{t('noSessions')}</div>
+                      )}
+                    </>
                   )
-                })}
-              </section>
+                })()}
+              </div>
             )}
+          </section>
+        )}
 
-            {archivedHistory.length > 0 && (
-              <section className="sidebar-section">
-                <button className="sidebar-section-toggle" onClick={() => setArchiveOpen((value) => !value)}>
-                  <span>{archiveExpanded ? '▾' : '▸'}</span>
-                  <span>{t('archived')}</span>
-                  <span className="sidebar-group-count">{archivedHistory.length}</span>
-                </button>
-                {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
-              </section>
+        {archivedHistory.length > 0 && (
+          <section className="sidebar-section">
+            <button className="sidebar-section-toggle" onClick={() => setArchiveOpen((value) => !value)}>
+              <span>{archiveExpanded ? '▾' : '▸'}</span>
+              <span>{t('archived')}</span>
+              <span className="sidebar-group-count">{archivedHistory.length}</span>
+            </button>
+            {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
+          </section>
+        )}
+
+        {contentSearchActive && (
+          <section className="sidebar-section">
+            <div className="sidebar-section-title">{t('contentSearchSection')}</div>
+            {transcriptSearchResults.map((result) => renderSearchHit(result))}
+            {transcriptSearchResults.length === 0 && !transcriptSearchLoading && (
+              <div className="sidebar-empty">{t('contentSearchEmpty')}</div>
             )}
+          </section>
+        )}
 
-            {contentSearchActive && (
-              <section className="sidebar-section">
-                <div className="sidebar-section-title">{t('contentSearchSection')}</div>
-                {transcriptSearchResults.map((result) => renderSearchHit(result))}
-                {transcriptSearchResults.length === 0 && !transcriptSearchLoading && (
-                  <div className="sidebar-empty">{t('contentSearchEmpty')}</div>
-                )}
-              </section>
-            )}
-
-            {totalVisible === 0 && <div className="sidebar-empty">{t('noMatchingSessions')}</div>}
-          </>
+        {query.trim() && totalVisible === 0 && projectGroups.length === 0 && !showUnassigned && (
+          <div className="sidebar-empty">{t('noMatchingSessions')}</div>
         )}
       </div>
 
