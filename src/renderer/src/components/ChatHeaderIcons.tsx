@@ -10,6 +10,7 @@ export type HeaderIconName =
   | 'files'
   | 'plugins'
   | 'routines'
+  | 'suggestions'
   | 'memory'
   | 'browser'
   | 'terminal'
@@ -81,6 +82,13 @@ const PATHS: Record<HeaderIconName, React.JSX.Element> = {
     <>
       <circle cx="8" cy="8" r="5.2" />
       <path d="M8 5v3l2 1.4" />
+    </>
+  ),
+  // 灯泡 / 开工建议
+  suggestions: (
+    <>
+      <path d="M5.4 10.4h5.2M6.1 12.7h3.8" />
+      <path d="M5.2 8.9A4.1 4.1 0 1 1 10.8 8.9c-.8.6-1.1 1-1.2 1.5H6.4c-.1-.5-.4-.9-1.2-1.5Z" />
     </>
   ),
   // 书签 / 记忆

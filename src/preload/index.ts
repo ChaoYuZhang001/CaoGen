@@ -15,6 +15,7 @@ import type {
   PermissionModeId,
   PreviewAnnotationInput,
   PluginRegistryScanOptions,
+  ProjectUpdate,
   ProjectMemoryDraftInput,
   ProviderModelFetchInput,
   ProviderInput,
@@ -226,7 +227,7 @@ const api: AgentDeskApi = {
   importMigrationAssets: (cwd: string, paths: string[]) =>
     ipcRenderer.invoke('migration:import', cwd, paths),
   listProjects: () => ipcRenderer.invoke('projects:list'),
-  updateProject: (id: string, patch: { name?: string }) =>
+  updateProject: (id: string, patch: ProjectUpdate) =>
     ipcRenderer.invoke('projects:update', id, patch),
   deleteProject: (id: string) => ipcRenderer.invoke('projects:delete', id),
   readProjectContext: (projectPath: string) =>

@@ -751,6 +751,81 @@ try {
   })
   await screenshot(cdp, '10-office')
 
+  await check(cdp, 'office new-session action opens an editable session workspace', async () => {
+    await clickSelector(cdp, '.office-actions .btn.btn-ghost')
+    await waitForSelector(cdp, '.welcome-composer-input', 10_000)
+    const state = await evalValue(
+      cdp,
+      `(() => {
+        const input = document.querySelector('.welcome-composer-input');
+        const project = document.querySelector('.welcome-project-select');
+        return {
+          welcome: Boolean(document.querySelector('.welcome')),
+          office: Boolean(document.querySelector('.office')),
+          editable: Boolean(input && !input.disabled && getComputedStyle(input).pointerEvents !== 'none'),
+          hasUnassigned: Boolean([...(project?.options ?? [])].find((option) => option.textContent?.includes('未关联项目')))
+        };
+      })()`
+    )
+    assert(state?.welcome === true && state?.office === false, `office new-session did not leave office: ${JSON.stringify(state)}`)
+    assert(state?.editable === true, `new-session composer should be editable: ${JSON.stringify(state)}`)
+    assert(state?.hasUnassigned === true, 'new sessions must allow the no-project collection')
+  })
+
+  await check(cdp, 'projects can be archived and restored from the sidebar', async () => {
+    await clickSelector(cdp, '.session-card.active')
+    await clickSelector(cdp, '[aria-label="项目操作: project"]')
+    await clickByText(cdp, '归档项目')
+    await waitForText(cdp, '已归档项目', 10_000)
+    const archived = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    assert(archived.length === 1 && archived[0].archived === true, `project archive was not persisted: ${JSON.stringify(archived)}`)
+    await clickByText(cdp, '已归档项目')
+    await waitForSelector(cdp, '.sidebar-archived-projects-section [aria-label="项目操作: project"]')
+    await screenshot(cdp, '10a-project-archived')
+    await clickSelector(cdp, '.sidebar-archived-projects-section [aria-label="项目操作: project"]')
+    await clickByText(cdp, '恢复项目')
+    await waitForSelector(cdp, '.sidebar-projects-section [aria-label="项目操作: project"]')
+    const restored = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    assert(restored.length === 1 && restored[0].archived !== true, `project restore was not persisted: ${JSON.stringify(restored)}`)
+  })
+
+  await check(cdp, 'deleting the last session leaves a usable new-session composer', async () => {
+    await evalValue(cdp, `(() => { window.confirm = () => true; return true })()`)
+    await clickSelector(cdp, '.session-card.active .session-card-more')
+    await clickByText(cdp, '关闭会话')
+    await waitForSelector(cdp, '.welcome-composer-input', 10_000)
+    await waitForNoSelector(cdp, '.modal-backdrop', 10_000)
+    await waitForSelector(cdp, '.history-card .session-card-more', 10_000)
+    await clickSelector(cdp, '.history-card .session-card-more')
+    await clickByText(cdp, '删除')
+    await waitForNoSelector(cdp, '.history-card', 10_000)
+    await focusWelcomeComposer(cdp)
+    await typeText(cdp, '删除后仍可输入')
+    const inputValue = await evalValue(cdp, `document.querySelector('.welcome-composer-input')?.value || ''`)
+    assert(inputValue === '删除后仍可输入', `new-session composer rejected input after delete: ${JSON.stringify(inputValue)}`)
+  })
+
+  await check(cdp, 'projects can be deleted without deleting their directories', async () => {
+    await clickSelector(cdp, '[aria-label="项目操作: project"]')
+    await clickByText(cdp, '删除项目')
+    await waitForNoAriaLabel(cdp, '项目操作: project', 10_000)
+    const savedProjects = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    assert(savedProjects.length === 0, `project delete was not persisted: ${JSON.stringify(savedProjects)}`)
+    assert(existsSync(projectDir), 'deleting a project must not delete its directory')
+    await waitForText(cdp, '未关联项目', 10_000)
+  })
+  await screenshot(cdp, '11-session-project-lifecycle')
+
+  await check(cdp, 'a new session can be created without selecting a project', async () => {
+    await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
+    await clickSelector(cdp, '.welcome-send')
+    await waitForSelector(cdp, '.workbench', 10_000)
+    await waitForSelector(cdp, '.sidebar-unassigned-group .session-card.active', 10_000)
+    const savedProjects = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    assert(savedProjects.length === 0, `an unassigned session must not recreate a project: ${JSON.stringify(savedProjects)}`)
+  })
+  await screenshot(cdp, '12-unassigned-session')
+
   await cdp.close()
 } finally {
   const exited = await terminate(app)
@@ -1632,6 +1707,19 @@ async function focusComposer(cdp) {
   assert(ok === true, 'composer input not found')
 }
 
+async function focusWelcomeComposer(cdp) {
+  const ok = await evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('.welcome-composer-input');
+      if (!el) return false;
+      el.focus();
+      return document.activeElement === el;
+    })()`
+  )
+  assert(ok === true, 'new-session composer input not found or not focusable')
+}
+
 async function typeText(cdp, text) {
   for (const char of text) {
     await cdp.send('Input.dispatchKeyEvent', { type: 'char', text: char })
@@ -1680,6 +1768,26 @@ async function waitForNoAriaLabel(cdp, label, timeout = 5000) {
     await sleep(150)
   }
   throw new Error(`aria-label still found: ${label}`)
+}
+
+async function waitForSelector(cdp, selector, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const found = await evalValue(cdp, `!!document.querySelector(${JSON.stringify(selector)})`)
+    if (found) return
+    await sleep(150)
+  }
+  throw new Error(`selector not found: ${selector}`)
+}
+
+async function waitForNoSelector(cdp, selector, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const found = await evalValue(cdp, `!!document.querySelector(${JSON.stringify(selector)})`)
+    if (!found) return
+    await sleep(150)
+  }
+  throw new Error(`selector still found: ${selector}`)
 }
 
 async function waitForCanvasPixels(cdp, timeout = 10_000) {

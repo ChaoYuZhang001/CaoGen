@@ -14,7 +14,7 @@
 
 **多模型、多项目、多文件、多任务、多工具，统一放进一个可控的桌面工作室。**
 
-[立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#3-分钟快速开始) | [贡献指南](./CONTRIBUTING.md) | [安全报告](./SECURITY.md) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
+[官方网站](https://www.caogen.dev) | [立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#3-分钟快速开始) | [贡献指南](./CONTRIBUTING.md) | [安全报告](./SECURITY.md) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
 
 </div>
 
