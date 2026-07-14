@@ -2,6 +2,12 @@
   "name": "caogen",
   "productName": "CaoGen",
   "version": "0.1.5",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Chaoyu Zhang",
+    "email": "2900814034@qq.com",
+    "url": "https://www.caogen.dev"
+  },
   "description": "CaoGen — 多会话并行、多厂商可调度、3D 办公区的桌面 AI 工作台",
   "main": "./out/main/index.js",
   "private": true,
@@ -150,6 +156,18 @@
       {
         "from": "resources/trayTemplate@2x.png",
         "to": "trayTemplate@2x.png"
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICE",
+        "to": "NOTICE"
+      },
+      {
+        "from": "COMMERCIAL-LICENSE.md",
+        "to": "COMMERCIAL-LICENSE.md"
       }
     ],
     "asarUnpack": [
