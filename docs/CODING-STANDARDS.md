@@ -118,7 +118,13 @@ When relevant, also run:
 
 ```text
 npm run test:office-status-recheck
+npm run test:office-performance
+npm run test:office-performance:required
 ```
+
+The performance report records both optimization targets and calibrated
+regression budgets. Target misses stay visible as warnings; the required gate
+blocks only when the current scene regresses beyond the recorded envelope.
 
 3D smoke should verify:
 
@@ -134,6 +140,7 @@ Performance rules:
 - Prefer instancing for repeated geometry.
 - Add quality gates before expensive visual effects become default.
 - Keep `OfficeView` lazy-loaded.
+- Keep renderer diagnostics opt-in and free of their own `useFrame` loop.
 
 ## Testing Rules
 

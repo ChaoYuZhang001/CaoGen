@@ -942,6 +942,24 @@ check('3D office canvas has resize-safe rendering hooks', () => {
   assert(css.includes('width: 100% !important') && css.includes('height: 100% !important'), 'office canvas must fill responsive viewport')
 })
 
+check('3D office performance diagnostics are opt-in and frame-loop free', () => {
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const probe = source('src/renderer/src/components/office/kit/OfficePerformanceProbe.tsx')
+  const packageJson = source('package.json')
+  assert(view.includes('<OfficePerformanceProbe />'), 'Office canvas must mount the performance probe')
+  assert(
+    probe.includes("window.sessionStorage.getItem(OFFICE_PERFORMANCE_SESSION_KEY) !== '1'") &&
+      probe.includes('__caogenOfficePerformance'),
+    'Office performance diagnostics must require the explicit session flag'
+  )
+  assert(!probe.includes('useFrame'), 'Office performance probe must not add a permanent frame loop')
+  assert(
+    packageJson.includes('test:office-performance') &&
+      packageJson.includes('test:office-performance:required'),
+    'package scripts must expose report and required Office performance gates'
+  )
+})
+
 const ok = results.every((item) => item.ok)
 mkdirSync(path.dirname(reportPath), { recursive: true })
 writeFileSync(reportPath, JSON.stringify({ ok, generatedAt: new Date().toISOString(), pass: results.filter((item) => item.ok).length, total: results.length, results }, null, 2))
