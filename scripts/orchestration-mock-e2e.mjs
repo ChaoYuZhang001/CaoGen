@@ -90,12 +90,15 @@ app.stderr.on('data', (chunk) => {
 })
 
 let browser
+let focusSession
 try {
   await waitForDebugPort(remotePort, 20_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
   const pages = await browser.pages()
   const page = pages.find((item) => !item.url().startsWith('devtools://')) || pages[0]
   if (!page) throw new Error('Electron page target not found')
+  focusSession = await page.target().createCDPSession()
+  await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       const loc = msg.location()
@@ -1003,6 +1006,7 @@ try {
   }
   process.exitCode = 1
 } finally {
+  if (focusSession) await focusSession.detach().catch(() => undefined)
   if (browser) await browser.disconnect().catch(() => undefined)
   const exited = await terminate(app)
   await closeServer(mock.server)

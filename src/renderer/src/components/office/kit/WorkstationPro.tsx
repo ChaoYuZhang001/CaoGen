@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
 import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
+import CompactWorkstationShell from './CompactWorkstationShell'
 import Desk from './Desk'
 import OfficeChair from './OfficeChair'
 import MonitorSetup from './MonitorSetup'
@@ -18,10 +19,14 @@ import { officeActivityOf, type OfficeSessionActivity, type OfficeSessionSignal,
 import type { Group, MeshStandardMaterial } from 'three'
 
 export type WorkstationActivity = OfficeSessionActivity
+export type WorkstationDetail = 'full' | 'compact'
 
-interface WorkstationProProps {
+export interface WorkstationProProps {
+  sessionId: string
   position: [number, number, number]
   active: boolean
+  /** Selected stations always render at full detail; this can keep an inactive station full when needed. */
+  detail?: WorkstationDetail
   activity: WorkstationActivity
   title: string
   costUsd: number
@@ -666,8 +671,10 @@ function RoutingBudgetStack({
  * 坐标:自身原点在地面(y=0),桌面 y=0.74,朝 -Z 面向桌子。占地约 2m×2m。
  */
 export default function WorkstationPro({
+  sessionId,
   position,
   active,
+  detail,
   activity,
   title,
   costUsd,
@@ -706,6 +713,7 @@ export default function WorkstationPro({
             ? 1
             : 0.08
   const showOperator = !operatorAway
+  const resolvedDetail: WorkstationDetail = active ? 'full' : (detail ?? 'compact')
 
   // AvatarRig 在挂载后把各关节写入该句柄;useFrame 内读取并驱动动画。
   const rigRef = useRef<AvatarRefs>(null)
@@ -752,8 +760,76 @@ export default function WorkstationPro({
     onOpen?.()
   }
 
+  if (resolvedDetail === 'compact') {
+    return (
+      <group
+        name="office-workstation-compact"
+        userData={{ officeWorkstationDetail: 'compact' }}
+        position={position}
+        onClick={clickSelect}
+        onDoubleClick={doubleClickOpen}
+        onPointerOver={cursorOver}
+        onPointerOut={cursorOut}
+      >
+        <mesh name="compact-workstation-hit-target" position={[0, 0.9, 0.08]}>
+          <boxGeometry args={[2.1, 1.8, 1.72]} />
+          <meshBasicMaterial visible={false} />
+        </mesh>
+        <CompactWorkstationShell
+          activity={activity}
+          screenColor={screenColor}
+          progress={progress}
+          showOperator={showOperator}
+          showBadge={showBadge}
+          providerLogo={providerLogo}
+        />
+
+        {showOperator && (
+          <>
+            <group
+              ref={leftHandTargetRef}
+              name="desk-left-hand-ik-target"
+              position={[-0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
+            />
+            <group
+              ref={rightHandTargetRef}
+              name="desk-right-hand-ik-target"
+              position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
+            />
+            <AvatarRig
+              ref={rigRef}
+              sessionId={sessionId}
+              position={[0, 0, 0.52]}
+              rotation={[0, Math.PI, 0]}
+              scale={1.2}
+              bodyColor={skin.bodyColor}
+              skinColor={skin.shellColor}
+              accentColor={stationAccent}
+              emblem={skin.emblem}
+              providerLogo={providerLogo}
+              catEars={catEars}
+              detailLevel="low"
+            />
+          </>
+        )}
+
+        {activity === 'awaiting' && !operatorAway && (
+          <SpeechBubble position={[0, 1.98, 0.56]} kind="speak" text={AWAITING_TEXT} />
+        )}
+      </group>
+    )
+  }
+
   return (
-    <group position={position} onClick={clickSelect} onDoubleClick={doubleClickOpen} onPointerOver={cursorOver} onPointerOut={cursorOut}>
+    <group
+      name="office-workstation-full"
+      userData={{ officeWorkstationDetail: 'full' }}
+      position={position}
+      onClick={clickSelect}
+      onDoubleClick={doubleClickOpen}
+      onPointerOver={cursorOver}
+      onPointerOut={cursorOut}
+    >
       {/* 控制台基座:矩形信息区取代玩具感发光圆圈。 */}
       <RoundedBox args={[2.1, 0.045, 1.72]} radius={0.055} smoothness={3} position={[0, 0.024, 0.08]} receiveShadow>
         <meshStandardMaterial
@@ -897,6 +973,7 @@ export default function WorkstationPro({
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
           <AvatarRig
             ref={rigRef}
+            sessionId={sessionId}
             position={[0, 0, 0.52]}
             rotation={[0, Math.PI, 0]}
             scale={1.2}
@@ -906,6 +983,7 @@ export default function WorkstationPro({
             emblem={skin.emblem}
             providerLogo={providerLogo}
             catEars={catEars}
+            detailLevel="full"
           />
           <OperatorContactLinks accent={stationAccent} activity={activity} />
           <OperatorFocusLinks accent={stationAccent} activity={activity} />

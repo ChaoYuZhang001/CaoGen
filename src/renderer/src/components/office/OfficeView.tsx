@@ -854,6 +854,7 @@ export default function OfficeView(): React.JSX.Element {
             {ids.map((id, i) => (
               <WorkstationPro
                 key={id}
+                sessionId={id}
                 position={positions[i]}
                 active={id === activeOfficeId}
                 activity={activityOf(sessions[id])}
