@@ -512,7 +512,9 @@ check('OfficeView exposes final 3D optimization completion controls', () => {
 
 check('reference robot assets use the pinned official Unitree rev1 pipeline', () => {
   const wrapper = source('scripts/generate-reference-robot-glb.mjs')
+  const helmetWrapper = source('scripts/generate-reference-helmet-source.mjs')
   const blender = source('scripts/generate-reference-robot-blender.py')
+  const helmetSource = source('scripts/extract-reference-helmet-source-blender.py')
   const officialModelMatch = blender.match(
     /OFFICIAL_G1_XML\s*=\s*OFFICIAL_G1_DIR\s*\/\s*"(g1_(?:23|29)dof_rev_1_0\.xml)"/u
   )
@@ -527,11 +529,24 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
   const officialReadme = source('third_party/unitree-g1-rev1/README.md')
   const assetReadme = source('src/renderer/src/assets/robots/README.md')
   const blendPath = path.join(repoRoot, 'src/renderer/src/assets/robots/reference-office-robot.blend')
+  const helmetBlendPath = path.join(
+    repoRoot,
+    'src/renderer/src/assets/robots/reference-helmet-source.blend'
+  )
   const glbPath = 'src/renderer/src/assets/robots/reference-office-robot.glb'
 
   assert(wrapper.includes("path.join(repoRoot, 'scripts/generate-reference-robot-blender.py')"), 'GLB wrapper must target the Blender generator')
   assert(wrapper.includes("['--background', '--python', blenderScript]"), 'GLB wrapper must run Blender in background Python mode')
   assert(wrapper.includes('process.env.BLENDER_BIN'), 'GLB wrapper must support an explicit Blender binary')
+  assert(
+    helmetWrapper.includes("path.join(repoRoot, 'scripts/extract-reference-helmet-source-blender.py')"),
+    'helmet wrapper must target the editable source-asset generator'
+  )
+  assert(
+    helmetWrapper.includes("['--background', '--python', blenderScript]") &&
+      helmetWrapper.includes('process.env.BLENDER_BIN'),
+    'helmet wrapper must run Blender in background mode and support BLENDER_BIN'
+  )
   for (const marker of [
     'import bmesh',
     'import bpy',
@@ -544,6 +559,11 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
     'root["source_license"] = "BSD-3-Clause"',
     'mesh_name == "logo_link"',
     'nameplate["provider_logo_renderer"] = "ProviderLogoBadge"',
+    'HELMET_SOURCE_BLEND',
+    'bpy.data.libraries.load',
+    'load_reference_helmet_source(head_mount, materials)',
+    'head["source_asset_pipeline"] = "appended_blender_subd_source"',
+    'modifier.show_render = False',
     'bpy.ops.export_scene.gltf',
     'bpy.ops.wm.save_as_mainfile'
   ]) {
@@ -560,25 +580,31 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
     'Blender generator must not lift the neutral upper arms with a 90-degree shoulder pose'
   )
   assert(
-    blender.includes('"black_u_visor_frame"') &&
-      blender.includes('visor_frame["visor_attachment"] = "helmet_black_smooth_cowl"'),
-    'Blender generator must attach the black face frame directly to the swept helmet cowl'
+    helmetSource.includes('"black_u_visor_frame"') &&
+      helmetSource.includes('visor_frame["visor_attachment"] = "helmet_black_smooth_cowl"'),
+    'helmet source pipeline must attach the black face frame directly to the continuous shell'
   )
   assert(
-    blender.includes('surface_y - 0.0008') &&
-      blender.includes('visor_light["visor_attachment"] = "black_u_visor_frame"') &&
-      blender.includes('visor_light["reference_component"] = "flush_inset_light_tube"') &&
-      blender.includes('visor_light["surface_offset_m"] = 0.0008'),
-    'Blender generator must place the cyan perimeter light on the visible face of the black frame'
+    helmetSource.includes('visor_light["visor_attachment"] = "black_u_visor_frame"') &&
+      helmetSource.includes('visor_light["reference_component"] = "flush_inset_light_tube"') &&
+      helmetSource.includes('visor_light["surface_offset_m"] = 0.0008'),
+    'helmet source pipeline must keep the cyan perimeter light flush with the black frame'
   )
   assert(
-    blender.includes(
-      'cowl["reference_silhouette"] = "orthographic_annular_frame_occipital_bridge"'
-    ) &&
-      blender.includes('obj["reference_offset_profile"] = "visor_contour_following"') &&
+    helmetSource.includes('def build_authoring_geometry()') &&
+      helmetSource.includes(
+        'generator.build_reference_helmet_authoring_geometry(mount, materials, 0.025)'
+      ) &&
+      helmetSource.includes('shell["reference_component"] = "single_continuous_subd_shell"') &&
+      helmetSource.includes(
+        'shell["reference_silhouette"] = "orthographic_single_shell_source_asset"'
+      ) &&
+      helmetSource.includes('shell.data.remesh_voxel_size = 0.0055') &&
+      helmetSource.includes('bpy.ops.object.voxel_remesh()') &&
+      helmetSource.includes('source_non_manifold_edges') &&
       blender.includes('head_source_mesh["visual_role"] = "provenance_only"') &&
       blender.includes('head_source_mesh.scale = (0.001, 0.001, 0.001)'),
-    'Blender generator must use the custom swept cowl while retaining the official head only as hidden provenance'
+    'robot pipeline must append one audited quad shell while retaining the official head only as hidden provenance'
   )
 
   assert(
@@ -608,6 +634,12 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
   assert(officialReadme.includes('BSD-3-Clause'), 'third-party README must identify the retained BSD-3-Clause license')
   assert(assetReadme.includes(unitreeG1Rev1Commit), 'robot asset README must record the pinned Unitree commit')
   assert(assetReadme.includes('ProviderLogoBadge'), 'robot asset README must identify the runtime provider-logo renderer')
+  assert(
+    assetReadme.includes('reference-helmet-source.blend') &&
+      assetReadme.includes('generate:reference-helmet-source') &&
+      assetReadme.includes('regression baseline'),
+    'robot asset README must document the editable helmet source and silhouette gate semantics'
+  )
 
   assert(existsSync(blendPath), 'Blender source asset is missing')
   const blendBytes = readFileSync(blendPath)
@@ -616,10 +648,25 @@ check('reference robot assets use the pinned official Unitree rev1 pipeline', ()
   assert(blendBytes.length > 1_000_000, `Blender source asset is unexpectedly small: ${blendBytes.length} bytes`)
   assert(plainBlend || compressedBlend, 'Blender source asset has neither a BLENDER nor compressed Blender header')
 
+  assert(existsSync(helmetBlendPath), 'reference helmet Blender source asset is missing')
+  const helmetBlendBytes = readFileSync(helmetBlendPath)
+  const plainHelmetBlend = helmetBlendBytes.subarray(0, 7).toString('ascii') === 'BLENDER'
+  const compressedHelmetBlend = helmetBlendBytes
+    .subarray(0, 4)
+    .equals(Buffer.from([0x28, 0xb5, 0x2f, 0xfd]))
+  assert(
+    helmetBlendBytes.length > 500_000,
+    `reference helmet Blender source is unexpectedly small: ${helmetBlendBytes.length} bytes`
+  )
+  assert(
+    plainHelmetBlend || compressedHelmetBlend,
+    'reference helmet source has neither a BLENDER nor compressed Blender header'
+  )
+
   const { bytes: glbBytes, json: glb } = loadGlb(glbPath)
   assert(glbBytes.length > 1_000_000, `reference robot GLB is unexpectedly small: ${glbBytes.length} bytes`)
   assert((glb.nodes?.length ?? 0) >= 25 && (glb.meshes?.length ?? 0) >= 20, 'reference robot GLB has unexpectedly little official scene geometry')
-  return `source=${officialModelPath}, blend=${(blendBytes.length / 1_048_576).toFixed(1)} MiB, glb=${(glbBytes.length / 1_048_576).toFixed(1)} MiB`
+  return `source=${officialModelPath}, helmet=${(helmetBlendBytes.length / 1_048_576).toFixed(1)} MiB, blend=${(blendBytes.length / 1_048_576).toFixed(1)} MiB, glb=${(glbBytes.length / 1_048_576).toFixed(1)} MiB`
 })
 
 check('reference robot GLB preserves official meshes and runtime animation roots', () => {

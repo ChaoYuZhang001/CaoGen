@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = REPO_ROOT / "src/renderer/src/assets/robots"
 GLB_PATH = ASSET_DIR / "reference-office-robot.glb"
 BLEND_PATH = ASSET_DIR / "reference-office-robot.blend"
+HELMET_SOURCE_BLEND = ASSET_DIR / "reference-helmet-source.blend"
 PREVIEW_DIR = REPO_ROOT / "test-results/reference-robot-blender"
 REFERENCE_ORIGINAL = REPO_ROOT / "docs/visual-references/reference-robot-original.jpeg"
 REFERENCE_SHEET = REPO_ROOT / "docs/visual-references/reference-robot-orthographic-sheet.png"
@@ -894,11 +895,12 @@ def reshape_reference_torso(obj: bpy.types.Object) -> None:
     obj.data.update()
 
 
-def build_reference_helmet(
+def build_reference_helmet_authoring_geometry(
     root: bpy.types.Object,
     materials: dict[str, bpy.types.Material],
     base_z: float,
 ) -> bpy.types.Object:
+    """Procedural seed used only to rebuild the editable helmet source asset."""
     black = materials["black"]
     black_soft = materials["black_soft"]
     joint = materials["joint"]
@@ -1101,6 +1103,75 @@ def build_reference_helmet(
     for index, x in enumerate((-0.058, -0.019, 0.019, 0.058)):
         add_cylinder(f"front_sensor_camera_{index}", 0.0048, 0.004, (x, -0.198, 0.132), glass, rotation=(math.radians(90), 0, 0), bevel=0.0012, vertices=32, parent=head)
     add_cylinder("lower_sensor_puck", 0.009, 0.007, (0, -0.181, 0.105), joint, rotation=(math.radians(90), 0, 0), bevel=0.002, vertices=48, parent=head)
+    return head
+
+
+def load_reference_helmet_source(
+    head_mount: bpy.types.Object,
+    materials: dict[str, bpy.types.Material],
+) -> bpy.types.Object:
+    if not HELMET_SOURCE_BLEND.exists():
+        raise FileNotFoundError(f"missing reference helmet source asset: {HELMET_SOURCE_BLEND}")
+
+    source_collection_name = "ReferenceHelmetSource"
+    with bpy.data.libraries.load(str(HELMET_SOURCE_BLEND), link=False) as (data_from, data_to):
+        if source_collection_name not in data_from.collections:
+            raise RuntimeError(
+                f"reference helmet source must contain collection {source_collection_name!r}"
+            )
+        data_to.collections = [source_collection_name]
+
+    source_collection = data_to.collections[0]
+    if source_collection is None:
+        raise RuntimeError("reference helmet source collection could not be appended")
+    bpy.context.scene.collection.children.link(source_collection)
+    source_objects = list(source_collection.all_objects)
+    objects_by_name = {obj.name: obj for obj in source_objects}
+    required_names = {
+        "helmet_head",
+        "helmet_black_smooth_cowl",
+        "black_u_visor_frame",
+        "cyan_u_visor_light",
+        "dark_glass_sensor_band",
+        "cyan_horizontal_sensor_slit",
+    }
+    missing_names = sorted(required_names - objects_by_name.keys())
+    if missing_names:
+        raise RuntimeError(f"reference helmet source is missing objects: {missing_names}")
+
+    head = objects_by_name["helmet_head"]
+    if head.parent is not None:
+        raise RuntimeError("reference helmet source helmet_head must be a collection root")
+    head.parent = head_mount
+    head.location = (0.0, 0.0, 0.0)
+    head.rotation_euler = (0.0, 0.0, 0.0)
+    head.scale = (1.0, 1.0, 1.0)
+
+    for obj in source_objects:
+        material_role = obj.get("helmet_material_role")
+        if not material_role or not obj.data or not hasattr(obj.data, "materials"):
+            continue
+        if material_role not in materials:
+            raise RuntimeError(
+                f"reference helmet object {obj.name!r} uses unknown material role {material_role!r}"
+            )
+        obj.data.materials.clear()
+        obj.data.materials.append(materials[material_role])
+
+    shell = objects_by_name["helmet_black_smooth_cowl"]
+    if shell.get("reference_component") != "single_continuous_subd_shell":
+        raise RuntimeError("reference helmet source must use the single continuous SubD shell")
+    subdivision_modifiers = [modifier for modifier in shell.modifiers if modifier.type == "SUBSURF"]
+    if not subdivision_modifiers:
+        raise RuntimeError("reference helmet source shell must retain a Subdivision modifier")
+    for modifier in subdivision_modifiers:
+        modifier.show_viewport = False
+        modifier.show_render = False
+    shell["production_subdivision_disabled"] = True
+
+    head["reference_style"] = "orthographic single-shell service helmet"
+    head["reference_source"] = "src/renderer/src/assets/robots/reference-helmet-source.blend"
+    head["source_asset_pipeline"] = "appended_blender_subd_source"
     return head
 
 
@@ -1478,7 +1549,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
         head_source_parent.matrix_world.to_quaternion().inverted()
         @ root.matrix_world.to_quaternion()
     )
-    head_control = build_reference_helmet(head_mount, materials, 0.025)
+    head_control = load_reference_helmet_source(head_mount, materials)
     head_control["reference_style"] = "orthographic open-face service helmet"
     head_control["reference_source"] = "docs/visual-references/reference-robot-orthographic-sheet.png"
 

@@ -15,6 +15,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "generate:reference-helmet-source": "node scripts/generate-reference-helmet-source.mjs",
+    "generate:reference-robot": "node scripts/generate-reference-robot-glb.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test:coding-standards": "node scripts/coding-standards-audit.mjs",
     "test:plan-contract": "node scripts/p0-p1-p2-contract-smoke.mjs",

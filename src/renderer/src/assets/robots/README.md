@@ -4,6 +4,25 @@
 `scripts/generate-reference-robot-glb.mjs` from the official Unitree G1 rev 1.0
 assets vendored in `third_party/unitree-g1-rev1`.
 
+The visible service helmet is maintained separately in
+`reference-helmet-source.blend`. It contains the editable, single-island quad
+shell and its visor/sensor details; production generation appends that source
+collection to the pinned Unitree body instead of rebuilding the helmet from
+transient primitives.
+
+Regenerate assets in dependency order:
+
+```sh
+npm run generate:reference-helmet-source
+npm run generate:reference-robot
+```
+
+Then run `npm run test:reference-robot-glb` for hierarchy, topology, provenance,
+and animation-root contracts. `npm run test:reference-robot-silhouette` compares
+the checked-in front/side renders with the orthographic reference and enforces a
+regression baseline. That gate prevents the current silhouette from getting
+worse; it does not claim pixel-level parity with the reference artwork.
+
 - Upstream repository: https://github.com/unitreerobotics/unitree_rl_gym
 - Pinned upstream commit: `276801e46c5d433564f24658bac64f254b7d2d4b`
 - Source license: BSD-3-Clause, retained in

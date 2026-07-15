@@ -55,31 +55,21 @@ const REQUIRED_VISOR_ATTACHMENT_NODES = [
     maximumSurfaceOffset: 0.001
   }
 ]
-const REQUIRED_REAR_SUPPORT_NODES = [
-  {
-    name: 'helmet_rear_occipital_spine_left',
-    side: -1
-  },
-  {
-    name: 'helmet_rear_occipital_spine_right',
-    side: 1
-  }
-]
-const REAR_SUPPORT_COMPONENT = 'paired_rear_neck_support'
 const REFERENCE_COWL_NODE_NAME = 'helmet_black_smooth_cowl'
-const REFERENCE_COWL_SILHOUETTE = 'orthographic_annular_frame_occipital_bridge'
-const REQUIRED_OCCIPITAL_BRIDGE_NODES = [
-  {
-    name: 'helmet_occipital_neck_bridge_left',
-    side: -1
-  },
-  {
-    name: 'helmet_occipital_neck_bridge_right',
-    side: 1
-  }
+const REFERENCE_COWL_COMPONENT = 'single_continuous_subd_shell'
+const REFERENCE_COWL_SILHOUETTE = 'orthographic_single_shell_source_asset'
+const REFERENCE_COWL_TOPOLOGY = 'classic_remesh_voxel_quad_subdivision'
+const REFERENCE_HEAD_PIPELINE = 'appended_blender_subd_source'
+const FORBIDDEN_LEGACY_HEAD_NODE_NAMES = [
+  'helmet_rear_occipital_spine_left',
+  'helmet_rear_occipital_spine_right',
+  'helmet_occipital_neck_bridge_left',
+  'helmet_occipital_neck_bridge_right'
 ]
-const OCCIPITAL_BRIDGE_COMPONENT = 'paired_occipital_neck_bridge'
-const VISOR_CONTOUR_OFFSET_PROFILE = 'visor_contour_following'
+const REQUIRED_HEAD_DETAIL_NODES = [
+  { name: 'helmet_shoulder_mount_left', component: 'shoulder_mount_loop' },
+  { name: 'helmet_shoulder_mount_right', component: 'shoulder_mount_loop' }
+]
 const OFFICIAL_HEAD_NODE_NAME = 'official_head_link'
 const OFFICIAL_HEAD_VISUAL_ROLE = 'provenance_only'
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
@@ -328,7 +318,6 @@ function inspectDocument(document) {
 
   const neutralArmPoses = inspectNeutralArmPoses(nodes, nodeEntries, failures)
   const visorAttachmentNodes = inspectVisorAttachmentNodes(nodes, nodeEntries, failures)
-  const rearSupportNodes = inspectRearSupportNodes(nodes, nodeEntries, failures)
   const referenceHead = inspectReferenceHead(nodes, nodeEntries, failures)
 
   const sourceRootMatches = nodeEntries.filter((node) => node.name === SOURCE_ROOT_NODE_NAME)
@@ -483,7 +472,6 @@ function inspectDocument(document) {
     gaitControlNodes,
     neutralArmPoses,
     visorAttachmentNodes,
-    rearSupportNodes,
     referenceHead,
     officialMeshBindings,
     materialEntries,
@@ -543,46 +531,6 @@ function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
   return attachments
 }
 
-function inspectRearSupportNodes(nodes, nodeEntries, failures) {
-  const supports = []
-  for (const contract of REQUIRED_REAR_SUPPORT_NODES) {
-    const matches = nodeEntries.filter((entry) => entry.name === contract.name)
-    if (matches.length !== 1) {
-      failures.push(`rear support ${quote(contract.name)} must appear exactly once; found ${matches.length}`)
-      continue
-    }
-
-    const entry = matches[0]
-    const node = nodes[entry.index]
-    const component = node?.extras?.reference_component
-    const side = node?.extras?.reference_side
-    const offsetProfile = node?.extras?.reference_offset_profile
-    const parentIndex = nodeParentIndex(nodes, entry.index)
-    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
-    if (component !== REAR_SUPPORT_COMPONENT) {
-      failures.push(
-        `rear support ${quote(contract.name)} must declare component ${quote(REAR_SUPPORT_COMPONENT)}; ` +
-          `found ${formatValue(component)}`
-      )
-    }
-    if (parentName !== 'helmet_head') {
-      failures.push(
-        `rear support ${quote(contract.name)} must be parented to "helmet_head"; ` +
-          `found ${formatValue(parentName)}`
-      )
-    }
-    if (side !== contract.side || offsetProfile !== VISOR_CONTOUR_OFFSET_PROFILE) {
-      failures.push(
-        `rear support ${quote(contract.name)} must follow side ${contract.side} with profile ` +
-          `${quote(VISOR_CONTOUR_OFFSET_PROFILE)}; found side=${formatValue(side)}, ` +
-          `profile=${formatValue(offsetProfile)}`
-      )
-    }
-    supports.push({ name: contract.name, side, offsetProfile, component })
-  }
-  return supports
-}
-
 function inspectReferenceHead(nodes, nodeEntries, failures) {
   const helmetIndex = nodes.findIndex((node) => node?.name === 'helmet_head')
   const cowlMatches = nodeEntries.filter((entry) => entry.name === REFERENCE_COWL_NODE_NAME)
@@ -594,44 +542,65 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
     failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must appear exactly once; found ${cowlMatches.length}`)
   }
 
-  const bridges = []
-  for (const contract of REQUIRED_OCCIPITAL_BRIDGE_NODES) {
+  if (helmetIndex < 0) {
+    failures.push('reference head must contain exactly one "helmet_head" animation root')
+  }
+  const helmetExtras = helmetIndex >= 0 ? nodes[helmetIndex]?.extras ?? {} : {}
+  if (helmetExtras.source_asset_pipeline !== REFERENCE_HEAD_PIPELINE) {
+    failures.push(
+      `helmet_head must declare source pipeline ${quote(REFERENCE_HEAD_PIPELINE)}; ` +
+        `found ${formatValue(helmetExtras.source_asset_pipeline)}`
+    )
+  }
+  if (helmetExtras.source_mesh_topology !== REFERENCE_COWL_TOPOLOGY) {
+    failures.push(
+      `helmet_head must declare topology ${quote(REFERENCE_COWL_TOPOLOGY)}; ` +
+        `found ${formatValue(helmetExtras.source_mesh_topology)}`
+    )
+  }
+  if (
+    helmetExtras.authoring_subdivision_levels !== 1 ||
+    helmetExtras.production_subdivision_levels !== 0
+  ) {
+    failures.push(
+      'helmet_head must retain authoring SubD level 1 and export production level 0; ' +
+        `found authoring=${formatValue(helmetExtras.authoring_subdivision_levels)}, ` +
+        `production=${formatValue(helmetExtras.production_subdivision_levels)}`
+    )
+  }
+
+  for (const name of FORBIDDEN_LEGACY_HEAD_NODE_NAMES) {
+    const matches = nodeEntries.filter((entry) => entry.name === name)
+    if (matches.length > 0) {
+      failures.push(`legacy split-shell node ${quote(name)} must be absent; found ${matches.length}`)
+    }
+  }
+
+  const detailNodes = []
+  for (const contract of REQUIRED_HEAD_DETAIL_NODES) {
     const matches = nodeEntries.filter((entry) => entry.name === contract.name)
     if (matches.length !== 1) {
       failures.push(
-        `occipital bridge ${quote(contract.name)} must appear exactly once; found ${matches.length}`
+        `reference head detail ${quote(contract.name)} must appear exactly once; found ${matches.length}`
       )
       continue
     }
     const entry = matches[0]
-    const node = nodes[entry.index]
-    const side = node?.extras?.reference_side
-    const offsetProfile = node?.extras?.reference_offset_profile
-    const parentIndex = nodeParentIndex(nodes, entry.index)
-    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
-    if (node?.extras?.reference_component !== OCCIPITAL_BRIDGE_COMPONENT) {
+    const component = nodes[entry.index]?.extras?.reference_component
+    if (component !== contract.component) {
       failures.push(
-        `occipital bridge ${quote(contract.name)} must declare component ` +
-          `${quote(OCCIPITAL_BRIDGE_COMPONENT)}; found ${formatValue(node?.extras?.reference_component)}`
+        `reference head detail ${quote(contract.name)} must declare component ` +
+          `${quote(contract.component)}; found ${formatValue(component)}`
       )
     }
-    if (parentName !== 'helmet_head') {
-      failures.push(
-        `occipital bridge ${quote(contract.name)} must be parented to "helmet_head"; ` +
-          `found ${formatValue(parentName)}`
-      )
+    if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
+      failures.push(`reference head detail ${quote(contract.name)} must descend from "helmet_head"`)
     }
-    if (side !== contract.side || offsetProfile !== VISOR_CONTOUR_OFFSET_PROFILE) {
-      failures.push(
-        `occipital bridge ${quote(contract.name)} must follow side ${contract.side} with profile ` +
-          `${quote(VISOR_CONTOUR_OFFSET_PROFILE)}; found side=${formatValue(side)}, ` +
-          `profile=${formatValue(offsetProfile)}`
-      )
-    }
-    bridges.push({ name: contract.name, side, offsetProfile })
+    detailNodes.push({ name: contract.name, component })
   }
   if (cowl) {
-    const silhouette = nodes[cowl.index]?.extras?.reference_silhouette
+    const extras = nodes[cowl.index]?.extras ?? {}
+    const silhouette = extras.reference_silhouette
     if (silhouette !== REFERENCE_COWL_SILHOUETTE) {
       failures.push(
         `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare silhouette ` +
@@ -640,6 +609,48 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
     }
     if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, cowl.index)) {
       failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must descend from "helmet_head"`)
+    }
+    if (extras.reference_component !== REFERENCE_COWL_COMPONENT) {
+      failures.push(
+        `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare component ` +
+          `${quote(REFERENCE_COWL_COMPONENT)}; found ${formatValue(extras.reference_component)}`
+      )
+    }
+    if (extras.source_topology !== REFERENCE_COWL_TOPOLOGY) {
+      failures.push(
+        `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare topology ` +
+          `${quote(REFERENCE_COWL_TOPOLOGY)}; found ${formatValue(extras.source_topology)}`
+      )
+    }
+    if (
+      extras.source_asset !== 'reference-helmet-source.blend' ||
+      extras.source_island_count !== 1 ||
+      extras.source_non_manifold_edges !== 0 ||
+      extras.source_degenerate_faces !== 0 ||
+      extras.source_non_quad_faces !== 0
+    ) {
+      failures.push(
+        `reference cowl topology audit failed: ${formatValue({
+          sourceAsset: extras.source_asset,
+          islands: extras.source_island_count,
+          nonManifold: extras.source_non_manifold_edges,
+          degenerate: extras.source_degenerate_faces,
+          nonQuad: extras.source_non_quad_faces
+        })}`
+      )
+    }
+    if (
+      !Number.isInteger(extras.source_face_count) ||
+      extras.source_face_count < 5_000 ||
+      extras.source_face_count > 10_000
+    ) {
+      failures.push(
+        `reference cowl production face budget must be 5000..10000; ` +
+          `found ${formatValue(extras.source_face_count)}`
+      )
+    }
+    if (extras.production_subdivision_disabled !== true) {
+      failures.push('reference cowl must disable authoring SubD in the production scene')
     }
   }
 
@@ -670,7 +681,11 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
   return {
     cowlName: cowl?.name ?? null,
     silhouette: cowl ? nodes[cowl.index]?.extras?.reference_silhouette ?? null : null,
-    bridgeNames: bridges.map((bridge) => bridge.name),
+    component: cowl ? nodes[cowl.index]?.extras?.reference_component ?? null : null,
+    topology: cowl ? nodes[cowl.index]?.extras?.source_topology ?? null : null,
+    faceCount: cowl ? nodes[cowl.index]?.extras?.source_face_count ?? null : null,
+    pipeline: helmetExtras.source_asset_pipeline ?? null,
+    detailNames: detailNodes.map((detail) => detail.name),
     officialHeadName: officialHead?.name ?? null,
     officialHeadVisualRole: officialHead ? nodes[officialHead.index]?.extras?.visual_role ?? null : null
   }
@@ -868,13 +883,13 @@ function printDocumentSummary(inspection) {
       `(${formatList(inspection.visorAttachmentNodes.map((node) => `${node.name}->${node.attachment}`))})`
   )
   console.log(
-    `Rear supports: ${inspection.rearSupportNodes.length}/${REQUIRED_REAR_SUPPORT_NODES.length} present ` +
-      `(${formatList(inspection.rearSupportNodes.map((node) => node.name))})`
-  )
-  console.log(
     `Reference head: cowl=${formatValue(inspection.referenceHead.cowlName)}, ` +
       `silhouette=${formatValue(inspection.referenceHead.silhouette)}, ` +
-      `bridges=${formatList(inspection.referenceHead.bridgeNames)}, ` +
+      `component=${formatValue(inspection.referenceHead.component)}, ` +
+      `topology=${formatValue(inspection.referenceHead.topology)}, ` +
+      `faces=${formatValue(inspection.referenceHead.faceCount)}, ` +
+      `pipeline=${formatValue(inspection.referenceHead.pipeline)}, ` +
+      `details=${formatList(inspection.referenceHead.detailNames)}, ` +
       `officialRole=${formatValue(inspection.referenceHead.officialHeadVisualRole)}`
   )
   console.log('Official mesh bindings:')
