@@ -563,6 +563,8 @@ function OneAgentWalker({
         )}
         <AvatarRig
           ref={rigRef}
+          sessionId={spec.sessionId}
+          detailLevel={active ? 'full' : 'low'}
           bodyColor={skin.bodyColor}
           skinColor={skin.shellColor}
           accentColor={WALKER_ACCENT}

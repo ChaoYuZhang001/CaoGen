@@ -8,6 +8,9 @@ import { Matrix4, Quaternion, Vector3 } from 'three'
 const GLB_MAGIC = 0x46546c67
 const GLB_VERSION = 2
 const JSON_CHUNK_TYPE = 0x4e4f534a
+const DRACO_EXTENSION = 'KHR_draco_mesh_compression'
+const FULL_GLB_BUDGET_BYTES = 8_000_000
+const LOD_TRIANGLE_RATIO_MAXIMUM = 0.3
 const PINNED_SOURCE_COMMIT = '276801e46c5d433564f24658bac64f254b7d2d4b'
 const SOURCE_LICENSE = 'BSD-3-Clause'
 const SOURCE_ROOT_NODE_NAME = 'reference_office_robot_unitree_style'
@@ -108,21 +111,22 @@ const defaultAssetPath = path.join(
   repoRoot,
   'src/renderer/src/assets/robots/reference-office-robot.glb'
 )
+const defaultLodAssetPath = path.join(
+  repoRoot,
+  'src/renderer/src/assets/robots/reference-office-robot-lod.glb'
+)
 const assetPath = process.argv[2] ? path.resolve(process.cwd(), process.argv[2]) : defaultAssetPath
 
 try {
-  const buffer = readGlb(assetPath)
-  const glb = parseGlb(buffer, assetPath)
-  const inspection = inspectDocument(glb.document)
-
-  printGlbSummary(assetPath, buffer.length, glb)
-  printDocumentSummary(inspection)
-
-  if (inspection.failures.length > 0) {
-    throw new Error(
-      `reference robot GLB contract failed with ${inspection.failures.length} issue(s):\n${inspection.failures
-        .map((failure) => `  - ${failure}`)
-        .join('\n')}`
+  const primary = inspectAsset(assetPath)
+  if (!process.argv[2]) {
+    const lod = inspectAsset(defaultLodAssetPath)
+    const pairFailures = inspectCardCAssetPair(primary, lod)
+    if (pairFailures.length > 0) throwContractFailures('reference robot Card C asset pair', pairFailures)
+    console.log(
+      `Card C asset pair: full=${primary.buffer.length} bytes/${primary.triangles} triangles, ` +
+        `low=${lod.buffer.length} bytes/${lod.triangles} triangles ` +
+        `(${((lod.triangles / primary.triangles) * 100).toFixed(2)}%)`
     )
   }
 
@@ -130,6 +134,78 @@ try {
 } catch (error) {
   console.error(`reference robot GLB smoke failed: ${errorMessage(error)}`)
   process.exitCode = 1
+}
+
+function inspectAsset(filePath) {
+  const buffer = readGlb(filePath)
+  const glb = parseGlb(buffer, filePath)
+  const inspection = inspectDocument(glb.document)
+
+  printGlbSummary(filePath, buffer.length, glb)
+  printDocumentSummary(inspection)
+  if (inspection.failures.length > 0) {
+    throwContractFailures('reference robot GLB', inspection.failures)
+  }
+  return {
+    filePath,
+    buffer,
+    document: glb.document,
+    inspection,
+    triangles: documentTriangleCount(glb.document)
+  }
+}
+
+function throwContractFailures(label, failures) {
+  throw new Error(
+    `${label} contract failed with ${failures.length} issue(s):\n${failures
+      .map((failure) => `  - ${failure}`)
+      .join('\n')}`
+  )
+}
+
+function inspectCardCAssetPair(full, lod) {
+  const failures = []
+  if (full.buffer.length > FULL_GLB_BUDGET_BYTES) {
+    failures.push(`full GLB is ${full.buffer.length} bytes; maximum is ${FULL_GLB_BUDGET_BYTES}`)
+  }
+  for (const asset of [full, lod]) {
+    if (!asset.document.extensionsRequired?.includes(DRACO_EXTENSION)) {
+      failures.push(`${path.basename(asset.filePath)} must require ${DRACO_EXTENSION}`)
+    }
+  }
+  if (full.triangles <= 0 || lod.triangles <= 0) {
+    failures.push(`triangle counts must be positive; full=${full.triangles}, low=${lod.triangles}`)
+  } else if (lod.triangles >= full.triangles * LOD_TRIANGLE_RATIO_MAXIMUM) {
+    failures.push(
+      `low GLB must keep fewer than ${LOD_TRIANGLE_RATIO_MAXIMUM * 100}% of full triangles; ` +
+        `found ${lod.triangles}/${full.triangles}`
+    )
+  }
+  if (JSON.stringify(lod.inspection.sourceProvenance) !== JSON.stringify(full.inspection.sourceProvenance)) {
+    failures.push('low GLB must preserve the full GLB source provenance')
+  }
+  const fullRoot = full.document.nodes?.find((node) => node?.name === SOURCE_ROOT_NODE_NAME)
+  const lowRoot = lod.document.nodes?.find((node) => node?.name === SOURCE_ROOT_NODE_NAME)
+  if (fullRoot?.extras?.office_lod_level !== 'full') {
+    failures.push(`full source root extras.office_lod_level must be "full"`)
+  }
+  if (lowRoot?.extras?.office_lod_level !== 'low') {
+    failures.push(`low source root extras.office_lod_level must be "low"`)
+  }
+  return failures
+}
+
+function documentTriangleCount(document) {
+  let triangles = 0
+  for (const mesh of document.meshes ?? []) {
+    for (const primitive of mesh?.primitives ?? []) {
+      if (primitive?.mode !== undefined && primitive.mode !== 4) continue
+      const indexCount = document.accessors?.[primitive?.indices]?.count
+      const positionCount = document.accessors?.[primitive?.attributes?.POSITION]?.count
+      triangles += Math.floor((indexCount ?? positionCount ?? 0) / 3)
+    }
+  }
+  return triangles
 }
 
 function readGlb(filePath) {

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useThree } from '@react-three/fiber'
+import { Vector3 } from 'three'
 import type { Object3D } from 'three'
 
 export const OFFICE_PERFORMANCE_SESSION_KEY = 'caogen.office.performance'
@@ -10,6 +11,14 @@ export interface OfficeRenderFrameMetrics {
   triangles: number
   lines: number
   points: number
+}
+
+export interface OfficeRobotLodRoot {
+  rootId: string
+  sessionId: string
+  lod: 'full' | 'low'
+  assetLod: string
+  modelUrl: string
 }
 
 export interface OfficePerformanceSnapshot {
@@ -23,6 +32,17 @@ export interface OfficePerformanceSnapshot {
     objects: number
     meshes: number
     lights: number
+  }
+  lod: {
+    fullRobots: number
+    lowRobots: number
+    fullRobotRootIds: string[]
+    lowRobotRootIds: string[]
+    fullWorkstations: number
+    compactWorkstations: number
+    fullWorkstationRootIds: string[]
+    compactWorkstationRootIds: string[]
+    robots: OfficeRobotLodRoot[]
   }
   canvas: {
     width: number
@@ -50,6 +70,13 @@ export interface OfficePerformanceSnapshot {
 export interface OfficePerformanceDiagnostics {
   readFrame(): OfficeRenderFrameMetrics
   snapshot(): OfficePerformanceSnapshot
+  projectWorldPoint(point: [number, number, number]): {
+    x: number
+    y: number
+    ndcX: number
+    ndcY: number
+    visible: boolean
+  }
 }
 
 type OfficePerformanceWindow = Window & {
@@ -85,7 +112,7 @@ function numberAttribute(element: Element | null, name: string): number {
 }
 
 export default function OfficePerformanceProbe(): null {
-  const { gl, scene } = useThree()
+  const { camera, gl, scene } = useThree()
 
   useEffect(() => {
     if (window.sessionStorage.getItem(OFFICE_PERFORMANCE_SESSION_KEY) !== '1') return
@@ -93,15 +120,48 @@ export default function OfficePerformanceProbe(): null {
     const target = window as OfficePerformanceWindow
     const diagnostics: OfficePerformanceDiagnostics = {
       readFrame: () => renderMetrics(gl.info.render),
+      projectWorldPoint: (point) => {
+        const projected = new Vector3(...point).project(camera)
+        const rect = gl.domElement.getBoundingClientRect()
+        return {
+          x: rect.left + ((projected.x + 1) / 2) * rect.width,
+          y: rect.top + ((1 - projected.y) / 2) * rect.height,
+          ndcX: projected.x,
+          ndcY: projected.y,
+          visible: Math.abs(projected.x) <= 1 && Math.abs(projected.y) <= 1 && Math.abs(projected.z) <= 1
+        }
+      },
       snapshot: () => {
         let objects = 0
         let meshes = 0
         let lights = 0
+        const fullRobotRootIds = new Set<string>()
+        const lowRobotRootIds = new Set<string>()
+        const fullWorkstationRootIds = new Set<string>()
+        const compactWorkstationRootIds = new Set<string>()
+        const robots: OfficeRobotLodRoot[] = []
         scene.traverse((object) => {
           const item = object as SceneObject
           objects += 1
           if (item.isMesh) meshes += 1
           if (item.isLight) lights += 1
+        })
+        scene.traverseVisible((object) => {
+          const item = object as SceneObject
+          const robotLod = item.userData.officeRobotLod
+          if (robotLod === 'full' || robotLod === 'low') {
+            if (robotLod === 'full') fullRobotRootIds.add(item.uuid)
+            else lowRobotRootIds.add(item.uuid)
+            robots.push({
+              rootId: item.uuid,
+              sessionId: String(item.userData.officeRobotSessionId ?? ''),
+              lod: robotLod,
+              assetLod: String(item.userData.officeRobotAssetLod ?? ''),
+              modelUrl: String(item.userData.officeRobotModelUrl ?? '')
+            })
+          }
+          if (item.userData.officeWorkstationDetail === 'full') fullWorkstationRootIds.add(item.uuid)
+          if (item.userData.officeWorkstationDetail === 'compact') compactWorkstationRootIds.add(item.uuid)
         })
 
         const context = gl.getContext()
@@ -122,6 +182,19 @@ export default function OfficePerformanceProbe(): null {
             programs: gl.info.programs?.length ?? 0
           },
           scene: { objects, meshes, lights },
+          lod: {
+            fullRobots: fullRobotRootIds.size,
+            lowRobots: lowRobotRootIds.size,
+            fullRobotRootIds: [...fullRobotRootIds].sort(),
+            lowRobotRootIds: [...lowRobotRootIds].sort(),
+            fullWorkstations: fullWorkstationRootIds.size,
+            compactWorkstations: compactWorkstationRootIds.size,
+            fullWorkstationRootIds: [...fullWorkstationRootIds].sort(),
+            compactWorkstationRootIds: [...compactWorkstationRootIds].sort(),
+            robots: robots.sort(
+              (left, right) => left.sessionId.localeCompare(right.sessionId) || left.rootId.localeCompare(right.rootId)
+            )
+          },
           canvas: {
             width: gl.domElement.width,
             height: gl.domElement.height,
@@ -150,7 +223,7 @@ export default function OfficePerformanceProbe(): null {
         delete target.__caogenOfficePerformance
       }
     }
-  }, [gl, scene])
+  }, [camera, gl, scene])
 
   return null
 }

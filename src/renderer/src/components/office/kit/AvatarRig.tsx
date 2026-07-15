@@ -7,8 +7,9 @@ import type { ProviderLogoSpec } from './ProviderLogos'
 import ReferenceRobotModelAsset, {
   createEmptyAvatarRefs,
   hasReferenceRobotModelAsset,
-  REFERENCE_ROBOT_GLB_URL
+  referenceRobotModelUrl
 } from './RobotModelAsset'
+import type { ReferenceRobotDetailLevel } from './RobotModelAsset'
 
 /** 视觉道具通用位姿 props(与其它 kit 组件一致) */
 export interface OfficeProp {
@@ -62,6 +63,8 @@ type Props = OfficeProp & {
   catEars?: boolean
   modelUrl?: string
   preferModelAsset?: boolean
+  detailLevel?: ReferenceRobotDetailLevel
+  sessionId?: string
   /** 可选:把各部位 group 写入外部传入的引用对象(与转发 ref 二选一或并用) */
   refs?: AvatarRefs
 }
@@ -848,8 +851,10 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
     emblem,
     providerLogo,
     refs,
-    modelUrl = REFERENCE_ROBOT_GLB_URL,
-    preferModelAsset = true
+    modelUrl,
+    preferModelAsset = true,
+    detailLevel = 'full',
+    sessionId
   },
   ref
 ): React.JSX.Element {
@@ -881,7 +886,8 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
   const kneeLRef = useRef<Group>(null)
   const kneeRRef = useRef<Group>(null)
   const modelAssetRefs = useRef<AvatarRefs>(createEmptyAvatarRefs())
-  const useModelAsset = preferModelAsset && hasReferenceRobotModelAsset(modelUrl)
+  const resolvedModelUrl = modelUrl ?? referenceRobotModelUrl(detailLevel)
+  const useModelAsset = preferModelAsset && hasReferenceRobotModelAsset(resolvedModelUrl)
 
   // 同时把句柄写入外部 refs 对象与转发 ref;二者共享同一组内部 ref。
   const collect = (): AvatarRefs => {
@@ -943,7 +949,9 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
     return (
       <ReferenceRobotModelAsset
         refs={modelAssetRefs.current}
-        modelUrl={modelUrl}
+        modelUrl={resolvedModelUrl}
+        detailLevel={detailLevel}
+        sessionId={sessionId}
         position={position}
         rotation={rotation}
         scale={scale}
@@ -954,7 +962,18 @@ const AvatarRig = forwardRef<AvatarRefs, Props>(function AvatarRig(
   }
 
   return (
-    <group ref={rootRef} position={position} rotation={rotation} scale={scale}>
+    <group
+      ref={rootRef}
+      position={position}
+      rotation={rotation}
+      scale={scale}
+      userData={{
+        officeRobotLod: 'full',
+        officeRobotAssetLod: 'full',
+        officeRobotModelUrl: 'procedural',
+        officeRobotSessionId: sessionId ?? ''
+      }}
+    >
       <group scale={HUMANOID_PROPORTION_SCALE}>
         {/* ===== 工程机器人躯干 ===== */}
         <HumanoidChestArmor accent={accent} providerLogo={providerLogo} />

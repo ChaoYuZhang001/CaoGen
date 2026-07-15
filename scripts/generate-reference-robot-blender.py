@@ -13,6 +13,7 @@ from mathutils import Quaternion, Vector
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = REPO_ROOT / "src/renderer/src/assets/robots"
 GLB_PATH = ASSET_DIR / "reference-office-robot.glb"
+LOD_GLB_PATH = ASSET_DIR / "reference-office-robot-lod.glb"
 BLEND_PATH = ASSET_DIR / "reference-office-robot.blend"
 HELMET_SOURCE_BLEND = ASSET_DIR / "reference-helmet-source.blend"
 PREVIEW_DIR = REPO_ROOT / "test-results/reference-robot-blender"
@@ -21,6 +22,9 @@ REFERENCE_SHEET = REPO_ROOT / "docs/visual-references/reference-robot-orthograph
 OFFICIAL_G1_DIR = REPO_ROOT / "third_party/unitree-g1-rev1"
 OFFICIAL_G1_MESH_DIR = OFFICIAL_G1_DIR / "meshes"
 OFFICIAL_G1_XML = OFFICIAL_G1_DIR / "g1_29dof_rev_1_0.xml"
+
+LOD_DECIMATE_RATIO = 0.18
+LOD_DECIMATE_MIN_FACES = 1_000
 
 JOINT_POSE_RADIANS = {
     # Keep the upper arms hanging from the shoulders. The source forearms point
@@ -1658,7 +1662,7 @@ def render_views(root: bpy.types.Object, materials: dict[str, bpy.types.Material
         bpy.ops.render.render(write_still=True)
 
 
-def export_model(root: bpy.types.Object) -> None:
+def export_model(root: bpy.types.Object, output_path: Path) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     root.select_set(True)
     for child in root.children_recursive:
@@ -1666,7 +1670,7 @@ def export_model(root: bpy.types.Object) -> None:
     bpy.context.view_layer.objects.active = root
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(
-        filepath=str(GLB_PATH),
+        filepath=str(output_path),
         export_format="GLB",
         use_selection=True,
         export_yup=True,
@@ -1675,7 +1679,37 @@ def export_model(root: bpy.types.Object) -> None:
         export_cameras=False,
         export_lights=False,
         export_extras=True,
+        export_draco_mesh_compression_enable=True,
+        export_draco_mesh_compression_level=6,
+        export_draco_position_quantization=14,
+        export_draco_normal_quantization=10,
     )
+
+
+def prepare_lod_model(root: bpy.types.Object) -> tuple[int, int]:
+    source_faces = 0
+    lod_faces = 0
+    for obj in [root, *root.children_recursive]:
+        if obj.type != "MESH":
+            continue
+        source_faces += len(obj.data.polygons)
+        if len(obj.data.polygons) >= LOD_DECIMATE_MIN_FACES:
+            if obj.data.users > 1:
+                obj.data = obj.data.copy()
+            bpy.ops.object.select_all(action="DESELECT")
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            modifier = obj.modifiers.new(name="OfficeLodDecimate", type="DECIMATE")
+            modifier.ratio = LOD_DECIMATE_RATIO
+            modifier.use_collapse_triangulate = True
+            bpy.ops.object.modifier_apply(modifier=modifier.name)
+        lod_faces += len(obj.data.polygons)
+
+    root["office_lod_level"] = "low"
+    root["office_lod_source_faces"] = source_faces
+    root["office_lod_faces"] = lod_faces
+    root["office_lod_decimate_ratio"] = LOD_DECIMATE_RATIO
+    return source_faces, lod_faces
 
 
 def main() -> None:
@@ -1704,10 +1738,17 @@ def main() -> None:
     add_reference_images()
     root = build_official_g1_robot(materials)
     align_model_to_floor(root)
-    export_model(root)
+    root["office_lod_level"] = "full"
+    export_model(root, GLB_PATH)
     render_views(root, materials)
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), compress=True)
+    source_faces, lod_faces = prepare_lod_model(root)
+    export_model(root, LOD_GLB_PATH)
     print(f"generated GLB: {GLB_PATH}")
+    print(
+        f"generated LOD GLB: {LOD_GLB_PATH} "
+        f"({source_faces} -> {lod_faces} Blender faces)"
+    )
     print(f"saved Blender source: {BLEND_PATH}")
     print(f"rendered orthographic previews: {PREVIEW_DIR}")
 

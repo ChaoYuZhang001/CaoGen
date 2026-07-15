@@ -1,21 +1,34 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react'
 import { useLoader } from '@react-three/fiber'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { Box3, Group, Quaternion, Vector3 } from 'three'
 import type { Object3D } from 'three'
 import referenceRobotGlbUrl from '../../../assets/robots/reference-office-robot.glb?url'
+import referenceRobotLodGlbUrl from '../../../assets/robots/reference-office-robot-lod.glb?url'
 import ProviderLogoBadge from './ProviderLogoBadge'
 import type { AvatarRefs, OfficeProp } from './AvatarRig'
 import type { ProviderLogoSpec } from './ProviderLogos'
 
 export const REFERENCE_ROBOT_GLB_URL = referenceRobotGlbUrl
+export const REFERENCE_ROBOT_LOD_GLB_URL = referenceRobotLodGlbUrl
+export type ReferenceRobotDetailLevel = 'full' | 'low'
+
+const dracoLoader = new DRACOLoader()
+dracoLoader.setDecoderPath('./draco/')
+
+function configureReferenceRobotLoader(loader: GLTFLoader): void {
+  loader.setDRACOLoader(dracoLoader)
+}
 
 type ReferenceRobotModelAssetProps = OfficeProp & {
   modelUrl: string
+  sessionId?: string
   accentColor?: string
   providerLogo?: ProviderLogoSpec
   refs?: AvatarRefs
   modelScale?: number
+  detailLevel?: ReferenceRobotDetailLevel
 }
 
 type GltfScene = {
@@ -52,7 +65,18 @@ export function hasReferenceRobotModelAsset(modelUrl = REFERENCE_ROBOT_GLB_URL):
 }
 
 export function preloadReferenceRobotModel(modelUrl = REFERENCE_ROBOT_GLB_URL): void {
-  if (hasReferenceRobotModelAsset(modelUrl)) useLoader.preload(GLTFLoader, modelUrl)
+  if (hasReferenceRobotModelAsset(modelUrl)) {
+    useLoader.preload(GLTFLoader, modelUrl, configureReferenceRobotLoader)
+  }
+}
+
+export function referenceRobotModelUrl(detailLevel: ReferenceRobotDetailLevel): string {
+  return detailLevel === 'low' ? REFERENCE_ROBOT_LOD_GLB_URL : REFERENCE_ROBOT_GLB_URL
+}
+
+function modelAssetDetailLevel(scene: Group): ReferenceRobotDetailLevel | 'unknown' {
+  const value = scene.getObjectByName('reference_office_robot_unitree_style')?.userData.office_lod_level
+  return value === 'full' || value === 'low' ? value : 'unknown'
 }
 
 function createAnimationControl(node: Object3D | undefined, controlName: string, axisRoot: Group): Object3D | null {
@@ -209,19 +233,22 @@ const ReferenceRobotModelAsset = forwardRef<AvatarRefs, ReferenceRobotModelAsset
   function ReferenceRobotModelAsset(
     {
       modelUrl,
+      sessionId,
       position,
       rotation,
       scale = 1,
       modelScale = 1,
       accentColor = '#59dcff',
       providerLogo,
-      refs
+      refs,
+      detailLevel = 'full'
     },
     ref
   ): React.JSX.Element {
-    const gltf = useLoader(GLTFLoader, modelUrl) as unknown as GltfScene
+    const gltf = useLoader(GLTFLoader, modelUrl, configureReferenceRobotLoader) as unknown as GltfScene
     const model = useMemo(() => prepareModelScene(gltf.scene), [gltf.scene])
     const scene = model.scene
+    const assetDetailLevel = modelAssetDetailLevel(scene)
     const rootRef = useRef<Group>(null)
     const headFallbackRef = useRef<Group>(null)
     const armLFallbackRef = useRef<Group>(null)
@@ -266,7 +293,18 @@ const ReferenceRobotModelAsset = forwardRef<AvatarRefs, ReferenceRobotModelAsset
     })
 
     return (
-      <group ref={rootRef} position={position} rotation={rotation} scale={scale}>
+      <group
+        ref={rootRef}
+        position={position}
+        rotation={rotation}
+        scale={scale}
+        userData={{
+          officeRobotLod: detailLevel,
+          officeRobotAssetLod: assetDetailLevel,
+          officeRobotModelUrl: modelUrl,
+          officeRobotSessionId: sessionId ?? ''
+        }}
+      >
         <group scale={modelScale}>
           <primitive object={scene} />
           <group ref={headFallbackRef} position={[0, 1.36, 0]} />

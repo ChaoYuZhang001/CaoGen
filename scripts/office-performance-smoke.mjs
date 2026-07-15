@@ -103,6 +103,13 @@ const artifactRegressionBudgets = {
   officeChunkBytesMaximum: 2_200_000,
   robotGlbBytesMaximum: 12_700_000
 }
+const cardCTargets = {
+  officeChunkBytesMaximum: 1_800_000,
+  robotGlbBytesMaximum: 8_000_000,
+  twelveAgentMedianDrawCallsMaximum: 3_269,
+  twelveAgentBaselineMedianDrawCalls: 4_671,
+  twelveAgentDrawCallReductionMinimumPercent: 30
+}
 
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(mainEntry) || !existsSync(rendererEntry)) {
@@ -130,12 +137,15 @@ const report = {
   fixedQualityRegressionBudgets,
   artifactTargets,
   artifactRegressionBudgets,
+  cardCTargets,
   artifacts: artifactMetrics(),
   scenarios: [],
   settingsUi: null,
   autoAdaptation: null,
   renderPause: null,
   unmount: null,
+  lodUpgrade: null,
+  cardCContract: null,
   checks: [],
   warnings: []
 }
@@ -147,7 +157,9 @@ report.checks.push({
         ? 'fail'
         : 'warn'
       : report.artifacts.targetViolations.length > 0
-        ? 'warn'
+        ? required
+          ? 'fail'
+          : 'warn'
         : 'pass',
   targetViolations: report.artifacts.targetViolations,
   regressionViolations: report.artifacts.regressionViolations
@@ -274,9 +286,11 @@ try {
         target: qualityMode === 'auto' ? (targets[count] ?? null) : fixedQualityTargets[qualityMode],
         regressionBudget:
           qualityMode === 'auto' ? (regressionBudgets[count] ?? null) : fixedQualityRegressionBudgets[qualityMode],
+        lodViolations: [],
         targetViolations: [],
         regressionViolations: []
       }
+      scenario.lodViolations = evaluateLodScenario(scenario)
       scenario.targetViolations = evaluateScenario(scenario, scenario.target, 'target')
       scenario.regressionViolations = evaluateScenario(
         scenario,
@@ -287,7 +301,7 @@ try {
       report.checks.push({
         name: `${count}-agent ${qualityMode} office performance`,
         status:
-          scenario.regressionViolations.length > 0
+          scenario.lodViolations.length > 0 || scenario.regressionViolations.length > 0
             ? required
               ? 'fail'
               : 'warn'
@@ -295,8 +309,18 @@ try {
               ? 'warn'
               : 'pass',
         targetViolations: scenario.targetViolations,
-        regressionViolations: scenario.regressionViolations
+        regressionViolations: scenario.regressionViolations,
+        violations: scenario.lodViolations
       })
+      if (
+        report.lodUpgrade === null &&
+        fixedQualityAgentCount > 1 &&
+        count === fixedQualityAgentCount &&
+        qualityMode === 'auto'
+      ) {
+        report.lodUpgrade = await verifyLowLodUpgrade(page)
+        report.checks.push({ name: '3D Office low LOD selection upgrade', status: 'pass', ...report.lodUpgrade })
+      }
       if (report.autoAdaptation === null && qualityMode === 'auto') {
         report.autoAdaptation = await verifyAutoPressureDowngrade(page)
         report.checks.push({ name: '3D Office Auto pressure downgrade', status: 'pass', ...report.autoAdaptation })
@@ -326,6 +350,9 @@ try {
   report.warnings.push(...summarizeProcessOutput(stdout, stderr, exited))
   if (process.env.CAOGEN_KEEP_TEST_TMP !== '1') rmSync(tempRoot, { recursive: true, force: true })
 }
+
+report.cardCContract = evaluateCardCContract(report)
+report.checks.push(report.cardCContract)
 
 const failures = report.checks.filter((item) => item.status === 'fail')
 const warnings = report.checks.filter((item) => item.status === 'warn')
@@ -556,11 +583,164 @@ async function readOfficeSemantics(page) {
       cameraPresets: number('data-office-camera-presets'),
       activeCameraPreset: office.getAttribute('data-office-active-camera-preset') ?? '',
       oneRobotPerAgent: number('data-office-one-robot-per-agent'),
+      visibleRobots: number('data-office-visible-robots'),
       workstationHitTargets: office.getAttribute('data-office-workstation-hit-targets') ?? '',
       walkerHitTargets: office.getAttribute('data-office-walker-hit-targets') ?? '',
       facilityHitTargets: office.getAttribute('data-office-facility-hit-targets') ?? ''
     }
   })
+}
+
+async function verifyLowLodUpgrade(page) {
+  const readState = () =>
+    page.evaluate(() => {
+      const office = document.querySelector('.office-canvas-wrap')
+      const diagnostics = window.__caogenOfficePerformance
+      if (!office || !diagnostics) throw new Error('Office LOD diagnostics unavailable')
+      const parseTargets = (name) => {
+        try {
+          return JSON.parse(office.getAttribute(name) || '[]')
+        } catch {
+          return []
+        }
+      }
+      const selected = office.getAttribute('data-office-selected-session') ?? ''
+      const walkers = parseTargets('data-office-walker-hit-targets')
+      const walkerIds = new Set(walkers.map((target) => target.id))
+      const targets = parseTargets('data-office-workstation-hit-targets')
+      const candidates = targets
+        .filter((candidate) => candidate.id !== selected && !walkerIds.has(candidate.id))
+        .sort((left, right) => right.z - left.z || Math.abs(left.x) - Math.abs(right.x))
+      const target =
+        candidates[0] ??
+        targets.find((candidate) => candidate.id !== selected) ??
+        null
+      return {
+        selected,
+        visibleRobots: Number(office.getAttribute('data-office-visible-robots') ?? 0),
+        target,
+        lod: diagnostics.snapshot().lod
+      }
+    })
+
+  const validateState = (state, label) => {
+    if (!state?.lod) throw new Error(`${label} LOD snapshot missing`)
+    const { fullRobots, lowRobots } = state.lod
+    if (!Number.isInteger(fullRobots) || !Number.isInteger(lowRobots) || fullRobots < 0 || lowRobots < 0) {
+      throw new Error(`${label} LOD counts are invalid: ${JSON.stringify(state.lod)}`)
+    }
+    if (fullRobots + lowRobots !== state.visibleRobots) {
+      throw new Error(
+        `${label} full + low LOD ${fullRobots + lowRobots} does not match ${state.visibleRobots} visible robots`
+      )
+    }
+    if (!Array.isArray(state.lod.robots) || state.lod.robots.length !== state.visibleRobots) {
+      throw new Error(
+        `${label} robot evidence ${state.lod.robots?.length ?? 'missing'} does not match ${state.visibleRobots} visible robots`
+      )
+    }
+    const sessionIds = new Set()
+    for (const robot of state.lod.robots) {
+      if (!robot.sessionId || !robot.modelUrl || robot.assetLod !== robot.lod) {
+        throw new Error(`${label} robot asset evidence is invalid: ${JSON.stringify(robot)}`)
+      }
+      sessionIds.add(robot.sessionId)
+    }
+    if (sessionIds.size !== state.visibleRobots) {
+      throw new Error(`${label} robot sessions are not one-to-one: ${JSON.stringify(state.lod.robots)}`)
+    }
+  }
+
+  await page.waitForFunction(
+    () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') === 'overview',
+    { timeout: 5_000 }
+  )
+  const before = await readState()
+  validateState(before, 'before selection')
+  if (before.lod.lowRobots < 1) {
+    throw new Error(`selection upgrade requires a low LOD robot: ${JSON.stringify(before.lod)}`)
+  }
+  if (!before.target?.id || before.target.id === before.selected) {
+    throw new Error(`selection upgrade target unavailable: ${JSON.stringify(before)}`)
+  }
+
+  const projected = await page.evaluate(({ x, y, z }) => {
+    const diagnostics = window.__caogenOfficePerformance
+    if (!diagnostics) throw new Error('Office projection diagnostics unavailable')
+    return diagnostics.projectWorldPoint([x, y, z])
+  }, before.target)
+  if (!projected.visible || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) {
+    throw new Error(`low LOD workstation target is outside the live camera: ${JSON.stringify({ target: before.target, projected })}`)
+  }
+  const hit = await page.evaluate(({ x, y }) => {
+    const element = document.elementFromPoint(x, y)
+    return { tag: element?.tagName ?? '', isCanvas: element?.tagName === 'CANVAS' }
+  }, projected)
+  if (!hit.isCanvas) {
+    throw new Error(`low LOD workstation click is covered: ${JSON.stringify({ target: before.target, projected, hit })}`)
+  }
+
+  await page.mouse.click(Math.round(projected.x), Math.round(projected.y))
+  await page.waitForFunction(
+    (expected) => {
+      const office = document.querySelector('.office-canvas-wrap')
+      const diagnostics = window.__caogenOfficePerformance
+      if (!office || !diagnostics) return false
+      const lod = diagnostics.snapshot().lod
+      const visibleRobots = Number(office.getAttribute('data-office-visible-robots') ?? 0)
+      return (
+        office.getAttribute('data-office-selected-session') === expected &&
+        office.getAttribute('data-office-active-camera-preset') === 'agent' &&
+        lod.fullRobots + lod.lowRobots === visibleRobots &&
+        lod.robots.some(
+          (robot) => robot.sessionId === expected && robot.lod === 'full' && robot.assetLod === 'full'
+        )
+      )
+    },
+    { timeout: 8_000 },
+    before.target.id
+  )
+  const after = await readState()
+  validateState(after, 'after selection')
+  const targetBefore = before.lod.robots.find((robot) => robot.sessionId === before.target.id)
+  const targetAfter = after.lod.robots.find((robot) => robot.sessionId === before.target.id)
+  const previousSelectionBefore = before.lod.robots.find((robot) => robot.sessionId === before.selected)
+  const previousSelectionAfter = after.lod.robots.find((robot) => robot.sessionId === before.selected)
+  const robotRootsChanged =
+    JSON.stringify(before.lod.fullRobotRootIds) !== JSON.stringify(after.lod.fullRobotRootIds) &&
+    JSON.stringify(before.lod.lowRobotRootIds) !== JSON.stringify(after.lod.lowRobotRootIds)
+  const workstationRootsChanged =
+    JSON.stringify(before.lod.fullWorkstationRootIds) !== JSON.stringify(after.lod.fullWorkstationRootIds) &&
+    JSON.stringify(before.lod.compactWorkstationRootIds) !== JSON.stringify(after.lod.compactWorkstationRootIds)
+  const targetSessionUpgraded = targetBefore?.lod === 'low' && targetAfter?.lod === 'full'
+  const previousSelectionDowngraded =
+    previousSelectionBefore?.lod === 'full' && previousSelectionAfter?.lod === 'low'
+  if (
+    after.selected !== before.target.id ||
+    !targetSessionUpgraded ||
+    !previousSelectionDowngraded ||
+    !robotRootsChanged ||
+    !workstationRootsChanged
+  ) {
+    throw new Error(
+      `low LOD workstation did not upgrade to a full rig: ${JSON.stringify({ before, after, targetSessionUpgraded, previousSelectionDowngraded, robotRootsChanged, workstationRootsChanged })}`
+    )
+  }
+  return {
+    targetSession: before.target.id,
+    projected: {
+      x: Math.round(projected.x),
+      y: Math.round(projected.y),
+      ndcX: Number(projected.ndcX.toFixed(3)),
+      ndcY: Number(projected.ndcY.toFixed(3))
+    },
+    before: { selected: before.selected, visibleRobots: before.visibleRobots, lod: before.lod },
+    after: { selected: after.selected, visibleRobots: after.visibleRobots, lod: after.lod },
+    targetSessionUpgraded,
+    previousSelectionDowngraded,
+    robotRootsChanged,
+    workstationRootsChanged
+  }
 }
 
 async function verifyOfficeControls(page) {
@@ -945,6 +1125,118 @@ function evaluateScenario(scenario, budget, label) {
   return violations
 }
 
+function evaluateLodScenario(scenario) {
+  const violations = []
+  const lod = scenario.renderer?.lod
+  if (!lod) return ['renderer did not report Office robot LOD counts']
+  for (const field of ['fullRobots', 'lowRobots']) {
+    if (!Number.isInteger(lod[field]) || lod[field] < 0) {
+      violations.push(`renderer reported invalid ${field} count ${lod[field]}`)
+    }
+  }
+  const visibleRobots = scenario.semantics.visibleRobots
+  if (lod.fullRobots + lod.lowRobots !== visibleRobots) {
+    violations.push(
+      `full + low LOD ${lod.fullRobots + lod.lowRobots} does not match ${visibleRobots} visible robots`
+    )
+  }
+  if (visibleRobots > 0 && lod.fullRobots < 1) {
+    violations.push('Office has visible robots but no full LOD rig')
+  }
+  if (visibleRobots > 1 && lod.lowRobots < 1) {
+    violations.push('multi-agent Office has no low LOD robot')
+  }
+  if (!Array.isArray(lod.robots) || lod.robots.length !== visibleRobots) {
+    violations.push(`robot asset evidence ${lod.robots?.length ?? 'missing'} does not match ${visibleRobots} visible robots`)
+  } else {
+    const sessionIds = new Set()
+    for (const robot of lod.robots) {
+      if (!robot.sessionId) violations.push(`robot ${robot.rootId} is missing its session id`)
+      if (!robot.modelUrl) violations.push(`robot ${robot.rootId} is missing its model URL`)
+      if (robot.assetLod !== robot.lod) {
+        violations.push(
+          `robot ${robot.sessionId || robot.rootId} is labeled ${robot.lod} but loaded ${robot.assetLod}`
+        )
+      }
+      sessionIds.add(robot.sessionId)
+    }
+    if (sessionIds.size !== visibleRobots) {
+      violations.push(`robot session evidence covers ${sessionIds.size}/${visibleRobots} visible robots`)
+    }
+  }
+  return violations
+}
+
+function evaluateCardCContract(value) {
+  const violations = []
+  if (value.artifacts.officeChunkBytes > cardCTargets.officeChunkBytesMaximum) {
+    violations.push(
+      `officeChunkBytes ${value.artifacts.officeChunkBytes} exceeds ${cardCTargets.officeChunkBytesMaximum}`
+    )
+  }
+  if (value.artifacts.robotGlbBytes > cardCTargets.robotGlbBytesMaximum) {
+    violations.push(`robotGlbBytes ${value.artifacts.robotGlbBytes} exceeds ${cardCTargets.robotGlbBytesMaximum}`)
+  }
+
+  const twelveAgentScenarios = value.scenarios.filter((scenario) => scenario.agents === 12)
+  const drawCallsByMode = Object.fromEntries(
+    twelveAgentScenarios.map((scenario) => [scenario.qualityMode, scenario.render.calls.median])
+  )
+  const expectedModes = value.required ? ['auto', 'high', 'balanced', 'low'] : value.config.qualityModes
+  if (value.required) {
+    for (const mode of expectedModes) {
+      if (!Object.hasOwn(drawCallsByMode, mode)) violations.push(`missing 12-agent ${mode} draw-call sample`)
+    }
+  }
+  const medianDrawCalls = Object.values(drawCallsByMode)
+  const maximumMedianDrawCalls = medianDrawCalls.length > 0 ? Math.max(...medianDrawCalls) : null
+  const drawCallReductionPercent =
+    maximumMedianDrawCalls === null
+      ? null
+      : ((cardCTargets.twelveAgentBaselineMedianDrawCalls - maximumMedianDrawCalls) /
+          cardCTargets.twelveAgentBaselineMedianDrawCalls) *
+        100
+  if (maximumMedianDrawCalls === null) {
+    violations.push('missing 12-agent median draw-call measurement')
+  } else {
+    if (maximumMedianDrawCalls > cardCTargets.twelveAgentMedianDrawCallsMaximum) {
+      violations.push(
+        `12-agent maximum median draw calls ${maximumMedianDrawCalls} exceeds ${cardCTargets.twelveAgentMedianDrawCallsMaximum}`
+      )
+    }
+    if (drawCallReductionPercent < cardCTargets.twelveAgentDrawCallReductionMinimumPercent) {
+      violations.push(
+        `12-agent draw-call reduction ${drawCallReductionPercent.toFixed(2)}% is below ${cardCTargets.twelveAgentDrawCallReductionMinimumPercent}% from baseline ${cardCTargets.twelveAgentBaselineMedianDrawCalls}`
+      )
+    }
+  }
+
+  for (const scenario of value.scenarios) {
+    for (const violation of scenario.lodViolations ?? []) {
+      violations.push(`${scenario.agents}-agent ${scenario.qualityMode}: ${violation}`)
+    }
+  }
+  if (value.required && !value.lodUpgrade) {
+    violations.push('missing low LOD workstation selection upgrade evidence')
+  }
+
+  return {
+    name: '3D Office Card C assets, LOD, and draw-call contract',
+    status: violations.length > 0 ? (value.required ? 'fail' : 'warn') : 'pass',
+    metrics: {
+      officeChunkBytes: value.artifacts.officeChunkBytes,
+      robotGlbBytes: value.artifacts.robotGlbBytes,
+      twelveAgentMedianDrawCallsByMode: drawCallsByMode,
+      twelveAgentMaximumMedianDrawCalls: maximumMedianDrawCalls,
+      twelveAgentDrawCallReductionPercent:
+        drawCallReductionPercent === null ? null : Number(drawCallReductionPercent.toFixed(2)),
+      lodUpgradeVerified: Boolean(value.lodUpgrade)
+    },
+    targets: cardCTargets,
+    violations
+  }
+}
+
 function writeReports(value) {
   const json = `${JSON.stringify(value, null, 2)}\n`
   const markdown = renderMarkdown(value)
@@ -962,7 +1254,7 @@ function renderMarkdown(value) {
   const rows = value.scenarios.map((scenario) => {
     const regression = scenario.regressionViolations.length > 0 ? scenario.regressionViolations.join('; ') : 'none'
     const target = scenario.targetViolations.length > 0 ? scenario.targetViolations.join('; ') : 'met'
-    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
+    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.lod?.fullRobots ?? 0} | ${scenario.renderer.lod?.lowRobots ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
   })
   const pause = value.renderPause
     ? `hidden ${value.renderPause.hidden.atFrame} -> ${value.renderPause.hidden.afterFrame}; unfocused ${value.renderPause.unfocused.atFrame} -> ${value.renderPause.unfocused.afterFrame}; resumed ${value.renderPause.resumedAtFrame}`
@@ -975,7 +1267,8 @@ function renderMarkdown(value) {
     ].join('; ')
     return `| ${check.status} | ${check.name} | ${detail || 'none'} |`
   })
-  return `# 3D Office Performance\n\n- Run: ${value.runId}\n- Status: ${value.status}\n- Required: ${value.required}\n- Source: ${value.source.head}${value.source.dirty ? ' (dirty)' : ' (clean)'}\n- Platform: ${value.environment.platform} ${value.environment.arch}\n- CPU: ${value.environment.cpu}\n- GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}\n- Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups\n- Office chunk: ${value.artifacts.officeChunkBytes} bytes\n- Robot GLB: ${value.artifacts.robotGlbBytes} bytes\n- Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}\n- Hidden/unfocused render pause: ${pause}\n- Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}\n\n| Agents | Requested | Effective | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Last-pass calls | Last-pass triangles | Regression violations | Target status |\n|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n${rows.join('\n')}\n\n## Checks\n\n| Status | Check | Details |\n|---|---|---|\n${checks.join('\n')}\n`
+  const cardC = value.cardCContract?.metrics
+  return `# 3D Office Performance\n\n- Run: ${value.runId}\n- Status: ${value.status}\n- Required: ${value.required}\n- Source: ${value.source.head}${value.source.dirty ? ' (dirty)' : ' (clean)'}\n- Platform: ${value.environment.platform} ${value.environment.arch}\n- CPU: ${value.environment.cpu}\n- GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}\n- Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups\n- Office chunk: ${value.artifacts.officeChunkBytes} bytes\n- Robot GLB: ${value.artifacts.robotGlbBytes} bytes\n- Card C draw calls: ${cardC?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${cardC?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.cardCTargets.twelveAgentBaselineMedianDrawCalls}\n- LOD selection upgrade: ${value.lodUpgrade ? `${value.lodUpgrade.before.lod.fullRobots}/${value.lodUpgrade.before.lod.lowRobots} full/low before; ${value.lodUpgrade.after.lod.fullRobots}/${value.lodUpgrade.after.lod.lowRobots} after` : 'not measured'}\n- Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}\n- Hidden/unfocused render pause: ${pause}\n- Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}\n\n| Agents | Requested | Effective | Full LOD | Low LOD | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |\n|---:|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n${rows.join('\n')}\n\n## Checks\n\n| Status | Check | Details |\n|---|---|---|\n${checks.join('\n')}\n`
 }
 
 function sourceState() {
