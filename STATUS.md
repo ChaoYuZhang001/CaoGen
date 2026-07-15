@@ -12,8 +12,8 @@
 
 # Current Status
 
-- **[v0.1.6 macOS x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)**(2026-07-14)——发布 5 个 DMG、zip、blockmap 和更新元数据资产;macOS Intel 主二进制为 `x86_64`;包内运行时和真实 renderer 启动均纳入发布门禁;仍未签名/公证
-- v0.1.5 Windows x64 安装包继续保留;v0.1.6 不发布 Windows、macOS arm64 或 Linux 资产。
+- **[v0.1.6 macOS x64 / Windows x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)**(2026-07-15)——发布 8 个 DMG、zip、EXE、blockmap 和更新元数据资产;macOS Intel 与 Windows x64 包均已通过版本、运行时依赖和公开资产审计;仍未签名/公证
+- v0.1.6 Windows x64 安装包为 `CaoGen.Setup.0.1.6.exe`;macOS arm64 与 Linux 资产仍未发布。
 - v0.1.5 新增整页设置与 Provider 编辑、项目级会话收纳、未关联项目会话收纳、三种显式调度范围，以及调研/策划/开发/测试/文档的默认与自定义模型调度。
 - 正式运行时保留可选 Claude Agent SDK 与默认 OpenAI-compatible API 两类执行路径。最新完整四态门禁目标与当前基线为 `87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail`；v0.1.5 发布报告为 `test-results/caogen-deep/2026-07-14T02-13-06-342Z/deep-test-report.md`，滚动入口为 `test-results/caogen-deep/latest.md`。3 个 optional skip 分别保留真实 Claude、China real-network、China tool-call parity 的外部条件，不计入 pass，也不阻塞默认发布档位。
 - Agent 恢复内核已升级为稳定事件身份 + 恢复游标 + 持久 Effect Ledger:每个外部效果包含独立 intent/effect/resource key、generation/revision、资源级 lease/fencing、状态与 evidence digest;SQLite barrier 会跨会话阻止同路径或同 device+inode 的并发执行,字段级合并避免普通事件覆盖 Effect 终态。`write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已支持只读自动对账;`search_replace dry_run=true` 保持只读且不建立 Effect,Claude `MultiEdit/NotebookEdit` 仍按 opaque fail-closed。文件编辑会冻结原始字节摘要、UTF-8 BOM、root/file 身份和预期内容;本地 writer 使用 identity/hash CAS,absent 写入还绑定审批时 root/parent 身份并原子发布,硬链接别名共享资源互斥。`git_merge` 会冻结 repo/ref/source SHA 与目录身份,在隔离 ODB 预检,并在 trusted ref transaction 中原子校验 old SHA、两父节点和 expected tree。强杀证据证明的是 Effect 执行边界可恢复,不是 writer 内部 crash-atomic:existing-file writer 仍原地 `truncate/write`,进程在写入中被杀、断电或遇到 ENOSPC 时仍可能留下空文件或半文件。这仍不是任意外部系统的事务级 exactly-once:PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 入口尚未全部接入专用 Reconciler,补偿执行与 append-only evidence 也未完成。
@@ -23,8 +23,8 @@
 - Work OS 第一波已进入 main:A1 Drive、A2 Quickbar、A3 Desktop Control、A4 Code Forge、A5 Skill Fabric、A6 Memory Loop、A7 Control Center、A8 Personal OS、A9 Genesis(计划层)。Genesis 只宣称编排/交付计划,不宣称真实外部子 Agent 执行、自动合并、推送或发布。
 - P2 本地 smoke 已刷新全绿;P2-005 IDE integrations 已由 `test:p2-ide-build-and-vscode:required`、`test:jetbrains-recorder-e2e:required`、`test:jetbrains-ide-interaction:required` 证明。最新 `npm run test:p2-audit` 报告中 P2-002/P2-003/P2-005 为 proved;`npm run test:p2-audit -- --required` 仍会失败,但失败范围只剩非本轮公开宣称的 P2-001 Windows GUI required evidence 与 P2-004 China external evidence。最新 release doctor 已把 `p2_required` 标记 ready,非阻塞开放项仍保留为 delegated/user-configured。提交/发布新增 `npm run secret:scan` / `npm run secret:scan:history` / `npm run test:github-release-audit` 门禁,用于阻止密钥、证书、签名材料、生成物和本地证据包进入公开仓库或公开 Release。
 - GitHub Releases 公开资产审计继续要求名称、大小、状态、SHA256 与 `latest*.yml` 文本全部可读;若发布后的远端 read-text 审计超时或失败,只保留本地校验结论,不得宣称公开文本资产已完成扫描。
-- v0.1.6 最终发布说明保存在 `docs/RELEASE-NOTES-FINAL.md`,列出精确 5 资产及 SHA256,并作为 GitHub Release 正文。
-- Packaging gate 的 v0.1.6 macOS x64 DMG/zip、两个 blockmap 与 `latest-mac.yml` 资产集 SHA256 为 `5ba568959b4973c7fa07a138ff80d1767be8945a9a76d155487b1d6556dc677b`。macOS 包仍未签名,Release notes 保留首次打开说明。
+- v0.1.6 最终发布说明保存在 `docs/RELEASE-NOTES-FINAL.md`,列出精确 8 资产及 SHA256,并作为 GitHub Release 正文。
+- Packaging gate 的 v0.1.6 macOS x64 资产集 SHA256 为 `5ba568959b4973c7fa07a138ff80d1767be8945a9a76d155487b1d6556dc677b`;Windows EXE、blockmap 与 `latest.yml` 的 SHA256 分别为 `63206b6186fcefecbeb83f283cabb27cf35c8810526ef5a9aa3dc86179eb74ee`、`074a8752b349713100164d298071df1eb7c5b4dee0fbd10af888a9da56a6eda0`、`6aa20fc19ff779b72077747a2ea42121e3fb2236def3efc33cd2e09b0d8ece43`。macOS 与 Windows 包均未签名,Release notes 保留首次打开说明。
 - v0.1.6 打包启动回归发现并修复 `tree-sitter` 运行时缺少 `node-gyp-build` 的主进程崩溃:`node-gyp-build` 已提升为应用直接依赖,`release-packaging-audit` 会解析 `app.asar` 并阻止缺失运行时文件的包通过,`test:packaged-app:mac` 会从全新用户目录启动成品并要求出现真实 `CaoGen` renderer。修复后的 macOS x64 `.app` 已通过该启动测试;仍未签名/公证。
 - 项目级规则口径更新:`caogen.md/.caogen.md/README.md` 会向 Claude/OpenAI 两类正式引擎注入项目身份与规则;未配置规则的新项目也会注入项目身份和缺失规则提示;设置页项目规则已提供结构化编辑器,可同步编辑项目提示词、背景、技术栈、常用命令、测试/构建命令、禁止目录、隔离策略、模型调度策略、项目记忆与历史决策;`caogen.md` 的模型调度策略会进入智能路由理由。由 `node scripts/context-loader-smoke.mjs`、`npm run test:project-rules-ui`、`node scripts/model-router-smoke.mjs` 覆盖;其中 context/model-router smoke 已验证不同项目的 prompt 与模型调度策略互不串用,同一请求会按各自项目规则路由到不同 Provider/模型;Electron 页面流 `npm run test:page` 也已验证当前项目规则可在设置页编辑并保存到项目 `caogen.md`,且不修改全局 `settings.json`(17/17,`test-results/caogen-deep/2026-07-10T12-48-21-376Z/page-operation-smoke.json`)。
 - 多厂商配置口径更新:Provider 已支持多 API Key、活动 key 选择、行内连通性检测、模型列表同步和持久化健康状态;系统 `safeStorage` 可用时密钥加密落盘,但不可用时仍存在 `b64:` 可逆编码 fallback,这是未完成的 P0 安全问题,不能宣称所有环境均为加密持久化。会话启动、模型拉取、OpenAI/SDK Agent/DAG 路径统一经主进程活动 key helper 取密钥。活动 key 遇到鉴权、403、限流或余额/配额错误时,会先切到同 Provider 内未禁用、未处于 5 分钟失败冷却且本轮未尝试的备用 key;OpenAI 请求直接重试,SDK Agent 重建子进程并 resume 当前上下文;备用 key 池耗尽后才进入原有跨 Provider failover。聊天与 3D 办公只显示用户自定义 key 标签和失败分类,不暴露 token。`npm run test:provider-key-failover` 验证轮换策略、冷却、防打转和 Renderer 边界;`node scripts/openai-mock-e2e.mjs` 已用真实 Electron UI 验证“主 key 401 → 备用 key 成功 → 活动 key/失败元数据持久化”(`test-results/openai-mock-e2e/2026-07-10T07-27-01-023Z/openai-mock-e2e.json`)。当前不宣称主动额度探测、按 key 权重负载均衡或所有外部协议变体已验证。
@@ -59,7 +59,7 @@
 
 **P0**
 - 用户反馈快修循环(常设)
-- v0.1.6 稳定发布:修正版本/授权身份和 v0.1.5 Windows 资产事实,完成会话/项目/3D/开工建议专项 Electron 回归,从精确干净提交构建并审计 macOS x64 安装包
+- v0.1.6 稳定发布:修正版本/授权身份,完成会话/项目/3D/开工建议专项 Electron 回归,构建并审计 macOS x64 与 Windows x64 安装包
 - ~~arm64 / universal 打包~~ ✅ 已发布至 v0.1.1
 - P0-1B:~~接入 `search_replace`、OpenAI `edit_file` 与 Claude `Edit` 的 queryable file Effect~~ ✅;继续接入 PR/Issue/消息/可查询 MCP、Code Forge 与直接 Renderer Git/patch 入口
 - P0-1C:建立独立 append-only evidence 链、审计关联与生产补偿计划/审批/执行
@@ -132,7 +132,7 @@
 
 - 云端 Routines / 云端 Runner(本地定时任务已有)
 - App Store 上架(走 GitHub Releases 分发)
-- Windows x64 已在 v0.1.5 发布,但可见桌面最终截图受锁屏条件限制;后续 Windows 版本仍需真实 Windows 回归后再发布。Linux 打包配置存在但未完成发布验证,不承诺
+- Windows x64 已在 v0.1.6 发布;类型检查、Windows 控制器、Electron 页面、PTY/tree-sitter 原生模块、`app.asar` 依赖与真实窗口创建均通过,可见桌面最终交互仍受锁屏条件限制。Linux 打包配置存在但未完成发布验证,不承诺
 - 移动端、自研/微调模型
 - 插件市场(安装/治理做,"市场"不做)
 - 写实游戏级 3D 自由漫游

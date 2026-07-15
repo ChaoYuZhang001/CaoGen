@@ -4,7 +4,7 @@
 
 ## Release Decision
 
-v0.1.6 is the selected macOS x64 stability release. It is the first CaoGen release under `AGPL-3.0-only`, with a separate written commercial-license path for proprietary integration or distribution. The tag must point to the exact release commit, and only the five listed installer and update metadata assets may be uploaded.
+v0.1.6 is the selected macOS x64 and Windows x64 stability release. It is the first CaoGen release under `AGPL-3.0-only`, with a separate written commercial-license path for proprietary integration or distribution. The tag points to the verified release commit, and only the eight listed installers, archives, blockmaps, and update metadata assets are uploaded.
 
 ## Highlights
 
@@ -23,6 +23,9 @@ v0.1.6 is the selected macOS x64 stability release. It is the first CaoGen relea
 - `CaoGen-0.1.6-mac.zip`
 - `CaoGen-0.1.6-mac.zip.blockmap`
 - `latest-mac.yml`
+- `CaoGen.Setup.0.1.6.exe`
+- `CaoGen.Setup.0.1.6.exe.blockmap`
+- `latest.yml`
 
 The `latest*.yml` metadata and every installer archive are release assets only. Local build output and evidence directories are not uploaded.
 
@@ -35,6 +38,9 @@ The `latest*.yml` metadata and every installer archive are release assets only. 
 | `CaoGen-0.1.6-mac.zip` | `4ac838081f17ae2a645909171a7370bc348840894156f20d8ee76ba8c1a19b75` |
 | `CaoGen-0.1.6-mac.zip.blockmap` | `96acd326104e568d51f208c6458db8b22f4b2bae0b81e144340801fc50f0a6e6` |
 | `latest-mac.yml` | `419a2f6266cee414b44c0a608c6f3b9cd0469c47f293c2d6317782c4697aa4de` |
+| `CaoGen.Setup.0.1.6.exe` | `63206b6186fcefecbeb83f283cabb27cf35c8810526ef5a9aa3dc86179eb74ee` |
+| `CaoGen.Setup.0.1.6.exe.blockmap` | `074a8752b349713100164d298071df1eb7c5b4dee0fbd10af888a9da56a6eda0` |
+| `latest.yml` | `6aa20fc19ff779b72077747a2ea42121e3fb2236def3efc33cd2e09b0d8ece43` |
 
 ## Truth Boundary
 
@@ -43,14 +49,15 @@ The `latest*.yml` metadata and every installer archive are release assets only. 
 - Provider and CLI capabilities depend on real keys, provider authentication, and locally configured tools when those integrations are selected.
 - Multiple encrypted keys and error-driven same-provider failover are locally verified. Proactive quota probing and weighted key load balancing are not claimed.
 - macOS document viewing provides a sandboxed system preview with extracted-structure fallback. Pixel-identical editing, complex formula execution, and presentation animation are not claimed.
-- This release contains macOS x64 assets only. macOS arm64, a v0.1.6 Windows build, Linux, user-configured external-network parity, and the private 30-minute migration drill are not claimed.
+- macOS arm64, Linux, user-configured external-network parity, and the private 30-minute migration drill are not claimed.
 - AGPL-compliant commercial use does not require a separate license. Proprietary integration or distribution rights require a signed written commercial agreement.
 - Releases through v0.1.5 retain their historical MIT terms.
 
 ## Known Blockers
 
 - The macOS packages are unsigned and not notarized.
-- There is no macOS arm64, Windows, or Linux installer in v0.1.6.
+- The Windows installer and application are not Authenticode signed, so Microsoft Defender SmartScreen may display an unknown-publisher warning.
+- A visible Windows in-app interaction was not completed because the desktop was locked during final launch verification; automated Windows controller/page tests and real window creation passed.
 - External provider connectivity still depends on the user's network, credentials, provider account, and local tool configuration.
 
 ## Security Statement
@@ -59,15 +66,17 @@ The repository and public release assets do not include real keys, webhooks, cer
 
 If any real credential is ever pushed, shared, or uploaded, deleting the public copy is not sufficient; the credential must also be rotated or revoked at its provider.
 
-## macOS First Open
+## First Open
 
-These builds are unsigned. On first launch, right-click CaoGen in Finder, choose **Open**, then confirm **Open**. The release is not notarized and is not distributed through the Mac App Store.
+- macOS: these builds are unsigned. Right-click CaoGen in Finder, choose **Open**, then confirm **Open**.
+- Windows: the installer is unsigned. Verify the SHA256 above before running it; SmartScreen may report an unknown publisher.
 
 ## Verification
 
 - TypeScript typecheck and production build.
 - Full required deep-test suite: 84 required passes, 3 optional skips, 0 blocked, and 0 failures.
-- P2 release scope: model/skill orchestration and both supported IDE integration gates proved; Windows GUI and user-configured external-network tracks remain outside this release claim.
+- Windows controller smoke, packaged-terminal smoke, Electron page-operation smoke, native PTY/tree-sitter execution, `app.asar` dependency checks, and real window creation passed.
 - macOS x64 packaging audit verified DMG/ZIP integrity, x86_64 architecture, package version, license files, and the required `tree-sitter` / `node-gyp-build` files inside `app.asar`.
+- Windows x64 packaging verified EXE version metadata, update metadata, required runtime files, Authenticode status, file sizes, SHA256, and public asset digests.
 - Packaged-app startup smoke created the real `CaoGen` renderer from the packaged `app.asar` without a main-process module-loading error.
 - SHA256 generation, release-note audit, product-positioning audit, public asset audit, and secret-history scan.

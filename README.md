@@ -149,7 +149,7 @@
 |---|---|---|---|
 | macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 历史版本 | v0.1.6 不发布 arm64 包 |
 | macOS Intel | `CaoGen-0.1.6.dmg` / `CaoGen-0.1.6-mac.zip` | [v0.1.6 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) | 修复打包启动时缺少 `node-gyp-build` 的崩溃 |
-| Windows x64 | `CaoGen.Setup.0.1.5.exe` | [v0.1.5 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) | 未签名，首次运行可能触发 SmartScreen |
+| Windows x64 | `CaoGen.Setup.0.1.6.exe` | [v0.1.6 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) | 未签名，首次运行可能触发 SmartScreen |
 | Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
 
 > **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
@@ -167,8 +167,8 @@
 | `CaoGen-0.1.6.dmg` | `7b193469e2c3b87546c797436652c8d73121f2bcdd7357850fa5521d605ef1f9` |
 | `CaoGen-0.1.6-mac.zip` | `4ac838081f17ae2a645909171a7370bc348840894156f20d8ee76ba8c1a19b75` |
 | `latest-mac.yml` | `419a2f6266cee414b44c0a608c6f3b9cd0469c47f293c2d6317782c4697aa4de` |
-| `CaoGen.Setup.0.1.5.exe` | `0787db30200018355e848f83f035c6ff87f115a2db3aef8f07b20be049e2b43a` |
-| `latest.yml` | `5073a2921e43fd45532817208771a879ce23cc06bb9429951a77e6fcc7eb0817` |
+| `CaoGen.Setup.0.1.6.exe` | `63206b6186fcefecbeb83f283cabb27cf35c8810526ef5a9aa3dc86179eb74ee` |
+| `latest.yml` | `6aa20fc19ff779b72077747a2ea42121e3fb2236def3efc33cd2e09b0d8ece43` |
 
 ## 常见问题
 
@@ -252,7 +252,7 @@ src/
 ## 项目状态
 
 - 当前公开版本：[**v0.1.6**](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)。
-- v0.1.6 发布 macOS x64 安装包；Windows x64 继续使用 v0.1.5，macOS arm64 与 Linux 不在本轮发布范围。
+- v0.1.6 已发布 macOS x64 与 Windows x64 安装包；macOS arm64 与 Linux 不在本轮发布范围。
 - v0.1.6 包含未关联项目会话、项目归档/恢复/删除、3D 办公新建会话、手动开工建议，以及打包运行时完整性与真实启动回归门禁。
 - 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
 - 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
