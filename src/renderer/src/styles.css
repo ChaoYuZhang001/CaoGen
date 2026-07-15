@@ -3649,6 +3649,15 @@ textarea {
   background: var(--bg-raised);
 }
 
+.settings-save-error {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--red);
+  font-size: 12.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .provider-editor {
   width: 100%;
   min-width: 0;
@@ -3714,6 +3723,39 @@ textarea {
   width: 15px;
   height: 15px;
   accent-color: var(--accent);
+}
+
+.office-quality-control {
+  margin: 12px 0 14px;
+}
+
+.office-quality-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.office-quality-option {
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.office-quality-option:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.office-quality-option.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
 }
 
 .plugins-paths {

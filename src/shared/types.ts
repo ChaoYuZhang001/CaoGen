@@ -1084,7 +1084,11 @@ export interface StartSuggestion {
   prompt: string
 }
 
+export type OfficeQualityMode = 'auto' | 'high' | 'balanced' | 'low'
+
 export interface OfficeSettings {
+  /** 3D 控制室画质;auto 仅持久化请求档位,实际档位由运行时测量决定。 */
+  qualityMode: OfficeQualityMode
   /** 显示桌上厂商工牌 */
   showBadges: boolean
   /** 控制室动效强度倍率(0.2 静态 ~ 1.2 活跃) */

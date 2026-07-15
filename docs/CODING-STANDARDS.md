@@ -118,6 +118,7 @@ When relevant, also run:
 
 ```text
 npm run test:office-status-recheck
+npm run test:office-quality-policy
 npm run test:office-performance
 npm run test:office-performance:required
 ```
@@ -125,6 +126,11 @@ npm run test:office-performance:required
 The performance report records both optimization targets and calibrated
 regression budgets. Target misses stay visible as warnings; the required gate
 blocks only when the current scene regresses beyond the recorded envelope.
+
+- Persist only the requested Office quality mode. Auto's effective tier is runtime evidence, not user intent, and must not be written back to settings.
+- Keep the Canvas and camera mounted while the Office view is active. Hidden or unfocused windows must stop the render loop; quality changes must not reset session, hit-target, or camera state.
+- High, Balanced, and Low must map to measurable renderer differences such as DPR, realtime shadows, and contact-shadow passes. Do not claim savings from a post-processing stack that the live Office view does not mount.
+- The performance matrix covers Auto at 1/6/12 agents plus fixed High/Balanced/Low at the largest scenario. Low must reduce renderer load while preserving session count, robot ownership, click targets, and camera presets.
 
 3D smoke should verify:
 

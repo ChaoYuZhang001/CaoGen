@@ -115,7 +115,9 @@ export default function WorkbenchRoot(): React.JSX.Element {
   }, [layout.workbenchSideWidth])
 
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
-    void updateSettings({ layout: { ...layout, ...patch } })
+    void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
+      console.error('[agent-desk] Failed to persist workbench layout:', error)
+    })
   }
 
   const startSideResize = (event: React.PointerEvent<HTMLDivElement>): void => {

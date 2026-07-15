@@ -1020,7 +1020,7 @@ export const useStore = create<AppStore>((set, get) => {
     hookPostEditCommand: '',
     hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
-    office: { showBadges: true, liveliness: 0.6, catEars: false },
+    office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
     layout: {
       sidebarCollapsed: false,
       sidebarWidth: 264,

@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ContactShadows } from '@react-three/drei'
 import { useStore } from '../../store'
@@ -13,11 +13,13 @@ import FacilityHotspots, {
 import type { OfficeFacilityKey } from './kit/FacilityHotspots'
 import OfficeScene from './kit/OfficeScene'
 import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
+import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQuality'
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
 import { buildOfficeModel } from './model'
 import type { OfficeSessionActivity } from './model'
+import type { OfficeContactShadowMode } from './quality'
 import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
 
 /**
@@ -60,9 +62,35 @@ const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.5, 9.55]
 const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.82, -1.18]
 const OFFICE_CAMERA_FOV = 44
 const WALKER_VISUAL_SCALE = 1.18
-const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
+const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
+const OFFICE_CONTACT_SHADOW_POSITION: [number, number, number] = [0, 0.02, 0]
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
 const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
+
+const OfficeContactShadows = memo(function OfficeContactShadows({
+  lightMode,
+  mode,
+  frames,
+  resolution
+}: {
+  lightMode: boolean
+  mode: OfficeContactShadowMode
+  frames: number
+  resolution: number
+}): React.JSX.Element {
+  return (
+    <ContactShadows
+      position={OFFICE_CONTACT_SHADOW_POSITION}
+      opacity={lightMode ? 0.24 : 0.34}
+      scale={40}
+      blur={1.4}
+      far={3.5}
+      frames={frames}
+      resolution={resolution}
+      smooth={mode === 'dynamic'}
+    />
+  )
+})
 
 function walkerLocalPoint(point: [number, number, number]): [number, number, number] {
   return [
@@ -143,9 +171,11 @@ export default function OfficeView(): React.JSX.Element {
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('overview')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(null)
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
+  const renderQuality = useOfficeRenderQuality(office.qualityMode)
+  const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr)
+    ? renderQuality.profile.dpr[1]
+    : renderQuality.profile.dpr
 
-  // 省电:窗口失焦/页面隐藏(最小化、切他窗、熄屏)时暂停 3D 渲染循环
-  // (切回列表视图时 OfficeView 整体卸载,无需在此处理)
   // 办公区场景色随主题切换
   const isLight =
     themePref === 'light' ||
@@ -608,6 +638,21 @@ export default function OfficeView(): React.JSX.Element {
           data-office-workstation-branches={Math.max(4, ids.length)}
           data-office-subject-framing={1}
           data-office-3d-optimization-complete={officeOptimizationComplete ? 1 : 0}
+          data-office-quality-requested={office.qualityMode}
+          data-office-quality-effective={renderQuality.resolvedTier}
+          data-office-quality-dpr-maximum={qualityDprMaximum}
+          data-office-quality-shadows={renderQuality.profile.shadows ? 1 : 0}
+          data-office-quality-contact-shadows={renderQuality.profile.contactShadows}
+          data-office-quality-contact-shadow-frames={
+            Number.isFinite(renderQuality.profile.contactShadowFrames)
+              ? renderQuality.profile.contactShadowFrames
+              : -1
+          }
+          data-office-quality-contact-shadow-resolution={renderQuality.profile.contactShadowResolution}
+          data-office-quality-auto-transitions={renderQuality.autoTransitions}
+          data-office-render-active={renderQuality.renderActive ? 1 : 0}
+          data-office-render-paused={renderQuality.renderActive ? 0 : 1}
+          data-office-frame-loop={renderQuality.renderActive ? 'manual' : 'paused'}
         >
           <div className="office-command-strip no-drag">
             <div className="office-metric">
@@ -761,10 +806,10 @@ export default function OfficeView(): React.JSX.Element {
             </div>
           )}
           <Canvas
-            shadows
+            shadows={renderQuality.profile.shadows}
             camera={{ position: OFFICE_CAMERA_POSITION, fov: OFFICE_CAMERA_FOV, near: 0.1, far: 100 }}
-            dpr={[1, 1.5]}
-            frameloop="always"
+            dpr={renderQuality.profile.dpr}
+            frameloop="never"
             resize={{ offsetSize: true }}
             onCreated={({ camera }) => {
               camera.lookAt(...OFFICE_CAMERA_TARGET)
@@ -773,16 +818,24 @@ export default function OfficeView(): React.JSX.Element {
           >
           <color attach="background" args={[scene.bg]} />
           <OfficePerformanceProbe />
+          <OfficeFrameDriver active={renderQuality.renderActive} onFrame={renderQuality.recordFrame} />
           <fog attach="fog" args={[scene.bg, 18, 42]} />
           <ambientLight intensity={isLight ? 0.98 : 1.05} />
           <directionalLight
             position={[5.5, 10, 7.5]}
             intensity={isLight ? 1.45 : 1.72}
             color={isLight ? '#ffffff' : '#fff7ed'}
-            castShadow
-            shadow-mapSize={[1024, 1024]}
+            castShadow={renderQuality.profile.shadows}
+            shadow-mapSize={[
+              Math.max(256, renderQuality.profile.shadowMapSize),
+              Math.max(256, renderQuality.profile.shadowMapSize)
+            ]}
           />
-          <directionalLight position={[-6, 5.5, 7]} intensity={isLight ? 0.5 : 0.92} color="#d9ecff" />
+          <directionalLight
+            position={[-6, 5.5, 7]}
+            intensity={isLight ? 0.5 : renderQuality.profile.shadows ? 0.92 : 1.05}
+            color={!isLight && !renderQuality.profile.shadows ? '#c9e5ff' : '#d9ecff'}
+          />
           {/* 顶部聚光,强化中心舞台感 */}
           <spotLight position={[0, 9, 6]} angle={0.78} penumbra={0.82} intensity={isLight ? 0.58 : 1.28} />
           {/* 中央暖色补光,提亮工位区,驱散 night 家具阴影 */}
@@ -797,14 +850,6 @@ export default function OfficeView(): React.JSX.Element {
           <Suspense fallback={null}>
             <OfficeScene lightMode={isLight} />
           </Suspense>
-          <ContactShadows
-            position={[0, 0.02, 0]}
-            opacity={isLight ? 0.24 : 0.34}
-            scale={40}
-            blur={1.4}
-            far={3.5}
-          />
-
           <Suspense fallback={null}>
             {ids.map((id, i) => (
               <WorkstationPro
@@ -847,6 +892,15 @@ export default function OfficeView(): React.JSX.Element {
               activeKey={selectedFacility}
               onSelect={selectFacility}
             />
+            {renderQuality.profile.contactShadows !== 'off' && (
+              <OfficeContactShadows
+                key={`${renderQuality.resolvedTier}-${ids.length}`}
+                lightMode={isLight}
+                mode={renderQuality.profile.contactShadows}
+                frames={renderQuality.profile.contactShadowFrames}
+                resolution={renderQuality.profile.contactShadowResolution}
+              />
+            )}
           </Suspense>
 
           <CameraRig

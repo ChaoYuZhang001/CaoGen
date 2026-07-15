@@ -26,6 +26,16 @@ export interface ModelOption {
 
 export type TranslateFn = (key: string, params?: TParams) => string
 
+function runSettingsUpdate(update: () => void | Promise<void>): void {
+  try {
+    void Promise.resolve(update()).catch((error) => {
+      console.error('[agent-desk] Failed to persist command settings:', error)
+    })
+  } catch (error) {
+    console.error('[agent-desk] Failed to persist command settings:', error)
+  }
+}
+
 export interface ComposerCommandContext {
   t: TranslateFn
   modelOptions: ModelOption[]
@@ -122,9 +132,11 @@ export function buildComposerSlashCommands(ctx: ComposerCommandContext): Command
       title: '/theme',
       hint: ctx.t('slashThemeHint'),
       run: () =>
-        void ctx.updateSettings({
-          theme: ctx.theme === 'dark' ? 'light' : ctx.theme === 'light' ? 'system' : 'dark'
-        })
+        runSettingsUpdate(() =>
+          ctx.updateSettings({
+            theme: ctx.theme === 'dark' ? 'light' : ctx.theme === 'light' ? 'system' : 'dark'
+          })
+        )
     },
     {
       id: 'model-auto',

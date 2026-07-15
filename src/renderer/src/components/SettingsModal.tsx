@@ -11,6 +11,7 @@ import type {
   MigrationScan,
   ModelRoutingRule,
   ModelRoutingTaskKind,
+  OfficeQualityMode,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
@@ -24,7 +25,13 @@ import ControlCenter from './ControlCenter'
 import ProjectSettings from '../pages/ProjectSettings'
 
 type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
-const DEFAULT_OFFICE_SETTINGS = { showBadges: true, liveliness: 0.6, catEars: false }
+const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
+const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
+  { value: 'auto', labelKey: 'officeQualityAuto' },
+  { value: 'high', labelKey: 'officeQualityHigh' },
+  { value: 'balanced', labelKey: 'officeQualityBalanced' },
+  { value: 'low', labelKey: 'officeQualityLow' }
+]
 const ROUTING_RULE_TASK_OPTIONS: Array<{ value: ModelRoutingTaskKind; labelKey: string }> = [
   { value: 'research', labelKey: 'routingTaskResearch' },
   { value: 'planning', labelKey: 'routingTaskPlanning' },
@@ -111,6 +118,8 @@ export default function SettingsPage(): React.JSX.Element {
   const [controlLoading, setControlLoading] = useState(false)
   const [controlMcpProbing, setControlMcpProbing] = useState(false)
   const [controlError, setControlError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   // 迁移向导状态
   const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const activeId = useStore((s) => s.activeId)
@@ -241,8 +250,16 @@ export default function SettingsPage(): React.JSX.Element {
     health.find((h) => h.providerId === (pid || 'local-login'))
 
   const save = async (): Promise<void> => {
-    await updateSettings(draft)
-    setShowSettings(false)
+    setSaving(true)
+    setSaveError('')
+    try {
+      await updateSettings(draft)
+      setShowSettings(false)
+    } catch {
+      setSaveError(t('settingsSaveFailed'))
+    } finally {
+      setSaving(false)
+    }
   }
 
   const refreshControlCenter = async (): Promise<void> => {
@@ -429,7 +446,8 @@ export default function SettingsPage(): React.JSX.Element {
                   onChange={(e) => {
                     const v = e.target.value as AppTheme
                     set('theme', v)
-                    void updateSettings({ theme: v }) // 立即应用 + 持久化(即时预览)
+                    setSaveError('')
+                    void updateSettings({ theme: v }).catch(() => setSaveError(t('settingsSaveFailed')))
                   }}
                 >
                   <option value="light">{t('themeLight')}</option>
@@ -1206,6 +1224,23 @@ export default function SettingsPage(): React.JSX.Element {
                   <div className="settings-section-head">
                     <h3 className="settings-h3">{t('officeTitle')}</h3>
                   </div>
+                  <div className="office-quality-control">
+                    <div className="field-label">{t('officeQualityMode')}</div>
+                    <div className="office-quality-options" role="group" aria-label={t('officeQualityMode')}>
+                      {OFFICE_QUALITY_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`office-quality-option ${draftOffice.qualityMode === option.value ? 'active' : ''}`}
+                          aria-pressed={draftOffice.qualityMode === option.value}
+                          data-office-quality-option={option.value}
+                          onClick={() => setOffice({ qualityMode: option.value })}
+                        >
+                          {t(option.labelKey)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <label className="settings-check">
                     <input
                       type="checkbox"
@@ -1405,11 +1440,16 @@ export default function SettingsPage(): React.JSX.Element {
       </div>
 
         {!editing && <footer className="settings-page-actions">
-          <button className="btn btn-ghost" onClick={() => setShowSettings(false)}>
+          {saveError && (
+            <div className="settings-save-error" role="alert" data-settings-save-error>
+              {saveError}
+            </div>
+          )}
+          <button className="btn btn-ghost" disabled={saving} onClick={() => setShowSettings(false)}>
             {t('cancel')}
           </button>
-          <button className="btn btn-primary" onClick={() => void save()}>
-            {t('save')}
+          <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
+            {saving ? t('saving') : t('save')}
           </button>
         </footer>}
     </section>
