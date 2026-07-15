@@ -955,9 +955,104 @@ check('3D office performance diagnostics are opt-in and frame-loop free', () => 
   assert(!probe.includes('useFrame'), 'Office performance probe must not add a permanent frame loop')
   assert(
     packageJson.includes('test:office-performance') &&
-      packageJson.includes('test:office-performance:required'),
+      packageJson.includes('test:office-performance:required') &&
+      packageJson.includes('test:office-quality-policy') &&
+      packageJson.includes('npm run test:office-quality-policy && npm run build && node scripts/office-performance-smoke.mjs --required'),
     'package scripts must expose report and required Office performance gates'
   )
+})
+
+check('3D office quality modes persist, adapt, and pause without changing scene semantics', () => {
+  const types = source('src/shared/types.ts')
+  const settings = source('src/main/settings.ts')
+  const store = source('src/renderer/src/store.ts')
+  const settingsUi = source('src/renderer/src/components/SettingsModal.tsx')
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  const quality = source('src/renderer/src/components/office/quality.ts')
+  const runtime = source('src/renderer/src/components/office/kit/OfficeRenderQuality.tsx')
+  const probe = source('src/renderer/src/components/office/kit/OfficePerformanceProbe.tsx')
+
+  assert(
+    types.includes("export type OfficeQualityMode = 'auto' | 'high' | 'balanced' | 'low'") &&
+      types.includes('qualityMode: OfficeQualityMode'),
+    'OfficeSettings must expose the four persisted quality modes'
+  )
+  assert(
+    settings.includes("office: { qualityMode: 'auto'") &&
+      settings.includes('normalizeOfficeQualityMode') &&
+      settings.includes('office: normalizeOffice(raw.office, DEFAULTS.office)') &&
+      settings.includes('office: normalizeOffice(patch.office, prev.office)'),
+    'main settings must default and normalize legacy or invalid Office quality values'
+  )
+  assert(store.includes("office: { qualityMode: 'auto'"), 'renderer settings fallback must default Office quality to auto')
+  for (const mode of ['auto', 'high', 'balanced', 'low']) {
+    assert(
+      settingsUi.includes(`{ value: '${mode}', labelKey:`),
+      `settings UI must expose the ${mode} Office quality option`
+    )
+  }
+  assert(
+    quality.includes('OFFICE_QUALITY_PROFILES') &&
+      quality.includes('nextOfficeAutoQuality') &&
+      quality.includes("contactShadows: 'dynamic'") &&
+      quality.includes("contactShadows: 'static'") &&
+      quality.includes("contactShadows: 'off'"),
+    'quality profiles must adapt DPR, realtime shadows, and contact-shadow effects'
+  )
+  assert(
+    runtime.includes("document.addEventListener('visibilitychange'") &&
+      runtime.includes("window.addEventListener('blur'") &&
+      runtime.includes("window.addEventListener('focus'") &&
+      runtime.includes('AUTO_SAMPLE_FRAMES'),
+    'Office quality runtime must measure frames and track visibility/focus'
+  )
+  assert(
+    view.includes('frameloop="never"') &&
+      view.includes('<OfficeFrameDriver active={renderQuality.renderActive}') &&
+      view.includes('shadows={renderQuality.profile.shadows}') &&
+      view.includes('dpr={renderQuality.profile.dpr}') &&
+      view.includes("renderQuality.profile.contactShadows !== 'off'") &&
+      !view.includes('<PostFX'),
+    'Office Canvas must use a pause-safe manual clock and apply real quality profiles without claiming an inactive post-processing stack'
+  )
+  for (const attribute of [
+    'data-office-quality-requested',
+    'data-office-quality-effective',
+    'data-office-quality-dpr-maximum',
+    'data-office-quality-shadows',
+    'data-office-quality-contact-shadows',
+    'data-office-render-paused'
+  ]) {
+    assert(view.includes(attribute), `Office quality diagnostics missing ${attribute}`)
+  }
+  assert(
+    probe.includes('quality: {') && probe.includes("document.querySelector('.office-canvas-wrap')"),
+    'performance probe must report the effective quality profile'
+  )
+  assert(
+    view.includes('const OfficeContactShadows = memo(') &&
+      view.includes('<OfficeContactShadows') &&
+      (view.match(/<ContactShadows/g) ?? []).length === 1,
+    'static contact shadows must survive unrelated Office rerenders without resetting their frame budget'
+  )
+  assert(
+    settingsUi.includes("setSaveError(t('settingsSaveFailed'))") &&
+      settingsUi.includes('data-settings-save-error'),
+    'settings write failures must stay visible instead of becoming unhandled rejections'
+  )
+  for (const file of [
+    'src/renderer/src/components/ChatView.tsx',
+    'src/renderer/src/components/Sidebar.tsx',
+    'src/renderer/src/components/workbench/WorkbenchRoot.tsx'
+  ]) {
+    const backgroundSettingsCaller = source(file)
+    assert(
+      backgroundSettingsCaller.includes('void updateSettings(') &&
+        backgroundSettingsCaller.includes('}).catch((error) => {') &&
+        backgroundSettingsCaller.includes("console.error('[agent-desk] Failed to persist"),
+      `${file} must handle background settings persistence failures`
+    )
+  }
 })
 
 const ok = results.every((item) => item.ok)

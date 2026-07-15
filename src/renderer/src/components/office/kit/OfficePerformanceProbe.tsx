@@ -33,6 +33,18 @@ export interface OfficePerformanceSnapshot {
     renderer: string
     vendor: string
   }
+  quality: {
+    requested: string
+    effective: string
+    dprMaximum: number
+    shadows: boolean
+    contactShadows: string
+    contactShadowFrames: number
+    contactShadowResolution: number
+    autoTransitions: number
+    renderActive: boolean
+    frameLoop: string
+  }
 }
 
 export interface OfficePerformanceDiagnostics {
@@ -67,6 +79,11 @@ function renderMetrics(render: RendererInfoLike): OfficeRenderFrameMetrics {
   }
 }
 
+function numberAttribute(element: Element | null, name: string): number {
+  const value = Number(element?.getAttribute(name) ?? 0)
+  return Number.isFinite(value) ? value : 0
+}
+
 export default function OfficePerformanceProbe(): null {
   const { gl, scene } = useThree()
 
@@ -95,6 +112,7 @@ export default function OfficePerformanceProbe(): null {
         const vendor = debugInfo
           ? String(context.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL))
           : String(context.getParameter(context.VENDOR))
+        const office = document.querySelector('.office-canvas-wrap')
 
         return {
           render: renderMetrics(gl.info.render),
@@ -109,7 +127,19 @@ export default function OfficePerformanceProbe(): null {
             height: gl.domElement.height,
             pixelRatio: gl.getPixelRatio()
           },
-          webgl: { renderer, vendor }
+          webgl: { renderer, vendor },
+          quality: {
+            requested: office?.getAttribute('data-office-quality-requested') ?? '',
+            effective: office?.getAttribute('data-office-quality-effective') ?? '',
+            dprMaximum: numberAttribute(office, 'data-office-quality-dpr-maximum'),
+            shadows: numberAttribute(office, 'data-office-quality-shadows') === 1,
+            contactShadows: office?.getAttribute('data-office-quality-contact-shadows') ?? '',
+            contactShadowFrames: numberAttribute(office, 'data-office-quality-contact-shadow-frames'),
+            contactShadowResolution: numberAttribute(office, 'data-office-quality-contact-shadow-resolution'),
+            autoTransitions: numberAttribute(office, 'data-office-quality-auto-transitions'),
+            renderActive: numberAttribute(office, 'data-office-render-active') === 1,
+            frameLoop: office?.getAttribute('data-office-frame-loop') ?? ''
+          }
         }
       }
     }

@@ -154,7 +154,9 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   }, [layout.sidebarWidth])
 
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
-    void updateSettings({ layout: { ...layout, ...patch } })
+    void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
+      console.error('[agent-desk] Failed to persist sidebar layout:', error)
+    })
   }
 
   const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {

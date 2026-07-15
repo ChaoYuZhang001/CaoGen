@@ -451,7 +451,8 @@ function OneAgentWalker({
     }
 
     group.position.copy(position)
-    group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, 0.18)
+    const turnFactor = 1 - Math.pow(1 - 0.18, Math.min(delta, 0.1) * 60)
+    group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, turnFactor)
     group.visible = nextAway
 
     const secondsToStop =

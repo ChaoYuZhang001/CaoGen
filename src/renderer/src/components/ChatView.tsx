@@ -89,7 +89,9 @@ export default function ChatView(): React.JSX.Element | null {
 
   const patchLayout = useCallback(
     (patch: Partial<typeof layout>): void => {
-      void updateSettings({ layout: { ...layout, ...patch } })
+      void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
+        console.error('[agent-desk] Failed to persist chat layout:', error)
+      })
     },
     [layout, updateSettings]
   )
