@@ -14,6 +14,15 @@ const referencePath = path.join(
 const previewDir = path.join(repoRoot, 'test-results/reference-robot-blender')
 const reportPath = path.join(previewDir, 'silhouette-audit.json')
 const normalizedSize = 256
+const acceptance = {
+  kind: 'regression-baseline',
+  meanIouMinimum: 0.52,
+  meanAspectErrorMaximum: 0.045,
+  views: {
+    front: { iouMinimum: 0.56, aspectErrorMaximum: 0.035 },
+    side: { iouMinimum: 0.48, aspectErrorMaximum: 0.055 }
+  }
+}
 
 const views = [
   {
@@ -38,13 +47,17 @@ const reference = readPng(referencePath)
 const results = views.map((view) => inspectView(reference, view))
 const meanIou = average(results.map((result) => result.normalizedIou))
 const meanAspectError = average(results.map((result) => result.aspectRatioError))
+const failures = evaluateAcceptance(results, meanIou, meanAspectError, acceptance)
 const comparisonPath = path.join(previewDir, 'reference-vs-model-p1.png')
 writeVisualComparison(reference, views, results, comparisonPath)
 const report = {
   generatedAt: new Date().toISOString(),
+  status: failures.length === 0 ? 'pass' : 'fail',
   reference: path.relative(repoRoot, referencePath),
   normalizedSize,
   comparison: path.relative(repoRoot, comparisonPath),
+  acceptance,
+  failures,
   meanIou,
   meanAspectError,
   views: results
@@ -62,6 +75,47 @@ for (const result of results) {
 console.log(`mean: iou=${meanIou.toFixed(4)}, aspectError=${meanAspectError.toFixed(4)}`)
 console.log(`visual comparison: ${comparisonPath}`)
 console.log(`silhouette report: ${reportPath}`)
+if (failures.length > 0) {
+  for (const failure of failures) console.error(`silhouette regression: ${failure}`)
+  process.exitCode = 1
+} else {
+  console.log('reference robot silhouette regression baseline ok')
+}
+
+function evaluateAcceptance(results, meanIou, meanAspectError, contract) {
+  const failures = []
+  if (meanIou < contract.meanIouMinimum) {
+    failures.push(
+      `mean IoU ${meanIou.toFixed(4)} is below ${contract.meanIouMinimum.toFixed(4)}`
+    )
+  }
+  if (meanAspectError > contract.meanAspectErrorMaximum) {
+    failures.push(
+      `mean aspect error ${meanAspectError.toFixed(4)} exceeds ` +
+        contract.meanAspectErrorMaximum.toFixed(4)
+    )
+  }
+  for (const result of results) {
+    const viewContract = contract.views[result.name]
+    if (!viewContract) {
+      failures.push(`missing acceptance contract for ${result.name}`)
+      continue
+    }
+    if (result.normalizedIou < viewContract.iouMinimum) {
+      failures.push(
+        `${result.name} IoU ${result.normalizedIou.toFixed(4)} is below ` +
+          viewContract.iouMinimum.toFixed(4)
+      )
+    }
+    if (result.aspectRatioError > viewContract.aspectErrorMaximum) {
+      failures.push(
+        `${result.name} aspect error ${result.aspectRatioError.toFixed(4)} exceeds ` +
+          viewContract.aspectErrorMaximum.toFixed(4)
+      )
+    }
+  }
+  return failures
+}
 
 function inspectView(referenceImage, view) {
   const modelImage = readPng(view.modelPath)
