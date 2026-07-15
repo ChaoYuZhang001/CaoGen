@@ -12,6 +12,7 @@ import FacilityHotspots, {
 } from './kit/FacilityHotspots'
 import type { OfficeFacilityKey } from './kit/FacilityHotspots'
 import OfficeScene from './kit/OfficeScene'
+import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
@@ -771,6 +772,7 @@ export default function OfficeView(): React.JSX.Element {
             }}
           >
           <color attach="background" args={[scene.bg]} />
+          <OfficePerformanceProbe />
           <fog attach="fog" args={[scene.bg, 18, 42]} />
           <ambientLight intensity={isLight ? 0.98 : 1.05} />
           <directionalLight

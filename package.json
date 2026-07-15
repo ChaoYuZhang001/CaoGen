@@ -37,6 +37,8 @@
     "test:orchestration-settings-recheck": "node scripts/orchestration-settings-recheck.mjs",
     "test:gui-tool-status-recheck": "node scripts/gui-tool-status-recheck.mjs",
     "test:office-status-recheck": "node scripts/office-status-recheck.mjs",
+    "test:office-performance": "node scripts/office-performance-smoke.mjs",
+    "test:office-performance:required": "node scripts/office-performance-smoke.mjs --required",
     "test:reference-robot-glb": "node scripts/reference-robot-glb-smoke.mjs",
     "test:reference-robot-silhouette": "node scripts/reference-robot-silhouette-audit.mjs",
     "test:office-preview-renderer": "node scripts/office-preview-renderer-smoke.mjs",
