@@ -16,6 +16,7 @@ export type ReferenceRobotDetailLevel = 'full' | 'low'
 
 const dracoLoader = new DRACOLoader()
 dracoLoader.setDecoderPath('./draco/')
+let decoderPreloaded = false
 
 function configureReferenceRobotLoader(loader: GLTFLoader): void {
   loader.setDRACOLoader(dracoLoader)
@@ -66,8 +67,15 @@ export function hasReferenceRobotModelAsset(modelUrl = REFERENCE_ROBOT_GLB_URL):
 
 export function preloadReferenceRobotModel(modelUrl = REFERENCE_ROBOT_GLB_URL): void {
   if (hasReferenceRobotModelAsset(modelUrl)) {
+    preloadReferenceRobotDecoder()
     useLoader.preload(GLTFLoader, modelUrl, configureReferenceRobotLoader)
   }
+}
+
+export function preloadReferenceRobotDecoder(): void {
+  if (decoderPreloaded) return
+  decoderPreloaded = true
+  dracoLoader.preload()
 }
 
 export function referenceRobotModelUrl(detailLevel: ReferenceRobotDetailLevel): string {

@@ -23,6 +23,7 @@ const puppeteer = require('puppeteer-core')
 const { PNG } = require('pngjs')
 const required = process.argv.includes('--required')
 const scenarioCounts = parseScenarioCounts(readArg('--scenarios') ?? '1,6,12')
+const scenarioExecutionCounts = required ? [...scenarioCounts].sort((left, right) => right - left) : scenarioCounts
 const qualityModes = parseQualityModes(readArg('--qualities') ?? 'auto,high,balanced,low')
 const fixedQualityAgentCount = Math.max(...scenarioCounts)
 const sampleFrames = readPositiveInteger('--sample-frames', 180)
@@ -110,6 +111,20 @@ const cardCTargets = {
   twelveAgentBaselineMedianDrawCalls: 4_671,
   twelveAgentDrawCallReductionMinimumPercent: 30
 }
+const loadPhaseTargets = {
+  shellReadyMsMaximum: 100,
+  canvasReadyMsMaximum: 350,
+  basicNonblankMsMaximum: 500,
+  lowLodReadyMsMaximum: 1_200,
+  interactiveReadyMsMaximum: 500,
+  fullLodReadyMsMaximum: 4_000
+}
+const cpuIdlePolicy = {
+  maximumBusyPercent: 65,
+  sampleMs: 350,
+  consecutiveSamples: 2,
+  timeoutMs: 30_000
+}
 
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(mainEntry) || !existsSync(rendererEntry)) {
@@ -130,7 +145,14 @@ const report = {
   runDir,
   source: sourceState(),
   environment: hostEnvironment(),
-  config: { scenarioCounts, qualityModes, fixedQualityAgentCount, sampleFrames, warmupFrames },
+  config: {
+    scenarioCounts,
+    scenarioExecutionCounts,
+    qualityModes,
+    fixedQualityAgentCount,
+    sampleFrames,
+    warmupFrames
+  },
   targets,
   regressionBudgets,
   fixedQualityTargets,
@@ -138,7 +160,10 @@ const report = {
   artifactTargets,
   artifactRegressionBudgets,
   cardCTargets,
+  loadPhaseTargets,
+  cpuIdlePolicy,
   artifacts: artifactMetrics(),
+  environmentReadiness: [],
   scenarios: [],
   settingsUi: null,
   autoAdaptation: null,
@@ -219,15 +244,20 @@ try {
 
   let createdSessions = 0
   let scenarioIndex = 0
-  for (const count of scenarioCounts) {
+  for (const count of scenarioExecutionCounts) {
     const addCount = count - createdSessions
     if (addCount > 0) {
       await createIdleSessions(page, addCount, createdSessions, projectDir)
-      createdSessions = count
+    } else if (addCount < 0) {
+      await removeIdleSessions(page, -addCount)
     }
+    createdSessions = count
 
     const scenarioQualities = qualityModes.filter((mode) => mode === 'auto' || count === fixedQualityAgentCount)
     for (const qualityMode of scenarioQualities) {
+      report.environmentReadiness.push(
+        await waitForSystemIdle(`${count}-agent ${qualityMode} renderer reload`)
+      )
       await page.bringToFront()
       const persistedQuality = await page.evaluate(async (mode) => {
         const settings = await window.agentDesk.updateSettings({ office: { qualityMode: mode } })
@@ -241,27 +271,12 @@ try {
       await waitForApp(page)
       await page.bringToFront()
 
-      const openedAt = Date.now()
-      await page.click('.sidebar-office')
-      await page.waitForSelector('.office canvas', { timeout: 20_000 })
-      await page.waitForFunction(
-        ({ expectedAgents, expectedQuality }) => {
-          const office = document.querySelector('.office-canvas-wrap')
-          return (
-            Number(office?.getAttribute('data-office-sessions') ?? 0) === expectedAgents &&
-            office?.getAttribute('data-office-quality-requested') === expectedQuality
-          )
-        },
-        { timeout: 20_000 },
-        { expectedAgents: count, expectedQuality: qualityMode }
-      )
-      await page.waitForFunction(
-        () => typeof window.__caogenOfficePerformance?.snapshot === 'function',
-        { timeout: 20_000 }
-      )
-
-      const canvas = await waitForNonblankCanvas(page, 15_000)
-      const firstNonblankMs = Date.now() - openedAt
+      const reloadLoad = await openOfficeWithLoadPhases(page, {
+        expectedAgents: count,
+        expectedQuality: qualityMode,
+        kind: scenarioIndex === 0 ? 'renderer-cold-prefetched' : 'renderer-cache-warm-prefetched'
+      })
+      const { canvas, firstNonblankMs, loadPhases } = reloadLoad
       const measurement = await collectFrameMetrics(page, warmupFrames, sampleFrames)
       const controls = await verifyOfficeControls(page)
       const semantics = await readOfficeSemantics(page)
@@ -276,7 +291,9 @@ try {
         agents: count,
         qualityMode,
         effectiveQuality: measurement.renderer.quality.effective,
-        loadKind: scenarioIndex === 0 ? 'cold' : 'warm-remount',
+        loadKind: loadPhases.kind,
+        loadPhases,
+        warmRemountLoadPhases: null,
         firstNonblankMs,
         canvas,
         controls,
@@ -287,6 +304,7 @@ try {
         regressionBudget:
           qualityMode === 'auto' ? (regressionBudgets[count] ?? null) : fixedQualityRegressionBudgets[qualityMode],
         lodViolations: [],
+        loadPhaseViolations: [],
         targetViolations: [],
         regressionViolations: []
       }
@@ -297,21 +315,6 @@ try {
         scenario.regressionBudget,
         'regression budget'
       )
-      report.scenarios.push(scenario)
-      report.checks.push({
-        name: `${count}-agent ${qualityMode} office performance`,
-        status:
-          scenario.lodViolations.length > 0 || scenario.regressionViolations.length > 0
-            ? required
-              ? 'fail'
-              : 'warn'
-            : scenario.targetViolations.length > 0
-              ? 'warn'
-              : 'pass',
-        targetViolations: scenario.targetViolations,
-        regressionViolations: scenario.regressionViolations,
-        violations: scenario.lodViolations
-      })
       if (
         report.lodUpgrade === null &&
         fixedQualityAgentCount > 1 &&
@@ -327,12 +330,45 @@ try {
       }
       scenarioIndex += 1
 
-      await page.click('.office-actions .btn-primary')
-      await page.waitForFunction(() => !document.querySelector('.office-canvas-wrap'), { timeout: 10_000 })
+      await closeOffice(page)
       if (report.unmount === null) {
         report.unmount = await verifyOfficeUnmount(page)
         report.checks.push({ name: '3D Office unmount cleanup', status: 'pass', ...report.unmount })
       }
+
+      report.environmentReadiness.push(
+        await waitForSystemIdle(`${count}-agent ${qualityMode} warm remount`)
+      )
+
+      const warmRemount = await openOfficeWithLoadPhases(page, {
+        expectedAgents: count,
+        expectedQuality: qualityMode,
+        kind: 'warm-remount'
+      })
+      scenario.warmRemountLoadPhases = warmRemount.loadPhases
+      await closeOffice(page)
+
+      scenario.loadPhaseViolations = [
+        ...evaluateLoadPhases(scenario.loadPhases, loadPhaseTargets),
+        ...evaluateLoadPhases(scenario.warmRemountLoadPhases, loadPhaseTargets)
+      ]
+      report.scenarios.push(scenario)
+      report.checks.push({
+        name: `${count}-agent ${qualityMode} office performance`,
+        status:
+          scenario.lodViolations.length > 0 ||
+          scenario.loadPhaseViolations.length > 0 ||
+          scenario.regressionViolations.length > 0
+            ? required
+              ? 'fail'
+              : 'warn'
+            : scenario.targetViolations.length > 0
+              ? 'warn'
+              : 'pass',
+        targetViolations: scenario.targetViolations,
+        regressionViolations: scenario.regressionViolations,
+        violations: [...scenario.lodViolations, ...scenario.loadPhaseViolations]
+      })
     }
   }
   report.checks.push(evaluateQualityMatrix(report.scenarios, fixedQualityAgentCount))
@@ -388,6 +424,208 @@ async function createIdleSessions(page, count, offset, cwd) {
     },
     { count, offset, cwd }
   )
+}
+
+async function removeIdleSessions(page, count) {
+  await page.evaluate(async (amount) => {
+    const sessions = (await window.agentDesk.listSessions())
+      .filter((session) => session.title.startsWith('Performance Agent '))
+      .sort((left, right) => right.createdAt - left.createdAt)
+    if (sessions.length < amount) {
+      throw new Error(`Only ${sessions.length} performance sessions are available to remove; requested ${amount}`)
+    }
+    for (const session of sessions.slice(0, amount)) {
+      await window.agentDesk.closeSession(session.id)
+    }
+  }, count)
+}
+
+async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality, kind }) {
+  await page.evaluate(
+    ({ agents, quality, loadKind }) => {
+      const previous = window.__caogenOfficeLoadMeasurement
+      if (previous?.rafId) window.cancelAnimationFrame(previous.rafId)
+
+      const button = document.querySelector('.sidebar-office')
+      if (!(button instanceof HTMLElement)) throw new Error('Office navigation button unavailable')
+
+      const startedAt = performance.now()
+      const expectedFullRobots = agents > 0 ? 1 : 0
+      const expectedLowRobots = Math.max(0, agents - expectedFullRobots)
+      const measurement = {
+        active: true,
+        complete: false,
+        rafId: 0,
+        lastSnapshotAt: 0,
+        kind: loadKind,
+        expectedAgents: agents,
+        expectedQuality: quality,
+        expectedFullRobots,
+        expectedLowRobots,
+        fullLodExpected: expectedFullRobots > 0,
+        lowLodExpected: expectedLowRobots > 0,
+        startedAt,
+        startedAtEpochMs: performance.timeOrigin + startedAt,
+        shellReadyMs: null,
+        canvasReadyMs: null,
+        basicNonblankMs: null,
+        fullLodReadyMs: null,
+        lowLodReadyMs: null,
+        robotsReadyMs: null,
+        interactiveReadyMs: null,
+        observed: null
+      }
+      window.__caogenOfficeLoadMeasurement = measurement
+
+      const elapsed = () => performance.now() - startedAt
+      const tick = () => {
+        if (!measurement.active) return
+        if (measurement.shellReadyMs === null && document.querySelector('.office')) {
+          measurement.shellReadyMs = elapsed()
+        }
+        if (measurement.canvasReadyMs === null && document.querySelector('.office canvas')) {
+          measurement.canvasReadyMs = elapsed()
+        }
+
+        const office = document.querySelector('.office-canvas-wrap')
+        const diagnostics = window.__caogenOfficePerformance
+        const rendered = diagnostics?.readFrame?.()
+        const sceneMatches =
+          Number(office?.getAttribute('data-office-sessions') ?? -1) === agents &&
+          office?.getAttribute('data-office-quality-requested') === quality
+        if (
+          measurement.basicNonblankMs === null &&
+          measurement.canvasReadyMs !== null &&
+          sceneMatches &&
+          (rendered?.calls ?? 0) > 0 &&
+          (rendered?.triangles ?? 0) > 0
+        ) {
+          measurement.basicNonblankMs = elapsed()
+        }
+        const now = performance.now()
+        if (
+          sceneMatches &&
+          typeof diagnostics?.snapshot === 'function' &&
+          (measurement.lastSnapshotAt === 0 || now - measurement.lastSnapshotAt >= 100)
+        ) {
+          measurement.lastSnapshotAt = now
+          const snapshot = diagnostics.snapshot()
+          const lod = snapshot?.lod
+          const robots = Array.isArray(lod?.robots) ? lod.robots : []
+          const fullRobots = robots.filter(
+            (robot) => robot.lod === 'full' && robot.assetLod === 'full' && robot.sessionId && robot.modelUrl
+          )
+          const lowRobots = robots.filter(
+            (robot) =>
+              robot.lod === 'low' &&
+              robot.assetLod === 'low' &&
+              robot.sessionId &&
+              robot.modelUrl === 'procedural-low-v1'
+          )
+          const fullReady =
+            lod?.fullRobots === expectedFullRobots && fullRobots.length === expectedFullRobots
+          const lowReady = lod?.lowRobots === expectedLowRobots && lowRobots.length === expectedLowRobots
+          if (measurement.fullLodExpected && measurement.fullLodReadyMs === null && fullReady) {
+            measurement.fullLodReadyMs = elapsed()
+          }
+          if (measurement.lowLodExpected && measurement.lowLodReadyMs === null && lowReady) {
+            measurement.lowLodReadyMs = elapsed()
+          }
+          if (
+            measurement.robotsReadyMs === null &&
+            fullReady &&
+            lowReady &&
+            robots.length === agents &&
+            new Set(robots.map((robot) => robot.sessionId)).size === agents
+          ) {
+            measurement.robotsReadyMs = elapsed()
+            measurement.observed = {
+              visibleRobots: Number(office?.getAttribute('data-office-visible-robots') ?? 0),
+              fullRobots: lod.fullRobots,
+              lowRobots: lod.lowRobots,
+              modelUrls: [...new Set(robots.map((robot) => robot.modelUrl))].sort()
+            }
+          }
+        }
+
+        const fullComplete = !measurement.fullLodExpected || measurement.fullLodReadyMs !== null
+        const lowComplete = !measurement.lowLodExpected || measurement.lowLodReadyMs !== null
+        const interactiveReady =
+          sceneMatches &&
+          measurement.shellReadyMs !== null &&
+          measurement.canvasReadyMs !== null &&
+          measurement.basicNonblankMs !== null
+        if (measurement.interactiveReadyMs === null && interactiveReady) {
+          measurement.interactiveReadyMs = elapsed()
+        }
+        if (
+          interactiveReady &&
+          lowComplete &&
+          fullComplete &&
+          measurement.robotsReadyMs !== null
+        ) {
+          measurement.complete = true
+          measurement.active = false
+          return
+        }
+        measurement.rafId = window.requestAnimationFrame(tick)
+      }
+
+      button.click()
+      tick()
+    },
+    { agents: expectedAgents, quality: expectedQuality, loadKind: kind }
+  )
+
+  try {
+    await page.waitForFunction(
+      () => window.__caogenOfficeLoadMeasurement?.complete === true,
+      { timeout: 20_000 }
+    )
+  } catch (error) {
+    const state = await page.evaluate(() => window.__caogenOfficeLoadMeasurement ?? null)
+    throw new Error(
+      `Office ${kind} load phases did not complete: ${JSON.stringify(state)}; ` +
+        `${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+
+  const canvas = await waitForNonblankCanvas(page, 5_000)
+
+  const loadPhases = await page.evaluate(() => {
+    const measurement = window.__caogenOfficeLoadMeasurement
+    if (!measurement) throw new Error('Office load phase measurement disappeared')
+    if (measurement.rafId) window.cancelAnimationFrame(measurement.rafId)
+    const milliseconds = (value) =>
+      Number.isFinite(value) ? Number(value.toFixed(1)) : null
+    const result = {
+      kind: measurement.kind,
+      expectedAgents: measurement.expectedAgents,
+      expectedQuality: measurement.expectedQuality,
+      expectedFullRobots: measurement.expectedFullRobots,
+      expectedLowRobots: measurement.expectedLowRobots,
+      fullLodExpected: measurement.fullLodExpected,
+      lowLodExpected: measurement.lowLodExpected,
+      startedAtEpochMs: Math.round(measurement.startedAtEpochMs),
+      shellReadyMs: milliseconds(measurement.shellReadyMs),
+      canvasReadyMs: milliseconds(measurement.canvasReadyMs),
+      basicNonblankMs: milliseconds(measurement.basicNonblankMs),
+      fullLodReadyMs: milliseconds(measurement.fullLodReadyMs),
+      lowLodReadyMs: milliseconds(measurement.lowLodReadyMs),
+      robotsReadyMs: milliseconds(measurement.robotsReadyMs),
+      interactiveReadyMs: milliseconds(measurement.interactiveReadyMs),
+      observed: measurement.observed
+    }
+    delete window.__caogenOfficeLoadMeasurement
+    return result
+  })
+  return { canvas, firstNonblankMs: loadPhases.basicNonblankMs, loadPhases }
+}
+
+async function closeOffice(page) {
+  await page.click('.office-actions .btn-primary')
+  await page.waitForFunction(() => !document.querySelector('.office-canvas-wrap'), { timeout: 10_000 })
+  await page.waitForFunction(() => typeof window.__caogenOfficePerformance === 'undefined', { timeout: 5_000 })
 }
 
 async function verifyQualitySettingsUi(page) {
@@ -1058,6 +1296,64 @@ function inspectCanvasImage(buffer) {
   }
 }
 
+function evaluateLoadPhases(measurement, budget) {
+  if (!measurement) return ['missing Office load phase measurement']
+  const violations = []
+  const prefix = `${measurement.kind}: `
+  const checks = [
+    ['shellReadyMs', 'office shell', budget.shellReadyMsMaximum, true],
+    ['canvasReadyMs', 'Canvas mount', budget.canvasReadyMsMaximum, true],
+    ['basicNonblankMs', 'basic nonblank', budget.basicNonblankMsMaximum, true],
+    ['interactiveReadyMs', 'interactive ready', budget.interactiveReadyMsMaximum, true],
+    ['fullLodReadyMs', 'full LOD ready', budget.fullLodReadyMsMaximum, measurement.fullLodExpected],
+    ['lowLodReadyMs', 'low LOD ready', budget.lowLodReadyMsMaximum, measurement.lowLodExpected]
+  ]
+  for (const [field, label, maximum, expected] of checks) {
+    if (!expected) continue
+    const value = measurement[field]
+    if (!Number.isFinite(value)) {
+      violations.push(`${prefix}${label} timing is missing`)
+    } else if (value > maximum) {
+      violations.push(`${prefix}${label} ${value.toFixed(1)}ms exceeds ${maximum}ms`)
+    }
+  }
+  if (!Number.isFinite(measurement.robotsReadyMs)) {
+    violations.push(`${prefix}robot LOD aggregate readiness timing is missing`)
+  }
+  if (!Number.isFinite(measurement.interactiveReadyMs)) {
+    violations.push(`${prefix}interactive readiness timing is missing`)
+  }
+  if (
+    Number.isFinite(measurement.shellReadyMs) &&
+    Number.isFinite(measurement.canvasReadyMs) &&
+    measurement.canvasReadyMs < measurement.shellReadyMs
+  ) {
+    violations.push(`${prefix}Canvas mounted before the Office shell`)
+  }
+  if (
+    Number.isFinite(measurement.canvasReadyMs) &&
+    Number.isFinite(measurement.basicNonblankMs) &&
+    measurement.basicNonblankMs < measurement.canvasReadyMs
+  ) {
+    violations.push(`${prefix}nonblank timing precedes Canvas mount`)
+  }
+  if (measurement.observed?.visibleRobots !== measurement.expectedAgents) {
+    violations.push(
+      `${prefix}observed ${measurement.observed?.visibleRobots ?? 'missing'} visible robots, expected ${measurement.expectedAgents}`
+    )
+  }
+  if (
+    measurement.observed?.fullRobots !== measurement.expectedFullRobots ||
+    measurement.observed?.lowRobots !== measurement.expectedLowRobots
+  ) {
+    violations.push(
+      `${prefix}observed full/low ${measurement.observed?.fullRobots ?? 'missing'}/${measurement.observed?.lowRobots ?? 'missing'}, ` +
+        `expected ${measurement.expectedFullRobots}/${measurement.expectedLowRobots}`
+    )
+  }
+  return violations
+}
+
 function evaluateScenario(scenario, budget, label) {
   const violations = []
   if (!budget) {
@@ -1256,6 +1552,17 @@ function renderMarkdown(value) {
     const target = scenario.targetViolations.length > 0 ? scenario.targetViolations.join('; ') : 'met'
     return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.lod?.fullRobots ?? 0} | ${scenario.renderer.lod?.lowRobots ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
   })
+  const formatLoadMs = (duration) => (Number.isFinite(duration) ? duration.toFixed(1) : 'n/a')
+  const loadRows = value.scenarios.flatMap((scenario) =>
+    [scenario.loadPhases, scenario.warmRemountLoadPhases]
+      .filter(Boolean)
+      .map((load) => {
+        const violations = (scenario.loadPhaseViolations ?? []).filter((item) =>
+          item.startsWith(`${load.kind}:`)
+        )
+        return `| ${scenario.agents} | ${scenario.qualityMode} | ${load.kind} | ${formatLoadMs(load.shellReadyMs)} | ${formatLoadMs(load.canvasReadyMs)} | ${formatLoadMs(load.basicNonblankMs)} | ${formatLoadMs(load.fullLodReadyMs)} | ${formatLoadMs(load.lowLodReadyMs)} | ${formatLoadMs(load.robotsReadyMs)} | ${formatLoadMs(load.interactiveReadyMs)} | ${violations.length > 0 ? violations.join('; ') : 'met'} |`
+      })
+  )
   const pause = value.renderPause
     ? `hidden ${value.renderPause.hidden.atFrame} -> ${value.renderPause.hidden.afterFrame}; unfocused ${value.renderPause.unfocused.atFrame} -> ${value.renderPause.unfocused.afterFrame}; resumed ${value.renderPause.resumedAtFrame}`
     : 'not measured'
@@ -1268,7 +1575,43 @@ function renderMarkdown(value) {
     return `| ${check.status} | ${check.name} | ${detail || 'none'} |`
   })
   const cardC = value.cardCContract?.metrics
-  return `# 3D Office Performance\n\n- Run: ${value.runId}\n- Status: ${value.status}\n- Required: ${value.required}\n- Source: ${value.source.head}${value.source.dirty ? ' (dirty)' : ' (clean)'}\n- Platform: ${value.environment.platform} ${value.environment.arch}\n- CPU: ${value.environment.cpu}\n- GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}\n- Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups\n- Office chunk: ${value.artifacts.officeChunkBytes} bytes\n- Robot GLB: ${value.artifacts.robotGlbBytes} bytes\n- Card C draw calls: ${cardC?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${cardC?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.cardCTargets.twelveAgentBaselineMedianDrawCalls}\n- LOD selection upgrade: ${value.lodUpgrade ? `${value.lodUpgrade.before.lod.fullRobots}/${value.lodUpgrade.before.lod.lowRobots} full/low before; ${value.lodUpgrade.after.lod.fullRobots}/${value.lodUpgrade.after.lod.lowRobots} after` : 'not measured'}\n- Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}\n- Hidden/unfocused render pause: ${pause}\n- Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}\n\n| Agents | Requested | Effective | Full LOD | Low LOD | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |\n|---:|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n${rows.join('\n')}\n\n## Checks\n\n| Status | Check | Details |\n|---|---|---|\n${checks.join('\n')}\n`
+  return `# 3D Office Performance
+
+- Run: ${value.runId}
+- Status: ${value.status}
+- Required: ${value.required}
+- Source: ${value.source.head}${value.source.dirty ? ' (dirty)' : ' (clean)'}
+- Platform: ${value.environment.platform} ${value.environment.arch}
+- CPU: ${value.environment.cpu}
+- GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}
+- Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups
+- Office chunk: ${value.artifacts.officeChunkBytes} bytes
+- Robot GLB: ${value.artifacts.robotGlbBytes} bytes
+- Card C draw calls: ${cardC?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${cardC?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.cardCTargets.twelveAgentBaselineMedianDrawCalls}
+- Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; Low <=${value.loadPhaseTargets.lowLodReadyMsMaximum}ms; background Full <=${value.loadPhaseTargets.fullLodReadyMsMaximum}ms
+- LOD selection upgrade: ${value.lodUpgrade ? `${value.lodUpgrade.before.lod.fullRobots}/${value.lodUpgrade.before.lod.lowRobots} full/low before; ${value.lodUpgrade.after.lod.fullRobots}/${value.lodUpgrade.after.lod.lowRobots} after` : 'not measured'}
+- Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}
+- Hidden/unfocused render pause: ${pause}
+- Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}
+
+| Agents | Requested | Effective | Full LOD | Low LOD | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |
+|---:|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|
+${rows.join('\n')}
+
+## Load phases
+
+\`renderer-cold-prefetched\` is the first measured renderer reload and includes the product's post-paint Office prefetch. \`renderer-cache-warm-prefetched\` repeats that path with browser resource-cache reuse. \`warm-remount\` reopens Office in the same renderer context after a real unmount.
+
+| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Full LOD ms | Low LOD ms | All robots ms | Interactive ms | Contract |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+${loadRows.join('\n')}
+
+## Checks
+
+| Status | Check | Details |
+|---|---|---|
+${checks.join('\n')}
+`
 }
 
 function sourceState() {
@@ -1472,6 +1815,51 @@ function parseQualityModes(raw) {
 function fail(message) {
   console.error(message)
   process.exit(1)
+}
+
+function cpuTotals() {
+  return cpus().reduce(
+    (totals, cpu) => {
+      const times = cpu.times
+      totals.idle += times.idle
+      totals.total += times.user + times.nice + times.sys + times.idle + times.irq
+      return totals
+    },
+    { idle: 0, total: 0 }
+  )
+}
+
+async function sampleSystemCpuBusyPercent() {
+  const before = cpuTotals()
+  await sleep(cpuIdlePolicy.sampleMs)
+  const after = cpuTotals()
+  const total = after.total - before.total
+  const idle = after.idle - before.idle
+  return total > 0 ? Math.max(0, Math.min(100, (1 - idle / total) * 100)) : 100
+}
+
+async function waitForSystemIdle(label) {
+  const startedAt = Date.now()
+  const samples = []
+  let consecutive = 0
+  while (Date.now() - startedAt < cpuIdlePolicy.timeoutMs) {
+    const busyPercent = await sampleSystemCpuBusyPercent()
+    samples.push(Number(busyPercent.toFixed(1)))
+    consecutive = busyPercent <= cpuIdlePolicy.maximumBusyPercent ? consecutive + 1 : 0
+    if (consecutive >= cpuIdlePolicy.consecutiveSamples) {
+      return {
+        label,
+        waitedMs: Date.now() - startedAt,
+        finalBusyPercent: samples.at(-1),
+        recentBusyPercent: samples.slice(-5)
+      }
+    }
+    await sleep(100)
+  }
+  throw new Error(
+    `System CPU remained above ${cpuIdlePolicy.maximumBusyPercent}% before ${label}: ` +
+      `${samples.slice(-8).join(', ')}% busy`
+  )
 }
 
 function sleep(ms) {

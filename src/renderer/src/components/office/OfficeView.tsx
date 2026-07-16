@@ -1,4 +1,4 @@
-import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ContactShadows } from '@react-three/drei'
 import { useStore } from '../../store'
@@ -17,6 +17,11 @@ import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQua
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
+import {
+  preloadReferenceRobotDecoder,
+  preloadReferenceRobotModel,
+  REFERENCE_ROBOT_GLB_URL
+} from './kit/RobotModelAsset'
 import { buildOfficeModel } from './model'
 import type { OfficeSessionActivity } from './model'
 import type { OfficeContactShadowMode } from './quality'
@@ -66,6 +71,14 @@ const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true
 const OFFICE_CONTACT_SHADOW_POSITION: [number, number, number] = [0, 0.02, 0]
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
 const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
+let fullRobotPreloadScheduled = false
+
+export function preloadOfficeAssets(): void {
+  preloadReferenceRobotDecoder()
+  if (fullRobotPreloadScheduled) return
+  fullRobotPreloadScheduled = true
+  preloadReferenceRobotModel(REFERENCE_ROBOT_GLB_URL)
+}
 
 const OfficeContactShadows = memo(function OfficeContactShadows({
   lightMode,
@@ -91,6 +104,82 @@ const OfficeContactShadows = memo(function OfficeContactShadows({
     />
   )
 })
+
+function OfficeBootScene({
+  ids,
+  positions,
+  activeId,
+  lightMode,
+  onSelect,
+  onOpen
+}: {
+  ids: string[]
+  positions: Array<[number, number, number]>
+  activeId: string | null
+  lightMode: boolean
+  onSelect: (id: string) => void
+  onOpen: (id: string) => void
+}): React.JSX.Element {
+  return (
+    <group name="office-boot-scene" userData={{ officeBootScene: true }}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
+        <planeGeometry args={[42, 30]} />
+        <meshBasicMaterial color={lightMode ? '#a7b1b7' : '#202832'} />
+      </mesh>
+      {ids.map((id, index) => {
+        const position = positions[index]
+        const accent = id === activeId ? '#59dcff' : '#697680'
+        return (
+          <group
+            key={id}
+            name="office-boot-workstation"
+            position={position}
+            userData={{ officeBootWorkstation: true, officeRobotSessionId: id }}
+            onClick={(event) => {
+              event.stopPropagation()
+              onSelect(id)
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation()
+              onOpen(id)
+            }}
+          >
+            <mesh position={[0, 0.04, 0.08]}>
+              <boxGeometry args={[2.05, 0.08, 1.66]} />
+              <meshBasicMaterial color={lightMode ? '#89969e' : '#182029'} />
+            </mesh>
+            <mesh position={[0, 0.62, -0.34]}>
+              <boxGeometry args={[1.45, 0.08, 0.62]} />
+              <meshBasicMaterial color={lightMode ? '#65737d' : '#303a45'} />
+            </mesh>
+            <group
+              name="office-boot-robot"
+              position={[0, 0, 0.28]}
+              userData={{
+                officeRobotLoading: true,
+                officeRobotRequestedLod: id === activeId ? 'full' : 'low',
+                officeRobotSessionId: id
+              }}
+            >
+              <mesh position={[0, 0.86, 0]}>
+                <capsuleGeometry args={[0.14, 0.48, 4, 8]} />
+                <meshBasicMaterial color={lightMode ? '#d8dee3' : '#95a2ad'} />
+              </mesh>
+              <mesh position={[0, 1.28, 0]}>
+                <sphereGeometry args={[0.17, 12, 8]} />
+                <meshBasicMaterial color={lightMode ? '#19222b' : '#0e151c'} />
+              </mesh>
+              <mesh position={[0, 1.28, 0.16]}>
+                <boxGeometry args={[0.19, 0.025, 0.016]} />
+                <meshBasicMaterial color={accent} toneMapped={false} />
+              </mesh>
+            </group>
+          </group>
+        )
+      })}
+    </group>
+  )
+}
 
 function walkerLocalPoint(point: [number, number, number]): [number, number, number] {
   return [
@@ -159,6 +248,7 @@ function gitStatusError(id: string, err: unknown): GitStatus {
 
 export default function OfficeView(): React.JSX.Element {
   const t = useT()
+  const hydrated = useStore((s) => s.hydrated)
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
   const providers = useStore((s) => s.providers)
@@ -170,11 +260,51 @@ export default function OfficeView(): React.JSX.Element {
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('overview')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(null)
+  const [sceneDetailEnabled, setSceneDetailEnabled] = useState(false)
+  const [robotAssetsEnabled, setRobotAssetsEnabled] = useState(false)
+  const assetPreloadStartedRef = useRef(false)
+  const bootFrameRenderedRef = useRef(false)
+  const detailUpgradeTimerRef = useRef<number | null>(null)
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr)
     ? renderQuality.profile.dpr[1]
     : renderQuality.profile.dpr
+
+  const handleOfficeFrame = useCallback(
+    (frameMs: number): void => {
+      renderQuality.recordFrame(frameMs)
+      if (!assetPreloadStartedRef.current) {
+        assetPreloadStartedRef.current = true
+        preloadOfficeAssets()
+      }
+      if (bootFrameRenderedRef.current) return
+      bootFrameRenderedRef.current = true
+      detailUpgradeTimerRef.current = window.setTimeout(() => setSceneDetailEnabled(true), 50)
+    },
+    [renderQuality.recordFrame]
+  )
+
+  useEffect(
+    () => () => {
+      if (detailUpgradeTimerRef.current !== null) window.clearTimeout(detailUpgradeTimerRef.current)
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (!sceneDetailEnabled || robotAssetsEnabled) return
+    let secondFrame = 0
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        setRobotAssetsEnabled(true)
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      if (secondFrame) window.cancelAnimationFrame(secondFrame)
+    }
+  }, [robotAssetsEnabled, sceneDetailEnabled])
 
   // 办公区场景色随主题切换
   const isLight =
@@ -505,7 +635,7 @@ export default function OfficeView(): React.JSX.Element {
         </div>
       </div>
 
-      {ids.length === 0 ? (
+      {hydrated && ids.length === 0 ? (
         <div className="office-empty">
           <div className="office-empty-inner">
             <div className="office-empty-mark">AGENT</div>
@@ -818,7 +948,7 @@ export default function OfficeView(): React.JSX.Element {
           >
           <color attach="background" args={[scene.bg]} />
           <OfficePerformanceProbe />
-          <OfficeFrameDriver active={renderQuality.renderActive} onFrame={renderQuality.recordFrame} />
+          <OfficeFrameDriver active={renderQuality.renderActive} onFrame={handleOfficeFrame} />
           <fog attach="fog" args={[scene.bg, 18, 42]} />
           <ambientLight intensity={isLight ? 0.98 : 1.05} />
           <directionalLight
@@ -847,62 +977,83 @@ export default function OfficeView(): React.JSX.Element {
           <pointLight position={[0, 3, 4]} intensity={isLight ? 0.22 : 0.34} color={isLight ? '#f3f5f6' : '#3c4658'} />
 
           {/* 富场景背景层:地板/墙/落地窗/家具/休息区/会议桌/白板/机架/茶水角 */}
-          <Suspense fallback={null}>
-            <OfficeScene lightMode={isLight} />
-          </Suspense>
-          <Suspense fallback={null}>
-            {ids.map((id, i) => (
-              <WorkstationPro
-                key={id}
-                sessionId={id}
-                position={positions[i]}
-                active={id === activeOfficeId}
-                activity={activityOf(sessions[id])}
-                title={sessions[id].meta.title}
-                costUsd={sessions[id].meta.costUsd}
-                brandName={
-                  sessions[id].meta.providerId
-                    ? providerNameOf(sessions[id].meta.providerId)
-                    : undefined
-                }
-                providerBaseUrl={providerBaseUrlOf(sessions[id].meta.providerId)}
-                modelName={sessions[id].meta.model}
-                vendorKey={vendorKeyOf(sessions[id].meta.providerId, sessions[id].meta.model)}
-                showBadge={office.showBadges}
-                liveliness={office.liveliness}
-                catEars={office.catEars}
-                operatorAway={awaySessionIds.has(id)}
-                currentTask={officeModel.sessions[id]?.currentTask}
-                taskStats={officeModel.sessions[id]?.taskStats}
-                sessionSignal={officeModel.sessions[id]?.signal}
-                onSelect={() => selectOfficeSession(id)}
-                onOpen={() => focus(id)}
-              />
-            ))}
-            <group scale={WALKER_VISUAL_SCALE}>
-              <AgentWalkers
-                specs={presentedWalkerSpecs}
-                activeSessionId={activeOfficeId}
-                onAwayChange={handleWalkerAwayChange}
-                onSelect={selectOfficeSession}
-                onOpen={focus}
-              />
-            </group>
-            <FacilityHotspots
-              specs={OFFICE_FACILITY_SPECS}
-              activeKey={selectedFacility}
-              onSelect={selectFacility}
+          {!sceneDetailEnabled && (
+            <OfficeBootScene
+              ids={ids}
+              positions={positions}
+              activeId={activeOfficeId}
+              lightMode={isLight}
+              onSelect={selectOfficeSession}
+              onOpen={focus}
             />
-            {renderQuality.profile.contactShadows !== 'off' && (
-              <OfficeContactShadows
-                key={`${renderQuality.resolvedTier}-${ids.length}`}
-                lightMode={isLight}
-                mode={renderQuality.profile.contactShadows}
-                frames={renderQuality.profile.contactShadowFrames}
-                resolution={renderQuality.profile.contactShadowResolution}
-              />
-            )}
-          </Suspense>
+          )}
+          {robotAssetsEnabled && (
+            <Suspense fallback={null}>
+              <OfficeScene lightMode={isLight} />
+            </Suspense>
+          )}
+          {sceneDetailEnabled && (
+            <>
+              {ids.map((id, i) => (
+                <Suspense key={id} fallback={null}>
+                  <WorkstationPro
+                    sessionId={id}
+                    position={positions[i]}
+                    active={id === activeOfficeId}
+                    activity={activityOf(sessions[id])}
+                    title={sessions[id].meta.title}
+                    costUsd={sessions[id].meta.costUsd}
+                    brandName={
+                      sessions[id].meta.providerId
+                        ? providerNameOf(sessions[id].meta.providerId)
+                        : undefined
+                    }
+                    providerBaseUrl={providerBaseUrlOf(sessions[id].meta.providerId)}
+                    modelName={sessions[id].meta.model}
+                    vendorKey={vendorKeyOf(sessions[id].meta.providerId, sessions[id].meta.model)}
+                    showBadge={office.showBadges}
+                    liveliness={office.liveliness}
+                    catEars={office.catEars}
+                    loadRobotAssets={robotAssetsEnabled}
+                    operatorAway={awaySessionIds.has(id)}
+                    currentTask={officeModel.sessions[id]?.currentTask}
+                    taskStats={officeModel.sessions[id]?.taskStats}
+                    sessionSignal={officeModel.sessions[id]?.signal}
+                    onSelect={() => selectOfficeSession(id)}
+                    onOpen={() => focus(id)}
+                  />
+                </Suspense>
+              ))}
+              <Suspense fallback={null}>
+                <group scale={WALKER_VISUAL_SCALE}>
+                  <AgentWalkers
+                    specs={presentedWalkerSpecs}
+                    activeSessionId={activeOfficeId}
+                    loadRobotAssets={robotAssetsEnabled}
+                    onAwayChange={handleWalkerAwayChange}
+                    onSelect={selectOfficeSession}
+                    onOpen={focus}
+                  />
+                </group>
+              </Suspense>
+              {robotAssetsEnabled && (
+                <FacilityHotspots
+                  specs={OFFICE_FACILITY_SPECS}
+                  activeKey={selectedFacility}
+                  onSelect={selectFacility}
+                />
+              )}
+              {robotAssetsEnabled && renderQuality.profile.contactShadows !== 'off' && (
+                <OfficeContactShadows
+                  key={`${renderQuality.resolvedTier}-${ids.length}`}
+                  lightMode={isLight}
+                  mode={renderQuality.profile.contactShadows}
+                  frames={renderQuality.profile.contactShadowFrames}
+                  resolution={renderQuality.profile.contactShadowResolution}
+                />
+              )}
+            </>
+          )}
 
           <CameraRig
             position={cameraPose.position}

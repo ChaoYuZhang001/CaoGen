@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Vector3 } from 'three'
 import type { Group } from 'three'
-import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
+import ProgressiveAvatarRig from './ProgressiveAvatarRig'
 import { applyIdle, applyStandingTalking, applyWalking } from './AvatarAnimations'
 import { vendorSkin } from './VendorSkins'
 import { providerLogoFor } from './ProviderLogos'
@@ -29,6 +29,7 @@ export interface AgentWalkerSpec {
 interface AgentWalkersProps {
   specs: AgentWalkerSpec[]
   activeSessionId?: string | null
+  loadRobotAssets?: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
@@ -315,12 +316,14 @@ function skinKey(providerName?: string, modelName?: string, providerBaseUrl?: st
 function OneAgentWalker({
   spec,
   active,
+  loadRobotAssets,
   onAwayChange,
   onSelect,
   onOpen
 }: {
   spec: AgentWalkerSpec
   active: boolean
+  loadRobotAssets: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
@@ -561,8 +564,9 @@ function OneAgentWalker({
             ))}
           </>
         )}
-        <AvatarRig
+        <ProgressiveAvatarRig
           ref={rigRef}
+          loadModel={loadRobotAssets}
           sessionId={spec.sessionId}
           detailLevel={active ? 'full' : 'low'}
           bodyColor={skin.bodyColor}
@@ -581,6 +585,7 @@ function OneAgentWalker({
 export default function AgentWalkers({
   specs,
   activeSessionId,
+  loadRobotAssets = true,
   onAwayChange,
   onSelect,
   onOpen
@@ -593,6 +598,7 @@ export default function AgentWalkers({
           key={spec.id}
           spec={spec}
           active={spec.sessionId === activeSessionId}
+          loadRobotAssets={loadRobotAssets}
           onAwayChange={onAwayChange}
           onSelect={onSelect}
           onOpen={onOpen}

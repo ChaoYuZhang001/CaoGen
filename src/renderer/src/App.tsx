@@ -12,9 +12,10 @@ import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
 import { APP_ICON_URL, APP_NAME } from './brand'
+import { loadOfficeView, preloadOfficeView } from './components/office/loadOffice'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
-const OfficeView = lazy(() => import('./components/office/OfficeView'))
+const OfficeView = lazy(loadOfficeView)
 
 export default function App(): React.JSX.Element {
   const t = useT()
@@ -80,6 +81,10 @@ export default function App(): React.JSX.Element {
     if (typeof window.agentDesk === 'undefined') return
     void init()
   }, [init])
+
+  useEffect(() => {
+    preloadOfficeView()
+  }, [])
 
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
