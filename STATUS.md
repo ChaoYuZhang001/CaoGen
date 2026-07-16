@@ -1,6 +1,6 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-14(第 30 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-16(第 31 次)· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
 > ⚠️ **未达完整发布标准**。本地代码、构建和四态 Deep 门禁已收口；正式签名/公证、Apple Silicon 真机启动、指定真实 Provider/中国网络证据仍取决于外部账号、机器或额度。Docker 已从产品模式删除；Claude 是可选引擎，不登录也不阻塞默认 OpenAI-compatible 路径、本地启动或发布门禁。
 >
@@ -34,6 +34,7 @@
 - macOS 顶部菜单栏图标已与 Dock/应用图标分离:菜单栏使用 18×18 / 36×36 Retina 的透明单色 `trayTemplate` 轮廓并启用 Electron Template 模式,可随 macOS 深浅色菜单栏自动着色;Dock、窗口、应用内品牌与安装包继续使用正式全彩人物 Logo。`npm run test:macos-tray-icon` 已验证 PNG 尺寸/透明通道、打包资源声明、Electron `nativeImage` 加载、Template 标志和真实 Tray bounds(`test-results/macos-tray-icon/latest.json`)。
 - 文件预览口径更新:HTML/Markdown/Text/CSV/JSON/图片/PDF 已有真实预览;PDF 已接入文本层 best-effort 提取并可发给 Agent;`.docx/.xlsx/.pptx` 已接入 OOXML 文本与结构提取。macOS 通过独立 Quick Look IPC 生成完整系统文档预览包,HTML/CSS/JS/图片附件全部内联,CSP 禁止网络,renderer iframe 仅开放 sandbox 脚本;完整预览失败时回退首屏 PNG,再失败则保留结构视图。结构视图已支持 Word 显式分页、Excel 工作表和 PowerPoint 幻灯片的上一项/下一项/选择器导航,可把当前页/表单独发给 Agent,批注会保存页码、摘录和结构选择器。`npm run test:office-visual-preview` 已用真实 DOCX 验证 625×980 系统文档预览、缓存、路径边界和附件/外链封锁(`test-results/office-visual-preview/latest.json`);`npm run test:page` 已验证完整 iframe、结构导航、当前单元发送和定位批注(17/17,`test-results/caogen-deep/2026-07-10T12-48-21-376Z/page-operation-smoke.json`)。发送给 Agent 的仍只有提取文本、元数据和批注,视觉 data URL 不会进入提示词。系统渲染可能与原应用中的完整原版式存在差异;编辑、复杂公式、动画和像素级一致性仍未完成,不得宣称。
 - 3D 办公口径更新:Office model 已从真实 `SessionState` 派生路由决策、Provider/密钥故障切换、预算/成本、最近耗时、审批、工具、子任务、worktree 隔离/分支/状态与 checkpoint 文件变化;同 Provider 密钥接管会进入选中 Agent 信号栈并点亮工位故障恢复指示,只显示 key 标签。OfficeView 打开时会对可见会话按需刷新 `git status`,并把分支、dirty 文件数、staged/unstaged/untracked、错误状态汇入顶部指标、选中 Agent 面板和工位低位 3D 指示条。设施区离席 Agent 已增加透明射线命中体,改善镜头过渡时的点击容错;真实 Electron 编排 E2E 连续 3 次通过,完整 `test:deep` 也覆盖工位、审批 Agent、设施 Agent 与会话打开链路。由 `npm run test:office-status-recheck`、`npm run test:provider-key-failover` 覆盖;Electron 页面流 `npm run test:page` 也已验证真实会话/worktree/Git 状态、可点击工位和非空 3D canvas。当前不宣称全量实时 git diff 轮询、完整项目交付驾驶舱、长期趋势图或可替代发布管理系统。
+- 3D 办公性能口径更新:Office chunk 会在应用首帧后预取,进入 Office 后按 Boot → procedural Low → 选中 Agent Full 分阶段挂载;12 Agent 场景保持 `1 Full + 11 Low`,未选中 Agent 的 Low 不加载 GLB/Draco。`npm run test:office-performance:required` 已在干净提交 `488caaa5` 上完成 14 项 required 检查并全部通过;本次 macOS x64 基准机(Intel i9-9980HK、AMD Radeon Pro 5500M)的 12 Agent Auto 冷路径为 shell/Canvas `26.6ms`、可交互 `170.9ms`、Low `350.0ms`、后台 Full `1310.5ms`,证据见 `test-results/office-performance/2026-07-16T03-46-07-994Z/report.md`。这些毫秒数只描述该机器与该次运行,不构成其他机器的延迟保证。
 - 五支柱当前判断:多厂商、调度和 3D 已形成可用优势;迁移级工作流与长期自主执行仍受真人 N1、跨 Provider 账本、后台持续运行和交付证据约束。当前没有统一评分工件,不再给出百分比。
 - 用户实测反馈已修 4 项(冗余"你"标注、矛盾错误文案、引擎×Provider 404、填 key 不生效)
 
