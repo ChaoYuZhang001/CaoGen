@@ -457,6 +457,7 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
         complete: false,
         rafId: 0,
         lastSnapshotAt: 0,
+        snapshotDurationsMs: [],
         kind: loadKind,
         expectedAgents: agents,
         expectedQuality: quality,
@@ -502,34 +503,50 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
         ) {
           measurement.basicNonblankMs = elapsed()
         }
+        const interactiveReady =
+          sceneMatches &&
+          measurement.shellReadyMs !== null &&
+          measurement.canvasReadyMs !== null &&
+          measurement.basicNonblankMs !== null
+        if (measurement.interactiveReadyMs === null && interactiveReady) {
+          measurement.interactiveReadyMs = elapsed()
+        }
         const now = performance.now()
         if (
           sceneMatches &&
           typeof diagnostics?.snapshot === 'function' &&
           (measurement.lastSnapshotAt === 0 || now - measurement.lastSnapshotAt >= 100)
         ) {
-          measurement.lastSnapshotAt = now
+          const snapshotStartedAt = performance.now()
+          measurement.lastSnapshotAt = snapshotStartedAt
           const snapshot = diagnostics.snapshot()
+          measurement.snapshotDurationsMs.push(performance.now() - snapshotStartedAt)
+          const snapshotObservedAt = snapshotStartedAt - startedAt
           const lod = snapshot?.lod
           const robots = Array.isArray(lod?.robots) ? lod.robots : []
           const fullRobots = robots.filter(
-            (robot) => robot.lod === 'full' && robot.assetLod === 'full' && robot.sessionId && robot.modelUrl
+            (robot) =>
+              robot.lod === 'full' &&
+              robot.assetLod === 'full' &&
+              robot.sessionId &&
+              typeof robot.modelUrl === 'string' &&
+              /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
           )
           const lowRobots = robots.filter(
             (robot) =>
               robot.lod === 'low' &&
               robot.assetLod === 'low' &&
               robot.sessionId &&
-              robot.modelUrl === 'procedural-low-v1'
+              robot.modelUrl === 'procedural-low-v2'
           )
           const fullReady =
             lod?.fullRobots === expectedFullRobots && fullRobots.length === expectedFullRobots
           const lowReady = lod?.lowRobots === expectedLowRobots && lowRobots.length === expectedLowRobots
           if (measurement.fullLodExpected && measurement.fullLodReadyMs === null && fullReady) {
-            measurement.fullLodReadyMs = elapsed()
+            measurement.fullLodReadyMs = snapshotObservedAt
           }
           if (measurement.lowLodExpected && measurement.lowLodReadyMs === null && lowReady) {
-            measurement.lowLodReadyMs = elapsed()
+            measurement.lowLodReadyMs = snapshotObservedAt
           }
           if (
             measurement.robotsReadyMs === null &&
@@ -538,7 +555,7 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
             robots.length === agents &&
             new Set(robots.map((robot) => robot.sessionId)).size === agents
           ) {
-            measurement.robotsReadyMs = elapsed()
+            measurement.robotsReadyMs = snapshotObservedAt
             measurement.observed = {
               visibleRobots: Number(office?.getAttribute('data-office-visible-robots') ?? 0),
               fullRobots: lod.fullRobots,
@@ -550,14 +567,6 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
 
         const fullComplete = !measurement.fullLodExpected || measurement.fullLodReadyMs !== null
         const lowComplete = !measurement.lowLodExpected || measurement.lowLodReadyMs !== null
-        const interactiveReady =
-          sceneMatches &&
-          measurement.shellReadyMs !== null &&
-          measurement.canvasReadyMs !== null &&
-          measurement.basicNonblankMs !== null
-        if (measurement.interactiveReadyMs === null && interactiveReady) {
-          measurement.interactiveReadyMs = elapsed()
-        }
         if (
           interactiveReady &&
           lowComplete &&
@@ -614,6 +623,16 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
       lowLodReadyMs: milliseconds(measurement.lowLodReadyMs),
       robotsReadyMs: milliseconds(measurement.robotsReadyMs),
       interactiveReadyMs: milliseconds(measurement.interactiveReadyMs),
+      snapshotDurationMs: {
+        samples: measurement.snapshotDurationsMs.length,
+        maximum: milliseconds(Math.max(0, ...measurement.snapshotDurationsMs)),
+        mean: milliseconds(
+          measurement.snapshotDurationsMs.length > 0
+            ? measurement.snapshotDurationsMs.reduce((sum, value) => sum + value, 0) /
+                measurement.snapshotDurationsMs.length
+            : 0
+        )
+      },
       observed: measurement.observed
     }
     delete window.__caogenOfficeLoadMeasurement
@@ -879,7 +898,16 @@ async function verifyLowLodUpgrade(page) {
     }
     const sessionIds = new Set()
     for (const robot of state.lod.robots) {
-      if (!robot.sessionId || !robot.modelUrl || robot.assetLod !== robot.lod) {
+      const fullAssetReady =
+        robot.lod === 'full' &&
+        robot.assetLod === 'full' &&
+        typeof robot.modelUrl === 'string' &&
+        /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
+      const lowAssetReady =
+        robot.lod === 'low' &&
+        robot.assetLod === 'low' &&
+        robot.modelUrl === 'procedural-low-v2'
+      if (!robot.sessionId || (!fullAssetReady && !lowAssetReady)) {
         throw new Error(`${label} robot asset evidence is invalid: ${JSON.stringify(robot)}`)
       }
       sessionIds.add(robot.sessionId)
@@ -931,7 +959,12 @@ async function verifyLowLodUpgrade(page) {
         office.getAttribute('data-office-active-camera-preset') === 'agent' &&
         lod.fullRobots + lod.lowRobots === visibleRobots &&
         lod.robots.some(
-          (robot) => robot.sessionId === expected && robot.lod === 'full' && robot.assetLod === 'full'
+          (robot) =>
+            robot.sessionId === expected &&
+            robot.lod === 'full' &&
+            robot.assetLod === 'full' &&
+            typeof robot.modelUrl === 'string' &&
+            /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
         )
       )
     },
@@ -950,9 +983,22 @@ async function verifyLowLodUpgrade(page) {
   const workstationRootsChanged =
     JSON.stringify(before.lod.fullWorkstationRootIds) !== JSON.stringify(after.lod.fullWorkstationRootIds) &&
     JSON.stringify(before.lod.compactWorkstationRootIds) !== JSON.stringify(after.lod.compactWorkstationRootIds)
-  const targetSessionUpgraded = targetBefore?.lod === 'low' && targetAfter?.lod === 'full'
+  const targetSessionUpgraded =
+    targetBefore?.lod === 'low' &&
+    targetBefore?.assetLod === 'low' &&
+    targetBefore?.modelUrl === 'procedural-low-v2' &&
+    targetAfter?.lod === 'full' &&
+    targetAfter?.assetLod === 'full' &&
+    typeof targetAfter?.modelUrl === 'string' &&
+    /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(targetAfter.modelUrl)
   const previousSelectionDowngraded =
-    previousSelectionBefore?.lod === 'full' && previousSelectionAfter?.lod === 'low'
+    previousSelectionBefore?.lod === 'full' &&
+    previousSelectionBefore?.assetLod === 'full' &&
+    typeof previousSelectionBefore?.modelUrl === 'string' &&
+    /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(previousSelectionBefore.modelUrl) &&
+    previousSelectionAfter?.lod === 'low' &&
+    previousSelectionAfter?.assetLod === 'low' &&
+    previousSelectionAfter?.modelUrl === 'procedural-low-v2'
   if (
     after.selected !== before.target.id ||
     !targetSessionUpgraded ||

@@ -15,6 +15,7 @@ import OfficeScene from './kit/OfficeScene'
 import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
 import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQuality'
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
+import { CompactRobotVisual } from './kit/ProgressiveAvatarRig'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
 import {
@@ -161,18 +162,12 @@ function OfficeBootScene({
                 officeRobotSessionId: id
               }}
             >
-              <mesh position={[0, 0.86, 0]}>
-                <capsuleGeometry args={[0.14, 0.48, 4, 8]} />
-                <meshBasicMaterial color={lightMode ? '#d8dee3' : '#95a2ad'} />
-              </mesh>
-              <mesh position={[0, 1.28, 0]}>
-                <sphereGeometry args={[0.17, 12, 8]} />
-                <meshBasicMaterial color={lightMode ? '#19222b' : '#0e151c'} />
-              </mesh>
-              <mesh position={[0, 1.28, 0.16]}>
-                <boxGeometry args={[0.19, 0.025, 0.016]} />
-                <meshBasicMaterial color={accent} toneMapped={false} />
-              </mesh>
+              <CompactRobotVisual
+                variant="boot"
+                materialMode="basic"
+                accentColor={accent}
+                castShadow={false}
+              />
             </group>
           </group>
         )
