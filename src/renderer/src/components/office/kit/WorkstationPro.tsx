@@ -1,8 +1,8 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
-import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
+import ProgressiveAvatarRig from './ProgressiveAvatarRig'
 import CompactWorkstationShell from './CompactWorkstationShell'
 import Desk from './Desk'
 import OfficeChair from './OfficeChair'
@@ -37,6 +37,7 @@ export interface WorkstationProProps {
   showBadge?: boolean
   liveliness?: number
   catEars?: boolean
+  loadRobotAssets?: boolean
   operatorAway?: boolean
   currentTask?: OfficeTask
   taskStats?: OfficeTaskStats
@@ -684,6 +685,7 @@ export default function WorkstationPro({
   showBadge = true,
   liveliness = 1,
   catEars = false,
+  loadRobotAssets = true,
   operatorAway = false,
   currentTask,
   taskStats,
@@ -796,8 +798,9 @@ export default function WorkstationPro({
               name="desk-right-hand-ik-target"
               position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
             />
-            <AvatarRig
+            <ProgressiveAvatarRig
               ref={rigRef}
+              loadModel={loadRobotAssets}
               sessionId={sessionId}
               position={[0, 0, 0.52]}
               rotation={[0, Math.PI, 0]}
@@ -971,8 +974,9 @@ export default function WorkstationPro({
           />
 
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
-          <AvatarRig
+          <ProgressiveAvatarRig
             ref={rigRef}
+            loadModel={loadRobotAssets}
             sessionId={sessionId}
             position={[0, 0, 0.52]}
             rotation={[0, Math.PI, 0]}

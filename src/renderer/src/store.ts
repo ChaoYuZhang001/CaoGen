@@ -732,6 +732,7 @@ export interface RewindPanelState {
 
 interface AppStore {
   ready: boolean
+  hydrated: boolean
   sessions: Record<string, SessionState>
   order: string[]
   activeId: string | null
@@ -962,6 +963,7 @@ export const useStore = create<AppStore>((set, get) => {
 
   return {
   ready: false,
+  hydrated: false,
   sessions: {},
   order: [],
   activeId: null,
@@ -1099,13 +1101,11 @@ export const useStore = create<AppStore>((set, get) => {
     window.agentDesk.onMemorySuggestion((event) => get().handleMemorySuggestion(event))
     window.agentDesk.onTerminalEvent((event) => get().handleTerminalEvent(event))
     window.agentDesk.onBrowserEvent((event) => get().handleBrowserEvent(event))
-    const [metas, history, settings, providers, projects, taskSnapshots] = await Promise.all([
+    // Sessions and persisted Office quality define the first usable workspace frame.
+    // Secondary panels hydrate independently so they cannot block navigation or transcript recovery.
+    const [metas, settings] = await Promise.all([
       window.agentDesk.listSessions(),
-      window.agentDesk.listHistory(),
-      window.agentDesk.getSettings(),
-      window.agentDesk.listProviders(),
-      window.agentDesk.listProjects(),
-      window.agentDesk.listTaskSnapshots()
+      window.agentDesk.getSettings()
     ])
     set((s) => {
       const sessions = { ...s.sessions }
@@ -1117,37 +1117,56 @@ export const useStore = create<AppStore>((set, get) => {
         }
       }
       return {
+        hydrated: true,
         sessions,
         order,
-        history,
         settings,
-        providers,
-        projects,
-        taskSnapshots,
         activeId: s.activeId ?? order[0] ?? null
       }
     })
     // 渲染进程重载会丢掉未决权限请求 + 聊天记录;从主进程补回
-    for (const meta of metas) {
-      const [reqs, transcript] = await Promise.all([
-        window.agentDesk.listPendingPermissions(meta.id),
-        window.agentDesk.getTranscript(meta.id)
-      ])
-      set((s) => {
-        const session = s.sessions[meta.id]
-        if (!session) return s
-        let next = session
-        if (reqs.length > 0) {
-          const known = new Set(session.pendingPermissions.map((p) => p.requestId))
-          const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
-          next = { ...next, pendingPermissions: merged }
+    const transcriptHydration = Promise.all(
+      metas.map(async (meta) => {
+        const [permissionsResult, transcriptResult] = await Promise.allSettled([
+          window.agentDesk.listPendingPermissions(meta.id),
+          window.agentDesk.getTranscript(meta.id)
+        ])
+        if (permissionsResult.status === 'rejected') {
+          console.warn(`Failed to restore pending permissions for ${meta.id}`, permissionsResult.reason)
         }
-        if (transcript.length > 0) {
-          next = replayTranscript(next, transcript)
+        if (transcriptResult.status === 'rejected') {
+          console.warn(`Failed to restore transcript for ${meta.id}`, transcriptResult.reason)
         }
-        return { sessions: { ...s.sessions, [meta.id]: next } }
+        const reqs = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
+        const transcript = transcriptResult.status === 'fulfilled' ? transcriptResult.value : []
+        if (reqs.length === 0 && transcript.length === 0) return
+        set((s) => {
+          const session = s.sessions[meta.id]
+          if (!session) return s
+          let next = session
+          if (reqs.length > 0) {
+            const known = new Set(session.pendingPermissions.map((p) => p.requestId))
+            const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
+            next = { ...next, pendingPermissions: merged }
+          }
+          if (transcript.length > 0) next = replayTranscript(next, transcript)
+          return { sessions: { ...s.sessions, [meta.id]: next } }
+        })
       })
-    }
+    )
+    const secondaryLabels = ['history', 'providers', 'projects', 'task snapshots']
+    const secondaryResults = await Promise.allSettled([
+      window.agentDesk.listHistory().then((history) => set({ history })),
+      window.agentDesk.listProviders().then((providers) => set({ providers })),
+      window.agentDesk.listProjects().then((projects) => set({ projects })),
+      window.agentDesk.listTaskSnapshots().then((taskSnapshots) => set({ taskSnapshots }))
+    ])
+    secondaryResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`Failed to hydrate ${secondaryLabels[index]}`, result.reason)
+      }
+    })
+    await transcriptHydration
   },
 
   handleEvent(sessionId, event, seq, eventId) {
