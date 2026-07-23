@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { modelOptionsForProvider, PERMISSION_OPTIONS, useStore } from '../store'
 import { useT } from '../i18n'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
-import { formatCost, formatTokens } from '../format'
 import MessageItem from './MessageItem'
 import PermissionBar from './PermissionBar'
 import Composer from './Composer'
@@ -10,6 +9,8 @@ import RewindPanel from './RewindPanel'
 import StartSuggestionsPanel from './StartSuggestionsPanel'
 import type { PermissionModeId } from '../../../shared/types'
 import type { ChatItem, ToolResultInfo } from '../store'
+import { useExperienceProjection } from './experience/ExperienceProjection'
+import ChatStatusBar from './experience/ChatStatusBar'
 
 const VIRTUAL_MESSAGE_THRESHOLD = 100
 const VIRTUAL_MESSAGE_ESTIMATED_HEIGHT = 116
@@ -30,6 +31,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export default function ChatView(): React.JSX.Element | null {
   const t = useT()
+  const projection = useExperienceProjection()
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const providers = useStore((s) => s.providers)
@@ -188,6 +190,7 @@ export default function ChatView(): React.JSX.Element | null {
   return (
     <div
       className={`chat chat-density-${layout.chatDensity}`}
+      data-experience-projection={projection}
       style={{ '--chat-scale': layout.chatScale } as React.CSSProperties}
     >
       <header className="chat-header drag-region">
@@ -200,20 +203,17 @@ export default function ChatView(): React.JSX.Element | null {
           </div>
         </div>
         <div className="chat-controls no-drag">
+          <SessionModelSelect
+            disabled={running}
+            label={t('switchModel')}
+            model={meta.model}
+            onChange={setModel}
+            options={modelOptions}
+            sessionId={meta.id}
+          />
           <select
             className="select"
-            value={meta.model}
-            onChange={(e) => void setModel(e.target.value)}
-            title={t('switchModel')}
-          >
-            {modelOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="select"
+            data-expert-control="true"
             value={meta.permissionMode}
             onChange={(e) => void setPermissionMode(e.target.value as PermissionModeId)}
             title={t('permissionMode')}
@@ -276,6 +276,7 @@ export default function ChatView(): React.JSX.Element | null {
           {meta.isolated && (
             <IconButton
               icon="worktree"
+              expert
               label={t('worktreeShort')}
               onClick={() => void openWorktreePanel()}
             />
@@ -283,6 +284,7 @@ export default function ChatView(): React.JSX.Element | null {
           <IconButton icon="files" label={t('filesShort')} onClick={() => void openFilesPanel()} />
           <IconButton
             icon="terminal"
+            expert
             label={t('terminalShort')}
             onClick={() => void openTerminalPanel()}
           />
@@ -453,39 +455,57 @@ export default function ChatView(): React.JSX.Element | null {
       <Composer running={running} />
       <RewindPanel />
 
-      <footer className="status-bar">
-        <span className={`status-dot status-${meta.status}`} />
-        <span className="status-text">
-          {meta.status === 'running'
-            ? t('statusRunning')
-            : meta.status === 'starting'
-              ? t('statusStarting')
-              : meta.status === 'idle'
-                ? t('statusIdle')
-                : meta.status === 'error'
-                  ? t('statusError')
-                  : t('statusClosed')}
-        </span>
-        <span className="status-item">
-          {t('provider')} {providerName}
-        </span>
-        {session.effectiveModel && (
-          <span className="status-item">
-            {t('model')} {session.effectiveModel}
-          </span>
-        )}
-        <span className="status-spacer" />
-        <span className="status-item">
-          {t('statusContext')} ~{formatTokens(meta.contextTokens)} tokens
-        </span>
-        <span className="status-item">
-          ↑{formatTokens(meta.usage.input + meta.usage.cacheRead + meta.usage.cacheCreation)} ↓
-          {formatTokens(meta.usage.output)}
-        </span>
-        <span className="status-item status-cost">{formatCost(meta.costUsd)}</span>
-      </footer>
+      <ChatStatusBar meta={meta} providerName={providerName} session={session} />
     </div>
   )
+}
+
+interface SessionModelSelectProps {
+  disabled: boolean
+  label: string
+  model: string
+  onChange: (model: string) => Promise<void>
+  options: Array<{ value: string; label: string }>
+  sessionId: string
+}
+
+function SessionModelSelect({
+  disabled,
+  label,
+  model,
+  onChange,
+  options,
+  sessionId
+}: SessionModelSelectProps): React.JSX.Element {
+  const [error, setError] = useState('')
+  useEffect(() => setError(''), [model, sessionId])
+  const errorId = error ? 'session-model-switch-error' : undefined
+
+  return (
+    <div className="session-model-control">
+      <select
+        aria-describedby={errorId}
+        aria-invalid={Boolean(error)}
+        className="select"
+        data-expert-control="true"
+        data-session-model-select="true"
+        disabled={disabled}
+        title={label}
+        value={model}
+        onChange={(event) => {
+          setError('')
+          void onChange(event.target.value).catch((cause) => setError(errorText(cause)))
+        }}
+      >
+        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      {error && <span id={errorId} className="session-model-error" role="alert">{error}</span>}
+    </div>
+  )
+}
+
+function errorText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 interface MessageListProps {
@@ -712,14 +732,15 @@ function findVirtualIndex(offsets: number[], target: number): number {
 }
 
 interface IconButtonProps {
+  expert?: boolean
   icon: HeaderIconName
   label: string
   onClick: () => void
 }
 
-function IconButton({ icon, label, onClick }: IconButtonProps): React.JSX.Element {
+function IconButton({ expert = false, icon, label, onClick }: IconButtonProps): React.JSX.Element {
   return (
-    <button type="button" className="icon-btn" aria-label={label} title={label} onClick={onClick}>
+    <button type="button" className="icon-btn" aria-label={label} title={label} data-expert-control={expert || undefined} onClick={onClick}>
       <HeaderIcon name={icon} />
     </button>
   )

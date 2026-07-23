@@ -260,11 +260,10 @@ export default function OfficeView(): React.JSX.Element {
   const assetPreloadStartedRef = useRef(false)
   const bootFrameRenderedRef = useRef(false)
   const detailUpgradeTimerRef = useRef<number | null>(null)
+  const officeHitRef = useRef({ seq: 0, kind: '', id: '' })
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
-  const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr)
-    ? renderQuality.profile.dpr[1]
-    : renderQuality.profile.dpr
+  const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
 
   const handleOfficeFrame = useCallback(
     (frameMs: number): void => {
@@ -302,12 +301,8 @@ export default function OfficeView(): React.JSX.Element {
   }, [robotAssetsEnabled, sceneDetailEnabled])
 
   // 办公区场景色随主题切换
-  const isLight =
-    themePref === 'light' ||
-    (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
-  const scene = isLight
-    ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' }
-    : { bg: '#10151b', floor: '#202832', grid1: '#34404c', grid2: '#26313a', ground: '#1d252d' }
+  const isLight = themePref === 'light' || (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
+  const scene = isLight ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' } : { bg: '#10151b', floor: '#202832', grid1: '#34404c', grid2: '#26313a', ground: '#1d252d' }
 
   const ids = order.filter((id) => sessions[id])
   const idsKey = ids.join('\0')
@@ -534,9 +529,7 @@ export default function OfficeView(): React.JSX.Element {
         position: OFFICE_CAMERA_POSITION,
         target: OFFICE_CAMERA_TARGET
       }
-  const selectedFacilitySpec = selectedFacility
-    ? OFFICE_FACILITY_SPECS.find((spec) => spec.key === selectedFacility)
-    : undefined
+  const selectedFacilitySpec = selectedFacility ? OFFICE_FACILITY_SPECS.find((spec) => spec.key === selectedFacility) : undefined
   const activeOfficePosition = activeOfficeIndex >= 0 ? positions[activeOfficeIndex] : undefined
   const cameraPose = useMemo(() => {
     if (cameraPreset === 'facilities') {
@@ -562,8 +555,7 @@ export default function OfficeView(): React.JSX.Element {
     if (cameraPreset === 'incidents') return incidentCamera
     return { position: OFFICE_CAMERA_POSITION, target: OFFICE_CAMERA_TARGET }
   }, [activeOfficePosition, cameraPreset, incidentCamera, selectedFacilitySpec])
-  const cameraMinDistance =
-    cameraPreset === 'overview' || (cameraPreset === 'facilities' && !selectedFacilitySpec) ? 5.5 : 2.6
+  const cameraMinDistance = cameraPreset === 'overview' || (cameraPreset === 'facilities' && !selectedFacilitySpec) ? 5.5 : 2.6
   const workstationHitTargets = ids.map((id, i) => ({
     id,
     x: positions[i]?.[0] ?? 0,
@@ -574,7 +566,7 @@ export default function OfficeView(): React.JSX.Element {
     id: spec.sessionId,
     reason: spec.reason,
     x: spec.target[0],
-    y: 0.88,
+    y: 1.27,
     z: spec.target[2]
   }))
   const facilityHitTargets = OFFICE_FACILITY_SPECS.map((spec) => ({
@@ -596,7 +588,8 @@ export default function OfficeView(): React.JSX.Element {
     facilityHitTargets.length === 3 &&
     activitySummary.error === faultHitTargets.length
 
-  const selectOfficeSession = (id: string): void => {
+  const selectOfficeSession = (id: string, kind: 'workstation' | 'walker' = 'workstation'): void => {
+    officeHitRef.current = { seq: officeHitRef.current.seq + 1, kind, id }
     setSelectedFacility(null)
     selectSession(id)
     setCameraPreset('agent')
@@ -607,6 +600,7 @@ export default function OfficeView(): React.JSX.Element {
     setCameraPreset(preset)
   }
   const selectFacility = (key: OfficeFacilityKey): void => {
+    officeHitRef.current = { seq: officeHitRef.current.seq + 1, kind: 'facility', id: key }
     setSelectedFacility(key)
     setCameraPreset('facilities')
   }
@@ -756,6 +750,9 @@ export default function OfficeView(): React.JSX.Element {
           data-office-selected-workstations={activeOfficeId ? 1 : 0}
           data-office-camera-presets={CAMERA_PRESETS.length}
           data-office-active-camera-preset={cameraPreset}
+          data-office-last-hit-seq={officeHitRef.current.seq}
+          data-office-last-hit-kind={officeHitRef.current.kind}
+          data-office-last-hit-id={officeHitRef.current.id}
           data-office-workstation-hit-targets={JSON.stringify(workstationHitTargets)}
           data-office-walker-hit-targets={JSON.stringify(walkerHitTargets)}
           data-office-ops-backplane={1}
@@ -1014,7 +1011,7 @@ export default function OfficeView(): React.JSX.Element {
                     currentTask={officeModel.sessions[id]?.currentTask}
                     taskStats={officeModel.sessions[id]?.taskStats}
                     sessionSignal={officeModel.sessions[id]?.signal}
-                    onSelect={() => selectOfficeSession(id)}
+                    onSelect={() => selectOfficeSession(id, 'workstation')}
                     onOpen={() => focus(id)}
                   />
                 </Suspense>
@@ -1026,7 +1023,7 @@ export default function OfficeView(): React.JSX.Element {
                     activeSessionId={activeOfficeId}
                     loadRobotAssets={robotAssetsEnabled}
                     onAwayChange={handleWalkerAwayChange}
-                    onSelect={selectOfficeSession}
+                    onSelect={(id) => selectOfficeSession(id, 'walker')}
                     onOpen={focus}
                   />
                 </group>

@@ -21,7 +21,8 @@ import type {
   SessionMeta
 } from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
-import ControlCenter from './ControlCenter'
+import ControlCenter from './ControlCenterWithWorkflow'
+import ProviderList from './settings/ProviderList'
 import ProjectSettings from '../pages/ProjectSettings'
 
 type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
@@ -245,9 +246,6 @@ export default function SettingsPage(): React.JSX.Element {
       ...d,
       modelRoutingRules: (d.modelRoutingRules ?? []).filter((rule) => rule.id !== id)
     }))
-
-  const healthOf = (pid: string): ProviderHealthView | undefined =>
-    health.find((h) => h.providerId === (pid || 'local-login'))
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -1274,78 +1272,16 @@ export default function SettingsPage(): React.JSX.Element {
             )}
 
             {tab === 'providers' && (
-              <>
-                <div className="settings-section-head">
-                  <h3 className="settings-h3">{t('tabProviders')}</h3>
-                  <button className="btn btn-ghost btn-sm" onClick={() => openProviderEditor('new')}>
-                    {t('addProvider')}
-                  </button>
-                </div>
-                <div className="provider-list">
-                  {providers.length === 0 && (
-                    <div className="provider-empty">{t('providerEmpty')}</div>
-                  )}
-                  {providers.map((p) => {
-                    const h = healthOf(p.id)
-                    return (
-                      <div key={p.id} className="provider-row">
-                        <div className="provider-row-body">
-                          <div className="provider-row-name">
-                            {p.name}
-                            {!p.hasToken && (
-                              <span className="provider-tag-warn">{t('noKeyConfigured')}</span>
-                            )}
-                            {h && (
-                              <span
-                                className={`health-dot ${h.healthy ? 'health-ok' : 'health-bad'}`}
-                                title={
-                                  h.healthy
-                                    ? t('healthOkTip', {
-                                        s: h.successes,
-                                        f: h.failures,
-                                        latencyMs: h.latencyEmaMs ?? h.lastLatencyMs ?? '-'
-                                      })
-                                    : t('healthBadTip', {
-                                        n: h.consecutiveFailures,
-                                        error: h.recentFailures?.[0]?.message ?? h.lastError ?? '-'
-                                      })
-                                }
-                              />
-                            )}
-                          </div>
-                          <div className="provider-row-sub">
-                            {p.baseUrl || t('officialEndpoint')} ·{' '}
-                            {t('modelsCount', { n: p.models.length })} ·{' '}
-                            {p.hasToken
-                              ? `${t('apiKeyCountLabel', { n: p.keyCount ?? 1 })}${p.activeKeyLabel ? ` · ${p.activeKeyLabel}` : ''}`
-                              : t('noKeyConfigured')}
-                          </div>
-                          {providerProbe?.providerId === p.id && (
-                            <div className={`provider-probe-message ${providerProbe.ok ? 'provider-probe-ok' : 'provider-probe-bad'}`}>
-                              {providerProbe.message}
-                            </div>
-                          )}
-                        </div>
-                        <div className="provider-row-actions">
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            disabled={checkingProviderId === p.id}
-                            onClick={() => void probeProvider(p)}
-                          >
-                            {checkingProviderId === p.id ? t('providerProbing') : t('providerProbe')}
-                          </button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => openProviderEditor(p)}>
-                            {t('rename')}
-                          </button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => void remove(p)}>
-                            {t('delete')}
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </>
+              <ProviderList
+                providers={providers}
+                health={health}
+                providerProbe={providerProbe}
+                checkingProviderId={checkingProviderId}
+                onAdd={() => openProviderEditor('new')}
+                onProbe={(provider) => void probeProvider(provider)}
+                onEdit={openProviderEditor}
+                onRemove={(provider) => void remove(provider)}
+              />
             )}
 
             {tab === 'plugins' && (

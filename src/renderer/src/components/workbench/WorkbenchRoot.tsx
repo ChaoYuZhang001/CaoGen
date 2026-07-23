@@ -16,6 +16,7 @@ import RoutinePanel from './RoutinePanel'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import type { LayoutSettings, Routine, SessionMeta } from '../../../../shared/types'
+import { useExperienceProjection } from '../experience/ExperienceProjection'
 
 type RoutineEditorState = { mode: 'create' } | { mode: 'edit'; id: string }
 
@@ -38,6 +39,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export default function WorkbenchRoot(): React.JSX.Element {
   const t = useT()
+  const projection = useExperienceProjection()
   const [routineEditor, setRoutineEditor] = useState<RoutineEditorState | null>(null)
   const activeId = useStore((s) => s.activeId)
   const order = useStore((s) => s.order)
@@ -109,11 +111,9 @@ export default function WorkbenchRoot(): React.JSX.Element {
   const openMemoryPanel = useStore((s) => s.openMemoryPanel)
   const closeMemoryPanel = useStore((s) => s.closeMemoryPanel)
   const [sideWidth, setSideWidth] = useState(layout.workbenchSideWidth)
-
   useEffect(() => {
     setSideWidth(layout.workbenchSideWidth)
   }, [layout.workbenchSideWidth])
-
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
     void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
       console.error('[agent-desk] Failed to persist workbench layout:', error)
@@ -243,6 +243,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
   return (
     <div
       className={`workbench ${sideOpen ? 'workbench-split' : ''}`}
+      data-experience-projection={projection}
       style={{ '--workbench-side-width': `${sideWidth}px` } as React.CSSProperties}
     >
       <DeskControlRail

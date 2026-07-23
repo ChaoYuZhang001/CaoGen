@@ -7,31 +7,29 @@ import type {
   ProviderApiKeyInput,
   ProviderApiKeyUpdateInput,
   ProviderApiKeyView,
+  ProviderCredentialStorage,
   ProviderView
 } from '../../../shared/types'
+import ProviderSavedKeys from './settings/ProviderSavedKeys'
+import type { ProviderKeyDraft } from './settings/ProviderSavedKeys'
 
 interface Props {
   /** null = 新建;否则编辑该 Provider */
   provider: ProviderView | null
   onClose: () => void
 }
-
-interface KeyDraft {
-  label: string
-  disabled: boolean
-  remove: boolean
-}
-
 export default function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
   const t = useT()
   const createProvider = useStore((s) => s.createProvider)
   const updateProvider = useStore((s) => s.updateProvider)
-
   const [name, setName] = useState(provider?.name ?? '')
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
   const [engine, setEngine] = useState<EngineKind>(provider?.engine ?? 'openai')
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
+  const [credentialHeaderNamesText, setCredentialHeaderNamesText] = useState(
+    (provider?.credentialHeaderNames ?? []).join('\n')
+  )
   const [budgetUsd, setBudgetUsd] = useState(provider?.budgetUsd ? String(provider.budgetUsd) : '')
   const [openaiProtocol, setOpenaiProtocol] = useState<OpenAIProtocol>(provider?.openaiProtocol ?? 'responses')
   const [note, setNote] = useState(provider?.note ?? '')
@@ -40,7 +38,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [tokenTouched, setTokenTouched] = useState(false)
   const [additionalKeysText, setAdditionalKeysText] = useState('')
   const [activeKeyId, setActiveKeyId] = useState(provider?.activeKeyId ?? '')
-  const [keyDrafts, setKeyDrafts] = useState<Record<string, KeyDraft>>(() =>
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, ProviderKeyDraft>>(() =>
     Object.fromEntries(
       (provider?.apiKeys ?? []).map((key) => [
         key.id,
@@ -75,6 +73,8 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         baseUrl: baseUrl.trim(),
         token: token.trim() || undefined,
         providerId: provider?.id,
+        customHeaders: customHeaders.trim() || undefined,
+        credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
         openaiProtocol
       })
       if (!result.ok) {
@@ -137,6 +137,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           models,
           engine,
           customHeaders: customHeaders.trim(),
+          credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           openaiProtocol,
           note: note.trim(),
@@ -154,6 +155,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           models,
           engine,
           customHeaders: customHeaders.trim(),
+          credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
           budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
           openaiProtocol,
           note: note.trim(),
@@ -206,6 +208,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         )}
 
         {presetHint && <div className="notice notice-info">{presetHint}</div>}
+        <ProviderCredentialMigrationNotice provider={provider} />
 
         <label className="field-label">{t('nameLabel')}</label>
         <input
@@ -230,8 +233,11 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           onChange={(e) => setEngine(e.target.value as EngineKind)}
         >
           <option value="openai">{t('providerEngineOpenAI')}</option>
+          <option value="anthropic">{t('providerEngineAnthropic')}</option>
           <option value="claude">{t('providerEngineClaude')}</option>
         </select>
+
+        <ProviderCredentialStorageNotice storage={provider?.credentialStorage} />
 
         <label className="field-label">
           {t('apiKeyLabelPrimary')}
@@ -258,36 +264,14 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           onChange={(e) => setTokenLabel(e.target.value)}
         />
 
-        {isEdit && savedKeys.length > 0 && (
-          <div className="provider-key-panel">
-            <div className="field-label-row">
-              <label className="field-label">{t('apiKeyListLabel')}</label>
-              <span className="field-hint">{t('apiKeyCountLabel', { n: provider.keyCount ?? savedKeys.filter((key) => !key.disabled).length })}</span>
-            </div>
-            <div className="provider-key-list">
-              {savedKeys.map((key) => (
-                <SavedKeyRow
-                  key={key.id}
-                  apiKey={key}
-                  draft={keyDrafts[key.id] ?? { label: key.label, disabled: key.disabled, remove: false }}
-                  activeKeyId={activeKeyId || provider.activeKeyId || ''}
-                  onActive={() => setActiveKeyId(key.id)}
-                  onChange={(patch) => {
-                    setKeyDrafts((prev) => ({
-                      ...prev,
-                      [key.id]: {
-                        label: prev[key.id]?.label ?? key.label,
-                        disabled: prev[key.id]?.disabled ?? key.disabled,
-                        remove: prev[key.id]?.remove ?? false,
-                        ...patch
-                      }
-                    }))
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+        <ProviderSavedKeys
+          provider={provider}
+          savedKeys={savedKeys}
+          keyDrafts={keyDrafts}
+          activeKeyId={activeKeyId}
+          onActiveKeyChange={setActiveKeyId}
+          onKeyDraftsChange={setKeyDrafts}
+        />
 
         <label className="field-label">{t('additionalApiKeysLabel')}</label>
         <textarea
@@ -330,8 +314,19 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           className="input input-block textarea"
           value={customHeaders}
           rows={2}
-          placeholder={'X-Gateway-Route: openai\nX-Custom: value'}
+          placeholder={'X-Gateway-Route: openai\nX-Trace-Id: request-label'}
           onChange={(e) => setCustomHeaders(e.target.value)}
+        />
+
+        <label className="field-label">
+          {t('credentialHeaderNamesLabel')} <span className="field-hint">{t('credentialHeaderNamesHint')}</span>
+        </label>
+        <textarea
+          className="input input-block textarea"
+          value={credentialHeaderNamesText}
+          rows={2}
+          placeholder={'api-key\nOcp-Apim-Subscription-Key'}
+          onChange={(e) => setCredentialHeaderNamesText(e.target.value)}
         />
 
         <label className="field-label">
@@ -378,71 +373,44 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   )
 }
 
-function SavedKeyRow({
-  apiKey,
-  draft,
-  activeKeyId,
-  onActive,
-  onChange
+function providerCredentialNotice(
+  storage: ProviderCredentialStorage
+): { key: string; tone: 'notice-info' | 'notice-error' } | null {
+  switch (storage) {
+    case 'session':
+      return { key: 'providerCredentialSessionNotice', tone: 'notice-info' }
+    case 'legacy-b64':
+      return { key: 'providerCredentialLegacyNotice', tone: 'notice-info' }
+    case 'unavailable':
+      return { key: 'providerCredentialUnavailableNotice', tone: 'notice-error' }
+    case 'mixed':
+      return { key: 'providerCredentialMixedNotice', tone: 'notice-info' }
+    case 'none':
+    case 'encrypted':
+      return null
+  }
+}
+
+function ProviderCredentialMigrationNotice({
+  provider
 }: {
-  apiKey: ProviderApiKeyView
-  draft: KeyDraft
-  activeKeyId: string
-  onActive: () => void
-  onChange: (patch: Partial<KeyDraft>) => void
-}): React.JSX.Element {
+  provider: ProviderView | null
+}): React.JSX.Element | null {
   const t = useT()
-  const removed = draft.remove
-  const disabled = draft.disabled || removed
-  const lastUsed = apiKey.lastUsedAt
-    ? t('apiKeyLastUsed', { time: new Date(apiKey.lastUsedAt).toLocaleString() })
-    : t('apiKeyNeverUsed')
-  const lastFailure = apiKey.lastFailureAt
-    ? t('apiKeyLastFailure', {
-        reason: apiKey.lastFailureReason || '-',
-        time: new Date(apiKey.lastFailureAt).toLocaleString()
-      })
-    : ''
-  return (
-    <div className={`provider-key-row ${removed ? 'provider-key-row-removed' : ''}`}>
-      <label className="provider-key-active">
-        <input
-          type="radio"
-          name="provider-active-key"
-          checked={activeKeyId === apiKey.id}
-          disabled={disabled}
-          onChange={onActive}
-        />
-        <span>{t('apiKeyActive')}</span>
-      </label>
-      <div className="provider-key-main">
-        <input
-          className="input input-block provider-key-name"
-          value={draft.label}
-          disabled={removed}
-          onChange={(e) => onChange({ label: e.target.value })}
-        />
-        <div className="provider-key-meta">{[lastUsed, lastFailure].filter(Boolean).join(' · ')}</div>
-      </div>
-      <label className="provider-key-check">
-        <input
-          type="checkbox"
-          checked={draft.disabled}
-          disabled={removed}
-          onChange={(e) => onChange({ disabled: e.target.checked })}
-        />
-        <span>{t('apiKeyDisabled')}</span>
-      </label>
-      <label className="provider-key-check">
-        <input
-          type="checkbox"
-          checked={removed}
-          onChange={(e) => onChange({ remove: e.target.checked })}
-        />
-        <span>{t('apiKeyRemove')}</span>
-      </label>
-    </div>
-  )
+  if (!provider?.credentialMigrationRequired) return null
+  return <div className="notice notice-error">{t('providerCredentialMigrationNotice')}</div>
+}
+
+function ProviderCredentialStorageNotice({
+  storage
+}: {
+  storage: ProviderCredentialStorage | undefined
+}): React.JSX.Element | null {
+  const t = useT()
+  if (!storage) return null
+  const notice = providerCredentialNotice(storage)
+  if (!notice) return null
+  return <div className={`notice ${notice.tone}`}>{t(notice.key)}</div>
 }
 
 function parseAdditionalKeys(value: string): ProviderApiKeyInput[] {
@@ -459,9 +427,16 @@ function parseAdditionalKeys(value: string): ProviderApiKeyInput[] {
     })
 }
 
+function parseCredentialHeaderNames(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function buildKeyUpdates(
   savedKeys: ProviderApiKeyView[],
-  drafts: Record<string, KeyDraft>
+  drafts: Record<string, ProviderKeyDraft>
 ): ProviderApiKeyUpdateInput[] {
   return savedKeys.flatMap((key) => {
     const draft = drafts[key.id]
