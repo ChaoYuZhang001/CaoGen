@@ -6,11 +6,14 @@
 ## Release Decision
 
 The package and lockfile version is `0.1.7`. CaoGen remains a multi-vendor AI work desktop.
-The candidate branch has a clean Deep
-report with `157 total / 154 required pass / 3 optional skip / 0 blocked / 0 fail`,
-but that report must be rerun after the final merge commit is selected. This is a
-0.1.x wedge release, not CaoGen 1.0 stable and not proof that all Agent Work OS
-requirements are complete.
+The last complete clean Deep report is bound to `4a3f6359`, with
+`158 total / 155 required pass / 3 optional skip / 0 blocked / 0 fail`. A clean
+rerun on current `main@61e895dc` passed candidate preflight but stopped at the
+required Assistant/Studio performance check while the reference Intel Mac was on
+battery with Low Power Mode enabled; it recorded `82 pass / 1 fail / 76 blocked`.
+The exact current candidate therefore has no complete green Deep evidence and must
+be rerun under a valid performance environment. This is a 0.1.x wedge release, not
+CaoGen 1.0 stable and not proof that all Agent Work OS requirements are complete.
 
 One Developer ID Application identity is available on the current Intel Mac. The
 release configuration, Hardened Runtime, entitlements, DMG/ZIP targets, and minimum
@@ -54,9 +57,10 @@ reports, local evidence, and intermediate build directories are never release as
 
 - Formal 1.0 acceptance remains open: 21 of 64 P0 requirements are currently verified
   and 43 remain partial, foundation-only, or planned.
-- The clean Deep has three explicit optional skips: real external-network parity for
-  two China conditions and one optional real-engine E2E. They are not passes and are
-  not claimed by this release.
+- The last complete clean Deep has three explicit optional skips: real
+  external-network parity for two China conditions and one optional real-engine E2E.
+  They are not passes and are not claimed by this release. The current candidate run
+  stopped before reaching those checks.
 - Provider availability depends on user-supplied real keys, account access, network,
   compatible protocols, and quota.
 - The current 3D office uses robot assets. Richer character art remains roadmap work.
@@ -69,15 +73,20 @@ reports, local evidence, and intermediate build directories are never release as
 
 - `p2_required`: release-scope P2 evidence is not yet fully proved on the exact
   candidate commit.
-- `release_identity`: the gate hardening changes are not yet bound to a clean final
-  candidate commit.
-- `deep_test`: the full required Deep gate must be rerun on that exact clean commit.
+- `deep_test`: the clean current-commit run stopped at the required performance gate;
+  rerun the full gate under normal power on the final candidate commit.
+- `dag_finalization`: the failed Deep run stopped before the required durable DAG
+  finalization crash E2E executed.
 - `packaging_release`: no complete provenance-bound 12-asset matrix exists. The current
   process lacks notarization configuration, native arm64 evidence requires Apple
   Silicon, and signed Windows x64 distribution/install evidence requires a Windows
   signing lane.
+- `product_positioning`: the required public-positioning audit is not yet bound to
+  the final candidate evidence set.
 - `release_notes`: this is a draft. Exact asset names, SHA256 values, platform support,
   signing state, final Doctor binding, and post-upload audit are still missing.
+- `github_release_assets`: no public 0.1.7 asset set exists for the required post-upload
+  text and asset audit.
 - Do not publish while Release Doctor is `not_ready`.
 
 ## Security Statement
