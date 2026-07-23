@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { withSafeLocalGitConfig } from './git/safe-git'
+import { inspectSingleFilePatch } from './git/git-patch-inspection'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
 import type {
   WorkspaceHunkResult,
   WorkspaceDiff,
@@ -21,7 +22,7 @@ const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 
 export function applyHunk(
   cwd: string,
-  _filePath: string,
+  filePath: string,
   hunkPatch: string,
   options: { reverse?: boolean } = {}
 ): WorkspaceHunkResult {
@@ -31,11 +32,14 @@ export function applyHunk(
   if (hunkPatch.length > MAX_DIFF_CHARS) return { ok: false, error: 'hunk patch 过大' }
 
   const patch = hunkPatch.endsWith('\n') ? hunkPatch : `${hunkPatch}\n`
+  const pathCheck = inspectSingleFilePatch(cwd, filePath, patch)
+  if (!pathCheck.ok) return pathCheck
   const args = options.reverse ? ['apply', '-R', '--whitespace=nowarn'] : ['apply', '--cached', '--whitespace=nowarn']
   try {
     execFileSync('git', withSafeLocalGitConfig(['-C', cwd, ...args]), {
       input: patch,
       encoding: 'utf8',
+      env: isolatedLocalGitEnv(process.env),
       timeout: 30_000,
       maxBuffer: MAX_EXEC_BUFFER,
       stdio: ['pipe', 'pipe', 'pipe']
@@ -116,41 +120,7 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
       continue
     }
     rawBytes += buffer.length
-    if (buffer.includes(0) || buffer.length > MAX_UNTRACKED_FILE_BYTES) {
-      files.push({
-        oldPath: relPath,
-        newPath: relPath,
-        status: 'binary',
-        hunks: [],
-        binary: true
-      })
-      continue
-    }
-
-    const lines = buffer.toString('utf8').split(/\r?\n/)
-    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-    const patchHeader = [`diff --git a/${relPath} b/${relPath}`, 'new file mode 100644', '--- /dev/null', `+++ b/${relPath}`]
-    const patchLines = [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]
-    files.push({
-      oldPath: relPath,
-      newPath: relPath,
-      status: 'added',
-      hunks: [
-        {
-          header: `@@ -0,0 +1,${lines.length} @@`,
-          oldStart: 0,
-          oldLines: 0,
-          newStart: 1,
-          newLines: lines.length,
-          patch: `${patchHeader.join('\n')}\n${patchLines.join('\n')}\n`,
-          lines: lines.map<WorkspaceDiffLine>((line, idx) => ({
-            type: 'add',
-            text: line,
-            newLine: idx + 1
-          }))
-        }
-      ]
-    })
+    files.push(untrackedFileDiff(relPath, buffer))
   }
 
   return { files, rawBytes }
@@ -168,7 +138,7 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     currentHunk.patch = `${currentFile.patchHeader.join('\n')}\n${currentHunk.patchLines.join('\n')}\n`
   }
 
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.split('\n')) {
     if (line.startsWith('diff --git ')) {
       finalizeHunk()
       currentFile = createFileFromHeader(line)
@@ -262,7 +232,7 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     if (line.startsWith(' ')) {
       currentHunk.lines.push({
         type: 'context',
-        text: line.slice(1),
+        text: displayDiffLine(line),
         oldLine,
         newLine
       })
@@ -274,7 +244,7 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     if (line.startsWith('+')) {
       currentHunk.lines.push({
         type: 'add',
-        text: line.slice(1),
+        text: displayDiffLine(line),
         newLine
       })
       newLine += 1
@@ -284,7 +254,7 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
     if (line.startsWith('-')) {
       currentHunk.lines.push({
         type: 'delete',
-        text: line.slice(1),
+        text: displayDiffLine(line),
         oldLine
       })
       oldLine += 1
@@ -300,6 +270,53 @@ function parseUnifiedDiff(text: string): WorkspaceDiffFile[] {
       return cleanHunk
     })
   }))
+}
+
+function untrackedFileDiff(relPath: string, buffer: Buffer): WorkspaceDiffFile {
+  const text = buffer.toString('utf8')
+  if (
+    buffer.includes(0) ||
+    buffer.length > MAX_UNTRACKED_FILE_BYTES ||
+    !Buffer.from(text, 'utf8').equals(buffer)
+  ) {
+    return { oldPath: relPath, newPath: relPath, status: 'binary', hunks: [], binary: true }
+  }
+  if (buffer.length === 0) return { oldPath: relPath, newPath: relPath, status: 'added', hunks: [] }
+  const hasFinalNewline = text.endsWith('\n')
+  const lines = text.split('\n')
+  if (hasFinalNewline) lines.pop()
+  const header = `@@ -0,0 +1,${lines.length} @@`
+  const patchHeader = [
+    `diff --git a/${relPath} b/${relPath}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${relPath}`
+  ]
+  const patchLines = [header, ...lines.map((line) => `+${line}`)]
+  if (!hasFinalNewline) patchLines.push('\\ No newline at end of file')
+  return {
+    oldPath: relPath,
+    newPath: relPath,
+    status: 'added',
+    hunks: [{
+      header,
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: lines.length,
+      patch: `${patchHeader.join('\n')}\n${patchLines.join('\n')}\n`,
+      lines: lines.map<WorkspaceDiffLine>((line, index) => ({
+        type: 'add',
+        text: line.endsWith('\r') ? line.slice(0, -1) : line,
+        newLine: index + 1
+      }))
+    }]
+  }
+}
+
+function displayDiffLine(line: string): string {
+  const text = line.slice(1)
+  return text.endsWith('\r') ? text.slice(0, -1) : text
 }
 
 function createFileFromHeader(line: string): ParsedWorkspaceDiffFile {

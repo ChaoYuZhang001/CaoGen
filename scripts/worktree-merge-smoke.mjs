@@ -50,6 +50,28 @@ try {
     path.join(outDir, 'main', 'git', 'auto-merger.js'),
     path.join(outDir, 'src', 'main', 'git', 'auto-merger.js')
   ])).href)
+  const autoMergeOperationEffects = []
+  let activeAutoMergeEffects = 0
+  let maxConcurrentAutoMergeEffects = 0
+  const applyPatchThroughObservedEffect = async (input) => {
+    activeAutoMergeEffects += 1
+    maxConcurrentAutoMergeEffects = Math.max(maxConcurrentAutoMergeEffects, activeAutoMergeEffects)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      const applied = worktreeMerge.applySquashPatch(input.repoRoot, input.patchText)
+      const operationId = `smoke-auto-merge-${autoMergeOperationEffects.length + 1}`
+      autoMergeOperationEffects.push({
+        operationId,
+        effectStatus: 'confirmed',
+        executionId: input.executionId,
+        taskId: input.taskId,
+        patchSha256: input.patchSha256
+      })
+      return { ...applied, effectStatus: 'confirmed', operationId }
+    } finally {
+      activeAutoMergeEffects -= 1
+    }
+  }
 
   mkdirSync(projectDir, { recursive: true })
   git(projectDir, ['init'])
@@ -174,14 +196,18 @@ try {
 
   const autoRepo = path.join(tempRoot, 'auto-merge-repo')
   const autoWorktree = path.join(tempRoot, 'auto-merge-worktree')
+  const autoWorktreeTwo = path.join(tempRoot, 'auto-merge-worktree-two')
   mkdirSync(autoRepo, { recursive: true })
   initRepo(autoRepo, 'auto.txt', 'base\n')
   const autoBaseSha = git(autoRepo, ['rev-parse', 'HEAD'])
   git(autoRepo, ['worktree', 'add', '-b', 'feature/auto-merge', autoWorktree, 'HEAD'])
+  git(autoRepo, ['worktree', 'add', '-b', 'feature/auto-merge-two', autoWorktreeTwo, 'HEAD'])
   writeFileSync(path.join(autoWorktree, 'auto.txt'), 'base\nauto merged\n', 'utf8')
-  const autoResult = autoMerger.runTaskDagAutoMerge({
+  writeFileSync(path.join(autoWorktreeTwo, 'second.txt'), 'second auto merge\n', 'utf8')
+  const autoResult = await autoMerger.runTaskDagAutoMerge({
     execution: executionView('auto-dag', 'success', [
-      taskView('apply-auto', 'success', ['auto-session'])
+      taskView('apply-auto', 'success', ['auto-session']),
+      taskView('apply-auto-two', 'success', ['auto-session-two'])
     ]),
     sessions: [
       {
@@ -192,14 +218,146 @@ try {
         baseSha: autoBaseSha,
         branch: 'feature/auto-merge',
         resultText: 'ok'
+      },
+      {
+        sessionId: 'auto-session-two',
+        taskId: 'apply-auto-two',
+        repoRoot: autoRepo,
+        worktreePath: autoWorktreeTwo,
+        baseSha: autoBaseSha,
+        branch: 'feature/auto-merge-two',
+        resultText: 'ok'
       }
     ],
-    verificationCommand: 'git diff --name-only -- auto.txt'
+    verificationCommand: 'git diff --name-only -- auto.txt second.txt',
+    applyPatch: applyPatchThroughObservedEffect
   })
   assertEqual(autoResult.status, 'success')
+  assertEqual(autoResult.mergedCount, 2)
   assertEqual(autoResult.entries[0].status, 'merged')
+  assertEqual(autoResult.entries[0].effectStatus, 'confirmed')
+  assertEqual(autoResult.entries[0].operationId, 'smoke-auto-merge-1')
+  assertEqual(autoResult.entries[1].status, 'merged')
+  assertEqual(autoResult.entries[1].effectStatus, 'confirmed')
+  assertEqual(autoResult.entries[1].operationId, 'smoke-auto-merge-2')
   assertEqual(autoResult.verification.status, 'passed')
   assert(readFileSync(path.join(autoRepo, 'auto.txt'), 'utf8').includes('auto merged'), 'auto merge should update main repo')
+  assertEqual(readFileSync(path.join(autoRepo, 'second.txt'), 'utf8'), 'second auto merge\n')
+  assertEqual(git(autoWorktree, ['rev-parse', 'HEAD']), autoBaseSha)
+  assertEqual(git(autoWorktreeTwo, ['rev-parse', 'HEAD']), autoBaseSha)
+  assertEqual(git(autoWorktree, ['diff', '--cached', '--name-only']), '')
+  assertEqual(git(autoWorktree, ['diff', '--name-only']), 'auto.txt')
+  assertEqual(git(autoWorktreeTwo, ['diff', '--cached', '--name-only']), '')
+  assertEqual(git(autoWorktreeTwo, ['ls-files', '--others', '--exclude-standard']), 'second.txt')
+
+  const reconciliationRepo = path.join(tempRoot, 'auto-merge-reconciliation-repo')
+  const reconciliationWorktreeOne = path.join(tempRoot, 'auto-merge-reconciliation-worktree-one')
+  const reconciliationWorktreeTwo = path.join(tempRoot, 'auto-merge-reconciliation-worktree-two')
+  mkdirSync(reconciliationRepo, { recursive: true })
+  initRepo(reconciliationRepo, 'reconciliation.txt', 'base\n')
+  const reconciliationBaseSha = git(reconciliationRepo, ['rev-parse', 'HEAD'])
+  git(reconciliationRepo, [
+    'worktree',
+    'add',
+    '-b',
+    'feature/reconciliation-one',
+    reconciliationWorktreeOne,
+    'HEAD'
+  ])
+  git(reconciliationRepo, [
+    'worktree',
+    'add',
+    '-b',
+    'feature/reconciliation-two',
+    reconciliationWorktreeTwo,
+    'HEAD'
+  ])
+  writeFileSync(path.join(reconciliationWorktreeOne, 'reconciliation-one.txt'), 'first patch\n', 'utf8')
+  writeFileSync(path.join(reconciliationWorktreeTwo, 'reconciliation-two.txt'), 'second patch\n', 'utf8')
+  const reconciliationTasks = [
+    taskView('reconciliation-one', 'success', ['reconciliation-session-one']),
+    taskView('reconciliation-two', 'success', ['reconciliation-session-two'])
+  ]
+  const reconciliationSessions = [
+    {
+      sessionId: 'reconciliation-session-one',
+      taskId: 'reconciliation-one',
+      repoRoot: reconciliationRepo,
+      worktreePath: reconciliationWorktreeOne,
+      baseSha: reconciliationBaseSha,
+      branch: 'feature/reconciliation-one',
+      resultText: 'ok'
+    },
+    {
+      sessionId: 'reconciliation-session-two',
+      taskId: 'reconciliation-two',
+      repoRoot: reconciliationRepo,
+      worktreePath: reconciliationWorktreeTwo,
+      baseSha: reconciliationBaseSha,
+      branch: 'feature/reconciliation-two',
+      resultText: 'ok'
+    }
+  ]
+
+  let waitingApplyCalls = 0
+  const waitingReconciliationResult = await autoMerger.runTaskDagAutoMerge({
+    execution: executionView('waiting-reconciliation-dag', 'success', reconciliationTasks),
+    sessions: reconciliationSessions,
+    applyPatch: async () => {
+      waitingApplyCalls += 1
+      return {
+        ok: false,
+        error: 'patch effect outcome is unknown',
+        effectStatus: 'waiting_reconciliation',
+        operationId: 'waiting-reconciliation-operation',
+        reconciliationRequired: true
+      }
+    }
+  })
+  assertEqual(waitingApplyCalls, 1)
+  assertEqual(waitingReconciliationResult.status, 'failed')
+  assertEqual(waitingReconciliationResult.entries.length, 2)
+  assertEqual(waitingReconciliationResult.entries[0].status, 'failed')
+  assertEqual(waitingReconciliationResult.entries[0].effectStatus, 'waiting_reconciliation')
+  assert(waitingReconciliationResult.entries[0].reconciliationRequired === true)
+  assertEqual(waitingReconciliationResult.entries[1].status, 'skipped')
+  assert(
+    waitingReconciliationResult.entries[1].error?.includes('前序 patch Effect 尚未唯一收敛'),
+    'later patch should be skipped while the first Effect awaits reconciliation'
+  )
+
+  let replayCalls = 0
+  let applyAfterReplayCalls = 0
+  const replayReconciliationResult = await autoMerger.runTaskDagAutoMerge({
+    execution: executionView('replay-reconciliation-dag', 'success', reconciliationTasks),
+    sessions: reconciliationSessions,
+    replayPatch: async () => {
+      replayCalls += 1
+      return {
+        ok: false,
+        error: 'confirmed ledger receipt does not match repository state',
+        effectStatus: 'confirmed',
+        operationId: 'confirmed-reconciliation-operation',
+        reconciliationRequired: true
+      }
+    },
+    applyPatch: async () => {
+      applyAfterReplayCalls += 1
+      throw new Error('applyPatch must not run after replay requires reconciliation')
+    }
+  })
+  assertEqual(replayCalls, 1)
+  assertEqual(applyAfterReplayCalls, 0)
+  assertEqual(replayReconciliationResult.status, 'failed')
+  assertEqual(replayReconciliationResult.entries.length, 2)
+  assertEqual(replayReconciliationResult.entries[0].status, 'failed')
+  assertEqual(replayReconciliationResult.entries[0].effectStatus, 'confirmed')
+  assert(replayReconciliationResult.entries[0].reconciliationRequired === true)
+  assertEqual(replayReconciliationResult.entries[1].status, 'skipped')
+  assert(
+    replayReconciliationResult.entries[1].error?.includes('前序 patch Effect 尚未唯一收敛'),
+    'confirmed replay mismatch should block every later patch'
+  )
 
   const rollbackRepo = path.join(tempRoot, 'auto-merge-rollback-repo')
   const rollbackWorktree = path.join(tempRoot, 'auto-merge-rollback-worktree')
@@ -208,7 +366,7 @@ try {
   const rollbackBaseSha = git(rollbackRepo, ['rev-parse', 'HEAD'])
   git(rollbackRepo, ['worktree', 'add', '-b', 'feature/rollback', rollbackWorktree, 'HEAD'])
   writeFileSync(path.join(rollbackWorktree, 'rollback.txt'), 'base\nwill rollback\n', 'utf8')
-  const rollbackResult = autoMerger.runTaskDagAutoMerge({
+  const rollbackResult = await autoMerger.runTaskDagAutoMerge({
     execution: executionView('rollback-dag', 'failed', [
       taskView('blocked-first', 'failed', []),
       taskView('rollback-task', 'success', ['rollback-session'])
@@ -224,15 +382,24 @@ try {
         resultText: 'ok'
       }
     ],
-    verificationCommand: `${JSON.stringify(process.execPath)} -e "process.exit(17)"`
+    verificationCommand: `${JSON.stringify(process.execPath)} -e "process.exit(17)"`,
+    applyPatch: applyPatchThroughObservedEffect
   })
   assertEqual(rollbackResult.status, 'rolled-back')
   assertEqual(rollbackResult.entries[0].status, 'skipped')
   assertEqual(rollbackResult.entries[1].status, 'rolled-back')
+  assertEqual(rollbackResult.entries[1].effectStatus, 'confirmed')
   assertEqual(rollbackResult.verification.status, 'failed')
+  assert(!('effectStatus' in rollbackResult.rollback), 'rollback must not be represented as an Effect')
   assert(
     !readFileSync(path.join(rollbackRepo, 'rollback.txt'), 'utf8').includes('will rollback'),
     'failed verification should rollback patch'
+  )
+  assertEqual(autoMergeOperationEffects.length, 3)
+  assertEqual(maxConcurrentAutoMergeEffects, 1)
+  assert(
+    autoMergeOperationEffects.every((effect) => effect.effectStatus === 'confirmed'),
+    'autoMerge callback should expose confirmed Effects'
   )
 
   console.log('worktreeMerge smoke ok')

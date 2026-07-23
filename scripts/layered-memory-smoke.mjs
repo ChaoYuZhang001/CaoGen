@@ -18,6 +18,7 @@ try {
   const manager = await import(pathToFileURL(findCompiled(outDir, 'memory-manager.js')).href)
   const retriever = await import(pathToFileURL(findCompiled(outDir, 'memory-retriever.js')).href)
   const writer = await import(pathToFileURL(findCompiled(outDir, 'memory-writer.js')).href)
+  const projectStore = await import(pathToFileURL(findCompiled(outDir, 'memoryStore.js')).href)
 
   const projectMemory = await manager.addMemory(storeRoot, {
     layer: 'project',
@@ -71,7 +72,11 @@ try {
     projectRoot: projectA,
     source: 'smoke:auto'
   })
-  assert(extracted?.layer === 'project', 'writeExtractedMemory should persist explicit project memory')
+  assert(extracted?.status === 'draft', 'writeExtractedMemory should create a pending project Memory draft')
+  const activeAfterExtraction = await manager.listMemories(storeRoot)
+  assert(!activeAfterExtraction.some((entry) => entry.title === extracted.title), 'auto extraction must not enter active layered memory')
+  const projectMemoryState = await projectStore.readProjectMemory(projectA, storeRoot)
+  assert(projectMemoryState.drafts.some((entry) => entry.id === extracted.id), 'auto extraction draft should be reviewable')
 
   const prompt = await retriever.buildLayeredMemoryPrompt({
     rootDir: storeRoot,
@@ -118,16 +123,22 @@ function compile(files, outDir) {
 }
 
 function findCompiled(root, fileName) {
+  const found = findCompiledOptional(root, fileName)
+  if (found) return found
+  throw new Error(`compiled ${fileName} not found`)
+}
+
+function findCompiledOptional(root, fileName) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const fullPath = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      const found = findCompiled(fullPath, fileName)
+      const found = findCompiledOptional(fullPath, fileName)
       if (found) return found
     } else if (entry.isFile() && entry.name === fileName) {
       return fullPath
     }
   }
-  throw new Error(`compiled ${fileName} not found`)
+  return null
 }
 
 function assert(condition, message) {

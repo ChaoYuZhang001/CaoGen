@@ -6,6 +6,16 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
+import {
+  clickProjectedFacilityTarget,
+  clickProjectedWalkerPath,
+  clickProjectedWorkstationTarget
+} from './lib/office-canvas-click.mjs'
+import {
+  focusElectronPage,
+  waitForOfficeRenderLoop,
+  waitForOfficeScenePixels
+} from './lib/office-render-ready.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -90,12 +100,13 @@ app.stderr.on('data', (chunk) => {
 })
 
 let browser
+let focusSession
 try {
   await waitForDebugPort(remotePort, 20_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  const pages = await browser.pages()
-  const page = pages.find((item) => !item.url().startsWith('devtools://')) || pages[0]
-  if (!page) throw new Error('Electron page target not found')
+  const page = await waitForElectronPage(browser, 20_000)
+  focusSession = await page.target().createCDPSession()
+  await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       const loc = msg.location()
@@ -681,7 +692,7 @@ try {
       }
     })
     assert(facilityTarget?.id === 'dining', `missing dining facility target: ${JSON.stringify(facilityTarget)}`)
-    const facilityClick = await clickProjectedOfficeTarget(page, facilityTarget, OFFICE_FACILITIES_CAMERA)
+    const facilityClick = await clickProjectedFacilityTarget(page, facilityTarget, OFFICE_FACILITIES_CAMERA)
     const selectedFacility = await waitForValue(
       () =>
         page.evaluate((expected) => {
@@ -734,7 +745,7 @@ try {
         }
       }, key)
       assert(target?.id === key, `missing ${key} facility target: ${JSON.stringify(target)}`)
-      await clickProjectedOfficeTarget(page, target, OFFICE_FACILITIES_CAMERA)
+      await clickProjectedFacilityTarget(page, target, OFFICE_FACILITIES_CAMERA)
       await waitForValue(
         () =>
           page.evaluate((expected) => {
@@ -763,47 +774,11 @@ try {
       'waiting for overview before workstation object click'
     )
     await sleep(900)
-    const clickPlan = await page.evaluate(() => {
-      const wrap = document.querySelector('.office-canvas-wrap')
-      const readTargets = (name) => {
-        try {
-          return JSON.parse(wrap?.getAttribute(name) || '[]')
-        } catch {
-          return []
-        }
-      }
-      const selected = wrap?.getAttribute('data-office-selected-session') ?? ''
-      const workstations = readTargets('data-office-workstation-hit-targets')
-      const walkers = readTargets('data-office-walker-hit-targets')
-      const walker = walkers[0] || null
-      const facilityWalker =
-        walkers.find((target) => target.reason === 'dining') ||
-        walkers.find((target) => target.reason === 'restroom') ||
-        walkers.find((target) => target.reason === 'tea') ||
-        null
-      const walkerSessionIds = new Set(walkers.map((target) => target.id))
-      const workstationCandidates = workstations
-        .filter((target) => target.id !== selected && !walkerSessionIds.has(target.id))
-        .sort((a, b) => {
-          const aScore = (a.x > 0 ? 10 : 0) + (a.z < -1 ? 6 : 0) + a.x * 0.1 - a.z * 0.02
-          const bScore = (b.x > 0 ? 10 : 0) + (b.z < -1 ? 6 : 0) + b.x * 0.1 - b.z * 0.02
-          return bScore - aScore
-        })
-      const workstation = workstationCandidates[0] || workstations.find((target) => target.id !== selected) || workstations[0] || null
-      return {
-        selected,
-        workstation,
-        walker,
-        facilityWalker,
-        workstationCount: workstations.length,
-        walkerCount: walkers.length,
-        facilityWalkerCount: walkers.filter((target) => target.reason !== 'approval').length
-      }
-    })
+    const clickPlan = await readOfficeCanvasClickPlan(page)
     assert(clickPlan.workstationCount >= 2, `expected multiple workstation hit targets: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.workstation?.id, `missing workstation click target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.workstation.id !== clickPlan.selected, `workstation target did not change selection: ${JSON.stringify(clickPlan)}`)
-    const workstationClick = await clickProjectedOfficeTarget(page, clickPlan.workstation, OFFICE_OVERVIEW_CAMERA)
+    const workstationClick = await clickProjectedWorkstationTarget(page, clickPlan.workstation, OFFICE_OVERVIEW_CAMERA)
     const selectedWorkstation = await waitForValue(
       () =>
         page.evaluate((expected) => {
@@ -829,6 +804,7 @@ try {
 
     assert(clickPlan.walkerCount >= 1, `expected walker hit target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.walker?.id, `missing walker click target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.walkerHome?.id === clickPlan.walker.id, `missing walker home target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.walker.id !== clickPlan.workstation.id, `walker target should differ from workstation target: ${JSON.stringify(clickPlan)}`)
     await page.click('.office-camera-button:nth-child(3)')
     await waitForValue(
@@ -838,7 +814,7 @@ try {
       'waiting for facilities before walker object click'
     )
     await sleep(900)
-    const walkerClick = await clickProjectedOfficeTarget(page, clickPlan.walker, OFFICE_FACILITIES_CAMERA)
+    const walkerClick = await clickProjectedWalkerPath(page, clickPlan.walkerHome, clickPlan.walker, OFFICE_FACILITIES_CAMERA)
     const selectedWalker = await waitForValue(
       () =>
         page.evaluate((expected) => {
@@ -858,6 +834,8 @@ try {
 
     assert(clickPlan.facilityWalkerCount >= 1, `expected non-approval facility walker: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.facilityWalker?.id, `missing facility walker click target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.facilityWalkerHome?.id === clickPlan.facilityWalker.id, `missing facility walker home target: ${JSON.stringify(clickPlan)}`)
+    assert(clickPlan.facilityWalker.id !== clickPlan.walker.id, `facility walker should differ from first walker: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.facilityWalker.reason !== 'approval', `facility walker should not be approval-only: ${JSON.stringify(clickPlan)}`)
     await page.click('.office-camera-button:nth-child(3)')
     await waitForValue(
@@ -867,7 +845,7 @@ try {
       'waiting for facilities before non-approval facility walker object click'
     )
     await sleep(900)
-    const facilityWalkerClick = await clickProjectedOfficeTarget(page, clickPlan.facilityWalker, OFFICE_FACILITIES_CAMERA)
+    const facilityWalkerClick = await clickProjectedWalkerPath(page, clickPlan.facilityWalkerHome, clickPlan.facilityWalker, OFFICE_FACILITIES_CAMERA)
     const selectedFacilityWalker = await waitForValue(
       () =>
         page.evaluate((expected) => {
@@ -899,7 +877,7 @@ try {
   })
 
   await check('3D office canvas renders nonblank with parent and child workstations', async () => {
-    const stats = await waitForCanvasPixels(page)
+    const stats = await waitForOfficeScenePixels(page)
     report.officeCanvas = stats
   })
   await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
@@ -975,6 +953,7 @@ try {
     })
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForAgentDesk(page)
+    await focusElectronPage(page, focusSession)
     await waitForValue(
       () => page.evaluate(() => document.documentElement.getAttribute('data-theme') ?? ''),
       (value) => value === 'light',
@@ -983,6 +962,9 @@ try {
     )
     await page.click('.sidebar-office')
     await page.waitForSelector('.office canvas', { timeout: 20_000 })
+    const renderState = await waitForOfficeRenderLoop(page)
+    report.officeLightRenderState = renderState
+    await waitForOfficeScenePixels(page)
     await sleep(1_800)
     const file = await screenshot(page, '03-office-light-overview')
     const stats = analyzeOfficeScreenshot(file)
@@ -1003,6 +985,7 @@ try {
   }
   process.exitCode = 1
 } finally {
+  if (focusSession) await focusSession.detach().catch(() => undefined)
   if (browser) await browser.disconnect().catch(() => undefined)
   const exited = await terminate(app)
   await closeServer(mock.server)
@@ -1328,135 +1311,64 @@ function writeMockUserData(port) {
   )
 }
 
-async function clickProjectedOfficeTarget(page, target, camera) {
-  const rect = await page.evaluate(() => {
-    const canvas = document.querySelector('.office canvas')
-    if (!canvas) return null
-    const box = canvas.getBoundingClientRect()
+async function readOfficeCanvasClickPlan(page) {
+  return page.evaluate(() => {
+    const wrap = document.querySelector('.office-canvas-wrap')
+    const readTargets = (name) => {
+      try {
+        return JSON.parse(wrap?.getAttribute(name) || '[]')
+      } catch {
+        return []
+      }
+    }
+    const selected = wrap?.getAttribute('data-office-selected-session') ?? ''
+    const workstations = readTargets('data-office-workstation-hit-targets')
+    const walkers = readTargets('data-office-walker-hit-targets')
+    const walker = walkers[0] || null
+    const facilityWalker =
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'dining') ||
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'restroom') ||
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'tea') ||
+      null
+    const walkerSessionIds = new Set(walkers.map((target) => target.id))
+    const workstationFor = (target) =>
+      workstations.find((workstationTarget) => workstationTarget.id === target?.id) || null
+    const workstationCandidates = workstations
+      .filter((target) => target.id !== selected && !walkerSessionIds.has(target.id))
+      .sort((a, b) => {
+        const aScore = (a.x > 0 ? 10 : 0) + (a.z < -1 ? 6 : 0) + a.x * 0.1 - a.z * 0.02
+        const bScore = (b.x > 0 ? 10 : 0) + (b.z < -1 ? 6 : 0) + b.x * 0.1 - b.z * 0.02
+        return bScore - aScore
+      })
+    const workstation =
+      workstationCandidates[0] || workstations.find((target) => target.id !== selected) || workstations[0] || null
     return {
-      left: box.left,
-      top: box.top,
-      width: box.width,
-      height: box.height
+      selected,
+      workstation,
+      walker,
+      walkerHome: workstationFor(walker),
+      facilityWalker,
+      facilityWalkerHome: workstationFor(facilityWalker),
+      workstationCount: workstations.length,
+      walkerCount: walkers.length,
+      facilityWalkerCount: walkers.filter((target) => target.reason !== 'approval').length
     }
   })
-  assert(rect && rect.width >= 300 && rect.height >= 200, `office canvas rect unavailable: ${JSON.stringify(rect)}`)
-  const projected = projectOfficePoint(target, rect, camera)
-  assert(
-    projected.x >= rect.left &&
-      projected.x <= rect.left + rect.width &&
-      projected.y >= rect.top &&
-      projected.y <= rect.top + rect.height,
-    `projected office click outside canvas: ${JSON.stringify({ target, rect, projected })}`
-  )
-  const hit = await page.evaluate(({ x, y }) => {
-    const element = document.elementFromPoint(x, y)
-    return {
-      tag: element?.tagName ?? '',
-      className: typeof element?.className === 'string' ? element.className : '',
-      isCanvas: element?.tagName === 'CANVAS'
-    }
-  }, projected)
-  assert(hit.isCanvas, `projected office click is covered before reaching canvas: ${JSON.stringify({ target, projected, hit })}`)
-  await page.mouse.click(Math.round(projected.x), Math.round(projected.y))
-  return {
-    x: Math.round(projected.x),
-    y: Math.round(projected.y),
-    ndcX: Number(projected.ndcX.toFixed(3)),
-    ndcY: Number(projected.ndcY.toFixed(3))
-  }
-}
-
-function projectOfficePoint(target, rect, camera) {
-  const position = camera.position
-  const lookAt = camera.target
-  const forward = normalize(subtract(lookAt, position))
-  const worldUp = [0, 1, 0]
-  const right = normalize(cross(forward, worldUp))
-  const up = normalize(cross(right, forward))
-  const relative = subtract([target.x, target.y, target.z], position)
-  const depth = dot(relative, forward)
-  assert(depth > 0.1, `office target is behind camera: ${JSON.stringify({ target, depth, camera })}`)
-  const aspect = rect.width / rect.height
-  const halfHeight = Math.tan((camera.fov * Math.PI) / 360) * depth
-  const halfWidth = halfHeight * aspect
-  const ndcX = dot(relative, right) / halfWidth
-  const ndcY = dot(relative, up) / halfHeight
-  return {
-    x: rect.left + ((ndcX + 1) / 2) * rect.width,
-    y: rect.top + ((1 - ndcY) / 2) * rect.height,
-    ndcX,
-    ndcY
-  }
-}
-
-function subtract(a, b) {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-function dot(a, b) {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-function cross(a, b) {
-  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-
-function normalize(v) {
-  const length = Math.hypot(v[0], v[1], v[2]) || 1
-  return [v[0] / length, v[1] / length, v[2] / length]
-}
-
-async function waitForCanvasPixels(page, timeout = 15_000) {
-  let lastStats = null
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeout) {
-    lastStats = await page.evaluate(() => {
-      const canvas = document.querySelector('.office canvas')
-      if (!canvas) return { canvas: false }
-      const width = canvas.width
-      const height = canvas.height
-      const rect = canvas.getBoundingClientRect()
-      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-      if (!gl || width < 100 || height < 100 || rect.width < 300 || rect.height < 200) {
-        return { canvas: true, gl: Boolean(gl), width, height, rectWidth: rect.width, rectHeight: rect.height, colorSum: 0, dataUrlLength: canvas.toDataURL('image/png').length }
-      }
-      const xs = [0.18, 0.33, 0.5, 0.67, 0.82]
-      const ys = [0.2, 0.38, 0.55, 0.72, 0.88]
-      const pixel = new Uint8Array(4)
-      let colorSum = 0
-      let alphaSum = 0
-      let samples = 0
-      for (const xRatio of xs) {
-        for (const yRatio of ys) {
-          const x = Math.max(0, Math.min(width - 1, Math.floor(width * xRatio)))
-          const y = Math.max(0, Math.min(height - 1, Math.floor(height * yRatio)))
-          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel)
-          colorSum += pixel[0] + pixel[1] + pixel[2]
-          alphaSum += pixel[3]
-          samples += 1
-        }
-      }
-      return { canvas: true, gl: true, width, height, rectWidth: rect.width, rectHeight: rect.height, colorSum, alphaSum, samples, dataUrlLength: canvas.toDataURL('image/png').length }
-    })
-    if (
-      lastStats?.canvas &&
-      lastStats.gl &&
-      lastStats.width >= 100 &&
-      lastStats.height >= 100 &&
-      lastStats.rectWidth >= 300 &&
-      lastStats.rectHeight >= 200 &&
-      ((lastStats.colorSum ?? 0) > 500 || (lastStats.dataUrlLength ?? 0) > 10_000)
-    ) {
-      return lastStats
-    }
-    await sleep(300)
-  }
-  throw new Error(`3D office canvas did not become visibly nonblank: ${JSON.stringify(lastStats)}`)
 }
 
 async function waitForAgentDesk(page) {
   await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: 15_000 })
+}
+
+async function waitForElectronPage(browser, timeoutMs) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const pages = await browser.pages()
+    const page = pages.find((item) => !item.url().startsWith('devtools://'))
+    if (page) return page
+    await sleep(100)
+  }
+  throw new Error('Electron page target not found before timeout')
 }
 
 async function waitForValue(producer, predicate, timeout, label) {

@@ -16,6 +16,8 @@ export const OPENAI_PERMISSION_READ_ONLY_TOOLS = new Set([
   'run_skill',
   'draft_skill',
   'route_model',
+  'china_notify',
+  'gitee_prepare',
   'memory_search',
   'browser_automation_status',
   'git_status',
@@ -42,6 +44,28 @@ const EFFECT_FREE_TOOLS = new Set([
   'browser_screenshot',
   'gui_list_windows',
   'gui_screenshot'
+])
+
+const DUPLICATE_CONFIRMATION_TOOLS = new Set([
+  'bash',
+  'gui_activate_window',
+  'gui_click',
+  'gui_type',
+  'gui_scroll',
+  'gui_hotkey',
+  'browser_navigate',
+  'browser_click',
+  'browser_type',
+  'browser_evaluate',
+  'git_stage_all',
+  'mcp_call_tool',
+  'git_commit',
+  'git_push',
+  'git_create_pr',
+  'git_merge',
+  'task_dispatch_dag',
+  'task_decompose_and_dispatch_dag',
+  'genesis_orchestrate'
 ])
 
 const TOOL_ALIASES: Record<string, string> = {
@@ -83,7 +107,20 @@ export function isReadOnlyToolCall(toolName: string, toolInput: unknown): boolea
   ) {
     return true
   }
+  if (normalized === 'code_forge_delivery') return isCodeForgeReportCall(toolInput)
   return false
+}
+
+function isCodeForgeReportCall(toolInput: unknown): boolean {
+  if (!toolInput || typeof toolInput !== 'object' || Array.isArray(toolInput)) return false
+  const input = toolInput as Record<string, unknown>
+  const forbidden = [
+    input.createPatch === true,
+    input.verificationCommand !== undefined,
+    input.verificationCommands !== undefined,
+    ['repoRoot', 'worktreePath', 'baseSha', 'baseBranch', 'branch'].some((field) => input[field] !== undefined)
+  ]
+  return !forbidden.some(Boolean) && (input.mode === undefined || input.mode === 'report')
 }
 
 export function isDisabledModeInspectionToolCall(toolName: string): boolean {
@@ -92,31 +129,7 @@ export function isDisabledModeInspectionToolCall(toolName: string): boolean {
 
 export function requiresDuplicateConfirmation(toolName: string, toolInput: unknown): boolean {
   const normalized = normalizeToolName(toolName)
-  if (normalized === 'bash') return true
-  if (
-    normalized === 'gui_activate_window' ||
-    normalized === 'gui_click' ||
-    normalized === 'gui_type' ||
-    normalized === 'gui_scroll' ||
-    normalized === 'gui_hotkey' ||
-    normalized === 'browser_navigate' ||
-    normalized === 'browser_click' ||
-    normalized === 'browser_type' ||
-    normalized === 'browser_evaluate'
-  ) {
-    return true
-  }
-  if (
-    normalized === 'git_commit' ||
-    normalized === 'git_push' ||
-    normalized === 'git_create_pr' ||
-    normalized === 'git_merge' ||
-    normalized === 'task_dispatch_dag' ||
-    normalized === 'task_decompose_and_dispatch_dag' ||
-    normalized === 'genesis_orchestrate'
-  ) {
-    return true
-  }
+  if (DUPLICATE_CONFIRMATION_TOOLS.has(normalized)) return true
   if (normalized === 'code_forge_delivery' && toolInput && typeof toolInput === 'object') {
     const mode = (toolInput as Record<string, unknown>).mode
     return mode === 'commit' || mode === 'pr'

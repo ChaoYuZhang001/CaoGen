@@ -1,0 +1,207 @@
+.app-mode-bar {
+  z-index: 12;
+  display: grid;
+  flex: 0 0 46px;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg-raised);
+}
+
+.app-mode-switcher {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(88px, 1fr));
+  width: min(224px, calc(100% - 24px));
+  min-height: 34px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+.app-mode-switcher button {
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.app-mode-switcher button:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.app-mode-switcher button.active {
+  color: var(--text);
+  background: var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+}
+
+.app-mode-switcher button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.experience-pane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experience-surface {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experience-surface[hidden] {
+  display: none;
+}
+
+.studio-projection-tabs {
+  display: flex;
+  flex: 0 0 42px;
+  align-items: end;
+  gap: 18px;
+  min-width: 0;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg);
+}
+
+.studio-projection-tabs[hidden] {
+  display: none;
+}
+
+.studio-projection-tabs button {
+  position: relative;
+  min-width: 0;
+  min-height: 41px;
+  padding: 0 2px;
+  border: 0;
+  color: var(--text-dim);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.studio-projection-tabs button::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: transparent;
+  content: '';
+}
+
+.studio-projection-tabs button:hover,
+.studio-projection-tabs button.active {
+  color: var(--text);
+}
+
+.studio-projection-tabs button.active::after {
+  background: var(--accent);
+}
+
+.studio-projection-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+.welcome-expert-routing {
+  display: contents;
+}
+
+.assistant-compute-indicator {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.assistant-compute-indicator::before {
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  content: '';
+}
+
+.assistant-compute-indicator[data-compute-available='false']::before {
+  background: var(--danger);
+}
+
+.assistant-start-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-start-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.workbench[data-experience-projection='assistant'] .desk-rail,
+.workbench[data-experience-projection='assistant'] .workbench-side-gutter,
+.workbench[data-experience-projection='assistant'] .workbench-side,
+.chat[data-experience-projection='assistant'] [data-expert-control='true'] {
+  display: none;
+}
+
+.workbench[data-experience-projection='assistant'].workbench-split .chat-title {
+  max-width: none;
+}
+
+.chat[data-experience-projection='assistant'] [data-header-action='subagents'],
+.chat[data-experience-projection='assistant'] [data-header-action='plugins'] {
+  display: none;
+}
+
+.studio-loading {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  color: var(--text-dim);
+}
+
+@media (max-width: 720px) {
+  .app-mode-bar {
+    padding-left: 46px;
+  }
+
+  .app-mode-switcher {
+    width: min(196px, calc(100% - 16px));
+  }
+
+  .studio-projection-tabs {
+    gap: 14px;
+    padding: 0 16px 0 52px;
+  }
+
+  .assistant-start-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

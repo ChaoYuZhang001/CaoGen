@@ -14,6 +14,7 @@ import type {
   TranscriptSearchResult
 } from '../../../shared/types'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
+import { preloadOfficeView } from './office/loadOffice'
 
 const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   starting: 'statusStarting',
@@ -154,7 +155,9 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
   }, [layout.sidebarWidth])
 
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
-    void updateSettings({ layout: { ...layout, ...patch } })
+    void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
+      console.error('[agent-desk] Failed to persist sidebar layout:', error)
+    })
   }
 
   const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -721,6 +724,9 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
 
       <button
         className="btn btn-ghost sidebar-office"
+        onPointerEnter={preloadOfficeView}
+        onFocus={preloadOfficeView}
+        onPointerDown={preloadOfficeView}
         onClick={() => {
           closeMobile()
           setView('office')

@@ -1,29 +1,33 @@
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
+import type { GitCommitCheckResult } from '../git/git-helper'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from '../git/safe-git'
 import {
-  gitCommit,
-  gitCreatePr,
-  type GitCommitCheckResult
-} from '../git/git-helper'
-import { withSafeLocalGitConfig } from '../git/safe-git'
+  executeCodeForgePatchEffectTarget,
+  type CodeForgePatchEffectTarget
+} from './patch-effect'
+import type { ConflictRisk } from '../worktreeMerge'
+import { MAX_PATCH_ARTIFACT_BYTES } from './patch-artifact'
 import {
-  canFastApplyPatch,
-  createPullRequest,
-  createSquashPatch,
-  getConflictFiles,
-  inspectMerge,
-  patchSha256,
-  type ConflictRisk
-} from '../worktreeMerge'
+  assertNoExecutableCodeForgeFiltersIn,
+  inspectCodeForgeUntrackedFiles
+} from './source-security'
+import { trustedCodeForgeManagedWorktree } from './managed-context-security'
+import {
+  buildCodeForgePatchText,
+  checkCodeForgePatchApplies,
+  codeForgeChangedFiles,
+  codeForgeDiffStats,
+  listCodeForgeUntrackedFiles
+} from './patch-source'
 
 export type CodeForgeDeliveryMode = 'report' | 'patch' | 'commit' | 'pr'
 export type CodeForgeDeliveryStatus = 'ready' | 'needs-review' | 'blocked' | 'failed'
 export type CodeForgeTargetKind = 'repository' | 'managed-worktree'
 export type CodeForgeVerificationStatus = 'passed' | 'failed' | 'skipped'
 export type CodeForgeRiskLevel = 'low' | 'medium' | 'high'
+export type { CodeForgePatchEffectTarget } from './patch-effect'
 
 export interface CodeForgeWorktreeContext {
   sessionId?: string
@@ -166,45 +170,44 @@ interface GitRunResult {
   error?: string
 }
 
-const DEFAULT_VERIFY_TIMEOUT_MS = 180_000
 const MAX_OUTPUT_CHARS = 12_000
 const MAX_FILE_LIST = 80
 const MAX_GIT_BUFFER = 32 * 1024 * 1024
 const GIT_TIMEOUT_MS = 120_000
-const GIT_DEV_NULL = '/dev/null'
 
-export function runCodeForgeDelivery(input: CodeForgeDeliveryInput): CodeForgeDeliveryResult {
+export function runCodeForgeDelivery(
+  input: CodeForgeDeliveryInput,
+  effectTarget?: CodeForgePatchEffectTarget
+): CodeForgeDeliveryResult {
   const startedAt = Date.now()
   const mode = normalizeMode(input.mode)
   try {
-    const context = resolveContext(input)
-    const changes = summarizeChanges(context)
-    const verification = runVerification(
-      verificationCommands(input),
-      context.verificationCwd,
-      input.verificationTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS
-    )
-    const patch = maybeCreatePatch(context, mode, input.createPatch === true)
-    const commit = maybeCommit(context, mode, verification, input)
-    const pullRequest = maybeCreatePullRequest(context, mode, verification, commit, input)
-    const risk = assessRisk({ changes, verification, patch, commit, pullRequest })
-    const status = deliveryStatus({ changes, verification, patch, commit, pullRequest })
-    const mergeable = isMergeable({ changes, verification, patch, commit, pullRequest })
+    assertSupportedDeliveryRequest(input, mode)
+    const patchExecution = mode === 'patch'
+      ? executeCodeForgePatchEffectTarget(input, effectTarget)
+      : undefined
+    const context = patchExecution ? undefined : resolveContext(input)
+    const target = patchExecution?.target ?? context?.target
+    if (!target) throw new Error('Code Forge 无法解析交付目标')
+    const changes = patchExecution?.changes ?? summarizeChanges(context as ResolvedContext)
+    const verification = skippedVerification()
+    const patch = patchExecution?.patch
+    const risk = assessRisk({ changes, verification, patch })
+    const status = deliveryStatus({ changes, verification, patch })
+    const mergeable = isMergeable({ changes, verification, patch })
     return {
       ok: true,
       status,
       mode,
       startedAt,
       completedAt: Date.now(),
-      target: context.target,
+      target,
       changes,
       verification,
       ...(patch ? { patch } : {}),
-      ...(commit ? { commit } : {}),
-      ...(pullRequest ? { pullRequest } : {}),
       risk,
       mergeable,
-      summary: buildSummary(status, mode, changes, verification, patch, commit, pullRequest, risk)
+      summary: buildSummary(status, mode, changes, verification, patch, undefined, undefined, risk)
     }
   } catch (err) {
     const error = errorText(err)
@@ -228,17 +231,48 @@ function normalizeMode(value: unknown): CodeForgeDeliveryMode {
     : 'report'
 }
 
+function assertSupportedDeliveryRequest(
+  input: CodeForgeDeliveryInput,
+  mode: CodeForgeDeliveryMode
+): void {
+  if (mode === 'commit' || mode === 'pr') {
+    throw new Error(
+      `code_forge_delivery mode=${mode} 已停用；请先生成 report/patch，再使用独立 Git 工具完成暂存、提交、推送或 PR`
+    )
+  }
+  if (input.verificationCommand !== undefined || input.verificationCommands !== undefined) {
+    throw new Error(
+      'code_forge_delivery 不再接受 verificationCommand/verificationCommands；请先显式调用 bash 完成验证，再生成 report/patch'
+    )
+  }
+  if (input.createPatch === true) {
+    throw new Error('code_forge_delivery createPatch=true 已停用；请显式使用 mode=patch，以建立可查询 Effect')
+  }
+}
+
+function skippedVerification(): CodeForgeVerificationSummary {
+  return { status: 'skipped', commands: [], passed: 0, failed: 0, skipped: 1 }
+}
+
 function resolveContext(input: CodeForgeDeliveryInput): ResolvedContext {
-  const cwd = normalizeExistingDirectory(input.cwd, 'cwd')
-  const cwdRoot = repoRootFor(cwd)
   const metadata = input.worktreeContext
   const repoRootArg = cleanString(input.repoRoot) ?? cleanString(metadata?.repoRoot)
   const worktreePathArg = cleanString(input.worktreePath) ?? cleanString(metadata?.worktreePath)
   const baseSha = cleanString(input.baseSha) ?? cleanString(metadata?.baseSha)
+  const managedRecord = trustedCodeForgeManagedWorktree({
+    ...metadata,
+    repoRoot: repoRootArg,
+    worktreePath: worktreePathArg,
+    baseSha,
+    branch: cleanString(input.branch) ?? metadata?.branch,
+    baseBranch: cleanString(input.baseBranch) ?? metadata?.baseBranch
+  })
+  const cwd = normalizeExistingDirectory(input.cwd, 'cwd')
+  const cwdRoot = repoRootFor(cwd)
 
-  if (repoRootArg && worktreePathArg && baseSha) {
-    const repoRoot = repoRootFor(normalizeExistingDirectory(repoRootArg, 'repoRoot'))
-    const worktreePath = repoRootFor(normalizeExistingDirectory(worktreePathArg, 'worktreePath'))
+  if (managedRecord) {
+    const repoRoot = repoRootFor(normalizeExistingDirectory(managedRecord.repoRoot, 'repoRoot'))
+    const worktreePath = repoRootFor(normalizeExistingDirectory(managedRecord.worktreePath, 'worktreePath'))
     const verificationCwd = pathInside(cwd, worktreePath) ? cwd : worktreePath
     return {
       target: {
@@ -246,11 +280,11 @@ function resolveContext(input: CodeForgeDeliveryInput): ResolvedContext {
         cwd: verificationCwd,
         repoRoot,
         worktreePath,
-        branch: cleanString(input.branch) ?? cleanString(metadata?.branch) ?? currentBranch(worktreePath),
-        baseBranch: cleanString(input.baseBranch) ?? metadata?.baseBranch,
-        baseSha,
+        branch: managedRecord.branch,
+        baseBranch: managedRecord.baseBranch,
+        baseSha: managedRecord.baseSha,
         headSha: revParseHead(worktreePath),
-        sessionId: cleanString(metadata?.sessionId)
+        sessionId: managedRecord.sessionId
       },
       verificationCwd
     }
@@ -271,218 +305,39 @@ function resolveContext(input: CodeForgeDeliveryInput): ResolvedContext {
 }
 
 function summarizeChanges(context: ResolvedContext): CodeForgeChangeSummary {
+  if (context.target.kind === 'managed-worktree') trustedCodeForgeManagedWorktree(context.target)
+  const sourceRoot = context.target.worktreePath
+  assertNoExecutableCodeForgeFiltersIn([sourceRoot, context.target.repoRoot])
+  const untracked = inspectCodeForgeUntrackedFiles(
+    sourceRoot,
+    listCodeForgeUntrackedFiles(sourceRoot, ['--', '.']),
+    MAX_PATCH_ARTIFACT_BYTES
+  )
   if (context.target.kind === 'managed-worktree') {
     const baseSha = context.target.baseSha
     if (!baseSha) throw new Error('managed worktree 缺少 baseSha')
-    const inspect = inspectMerge(context.target.repoRoot, context.target.worktreePath, baseSha)
-    if (inspect.ok === false) throw new Error(inspect.error)
-    const files = changedFilesSinceBase(context.target.worktreePath, baseSha)
+    const stats = codeForgeDiffStats(context.target.worktreePath, baseSha, ['--'], untracked)
+    const files = codeForgeChangedFiles(context.target.worktreePath, baseSha, ['--'], untracked)
+    const patchText = buildCodeForgePatchText(context.target.worktreePath, baseSha, ['--'], untracked)
+    const applyCheck = checkCodeForgePatchApplies(context.target.repoRoot, patchText)
     return {
-      changedFiles: inspect.changedFiles,
-      insertions: inspect.insertions,
-      deletions: inspect.deletions,
+      changedFiles: files.length,
+      insertions: stats.insertions,
+      deletions: stats.deletions,
       files: files.slice(0, MAX_FILE_LIST),
       truncatedFiles: files.length > MAX_FILE_LIST,
-      conflictRisk: inspect.conflictRisk
+      conflictRisk: applyCheck.state === 'failed' ? 'unknown' : applyCheck.canApply ? 'low' : 'medium'
     }
   }
 
-  const stats = repoDiffStats(context.target.repoRoot)
-  const files = repoChangedFiles(context.target.repoRoot)
+  const stats = codeForgeDiffStats(context.target.repoRoot, 'HEAD', ['--'], untracked)
+  const files = codeForgeChangedFiles(context.target.repoRoot, 'HEAD', ['--'], untracked)
   return {
     changedFiles: files.length,
     insertions: stats.insertions,
     deletions: stats.deletions,
     files: files.slice(0, MAX_FILE_LIST),
     truncatedFiles: files.length > MAX_FILE_LIST
-  }
-}
-
-function maybeCreatePatch(
-  context: ResolvedContext,
-  mode: CodeForgeDeliveryMode,
-  forced: boolean
-): CodeForgePatchReport | undefined {
-  if (!forced && mode !== 'patch' && mode !== 'pr') return undefined
-
-  if (context.target.kind === 'managed-worktree') {
-    const baseSha = context.target.baseSha
-    if (!baseSha) throw new Error('managed worktree 缺少 baseSha')
-    const patch = createSquashPatch(context.target.repoRoot, context.target.worktreePath, patchOutputRoot(), baseSha)
-    if (patch.ok === false) throw new Error(patch.error)
-    const check = canFastApplyPatch(context.target.repoRoot, patch.patchText)
-    const report: CodeForgePatchReport = {
-      path: patch.path,
-      bytes: patch.bytes,
-      sha256: patchSha256(patch.patchText),
-      canApply: check.ok === true ? check.canApply : false
-    }
-    if (check.ok === false) report.error = check.error
-    else if (check.canApply === false) {
-      report.error = check.error
-      const conflicts = getConflictFiles(context.target.repoRoot, context.target.worktreePath, baseSha)
-      if (conflicts.ok && conflicts.files) report.conflictFiles = conflicts.files.map((file) => file.path)
-    }
-    return report
-  }
-
-  const patchText = repoPatchText(context.target.repoRoot)
-  const patchPath = writePatchFile(context.target.repoRoot, patchText)
-  return {
-    path: patchPath,
-    bytes: statSync(patchPath).size,
-    sha256: patchSha256(patchText)
-  }
-}
-
-function maybeCommit(
-  context: ResolvedContext,
-  mode: CodeForgeDeliveryMode,
-  verification: CodeForgeVerificationSummary,
-  input: CodeForgeDeliveryInput
-): CodeForgeCommitReport | undefined {
-  if (mode !== 'commit' && mode !== 'pr') return undefined
-  const message = cleanString(input.commitMessage)
-  if (!message && mode === 'commit') {
-    return { ok: false, error: 'commit 模式必须提供 commitMessage' }
-  }
-  if (verification.status === 'failed') {
-    return { ok: false, message, error: '验证失败，已跳过 commit' }
-  }
-
-  if (input.stageAll === true) {
-    const add = runGit(context.target.worktreePath, ['add', '--all', '--'])
-    if (!add.ok) return { ok: false, message, error: add.error ?? 'git add 失败' }
-  }
-
-  if (!message) {
-    return hasUncommittedChanges(context.target.worktreePath)
-      ? { ok: false, error: 'PR 模式检测到未提交改动；请提供 commitMessage 或先提交 worktree' }
-      : undefined
-  }
-
-  const result = gitCommit(context.target.worktreePath, message)
-  if (result.ok === false) {
-    return {
-      ok: false,
-      message,
-      error: result.error,
-      checks: result.checks
-    }
-  }
-  return {
-    ok: true,
-    sha: result.sha,
-    branch: result.branch,
-    message,
-    checks: result.checks
-  }
-}
-
-function maybeCreatePullRequest(
-  context: ResolvedContext,
-  mode: CodeForgeDeliveryMode,
-  verification: CodeForgeVerificationSummary,
-  commit: CodeForgeCommitReport | undefined,
-  input: CodeForgeDeliveryInput
-): CodeForgePullRequestReport | undefined {
-  if (mode !== 'pr') return undefined
-  if (verification.status === 'failed') {
-    return { ok: false, created: false, error: '验证失败，已跳过 PR' }
-  }
-  if (commit?.ok === false) {
-    return { ok: false, created: false, error: commit.error ?? 'commit 未完成，已跳过 PR' }
-  }
-
-  const title = cleanString(input.prTitle) ?? cleanString(input.commitMessage) ?? 'Code Forge delivery'
-  const body = cleanString(input.prBody) ?? defaultPrBody(context)
-
-  if (context.target.kind === 'managed-worktree') {
-    const branch = context.target.branch
-    if (!branch) return { ok: false, created: false, error: 'managed worktree 缺少 branch' }
-    const result = createPullRequest({
-      repoRoot: context.target.repoRoot,
-      worktreePath: context.target.worktreePath,
-      branch,
-      title,
-      body,
-      baseBranch: cleanString(input.baseBranch) ?? context.target.baseBranch
-    })
-    if (result.ok === false) return { ok: false, created: false, error: result.error }
-    if (result.created === false) return { ok: true, created: false, branch, error: result.message }
-    return {
-      ok: true,
-      created: true,
-      branch: result.branch,
-      tool: result.tool,
-      url: result.url,
-      pushed: result.pushed
-    }
-  }
-
-  const result = gitCreatePr(
-    context.target.worktreePath,
-    title,
-    body,
-    cleanString(input.baseBranch) ?? undefined
-  )
-  if (result.ok === false) return { ok: false, created: false, error: result.error }
-  return {
-    ok: true,
-    created: true,
-    branch: result.branch,
-    base: result.base,
-    tool: result.tool,
-    url: result.url
-  }
-}
-
-function runVerification(
-  commands: string[],
-  cwd: string,
-  timeoutMs: number
-): CodeForgeVerificationSummary {
-  if (commands.length === 0) {
-    return { status: 'skipped', commands: [], passed: 0, failed: 0, skipped: 1 }
-  }
-  const results = commands.map((command) => runVerificationCommand(command, cwd, timeoutMs))
-  const failed = results.filter((result) => result.status === 'failed').length
-  const passed = results.filter((result) => result.status === 'passed').length
-  return {
-    status: failed > 0 ? 'failed' : 'passed',
-    commands: results,
-    passed,
-    failed,
-    skipped: 0
-  }
-}
-
-function runVerificationCommand(
-  command: string,
-  cwd: string,
-  timeoutMs: number
-): CodeForgeVerificationCommandResult {
-  const startedAt = Date.now()
-  const shell = process.platform === 'win32'
-    ? { command: 'cmd', args: ['/c', command] }
-    : { command: '/bin/sh', args: ['-c', command] }
-  const result = spawnSync(shell.command, shell.args, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: normalizeTimeout(timeoutMs),
-    maxBuffer: MAX_GIT_BUFFER
-  })
-  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
-  const stderr = typeof result.stderr === 'string' ? result.stderr : ''
-  const output = clip([stdout, stderr, result.error?.message].filter(Boolean).join('\n'))
-  return {
-    command,
-    cwd,
-    status: result.status === 0 && !result.error ? 'passed' : 'failed',
-    exitCode: result.status,
-    durationMs: Date.now() - startedAt,
-    output: output || '(no output)'
   }
 }
 
@@ -501,7 +356,7 @@ function assessRisk(input: {
   }
   if (input.verification.status === 'skipped') {
     level = maxRisk(level, 'medium')
-    reasons.push('未运行验证命令')
+    reasons.push('Code Forge 未采集验证结果；验证必须通过显式 bash 独立执行')
   }
   if (input.verification.status === 'failed') {
     level = maxRisk(level, 'high')
@@ -580,116 +435,6 @@ function buildSummary(
   return parts.join(' | ')
 }
 
-function verificationCommands(input: CodeForgeDeliveryInput): string[] {
-  const commands = [
-    ...(Array.isArray(input.verificationCommands) ? input.verificationCommands : []),
-    cleanString(input.verificationCommand)
-  ]
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map((item) => item.trim())
-  return [...new Set(commands)].slice(0, 8)
-}
-
-function repoDiffStats(repoRoot: string): { insertions: number; deletions: number } {
-  let insertions = 0
-  let deletions = 0
-  const numstat = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD', '--'], {
-    allowExitCodes: [0, 1]
-  })
-  if (numstat.ok) {
-    for (const line of numstat.stdout.split(/\r?\n/)) {
-      const [added, removed] = line.split('\t')
-      if (/^\d+$/.test(added)) insertions += Number(added)
-      if (/^\d+$/.test(removed)) deletions += Number(removed)
-    }
-  }
-  for (const file of untrackedFiles(repoRoot)) insertions += countTextLines(repoRoot, file)
-  return { insertions, deletions }
-}
-
-function repoChangedFiles(repoRoot: string): string[] {
-  const files = new Set<string>()
-  const tracked = runGit(repoRoot, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', 'HEAD', '--'], {
-    allowExitCodes: [0, 1]
-  })
-  if (tracked.ok) {
-    for (const item of tracked.stdout.split('\0').filter(Boolean)) files.add(item)
-  }
-  for (const item of untrackedFiles(repoRoot)) files.add(item)
-  return [...files].sort()
-}
-
-function changedFilesSinceBase(worktreePath: string, baseSha: string): string[] {
-  const files = new Set<string>()
-  const tracked = runGit(worktreePath, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', baseSha, '--'], {
-    allowExitCodes: [0, 1]
-  })
-  if (tracked.ok) {
-    for (const item of tracked.stdout.split('\0').filter(Boolean)) files.add(item)
-  }
-  for (const item of untrackedFiles(worktreePath)) files.add(item)
-  return [...files].sort()
-}
-
-function repoPatchText(repoRoot: string): string {
-  const chunks: string[] = []
-  const tracked = runGit(repoRoot, [
-    'diff',
-    '--no-ext-diff',
-    '--no-textconv',
-    '--binary',
-    '--full-index',
-    'HEAD',
-    '--'
-  ], {
-    allowExitCodes: [0, 1]
-  })
-  if (!tracked.ok) throw new Error(tracked.error ?? 'git diff 失败')
-  if (tracked.stdout) chunks.push(tracked.stdout)
-  for (const file of untrackedFiles(repoRoot)) {
-    const untracked = runGit(
-      repoRoot,
-      ['diff', '--no-ext-diff', '--no-textconv', '--no-index', '--binary', '--full-index', '--', GIT_DEV_NULL, file],
-      { allowExitCodes: [0, 1] }
-    )
-    if (!untracked.ok) throw new Error(untracked.error ?? `无法生成 untracked patch: ${file}`)
-    if (untracked.stdout) chunks.push(untracked.stdout)
-  }
-  return ensureTrailingNewline(chunks.join('\n'))
-}
-
-function writePatchFile(repoRoot: string, patchText: string): string {
-  const patchPath = path.join(patchOutputRoot(), `code-forge-${patchNameSeed(repoRoot, patchText)}.patch`)
-  writeFileSync(patchPath, ensureTrailingNewline(patchText), 'utf8')
-  return patchPath
-}
-
-function patchOutputRoot(): string {
-  const dir = path.join(tmpdir(), 'caogen-code-forge-patches')
-  mkdirSync(dir, { recursive: true })
-  return realpathSync(dir)
-}
-
-function patchNameSeed(repoRoot: string, patchText: string): string {
-  return `${Date.now()}-${createHash('sha1').update(repoRoot).update('\0').update(patchText).digest('hex').slice(0, 10)}`
-}
-
-function hasUncommittedChanges(cwd: string): boolean {
-  const status = runGit(cwd, ['status', '--porcelain=v1', '--untracked-files=all'])
-  return status.ok ? status.stdout.trim().length > 0 : true
-}
-
-function defaultPrBody(context: ResolvedContext): string {
-  return [
-    'Generated by CaoGen Code Forge.',
-    '',
-    `- Target: ${context.target.kind}`,
-    `- Branch: ${context.target.branch ?? '(detached)'}`,
-    context.target.baseSha ? `- Base: ${context.target.baseSha.slice(0, 12)}` : '',
-    `- Worktree: ${context.target.worktreePath}`
-  ].filter(Boolean).join('\n')
-}
-
 function normalizeExistingDirectory(value: string, label: string): string {
   const text = cleanString(value)
   if (!text) throw new Error(`${label} 不能为空`)
@@ -719,22 +464,6 @@ function revParseHead(cwd: string): string | undefined {
   return result.ok ? result.stdout.trim() : undefined
 }
 
-function untrackedFiles(cwd: string): string[] {
-  const result = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'])
-  return result.ok ? result.stdout.split('\0').filter(Boolean) : []
-}
-
-function countTextLines(root: string, relPath: string): number {
-  try {
-    const buffer = readFileSync(path.join(root, relPath))
-    if (buffer.includes(0) || buffer.length === 0) return 0
-    const text = buffer.toString('utf8')
-    return text.endsWith('\n') ? text.split(/\r?\n/).length - 1 : text.split(/\r?\n/).length
-  } catch {
-    return 0
-  }
-}
-
 function pathInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child)
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
@@ -748,6 +477,7 @@ function runGit(
   const allowed = options.allowExitCodes ?? [0]
   const result = spawnSync('git', withSafeLocalGitConfig(args), {
     cwd,
+    env: isolatedLocalGitEnv(process.env),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: GIT_TIMEOUT_MS,
@@ -769,22 +499,8 @@ function gitError(args: string[], status: number | null, stdout: string, stderr:
   return output ? `git ${args.join(' ')} failed (${code}): ${output}` : `git ${args.join(' ')} failed (${code})`
 }
 
-function normalizeTimeout(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_VERIFY_TIMEOUT_MS
-  return Math.min(30 * 60 * 1000, Math.max(100, Math.floor(value)))
-}
-
 function cleanString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function ensureTrailingNewline(text: string): string {
-  return text.endsWith('\n') ? text : `${text}\n`
-}
-
-function clip(text: string): string {
-  if (text.length <= MAX_OUTPUT_CHARS) return text
-  return `${text.slice(0, MAX_OUTPUT_CHARS)}\n...<truncated>`
 }
 
 function errorText(err: unknown): string {

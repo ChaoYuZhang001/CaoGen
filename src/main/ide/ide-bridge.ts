@@ -102,7 +102,7 @@ export interface IdeBridgeErrorPayload {
 
 export interface IdeBridgeSessionPort {
   listSessions(): SessionMeta[]
-  createSession(options: CreateSessionOptions): SessionMeta
+  createSession(options: CreateSessionOptions): SessionMeta | Promise<SessionMeta>
   sendMessage(sessionId: string, message: string | SendMessagePayload): void
   syncDocument?(payload: IdeBridgeDocumentSyncPayload): void
   subscribeSessionEvents?(listener: (event: SessionEventPayload) => void): () => void
@@ -132,6 +132,7 @@ interface IdeBridgeConnection {
   id: string
   socket: Duplex
   authenticated: boolean
+  pending: Promise<void>
 }
 
 type WebSocketOpcode = 0x1 | 0x8 | 0x9 | 0xa
@@ -263,7 +264,8 @@ class LocalIdeBridge implements IdeBridgeServer {
     const connection: IdeBridgeConnection = {
       id: randomBytes(8).toString('hex'),
       socket,
-      authenticated: false
+      authenticated: false,
+      pending: Promise.resolve()
     }
     this.connections.set(connection.id, connection)
 
@@ -285,12 +287,12 @@ class LocalIdeBridge implements IdeBridgeServer {
       const parsed = parseFrame(input, offset)
       if (!parsed) break
       offset = parsed.nextOffset
-      this.handleFrame(connection, parsed.frame)
+      connection.pending = connection.pending.then(() => this.handleFrame(connection, parsed.frame))
     }
     return input.subarray(offset)
   }
 
-  private handleFrame(connection: IdeBridgeConnection, frame: WebSocketFrame): void {
+  private async handleFrame(connection: IdeBridgeConnection, frame: WebSocketFrame): Promise<void> {
     if (frame.opcode === CLOSE_OPCODE) {
       connection.socket.end()
       return
@@ -308,13 +310,13 @@ class LocalIdeBridge implements IdeBridgeServer {
     }
 
     try {
-      this.handleEnvelope(connection, envelope)
+      await this.handleEnvelope(connection, envelope)
     } catch (error) {
       this.sendError(connection, envelope.id, 'handler_failed', errorMessage(error))
     }
   }
 
-  private handleEnvelope(connection: IdeBridgeConnection, envelope: IdeBridgeEnvelope): void {
+  private async handleEnvelope(connection: IdeBridgeConnection, envelope: IdeBridgeEnvelope): Promise<void> {
     if (envelope.type === 'hello') {
       this.handleHello(connection, envelope)
       return
@@ -339,7 +341,7 @@ class LocalIdeBridge implements IdeBridgeServer {
     if (envelope.type === 'sessions.create') {
       const payload = requireCreateSessionPayload(envelope.payload)
       const { initialText, ...options } = payload
-      const meta = this.sessionPort.createSession(options)
+      const meta = await this.sessionPort.createSession(options)
       if (typeof initialText === 'string' && initialText.trim()) {
         this.sessionPort.sendMessage(meta.id, { text: initialText.trim() })
       }
@@ -550,7 +552,7 @@ function optionalFiniteNumber(value: unknown): number | undefined {
 }
 
 function optionalEngine(value: unknown): CreateSessionOptions['engine'] {
-  if (value === 'claude' || value === 'openai') return value
+  if (value === 'claude' || value === 'anthropic' || value === 'openai') return value
   return undefined
 }
 

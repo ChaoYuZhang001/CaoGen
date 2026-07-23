@@ -235,6 +235,7 @@ try {
     health,
     engines: [
       { kind: 'claude', label: 'Claude SDK', available: true, optional: true, configured: true },
+      { kind: 'anthropic', label: 'Anthropic Messages API', available: true, configured: true },
       { kind: 'openai', label: 'OpenAI-compatible', available: true }
     ],
     pluginRegistry,
@@ -276,12 +277,17 @@ try {
   assert(view.budget.report.providers.some((provider) => provider.providerId === 'openrouter' && provider.spentUsd === 4), 'budget report should aggregate provider cost')
   assert(view.mcp.status === 'available', 'reachable enabled MCP should be available')
   assert(view.mcp.ok === 1, 'MCP ok count should be surfaced')
-  assert(view.engines.every((engine) => engine.kind === 'claude' || engine.kind === 'openai'), 'only formal engines should be exposed')
+  assert(
+    new Set(view.engines.map((engine) => engine.kind)).size === 3 &&
+      ['claude', 'anthropic', 'openai'].every((kind) => view.engines.some((engine) => engine.kind === kind)),
+    'all three formal engines should be exposed'
+  )
   assert(view.engines.find((engine) => engine.kind === 'claude')?.status === 'unknown', 'unverified optional Claude must not be ready')
   assert(view.engines.find((engine) => engine.kind === 'claude')?.statusLabel === '有凭据，兼容性未验证', 'Claude status must be explicit')
+  assert(view.engines.find((engine) => engine.kind === 'anthropic')?.status === 'available', 'configured Anthropic Messages must be available')
   assert(
-    view.capabilities.find((capability) => capability.title === 'Agent engines')?.detail === 'OpenAI-compatible',
-    'Agent engine capability must count only configured engines'
+    view.capabilities.find((capability) => capability.title === 'Agent engines')?.detail === 'Anthropic Messages API, OpenAI-compatible',
+    'Agent engine capability must list configured non-optional engines'
   )
   assert(view.capabilities.some((capability) => capability.title === 'Model routing' && capability.status === 'available'), 'model routing should connect Drive/provider state')
   assert(!JSON.stringify(view).includes(secretProbe), 'Control Center view must not expose provider note/token-like secret values')

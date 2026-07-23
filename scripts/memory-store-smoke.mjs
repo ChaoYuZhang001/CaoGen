@@ -28,6 +28,8 @@ try {
       'src/main/memoryStore.ts',
       '--outDir',
       outDir,
+      '--rootDir',
+      'src',
       '--target',
       'ES2022',
       '--module',
@@ -41,7 +43,10 @@ try {
     { cwd: repoRoot, stdio: 'inherit' }
   )
 
-  const memoryStore = await import(pathToFileURL(path.join(outDir, 'memoryStore.js')).href)
+  const memoryStore = await import(pathToFileURL(path.join(outDir, 'main/memoryStore.js')).href)
+  const learningSecurity = await import(pathToFileURL(path.join(outDir, 'main/learning/learning-security.js')).href)
+  const authority = () => learningSecurity.createTrustedUserLearningDecision('memory-store-smoke')
+  const learningState = (projectRoot) => path.join(tempRoot, 'learning', 'projects', memoryStore.projectHash(projectRoot), 'learning.json')
 
   const hashA = memoryStore.projectHash(projectA)
   const hashARepeat = memoryStore.projectHash(projectA)
@@ -65,22 +70,18 @@ try {
   assertEqual(draft.status, 'draft')
   assertEqual(draft.source, 'scripts/memory-store-smoke.mjs')
   assertEqual(draft.reason, 'smoke-test draft path')
-  assert(existsSync(path.join(memoryRoot, 'projects', hashA, 'drafts', `${draft.id}.json`)))
-  assert(existsSync(path.join(memoryRoot, 'projects', hashA, 'drafts', `${draft.id}.md`)))
+  assert(existsSync(learningState(projectA)), 'learning state must persist the draft')
 
   const readWithDraft = await memoryStore.readProjectMemory(projectA, memoryRoot)
   assertEqual(readWithDraft.entries.length, 0)
   assertEqual(readWithDraft.drafts.length, 1)
   assert(!readWithDraft.markdown.includes(draft.title), 'drafts should not enter prompt markdown')
 
-  const confirmed = await memoryStore.acceptMemoryDraft(projectA, memoryRoot, draft.id)
+  const confirmed = await memoryStore.acceptMemoryDraft(projectA, memoryRoot, draft.id, authority())
   assertEqual(confirmed.id, draft.id)
   assertEqual(confirmed.title, draft.title)
   assert(!('status' in confirmed), 'accepted entries should not retain draft status')
-  assert(!existsSync(path.join(memoryRoot, 'projects', hashA, 'drafts', `${draft.id}.json`)))
-  assert(!existsSync(path.join(memoryRoot, 'projects', hashA, 'drafts', `${draft.id}.md`)))
-  assert(existsSync(path.join(memoryRoot, 'projects', hashA, 'confirmed', `${confirmed.id}.json`)))
-  assert(existsSync(path.join(memoryRoot, 'projects', hashA, 'confirmed', `${confirmed.id}.md`)))
+  assert(readFileSync(learningState(projectA), 'utf8').includes('"status": "active"'), 'learning state must activate the draft')
 
   const readConfirmed = await memoryStore.readProjectMemory(projectA, memoryRoot)
   assertEqual(readConfirmed.entries.length, 1)
@@ -91,7 +92,7 @@ try {
   assert(readConfirmed.markdown.includes(confirmed.source))
   assert(readConfirmed.markdown.includes(confirmed.reason))
 
-  const deleted = await memoryStore.deleteMemoryEntry(projectA, memoryRoot, confirmed.id)
+  const deleted = await memoryStore.deleteMemoryEntry(projectA, memoryRoot, confirmed.id, authority())
   assert(deleted.deleted, 'confirmed entry should be deleted')
   assertEqual(deleted.deletedFrom.join(','), 'confirmed')
   const readAfterDelete = await memoryStore.readProjectMemory(projectA, memoryRoot)
@@ -105,7 +106,7 @@ try {
     source: 'scripts/memory-store-smoke.mjs',
     reason: 'smoke-test hash isolation'
   })
-  await memoryStore.acceptMemoryDraft(projectB, memoryRoot, isolatedDraft.id)
+  await memoryStore.acceptMemoryDraft(projectB, memoryRoot, isolatedDraft.id, authority())
 
   const finalA = await memoryStore.readProjectMemory(projectA, memoryRoot)
   const finalB = await memoryStore.readProjectMemory(projectB, memoryRoot)
@@ -113,7 +114,7 @@ try {
   assert(!finalA.markdown.includes('Project B only'), 'Project A should not see Project B memory')
   assertEqual(finalB.entries.length, 1)
   assert(finalB.markdown.includes('Project B only'))
-  assert(readFileSync(path.join(memoryRoot, 'projects', hashB, 'confirmed', `${isolatedDraft.id}.json`), 'utf8').includes('"source"'))
+  assert(readFileSync(learningState(projectB), 'utf8').includes('"source"'))
 
   console.log('memoryStore smoke ok')
 } finally {

@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import type { DigitalWorkerBinding } from '../../shared/digital-worker-types'
 import type {
   AgentEvent,
   AgentEventIdentity,
   EffectRecord,
+  InteractiveOperationKind,
   TaskRunRecord,
+  TaskRunOperationMetadata,
   TaskRunStatus,
   TaskStepRecord,
   ToolExecutionRecord
@@ -31,6 +34,8 @@ export interface CreateTaskRunInput {
   taskId: string
   now?: number
   id?: string
+  operation?: TaskRunOperationMetadata
+  digitalWorkerBinding?: DigitalWorkerBinding
 }
 
 export interface TaskRunTransitionOptions {
@@ -48,12 +53,16 @@ export function createTaskRun(input: CreateTaskRunInput): TaskRunRecord {
     id: input.id ?? randomUUID(),
     sessionId: input.sessionId,
     taskId: input.taskId,
+    ...(input.digitalWorkerBinding
+      ? { digitalWorkerBinding: cloneDigitalWorkerBinding(input.digitalWorkerBinding) }
+      : {}),
     status: 'queued',
     revision: 1,
     attempt: 1,
     recoveryCount: 0,
     createdAt: now,
     updatedAt: now,
+    ...(input.operation ? { operation: { ...input.operation } } : {}),
     steps: [],
     toolExecutions: [],
     effects: []
@@ -97,6 +106,11 @@ export function mergeTaskRunRecords(
   const preferred = compareTaskRunFreshness(current, incoming) >= 0 ? current : incoming
   const other = preferred === current ? incoming : current
   const effects = mergeEffects(preferred.effects ?? [], other.effects ?? [])
+  const operation = mergeOperationMetadata(current.operation, incoming.operation)
+  const digitalWorkerBinding = mergeDigitalWorkerBinding(
+    current.digitalWorkerBinding,
+    incoming.digitalWorkerBinding
+  )
   const merged: TaskRunRecord = {
     ...preferred,
     revision: Math.max(current.revision, incoming.revision),
@@ -112,9 +126,31 @@ export function mergeTaskRunRecords(
       other.toolExecutions ?? [],
       (left, right) => mergeToolExecutions(left, right, effects)
     ),
-    effects
+    effects,
+    ...(operation ? { operation } : {}),
+    ...(digitalWorkerBinding ? { digitalWorkerBinding } : {})
   }
   return projectUnresolvedEffectState(merged)
+}
+
+function mergeOperationMetadata(
+  current: TaskRunOperationMetadata | undefined,
+  incoming: TaskRunOperationMetadata | undefined
+): TaskRunOperationMetadata | undefined {
+  if (!current) return incoming
+  if (!incoming) return current
+  if (
+    current.schemaVersion !== incoming.schemaVersion ||
+    current.operationId !== incoming.operationId ||
+    current.source !== incoming.source ||
+    current.kind !== incoming.kind ||
+    current.sourceSessionId !== incoming.sourceSessionId ||
+    current.projectId !== incoming.projectId ||
+    current.title !== incoming.title
+  ) {
+    throw new Error('TaskRun operation 元数据发生不可变字段冲突')
+  }
+  return current
 }
 
 export function compareTaskRunFreshness(left: TaskRunRecord, right: TaskRunRecord): number {
@@ -166,8 +202,7 @@ function projectUnresolvedEffectState(run: TaskRunRecord): TaskRunRecord {
     ...run,
     status: 'waiting_reconciliation',
     revision: run.revision + 1,
-    finishedAt: undefined,
-    error: undefined
+    finishedAt: undefined
   }
 }
 
@@ -412,37 +447,165 @@ export function reduceTaskRunEvent(current: TaskRunRecord, event: AgentEvent, no
 export function isTaskRunRecord(value: unknown): value is TaskRunRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
+  return [
+    isTaskRunIdentity(record),
+    isTaskRunCounters(record),
+    isTaskRunTiming(record),
+    isTaskRunEventCursor(record),
+    isTaskRunOptionalFields(record),
+    isTaskRunCollections(record)
+  ].every(Boolean)
+}
+
+function isTaskRunIdentity(record: Record<string, unknown>): boolean {
+  return [
+    record.schemaVersion === 1,
+    typeof record.id === 'string',
+    typeof record.sessionId === 'string',
+    typeof record.taskId === 'string',
+    isTaskRunStatus(record.status)
+  ].every(Boolean)
+}
+
+function isTaskRunStatus(value: unknown): boolean {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(ALLOWED_TRANSITIONS, value)
+}
+
+function isTaskRunCounters(record: Record<string, unknown>): boolean {
+  return [
+    isPositiveInteger(record.revision),
+    isPositiveInteger(record.attempt),
+    isNonNegativeInteger(record.recoveryCount)
+  ].every(Boolean)
+}
+
+function isTaskRunTiming(record: Record<string, unknown>): boolean {
+  return [
+    isFiniteNumber(record.createdAt),
+    isFiniteNumber(record.updatedAt),
+    isOptionalFiniteNumber(record.startedAt),
+    isOptionalFiniteNumber(record.finishedAt)
+  ].every(Boolean)
+}
+
+function isTaskRunEventCursor(record: Record<string, unknown>): boolean {
+  return [
+    isOptionalNonNegativeInteger(record.lastAppliedEventSeq),
+    isOptionalRecentEventIds(record.recentEventIds)
+  ].every(Boolean)
+}
+
+function isTaskRunOptionalFields(record: Record<string, unknown>): boolean {
+  return [
+    isOptionalString(record.messageId),
+    isOptionalString(record.pendingPermissionRequestId),
+    isOptionalString(record.lastAppliedEventId),
+    isOptionalString(record.lastEventKind),
+    isOptionalString(record.error),
+    isOptionalDigitalWorkerBinding(record.digitalWorkerBinding),
+    record.operation === undefined || isTaskRunOperationMetadata(record.operation)
+  ].every(Boolean)
+}
+
+function isTaskRunCollections(record: Record<string, unknown>): boolean {
+  return [
+    isOptionalRecordArray(record.steps, isTaskStepRecord),
+    isOptionalRecordArray(record.toolExecutions, isToolExecutionRecord),
+    isOptionalRecordArray(record.effects, isEffectRecord)
+  ].every(Boolean)
+}
+
+function isOptionalRecordArray<T>(
+  value: unknown,
+  predicate: (item: unknown) => item is T
+): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(predicate))
+}
+
+function isOptionalRecentEventIds(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!Array.isArray(value) || value.length > RECENT_EVENT_IDS_LIMIT) return false
+  return value.every((eventId) => typeof eventId === 'string')
+}
+
+function isPositiveInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+function isNonNegativeInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function isOptionalNonNegativeInteger(value: unknown): boolean {
+  return value === undefined || isNonNegativeInteger(value)
+}
+
+function isFiniteNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isOptionalFiniteNumber(value: unknown): boolean {
+  return value === undefined || isFiniteNumber(value)
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function isOptionalDigitalWorkerBinding(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (record.kind === 'unscoped' && Object.keys(record).length === 1) || (
+    record.kind === 'assigned' && Object.keys(record).length === 3 &&
+    typeof record.workerId === 'string' && Boolean(record.workerId.trim()) &&
+    typeof record.assignmentId === 'string' && Boolean(record.assignmentId.trim())
+  )
+}
+
+function mergeDigitalWorkerBinding(
+  current: DigitalWorkerBinding | undefined,
+  incoming: DigitalWorkerBinding | undefined
+): DigitalWorkerBinding | undefined {
+  if (!current) return incoming ? cloneDigitalWorkerBinding(incoming) : undefined
+  if (!incoming) return cloneDigitalWorkerBinding(current)
+  if (current.kind !== incoming.kind || (current.kind === 'assigned' && (
+    incoming.kind !== 'assigned' || current.workerId !== incoming.workerId ||
+    current.assignmentId !== incoming.assignmentId
+  ))) {
+    throw new Error('TaskRun DigitalWorker identity binding conflict')
+  }
+  return cloneDigitalWorkerBinding(current)
+}
+
+function cloneDigitalWorkerBinding(binding: DigitalWorkerBinding): DigitalWorkerBinding {
+  return binding.kind === 'unscoped'
+    ? { kind: 'unscoped' }
+    : { kind: 'assigned', workerId: binding.workerId, assignmentId: binding.assignmentId }
+}
+
+const interactiveOperationKinds = new Set<InteractiveOperationKind>([
+  'file_write',
+  'workspace_hunk_discard',
+  'git_commit',
+  'git_index_update',
+  'managed_worktree_create',
+  'managed_worktree_remove',
+  'worktree_patch_apply',
+  'git_push',
+  'pull_request_create'
+])
+
+function isTaskRunOperationMetadata(value: unknown): value is TaskRunOperationMetadata {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
   return (
     record.schemaVersion === 1 &&
-    typeof record.id === 'string' &&
-    typeof record.sessionId === 'string' &&
-    typeof record.taskId === 'string' &&
-    typeof record.status === 'string' &&
-    Object.prototype.hasOwnProperty.call(ALLOWED_TRANSITIONS, record.status) &&
-    typeof record.revision === 'number' && Number.isInteger(record.revision) && record.revision > 0 &&
-    typeof record.attempt === 'number' && Number.isInteger(record.attempt) && record.attempt > 0 &&
-    typeof record.recoveryCount === 'number' && Number.isInteger(record.recoveryCount) && record.recoveryCount >= 0 &&
-    typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) &&
-    typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) &&
-    (record.startedAt === undefined || (typeof record.startedAt === 'number' && Number.isFinite(record.startedAt))) &&
-    (record.finishedAt === undefined || (typeof record.finishedAt === 'number' && Number.isFinite(record.finishedAt))) &&
-    (record.messageId === undefined || typeof record.messageId === 'string') &&
-    (record.pendingPermissionRequestId === undefined || typeof record.pendingPermissionRequestId === 'string') &&
-    (record.lastAppliedEventId === undefined || typeof record.lastAppliedEventId === 'string') &&
-    (record.lastAppliedEventSeq === undefined ||
-      (typeof record.lastAppliedEventSeq === 'number' &&
-        Number.isInteger(record.lastAppliedEventSeq) &&
-        record.lastAppliedEventSeq >= 0)) &&
-    (record.recentEventIds === undefined ||
-      (Array.isArray(record.recentEventIds) &&
-        record.recentEventIds.length <= RECENT_EVENT_IDS_LIMIT &&
-        record.recentEventIds.every((eventId) => typeof eventId === 'string'))) &&
-    (record.lastEventKind === undefined || typeof record.lastEventKind === 'string') &&
-    (record.error === undefined || typeof record.error === 'string') &&
-    (record.steps === undefined || (Array.isArray(record.steps) && record.steps.every(isTaskStepRecord))) &&
-    (record.toolExecutions === undefined ||
-      (Array.isArray(record.toolExecutions) && record.toolExecutions.every(isToolExecutionRecord))) &&
-    (record.effects === undefined ||
-      (Array.isArray(record.effects) && record.effects.every(isEffectRecord)))
+    (record.source === 'renderer' || record.source === 'dag' || record.source === 'session_lifecycle') &&
+    typeof record.operationId === 'string' &&
+    interactiveOperationKinds.has(record.kind as InteractiveOperationKind) &&
+    typeof record.sourceSessionId === 'string' &&
+    (record.projectId === undefined || typeof record.projectId === 'string') &&
+    typeof record.title === 'string'
   )
 }

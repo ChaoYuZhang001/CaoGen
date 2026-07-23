@@ -2,27 +2,26 @@ import * as React from 'react'
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { useThemeEffect } from './theme'
-import { useT } from './i18n'
 import type { MenuCommand } from '../../shared/types'
-import Sidebar from './components/Sidebar'
-import WorkbenchRoot from './components/workbench/WorkbenchRoot'
-import WelcomeView from './components/WelcomeView'
 import SettingsPage from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
+import AppListView from './components/AppListView'
 import { APP_ICON_URL, APP_NAME } from './brand'
+import { loadOfficeView, preloadOfficeView } from './components/office/loadOffice'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
-const OfficeView = lazy(() => import('./components/office/OfficeView'))
+const OfficeView = lazy(loadOfficeView)
 
 export default function App(): React.JSX.Element {
-  const t = useT()
   const init = useStore((s) => s.init)
   const activeId = useStore((s) => s.activeId)
   const hasActive = useStore((s) => (activeId ? Boolean(s.sessions[activeId]) : false))
   const order = useStore((s) => s.order)
   const view = useStore((s) => s.view)
+  const experienceMode = useStore((s) => s.experienceMode)
+  const language = useStore((s) => s.settings.language)
   const showNewSession = useStore((s) => s.showNewSession)
   const showSettings = useStore((s) => s.showSettings)
   const showCommandPalette = useStore((s) => s.showCommandPalette)
@@ -31,7 +30,9 @@ export default function App(): React.JSX.Element {
   const setShowCommandPalette = useStore((s) => s.setShowCommandPalette)
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
+  const setExperienceMode = useStore((s) => s.setExperienceMode)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [studioVisited, setStudioVisited] = useState(experienceMode === 'studio')
 
   useThemeEffect()
 
@@ -80,6 +81,14 @@ export default function App(): React.JSX.Element {
     if (typeof window.agentDesk === 'undefined') return
     void init()
   }, [init])
+
+  useEffect(() => {
+    preloadOfficeView()
+  }, [])
+
+  useEffect(() => {
+    if (experienceMode === 'studio') setStudioVisited(true)
+  }, [experienceMode])
 
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
@@ -143,31 +152,18 @@ export default function App(): React.JSX.Element {
           <OfficeView />
         </Suspense>
       ) : (
-        <>
-          <button
-            type="button"
-            className="mobile-sidebar-toggle"
-            aria-label={mobileSidebarOpen ? t('closeSession') : t('openSidebar')}
-            aria-expanded={mobileSidebarOpen}
-            onClick={() => setMobileSidebarOpen((open) => !open)}
-          >
-            <span />
-            <span />
-            <span />
-          </button>
-          {mobileSidebarOpen && (
-            <button
-              type="button"
-              className="mobile-sidebar-backdrop"
-              aria-label={t('closeSession')}
-              onClick={() => setMobileSidebarOpen(false)}
-            />
-          )}
-          <Sidebar mobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} />
-          <main className="main">
-            {showNewSession || !hasActive ? <WelcomeView /> : <WorkbenchRoot key={activeId} />}
-          </main>
-        </>
+        <AppListView
+          activeId={activeId}
+          experienceMode={experienceMode}
+          hasActive={hasActive}
+          language={language}
+          mobileSidebarOpen={mobileSidebarOpen}
+          showNewSession={showNewSession}
+          studioVisited={studioVisited}
+          onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
+          onExperienceModeChange={setExperienceMode}
+          onToggleMobileSidebar={() => setMobileSidebarOpen((open) => !open)}
+        />
       )}
       {showCommandPalette && <CommandPalette />}
       {!showSettings && <TaskRecoveryModal />}

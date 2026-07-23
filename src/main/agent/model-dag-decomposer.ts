@@ -1,19 +1,40 @@
-import { decryptProviderToken, getProvider } from '../providers'
+import { decryptProviderToken, getProvider, providerCredentialHeaders } from '../providers'
 import { getSettings } from '../settings'
 import type { OpenAIProtocol, TaskDagRole, TaskDecomposeInput } from '../../shared/types'
 import type { ModelDagDecomposer, ModelDagPayload, ModelDagTaskPayload } from './task-decomposer'
+import {
+  classifyRuntimeModelFailure,
+  executePersistedModelAttempt,
+  modelAttemptUsage,
+  ModelAttemptPersistenceError,
+  type RuntimeModelAttemptDependencies
+} from '../task/model-attempt-runtime'
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_REASONING_MODEL = 'gpt-4.1'
 const MODEL_TIMEOUT_MS = 45_000
 
 interface ProviderModelConfig {
+  providerId: string
   baseUrl: string
   token: string
   headers: Record<string, string>
   model: string
   protocol: OpenAIProtocol
 }
+
+export interface ModelDagAttemptContext {
+  runId: string
+  requestId: string
+  stepId?: string
+}
+
+export interface ModelDagRuntimeDependencies {
+  fetch: typeof fetch
+  attempt?: Partial<RuntimeModelAttemptDependencies>
+}
+
+const DEFAULT_RUNTIME_DEPENDENCIES: ModelDagRuntimeDependencies = { fetch }
 
 const TASK_ROLES: readonly TaskDagRole[] = [
   'frontend',
@@ -65,9 +86,13 @@ function configFromInput(input: TaskDecomposeInput): ProviderModelConfig {
     throw new Error(`${provider?.name ?? 'OpenAI'} 缺少 API Key,已回退本地 DAG 拆解`)
   }
   return {
+    providerId: providerId || 'openai',
     baseUrl,
     token,
-    headers: parseHeaders(provider?.customHeaders),
+    headers: {
+      ...parseHeaders(provider?.customHeaders),
+      ...providerCredentialHeaders(provider, token)
+    },
     model: selectReasoningModel(provider?.models ?? [], input.model || settings.defaultModel),
     protocol
   }
@@ -164,29 +189,67 @@ function extractResponseText(json: unknown): string {
   return chunks.join('').trim()
 }
 
-async function fetchJson(url: string, config: ProviderModelConfig, body: Record<string, unknown>): Promise<unknown> {
+async function fetchJson(
+  url: string,
+  config: ProviderModelConfig,
+  body: Record<string, unknown>,
+  attemptContext: ModelDagAttemptContext | undefined,
+  parse: (json: unknown) => ModelDagPayload,
+  runtime: ModelDagRuntimeDependencies
+): Promise<ModelDagPayload> {
+  if (!attemptContext) {
+    throw new ModelAttemptPersistenceError(
+      'start', false, undefined, new Error('DAG model request is missing canonical Run context')
+    )
+  }
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), MODEL_TIMEOUT_MS)
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, MODEL_TIMEOUT_MS)
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${config.token}`,
-        'content-type': 'application/json',
-        ...config.headers
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
+    const result = await executePersistedModelAttempt({
+      ...attemptContext,
+      providerId: config.providerId,
+      model: config.model,
+      protocol: config.protocol === 'chat' ? 'openai.chat-completions' : 'openai.responses',
+      adapterVersion: 'model-dag-decomposer-v1',
+      context: { url, body },
+      routeReason: 'DAG decomposer selected configured reasoning model',
+      keyIdentity: { providerId: config.providerId, token: config.token }
+    }, async () => {
+      const res = await runtime.fetch(url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${config.token}`,
+          'content-type': 'application/json',
+          ...config.headers
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+      if (!res.ok) throw new Error(`模型拆解请求失败:${res.status} ${await res.text()}`)
+      const json = await res.json()
+      return { payload: parse(json), usage: extractAttemptUsage(json, config.protocol) }
+    }, {
+      success: (value) => ({ usage: value.usage }),
+      failure: (error) => classifyRuntimeModelFailure(error, { timedOut }),
+      dependencies: runtime.attempt
     })
-    if (!res.ok) throw new Error(`模型拆解请求失败:${res.status} ${await res.text()}`)
-    return await res.json()
+    return result.payload
   } finally {
     clearTimeout(timeout)
   }
 }
 
-async function callChat(input: TaskDecomposeInput, config: ProviderModelConfig): Promise<ModelDagPayload> {
-  const json = await fetchJson(`${config.baseUrl}/v1/chat/completions`, config, {
+async function callChat(
+  input: TaskDecomposeInput,
+  config: ProviderModelConfig,
+  attemptContext: ModelDagAttemptContext | undefined,
+  runtime: ModelDagRuntimeDependencies
+): Promise<ModelDagPayload> {
+  return fetchJson(`${config.baseUrl}/v1/chat/completions`, config, {
     model: config.model,
     messages: [
       { role: 'system', content: systemPrompt() },
@@ -194,14 +257,16 @@ async function callChat(input: TaskDecomposeInput, config: ProviderModelConfig):
     ],
     response_format: { type: 'json_object' },
     temperature: 0.1
-  })
-  const text = extractChatText(json)
-  if (!text) throw new Error('模型响应缺少 content')
-  return parseDagPayload(text)
+  }, attemptContext, (json) => parseDagResponse(json, extractChatText, 'content'), runtime)
 }
 
-async function callResponses(input: TaskDecomposeInput, config: ProviderModelConfig): Promise<ModelDagPayload> {
-  const json = await fetchJson(`${config.baseUrl}/v1/responses`, config, {
+async function callResponses(
+  input: TaskDecomposeInput,
+  config: ProviderModelConfig,
+  attemptContext: ModelDagAttemptContext | undefined,
+  runtime: ModelDagRuntimeDependencies
+): Promise<ModelDagPayload> {
+  return fetchJson(`${config.baseUrl}/v1/responses`, config, {
     model: config.model,
     input: [
       { role: 'system', content: [{ type: 'input_text', text: systemPrompt() }] },
@@ -209,17 +274,49 @@ async function callResponses(input: TaskDecomposeInput, config: ProviderModelCon
     ],
     text: { format: { type: 'json_object' } },
     temperature: 0.1
-  })
-  const text = extractResponseText(json)
-  if (!text) throw new Error('模型响应缺少 output_text')
-  return parseDagPayload(text)
+  }, attemptContext, (json) => parseDagResponse(json, extractResponseText, 'output_text'), runtime)
 }
 
-export function createModelDagDecomposer(input: TaskDecomposeInput): ModelDagDecomposer {
+export function createModelDagDecomposer(
+  input: TaskDecomposeInput,
+  attemptContext?: ModelDagAttemptContext,
+  runtime: ModelDagRuntimeDependencies = DEFAULT_RUNTIME_DEPENDENCIES
+): ModelDagDecomposer {
   return {
     async decompose() {
       const config = configFromInput(input)
-      return config.protocol === 'chat' ? callChat(input, config) : callResponses(input, config)
+      return config.protocol === 'chat'
+        ? callChat(input, config, attemptContext, runtime)
+        : callResponses(input, config, attemptContext, runtime)
     }
   }
+}
+
+function parseDagResponse(
+  json: unknown,
+  extract: (value: unknown) => string,
+  field: string
+): ModelDagPayload {
+  const text = extract(json)
+  if (!text) throw new Error(`模型响应缺少 ${field}`)
+  return parseDagPayload(text)
+}
+
+function extractAttemptUsage(json: unknown, protocol: OpenAIProtocol) {
+  if (!json || typeof json !== 'object') return undefined
+  const usage = (json as Record<string, unknown>).usage as Record<string, unknown> | undefined
+  if (!usage) return undefined
+  const input = protocol === 'chat' ? usage.prompt_tokens : usage.input_tokens
+  const output = protocol === 'chat' ? usage.completion_tokens : usage.output_tokens
+  const detailsKey = protocol === 'chat' ? 'prompt_tokens_details' : 'input_tokens_details'
+  const details = usage[detailsKey] as Record<string, unknown> | undefined
+  return modelAttemptUsage({
+    input: numericUsage(input),
+    output: numericUsage(output),
+    cacheRead: numericUsage(details?.cached_tokens)
+  })
+}
+
+function numericUsage(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }

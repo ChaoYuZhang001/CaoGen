@@ -1,6 +1,15 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -64,6 +73,39 @@ try {
 
   const block = await attachmentOps.imageToContentBlock(copied.path)
   assertImageContentBlock(block, minPng, 'image/png')
+  assertImageContentBlock(
+    attachmentOps.imageAttachmentRefToContentBlock(copied, attachmentsRoot),
+    minPng,
+    'image/png'
+  )
+  assertThrows(
+    () => attachmentOps.imageAttachmentRefToContentBlock({ ...copied, hash: undefined }, attachmentsRoot),
+    /SHA-256/,
+    'legacy references without a digest must fail closed'
+  )
+  assertThrows(
+    () => attachmentOps.imageAttachmentRefToContentBlock({ ...copied, bytes: copied.bytes + 1 }, attachmentsRoot),
+    /大小/,
+    'reference byte mismatches must fail closed'
+  )
+
+  const absentUserData = path.join(tempRoot, 'absent-user-data')
+  assertEqual(
+    attachmentOps.sessionImageAttachmentsRoot(absentUserData, 'session-safe'),
+    path.join(absentUserData, 'attachments', 'session-safe')
+  )
+  assertThrows(
+    () => attachmentOps.sessionImageAttachmentsRoot(absentUserData, '../escape'),
+    /标识无效/,
+    'session ids must not escape the attachment base'
+  )
+  const symlinkRoot = path.join(tempRoot, 'symlink-attachments')
+  symlinkSync(realpathSync(attachmentsRoot), symlinkRoot)
+  assertThrows(
+    () => attachmentOps.imageAttachmentRefToContentBlock(copied, symlinkRoot),
+    /普通目录/,
+    'a symlinked session attachment root must fail closed'
+  )
 
   const savedBytes = await attachmentOps.saveImageAttachmentBytes(new Uint8Array(minPng), bytesAttachmentsRoot, {
     mime: 'image/png'
@@ -142,4 +184,14 @@ function assert(condition, message = 'assertion failed') {
   if (!condition) {
     throw new Error(message)
   }
+}
+
+function assertThrows(operation, expected, message) {
+  try {
+    operation()
+  } catch (error) {
+    assert(expected.test(String(error?.message ?? error)), `${message}: unexpected error ${error}`)
+    return
+  }
+  throw new Error(`${message}: operation did not throw`)
 }

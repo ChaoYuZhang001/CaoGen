@@ -8,6 +8,9 @@ import { Matrix4, Quaternion, Vector3 } from 'three'
 const GLB_MAGIC = 0x46546c67
 const GLB_VERSION = 2
 const JSON_CHUNK_TYPE = 0x4e4f534a
+const DRACO_EXTENSION = 'KHR_draco_mesh_compression'
+const FULL_GLB_BUDGET_BYTES = 8_000_000
+const LOD_TRIANGLE_RATIO_MAXIMUM = 0.3
 const PINNED_SOURCE_COMMIT = '276801e46c5d433564f24658bac64f254b7d2d4b'
 const SOURCE_LICENSE = 'BSD-3-Clause'
 const SOURCE_ROOT_NODE_NAME = 'reference_office_robot_unitree_style'
@@ -45,15 +48,31 @@ const REQUIRED_NEUTRAL_ARM_POSES = [
 const REQUIRED_VISOR_ATTACHMENT_NODES = [
   {
     name: 'black_u_visor_frame',
-    attachment: 'helmet_black_smooth_cowl'
+    attachment: 'helmet_black_smooth_cowl',
+    component: 'beveled_annular_face_shell'
   },
   {
     name: 'cyan_u_visor_light',
-    attachment: 'black_u_visor_frame'
+    attachment: 'black_u_visor_frame',
+    component: 'flush_inset_light_tube',
+    maximumSurfaceOffset: 0.001
   }
 ]
 const REFERENCE_COWL_NODE_NAME = 'helmet_black_smooth_cowl'
-const REFERENCE_COWL_SILHOUETTE = 'rounded_profile_open_face_cowl'
+const REFERENCE_COWL_COMPONENT = 'single_continuous_subd_shell'
+const REFERENCE_COWL_SILHOUETTE = 'orthographic_single_shell_source_asset'
+const REFERENCE_COWL_TOPOLOGY = 'classic_remesh_voxel_quad_subdivision'
+const REFERENCE_HEAD_PIPELINE = 'appended_blender_subd_source'
+const FORBIDDEN_LEGACY_HEAD_NODE_NAMES = [
+  'helmet_rear_occipital_spine_left',
+  'helmet_rear_occipital_spine_right',
+  'helmet_occipital_neck_bridge_left',
+  'helmet_occipital_neck_bridge_right'
+]
+const REQUIRED_HEAD_DETAIL_NODES = [
+  { name: 'helmet_shoulder_mount_left', component: 'shoulder_mount_loop' },
+  { name: 'helmet_shoulder_mount_right', component: 'shoulder_mount_loop' }
+]
 const OFFICIAL_HEAD_NODE_NAME = 'official_head_link'
 const OFFICIAL_HEAD_VISUAL_ROLE = 'provenance_only'
 const REQUIRED_OFFICIAL_MESH_BINDINGS = [
@@ -92,21 +111,22 @@ const defaultAssetPath = path.join(
   repoRoot,
   'src/renderer/src/assets/robots/reference-office-robot.glb'
 )
+const defaultLodAssetPath = path.join(
+  repoRoot,
+  'src/renderer/src/assets/robots/reference-office-robot-lod.glb'
+)
 const assetPath = process.argv[2] ? path.resolve(process.cwd(), process.argv[2]) : defaultAssetPath
 
 try {
-  const buffer = readGlb(assetPath)
-  const glb = parseGlb(buffer, assetPath)
-  const inspection = inspectDocument(glb.document)
-
-  printGlbSummary(assetPath, buffer.length, glb)
-  printDocumentSummary(inspection)
-
-  if (inspection.failures.length > 0) {
-    throw new Error(
-      `reference robot GLB contract failed with ${inspection.failures.length} issue(s):\n${inspection.failures
-        .map((failure) => `  - ${failure}`)
-        .join('\n')}`
+  const primary = inspectAsset(assetPath)
+  if (!process.argv[2]) {
+    const lod = inspectAsset(defaultLodAssetPath)
+    const pairFailures = inspectCardCAssetPair(primary, lod)
+    if (pairFailures.length > 0) throwContractFailures('reference robot Card C asset pair', pairFailures)
+    console.log(
+      `Card C asset pair: full=${primary.buffer.length} bytes/${primary.triangles} triangles, ` +
+        `low=${lod.buffer.length} bytes/${lod.triangles} triangles ` +
+        `(${((lod.triangles / primary.triangles) * 100).toFixed(2)}%)`
     )
   }
 
@@ -114,6 +134,78 @@ try {
 } catch (error) {
   console.error(`reference robot GLB smoke failed: ${errorMessage(error)}`)
   process.exitCode = 1
+}
+
+function inspectAsset(filePath) {
+  const buffer = readGlb(filePath)
+  const glb = parseGlb(buffer, filePath)
+  const inspection = inspectDocument(glb.document)
+
+  printGlbSummary(filePath, buffer.length, glb)
+  printDocumentSummary(inspection)
+  if (inspection.failures.length > 0) {
+    throwContractFailures('reference robot GLB', inspection.failures)
+  }
+  return {
+    filePath,
+    buffer,
+    document: glb.document,
+    inspection,
+    triangles: documentTriangleCount(glb.document)
+  }
+}
+
+function throwContractFailures(label, failures) {
+  throw new Error(
+    `${label} contract failed with ${failures.length} issue(s):\n${failures
+      .map((failure) => `  - ${failure}`)
+      .join('\n')}`
+  )
+}
+
+function inspectCardCAssetPair(full, lod) {
+  const failures = []
+  if (full.buffer.length > FULL_GLB_BUDGET_BYTES) {
+    failures.push(`full GLB is ${full.buffer.length} bytes; maximum is ${FULL_GLB_BUDGET_BYTES}`)
+  }
+  for (const asset of [full, lod]) {
+    if (!asset.document.extensionsRequired?.includes(DRACO_EXTENSION)) {
+      failures.push(`${path.basename(asset.filePath)} must require ${DRACO_EXTENSION}`)
+    }
+  }
+  if (full.triangles <= 0 || lod.triangles <= 0) {
+    failures.push(`triangle counts must be positive; full=${full.triangles}, low=${lod.triangles}`)
+  } else if (lod.triangles >= full.triangles * LOD_TRIANGLE_RATIO_MAXIMUM) {
+    failures.push(
+      `low GLB must keep fewer than ${LOD_TRIANGLE_RATIO_MAXIMUM * 100}% of full triangles; ` +
+        `found ${lod.triangles}/${full.triangles}`
+    )
+  }
+  if (JSON.stringify(lod.inspection.sourceProvenance) !== JSON.stringify(full.inspection.sourceProvenance)) {
+    failures.push('low GLB must preserve the full GLB source provenance')
+  }
+  const fullRoot = full.document.nodes?.find((node) => node?.name === SOURCE_ROOT_NODE_NAME)
+  const lowRoot = lod.document.nodes?.find((node) => node?.name === SOURCE_ROOT_NODE_NAME)
+  if (fullRoot?.extras?.office_lod_level !== 'full') {
+    failures.push(`full source root extras.office_lod_level must be "full"`)
+  }
+  if (lowRoot?.extras?.office_lod_level !== 'low') {
+    failures.push(`low source root extras.office_lod_level must be "low"`)
+  }
+  return failures
+}
+
+function documentTriangleCount(document) {
+  let triangles = 0
+  for (const mesh of document.meshes ?? []) {
+    for (const primitive of mesh?.primitives ?? []) {
+      if (primitive?.mode !== undefined && primitive.mode !== 4) continue
+      const indexCount = document.accessors?.[primitive?.indices]?.count
+      const positionCount = document.accessors?.[primitive?.attributes?.POSITION]?.count
+      triangles += Math.floor((indexCount ?? positionCount ?? 0) / 3)
+    }
+  }
+  return triangles
 }
 
 function readGlb(filePath) {
@@ -474,17 +566,43 @@ function inspectVisorAttachmentNodes(nodes, nodeEntries, failures) {
     }
 
     const entry = matches[0]
-    const attachment = nodes[entry.index]?.extras?.visor_attachment
+    const extras = nodes[entry.index]?.extras ?? {}
+    const attachment = extras.visor_attachment
+    const component = extras.reference_component
     if (attachment !== contract.attachment) {
       failures.push(
         `visor attachment ${quote(contract.name)} must declare ${quote(contract.attachment)}; ` +
           `found ${formatValue(attachment)}`
       )
     }
+    if (component !== contract.component) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} must declare component ${quote(contract.component)}; ` +
+          `found ${formatValue(component)}`
+      )
+    }
+    if (
+      contract.maximumSurfaceOffset !== undefined &&
+      (typeof extras.surface_offset_m !== 'number' ||
+        extras.surface_offset_m > contract.maximumSurfaceOffset)
+    ) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} surface offset must be at most ` +
+          `${contract.maximumSurfaceOffset}m; found ${formatValue(extras.surface_offset_m)}`
+      )
+    }
     if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
       failures.push(`visor attachment ${quote(contract.name)} must descend from "helmet_head"`)
     }
-    attachments.push({ name: contract.name, attachment })
+    const parentIndex = nodeParentIndex(nodes, entry.index)
+    const parentName = parentIndex >= 0 ? nodes[parentIndex]?.name : null
+    if (parentName !== contract.attachment) {
+      failures.push(
+        `visor attachment ${quote(contract.name)} must be parented to ${quote(contract.attachment)}; ` +
+          `found ${formatValue(parentName)}`
+      )
+    }
+    attachments.push({ name: contract.name, attachment, component })
   }
   return attachments
 }
@@ -499,8 +617,66 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
   if (cowlMatches.length !== 1) {
     failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must appear exactly once; found ${cowlMatches.length}`)
   }
+
+  if (helmetIndex < 0) {
+    failures.push('reference head must contain exactly one "helmet_head" animation root')
+  }
+  const helmetExtras = helmetIndex >= 0 ? nodes[helmetIndex]?.extras ?? {} : {}
+  if (helmetExtras.source_asset_pipeline !== REFERENCE_HEAD_PIPELINE) {
+    failures.push(
+      `helmet_head must declare source pipeline ${quote(REFERENCE_HEAD_PIPELINE)}; ` +
+        `found ${formatValue(helmetExtras.source_asset_pipeline)}`
+    )
+  }
+  if (helmetExtras.source_mesh_topology !== REFERENCE_COWL_TOPOLOGY) {
+    failures.push(
+      `helmet_head must declare topology ${quote(REFERENCE_COWL_TOPOLOGY)}; ` +
+        `found ${formatValue(helmetExtras.source_mesh_topology)}`
+    )
+  }
+  if (
+    helmetExtras.authoring_subdivision_levels !== 1 ||
+    helmetExtras.production_subdivision_levels !== 0
+  ) {
+    failures.push(
+      'helmet_head must retain authoring SubD level 1 and export production level 0; ' +
+        `found authoring=${formatValue(helmetExtras.authoring_subdivision_levels)}, ` +
+        `production=${formatValue(helmetExtras.production_subdivision_levels)}`
+    )
+  }
+
+  for (const name of FORBIDDEN_LEGACY_HEAD_NODE_NAMES) {
+    const matches = nodeEntries.filter((entry) => entry.name === name)
+    if (matches.length > 0) {
+      failures.push(`legacy split-shell node ${quote(name)} must be absent; found ${matches.length}`)
+    }
+  }
+
+  const detailNodes = []
+  for (const contract of REQUIRED_HEAD_DETAIL_NODES) {
+    const matches = nodeEntries.filter((entry) => entry.name === contract.name)
+    if (matches.length !== 1) {
+      failures.push(
+        `reference head detail ${quote(contract.name)} must appear exactly once; found ${matches.length}`
+      )
+      continue
+    }
+    const entry = matches[0]
+    const component = nodes[entry.index]?.extras?.reference_component
+    if (component !== contract.component) {
+      failures.push(
+        `reference head detail ${quote(contract.name)} must declare component ` +
+          `${quote(contract.component)}; found ${formatValue(component)}`
+      )
+    }
+    if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, entry.index)) {
+      failures.push(`reference head detail ${quote(contract.name)} must descend from "helmet_head"`)
+    }
+    detailNodes.push({ name: contract.name, component })
+  }
   if (cowl) {
-    const silhouette = nodes[cowl.index]?.extras?.reference_silhouette
+    const extras = nodes[cowl.index]?.extras ?? {}
+    const silhouette = extras.reference_silhouette
     if (silhouette !== REFERENCE_COWL_SILHOUETTE) {
       failures.push(
         `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare silhouette ` +
@@ -509,6 +685,48 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
     }
     if (helmetIndex < 0 || !nodeContains(nodes, helmetIndex, cowl.index)) {
       failures.push(`reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must descend from "helmet_head"`)
+    }
+    if (extras.reference_component !== REFERENCE_COWL_COMPONENT) {
+      failures.push(
+        `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare component ` +
+          `${quote(REFERENCE_COWL_COMPONENT)}; found ${formatValue(extras.reference_component)}`
+      )
+    }
+    if (extras.source_topology !== REFERENCE_COWL_TOPOLOGY) {
+      failures.push(
+        `reference cowl ${quote(REFERENCE_COWL_NODE_NAME)} must declare topology ` +
+          `${quote(REFERENCE_COWL_TOPOLOGY)}; found ${formatValue(extras.source_topology)}`
+      )
+    }
+    if (
+      extras.source_asset !== 'reference-helmet-source.blend' ||
+      extras.source_island_count !== 1 ||
+      extras.source_non_manifold_edges !== 0 ||
+      extras.source_degenerate_faces !== 0 ||
+      extras.source_non_quad_faces !== 0
+    ) {
+      failures.push(
+        `reference cowl topology audit failed: ${formatValue({
+          sourceAsset: extras.source_asset,
+          islands: extras.source_island_count,
+          nonManifold: extras.source_non_manifold_edges,
+          degenerate: extras.source_degenerate_faces,
+          nonQuad: extras.source_non_quad_faces
+        })}`
+      )
+    }
+    if (
+      !Number.isInteger(extras.source_face_count) ||
+      extras.source_face_count < 5_000 ||
+      extras.source_face_count > 10_000
+    ) {
+      failures.push(
+        `reference cowl production face budget must be 5000..10000; ` +
+          `found ${formatValue(extras.source_face_count)}`
+      )
+    }
+    if (extras.production_subdivision_disabled !== true) {
+      failures.push('reference cowl must disable authoring SubD in the production scene')
     }
   }
 
@@ -539,6 +757,11 @@ function inspectReferenceHead(nodes, nodeEntries, failures) {
   return {
     cowlName: cowl?.name ?? null,
     silhouette: cowl ? nodes[cowl.index]?.extras?.reference_silhouette ?? null : null,
+    component: cowl ? nodes[cowl.index]?.extras?.reference_component ?? null : null,
+    topology: cowl ? nodes[cowl.index]?.extras?.source_topology ?? null : null,
+    faceCount: cowl ? nodes[cowl.index]?.extras?.source_face_count ?? null : null,
+    pipeline: helmetExtras.source_asset_pipeline ?? null,
+    detailNames: detailNodes.map((detail) => detail.name),
     officialHeadName: officialHead?.name ?? null,
     officialHeadVisualRole: officialHead ? nodes[officialHead.index]?.extras?.visual_role ?? null : null
   }
@@ -685,6 +908,10 @@ function nodeContains(nodes, ancestorIndex, descendantIndex) {
   return false
 }
 
+function nodeParentIndex(nodes, childIndex) {
+  return nodes.findIndex((node) => Array.isArray(node?.children) && node.children.includes(childIndex))
+}
+
 function printGlbSummary(filePath, fileLength, glb) {
   console.log(`Reference robot GLB: ${filePath}`)
   console.log(
@@ -734,6 +961,11 @@ function printDocumentSummary(inspection) {
   console.log(
     `Reference head: cowl=${formatValue(inspection.referenceHead.cowlName)}, ` +
       `silhouette=${formatValue(inspection.referenceHead.silhouette)}, ` +
+      `component=${formatValue(inspection.referenceHead.component)}, ` +
+      `topology=${formatValue(inspection.referenceHead.topology)}, ` +
+      `faces=${formatValue(inspection.referenceHead.faceCount)}, ` +
+      `pipeline=${formatValue(inspection.referenceHead.pipeline)}, ` +
+      `details=${formatList(inspection.referenceHead.detailNames)}, ` +
       `officialRole=${formatValue(inspection.referenceHead.officialHeadVisualRole)}`
   )
   console.log('Official mesh bindings:')

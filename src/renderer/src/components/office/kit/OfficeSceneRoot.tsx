@@ -48,6 +48,7 @@ export default function OfficeSceneRoot({
       {stations.map((s) => (
         <WorkstationPro
           key={s.id}
+          sessionId={s.id}
           position={s.position}
           active={s.active}
           activity={s.activity}

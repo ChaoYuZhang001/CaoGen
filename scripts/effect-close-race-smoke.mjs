@@ -167,7 +167,7 @@ try {
   })
 
   const manager = sessionManagerModule.sessionManager
-  const meta = manager.create({
+  const meta = await manager.create({
     cwd: project,
     isolated: false,
     engine: 'openai',
@@ -237,7 +237,7 @@ try {
   assertEqual((await snapshotStore.listTaskSnapshots(userData)).some((item) => item.sessionId === meta.id), false)
 
   writeFileSync(path.join(project, 'state.txt'), 'before\n', 'utf8')
-  const interruptMeta = manager.create({
+  const interruptMeta = await manager.create({
     cwd: project,
     isolated: false,
     engine: 'openai',
@@ -293,7 +293,7 @@ try {
   )
   assert(await manager.deleteTaskSnapshot(interruptedSnapshot.id), 'resolved interrupt snapshot should be deletable')
 
-  const blockedMeta = manager.create({
+  const blockedMeta = await manager.create({
     cwd: project,
     isolated: false,
     engine: 'openai',

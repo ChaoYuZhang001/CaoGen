@@ -4,12 +4,14 @@ import { useT } from '../i18n'
 import type { ImageAttachmentView } from '../../../shared/types'
 import ImageAttachmentTray from './ImageAttachmentTray'
 import {
-  buildComposerSlashCommands,
-  buildPluginCommands,
   filterCommandItems,
-  shouldLoadPluginSlashRegistry,
   type CommandDescriptor
 } from '../commands'
+import { useExperienceProjection } from './experience/ExperienceProjection'
+import {
+  projectedComposerCommands,
+  shouldLoadProjectedPluginRegistry
+} from './experience/projectedComposerCommands'
 
 interface Mention {
   start: number
@@ -52,6 +54,7 @@ function filePath(file: File): string | undefined {
 
 export default function Composer({ running }: { running: boolean }): React.JSX.Element {
   const t = useT()
+  const projection = useExperienceProjection()
   const [text, setText] = useState('')
   const sendMessage = useStore((s) => s.sendMessage)
   const openLatestRewindPanel = useStore((s) => s.openLatestRewindPanel)
@@ -112,19 +115,16 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     return () => {
       cancelled = true
     }
-  }, [mention?.query, activeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mention?.query, activeId]) // eslint-disable-line react-hooks/exhaustive-deps -- only the parsed query affects suggestions
 
   const mentionOpen = mention !== null && suggestions.length > 0
   const slashQuery = text.startsWith('/') && !text.includes('\n') ? text.slice(1).trim().toLowerCase() : null
-  const pluginSlashCommands: CommandDescriptor[] =
-    slashQuery && slashQuery.length > 0
-      ? buildPluginCommands(pluginRegistry?.items ?? [], {
-          sendPluginRegistryItemToAgent,
-          dispatchPluginAgent
-        })
-      : []
-  const slashCommands: CommandDescriptor[] = [
-    ...buildComposerSlashCommands({
+  const slashCommands: CommandDescriptor[] = projectedComposerCommands({
+    projection,
+    slashQuery,
+    pluginItems: pluginRegistry?.items ?? [],
+    pluginHandlers: { sendPluginRegistryItemToAgent, dispatchPluginAgent },
+    commandContext: {
       t,
       modelOptions: modelOptionsForProvider(
         providers,
@@ -145,19 +145,18 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       openMemoryPanel,
       updateSettings,
       setModel
-    }),
-    ...pluginSlashCommands
-  ]
+    }
+  })
   const slashMatches = slashQuery === null ? [] : filterCommandItems(slashQuery, slashCommands)
   const slashOpen = slashQuery !== null && slashMatches.length > 0
 
   useEffect(() => {
-    if (!shouldLoadPluginSlashRegistry(slashQuery) || pluginRegistryLoading) return
+    if (!shouldLoadProjectedPluginRegistry(projection, slashQuery) || pluginRegistryLoading) return
     const key = activeId ?? '__no_session__'
     if (slashRegistryScanKey.current === key && pluginRegistry) return
     slashRegistryScanKey.current = key
     void loadPluginRegistryForSlash()
-  }, [activeId, loadPluginRegistryForSlash, pluginRegistry, pluginRegistryLoading, slashQuery])
+  }, [activeId, loadPluginRegistryForSlash, pluginRegistry, pluginRegistryLoading, projection, slashQuery])
 
   useEffect(() => {
     setSlashIndex(0)

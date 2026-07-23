@@ -28,6 +28,14 @@ async function invoke(channel, ...args) {
   if (!map || !map.has(channel)) throw new Error(`通道未注册: ${channel}`)
   return map.get(channel)({}, ...args)
 }
+async function waitForHandler(channel, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (ipcMain._invokeHandlers?.has(channel)) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`等待 IPC 通道超时: ${channel}`)
+}
 
 // SSE 帮手:写一串 Responses 事件
 function sse(res, events) {
@@ -79,7 +87,7 @@ const server = http.createServer((req, res) => {
 async function run() {
   const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
   require(path.join(repoOut, 'index.js'))
-  await new Promise((r) => setTimeout(r, 900))
+  await waitForHandler('providers:create')
 
   // Provider:显式 responses 协议(本地 mock 端点)
   const provider = await invoke('providers:create', {
@@ -120,6 +128,7 @@ async function run() {
   const toolUse = entries.some((e) => e.event.kind === 'assistant-message' && (e.event.blocks ?? []).some((b) => b.type === 'tool_use' && b.name === 'write_file'))
   check('tool_use 事件持久化', toolUse)
 
+  await invoke('sessions:close', meta.id)
   return finish(results.every((r) => r.ok) ? 0 : 1)
 }
 function finish(code) {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { EffectRecord, TaskRunRecord, TaskSnapshotRecord } from '../../shared/types'
+import { projectConfirmedManagedWorktreeTarget } from '../managed-worktree-lifecycle'
 import {
   abandonPreparedEffect,
   applyEffectReconciliation,
@@ -11,7 +12,9 @@ import {
   prepareEffect,
   type EffectExecutionHandle
 } from './effect-ledger'
+import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { buildEffectDescriptor, reconcileEffect } from './effect-reconciler'
+import { registerConfirmedRunArtifactLifecycles } from './artifact-lifecycle-producer'
 import { getTaskSnapshot, saveTaskRunBarrier, saveTaskSnapshot } from './task-snapshot'
 import { taskRuntimeRegistry } from './task-runtime-registry'
 import { isTaskRunTerminal, transitionTaskRun } from './task-run'
@@ -40,6 +43,7 @@ export async function prepareEffectExecution(
   return withSessionQueue(input.sessionId, async () => {
     const run = requireRun(input.sessionId)
     const descriptor = await buildEffectDescriptor({
+      sessionId: input.sessionId,
       toolName: input.toolName,
       toolInput: input.toolInput,
       cwd: input.cwd
@@ -68,6 +72,7 @@ export async function markEffectExecutionStarted(
     let descriptor
     try {
       descriptor = await buildEffectDescriptor({
+        sessionId: input.sessionId,
         toolName: input.toolName,
         toolInput: input.toolInput,
         cwd: input.cwd
@@ -175,9 +180,15 @@ async function reconcileStoppedTaskRunEffects(
   )
   for (const candidate of candidates) {
     const current = requireEffect(next, candidate.id)
-    if (current.status === 'prepared' && engine === 'openai') {
+    if (current.status === 'prepared' && (usesPreExecutionNativeToolGate(engine) || run.operation !== undefined)) {
       const handle = effectHandleFromRecord(current)
-      next = abandonPreparedEffect(next, handle, 'OpenAI 工具仍处于审批前 prepared 状态，已确认外部执行未开始')
+      next = abandonPreparedEffect(
+        next,
+        handle,
+        run.operation !== undefined
+          ? `${run.operation.source} 操作仍处于 prepared 状态；Gateway 尚未跨过 executing 屏障，已确认外部执行未开始`
+          : `${engine} 原生工具仍处于审批前 prepared 状态，已确认外部执行未开始`
+      )
       continue
     }
     const probed = await reconcileEffect(current)
@@ -197,6 +208,10 @@ async function reconcileStoppedTaskRunEffects(
     next = applyEffectReconciliation(next, current.id, result)
   }
   return next
+}
+
+function usesPreExecutionNativeToolGate(engine: TaskSnapshotRecord['engine']): boolean {
+  return engine === 'openai' || engine === 'anthropic'
 }
 
 function effectHandleFromRecord(effect: EffectRecord): EffectExecutionHandle {
@@ -244,7 +259,10 @@ export async function reconcilePersistedTaskSnapshot(
     const reconciled = await reconcileTaskSnapshotEffects(base, { processStopped: true })
     const persisted = reconciled === stored ? stored : await saveTaskSnapshot(reconciled)
     if (!persisted) throw new Error('任务快照在对账期间被删除')
-    if (persisted.run) taskRuntimeRegistry.set(persisted.run.sessionId, persisted.run)
+    if (persisted.run) {
+      taskRuntimeRegistry.set(persisted.run.sessionId, persisted.run)
+      await registerConfirmedRunArtifactLifecycles(persisted.run)
+    }
     return persisted
   })
 }
@@ -253,7 +271,8 @@ export async function resolvePersistedTaskEffect(
   snapshotId: string,
   effectId: string,
   expectedRevision: number,
-  resolution: 'confirmed_applied' | 'confirmed_not_applied'
+  resolution: 'confirmed_applied' | 'confirmed_not_applied',
+  options: { beforePersist?(effect: EffectRecord): void | Promise<void> } = {}
 ): Promise<TaskSnapshotRecord> {
   return withSessionQueue(snapshotId, async () => {
     const snapshot = await getTaskSnapshot(snapshotId)
@@ -263,11 +282,30 @@ export async function resolvePersistedTaskEffect(
     if (effect.revision !== expectedRevision) {
       throw new Error(`stale_revision: EffectRecord 已从 ${expectedRevision} 更新到 ${effect.revision}`)
     }
+    const managedWorktreeEffect = isManagedWorktreeEffect(effect)
+    if (managedWorktreeEffect && !effectRecordIntegrityMatches(effect)) {
+      throw new Error('managed worktree EffectRecord 摘要校验失败，已拒绝人工处置')
+    }
+    if (resolution === 'confirmed_applied' && managedWorktreeEffect) {
+      const projection = projectConfirmedManagedWorktreeTarget(effect.target)
+      if ('error' in projection) {
+        throw new Error(`Effect 已由用户确认，但 managed worktree projection 失败: ${projection.error}`)
+      }
+    }
+    await options.beforePersist?.(effect)
     const run = manuallyResolveEffect(snapshot.run, effectId, resolution)
     const persisted = await saveTaskSnapshot({ ...snapshot, updatedAt: Date.now(), run })
-    taskRuntimeRegistry.set(run.sessionId, persisted.run ?? run)
+    const persistedRun = persisted.run ?? run
+    taskRuntimeRegistry.set(run.sessionId, persistedRun)
+    await registerConfirmedRunArtifactLifecycles(persistedRun)
     return persisted
   })
+}
+
+function isManagedWorktreeEffect(effect: EffectRecord): effect is EffectRecord & {
+  target: Extract<EffectRecord['target'], { kind: 'git_worktree_create' | 'git_worktree_remove' }>
+} {
+  return effect.target.kind === 'git_worktree_create' || effect.target.kind === 'git_worktree_remove'
 }
 
 export function runHasWaitingEffects(run: TaskRunRecord | undefined): boolean {
@@ -295,6 +333,7 @@ async function persistRun(run: TaskRunRecord, requiredEffectId?: string): Promis
     }
   }
   taskRuntimeRegistry.set(persisted.sessionId, persisted)
+  await registerConfirmedRunArtifactLifecycles(persisted)
   return persisted
 }
 

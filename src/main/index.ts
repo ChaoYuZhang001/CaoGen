@@ -1,4 +1,6 @@
-﻿import {
+﻿// Must run before imports that construct app-path-bound singletons.
+import './app-runtime-paths'
+import {
   app,
   BrowserWindow,
   Menu,
@@ -18,6 +20,9 @@ import { executeRoutine } from './routines/routine-executor'
 import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { initAutoUpdater } from './updater'
 import { configureQuickbar, disposeQuickbar, registerQuickbarGlobalShortcut } from './quickbar'
+import { listProjects } from './projects'
+import { ensureProjectSkillReadiness } from './learning/learning-lifecycle'
+import { configureLearningUserDataRoot } from './learning/learning-store'
 import type { Routine } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -26,10 +31,8 @@ let quitting = false
 let quitCleanupStarted = false
 let trayTimer: NodeJS.Timeout | null = null
 
-// 未打包运行时(dev / 直接 electron out/...)默认 userData 是共享的 "Electron" 目录。
-// 测试脚本可通过 CAOGEN_USER_DATA_DIR 指向临时目录,避免污染真实 CaoGen 配置。
-app.setName('CaoGen')
-app.setPath('userData', process.env.CAOGEN_USER_DATA_DIR || join(app.getPath('appData'), 'CaoGen'))
+process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
+configureLearningUserDataRoot(app.getPath('userData'))
 const singleInstanceOwner = app.requestSingleInstanceLock()
 if (!singleInstanceOwner) {
   app.quit()
@@ -245,8 +248,22 @@ function runRoutine(routine: Routine, nextRunAt: number | null): void {
     console.error('[caogen] routine execute failed:', err)
   })
 }
+
+async function recoverLearningMaterializationAtStartup(): Promise<void> {
+  const projectRoots = [...new Set(listProjects().map((project) => project.path).filter(Boolean))]
+  await Promise.all(projectRoots.map(async (projectRoot) => {
+    try {
+      await ensureProjectSkillReadiness(projectRoot)
+    } catch (error) {
+      // Project Skill loading also fails closed until the same recovery succeeds.
+      console.error(`[caogen] Learning materialization recovery failed for ${projectRoot}:`, error)
+    }
+  }))
+}
+
 void app.whenReady().then(async () => {
   if (!singleInstanceOwner) return
+  await recoverLearningMaterializationAtStartup()
   await sessionManager.init()
   registerIpc()
   createWindow()

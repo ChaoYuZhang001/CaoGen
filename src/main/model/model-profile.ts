@@ -403,7 +403,10 @@ function defaultTaskAffinity(profile: ModelProfile, taskKinds: ModelTaskKind[]):
 }
 
 function modelFamily(profile: ModelProfile): 'google' | 'anthropic' | 'openai' | 'deepseek' | 'moonshot' | 'other' {
-  const identity = `${profile.providerId} ${profile.providerName ?? ''} ${profile.model} ${profile.tags.join(' ')}`.toLowerCase()
+  // Provider identity and display metadata are not model capability evidence.
+  // A relay, renamed Provider, or local compatible endpoint must receive the
+  // same score for the same model/profile.
+  const identity = `${profile.model} ${profile.tags.join(' ')}`.toLowerCase()
   if (hasAny(identity, ['gemini', 'google'])) return 'google'
   if (hasAny(identity, ['claude', 'anthropic', 'opus', 'sonnet', 'haiku'])) return 'anthropic'
   if (hasAny(identity, ['openai', 'gpt-', 'codex'])) return 'openai'

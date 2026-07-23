@@ -1,9 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { app, powerSaveBlocker } from 'electron'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
 import type { PermissionResult, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources'
 import { Pushable } from './pushable'
 import { TranscriptWriter } from './transcript'
 import {
@@ -14,27 +12,36 @@ import {
   resolveProviderToken,
   rotateProviderKey
 } from './providers'
-import { listHistory } from './history'
-import { readReferencedFiles } from './fileSuggest'
+import { applyClaudeProviderEnvironment } from './providerRuntimeAuth'
+import { assertClaudeRuntimeLaunchPolicy, buildClaudeRuntimeEnvironment, createClaudeRuntimeLaunchPolicy } from './provider/claudeRuntimePolicy'
 import { buildMemorySystemAppend } from './memoryInject'
-import { buildLayeredMemoryPrompt } from './memory/memory-retriever'
-import { buildSkillInvocationPrompt } from './skill/skill-invocation'
-import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
-import {
-  buildProjectContextSystemAppend,
-  buildProjectContextSystemAppendSync
-} from './agent/context-loader'
+import { buildProjectContextSystemAppend } from './agent/context-loader'
 import { evaluateContextUsage } from './agent/context-compressor'
 import { loadSdkAgentDefinitions } from './sdkAgents'
-import { imageToContentBlock } from './attachmentOps'
+import { prepareClaudeUserMessage } from './claude-user-message'
+import { claudeExecutablePath, loadClaudeSdk } from './claude-sdk-loader'
+import {
+  asRecordInput,
+  compactUserAttachments,
+  normalizeBlocks,
+  normalizeClaudeToolInput,
+  normalizeClaudeToolName,
+  providerTokenFingerprint,
+  splitList,
+  toolResultText,
+  userMessageText
+} from './claude-session-codec'
 import { latestUserTextUuid } from './checkpoints'
-import { recordModelFailure, recordModelSuccess } from './modelStats'
-import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './model/session-routing'
-import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { resolveClaudeAutoRoute } from './model/claude-auto-route'
 import { canRotateProviderKey } from './providerKeyRouting'
 import { writeAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { ClaudeModelAttemptTracker } from './task/claude-model-attempt-runtime'
+import { ClaudeAgentSessionTurnRuntime } from './task/claude-agent-session-runtime'
+import { handleClaudeResult, type ClaudeTurnResultEvent } from './task/claude-result-runtime'
+import { handleClaudeStreamFailure } from './task/claude-stream-failure-runtime'
+import { normalizeStableMessagePayload, type StableMessagePayload } from './stable-message-payload'
 import {
   cancelEffectExecution,
   completeEffectExecution,
@@ -43,19 +50,14 @@ import {
 } from './task/effect-runtime'
 import type { EffectExecutionHandle } from './task/effect-ledger'
 import { isSideEffectingToolCall } from './task/tool-idempotency'
+import { digitalWorkerToolPermissionDecision } from './digital-worker/tool-action-policy'
+import { assertDigitalWorkerProviderDispatchAllowed } from './digital-worker/session-action-policy'
 import {
   decideGuiPermission,
   GUI_TEMPORARY_GRANT_MESSAGE,
   grantTemporaryGuiAutomation
 } from './permission/permission-manager'
-import {
-  pickModelAcrossProviders,
-  recordSuccess,
-  recordFailure,
-  classifyFailure,
-  pickFailoverTarget,
-  DEFAULT_AUTO_CANDIDATES
-} from './scheduler'
+import { classifyFailure, pickFailoverTarget } from './scheduler'
 import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
 import { settingsForCaoGenDrive } from './model/drive'
@@ -63,11 +65,8 @@ import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit } from './engine'
 import type {
   AgentEvent,
-  AssistantBlock,
-  CaoGenDriveMode,
   CheckpointRestoreMode,
   CheckpointRestoreResult,
-  EngineKind,
   EffectStatus,
   ImageAttachmentView,
   PermissionModeId,
@@ -75,54 +74,10 @@ import type {
   RewindResult,
   SdkAgentInfo,
   SendMessagePayload,
-  SessionMeta,
-  SessionRoutingScope,
-  UserMessageAttachmentView,
-  UsageTotals
+  SessionMeta
 } from '../shared/types'
 
-type SdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
-
-let sdkPromise: Promise<SdkModule> | undefined
-
-/** SDK 为 ESM-only,主进程按 CJS 构建,故用动态 import 惰性加载。 */
-function loadSdk(): Promise<SdkModule> {
-  sdkPromise ??= import('@anthropic-ai/claude-agent-sdk')
-  return sdkPromise
-}
-
-/**
- * 打包(asar)后 SDK 自动算出的 CLI 二进制路径会穿过 app.asar(文件非目录),
- * spawn 报 ENOTDIR。显式指向解包后的原生二进制修复。dev 下返回 undefined 走默认。
- */
-let cachedExecPath: string | null | undefined
-function claudeExecutablePath(): string | undefined {
-  if (cachedExecPath !== undefined) return cachedExecPath ?? undefined
-  if (!app.isPackaged) {
-    cachedExecPath = null
-    return undefined
-  }
-  const pkg = `claude-agent-sdk-${process.platform}-${process.arch}`
-  const bin = process.platform === 'win32' ? 'claude.exe' : 'claude'
-  const p = join(
-    process.resourcesPath,
-    'app.asar.unpacked',
-    'node_modules',
-    '@anthropic-ai',
-    pkg,
-    bin
-  )
-  cachedExecPath = existsSync(p) ? p : null
-  if (!cachedExecPath) console.error('[caogen] 未找到打包后的 claude 二进制:', p)
-  return cachedExecPath ?? undefined
-}
-
-const TOOL_RESULT_MAX_CHARS = 20_000
-
-interface NormalizedSendPayload {
-  text: string
-  images: ImageAttachmentView[]
-}
+export { newSessionMeta } from './session-meta'
 
 interface PendingPermission {
   resolve: (result: PermissionResult) => void
@@ -136,160 +91,8 @@ const CLAUDE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const LOCAL_EXECUTION_DISABLED_MESSAGE =
   'Agent 本地执行能力已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。当前仅保留最小项目检查能力，请先在设置 > 权限中确认启用。'
 
-function normalizeClaudeToolName(toolName: string): string {
-  if (toolName === 'Bash') return 'bash'
-  if (toolName === 'Read') return 'read_file'
-  if (toolName === 'LS') return 'list_dir'
-  if (toolName === 'Grep') return 'search_code'
-  if (toolName === 'Glob') return 'find_file'
-  if (toolName === 'Write') return 'write_file'
-  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'NotebookEdit') return 'edit_file'
-  return toolName
-}
-
-function normalizeClaudeToolInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
-  const normalized = { ...input }
-  const pathValue = normalized.path ?? normalized.file_path ?? normalized.notebook_path
-  if (typeof pathValue === 'string' && pathValue.trim()) {
-    normalized.path = pathValue
-    normalized.file_path = pathValue
-  }
-  if (toolName === 'Glob' && typeof normalized.pattern === 'string') normalized.path = normalized.path ?? '.'
-  return normalized
-}
-
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
-}
-
-function providerTokenFingerprint(token: string): string {
-  return token ? createHash('sha256').update(token).digest('hex').slice(0, 16) : 'no-token'
-}
-
-function normalizeBudget(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
-}
-
-/** 把多行/逗号分隔的工具清单拆成数组 */
-function splitList(text: string): string[] {
-  return text
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-/** 从消息文本提取 @文件引用(路径:字母数字 / . _ - 及分隔符) */
-function extractMentions(text: string): string[] {
-  const out: string[] = []
-  const re = /@([A-Za-z0-9._\-/\\]+)/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
-    const p = m[1].replace(/[.,;:)]+$/, '') // 去掉尾随标点
-    if (p) out.push(p)
-  }
-  return out
-}
-
-function emptyUsage(): UsageTotals {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
-}
-
-function normalizeUsage(raw: unknown): UsageTotals {
-  const u = (raw ?? {}) as Record<string, unknown>
-  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-  return {
-    input: n(u.input_tokens),
-    output: n(u.output_tokens),
-    cacheRead: n(u.cache_read_input_tokens),
-    cacheCreation: n(u.cache_creation_input_tokens)
-  }
-}
-
-function normalizeBlocks(content: unknown): AssistantBlock[] {
-  if (!Array.isArray(content)) return []
-  const out: AssistantBlock[] = []
-  for (const raw of content) {
-    if (!raw || typeof raw !== 'object') continue
-    const b = raw as Record<string, unknown>
-    if (b.type === 'text' && typeof b.text === 'string' && b.text.length > 0) {
-      out.push({ type: 'text', text: b.text })
-    } else if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.length > 0) {
-      out.push({ type: 'thinking', text: b.thinking })
-    } else if (b.type === 'tool_use') {
-      out.push({
-        type: 'tool_use',
-        id: typeof b.id === 'string' ? b.id : randomUUID(),
-        name: typeof b.name === 'string' ? b.name : 'unknown',
-        input: b.input
-      })
-    }
-  }
-  return out
-}
-
-function normalizeSendPayload(input: string | SendMessagePayload): NormalizedSendPayload {
-  if (typeof input === 'string') return { text: input.trim(), images: [] }
-  return {
-    text: typeof input.text === 'string' ? input.text.trim() : '',
-    images: Array.isArray(input.images) ? input.images.filter(isImageAttachmentView) : []
-  }
-}
-
-function isImageAttachmentView(value: unknown): value is ImageAttachmentView {
-  if (!value || typeof value !== 'object') return false
-  const record = value as Record<string, unknown>
-  return (
-    typeof record.id === 'string' &&
-    typeof record.hash === 'string' &&
-    typeof record.path === 'string' &&
-    typeof record.mime === 'string' &&
-    typeof record.bytes === 'number' &&
-    Number.isFinite(record.bytes) &&
-    typeof record.createdAt === 'string'
-  )
-}
-
-function userMessageText(payload: NormalizedSendPayload): string {
-  if (payload.text) return payload.text
-  return payload.images.length > 0 ? `图片输入 (${payload.images.length} 张)` : ''
-}
-
-function compactUserAttachments(images: ImageAttachmentView[]): UserMessageAttachmentView[] | undefined {
-  if (images.length === 0) return undefined
-  return images.map((image) => ({ id: image.id, mime: image.mime, bytes: image.bytes }))
-}
-
-function toolResultText(content: unknown): string {
-  let text: string
-  if (typeof content === 'string') {
-    text = content
-  } else if (Array.isArray(content)) {
-    text = content
-      .map((c) => {
-        const block = c as Record<string, unknown> | null
-        if (block && block.type === 'text' && typeof block.text === 'string') return block.text
-        return `[${(block && block.type) || 'block'}]`
-      })
-      .join('\n')
-  } else if (content == null) {
-    text = ''
-  } else {
-    try {
-      text = JSON.stringify(content, null, 2)
-    } catch {
-      text = String(content)
-    }
-  }
-  if (text.length > TOOL_RESULT_MAX_CHARS) {
-    text = `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n… [截断,共 ${text.length} 字符]`
-  }
-  return text
-}
-
-function asRecordInput(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
 }
 
 /**
@@ -312,8 +115,6 @@ export class AgentSession implements Engine {
   private envFingerprint = ''
   /** SDK 子进程 stderr 尾部(诊断用:超时/崩溃时附到错误信息) */
   private stderrTail = ''
-  /** auto 模式本轮路由选中的真实模型名(供结束时记模型实测统计) */
-  private lastRoutedModel = ''
   /** 最近注入到 Claude SDK 的项目上下文;保存 caogen.md 后下一轮消息会补充差异快照。 */
   private lastProjectContextAppend = ''
   private disposed = false
@@ -324,8 +125,6 @@ export class AgentSession implements Engine {
   /** 引擎代数:每次(重)启动 +1,旧 consume 循环据此失效,避免误报状态 */
   private generation = 0
   /** 本轮用户消息原文,故障切换后重发 */
-  /** 本轮完整用户 payload,故障切换后重发(含图片)。 */
-  private lastUserPayload: NormalizedSendPayload | null = null
   /** 上次发过检查点的用户消息 uuid,去重避免同轮重复发 */
   private lastCheckpointUuid = ''
   /** 等待绑定 SDK checkpoint uuid 的本地用户消息 id 队列。 */
@@ -337,23 +136,22 @@ export class AgentSession implements Engine {
   /** 本轮已尝试的 key id,防同 Provider 内轮换打转。 */
   private triedProviderKeys = new Set<string>()
   private failoverBusy = false
-  /** 故障切换窗口期(旧引擎已死、新引擎未起)收到的消息,切换完成后补推 */
-  private queuedDuringFailover: NormalizedSendPayload[] = []
-  /** 用户主动中断标记:中断产生的错误 result 不触发故障切换 */
-  private interrupting = false
   /** 本会话在轮次运行中持有的系统防休眠句柄。 */
   private powerBlockerId: number | null = null
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
   private readonly effectHandles = new Map<string, EffectExecutionHandle>()
   private readonly effectStatuses = new Map<string, EffectStatus>()
+  private readonly turns: ClaudeAgentSessionTurnRuntime
 
   constructor(
     meta: SessionMeta,
     emit: EngineEmit,
     resumeSdkSessionId?: string,
-    initialEventSeq = 0
+    initialEventSeq = 0,
+    modelAttempts = new ClaudeModelAttemptTracker()
   ) {
     this.meta = meta
+    this.turns = new ClaudeAgentSessionTurnRuntime(modelAttempts)
     this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
     this.emitRaw = (event) => {
       const entry = this.transcript.nextEntry(event)
@@ -369,45 +167,21 @@ export class AgentSession implements Engine {
   }
 
   /**
-   * 组装 SDK 子进程 env:以 process.env 为基,叠加所选 Provider 的
-   * ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 覆写,实现按会话切换厂商。
-   * env 是整体替换而非合并,必须显式带上 process.env(PATH、登录凭据等)。
+   * 构建最小 SDK 环境并注入 Provider；manifest 外的宿主变量不进入 Claude。
    */
   private buildEnv(): NodeJS.ProcessEnv {
-    const env = { ...process.env }
+    const env = buildClaudeRuntimeEnvironment(process.env)
     if (!this.meta.providerId) {
       this.activeProviderKeyId = undefined
       return env
     }
     const provider = getProvider(this.meta.providerId)
-    if (!provider) {
-      console.warn('[agent-desk] Provider 不存在,跳过 Provider 环境覆盖:', this.meta.providerId)
-      return env
-    }
+    if (!provider) { this.activeProviderKeyId = undefined; throw new Error(`Provider 不存在:${this.meta.providerId}`) }
     const selection = resolveProviderToken(provider)
     const token = selection.token
     this.activeProviderKeyId = selection.keyId
     if (selection.keyId) markProviderKeyUsed(provider.id, selection.keyId)
-    // 只有在我们真能注入替代凭据时,才剥离 host 托管鉴权 —— 否则(选了 Provider
-    // 但没配 key)既没了 host 登录、又没有自己的 token,SDK 子进程零凭据挂起。
-    // 这是"选了 Provider 但没填 key → 真对话超时"的根因。
-    if (token || provider.baseUrl) {
-      delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
-      delete env.CLAUDE_CODE_HOST_CREDS_FILE
-      delete env.CLAUDE_CODE_HOST_AUTH_ENV_VAR
-      delete env.CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH
-      delete env.CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH
-    }
-    if (provider.baseUrl) env.ANTHROPIC_BASE_URL = provider.baseUrl
-    if (token) {
-      env.ANTHROPIC_AUTH_TOKEN = token
-      // 兼容以 API key 方式鉴权的网关;两者择一即可,一并覆写避免旧值干扰
-      env.ANTHROPIC_API_KEY = token
-    }
-    // 网关专用请求头(每行 "Name: value"),SDK 读 ANTHROPIC_CUSTOM_HEADERS
-    if (provider.customHeaders && provider.customHeaders.trim()) {
-      env.ANTHROPIC_CUSTOM_HEADERS = provider.customHeaders
-    }
+    applyClaudeProviderEnvironment(env, provider, token)
     return env
   }
 
@@ -621,11 +395,11 @@ export class AgentSession implements Engine {
 
   async start(): Promise<void> {
     if (this.disposed) return
-    const gen = ++this.generation
+    const gen = this.advanceGeneration()
     this.setStatus('starting')
     this.envFingerprint = this.providerEnvFingerprint()
     try {
-      const sdk = await loadSdk()
+      const sdk = await loadClaudeSdk()
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
       const persona = settings.persona.trim()
       const allowed = splitList(settings.allowedTools)
@@ -655,6 +429,9 @@ export class AgentSession implements Engine {
       if (sdkAgents?.diagnostics.length) {
         console.error('[caogen] SDK agents 加载诊断:', sdkAgents.diagnostics.join('\n'))
       }
+      const runtimePolicy = createClaudeRuntimeLaunchPolicy(this.buildEnv())
+      if (!runtimePolicy.strictMcpConfig) throw new Error('Claude runtime MCP discovery must remain explicit-only')
+      assertClaudeRuntimeLaunchPolicy(runtimePolicy)
       this.query = sdk.query({
         prompt: this.input,
         options: {
@@ -662,10 +439,10 @@ export class AgentSession implements Engine {
           permissionMode: this.meta.permissionMode,
           includePartialMessages: true,
           enableFileCheckpointing: true,
-          env: this.buildEnv(),
+          env: runtimePolicy.env,
           ...(execPath ? { pathToClaudeCodeExecutable: execPath } : {}),
-          // 历史 strict Docker 迁移态必须隔离文件设置，防止原生 hooks/statusLine/MCP 在宿主机执行。
-          ...(settings.sandboxMode === 'disabled' ? { settingSources: [], strictMcpConfig: true } : {}),
+          settingSources: runtimePolicy.settingSources,
+          strictMcpConfig: runtimePolicy.strictMcpConfig,
           // 人设 + 项目记忆:preset 之上追加
           systemPrompt: append
             ? { type: 'preset', preset: 'claude_code', append }
@@ -702,18 +479,12 @@ export class AgentSession implements Engine {
 
   send(input: string | SendMessagePayload): void {
     if (this.disposed) return
-    const payload = normalizeSendPayload(input)
-    const displayText = userMessageText(payload)
-    if (!displayText && payload.images.length === 0) return
+    const normalized = normalizeStableMessagePayload(input)
+    const displayText = userMessageText(normalized)
+    if (!displayText && normalized.images.length === 0) return
     const authError = this.providerAuthError()
     if (authError) {
       this.setStatus('error', authError)
-      return
-    }
-    // 故障切换窗口期(旧引擎已死、新引擎未起):先入队,切换完成后补推
-    if (this.failoverBusy) {
-      this.emitUserMessage(displayText, payload.images)
-      this.queuedDuringFailover.push(payload)
       return
     }
     // query 创建前 Pushable 已可排队;仅已失败/已关闭时拒绝,避免初始任务竞态丢失。
@@ -721,15 +492,24 @@ export class AgentSession implements Engine {
       this.setStatus('error', '会话已结束,无法发送消息。请新建会话或从历史恢复。')
       return
     }
-    this.emitUserMessage(displayText, payload.images)
+    const messageId = this.emitUserMessage(displayText, normalized.images, normalized.messageId)
+    const payload = normalized.messageId === messageId ? normalized : { ...normalized, messageId }
     if (this.meta.title === '新会话' && displayText.trim()) {
       this.meta.title = displayText.trim().replace(/\s+/g, ' ').slice(0, 40)
       this.emit({ kind: 'meta', meta: { ...this.meta } })
     }
+    if (this.failoverBusy || this.turns.activePayload !== null) {
+      this.turns.enqueue(payload)
+      return
+    }
+    this.dispatchTurnPayload(payload)
+  }
+
+  private dispatchTurnPayload(payload: StableMessagePayload): void {
     this.setStatus('running')
     this.turnStartedAt = Date.now()
     // 新一轮:重置故障切换尝试记录(仅在本轮内防打转)
-    this.lastUserPayload = payload
+    this.turns.beginPayload(payload, this.meta.model === AUTO_MODEL)
     this.triedProviders = new Set([this.meta.providerId])
     this.triedProviderKeys = new Set(this.activeProviderKeyId ? [this.activeProviderKeyId] : [])
     // Provider 凭据在会话启动后变了(典型:先建会话后填 key)→ 旧 query 的
@@ -746,7 +526,7 @@ export class AgentSession implements Engine {
     }
   }
 
-  /** Provider 环境指纹:providerId + 是否有 token + baseUrl + 自定义头 */
+  /** Provider 环境指纹:providerId + token + baseUrl + 路由头 + 受管鉴权头名 */
   private providerEnvFingerprint(): string {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     if (!provider) return `none:${this.meta.providerId ?? ''}`
@@ -756,7 +536,8 @@ export class AgentSession implements Engine {
       selection.keyId ?? 'no-key',
       providerTokenFingerprint(selection.token),
       provider.baseUrl,
-      provider.customHeaders ?? ''
+      provider.customHeaders ?? '',
+      provider.credentialHeaderNames?.join(',') ?? ''
     ].join('|')
   }
 
@@ -778,7 +559,7 @@ export class AgentSession implements Engine {
 
   /** 引擎重建核心:作废旧代 → 关旧 query → 以 resume 延续上下文重启 */
   private async rebuildEngine(): Promise<void> {
-    this.generation++
+    this.advanceGeneration()
     const queryClosed = this.detachCurrentQuery()
     await this.invalidatePermissionSettlements('引擎重建,操作作废')
     await queryClosed
@@ -789,11 +570,14 @@ export class AgentSession implements Engine {
   }
 
   /** 凭据变更后的引擎重建:重建 → 推本轮消息(auto 模式先路由) */
-  private async rebuildEngineThenPush(payload: NormalizedSendPayload): Promise<void> {
+  private async rebuildEngineThenPush(payload: StableMessagePayload): Promise<void> {
     this.failoverBusy = true
     try {
       await this.rebuildEngine()
-      if (!this.query) return // start 失败已置 error
+      if (!this.query) {
+        this.cancelTurnDispatch('Claude 引擎重建失败')
+        return
+      }
       this.setStatus('running')
       if (this.meta.model === AUTO_MODEL) {
         void this.autoRouteThenPush(payload)
@@ -801,9 +585,11 @@ export class AgentSession implements Engine {
         void this.pushUserMessage(payload)
       }
     } catch (err) {
+      this.cancelTurnDispatch('Claude 引擎重建失败')
       this.setStatus('error', errText(err))
     } finally {
       this.failoverBusy = false
+      this.dispatchNextQueuedTurn()
     }
   }
 
@@ -824,197 +610,112 @@ export class AgentSession implements Engine {
    * 不局限于会话当前厂商。选中别家时切 providerId 并重建引擎
    * (resume 延续上下文),路由决策以 routing 事件透明呈现。
    */
-  private async autoRouteThenPush(payload: NormalizedSendPayload): Promise<void> {
+  private async autoRouteThenPush(payload: StableMessagePayload): Promise<void> {
     try {
-      const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
-      const strategy = settings.schedulerStrategy
-      if (settings.smartModelRoutingEnabled || this.meta.routingScope === 'provider' || this.meta.routingScope === 'global') {
-        const monthlyBudget = calculateMonthlyBudgetSnapshot({
-          settings,
-          history: listHistory(),
-          currentSession: this.meta
-        })
-        const smart = resolveSessionModelRoute({
-          enabled: true,
-          currentModel: this.meta.model,
-          providerId: this.meta.providerId,
-          providers:
-            this.meta.routingScope === 'provider'
-              ? listProviders().filter((provider) => provider.id === this.meta.providerId)
-              : listProviders(),
-          engine: this.meta.engine,
-          driveMode: this.meta.driveMode,
-          payload,
-          strategy: settings.schedulerStrategy,
-          sessionCostUsd: this.meta.costUsd,
-          sessionBudgetUsd: this.meta.budgetUsd,
-          settingsBudgetUsd: settings.budgetUsdPerSession,
-          monthlyBudgetRemainingUsd: monthlyBudget.remainingUsd,
-          fallbackProviderId: settings.fallbackProviderId,
-          fallbackModel: settings.fallbackModel,
-          lowCostProviderId: settings.lowCostProviderId,
-          lowCostModel: settings.lowCostModel,
-          strongReasoningProviderId: settings.strongReasoningProviderId,
-          strongReasoningModel: settings.strongReasoningModel,
-          reviewProviderId: settings.reviewProviderId,
-          reviewModel: settings.reviewModel,
-          researchProviderId: settings.researchProviderId,
-          researchModel: settings.researchModel,
-          planningProviderId: settings.planningProviderId,
-          planningModel: settings.planningModel,
-          codingProviderId: settings.codingProviderId,
-          codingModel: settings.codingModel,
-          testingProviderId: settings.testingProviderId,
-          testingModel: settings.testingModel,
-          documentationProviderId: settings.documentationProviderId,
-          documentationModel: settings.documentationModel,
-          modelRoutingRules: settings.modelRoutingRules,
-          projectPath: this.meta.sourceCwd ?? this.meta.cwd
-        })
-        if (smart.kind === 'routed') {
-          this.lastRoutedModel = smart.model
-          this.emit({
-            kind: 'routing',
-            model: smart.model,
-            reason: smart.reason,
-            providerId: smart.providerId,
-            providerName: smart.providerName,
-            decision: smart.decision,
-            crossValidationPlan: smart.crossValidationPlan
-          })
-          if (smart.switchedProvider) {
-            this.meta.providerId = smart.providerId
-            this.emit({ kind: 'meta', meta: { ...this.meta } })
-            await this.rebuildEngine()
-            if (!this.query) return
-            this.setStatus('running')
-            await this.query.setModel(smart.model)
-            await this.pushUserMessage(payload)
-            return
-          }
-          await this.query?.setModel(smart.model)
-          await this.pushUserMessage(payload)
-          return
-        }
-      }
-      const candidates = this.failoverCandidates()
-      const decision = pickModelAcrossProviders({
-        candidates,
-        text: userMessageText(payload),
-        strategy,
-        currentProviderId: this.meta.providerId
+      const route = resolveClaudeAutoRoute(this.meta, payload)
+      if (!route) return await this.pushUserMessage(payload)
+      this.turns.appendRouteReason(route.reason)
+      this.emit({
+        kind: 'routing',
+        model: route.model,
+        reason: route.reason,
+        providerId: route.providerId,
+        providerName: route.providerName,
+        decision: route.decision,
+        crossValidationPlan: route.crossValidationPlan
       })
-      if (decision) {
-        this.lastRoutedModel = decision.model // 供本轮结束记模型实测统计
-        this.emit({
-          kind: 'routing',
-          model: decision.model,
-          reason: decision.reason,
-          providerId: decision.providerId,
-          providerName: decision.providerName,
-          decision: createLegacyRoutingDecisionView({
-            providerId: decision.providerId,
-            providerName: decision.providerName,
-            model: decision.model,
-            strategy,
-            complexity: decision.complexity,
-            candidateCount: candidates.reduce((count, candidate) => count + candidate.models.filter(Boolean).length, 0),
-            switchedProvider: decision.switchedProvider,
-            reason: decision.reason
-          })
-        })
-        if (decision.switchedProvider) {
-          // 跨厂商:换身份 → 重建引擎(env 换新家)→ 定模型 → 推消息
-          this.meta.providerId = decision.providerId
-          this.emit({ kind: 'meta', meta: { ...this.meta } })
-          await this.rebuildEngine()
-          if (!this.query) return // start 失败已置 error
-          this.setStatus('running')
-          await this.query.setModel(decision.model)
-          await this.pushUserMessage(payload)
+      if (route.switchedProvider) {
+        this.meta.providerId = route.providerId
+        this.emit({ kind: 'meta', meta: { ...this.meta } })
+        await this.rebuildEngine()
+        if (!this.query) {
+          this.cancelTurnDispatch('自动路由切换 Provider 后引擎启动失败')
           return
         }
-        await this.query?.setModel(decision.model)
+        this.setStatus('running')
       }
+      if (!this.query) throw new Error('Claude query is unavailable for auto model routing')
+      await this.query.setModel(route.model)
+      this.turns.rememberVerifiedModel(route.model)
+      await this.pushUserMessage(payload)
+      return
     } catch (err) {
       console.error('[agent-desk] 自动路由失败,保留当前显式模型:', err)
     }
     await this.pushUserMessage(payload)
   }
 
-  private async pushUserMessage(payload: NormalizedSendPayload): Promise<void> {
+  private async pushUserMessage(payload: StableMessagePayload): Promise<void> {
     if (this.disposed) return
+    const generation = this.generation
     try {
-      // 展开 @文件引用:把被引文件内容追加到发给模型的 prompt(UI 仍显示原文)
-      const mentions = extractMentions(payload.text)
-      const injected = mentions.length > 0 ? readReferencedFiles(this.meta.cwd, mentions) : ''
-      let promptText = injected ? payload.text + injected : payload.text
-      const layeredMemory = promptText
-        ? await buildLayeredMemoryPrompt({
-            rootDir: join(app.getPath('userData'), 'memory'),
-            query: promptText,
-            projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
-            limit: 6
-          }).catch((error) => {
-            console.error('[caogen] layered memory retrieval failed:', error)
-            return ''
-          })
-        : ''
-      if (layeredMemory.trim()) {
-        promptText = [layeredMemory, '## Current User Request', promptText].join('\n\n')
-      }
-      const skillPrompt = buildSkillInvocationPrompt({
-        enabled: getSettings().autoSkillLearningEnabled,
-        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
-        query: payload.text,
-        maxSkills: 2
+      const prepared = await prepareClaudeUserMessage({
+        payload,
+        meta: this.meta,
+        lastProjectContextAppend: this.lastProjectContextAppend
       })
-      if (skillPrompt.trim()) {
-        promptText = promptText.includes('## Current User Request')
-          ? [skillPrompt, promptText].join('\n\n')
-          : [skillPrompt, '## Current User Request', promptText].join('\n\n')
+      this.lastProjectContextAppend = prepared.projectContextAppend
+      const { message } = prepared
+      if (!this.permissionSettlementIsCurrent(generation)) return
+      assertDigitalWorkerProviderDispatchAllowed(this.meta, app.getPath('userData'))
+      const run = taskRuntimeRegistry.get(this.meta.id)
+      const unfinishedSteps = (run?.steps ?? []).filter(
+        (candidate) => !['completed', 'failed', 'cancelled'].includes(candidate.status)
+      )
+      const step = unfinishedSteps.find((candidate) => candidate.messageId === payload.messageId) ?? unfinishedSteps[0]
+      const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+      const selection = provider ? resolveProviderToken(provider) : undefined
+      const keyIdentity = selection ? {
+        providerId: this.meta.providerId,
+        keyId: selection.keyId,
+        keyLabel: selection.keyLabel,
+        token: selection.token
+      } : undefined
+      await this.turns.attempts.beginTurn({
+        runId: run?.id,
+        stepId: step?.id,
+        generation,
+        providerId: this.meta.providerId,
+        model: this.turns.modelForAttempt(this.meta.model, AUTO_MODEL),
+        context: message,
+        routeReason: this.turns.attemptRouteReason,
+        keyIdentity,
+        rootDir: app.getPath('userData')
+      })
+      if (!this.permissionSettlementIsCurrent(generation)) {
+        this.turns.attempts.abandonGeneration(generation)
+        return
       }
-      const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
-      if (ideDocumentContext.trim()) {
-        promptText = promptText.includes('## Current User Request')
-          ? [ideDocumentContext, promptText].join('\n\n')
-          : [ideDocumentContext, '## Current User Request', promptText].join('\n\n')
+      try {
+        this.input.push(message as unknown as SDKUserMessage)
+      } catch (error) {
+        await this.turns.failTurn({ generation, error })
+        throw error
       }
-      const liveProjectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
-      if (liveProjectContext && liveProjectContext !== this.lastProjectContextAppend) {
-        this.lastProjectContextAppend = liveProjectContext
-        promptText = ['# 项目上下文已更新', liveProjectContext, promptText].filter(Boolean).join('\n\n')
-      }
-      const content: ContentBlockParam[] = []
-      if (promptText) content.push({ type: 'text', text: promptText })
-      for (const image of payload.images) {
-        content.push((await imageToContentBlock(image.path)) as unknown as ContentBlockParam)
-      }
-      const message = {
-        type: 'user',
-        message: { role: 'user', content },
-        parent_tool_use_id: null,
-        session_id: this.meta.sdkSessionId ?? ''
-      }
-      this.input.push(message as unknown as SDKUserMessage)
     } catch (err) {
-      this.setStatus('error', `图片输入失败: ${errText(err)}`)
+      if (!this.permissionSettlementIsCurrent(generation)) return
+      this.cancelTurnDispatch('当前 Claude 轮次未能开始')
+      this.setStatus('error', `模型请求准备失败: ${errText(err)}`)
     }
   }
 
   async interrupt(): Promise<void> {
-    this.interrupting = true
+    const generation = this.generation
+    const settlement = this.turns.beginInterrupt(generation)
+    this.cancelQueuedTurns('用户已中断当前 Claude 轮次')
+    const fallback = setTimeout(() => {
+      void this.finishInterruptedGeneration(generation)
+    }, 3000)
     try {
-      await this.query?.interrupt()
+      void Promise.resolve(this.query?.interrupt()).catch((err) => {
+        console.error('[agent-desk] interrupt 失败:', err)
+      })
     } catch (err) {
       console.error('[agent-desk] interrupt 失败:', err)
-    } finally {
-      this.stopPowerBlocker()
-      // result 消息在 interrupt() resolve 后到达,稍留窗口再复位
-      setTimeout(() => {
-        this.interrupting = false
-      }, 3000)
     }
+    this.stopPowerBlocker()
+    await settlement
+    clearTimeout(fallback)
   }
 
   respondPermission(requestId: string, allow: boolean, message?: string): void {
@@ -1159,7 +860,7 @@ export class AgentSession implements Engine {
    */
   private async restartForContextRewind(): Promise<boolean> {
     if (this.disposed) return false
-    if (this.failoverBusy || this.interrupting) return false
+    if (this.failoverBusy || this.turns.activeInterruptGeneration !== undefined) return false
     if (this.turnInFlight) return false // 有轮次在途,不打断;下次 resume 兜底
     if (!this.query) return false // 引擎未起,start() 时 resumeSessionAt 自会生效
     if (!this.resumeId || !this.resumeAtId) return false // 无 SDK 会话可截断
@@ -1167,7 +868,7 @@ export class AgentSession implements Engine {
     this.failoverBusy = true
     try {
       // 作废旧代:旧 consume 循环的残余消息/异常一律丢弃
-      this.generation++
+      this.advanceGeneration()
       const queryClosed = this.detachCurrentQuery()
       // 旧引擎未决权限全部拒绝(其进程即将终止)
       await this.invalidatePermissionSettlements('会话已回退,操作作废')
@@ -1186,6 +887,7 @@ export class AgentSession implements Engine {
       return false
     } finally {
       this.failoverBusy = false
+      this.dispatchNextQueuedTurn()
     }
   }
 
@@ -1226,8 +928,8 @@ export class AgentSession implements Engine {
   }
 
   /** 用户消息入聊天流时先分配本地 id,之后 SDK checkpoint uuid 按该 id 精确回填。 */
-  private emitUserMessage(text: string, images: ImageAttachmentView[] = []): string {
-    const messageId = randomUUID()
+  private emitUserMessage(text: string, images: ImageAttachmentView[] = [], stableMessageId?: string): string {
+    const messageId = stableMessageId ?? randomUUID()
     this.pendingCheckpointUserMessageIds.push(messageId)
     this.emit({ kind: 'user-message', text, messageId, attachments: compactUserAttachments(images) })
     return messageId
@@ -1239,7 +941,7 @@ export class AgentSession implements Engine {
   /** 有用户消息在途(值得为它切换厂商重试) */
   private get turnInFlight(): boolean {
     return (
-      this.lastUserPayload !== null &&
+      this.turns.activePayload !== null &&
       (this.meta.status === 'running' || this.meta.status === 'starting')
     )
   }
@@ -1247,6 +949,79 @@ export class AgentSession implements Engine {
   private providerName(id: string): string {
     if (!id) return '未选择 Provider'
     return getProvider(id)?.name ?? '未知厂商'
+  }
+
+  private advanceGeneration(): number {
+    this.generation = this.turns.advanceGeneration(this.generation)
+    return this.generation
+  }
+
+  private dispatchNextQueuedTurn(): void {
+    if (
+      this.disposed ||
+      this.failoverBusy ||
+      this.turns.activePayload !== null ||
+      this.turns.activeInterruptGeneration !== undefined
+    ) return
+    const payload = this.turns.takeNextQueued()
+    if (payload) this.dispatchTurnPayload(payload)
+  }
+
+  private finishTurnDispatch(continueQueuedTurns = true): void {
+    this.clearCurrentTurnPayload()
+    this.setStatus('idle')
+    if (continueQueuedTurns) this.dispatchNextQueuedTurn()
+  }
+
+  private cancelQueuedTurns(reason: string): void {
+    const cancelled = this.turns.cancelQueued()
+    if (cancelled.length === 0) return
+    for (const payload of cancelled) this.discardPendingCheckpointMessage(payload.messageId)
+    this.emit({
+      kind: 'hook-event',
+      event: 'queued-turns-cancelled',
+      detail: `${reason}，已取消 ${cancelled.length} 条尚未发送给模型的排队消息。`
+    })
+  }
+
+  private clearCurrentTurnPayload(): void {
+    this.discardPendingCheckpointMessage(this.turns.clearCurrent()?.messageId)
+  }
+
+  private cancelTurnDispatch(reason: string): void {
+    this.clearCurrentTurnPayload()
+    this.cancelQueuedTurns(reason)
+  }
+
+  private discardPendingCheckpointMessage(messageId: string | undefined): void {
+    if (!messageId) return
+    const index = this.pendingCheckpointUserMessageIds.indexOf(messageId)
+    if (index >= 0) this.pendingCheckpointUserMessageIds.splice(index, 1)
+  }
+
+  private emitCancelledTurnResult(): void {
+    this.emit({ kind: 'turn-result', subtype: 'cancelled', isError: true })
+  }
+
+  private async finishInterruptedGeneration(generation: number): Promise<void> {
+    if (this.disposed || generation !== this.generation || !this.turns.isInterrupted(generation)) {
+      this.turns.resolveInterrupt(generation)
+      return
+    }
+    try {
+      const settled = await this.turns.cancelTurn({ generation, cause: 'user_interrupt_timeout' })
+      if (this.disposed || generation !== this.generation || !this.turns.isInterrupted(generation)) return
+      this.turns.clearInterrupt(generation)
+      if (settled || this.turns.activePayload) this.emitCancelledTurnResult()
+      this.finishTurnDispatch(false)
+    } catch (error) {
+      if (this.disposed || generation !== this.generation) return
+      this.clearCurrentTurnPayload()
+      this.turns.clearInterrupt(generation)
+      this.setStatus('error', `ModelAttempt 中断状态写入失败: ${errText(error)}`)
+    } finally {
+      this.turns.resolveInterrupt(generation)
+    }
   }
 
   /** 故障切换候选:只纳入已配置 key 的 Provider,避免暗中切到本机默认登录态。 */
@@ -1265,10 +1040,11 @@ export class AgentSession implements Engine {
    * 返回 true 表示已切换接管,调用方不应再把本轮按失败收尾。
    */
   private async tryFailover(errorText: string): Promise<boolean> {
-    if (this.disposed || this.failoverBusy || this.interrupting) return false
+    if (this.disposed || this.failoverBusy || this.turns.activeInterruptGeneration !== undefined) return false
     const settings = getSettings()
     if (!settings.failoverEnabled) return false
-    if (!this.lastUserPayload) return false // 无在途轮次,无从重试
+    const retryPayload = this.turns.activePayload
+    if (!retryPayload) return false // 无在途轮次,无从重试
     if (this.triedProviders.size > AgentSession.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
     if (!failure.switchable) return false
@@ -1287,7 +1063,7 @@ export class AgentSession implements Engine {
     try {
       // 先令旧引擎代数作废:此后旧 consume 循环的任何消息/异常都被丢弃,
       // 不会在切换过程中把会话误标为 error/closed
-      this.generation++
+      this.advanceGeneration()
       const queryClosed = this.detachCurrentQuery()
       const fromId = this.meta.providerId
       const fromName = this.providerName(fromId)
@@ -1303,6 +1079,9 @@ export class AgentSession implements Engine {
       this.meta.providerId = target.providerId
       if (this.meta.model !== AUTO_MODEL && target.model) this.meta.model = target.model
       this.triedProviders.add(target.providerId)
+      this.turns.appendRouteReason(
+        `Provider failover: ${[failure.label, target.preference].filter(Boolean).join(' · ')}`
+      )
       // 延续对话上下文:从当前 SDK 会话 resume(首轮尚无 id 时全新开始)
       this.resumeId = this.meta.sdkSessionId || this.resumeId
 
@@ -1320,32 +1099,32 @@ export class AgentSession implements Engine {
       await this.start()
       // 已提交切换(旧引擎已终止),即使新引擎启动失败也返回 true:
       // start() 失败路径已把会话置为 error,调用方不得再按正常轮次收尾
-      if (!this.query) return true
+      if (!this.query) {
+        this.cancelTurnDispatch('Provider 故障切换后 Claude 引擎启动失败')
+        return true
+      }
 
       // 重发本轮消息(user-message 已在转录中,不重复 emit)
+      if (!this.turns.canReplay(retryPayload)) return true
       this.setStatus('running')
       this.turnStartedAt = Date.now()
-      if (this.lastUserPayload) {
-        if (this.meta.model === AUTO_MODEL) {
-          void this.autoRouteThenPush(this.lastUserPayload)
-        } else {
-          void this.pushUserMessage(this.lastUserPayload)
-        }
-      }
-      // 补推切换窗口期用户发的消息
-      for (const queued of this.queuedDuringFailover.splice(0)) {
-        void this.pushUserMessage(queued)
+      if (this.meta.model === AUTO_MODEL) {
+        void this.autoRouteThenPush(retryPayload)
+      } else {
+        void this.pushUserMessage(retryPayload)
       }
       return true
     } finally {
       this.failoverBusy = false
+      this.dispatchNextQueuedTurn()
     }
   }
 
   private async tryProviderKeyFailover(errorText: string): Promise<boolean> {
-    if (this.disposed || this.failoverBusy || this.interrupting) return false
+    if (this.disposed || this.failoverBusy || this.turns.activeInterruptGeneration !== undefined) return false
     const settings = getSettings()
-    if (!settings.failoverEnabled || !this.lastUserPayload || !this.meta.providerId || !this.activeProviderKeyId) {
+    const retryPayload = this.turns.activePayload
+    if (!settings.failoverEnabled || !retryPayload || !this.meta.providerId || !this.activeProviderKeyId) {
       return false
     }
     const failure = classifyFailure(errorText)
@@ -1361,13 +1140,14 @@ export class AgentSession implements Engine {
 
     this.failoverBusy = true
     try {
-      this.generation++
+      this.advanceGeneration()
       const queryClosed = this.detachCurrentQuery()
       await this.invalidatePermissionSettlements('API Key 已切换,操作作废')
       await queryClosed
       this.input = new Pushable<SDKUserMessage>()
       this.resumeId = this.meta.sdkSessionId || this.resumeId
       this.triedProviderKeys.add(rotation.toKeyId)
+      this.turns.appendRouteReason(`Provider key failover: ${failure.label}`)
       this.emit({
         kind: 'provider-key-failover',
         providerId: rotation.providerId,
@@ -1380,18 +1160,22 @@ export class AgentSession implements Engine {
       })
 
       await this.start()
-      if (!this.query) return true
+      if (!this.query) {
+        this.cancelTurnDispatch('API Key 切换后 Claude 引擎启动失败')
+        return true
+      }
+      if (!this.turns.canReplay(retryPayload)) return true
       this.setStatus('running')
       this.turnStartedAt = Date.now()
       if (this.meta.model === AUTO_MODEL) {
-        void this.autoRouteThenPush(this.lastUserPayload)
+        void this.autoRouteThenPush(retryPayload)
       } else {
-        void this.pushUserMessage(this.lastUserPayload)
+        void this.pushUserMessage(retryPayload)
       }
-      for (const queued of this.queuedDuringFailover.splice(0)) void this.pushUserMessage(queued)
       return true
     } finally {
       this.failoverBusy = false
+      this.dispatchNextQueuedTurn()
     }
   }
 
@@ -1402,8 +1186,9 @@ export class AgentSession implements Engine {
   }
 
   async setModel(model: string): Promise<void> {
-    await this.query?.setModel(model || undefined)
+    await this.query?.setModel(model && model !== AUTO_MODEL ? model : undefined)
     this.meta.model = model
+    if (model && model !== AUTO_MODEL) this.turns.rememberVerifiedModel(model)
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
@@ -1441,8 +1226,9 @@ export class AgentSession implements Engine {
   }
 
   private async disposeAndWait(): Promise<void> {
+    this.cancelTurnDispatch('会话已关闭')
     this.disposed = true
-    this.generation++
+    this.advanceGeneration()
     this.stopPowerBlocker()
     const queryClosed = this.detachCurrentQuery()
     await this.invalidatePermissionSettlements('会话已关闭')
@@ -1460,34 +1246,63 @@ export class AgentSession implements Engine {
       for await (const message of q) {
         // 故障切换会重建引擎;旧引擎的残余消息一律丢弃
         if (this.disposed || gen !== this.generation) return
-        this.handleMessage(message as unknown as Record<string, unknown>)
+        await this.handleMessage(message as unknown as Record<string, unknown>, gen)
       }
-      if (!this.disposed && gen === this.generation) this.setStatus('closed')
+      if (!this.disposed && gen === this.generation) {
+        this.turns.attempts.abandonGeneration(gen)
+        this.clearCurrentTurnPayload()
+        this.cancelQueuedTurns('Claude 流已关闭')
+        this.turns.clearInterrupt(gen)
+        this.turns.resolveInterrupt(gen)
+        this.setStatus('closed')
+      }
     } catch (err) {
-      if (this.disposed || gen !== this.generation) return
-      // 附上 SDK stderr 尾部:否则子进程认证失败/崩溃时用户只见空洞错误
-      const tail = this.stderrTail.trim()
-      const text = tail ? `${errText(err)}\n[SDK stderr]\n${tail.slice(-1200)}` : errText(err)
-      if (this.blockFailoverForUnresolvedEffects()) {
-        recordFailure(this.meta.providerId, text)
-        this.setStatus('error', text)
-        return
-      }
-      if (this.turnInFlight && (await this.tryProviderKeyFailover(text))) return
-      recordFailure(this.meta.providerId, text)
-      // 流层崩溃(进程退出/网络断):仅当有轮次在途时值得切厂商重试
-      if (this.turnInFlight && (await this.tryFailover(text))) return
-      // await 期间可能有并行的故障切换已接管(代数已推进),此时不再报错
-      if (this.disposed || gen !== this.generation) return
-      this.setStatus('error', text)
+      await handleClaudeStreamFailure({
+        error: err,
+        generation: gen,
+        stderrTail: this.stderrTail,
+        providerId: this.meta.providerId,
+        turns: this.turns,
+        isCurrent: () => this.permissionSettlementIsCurrent(gen),
+        turnInFlight: () => this.turnInFlight,
+        persistenceFailure: (message) => {
+          this.cancelTurnDispatch('ModelAttempt 结果未能持久化')
+          this.turns.clearInterrupt(gen)
+          this.turns.resolveInterrupt(gen)
+          this.setStatus('error', message)
+        },
+        cancelled: (settled) => {
+          this.turns.clearInterrupt(gen)
+          if (settled || this.turns.activePayload) this.emitCancelledTurnResult()
+          this.finishTurnDispatch(false)
+          this.turns.resolveInterrupt(gen)
+        },
+        missingAttempt: () => {
+          this.cancelTurnDispatch('Claude 流缺少可结算的 ModelAttempt')
+          this.setStatus('error', 'Claude stream failed without an active durable ModelAttempt')
+        },
+        blockFailoverForUnresolvedEffects: () => {
+          const blocked = this.blockFailoverForUnresolvedEffects()
+          if (blocked) this.cancelQueuedTurns('外部效果仍待对账')
+          return blocked
+        },
+        tryProviderKeyFailover: (message) => this.tryProviderKeyFailover(message),
+        tryFailover: (message) => this.tryFailover(message),
+        terminalError: (message) => {
+          this.cancelTurnDispatch('Claude 流异常结束')
+          this.setStatus('error', message)
+        },
+        setError: (message) => this.setStatus('error', message)
+      })
     }
   }
 
-  private handleMessage(msg: Record<string, unknown>): void {
+  private async handleMessage(msg: Record<string, unknown>, generation: number): Promise<void> {
     switch (msg.type) {
       case 'system': {
         if (msg.subtype === 'init') {
           const sdkSessionId = typeof msg.session_id === 'string' ? msg.session_id : ''
+          if (typeof msg.model === 'string') this.turns.rememberVerifiedModel(msg.model)
           this.meta.sdkSessionId = sdkSessionId
           this.emit({
             kind: 'init',
@@ -1544,71 +1359,58 @@ export class AgentSession implements Engine {
         break
       }
       case 'result': {
-        const usage = normalizeUsage(msg.usage)
-        const costUsd = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : undefined
-        if (costUsd !== undefined) this.meta.costUsd = costUsd
-        // 中断/异常的 result 可能带全零 usage,不能覆盖已知的上下文规模
-        const hasUsage = usage.input + usage.output + usage.cacheRead + usage.cacheCreation > 0
-        if (hasUsage) {
-          this.meta.usage = usage
-          this.recordContextTokens(usage.input + usage.cacheRead + usage.cacheCreation)
-        }
-        const subtype = typeof msg.subtype === 'string' ? msg.subtype : 'unknown'
-        const isError = msg.is_error === true || subtype !== 'success'
-        const latency = this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined
-        const finish = (): void => {
-          // 检查点:本轮结束后从 CLI transcript 取本轮用户消息 uuid 作回退锚点
-          // (用户 prompt 不在 SDK 事件流里,但会落到 CLI transcript;文件检查点挂在它上)
-          if (!isError && this.meta.sdkSessionId) {
-            const uuid = latestUserTextUuid(this.meta.sdkSessionId)
-            if (uuid) this.emitCheckpoint(uuid)
-          }
-          if (!isError && this.resumeAtId) {
-            this.resumeAtId = undefined
-            this.meta.resumeSessionAt = undefined
-            this.emit({ kind: 'meta', meta: { ...this.meta } })
-          }
-          this.emit({
-            kind: 'turn-result',
-            subtype,
-            isError,
-            costUsd,
-            usage: hasUsage ? usage : undefined,
-            durationMs: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
-            numTurns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
-            resultText: typeof msg.result === 'string' ? msg.result : undefined
-          })
-          this.setStatus('idle')
-        }
-        // Provider 健康度 + 模型实测统计:成功记成功+延迟,异常记失败
-        // auto 模式记本轮路由选中的真实模型名,固定模式记 meta.model
-        const activeModel =
-          this.meta.model && this.meta.model !== AUTO_MODEL ? this.meta.model : this.lastRoutedModel
-        if (isError) {
-          const errorText = typeof msg.result === 'string' ? msg.result : subtype
-          void (async () => {
-            if (await this.tryProviderKeyFailover(errorText)) return
-            recordFailure(this.meta.providerId, errorText)
-            if (activeModel) recordModelFailure(activeModel)
-            if (!(await this.tryFailover(errorText))) finish()
-          })().catch((error) => {
-            console.error('[caogen] 故障接管失败:', error)
-            finish()
-          })
-        } else {
-          if (this.activeProviderKeyId) {
-            recordProviderKeySuccess(this.meta.providerId, this.activeProviderKeyId)
-          }
-          recordSuccess(this.meta.providerId, latency)
-          if (activeModel) recordModelSuccess(activeModel, latency)
-          this.lastUserPayload = null // 本轮成功,清除重试凭据
-          finish()
-        }
+        const activeModel = this.meta.model !== AUTO_MODEL
+          ? this.meta.model
+          : this.turns.activeModelForStats
+        await handleClaudeResult({
+          msg,
+          generation,
+          turns: this.turns,
+          providerId: this.meta.providerId,
+          providerKeyId: this.activeProviderKeyId,
+          activeModel,
+          latencyMs: this.turnStartedAt ? Date.now() - this.turnStartedAt : undefined,
+          isCurrent: () => this.permissionSettlementIsCurrent(generation),
+          applyAccounting: (usage, costUsd) => {
+            if (costUsd !== undefined) this.meta.costUsd = costUsd
+            if (!usage) return
+            this.meta.usage = usage
+            this.recordContextTokens(usage.input + usage.cacheRead + usage.cacheCreation)
+          },
+          finish: (event, continueQueuedTurns) =>
+            this.finishClaudeResult(event, generation, continueQueuedTurns),
+          cancelled: (event) => {
+            this.turns.clearInterrupt(generation)
+            this.finishClaudeResult(event, generation, false)
+            this.turns.resolveInterrupt(generation)
+          },
+          tryProviderKeyFailover: (errorText) => this.tryProviderKeyFailover(errorText),
+          tryFailover: (errorText) => this.tryFailover(errorText)
+        })
         break
       }
       default:
         break
     }
+  }
+
+  private finishClaudeResult(
+    event: ClaudeTurnResultEvent,
+    generation: number,
+    continueQueuedTurns: boolean
+  ): void {
+    if (!this.permissionSettlementIsCurrent(generation)) return
+    if (!event.isError && this.meta.sdkSessionId) {
+      const uuid = latestUserTextUuid(this.meta.sdkSessionId)
+      if (uuid) this.emitCheckpoint(uuid)
+    }
+    if (!event.isError && this.resumeAtId) {
+      this.resumeAtId = undefined
+      this.meta.resumeSessionAt = undefined
+      this.emit({ kind: 'meta', meta: { ...this.meta } })
+    }
+    this.emit(event)
+    this.finishTurnDispatch(continueQueuedTurns)
   }
 
   private handleStreamEvent(event: Record<string, unknown> | undefined): void {
@@ -1813,7 +1615,7 @@ export class AgentSession implements Engine {
         (effect) => effect.status === 'executing' || effect.status === 'waiting_reconciliation'
       )
     if (!unresolved) return false
-    this.lastUserPayload = null
+    this.clearCurrentTurnPayload()
     this.emit({
       kind: 'hook-event',
       event: 'effect-reconciliation-required',
@@ -1844,10 +1646,10 @@ export class AgentSession implements Engine {
     if (!this.permissionSettlementIsCurrent(requestGeneration)) {
       return Promise.resolve({ behavior: 'deny', message: '操作所属引擎代已结束，审批已作废' })
     }
-    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policyToolName = normalizeClaudeToolName(toolName)
     const policyInput = normalizeClaudeToolInput(toolName, input)
-    const policy = evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd })
+    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+    const policy = digitalWorkerToolPermissionDecision(this.meta, policyToolName, policyInput, app.getPath('userData'), () => evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd }))
     const audit = (
       action: 'allow' | 'deny' | 'ask',
       source: 'policy' | 'permission-mode' | 'idempotency',
@@ -1990,7 +1792,9 @@ export class AgentSession implements Engine {
   }
 
   private recordContextTokens(usedTokens: number): void {
-    const model = this.meta.model !== AUTO_MODEL ? this.meta.model : this.lastRoutedModel || this.meta.model
+    const model = this.meta.model !== AUTO_MODEL
+      ? this.meta.model
+      : this.turns.activeModelForStats || this.meta.model
     const state = evaluateContextUsage({ usedTokens, model })
     this.meta.contextTokens = state.usedTokens
     this.meta.contextWindowTokens = state.windowTokens
@@ -2044,66 +1848,5 @@ export class AgentSession implements Engine {
     } catch (err) {
       console.error('[agent-desk] 释放防休眠失败:', err)
     }
-  }
-}
-
-export function newSessionMeta(opts: {
-  cwd: string
-  driveMode?: CaoGenDriveMode
-  parentSessionId?: string
-  orchestrationId?: string
-  childTaskId?: string
-  childRole?: string
-  isolated?: boolean
-  sourceCwd?: string
-  projectId?: string
-  unassigned?: boolean
-  repoRoot?: string
-  worktreePath?: string
-  branch?: string
-  baseBranch?: string | null
-  baseSha?: string
-  worktreeState?: 'active' | 'removed'
-  model: string
-  providerId: string
-  routingScope?: SessionRoutingScope
-  budgetUsd?: number
-  resumeSessionAt?: string
-  engine?: EngineKind
-  permissionMode: PermissionModeId
-  title?: string
-}): SessionMeta {
-  return {
-    id: randomUUID(),
-    title: opts.title || '新会话',
-    cwd: opts.cwd,
-    driveMode: opts.driveMode,
-    parentSessionId: opts.parentSessionId,
-    orchestrationId: opts.orchestrationId,
-    childTaskId: opts.childTaskId,
-    childRole: opts.childRole,
-    isolated: opts.isolated,
-    sourceCwd: opts.sourceCwd,
-    projectId: opts.projectId,
-    unassigned: opts.unassigned,
-    repoRoot: opts.repoRoot,
-    worktreePath: opts.worktreePath,
-    branch: opts.branch,
-    baseBranch: opts.baseBranch,
-    baseSha: opts.baseSha,
-    worktreeState: opts.worktreeState,
-    model: opts.model,
-    providerId: opts.providerId,
-    routingScope: opts.routingScope,
-    budgetUsd: normalizeBudget(opts.budgetUsd),
-    resumeSessionAt: opts.resumeSessionAt,
-    engine: opts.engine,
-    permissionMode: opts.permissionMode,
-    status: 'starting',
-    costUsd: 0,
-    usage: emptyUsage(),
-    contextTokens: 0,
-    contextPressure: 'normal',
-    createdAt: Date.now()
   }
 }

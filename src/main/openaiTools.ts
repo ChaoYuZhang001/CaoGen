@@ -34,16 +34,19 @@ import {
 import { resolveExistingProjectPathSync, resolveWritableProjectPathSync } from './utils/safe-project-path'
 import { OPENAI_PERMISSION_READ_ONLY_TOOLS } from './task/tool-idempotency'
 import { SkillManager } from './skill/skill-manager'
-import { addMemory, searchMemories, type MemoryLayer } from './memory/memory-manager'
+import { searchMemories, type MemoryLayer } from './memory/memory-manager'
+import { proposeModelMemoryDraft } from './learning/memory-tool-adapter'
 import {
   builtinMcpServerTemplates,
   callMcpTool,
   discoverMcpServer,
   loadClaudeDesktopMcpServers,
+  summarizeClaudeDesktopMcpImport,
   type McpServerConfig,
   type McpTransport
 } from './mcp/mcp-client'
 import type {
+  CommandTermination,
   EngineKind,
   EffectTarget,
   PermissionModeId,
@@ -74,16 +77,15 @@ export interface ToolDefinition {
     parameters: Record<string, unknown>
   }
 }
-
 export interface ToolExecResult {
   ok: boolean
   output: string
+  exitCode?: number; commandTermination?: CommandTermination
   sandboxMode?: SandboxMode
   modeUsed?: SandboxMode
   sandboxed?: boolean
   fallbackReason?: string
 }
-
 export interface ToolExecutionOptions {
   signal?: AbortSignal
   sandboxMode?: SandboxMode
@@ -323,7 +325,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           deliveryMode: {
             type: 'string',
             enum: ['report', 'patch', 'commit', 'pr'],
-            description: '计划推荐的 Code Forge 交付模式;默认 report。只写入计划,不执行交付。'
+            description: '整体交付意图;默认 report。Code Forge 仅规划 report/patch，commit/pr 会拆为独立 Git 工具步骤。'
           },
           maxWorkerLanes: { type: 'number', description: '计划生成的 worker lane 上限,默认 8,最大 12' },
           isolationRoot: { type: 'string', description: '计划中的隔离 worktree 根目录;不会实际创建' },
@@ -347,7 +349,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           isolated: { type: 'boolean', description: '是否使用独立 Git worktree;默认 true' },
           model: { type: 'string', description: '可选:子 Agent 模型' },
           providerId: { type: 'string', description: '可选:子 Agent Provider' },
-          engine: { type: 'string', enum: ['claude', 'openai'] },
+          engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
           permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
@@ -373,7 +375,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           isolated: { type: 'boolean', description: '是否使用独立 Git worktree;默认 true' },
           model: { type: 'string', description: '可选:拆解和子 Agent 模型' },
           providerId: { type: 'string', description: '可选:拆解和子 Agent Provider' },
-          engine: { type: 'string', enum: ['claude', 'openai'] },
+          engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
           permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
@@ -452,7 +454,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'memory_add',
-      description: '写入 CaoGen 三层记忆。该操作会持久化内容，应只记录稳定事实、偏好或明确约定。',
+      description: '创建项目范围的待批准记忆草稿；不会直接写入生效记忆。仅提议稳定事实、偏好或明确约定。',
       parameters: {
         type: 'object',
         properties: {
@@ -476,10 +478,8 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
         properties: {
           command: { type: 'string', description: 'stdio server 命令' },
           args: { type: 'array', items: { type: 'string' } },
-          env: { type: 'object', additionalProperties: { type: 'string' } },
           url: { type: 'string', description: 'HTTP JSON-RPC 或 SSE endpoint' },
           transport: { type: 'string', enum: ['stdio', 'http', 'sse'] },
-          headers: { type: 'object', additionalProperties: { type: 'string' } },
           timeoutMs: { type: 'number' }
         }
       }
@@ -495,10 +495,8 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
         properties: {
           command: { type: 'string' },
           args: { type: 'array', items: { type: 'string' } },
-          env: { type: 'object', additionalProperties: { type: 'string' } },
           url: { type: 'string' },
           transport: { type: 'string', enum: ['stdio', 'http', 'sse'] },
-          headers: { type: 'object', additionalProperties: { type: 'string' } },
           toolName: { type: 'string' },
           arguments: { type: 'object' },
           timeoutMs: { type: 'number' }
@@ -522,12 +520,10 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'mcp_import_claude_desktop',
-      description: '读取 Claude Desktop 的 claude_desktop_config.json，并导入其中的 MCP server 配置。',
+      description: '读取系统默认位置的 Claude Desktop MCP 配置，并返回不含命令参数、环境变量、headers 或完整 URL 的摘要。',
       parameters: {
         type: 'object',
-        properties: {
-          configPath: { type: 'string', description: '可选，Claude Desktop 配置文件路径；默认使用系统标准路径' }
-        }
+        properties: {}
       }
     }
   },
@@ -599,34 +595,37 @@ function memoryLayersArg(value: unknown): MemoryLayer[] | undefined {
 function recordArg(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
 }
-
-function stringRecordArg(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) return undefined
-  const entries = Object.entries(value).filter((item): item is [string, string] => typeof item[1] === 'string')
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined
-}
-
 function mcpTransportArg(value: unknown): McpTransport | undefined {
   return value === 'stdio' || value === 'http' || value === 'sse' ? value : undefined
 }
-
 function memoryRoot(): string {
   return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
 }
 
 function mcpConfigArg(args: Record<string, unknown>): McpServerConfig {
+  if (Object.hasOwn(args, 'env') || Object.hasOwn(args, 'headers')) {
+    throw new Error('模型 MCP 调用不允许传入 env 或 headers；请使用受管 MCP 配置')
+  }
   return {
     command: optionalStringArg(args.command),
     args: stringArrayArg(args.args),
-    env: stringRecordArg(args.env),
     url: optionalStringArg(args.url),
-    transport: mcpTransportArg(args.transport),
-    headers: stringRecordArg(args.headers)
+    transport: mcpTransportArg(args.transport)
+  }
+}
+async function importClaudeDesktopMcp(args: Record<string, unknown>): Promise<ToolExecResult> {
+  if (Object.keys(args).length > 0) {
+    return { ok: false, output: 'mcp_import_claude_desktop 只读取系统默认配置位置，不接受路径或其他参数' }
+  }
+  try {
+    return { ok: true, output: clip(JSON.stringify(summarizeClaudeDesktopMcpImport(await loadClaudeDesktopMcpServers()), null, 2)) }
+  } catch {
+    return { ok: false, output: '无法读取或解析系统默认位置的 Claude Desktop MCP 配置' }
   }
 }
 
 function engineArg(value: unknown): EngineKind | undefined {
-  return value === 'claude' || value === 'openai' ? value : undefined
+  return value === 'claude' || value === 'anthropic' || value === 'openai' ? value : undefined
 }
 
 function permissionModeArg(value: unknown): PermissionModeId | undefined {
@@ -728,7 +727,7 @@ async function loadSessionManager() {
   const specifier = './sessionManager.js'
   return (await import(specifier) as { sessionManager: {
     decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult>
-    dispatchTaskDag(parentSessionId: string, input: TaskDagDispatchInput): TaskDagDispatchResult
+    dispatchTaskDag(parentSessionId: string, input: TaskDagDispatchInput): Promise<TaskDagDispatchResult>
   } }).sessionManager
 }
 
@@ -878,7 +877,7 @@ export async function executeCodingTool(
       case 'task_dispatch_dag': {
         const parentSessionId = sessionIdArg(options)
         const manager = await loadSessionManager()
-        const result = manager.dispatchTaskDag(
+        const result = await manager.dispatchTaskDag(
           parentSessionId,
           dagDispatchInputArgs(args, taskDagArg(args.dag), cwd)
         )
@@ -888,7 +887,7 @@ export async function executeCodingTool(
         const parentSessionId = sessionIdArg(options)
         const manager = await loadSessionManager()
         const decompose: TaskDecomposeResult = await manager.decomposeTask(parentSessionId, decomposeInputArgs(args, cwd))
-        const dispatch = manager.dispatchTaskDag(
+        const dispatch = await manager.dispatchTaskDag(
           parentSessionId,
           dagDispatchInputArgs(args, decompose.dag, cwd)
         )
@@ -958,18 +957,7 @@ export async function executeCodingTool(
         return { ok: true, output: clip(JSON.stringify({ hits }, null, 2)) }
       }
       case 'memory_add': {
-        const layer = stringArg(args, 'layer') as MemoryLayer
-        if (layer !== 'working' && layer !== 'project' && layer !== 'user') {
-          return { ok: false, output: `无效记忆层级: ${layer}` }
-        }
-        const entry = await addMemory(memoryRoot(), {
-          layer,
-          projectRoot: layer === 'user' ? undefined : cwd,
-          title: stringArg(args, 'title'),
-          body: stringArg(args, 'body'),
-          source: stringArg(args, 'source'),
-          tags: stringArrayArg(args.tags)
-        })
+        const entry = await proposeModelMemoryDraft(cwd, args)
         return { ok: true, output: clip(JSON.stringify(entry, null, 2)) }
       }
       case 'mcp_discover': {
@@ -989,10 +977,8 @@ export async function executeCodingTool(
       }
       case 'mcp_builtin_servers':
         return { ok: true, output: clip(JSON.stringify({ servers: builtinMcpServerTemplates() }, null, 2)) }
-      case 'mcp_import_claude_desktop': {
-        const result = await loadClaudeDesktopMcpServers(optionalStringArg(args.configPath))
-        return { ok: true, output: clip(JSON.stringify(result, null, 2)) }
-      }
+      case 'mcp_import_claude_desktop':
+        return importClaudeDesktopMcp(args)
       default:
         return { ok: false, output: `未知工具: ${name}` }
     }
@@ -1103,7 +1089,6 @@ async function runBash(
   cwd: string,
   options: ToolExecutionOptions
 ): Promise<ToolExecResult> {
-  if (!command.trim()) return { ok: false, output: '命令不能为空' }
   const sandboxMode = options.sandboxMode ?? 'restrictedLocal'
   const result = await runLocalCommand({
     command,
@@ -1119,6 +1104,7 @@ async function runBash(
   return {
     ok: result.ok,
     output: clip(result.output),
+    exitCode: result.exitCode, commandTermination: result.commandTermination,
     sandboxMode,
     modeUsed: result.modeUsed,
     sandboxed: result.sandboxed,

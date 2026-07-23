@@ -2,16 +2,58 @@
  * 主进程 / 预加载 / 渲染进程共享的类型定义。
  * 仅包含类型(编译期擦除),两侧 tsconfig 都会引入本目录。
  */
-
+import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, TaskRunOperationMetadata } from './effect-types'
+import type { TaskDagAutoMergeView, TaskDagFinalizationRecord, TaskDagFinalizationResolution, TaskDagFinalizationView } from './task-dag-finalization-types'
+import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-types'
+import type { ModelAttemptRecoveryApi } from './model-attempt-types'
+import type { WorkflowLedgerApi } from './workflow-types'
+import type { ProjectWorkspaceApi } from './project-workspace-types'
+import type { LearningApi } from './learning-types'
+import type { SupervisorStateApi } from './supervisor-types'
+import type { UserMessageAttachmentView } from './attachment-types'
+export type { UserMessageAttachmentView } from './attachment-types'
+export type * from './workflow-types'
+export type * from './digital-worker-types'
+export type * from './project-workspace-types'
+export type * from './learning-types'
+export type * from './supervisor-types'
+export type {
+  EffectEvidenceKind,
+  EffectEvidenceRecord,
+  EffectLease,
+  EffectRecord,
+  EffectStatus,
+  EffectTarget,
+  FileSystemIdentity,
+  InteractiveOperationKind,
+  InteractiveOperationSource,
+  TaskRunOperationMetadata,
+  ManagedWorktreeProjectionRecord
+} from './effect-types'
+export type {
+  TaskDagAutoMergeConflict,
+  TaskDagAutoMergeEntry,
+  TaskDagAutoMergeEntryStatus,
+  TaskDagAutoMergeRollback,
+  TaskDagAutoMergeRollbackEntry,
+  TaskDagAutoMergeStatus,
+  TaskDagAutoMergeVerification,
+  TaskDagAutoMergeVerificationStatus,
+  TaskDagAutoMergeView,
+  TaskDagFinalizationPatchPlan,
+  TaskDagFinalizationPhase,
+  TaskDagFinalizationRecord,
+  TaskDagFinalizationResolution,
+  TaskDagFinalizationSummary,
+  TaskDagFinalizationVerification,
+  TaskDagFinalizationView
+} from './task-dag-finalization-types'
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
-
 /** 本地执行策略。disabled 仅用于旧严格容器设置的 fail-closed 迁移。 */
 export type SandboxMode = 'disabled' | 'restrictedLocal' | 'loose'
-
+/** Native command lifecycle outcome; exitCode is meaningful only for exited. */ export type CommandTermination = 'exited' | 'timed_out' | 'aborted' | 'output_limit' | 'spawn_error' | 'not_started'
 export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
-
 export type SchedulerStrategy = 'quality' | 'cost' | 'speed' | 'balanced'
-
 export type ModelRoutingTaskKind =
   | 'chat'
   | 'coding'
@@ -226,10 +268,8 @@ export interface ProviderHealthView {
 }
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
-
-/** Agent 引擎标识:claude = Claude Agent SDK;openai = OpenAI-compatible API。 */
-export type EngineKind = 'claude' | 'openai'
-
+/** Agent 引擎标识:claude = Claude Agent SDK;anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
+export type EngineKind = 'claude' | 'anthropic' | 'openai'
 export interface EngineInfo {
   kind: string
   label: string
@@ -249,7 +289,6 @@ export interface UsageTotals {
 }
 
 export type ContextPressureLevel = 'normal' | 'warning' | 'critical'
-
 export interface SessionMeta {
   id: string
   title: string
@@ -268,8 +307,15 @@ export interface SessionMeta {
   isolated?: boolean
   /** 用户最初选择的目录;隔离会话中 cwd 会改为 worktree 内对应目录。 */
   sourceCwd?: string
-  /** 显式关联的 CaoGen 项目;旧会话缺失时可按目录兼容匹配。 */
+  /** 旧目录型 Project 身份；仅用于兼容路径/规则，不是 1.0 Workspace 所有权。 */
   projectId?: string
+  /** 1.0 ProjectWorkspace 的 canonical 所有权边界。 */
+  workspaceId?: string
+  /** 显式关联的 canonical Goal；存在时必须同时存在 workspaceId。 */
+  goalId?: string
+  /** 显式关联的 canonical WorkItem；Run 不得用 Session/DAG 身份替代它。 */
+  workItemId?: string
+  digitalWorkerBinding?: DigitalWorkerBinding
   /** 明确不归属项目的会话;仍保留工作目录供工具执行。 */
   unassigned?: boolean
   /** 原仓库根目录。 */
@@ -321,7 +367,12 @@ export interface HistoryEntry {
   childRole?: string
   isolated?: boolean
   sourceCwd?: string
+  /** 旧目录型 Project 身份；仅用于兼容路径/规则。 */
   projectId?: string
+  workspaceId?: string
+  goalId?: string
+  workItemId?: string
+  digitalWorkerBinding?: DigitalWorkerBinding
   unassigned?: boolean
   repoRoot?: string
   worktreePath?: string
@@ -347,7 +398,12 @@ export interface HistoryEntry {
 
 export interface CreateSessionOptions {
   cwd: string
+  /** 旧目录型 Project 身份；新工作流归属使用 workspaceId。 */
   projectId?: string
+  /** 1.0 ProjectWorkspace 的 canonical 所有权边界。 */
+  workspaceId?: string
+  goalId?: string
+  workItemId?: string
   unassigned?: boolean
   driveMode?: CaoGenDriveMode
   parentSessionId?: string
@@ -486,6 +542,7 @@ export interface TaskDagExecutionView {
   summary?: string
   error?: string
   autoMerge?: TaskDagAutoMergeView
+  finalization?: TaskDagFinalizationView
 }
 
 export interface TaskDagRuntimeDispatchOptions {
@@ -525,10 +582,10 @@ export interface TaskDagRuntimeSnapshot {
   capturedAt: number
   dispatchOptions: TaskDagRuntimeDispatchOptions
   runningTasks: TaskDagRuntimeRunningTask[]
+  recoveryBlockedError?: string
   mergeSessions?: TaskDagRuntimeMergeSession[]
   autoMerge?: TaskDagRuntimeAutoMergeOptions
 }
-
 export interface TaskDagDispatchInput {
   dag: TaskDag
   cwd?: string
@@ -551,76 +608,6 @@ export interface TaskDagDispatchResult {
   execution: TaskDagExecutionView
   /** 当前调度调用已经启动的 child sessions;后续依赖层通过 task-dag-update 同步。 */
   children: SubagentDispatchItem[]
-}
-
-export type TaskDagAutoMergeStatus = 'running' | 'success' | 'partial' | 'failed' | 'rolled-back'
-export type TaskDagAutoMergeEntryStatus =
-  | 'merged'
-  | 'skipped'
-  | 'blocked'
-  | 'failed'
-  | 'rolled-back'
-export type TaskDagAutoMergeVerificationStatus = 'passed' | 'failed' | 'skipped' | 'not-run'
-
-export interface TaskDagAutoMergeVerification {
-  status: TaskDagAutoMergeVerificationStatus
-  command?: string
-  cwd?: string
-  exitCode?: number | null
-  durationMs?: number
-  output?: string
-  error?: string
-}
-
-export interface TaskDagAutoMergeConflict {
-  path: string
-  base: string
-  worktree: string
-  main: string
-  baseMissing?: boolean
-  worktreeMissing?: boolean
-  mainMissing?: boolean
-  truncated?: boolean
-}
-
-export interface TaskDagAutoMergeEntry {
-  taskId: string
-  sessionId?: string
-  branch?: string
-  worktreePath?: string
-  status: TaskDagAutoMergeEntryStatus
-  changedFiles?: number
-  insertions?: number
-  deletions?: number
-  conflictRisk?: WorktreeConflictRisk
-  patchSha256?: string
-  patchPath?: string
-  commitSha?: string
-  error?: string
-  conflicts?: TaskDagAutoMergeConflict[]
-  resolverPrompt?: string
-}
-
-export interface TaskDagAutoMergeRollback {
-  attempted: boolean
-  ok: boolean
-  error?: string
-}
-
-export interface TaskDagAutoMergeView {
-  enabled: true
-  status: TaskDagAutoMergeStatus
-  startedAt: number
-  completedAt?: number
-  repoRoot?: string
-  entries: TaskDagAutoMergeEntry[]
-  mergedCount: number
-  blockedCount: number
-  skippedCount: number
-  verification?: TaskDagAutoMergeVerification
-  rollback?: TaskDagAutoMergeRollback
-  summary?: string
-  error?: string
 }
 
 export interface SdkAgentInfo {
@@ -732,126 +719,6 @@ export type ToolExecutionStatus =
   | 'superseded'
   | 'unknown_outcome'
 
-export type EffectStatus =
-  | 'prepared'
-  | 'executing'
-  | 'waiting_reconciliation'
-  | 'confirmed'
-  | 'failed'
-  | 'compensated'
-  | 'abandoned'
-
-export type EffectEvidenceKind =
-  | 'prepared'
-  | 'executing'
-  | 'execution_result'
-  | 'reconciliation'
-  | 'retry_authorized'
-  | 'manual_confirmation'
-  | 'compensation'
-
-export interface EffectLease {
-  id: string
-  ownerId: string
-  fencingToken: number
-  acquiredAt: number
-  expiresAt: number
-  releasedAt?: number
-}
-
-export interface EffectEvidenceRecord {
-  id: string
-  kind: EffectEvidenceKind
-  digest: string
-  observedAt: number
-  verifier: string
-  generation: number
-}
-
-export interface FileSystemIdentity {
-  device: string
-  inode: string
-}
-
-export type EffectTarget =
-  | {
-      kind: 'file_content'
-      rootPath: string
-      rootIdentity?: FileSystemIdentity
-      relativePath: string
-      preState: 'absent' | 'file'
-      preFileIdentity?: FileSystemIdentity
-      preSha256?: string
-      preBytes?: number
-      expectedSha256: string
-      expectedBytes: number
-    }
-  | {
-      kind: 'git_commit'
-      repoRoot: string
-      branch: string
-      preHead: string
-      stagedDiffDigest: string
-      messageDigest: string
-    }
-  | {
-      kind: 'git_merge'
-      repoRoot: string
-      gitCommonDir: string
-      worktreeGitDir: string
-      repoRootIdentity: FileSystemIdentity
-      gitCommonDirIdentity: FileSystemIdentity
-      worktreeGitDirIdentity: FileSystemIdentity
-      destinationRef: string
-      preHead: string
-      preTree: string
-      sourceRef: string
-      sourceSha: string
-      sourceWasAncestor: boolean
-      mode: 'no_ff_v1'
-    }
-  | {
-      kind: 'git_push'
-      repoRoot: string
-      remote: string
-      pushUrlDigest: string
-      branch: string
-      ref: string
-      intendedSha: string
-    }
-  | {
-      kind: 'unsupported'
-      toolName: string
-    }
-
-export interface EffectRecord {
-  schemaVersion: 1
-  id: string
-  effectKey: string
-  resourceKey: string
-  sessionId: string
-  runId: string
-  stepId?: string
-  toolExecutionId?: string
-  toolUseId: string
-  toolName: string
-  generation: number
-  revision: number
-  status: EffectStatus
-  reconcilability: 'queryable' | 'opaque'
-  target: EffectTarget
-  targetDigest: string
-  intentDigest: string
-  inputDigest: string
-  lease?: EffectLease
-  evidence: EffectEvidenceRecord[]
-  compensationEffectId?: string
-  createdAt: number
-  updatedAt: number
-  terminalAt?: number
-  error?: string
-}
-
 export interface ToolExecutionRecord {
   id: string
   runId: string
@@ -890,6 +757,7 @@ export interface TaskRunRecord {
   id: string
   sessionId: string
   taskId: string
+  digitalWorkerBinding?: DigitalWorkerBinding
   status: TaskRunStatus
   revision: number
   attempt: number
@@ -905,6 +773,7 @@ export interface TaskRunRecord {
   recentEventIds?: string[]
   lastEventKind?: AgentEvent['kind']
   error?: string
+  operation?: TaskRunOperationMetadata
   steps?: TaskStepRecord[]
   toolExecutions?: ToolExecutionRecord[]
   effects?: EffectRecord[]
@@ -1084,7 +953,11 @@ export interface StartSuggestion {
   prompt: string
 }
 
+export type OfficeQualityMode = 'auto' | 'high' | 'balanced' | 'low'
+
 export interface OfficeSettings {
+  /** 3D 控制室画质;auto 仅持久化请求档位,实际档位由运行时测量决定。 */
+  qualityMode: OfficeQualityMode
   /** 显示桌上厂商工牌 */
   showBadges: boolean
   /** 控制室动效强度倍率(0.2 静态 ~ 1.2 活跃) */
@@ -1219,10 +1092,12 @@ export interface Provider {
   name: string
   /** 空字符串 = 该 Provider 使用引擎/本机默认端点;不会作为新会话隐式默认。 */
   baseUrl: string
-  /** safeStorage 加密后的旧版/活动 token 镜像;空字符串 = 继承环境变量。仅存在于主进程 */
+  /** 旧版/活动 token 兼容镜像;空字符串也可能表示环境变量或仅当前进程密钥。仅存在于主进程。 */
   encryptedToken: string
-  /** 多 API Key 存储;密钥值只在主进程以加密串存在。 */
+  /** 多 API Key 记录;持久化密钥使用安全加密串,sessionOnly 密钥只在当前主进程内存中存在。 */
   apiKeys?: ProviderApiKey[]
+  /** 旧版请求头或 Base URL 中不安全/不受支持的信息已被移除,需要用户检查并重新保存。 */
+  credentialMigrationRequired?: boolean
   /** 当前活动 API Key;为空时使用第一个可用 key。 */
   activeKeyId?: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
@@ -1230,16 +1105,18 @@ export interface Provider {
   /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
   engine?: EngineKind
   /**
-   * 自定义请求头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
-   * 某些网关需要额外头(如自定义鉴权、路由标签)。
+   * 允许列表内的非敏感标准/路由元数据头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
+   * 未知头、畸形行、鉴权/密钥头和疑似凭据值禁止保存;凭据必须通过 Provider API 密钥字段配置。
    */
   customHeaders?: string
+  /** 由主进程使用当前 Provider token 注入的受管鉴权头名称;不包含头值。 */
+  credentialHeaderNames?: string[]
   /** Provider 级预算上限;0/undefined = 继承全局设置 */
   budgetUsd?: number
   /**
    * OpenAI 引擎协议:'responses'(OpenAI 官方 Responses API,默认)或
    * 'chat'(通用 /v1/chat/completions,DeepSeek/Qwen/网关/自部署 vLLM 等)。
-   * 仅 openai 引擎读取;Claude 引擎忽略。
+   * 仅 openai 引擎读取;Claude Agent SDK 与 Anthropic Messages 引擎忽略。
    */
   openaiProtocol?: OpenAIProtocol
   /** 用户备注 */
@@ -1251,12 +1128,22 @@ export interface ProviderApiKey {
   id: string
   label: string
   encryptedToken: string
+  /** true = 密钥仅保留在当前主进程内存中,不会写入磁盘。 */
+  sessionOnly?: boolean
   createdAt: number
   lastUsedAt?: number
   lastFailureAt?: number
   lastFailureReason?: string
   disabled?: boolean
 }
+
+export type ProviderCredentialStorage =
+  | 'none'
+  | 'encrypted'
+  | 'session'
+  | 'legacy-b64'
+  | 'unavailable'
+  | 'mixed'
 
 export interface ProviderApiKeyView {
   id: string
@@ -1267,6 +1154,9 @@ export interface ProviderApiKeyView {
   lastFailureReason?: string
   disabled: boolean
   active: boolean
+  credentialStorage: ProviderCredentialStorage
+  /** 当前主进程是否能够解析并使用该密钥。 */
+  available: boolean
 }
 
 /** OpenAI 引擎可用的 API 协议 */
@@ -1280,11 +1170,14 @@ export interface ProviderView {
   models: string[]
   engine: EngineKind
   customHeaders?: string
+  credentialHeaderNames?: string[]
   budgetUsd: number
   openaiProtocol?: OpenAIProtocol
   note?: string
   createdAt: number
   hasToken: boolean
+  credentialStorage: ProviderCredentialStorage
+  credentialMigrationRequired?: boolean
   keyCount?: number
   activeKeyId?: string
   activeKeyLabel?: string
@@ -1312,12 +1205,6 @@ export interface ImageOcrResult {
   error?: string
 }
 
-export interface UserMessageAttachmentView {
-  id: string
-  mime: string
-  bytes: number
-}
-
 export interface SaveImageAttachmentBytesInput {
   data: string | ArrayBuffer
   mime?: string
@@ -1326,6 +1213,8 @@ export interface SaveImageAttachmentBytesInput {
 export interface SendMessagePayload {
   text: string
   images?: ImageAttachmentView[]
+  /** Internal callers may supply a stable id for crash-safe outbox delivery. */
+  messageId?: string
 }
 
 export type QuickbarTargetMode = 'current' | 'new'
@@ -1433,14 +1322,16 @@ export interface ProviderInput {
   models: string[]
   engine?: EngineKind
   customHeaders?: string
+  /** 额外受管鉴权头名称;头值始终取 Broker 中的 Provider token。 */
+  credentialHeaderNames?: string[]
   budgetUsd?: number
   openaiProtocol?: OpenAIProtocol
   note?: string
-  /** 明文 token,经 IPC 传入主进程后加密落盘;编辑时 undefined = 不改动。 */
+  /** 明文 token,经 IPC 传入主进程;安全存储可用时加密落盘,否则仅当前进程可用。 */
   token?: string
   /** 主/活动密钥标签;不含密钥值,可回传渲染进程。 */
   tokenLabel?: string
-  /** 新增的明文 token 列表,经 IPC 传入主进程后逐条加密落盘。 */
+  /** 新增的明文 token 列表;安全存储不可用时不会持久化。 */
   additionalTokens?: ProviderApiKeyInput[]
   /** 只更新密钥元数据,不包含明文 token。 */
   keyUpdates?: ProviderApiKeyUpdateInput[]
@@ -1463,6 +1354,8 @@ export interface ProviderModelFetchInput {
   baseUrl: string
   token?: string
   providerId?: string
+  customHeaders?: string
+  credentialHeaderNames?: string[]
   openaiProtocol?: OpenAIProtocol
 }
 
@@ -1488,7 +1381,8 @@ export interface ProviderModelFetchResult {
 
 export type AssistantBlock =
   | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string }
+  | { type: 'thinking'; text: string; signature?: string }
+  | { type: 'redacted_thinking'; data: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
 
 export interface PermissionRequestInfo {
@@ -1567,6 +1461,9 @@ export type AgentEvent =
       toolUseId: string
       content: string
       isError: boolean
+      /** Structured process exit code when the native tool executed a command. */
+      exitCode?: number
+      commandTermination?: CommandTermination
       effectStatus?: EffectStatus
     }
   | { kind: 'permission-request'; request: PermissionRequestInfo }
@@ -1858,7 +1755,11 @@ export type GitOperationResult = { ok: true } | { ok: false; error: string }
 
 export type GitCommitResult = { ok: true; sha: string } | { ok: false; error: string }
 
-export type WorkspaceHunkResult = { ok: true } | { ok: false; error: string }
+export type WorkspaceHunkResult = ({ ok: true } | { ok: false; error: string }) & {
+  effectStatus?: EffectStatus
+  operationId?: string
+  snapshotId?: string
+}
 
 export interface WorkspaceDiffLine {
   type: 'context' | 'add' | 'delete'
@@ -1964,8 +1865,19 @@ export type WorktreeApplyResult =
       bytes: number
       changedFiles: number
       applied: boolean
+      effectStatus?: EffectStatus
+      operationId?: string
+      snapshotId?: string
+      reconciliationRequired?: boolean
     }
-  | { ok: false; error: string }
+  | {
+      ok: false
+      error: string
+      effectStatus?: EffectStatus
+      operationId?: string
+      snapshotId?: string
+      reconciliationRequired?: boolean
+    }
 
 export interface WorktreeRemoveResult {
   ok: boolean
@@ -2015,9 +1927,25 @@ export type WorktreePullRequestResult =
       branch: string
       url: string
       pushed: boolean
+      effectStatus?: EffectStatus
+      operationId?: string
+      snapshotId?: string
     }
-  | { ok: true; created: false; message: string }
-  | { ok: false; error: string }
+  | {
+      ok: true
+      created: false
+      message: string
+      effectStatus?: EffectStatus
+      operationId?: string
+      snapshotId?: string
+    }
+  | {
+      ok: false
+      error: string
+      effectStatus?: EffectStatus
+      operationId?: string
+      snapshotId?: string
+    }
 
 export type ProjectFileKind = 'file' | 'directory'
 
@@ -2120,14 +2048,12 @@ export interface PreviewAnnotationInput {
 }
 
 export type TerminalBackend = 'pty' | 'pipe'
-
 export interface TerminalExitInfo {
   exitCode: number | null
   signal?: number | string
   reason?: string
   at: number
 }
-
 export interface TerminalInfo {
   id: string
   sessionId?: string
@@ -2287,7 +2213,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2306,7 +2232,12 @@ export interface AgentDeskApi {
     effectId: string,
     expectedRevision: number,
     resolution: 'confirmed_applied' | 'confirmed_not_applied'
-  ): Promise<TaskSnapshotRecord>
+  ): Promise<{ snapshot: TaskSnapshotRecord; resumedSession?: SessionMeta }>
+  resolveTaskDagFinalization(
+    executionId: string,
+    expectedRevision: number,
+    resolution: TaskDagFinalizationResolution
+  ): Promise<TaskDagFinalizationRecord>
   deleteTaskSnapshot(snapshotId: string): Promise<boolean>
   createSession(opts: CreateSessionOptions): Promise<SessionMeta>
   decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult>
@@ -2449,10 +2380,6 @@ export interface AgentDeskApi {
     sessionId: string | undefined,
     input: LayeredMemorySearchInput
   ): Promise<LayeredMemorySearchHit[]>
-  addLayeredMemory(
-    sessionId: string | undefined,
-    input: LayeredMemoryWriteInput
-  ): Promise<LayeredMemoryEntry>
   archiveLayeredMemories(olderThanDays?: number): Promise<number>
   exportLayeredMemories(): Promise<string>
   updateLayeredMemory(entryId: string, input: LayeredMemoryUpdateInput): Promise<LayeredMemoryEntry | null>

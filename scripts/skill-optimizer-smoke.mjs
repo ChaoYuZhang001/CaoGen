@@ -45,6 +45,11 @@ try {
   )
 
   const optimizer = await import(pathToFileURL(findCompiled(outDir, 'skill-optimizer.js')).href)
+  const lifecycle = await import(pathToFileURL(findCompiled(outDir, 'learning-lifecycle.js')).href)
+  const security = await import(pathToFileURL(findCompiled(outDir, 'learning-security.js')).href)
+  const learningRoot = path.join(projectRoot, '.caogen', 'learning-state')
+  const authority = (action) => security.createTrustedUserLearningDecision(`skill-optimizer-smoke:${action}`)
+  const originalMarkdown = readFileSync(skillPath, 'utf8')
 
   const firstFailure = await optimizer.recordSkillFeedback({
     projectRoot,
@@ -59,7 +64,7 @@ try {
   assertEqual(firstFailure.status, 'recorded')
   assert(!readFileSync(skillPath, 'utf8').includes('自动优化记录'), 'first failure should only record feedback')
 
-  const secondFailure = await optimizer.recordSkillFeedback({
+  const secondFailureInput = {
     projectRoot,
     skillIdOrName: 'Tailwind Config Builder',
     outcome: 'failed',
@@ -68,24 +73,44 @@ try {
     verification: ['npm.cmd run build'],
     occurredAt: Date.UTC(2026, 6, 7, 1, 1, 0),
     failureThreshold: 2
-  })
-  assertEqual(secondFailure.status, 'updated')
-  let markdown = readFileSync(skillPath, 'utf8')
-  assert(markdown.includes('自动优化记录'), 'second failure should append optimization section')
-  assert(markdown.includes('PostCSS config'), 'optimization should include first failure feedback')
-  assert(markdown.includes('CSS entry'), 'optimization should include second failure feedback')
+  }
+  const secondFailure = await optimizer.recordSkillFeedback(secondFailureInput)
+  assertEqual(secondFailure.status, 'drafted')
+  assertEqual(secondFailure.applied, false)
+  assertEqual(readFileSync(skillPath, 'utf8'), originalMarkdown)
+  let snapshot = await lifecycle.listLearningProject(projectRoot, learningRoot)
+  const failureDraft = snapshot.drafts.find((record) => record.id === secondFailure.draftId)
+  assert(failureDraft?.payload.type === 'skill', 'failure threshold should create a persisted Skill draft')
+  assert(failureDraft.payload.markdown.includes('PostCSS config'), 'draft should include first failure feedback')
+  assert(failureDraft.payload.markdown.includes('CSS entry'), 'draft should include second failure feedback')
 
-  const correction = await optimizer.applySkillCorrection({
+  await lifecycle.rejectLearningDraft(projectRoot, learningRoot, failureDraft.id, authority('reject-failure-draft'))
+  const retriedFailure = await optimizer.recordSkillFeedback(secondFailureInput)
+  assertEqual(retriedFailure.status, 'drafted')
+  assert(retriedFailure.draftId !== failureDraft.id, 'rejected optimization must be re-proposable as a new draft')
+  assertEqual(readFileSync(skillPath, 'utf8'), originalMarkdown)
+
+  const correctionInput = {
     projectRoot,
     skillIdOrName: 'Tailwind Config Builder',
     summary: 'User correction: also update content globs for src/pages.',
     correctionSteps: ['Include src/pages/**/* in Tailwind content globs.'],
     verification: ['npm.cmd run typecheck'],
     occurredAt: Date.UTC(2026, 6, 7, 1, 2, 0)
-  })
-  assertEqual(correction.status, 'updated')
-  markdown = readFileSync(skillPath, 'utf8')
-  assert(markdown.includes('src/pages/**/*'), 'user correction should be written back to SKILL.md')
+  }
+  const correction = await optimizer.applySkillCorrection(correctionInput)
+  assertEqual(correction.status, 'drafted')
+  assertEqual(readFileSync(skillPath, 'utf8'), originalMarkdown)
+  snapshot = await lifecycle.listLearningProject(projectRoot, learningRoot)
+  const correctionDraft = snapshot.drafts.find((record) => record.id === correction.draftId)
+  assert(correctionDraft?.payload.type === 'skill', 'user correction should create a persisted Skill draft')
+  assert(correctionDraft.payload.markdown.includes('src/pages/**/*'), 'user correction should be present in the draft')
+
+  await lifecycle.deleteLearningRecord(projectRoot, learningRoot, correctionDraft.id, authority('delete-correction-draft'))
+  const retriedCorrection = await optimizer.applySkillCorrection(correctionInput)
+  assertEqual(retriedCorrection.status, 'drafted')
+  assert(retriedCorrection.draftId !== correctionDraft.id, 'deleted optimization must be re-proposable as a new draft')
+  assertEqual(readFileSync(skillPath, 'utf8'), originalMarkdown)
 
   const feedbackPath = path.join(path.dirname(skillPath), 'skill-feedback.json')
   assert(existsSync(feedbackPath), 'feedback store should be persisted next to project skill')

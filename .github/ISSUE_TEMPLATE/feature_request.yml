@@ -1,0 +1,80 @@
+name: Feature request / 功能建议
+description: Propose a focused improvement without presenting roadmap work as shipped / 提议聚焦改进，不把路线图写成已发布能力
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the user problem and the smallest useful outcome. CaoGen's long-term Agent Work OS vision is under construction; proposals must distinguish current behavior from roadmap goals.
+
+        请从用户问题和最小可用结果开始。CaoGen 的 Agent Work OS 长期愿景仍在建设中，建议必须区分当前行为和路线图目标。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem / 用户问题
+      description: Who is blocked, in which workflow, and why current behavior is insufficient? / 谁在什么流程中受阻，为什么现有能力不够？
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior / 当前行为
+      description: Describe what CaoGen can and cannot do today. / 描述 CaoGen 今天能做和不能做什么。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Smallest useful change / 最小可用改动
+      description: Define a focused first increment and its user-visible outcome. / 定义聚焦的第一步及用户可见结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / 验收标准
+      placeholder: |
+        - Given...
+        - When...
+        - Then...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 已考虑的替代方案
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Product status / 产品状态
+      options:
+        - Improvement to a currently available capability / 改进当前可用能力
+        - Conditional integration / 条件集成
+        - Roadmap proposal only / 仅路线图建议
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution / 参与意愿
+      options:
+        - label: I can open a focused pull request after scope confirmation. / 范围确认后我可以提交聚焦 PR。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交确认
+      options:
+        - label: I searched existing issues and roadmap documents. / 我已搜索现有 Issue 和路线图文档。
+          required: true
+        - label: I did not describe an unbuilt roadmap goal as already shipped. / 我没有把未完成的路线图目标写成已发布能力。
+          required: true
