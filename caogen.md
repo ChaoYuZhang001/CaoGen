@@ -4,6 +4,7 @@ CaoGen 是 Electron + React + TypeScript 桌面 AI 编码 Agent。主进程在 `
 
 # 代码规范
 
+- 以 `docs/CODING-STANDARDS.md` 为当前有效编码标准；文件/函数/复杂度、注释、设计模式、例外和基线规则均以该文档为准。
 - 优先保持现有 TypeScript 模块风格，不引入无关框架。
 - 修改已有文件时优先使用 `search_replace` 或小范围补丁，避免全文件覆写。
 - 新增运行时数据应写入 `.caogen`、`test-results` 或系统临时目录，并确保不污染 git 状态。
@@ -14,6 +15,7 @@ CaoGen 是 Electron + React + TypeScript 桌面 AI 编码 Agent。主进程在 `
 ```powershell
 npm.cmd run typecheck
 npm.cmd run build
+npm.cmd run test:coding-standards:required
 npm.cmd run test:deep
 npm.cmd run test:p2-required
 ```

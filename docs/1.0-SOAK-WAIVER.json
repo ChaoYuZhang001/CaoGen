@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "gateId": "product_1_0_soak",
+  "decision": "waive",
+  "releaseVersion": "1.0.0",
+  "scope": "exact_release_version_only",
+  "owner": "CaoGen release owner",
+  "decidedAt": "2026-07-22",
+  "decisionSource": "Direct release-owner instruction recorded on 2026-07-22",
+  "reason": "The release owner explicitly chose to deliver CaoGen 1.0.0 without waiting for the seven-day daily-use soak.",
+  "acceptedRisk": "Defects detectable only through prolonged daily use may remain in 1.0.0 and require rollback or a hotfix.",
+  "approvedByOwner": true,
+  "riskAccepted": true,
+  "appliesToFutureVersions": false,
+  "expiresAfterReleaseVersion": "1.0.0",
+  "substituteEvidence": [
+    "Formal PRD P0 acceptance closure on the exact release candidate",
+    "Full required Deep test on the exact clean release commit",
+    "Release-bound real default provider evidence",
+    "Developer ID signed, notarized, and stapled macOS artifact evidence",
+    "Release-bound SBOM, secret-history scan, and rollback readiness"
+  ]
+}

@@ -134,7 +134,7 @@ Provider JSON example:
     "id": "openai-baseline",
     "name": "OpenAI baseline",
     "group": "baseline",
-    "apiFormat": "openai-compatible",
+    "apiFormat": "openai-responses",
     "baseUrl": "https://api.openai.com/v1",
     "model": "gpt-4.1-mini",
     "apiKey": "<secret>"
@@ -151,10 +151,23 @@ Provider JSON example:
 ]
 ```
 
+Supported `apiFormat` values:
+
+- `openai-responses`: OpenAI Responses API at `/v1/responses`.
+- `openai-compatible`: Chat Completions-compatible API at `/v1/chat/completions`.
+- `anthropic`: Anthropic Messages API at `/v1/messages`.
+
+Use the protocol implemented by the selected model route. Do not send Responses-only models through the Chat Completions parity path.
+
+For an `openai-compatible` route that implements the `thinking.type` contract, set `"thinkingMode": "disabled"` or `"thinkingMode": "enabled"`. Omit it for providers that do not implement this field. This is useful when a thinking route rejects forced tool selection but supports an explicit disabled mode.
+
 Optional controls:
 
 - `CAOGEN_CHINA_PARITY_REQUIRE_BASELINE=0`: allow running only China providers without a baseline.
 - `CAOGEN_CHINA_PARITY_MAX_GAP=<number>`: allow China provider pass-rate gap from the best baseline.
+- `CAOGEN_CHINA_PARITY_TIMEOUT_MS=<milliseconds>`: bound each provider request to 1,000-120,000 ms; the default is 20,000 ms.
+
+In a required run, every configured baseline provider must pass every golden tool-call case. `bestBaseline` is used only to calculate each China provider's allowed pass-rate gap; a passing baseline does not hide failures from another configured baseline. Providers run concurrently, while each provider's golden cases run sequentially.
 
 ## JetBrains Real IDE Interaction
 

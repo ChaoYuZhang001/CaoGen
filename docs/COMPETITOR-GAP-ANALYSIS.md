@@ -1,6 +1,8 @@
 # CaoGen 竞品差距与优化优先级
 
 > 快照日期: 2026-07-11
+> E1 凭据状态补记: 2026-07-17（未重新联网刷新竞品事实）
+> C1 证据边界: 下文标注为历史快照的数字只记录当时的仓库状态；当前仓库最新 dirty-worktree Deep（2026-07-20）为 `123 total / 120 required pass / 3 optional skip / 0 blocked / 0 fail`（`test-results/caogen-deep/2026-07-20T14-04-52-427Z/deep-test-report.md`），独立 Electron 页面流为 `22/22 pass`（`test-results/caogen-deep/2026-07-20T14-22-20-382Z/page-operation-smoke.json`）。三个 optional 分别是 Claude real e2e、China real-network 和 China tool-call parity，不能算 pass；Release Doctor 仍为 `not_ready`（`test-results/workos-release-doctor/2026-07-19T16-29-57-170Z/report.md`），开放域仅为 release identity、clean-commit Deep、packaging 和 release notes。本地 unsigned macOS x64 资产审计与真实 packaged-app 启动已通过，但未绑定 clean release commit，因此上述结果不能替代 clean release candidate gate。
 > CaoGen 功能代码基线: 本地 `main`（未推送远端）
 > 核心对标: Codex Desktop / CLI、Claude Desktop / Code、Cursor / Windsurf
 > 扩展参照: OpenClaw、Hermes Agent，以及 Devin / OpenHands 类长任务交付
@@ -21,10 +23,10 @@ CaoGen 已经具备真实差异化:
 
 但以下五项会直接阻止 CaoGen 成为可信赖的长期 Agent Desktop:
 
-1. Effect Ledger 核心已经落地，自动 Reconciler 已覆盖 `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push`；PR、Issue、消息、可查询 MCP、Code Forge 复合动作、直接 Renderer Git 入口、补偿执行和防篡改 evidence 链仍未闭环。
-2. Docker 产品模式已删除，历史 strict 设置会进入 fail-closed 确认态；Claude SDK 自动放行、原生设置 hooks/statusLine、Git filter 和 ripgrep config 旁路已封。剩余问题是 GUI 五分钟授权仍对所有 GUI 工具全局生效，`safeStorage` 不可用时 API Key 仍会退化为可逆 Base64。
-3. MCP 子进程继承完整环境变量，内置模板使用未锁版本的 `npx -y`，插件安装缺少来源、哈希、签名、能力清单和运行时隔离。
-4. 本地 Deep 已完成 `pass / skip / blocked / fail` 四态，当前口径为 `87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail`；剩余发布风险是没有托管 CI，macOS 包未签名，也没有 SBOM、provenance、安装升级验证和失败回滚证据。
+1. Effect Ledger 核心已经落地，自动 Reconciler 已覆盖主要文件编辑、Git commit/merge/push、Renderer 文件保存/commit、Git stage/stageAll/unstage/accept hunk、文本 hunk 丢弃、managed-worktree create/remove/patch、DAG autoMerge 和 GitHub/GitLab PR/MR；Issue、消息、可查询 MCP、Code Forge patch、补偿执行和防篡改 evidence 链仍未闭环。
+2. Docker 产品模式已删除，历史 strict 设置会进入 fail-closed 确认态；Claude SDK 自动放行、原生设置 hooks/statusLine、Git filter 和 ripgrep config 旁路已封。新 Provider Key 的可逆 Base64 fallback 也已移除；剩余问题是 GUI 五分钟授权仍对所有 GUI 工具全局生效，Credential Broker 尚未完成 project/session/operation/expiry 作用域。
+3. MCP 模型入口已拒绝 `env/headers/configPath`，导入结果已脱敏，stdio/probe 已使用最小环境；剩余缺口是内置模板仍使用未锁版本的 `npx -y`，插件安装缺少来源、哈希、签名、能力清单和受管运行时隔离。
+4. 本地 Deep 已完成 `pass / skip / blocked / fail` 四态；**历史快照（2026-07-17）**为 `92 total / 89 required pass / 3 optional skip / 0 blocked / 0 fail`。当前最新 dirty-worktree Deep 为 `123 total / 120 required pass / 3 optional skip / 0 blocked / 0 fail`（详见 `test-results/caogen-deep/2026-07-20T14-04-52-427Z/deep-test-report.md`），独立 Electron 页面流为 `22/22 pass`（`test-results/caogen-deep/2026-07-20T14-22-20-382Z/page-operation-smoke.json`）；Claude real e2e、China real-network 和 China tool-call parity 仍是 optional skip，不能算 pass。本地 unsigned macOS x64 资产审计和真实 packaged-app 启动已通过，但没有 clean-commit 绑定、签名、公证、SBOM、provenance、安装升级和失败回滚证据；Release Doctor 仍为 `not_ready`（`test-results/workos-release-doctor/2026-07-19T16-29-57-170Z/report.md`），开放域仅为 release identity、clean-commit Deep、packaging 和 release notes。
 5. OpenAI Responses 的 `lastResponseId` 只在内存中，重启、换 Provider 或换 Key 会丢失服务端上下文链，尚无 Provider 无关的会话账本。
 
 因此下一阶段不应继续追求更多可见功能。正确顺序是:
@@ -47,9 +49,9 @@ CaoGen 已经具备真实差异化:
 |---|---|---|---|---|---|
 | P0-1B/C | 剩余外部副作用、evidence 与补偿未闭环 | `effect-reconciler.ts` 已覆盖主要文件编辑和 Git commit/merge/push，其他工具仍进入 `unsupported/opaque`；`TaskRecoveryModal.tsx` 主要提供目标、错误和人工确认 | Codex/Claude 已提供线程恢复、审批、checkpoint 与 PR/CI 工作流；CaoGen 应在“外部成功但本地未知”上形成领先能力 | 崩溃或断网后不会重复发 PR、消息、Issue 或复合交付动作 | 所有高风险入口经过 Effect Runtime；外部成功后强杀不重放；evidence 为 append-only 可验证链；补偿需审批且失败时 fail closed |
 | P0-2 | 审批作用域与本地执行真相仍不完整 | Docker 产品模式已删除，历史 strict 设置 fail-closed；Claude/OpenAI 双闸门与 Git/rg 配置旁路已补 required smoke。`permission-manager.ts` 的五分钟 GUI grant 仍对所有 GUI 工具生效 | Codex sandbox/approval/Guardian 与 Claude permissions/OS sandbox 都把能力边界作为一等产品面 | 用户能准确知道“允许了什么、对哪个目标、持续多久” | 授权绑定 app/window/action/path/diff/postcondition，可随时撤销；UI、运行时和审计使用同一能力状态 |
-| P0-3 | 凭据与 MCP/插件供应链隔离不足 | `providers.ts` 仍有 `b64:` fallback；`mcp-client.ts` 把完整 `process.env` 传给子进程；安装缺来源、digest、签名和能力 diff | Claude Managed MCP/MCPB 强调受管配置；Codex 对 Skill/Hook 有启用与信任状态 | 一个插件或 MCP 出问题时，不会带走全部密钥、环境变量和项目数据 | safeStorage 不可用时不持久化新密钥；恶意 fixture 读不到无关环境/文件/凭据；安装和内容变化都展示 provenance、digest 与 capability diff 并重新审批 |
+| P0-3 | 凭据与 MCP/插件供应链隔离不足 | Provider 新 Key 已不再写 `b64:`；MCP 模型入口已移除 `env/headers/configPath`，导入结果脱敏，stdio/probe 使用最小环境；Broker 仍无完整作用域，安装仍缺来源、digest、签名和 capability diff | Claude Managed MCP/MCPB 强调受管配置；Codex 对 Skill/Hook 有启用与信任状态 | 一个插件或 MCP 出问题时，不会带走全部密钥、环境变量和项目数据 | safeStorage 不可用时不持久化新密钥；恶意 fixture 读不到未声明文件、环境或凭据；安装和内容变化都展示 provenance、digest 与 capability diff 并重新审批 |
 | P0-4 | 四态本地门禁已完成，发布证据链仍缺 | `deep-test.mjs` 已区分 `pass/skip/blocked/fail`，required skip/blocked 会阻断；仍无 hosted CI、签名、SBOM/provenance、升级和回滚证据 | Claude 有 GitHub Actions/Code Review 交付面；成熟竞品用 CI、签名和制品证明建立发布信任 | 用户看到“通过”时可确信真实环境已验证，安装包可追溯、可升级、可回滚 | PR/main/release 有托管矩阵；每个制品绑定源码 SHA、哈希、签名、SBOM、provenance 与干净机安装/升级/回滚记录 |
-| P0-5 | 恢复界面和会话账本不够可检查、不可跨 Provider | `TaskRecoveryModal.tsx` 未展示 causation、lease、generation、evidence 和完整状态时间线；`openaiEngine.ts` 的 `lastResponseId` 只在内存中 | Codex 支持 thread resume/fork/list/goals；Claude checkpoint 明确展示恢复能力与边界 | 重启、换模型或换 Provider 后，用户仍能解释任务做过什么、为什么停在这里 | 建立 Canonical Conversation Ledger；跨 Provider 恢复保持 tool-call 配对、附件和已确认 Effect；UI 展示 append-only 事件/effect 时间线和可恢复边界 |
+| P0-5 | 恢复界面和会话账本不够可检查、不可跨 Provider | v8 已为 Task Snapshot/TaskRun 提供按数据库路径隔离的 `legacy / compare / canonical` 恢复读源、canonical recovery sessions、mode flip 复验和 committed identity/high-water continuity；但 `TaskRecoveryModal.tsx` 仍未展示 causation、lease、generation、evidence 和完整状态时间线，`openaiEngine.ts` 的 `lastResponseId` 仍只在内存中 | Codex 支持 thread resume/fork/list/goals；Claude checkpoint 明确展示恢复能力与边界 | 重启、换模型或换 Provider 后，用户仍能解释任务做过什么、为什么停在这里 | 在 v8 recovery cutover 基础上建立 Canonical Conversation Ledger；跨 Provider 恢复保持 tool-call 配对、附件和已确认 Effect；UI 展示 append-only 事件/effect 时间线和可恢复边界 |
 | P1-10 | Desktop 自动化缺 observe-act-verify | `gui-tools.ts` 的 click/type/scroll/hotkey 返回即时执行结果，没有自动观察后置状态；GUI 工具仍是 opaque Effect | 桌面自动化的有效基线是“观察 → 操作 → 验证”；当前仓库只有动作回执，没有后置状态证据 | 减少“点了但没生效”“输入到了错误窗口”这类假成功 | 每个动作可声明 postcondition；执行后自动截图/读取可访问性状态并断言；失败可恢复；权限绑定具体 app/window；Windows/macOS 真实 E2E 进入 required gate |
 | P1-11 | Existing-file writer 不是 crash-atomic | `search-replace.ts` 与本地 writer 仍原地 `truncate/write`；CAS 可拒绝漂移目标，但写入中强杀、断电或 ENOSPC 可能留下空文件或半文件 | 可信编辑器应把一次已批准写入收敛为完整 pre-state 或完整 expected-state，而不是中间字节状态 | 避免恢复后源码损坏、构建失败或用户只能手工找回内容 | 进程在 truncate 后任意点强杀或注入 ENOSPC，重启后目标只能是完整 pre-state 或 expected-state；硬链接语义、备份恢复与原子替换边界有明确测试 |
 | P1-7 | Memory 与 Skill 自动学习缺统一治理 | `memory_add` 直接写入确认层；启用自动 Skill review 后，校验通过会直接写可执行 `SKILL.md` | Codex 的 Skill 启用与 Hook trust 强调显式信任；Claude 的受管扩展也强调策略边界 | 错误经验或提示注入不会静默变成长期记忆和可执行规则 | 所有自动学习先进入 draft，附来源、置信度、diff 和影响范围；人工批准后生效；支持版本、回滚、过期和按项目导出/删除 |
@@ -91,14 +93,16 @@ CaoGen 已经具备真实差异化:
 
 - `src/main/engine.ts` 和 `src/main/engines.ts` 已固定两条正式运行时路径。Codex CLI / Gemini CLI Adapter 已移除，不再作为未来方向。
 - `src/main/task/task-recovery.ts`、`src/main/task/task-snapshot.ts` 和 `src/main/task/task-runtime-registry.ts` 已形成事件回执、恢复游标、快照和幂等防重底座。
+- `task-snapshots.db` v8 已增加 canonical recovery sessions 和持久 `workflow_store_identity`；Task Snapshot/TaskRun 恢复读取支持按数据库路径隔离的 `legacy / compare / canonical` 三态，compare 漂移 fail-closed，mode flip 强制复验，committed journal 校验 store identity 与历史高水位。未配置时仍默认 legacy；这不等于跨 Provider 的 Canonical Conversation Ledger、全入口 canonical workflow 或完整 Artifact 生命周期。
 - `src/main/task/effect-ledger.ts`、`effect-runtime.ts` 和 `effect-reconciler.ts` 已形成持久 EffectRecord、资源级 lease/fencing、字段级并发合并、自动/人工对账和 fail-closed 恢复底座。
-- `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push` 已有只读 Reconciler；`search_replace dry_run=true` 不建立 Effect，Claude `MultiEdit/NotebookEdit` 仍为 opaque；`git_merge` 固化 repo/ref/source SHA 与文件系统身份，在隔离 ODB 预检，并用 trusted reference-transaction hook 原子校验 old SHA、exact parents 和 expected tree。
+- `write_file`、`search_replace`、OpenAI `edit_file`、Claude 原生 `Edit`、`git_commit`、`git_merge`、`git_push`、Agent 原生 `git_stage` / `git_stage_all` 和 Renderer Git stage/stageAll/unstage/accept hunk 已有只读 Reconciler；`search_replace dry_run=true` 不建立 Effect，Claude `MultiEdit/NotebookEdit` 仍为 opaque；Git Index 操作使用临时 Index/ODB 冻结 exact bytes 与 entries digest，通过真实 `index.lock` 和 HEAD/Index CAS 发布，并隔离 hooks/filter/父进程 Git 环境；`git_merge` 固化 repo/ref/source SHA 与文件系统身份，在隔离 ODB 预检，并用 trusted reference-transaction hook 原子校验 old SHA、exact parents 和 expected tree。
+- Code Forge 动作面已收敛到 `report` / `patch`；内嵌 shell 与复合 commit/PR 请求 fail closed，`patch` 的专用可查询 Effect 仍是后续工作。
 - `src/main/sessionManager.ts` 与 `src/main/agent/dag-scheduler.ts` 已支持真实 child session、DAG 和 worktree 编排。
 - `src/main/providers.ts`、`src/main/providerKeyRouting.ts` 和 `src/main/model/session-routing.ts` 已支持 Provider/Key 选择、健康、预算和故障切换。
 - `src/main/permission/tool-permission.ts`、`src/main/permission/audit-log.ts` 和沙箱相关模块已形成权限治理基础；审计输入默认保存 metadata/hash，权限卡展示完整但递归脱敏的审批输入。
 - `src/main/skill`、`src/main/mcp`、`src/main/pluginInstall.ts` 已形成扩展生态底座。
 - `src/renderer/src/components/office` 已消费真实会话、审批、工具、路由、成本、worktree 和 checkpoint 状态。
-- 当前完整 Deep 口径为 `87 total / 84 required pass / 3 optional skip / 0 blocked / 0 fail`（不可变报告: `test-results/caogen-deep/2026-07-11T13-56-12-426Z/deep-test-report.md`；滚动入口: `test-results/caogen-deep/latest.md`）。Claude real e2e、China real-network 和 China tool-call parity 保留为 optional skip，不能算真实外部环境通过。
+- **历史 Deep 快照（2026-07-17）**为 `92 total / 89 required pass / 3 optional skip / 0 blocked / 0 fail`（不可变报告: `test-results/caogen-deep/2026-07-17T15-15-55-522Z/deep-test-report.md`）。当前最新 dirty-worktree Deep 为 `123 total / 120 required pass / 3 optional skip / 0 blocked / 0 fail`（`test-results/caogen-deep/2026-07-20T14-04-52-427Z/deep-test-report.md`；滚动入口: `test-results/caogen-deep/latest.md`），独立 Electron 页面流为 `22/22 pass`（`test-results/caogen-deep/2026-07-20T14-22-20-382Z/page-operation-smoke.json`）。Claude real e2e、China real-network 和 China tool-call parity 保留为 optional skip，不能算真实外部环境通过；Release Doctor 仍为 `not_ready`（`test-results/workos-release-doctor/2026-07-19T16-29-57-170Z/report.md`），开放域仅为 release identity、clean-commit Deep、packaging 和 release notes，DAG finalization 与 P2 release scope 已为 ready。本地 unsigned macOS x64 资产审计和真实 packaged-app 启动已通过，但 packaging_release 仍因未绑定 clean release commit 而 open。
 
 ## P0: 必须先解决
 
@@ -119,7 +123,7 @@ CaoGen 已经具备真实差异化:
 
 继续问题:
 
-- `git_create_pr`、Issue、消息、可查询 MCP、Code Forge 复合动作和 Renderer 直接 Git/patch 入口尚无专用 Reconciler 或未统一经过 Effect Runtime。
+- Issue、消息、可查询 MCP 和 Code Forge patch 尚无专用 Reconciler 或未统一经过 Effect Runtime。
 - Existing-file writer 仍原地 `truncate/write`，不具备 writer 内部 crash-atomic；当前强杀 E2E 证明的是 Effect 执行边界恢复，不能证明写入中断后文件一定完整。
 - Claude `MultiEdit/NotebookEdit` 尚无可信 planner；Claude AgentSession 的真实外部 `Edit` 全链仍缺有条件环境集成测试，不能把 mock/模块 smoke 写成真实外部执行证明。
 - `markEffectCompensated` 只有账本状态能力，没有生产级补偿计划、审批和执行器。
@@ -135,7 +139,7 @@ CaoGen 已经具备真实差异化:
 
 下一纵切要求:
 
-- 把所有高风险入口统一接入 Effect Runtime，下一纵切先完成 PR、Issue、消息、可查询 MCP、Code Forge 和直接 Renderer Git/patch 操作。
+- 把所有高风险入口统一接入 Effect Runtime，下一纵切继续完成 Issue、消息、可查询 MCP 和 Code Forge patch。
 - 建立独立 Effect 持久表、append-only evidence 链和审计事件 ID，避免 evidence 只存在 TaskRun JSON 中。
 - 定义补偿动作的生成、审批、执行、失败恢复和二次补偿边界。
 - 对每类可查询副作用补真实强杀 E2E；无外部回读能力的操作继续禁止自动重试。
@@ -162,7 +166,7 @@ Owner: Runtime / Task Kernel。
 
 当前问题:
 
-- `src/main/providers.ts` 在 `safeStorage` 不可用时写入 `b64:`，这是编码，不是加密。
+- 新 Provider Key 的 `b64:` 写入 fallback 已移除；安全存储不可用时只保留主进程 session-only Key。历史 `b64:` 仍需完成真实迁移演练，Broker 仍缺 project/session/operation/expiry 作用域。
 - 审计日志已经停止保存 command/content/JSON 原文，改为 metadata、长度和 SHA-256；权限卡也会完整展示但递归脱敏输入。该纵切仍未覆盖所有日志、转录、插件和 MCP 数据出口。
 - GUI 五分钟临时授权只记录到期时间，对所有 GUI 工具全局放行，没有绑定 app、window、action 或 postcondition。
 - Docker 产品模式和旧降级开关已删除；历史 strict 用户进入 `disabled` 确认态。剩余工作是把这一能力状态与 GUI 临时授权、凭据和数据保留统一到同一控制面。
@@ -170,7 +174,7 @@ Owner: Runtime / Task Kernel。
 
 实现要求:
 
-- `safeStorage` 不可用时禁止持久化新密钥；提供仅本次会话使用或引导修复系统安全存储。
+- 已实现 `safeStorage` 不可用时不持久化新密钥，并提供仅本次运行状态；后续补完整作用域、恢复引导和企业凭据后端。
 - 迁移并删除现有 `b64:` 密钥，迁移失败时要求用户重新输入。
 - 把现有审计 metadata/hash 规则抽成统一数据分类与递归脱敏组件，覆盖日志、转录、插件、MCP 和错误回传。
 - MCP/工具凭据通过 scoped broker 注入，避免把主进程完整环境传给子进程。
@@ -180,7 +184,7 @@ Owner: Runtime / Task Kernel。
 
 验收标准:
 
-- 全仓和运行产物中不存在可逆编码密钥。
+- 生产写入路径和新产生的运行数据中不存在可逆编码密钥；旧数据与测试迁移 fixture 只作为只读输入存在。
 - 包含 `Authorization`、API Key、JWT、cookie、密码和私钥片段的输入不会出现在审计日志。
 - 渲染层、插件和 MCP 只能获得声明过的凭据范围。
 - GUI 临时授权不能跨 app/window/action 复用；严格沙箱未运行时不得显示为已隔离。
@@ -201,7 +205,7 @@ Owner: Security / Runtime。
 
 当前问题:
 
-- `src/main/mcp/mcp-client.ts` 的 stdio 子进程继承完整 `process.env`。
+- MCP stdio/probe 已使用最小环境，模型入口也已禁止直接提供 `env/headers/configPath`；尚未完成 digest-bound trust、Capability Manifest、scoped credential broker 和受管隔离 Runner。
 - 内置 MCP 模板使用未锁版本的 `npx -y`。
 - `src/main/pluginInstall.ts` 只检查目录形状、大小和路径，没有来源、digest、签名、依赖、能力或兼容性验证。
 - 插件、Skill、MCP 和 Hooks 尚未形成一致的信任模型。
@@ -345,9 +349,9 @@ Owner: Runtime / Session。
 
 | 批次 | 范围 | 估算 | 完成判据 |
 |---|---|---:|---|
-| A0 今晚真相收口 | 删除 Docker 产品依赖；Claude 改为可选；Deep 四态；封 Claude/Git/rg 旁路；整理状态和排期 | 已完成 | `87 / 84 pass / 3 optional skip / 0 blocked / 0 fail`，本地 `main` 干净 |
+| A0 今晚真相收口 | 删除 Docker 产品依赖；Claude 改为可选；Deep 四态；封 Claude/Git/rg 旁路；整理状态和排期 | 已完成 | 历史里程碑快照为 `87 / 84 pass / 3 optional skip / 0 blocked / 0 fail`；不代表当前 Deep 或当前工作树洁净度 |
 | A1 Trust Kernel | 剩余 Reconciler、append-only evidence、补偿执行、crash-atomic writer、GUI capability 授权 | 6-10 agent-days | 强杀、重复执行、目标漂移和补偿失败全部 fail closed，所有高风险入口进 required gate |
-| A2 安全与插件/MCP 隔离 | 移除 Base64 fallback、scoped credential broker、Capability Manifest、版本/digest、最小环境、恶意 fixture | 6-10 agent-days | 插件/MCP 不能读取未声明文件、环境或凭据；内容变化会失去信任并重新审批 |
+| A2 安全与插件/MCP 隔离 | Provider Base64 新写 fallback 与 MCP stdio/probe 最小环境已完成；继续 scoped credential broker、Capability Manifest、版本/digest、managed runner 和恶意 fixture | 6-10 agent-days | 插件/MCP 不能读取未声明文件、环境或凭据；内容变化会失去信任并重新审批 |
 | A3 发布链 | Hosted CI、签名/公证、SBOM、provenance、安装/升级/回滚、发布后审计 | 4-7 agent-days + 外部等待 | 每个制品绑定源码 SHA、测试报告、签名、哈希、SBOM 和干净机证据 |
 | A4 持久会话账本 | Canonical Conversation Ledger、跨 Provider resume、可检查 checkpoint/effect 时间线 | 5-8 agent-days | 重启、换 Provider/Key 后保持 tool-call 配对、附件和已确认 Effect 连续 |
 | A5 Agent Control Plane | 四类 Agent 原语、Supervisor、pause/cancel/resume、observe-act-verify、PR/CI/Artifact 控制面、Genesis 执行化 | 15-25 agent-days | 长任务可恢复、可审批、可验证、可交付，不依赖桌面 UI 进程一直存活 |
