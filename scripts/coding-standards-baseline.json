@@ -131,8 +131,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 610,
-      "contentHash": "6b88b43bbf619a2974b1cb02bfc1dd58e96172d82de4d29362c73b4c4096837b",
+      "lines": 611,
+      "contentHash": "bb41a83d600ecc76953b10e141fecd875523737ae19d8de9797cfee3ca526212",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,

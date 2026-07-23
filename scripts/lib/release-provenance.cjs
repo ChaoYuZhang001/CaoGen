@@ -16,6 +16,10 @@ function createReleaseProvenance(repoRoot, packageVersion) {
 
 function readPackagedReleaseProvenance(appPath) {
   const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  return readPackagedReleaseProvenanceFromAsar(asarPath)
+}
+
+function readPackagedReleaseProvenanceFromAsar(asarPath) {
   try {
     const { extractFile } = require('@electron/asar')
     const packageJson = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'))
@@ -61,5 +65,6 @@ module.exports = {
   RELEASE_PROVENANCE_SCHEMA_VERSION,
   createReleaseProvenance,
   readPackagedReleaseProvenance,
+  readPackagedReleaseProvenanceFromAsar,
   releaseProvenanceChecks
 }

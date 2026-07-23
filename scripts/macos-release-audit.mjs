@@ -111,7 +111,12 @@ const report = {
 
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+if (configOnly) {
+  writeFileSync(path.join(reportRoot, 'latest-config.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+} else {
+  writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  writeFileSync(path.join(reportRoot, `latest-${targetArch}.json`), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+}
 console.log(JSON.stringify(report, null, 2))
 
 const anyArtifactPresent = Object.values(artifactPresence).some(Boolean)
@@ -126,6 +131,7 @@ function inspectReleaseConfig() {
     forceCodeSigning: false,
     hardenedRuntime: false,
     notarize: false,
+    timestampRetryHook: false,
     identityDisabled: null,
     minimumSystemVersion: null,
     entitlements: null,
@@ -152,6 +158,7 @@ function inspectReleaseConfig() {
   summary.forceCodeSigning = mac.forceCodeSigning === true
   summary.hardenedRuntime = mac.hardenedRuntime === true
   summary.notarize = mac.notarize === true
+  summary.timestampRetryHook = mac.sign === 'scripts/macos-sign-with-retry.cjs'
   summary.identityDisabled = mac.identity === null
   summary.minimumSystemVersion = typeof mac.minimumSystemVersion === 'string' ? mac.minimumSystemVersion : null
   summary.preservesAnthropicSignature = asArray(mac.signIgnore).some((pattern) => pattern === expectedClaudeSignIgnore)
@@ -162,6 +169,7 @@ function inspectReleaseConfig() {
   check('config', 'forceCodeSigning is true', summary.forceCodeSigning)
   check('config', 'hardenedRuntime is true', summary.hardenedRuntime)
   check('config', 'notarize is true', summary.notarize)
+  check('config', 'timestamp failures use the bounded retry hook', summary.timestampRetryHook)
   check('config', 'identity is not null', !summary.identityDisabled)
   check('config', 'minimumSystemVersion is 14.0 or newer', versionAtLeast(mac.minimumSystemVersion, '14.0'))
   check('config', 'DMG target is enabled', hasTarget(mac.target, 'dmg'))
@@ -447,10 +455,11 @@ function inspectDmgPayload() {
     return summary
   } finally {
     if (summary.mounted) {
-      const detached = runCommand('hdiutil', ['detach', mountPoint])
+      const detached = detachDmg(mountPoint)
       check('dmg_app', 'DMG detaches cleanly', detached.ok, detached.ok ? undefined : commandFailureDetail(detached))
     }
-    rmSync(mountPoint, { recursive: true, force: true })
+    const cleanupError = removeTemporaryTree(mountPoint)
+    check('dmg_app', 'DMG temporary mount directory is removed', !cleanupError, cleanupError || undefined)
   }
 }
 
@@ -468,7 +477,8 @@ function inspectZipPayload() {
     if (archivedApp) summary.checks = inspectArchivedApp('zip_app', archivedApp)
     return summary
   } finally {
-    rmSync(extractRoot, { recursive: true, force: true })
+    const cleanupError = removeTemporaryTree(extractRoot)
+    check('zip_app', 'ZIP temporary extraction directory is removed', !cleanupError, cleanupError || undefined)
   }
 }
 
@@ -611,6 +621,31 @@ function listRegularFiles(root) {
   }
 }
 
+function removeTemporaryTree(targetPath) {
+  try {
+    rmSync(targetPath, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 200
+    })
+    return null
+  } catch (error) {
+    return errorMessage(error)
+  }
+}
+
+function detachDmg(mountPoint) {
+  let result
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const args = attempt === 5 ? ['detach', '-force', mountPoint] : ['detach', mountPoint]
+    result = runCommand('hdiutil', args)
+    if (result.ok) return result
+    if (attempt < 5) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 500)
+  }
+  return result
+}
+
 function parseCodeSignDetails(output) {
   const authorities = [...output.matchAll(/^Authority=(.+)$/gm)].map((match) => match[1].trim())
   const developerAuthority = authorities.find((authority) => authority.startsWith('Developer ID Application:')) || null
@@ -697,15 +732,13 @@ function inspectArtifactSet() {
         `CaoGen-${version}-arm64-mac.zip`,
         `CaoGen-${version}-arm64-mac.zip.blockmap`,
         `CaoGen-${version}-arm64.dmg`,
-        `CaoGen-${version}-arm64.dmg.blockmap`,
-        'latest-mac.yml'
+        `CaoGen-${version}-arm64.dmg.blockmap`
       ]
     : [
         `CaoGen-${version}-mac.zip`,
         `CaoGen-${version}-mac.zip.blockmap`,
         `CaoGen-${version}.dmg`,
-        `CaoGen-${version}.dmg.blockmap`,
-        'latest-mac.yml'
+        `CaoGen-${version}.dmg.blockmap`
       ]
   const sortedFiles = files.sort()
   const missing = sortedFiles.filter((file) => !isFile(path.join(repoRoot, 'dist', file)))

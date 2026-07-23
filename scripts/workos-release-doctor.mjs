@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { renderReleaseDoctorMarkdown } from './lib/release-doctor-render.mjs'
 import {
+  requiresReleasePlatformMatrix,
   requiresTrustedMacDistribution,
   trustedMacDistributionChecks
 } from './lib/release-packaging-policy.mjs'
+import {
+  releaseArtifactEvidence,
+  releasePackagingCommands,
+  releasePackagingNextActions,
+  releasePlatformArtifactEvidence,
+  releasePlatformMatrixChecks
+} from './lib/release-platform-matrix.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -39,7 +46,13 @@ const reports = {
   releaseSbomAudit: readJson('test-results/release-sbom/latest.json'),
   releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
   macosReleaseAudit: readJson('test-results/macos-release-audit/latest.json'),
+  macosReleaseX64Audit: readJson('test-results/macos-release-audit/latest-x64.json'),
+  macosReleaseArm64Audit: readJson('test-results/macos-release-audit/latest-arm64.json'),
+  windowsReleaseX64Audit: readJson('test-results/windows-release-audit/latest-x64.json'),
   packagedAppSmoke: readJson('test-results/packaged-app-smoke/latest.json'),
+  packagedAppMacosX64Smoke: readJson('test-results/packaged-app-smoke/latest-macos-x64.json'),
+  packagedAppMacosArm64Smoke: readJson('test-results/packaged-app-smoke/latest-macos-arm64.json'),
+  packagedAppWindowsX64Smoke: readJson('test-results/packaged-app-smoke/latest-windows-x64.json'),
   releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
   productPositioningAudit: readJson('test-results/product-positioning-audit/latest.json'),
   githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
@@ -758,12 +771,18 @@ function product1SoakNextActions(soakPassed, waiverAccepted) {
 
 function packagingDomain(packageJson) {
   const audit = reports.releasePackagingAudit
-  const macosAudit = reports.macosReleaseAudit
-  const launchAudit = reports.packagedAppSmoke
+  const platformMatrixRequired = requiresReleasePlatformMatrix(releaseTargetVersion)
+  const macosX64Audit = platformMatrixRequired ? reports.macosReleaseX64Audit : reports.macosReleaseAudit
+  const macosArm64Audit = reports.macosReleaseArm64Audit
+  const windowsX64Audit = reports.windowsReleaseX64Audit
+  const launchAudit = platformMatrixRequired ? reports.packagedAppMacosX64Smoke : reports.packagedAppSmoke
+  const macosArm64LaunchAudit = reports.packagedAppMacosArm64Smoke
+  const windowsX64LaunchAudit = reports.packagedAppWindowsX64Smoke
   const version = stringField(packageJson, 'version') || 'unknown'
   const distPath = path.join(repoRoot, 'dist')
   const hasDist = existsSync(distPath)
-  const artifacts = releaseArtifactEvidence(version)
+  const artifacts = releaseArtifactEvidence(repoRoot, version)
+  const macosX64Artifacts = releasePlatformArtifactEvidence(repoRoot, version, 'macos-x64')
   const trustedMacRequired = requiresTrustedMacDistribution(releaseTargetVersion)
   const checks = {
     auditPassed: audit.data?.status === 'passed',
@@ -780,13 +799,24 @@ function packagingDomain(packageJson) {
     artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256,
     ...(trustedMacRequired
       ? trustedMacDistributionChecks({
-          audit: macosAudit.data,
+          audit: macosX64Audit.data,
           releaseVersion: releaseTargetVersion,
           gitState,
-          artifactSetSha256: artifacts.artifactSetSha256,
+          artifactSetSha256: macosX64Artifacts.artifactSetSha256,
           targetArch: 'x64'
         })
-      : {})
+      : {}),
+    ...releasePlatformMatrixChecks({
+      releaseVersion: releaseTargetVersion,
+      gitState,
+      macosX64ArtifactSetSha256: macosX64Artifacts.artifactSetSha256,
+      macosX64Audit: macosX64Audit.data,
+      macosArm64Audit: macosArm64Audit.data,
+      windowsX64Audit: windowsX64Audit.data,
+      macosX64LaunchAudit: launchAudit.data,
+      macosArm64LaunchAudit: macosArm64LaunchAudit.data,
+      windowsX64LaunchAudit: windowsX64LaunchAudit.data
+    })
   }
   const failures = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -800,6 +830,11 @@ function packagingDomain(packageJson) {
     checks,
     failures,
     artifacts,
+    platformArtifacts: {
+      macosX64: macosX64Artifacts,
+      macosArm64: releasePlatformArtifactEvidence(repoRoot, version, 'macos-arm64'),
+      windowsX64: releasePlatformArtifactEvidence(repoRoot, version, 'windows-x64')
+    },
     audit: {
       path: audit.relativePath,
       exists: audit.exists,
@@ -821,74 +856,60 @@ function packagingDomain(packageJson) {
       target: launchAudit.data?.target,
       failure: launchAudit.data?.failure
     },
-    macosReleaseAudit: {
-      required: trustedMacRequired,
-      path: macosAudit.relativePath,
-      exists: macosAudit.exists,
-      status: evidenceStatus(macosAudit),
-      packageVersion: macosAudit.data?.packageVersion,
-      targetArch: macosAudit.data?.targetArch,
-      git: macosAudit.data?.git,
-      artifactSetSha256: macosAudit.data?.artifactSetSha256,
-      buildProvenance: macosAudit.data?.buildProvenance,
-      failures: Array.isArray(macosAudit.data?.failures) ? macosAudit.data.failures : undefined
+    macosReleaseAudit: summarizeDistributionAudit(macosX64Audit, trustedMacRequired),
+    macosArm64ReleaseAudit: summarizeDistributionAudit(macosArm64Audit, platformMatrixRequired),
+    windowsX64ReleaseAudit: summarizeDistributionAudit(windowsX64Audit, platformMatrixRequired),
+    platformLaunchAudits: {
+      macosX64: summarizeLaunchAudit(launchAudit),
+      macosArm64: summarizeLaunchAudit(macosArm64LaunchAudit),
+      windowsX64: summarizeLaunchAudit(windowsX64LaunchAudit)
     },
-    commands: [
-      'npm run typecheck',
-      'npm run build',
-      'npm run test:deep',
-      'npm run secret:scan:history',
-      ...(trustedMacRequired
-        ? [
-            'npm run release:mac:preflight:x64',
-            'npm run dist:mac:release:x64',
-            'npm run test:macos-release-audit:required -- --arch x64'
-          ]
-        : ['npm run dist:mac:x64']),
-      'npm run test:release-packaging-audit:required',
-      'npm run test:packaged-app:mac'
-    ],
-    nextActions: [
-      'Bump package.json and package-lock.json only when all required evidence gates are proved.',
-      'Run macOS packaging and inspect dist assets before uploading.',
-      ...(trustedMacRequired
-        ? ['For v0.1.7 and later, unsigned or unnotarized preview assets never satisfy the distribution gate.']
-        : []),
-      'Run the packaging audit against the intended release version before creating GitHub Release assets.',
-      'Launch the packaged macOS app from a fresh user-data directory and require a real renderer target.',
-      'Publish only the intended installer/update assets; never upload test-results, out, node_modules, .env files, certs, private keys, or local evidence packs.'
-    ]
+    legacyMacosReleaseAudit: {
+      required: trustedMacRequired,
+      path: reports.macosReleaseAudit.relativePath,
+      exists: reports.macosReleaseAudit.exists,
+      status: evidenceStatus(reports.macosReleaseAudit)
+    },
+    commands: releasePackagingCommands(trustedMacRequired),
+    nextActions: releasePackagingNextActions(trustedMacRequired)
   }
 }
 
-function releaseArtifactEvidence(version) {
-  const files = [
-    `CaoGen-${version}.dmg`,
-    `CaoGen-${version}.dmg.blockmap`,
-    `CaoGen-${version}-mac.zip`,
-    `CaoGen-${version}-mac.zip.blockmap`,
-    'latest-mac.yml'
-  ].sort()
-  const missing = files.filter((file) => !existsSync(path.join(repoRoot, 'dist', file)))
-  if (missing.length > 0) return { complete: false, missing, files: {}, artifactSetSha256: null }
-  const digests = Object.fromEntries(files.map((file) => {
-    const absolutePath = path.join(repoRoot, 'dist', file)
-    return [file, {
-      size: statSync(absolutePath).size,
-      sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
-    }]
-  }))
+function summarizeDistributionAudit(audit, required) {
   return {
-    complete: true,
-    missing: [],
-    files: digests,
-    artifactSetSha256: createHash('sha256').update(JSON.stringify(digests)).digest('hex')
+    required,
+    path: audit.relativePath,
+    exists: audit.exists,
+    status: evidenceStatus(audit),
+    packageVersion: audit.data?.packageVersion,
+    platform: audit.data?.platform,
+    targetArch: audit.data?.targetArch,
+    git: audit.data?.git,
+    artifactSetSha256: audit.data?.artifactSetSha256,
+    buildProvenance: audit.data?.buildProvenance,
+    signing: audit.data?.signing,
+    failures: Array.isArray(audit.data?.failures) ? audit.data.failures : undefined
+  }
+}
+
+function summarizeLaunchAudit(audit) {
+  return {
+    path: audit.relativePath,
+    exists: audit.exists,
+    status: evidenceStatus(audit),
+    packageVersion: audit.data?.packageVersion,
+    platform: audit.data?.platform,
+    targetArch: audit.data?.targetArch,
+    git: audit.data?.git,
+    artifactSetSha256: audit.data?.artifactSetSha256,
+    buildProvenance: audit.data?.buildProvenance,
+    failure: audit.data?.failure
   }
 }
 
 function releaseNotesDomain() {
   const audit = reports.releaseNotesAudit
-  const currentArtifactSetSha256 = releaseArtifactEvidence(releaseTargetVersion).artifactSetSha256
+  const currentArtifactSetSha256 = releaseArtifactEvidence(repoRoot, releaseTargetVersion).artifactSetSha256
   const expectedVersionMatches = audit.data?.expectedVersion === releaseTargetVersion
   const commitMatches = audit.data?.git?.commit === gitState.commit
   const cleanCommitEvidence = audit.data?.git?.worktreeClean === true && gitState.worktreeClean
