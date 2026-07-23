@@ -7,7 +7,7 @@
 
 The package and lockfile version is `0.1.7`. CaoGen remains a multi-vendor AI work desktop.
 The candidate branch has a clean Deep
-report with `156 total / 153 required pass / 3 optional skip / 0 blocked / 0 fail`,
+report with `157 total / 154 required pass / 3 optional skip / 0 blocked / 0 fail`,
 but that report must be rerun after the final merge commit is selected. This is a
 0.1.x wedge release, not CaoGen 1.0 stable and not proof that all Agent Work OS
 requirements are complete.
@@ -19,6 +19,12 @@ credentials configured. A local x64 Developer ID-signed baseline exists, but it 
 explicitly built without notarization and without build-commit provenance, so it is
 not a release candidate. No 0.1.7 artifact is notarized or uploaded, and a native
 arm64 release requires Apple Silicon hardware.
+
+The release gate now requires a complete macOS x64, macOS arm64, and Windows x64
+matrix. Each platform must provide an independent distribution audit, clean-commit
+build provenance, native installation, and real renderer launch. Windows additionally
+requires PE x64, NSIS, and timestamped Authenticode evidence for both the unpacked app
+and installer. These gates are implemented; their final platform evidence is not.
 
 ## Candidate Highlights
 
@@ -61,9 +67,10 @@ reports, local evidence, and intermediate build directories are never release as
 - `release_identity`: the gate hardening changes are not yet bound to a clean final
   candidate commit.
 - `deep_test`: the full required Deep gate must be rerun on that exact clean commit.
-- `packaging_release`: no complete provenance-bound, signed, notarized 0.1.7 asset set
-  exists. The current process lacks notarization configuration, and native arm64
-  evidence requires Apple Silicon.
+- `packaging_release`: no complete provenance-bound 12-asset matrix exists. The current
+  process lacks notarization configuration, native arm64 evidence requires Apple
+  Silicon, and signed Windows x64 distribution/install evidence requires a Windows
+  signing lane.
 - `release_notes`: this is a draft. Exact asset names, SHA256 values, platform support,
   signing state, final Doctor binding, and post-upload audit are still missing.
 - Do not publish while Release Doctor is `not_ready`.
@@ -91,10 +98,13 @@ verified signing and first-open behavior of the uploaded artifact.
 - `npm run release:mac:preflight:x64`
 - `npm run dist:mac:release:x64`
 - `npm run test:macos-release-audit:required -- --arch x64`
+- `npm run test:packaged-app:mac:x64`
 - native arm64 build and audit on Apple Silicon before uploading an arm64 asset
-- signed Windows x64 build and native install/launch audit before uploading it
+- `npm run test:packaged-app:mac:arm64` on native Apple Silicon
+- `npm run dist:win:release:x64` with a valid Authenticode identity on native Windows x64
+- `npm run test:windows-release-audit:required -- --arch x64`
+- `npm run test:packaged-app:win:x64`
 - `npm run test:release-packaging-audit:required`
-- `npm run test:packaged-app:mac`
 - `npm run test:product-positioning:required`
 - `npm run workos:release-doctor -- --required --refresh --version 0.1.7`
 - `npm run test:release-notes-audit:final -- --version 0.1.7`

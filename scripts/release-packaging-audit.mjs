@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import releaseProvenance from './lib/release-provenance.cjs'
-import { requiresTrustedMacDistribution } from './lib/release-packaging-policy.mjs'
+import { requiresReleasePlatformMatrix, requiresTrustedMacDistribution } from './lib/release-packaging-policy.mjs'
 
 const { readPackagedReleaseProvenance, releaseProvenanceChecks } = releaseProvenance
 
@@ -55,6 +55,7 @@ const report = {
   uploadableAssetDigests,
   artifactSetSha256,
   unexpectedUploadableAssets: uploadableAssets.filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
+  expectedReleaseAssets: expectedReleaseAssets(expectedVersion),
   expectedMacAssets: expectedMacAssets(expectedVersion),
   packagedRuntime,
   releaseProvenanceRequired,
@@ -122,7 +123,7 @@ function validateDist() {
   }
   for (const asset of expectedReleaseAssets(expectedVersion)) {
     const file = distFiles.find((item) => item.relativePath === asset)
-    if (!file) failures.push(`missing expected macOS release asset: ${asset}`)
+    if (!file) failures.push(`missing expected release asset: ${asset}`)
     else if (file.size <= 0) failures.push(`release asset is empty: ${asset}`)
   }
   const expected = new Set(expectedReleaseAssets(expectedVersion))
@@ -273,7 +274,17 @@ function summarizeCodesignFailure(output) {
 }
 
 function expectedReleaseAssets(version) {
-  return expectedMacAssets(version)
+  if (!requiresReleasePlatformMatrix(version)) return expectedMacAssets(version)
+  return [
+    ...expectedMacAssets(version),
+    `CaoGen-${version}-arm64.dmg`,
+    `CaoGen-${version}-arm64.dmg.blockmap`,
+    `CaoGen-${version}-arm64-mac.zip`,
+    `CaoGen-${version}-arm64-mac.zip.blockmap`,
+    `CaoGen Setup ${version}.exe`,
+    `CaoGen Setup ${version}.exe.blockmap`,
+    'latest.yml'
+  ]
 }
 
 function expectedMacAssets(version) {

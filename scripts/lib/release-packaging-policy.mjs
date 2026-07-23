@@ -1,7 +1,12 @@
 export const TRUSTED_MAC_DISTRIBUTION_MIN_VERSION = '0.1.7'
+export const RELEASE_PLATFORM_MATRIX_MIN_VERSION = '0.1.7'
 
 export function requiresTrustedMacDistribution(releaseVersion) {
   return compareVersions(releaseVersion, TRUSTED_MAC_DISTRIBUTION_MIN_VERSION) >= 0
+}
+
+export function requiresReleasePlatformMatrix(releaseVersion) {
+  return compareVersions(releaseVersion, RELEASE_PLATFORM_MATRIX_MIN_VERSION) >= 0
 }
 
 export function trustedMacDistributionChecks({
@@ -16,6 +21,7 @@ export function trustedMacDistributionChecks({
     macosDistributionAuditPassed: audit?.status === 'passed',
     macosDistributionAuditWasRequired: audit?.required === true,
     macosDistributionModeMatches: audit?.mode === 'post_build',
+    macosDistributionPlatformMatches: audit?.platform === 'darwin',
     macosDistributionVersionMatches: audit?.packageVersion === releaseVersion,
     macosDistributionTargetArchMatches: audit?.targetArch === targetArch,
     macosDistributionCommitMatches: audit?.git?.commit === gitState.commit,
@@ -25,6 +31,56 @@ export function trustedMacDistributionChecks({
     macosDistributionBuildCommitMatches: provenance?.gitCommit === gitState.commit,
     macosDistributionBuildWasClean: provenance?.worktreeClean === true,
     macosDistributionBuildVersionMatches: provenance?.packageVersion === releaseVersion
+  }
+}
+
+export function trustedWindowsDistributionChecks({
+  audit,
+  releaseVersion,
+  gitState,
+  targetArch = 'x64'
+}) {
+  const provenance = audit?.buildProvenance?.app
+  return {
+    distributionAuditPassed: audit?.status === 'passed',
+    distributionAuditWasRequired: audit?.required === true,
+    distributionModeMatches: audit?.mode === 'post_build',
+    distributionPlatformMatches: audit?.platform === 'win32',
+    distributionVersionMatches: audit?.packageVersion === releaseVersion,
+    distributionTargetArchMatches: audit?.targetArch === targetArch,
+    distributionCommitMatches: audit?.git?.commit === gitState.commit,
+    distributionCleanEvidence: audit?.git?.worktreeClean === true && gitState.worktreeClean,
+    distributionArtifactSetBound: /^[0-9a-f]{64}$/i.test(audit?.artifactSetSha256 || ''),
+    distributionBuildCommitMatches: provenance?.gitCommit === gitState.commit,
+    distributionBuildWasClean: provenance?.worktreeClean === true,
+    distributionBuildVersionMatches: provenance?.packageVersion === releaseVersion,
+    unpackedAppAuthenticodeValid: audit?.signing?.app?.status === 'Valid',
+    installerAuthenticodeValid: audit?.signing?.installer?.status === 'Valid'
+  }
+}
+
+export function trustedPackagedLaunchChecks({
+  audit,
+  releaseVersion,
+  gitState,
+  platform,
+  targetArch,
+  artifactSetSha256
+}) {
+  const provenance = audit?.buildProvenance
+  return {
+    launchPassed: audit?.status === 'passed',
+    installPassed: audit?.installation?.status === 'passed',
+    launchPlatformMatches: audit?.platform === platform,
+    launchTargetArchMatches: audit?.targetArch === targetArch,
+    launchVersionMatches: audit?.packageVersion === releaseVersion,
+    launchCommitMatches: audit?.git?.commit === gitState.commit,
+    launchCleanEvidence: audit?.git?.worktreeClean === true && gitState.worktreeClean,
+    launchArtifactSetMatches:
+      /^[0-9a-f]{64}$/i.test(artifactSetSha256 || '') && audit?.artifactSetSha256 === artifactSetSha256,
+    launchBuildCommitMatches: provenance?.gitCommit === gitState.commit,
+    launchBuildWasClean: provenance?.worktreeClean === true,
+    launchBuildVersionMatches: provenance?.packageVersion === releaseVersion
   }
 }
 

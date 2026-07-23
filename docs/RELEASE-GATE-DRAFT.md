@@ -13,10 +13,12 @@ claims supported by the exact 0.1.7 candidate evidence.
 | Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Package and lockfile | `0.1.7` |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for a truthful 0.1.x wedge release |
-| Clean Deep | `153/153` required pass; 3 optional skip; latest report bound to clean commit `7035a6c5`; final candidate rerun pending |
-| Release identity | Ready for version 0.1.7 on a clean commit |
+| Clean Deep | `154/154` required pass; 3 optional skip; latest report bound to clean commit `dd5fefd6`; matrix increment rerun pending |
+| Release identity | Package version is 0.1.7; exact clean matrix commit and rerun still pending |
 | macOS preflight | Developer ID identity present; notarization configuration missing in the current process |
 | Native arm64 | Open; current host is Intel and cannot provide Apple Silicon runtime evidence |
+| Windows release config | Pass; NSIS and mandatory code signing are configured, but native signed artifacts are absent |
+| Platform matrix | macOS x64, macOS arm64, and Windows x64 each require distribution plus native install/renderer evidence; incomplete |
 | Release decision | `not_ready`; `packaging_release` and `release_notes` remain open |
 
 ## Required Before 0.1.7
@@ -31,7 +33,7 @@ claims supported by the exact 0.1.7 candidate evidence.
 | macOS x64 release | `npm run dist:mac:release:x64` and required macOS audit | Open; local signed baseline lacks notarization, staple, Gatekeeper acceptance, and build provenance |
 | macOS arm64 release | Native Apple Silicon build, install, launch, and required audit | External hardware required |
 | Windows x64 release | Signed native build plus install and launch evidence | External Windows/signing lane required |
-| Packaging/runtime | Required packaging audit and packaged-app launch against exact assets | Open for 0.1.7 |
+| Packaging/runtime | Required packaging audit over all 12 assets plus per-platform installed-app launch | Open for 0.1.7 |
 | Final notes | Exact uploaded names, SHA256 values, platforms, signing state, and residual risks | Draft only |
 | Final Doctor | Required refreshed Doctor for version 0.1.7 | `not_ready` until packaging and notes close |
 | Public asset audit | Post-upload audit for tag v0.1.7 and exact local asset set | No v0.1.7 release exists |
@@ -46,8 +48,20 @@ claims supported by the exact 0.1.7 candidate evidence.
   that provenance to the current commit and exact uploadable artifact-set digest.
 - x64 and arm64 are separate assets. Embedded arm64 binaries do not prove an arm64 app
   ran on Apple Silicon.
+- macOS signing retries only transient Apple timestamp-service failures, at most five
+  attempts. Certificate, entitlement, Keychain, and other signing errors fail immediately.
 - Do not print, persist, stage, or upload certificate contents, passwords, API private
   keys, app-specific passwords, or notarization profile values.
+
+## Cross-platform Distribution Contract
+
+- The complete upload set is 12 assets: four macOS x64 assets, four macOS arm64
+  assets, three Windows x64 assets, and shared `latest-mac.yml`.
+- Windows x64 requires PE x64 validation, NSIS output, valid timestamped Authenticode
+  signatures on both the unpacked app and installer, and a native silent-install,
+  renderer-start, uninstall, and cleanup record.
+- Every platform report must bind the exact package version, clean Git commit, build
+  provenance, target architecture, and that platform's artifact-set digest.
 
 ## Release Notes Contract
 
@@ -63,6 +77,8 @@ roadmap work, or unavailable platform evidence into released capability.
 - A macOS asset is unsigned, lacks Hardened Runtime, is not notarized/stapled, or fails
   Gatekeeper and packaged launch audit.
 - A platform asset is uploaded without native install and runtime evidence.
+- Any macOS x64, macOS arm64, or Windows x64 distribution/install report is missing,
+  stale, from the wrong architecture, or bound to another commit or artifact digest.
 - A real secret, certificate, private key, signing material, `.env`, `test-results`,
   `out`, `dist`, `node_modules`, or local evidence pack is staged or uploaded.
 - Release copy presents 0.1.7 as 1.0 stable or claims an unverified external condition.

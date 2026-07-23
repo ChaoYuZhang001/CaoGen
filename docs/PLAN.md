@@ -83,6 +83,8 @@ README、官网、STATUS 三处必须一致:
 - [ ] M1-T3 macOS(x64 + arm64)签名 + 公证,Windows x64 签名;发布管线走通
   - [x] Intel x64 本地签名基线:Developer ID、Hardened Runtime、45/45 Mach-O、DMG/ZIP 内签名和真实 renderer 启动已验证;该基线未公证,不得发布
   - [x] 0.1.7+ 发布门禁硬化:未通过 required macOS audit、公证/staple 或包内 clean-commit provenance 绑定时,Release Doctor 必须保持 `packaging_release` open
+  - [x] 0.1.7+ 三平台发布矩阵门禁:macOS x64、macOS arm64、Windows x64 必须各自通过签名/公证审计、clean-commit provenance、原生安装和 renderer 启动;最终 packaging audit 必须同时绑定 12 项发布资产
+  - [x] macOS 签名只对 Apple 时间戳服务瞬时错误执行最多 5 次有界重试;证书、entitlement、Keychain 与其他签名错误立即失败
   - [ ] 在最终 clean commit 上完成 x64 notarize、staple、Gatekeeper 与 required release audit
   - [ ] 在 Apple Silicon 真机完成 arm64 原生签名、公证、安装和启动证据
   - [ ] 在 Windows x64 签名环境完成签名、安装和启动证据
