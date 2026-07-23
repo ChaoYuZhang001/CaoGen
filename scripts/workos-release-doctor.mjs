@@ -4,6 +4,10 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { renderReleaseDoctorMarkdown } from './lib/release-doctor-render.mjs'
+import {
+  requiresTrustedMacDistribution,
+  trustedMacDistributionChecks
+} from './lib/release-packaging-policy.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -120,7 +124,7 @@ const report = {
     'Do not label a 1.x build stable while any PRD P0 remains short of the exact current-verified state.',
     'Do not publish a 1.x stable release without release-bound real default OpenAI-compatible provider evidence.',
     'Do not label a 1.x build stable without a release-bound CycloneDX/SPDX inventory and vulnerability disposition.',
-    'Do not publish a 1.x macOS stable build without Developer ID signing, Hardened Runtime, notarization, stapling, and the required macOS release audit.',
+    'Do not publish v0.1.7 or any later macOS build without Developer ID signing, Hardened Runtime, notarization, stapling, and the required macOS release audit.',
     'Do not publish until the required taskDag durable finalization crash e2e is present and passing in the release-bound Deep report.',
     'Do not publish while release-scope P2 evidence is missing: P2-002, P2-003, and P2-005 must be proved.',
     'Do not claim P2-001 Windows GUI evidence or P2-004 China external evidence as release-proved until their separate required gates pass.',
@@ -760,6 +764,7 @@ function packagingDomain(packageJson) {
   const distPath = path.join(repoRoot, 'dist')
   const hasDist = existsSync(distPath)
   const artifacts = releaseArtifactEvidence(version)
+  const trustedMacRequired = requiresTrustedMacDistribution(releaseTargetVersion)
   const checks = {
     auditPassed: audit.data?.status === 'passed',
     expectedVersionMatches: audit.data?.expectedVersion === releaseTargetVersion,
@@ -773,11 +778,14 @@ function packagingDomain(packageJson) {
     packagedLaunchCleanEvidence: launchAudit.data?.git?.worktreeClean === true && gitState.worktreeClean,
     artifactsComplete: artifacts.complete,
     artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256,
-    ...(requiresTrustedMacDistribution()
-      ? {
-          macosDistributionAuditPassed: macosAudit.data?.status === 'passed',
-          macosDistributionVersionMatches: macosAudit.data?.packageVersion === releaseTargetVersion
-        }
+    ...(trustedMacRequired
+      ? trustedMacDistributionChecks({
+          audit: macosAudit.data,
+          releaseVersion: releaseTargetVersion,
+          gitState,
+          artifactSetSha256: artifacts.artifactSetSha256,
+          targetArch: 'x64'
+        })
       : {})
   }
   const failures = Object.entries(checks)
@@ -814,12 +822,15 @@ function packagingDomain(packageJson) {
       failure: launchAudit.data?.failure
     },
     macosReleaseAudit: {
-      required: requiresTrustedMacDistribution(),
+      required: trustedMacRequired,
       path: macosAudit.relativePath,
       exists: macosAudit.exists,
       status: evidenceStatus(macosAudit),
       packageVersion: macosAudit.data?.packageVersion,
       targetArch: macosAudit.data?.targetArch,
+      git: macosAudit.data?.git,
+      artifactSetSha256: macosAudit.data?.artifactSetSha256,
+      buildProvenance: macosAudit.data?.buildProvenance,
       failures: Array.isArray(macosAudit.data?.failures) ? macosAudit.data.failures : undefined
     },
     commands: [
@@ -827,7 +838,7 @@ function packagingDomain(packageJson) {
       'npm run build',
       'npm run test:deep',
       'npm run secret:scan:history',
-      ...(requiresTrustedMacDistribution()
+      ...(trustedMacRequired
         ? [
             'npm run release:mac:preflight:x64',
             'npm run dist:mac:release:x64',
@@ -840,8 +851,8 @@ function packagingDomain(packageJson) {
     nextActions: [
       'Bump package.json and package-lock.json only when all required evidence gates are proved.',
       'Run macOS packaging and inspect dist assets before uploading.',
-      ...(requiresTrustedMacDistribution()
-        ? ['For a 1.x stable release, unsigned preview assets never satisfy the distribution gate.']
+      ...(trustedMacRequired
+        ? ['For v0.1.7 and later, unsigned or unnotarized preview assets never satisfy the distribution gate.']
         : []),
       'Run the packaging audit against the intended release version before creating GitHub Release assets.',
       'Launch the packaged macOS app from a fresh user-data directory and require a real renderer target.',
@@ -1033,10 +1044,6 @@ function secretDomain() {
 function requiresStableProductAcceptance() {
   const major = Number(String(releaseTargetVersion).split('.')[0])
   return Number.isFinite(major) && major >= 1
-}
-
-function requiresTrustedMacDistribution() {
-  return process.platform === 'darwin' && requiresStableProductAcceptance()
 }
 
 function buildParallelAgents() {

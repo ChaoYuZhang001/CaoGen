@@ -33,6 +33,7 @@ const commandDefinitions = [
   { name: 'product 1.0 soak audit smoke', command: 'node', args: ['scripts/product-1.0-soak-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release audit smoke', command: 'node', args: ['scripts/real-provider-release-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release runner smoke', command: 'node', args: ['scripts/real-provider-release-runner-smoke.mjs'], category: 'smoke' },
+  { name: 'release packaging policy smoke', command: 'node', args: ['scripts/release-packaging-policy-smoke.mjs'], category: 'smoke' },
   { name: 'CaoGen Drive smoke', command: 'node', args: ['scripts/drive-smoke.mjs'], category: 'smoke' },
   { name: 'Claude optional smoke', command: 'node', args: ['scripts/claude-optional-smoke.mjs'], category: 'smoke' },
   { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },

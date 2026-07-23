@@ -1,11 +1,17 @@
 const packageJson = require('./package.json')
+const { createReleaseProvenance } = require('./scripts/lib/release-provenance.cjs')
 
 const baseBuild = packageJson.build || {}
 const baseMac = { ...(baseBuild.mac || {}) }
+const releaseProvenance = createReleaseProvenance(__dirname, packageJson.version)
 delete baseMac.identity
 
 module.exports = {
   ...baseBuild,
+  extraMetadata: {
+    ...(baseBuild.extraMetadata || {}),
+    caogenReleaseProvenance: releaseProvenance
+  },
   mac: {
     ...baseMac,
     target: ['dmg', 'zip'],

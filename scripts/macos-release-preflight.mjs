@@ -17,6 +17,7 @@ const packageJson = readJson('package.json')
 const packageLock = readJson('package-lock.json')
 const releaseConfig = require(path.join(repoRoot, 'electron-builder.release.cjs'))
 const mac = releaseConfig.mac || {}
+const releaseProvenance = releaseConfig.extraMetadata?.caogenReleaseProvenance
 
 check('package version is stable semver', /^\d+\.\d+\.\d+$/.test(packageJson.version || ''))
 check('package and lock versions match', packageLock.version === packageJson.version && packageLock.packages?.['']?.version === packageJson.version)
@@ -24,6 +25,10 @@ check('release signing cannot be disabled', mac.identity !== null)
 check('release requires code signing', mac.forceCodeSigning === true)
 check('release enables hardened runtime', mac.hardenedRuntime === true)
 check('release enables notarization', mac.notarize === true)
+check('release provenance schema is supported', releaseProvenance?.schemaVersion === 1)
+check('release provenance commit is resolved', /^[0-9a-f]{40}$/i.test(releaseProvenance?.gitCommit || ''))
+check('release provenance version matches package.json', releaseProvenance?.packageVersion === packageJson.version)
+check('release provenance clean state is explicit', typeof releaseProvenance?.worktreeClean === 'boolean')
 check('release minimum macOS is 14.0 or newer', compareVersions(mac.minimumSystemVersion, '14.0') >= 0)
 check('release includes DMG and ZIP targets', hasTarget(mac.target, 'dmg') && hasTarget(mac.target, 'zip'))
 check(
@@ -56,6 +61,8 @@ if (!configOnly) {
     check('arm64 release runs on Apple Silicon', process.arch === 'arm64')
   }
   check('release worktree is clean', gitOutput(['status', '--porcelain=v1', '--untracked-files=all']) === '')
+  check('release provenance commit matches current HEAD', releaseProvenance?.gitCommit === gitOutput(['rev-parse', 'HEAD']))
+  check('release provenance records a clean worktree', releaseProvenance?.worktreeClean === true)
 
   const identities = commandOutput('security', ['find-identity', '-v', '-p', 'codesigning'])
     .split(/\r?\n/)
@@ -97,6 +104,7 @@ const report = {
   reportDir,
   packageVersion: packageJson.version,
   targetArch,
+  releaseProvenance,
   signingIdentityCount,
   notarizationMethod,
   redactionPolicy: 'Environment variable values and credential contents are never emitted.',

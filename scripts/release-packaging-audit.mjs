@@ -4,6 +4,10 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import releaseProvenance from './lib/release-provenance.cjs'
+import { requiresTrustedMacDistribution } from './lib/release-packaging-policy.mjs'
+
+const { readPackagedReleaseProvenance, releaseProvenanceChecks } = releaseProvenance
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required') || process.env.CAOGEN_RELEASE_PACKAGING_AUDIT_REQUIRED === '1'
@@ -28,10 +32,12 @@ const artifactSetSha256 = digestJson(uploadableAssetDigests)
 const git = readGitState()
 const packagedRuntime = inspectPackagedRuntime()
 const macSigning = inspectMacSigning()
+const releaseProvenanceRequired = requiresTrustedMacDistribution(expectedVersion)
 
 validatePackage()
 validateMacSigning()
 validateDist()
+validateReleaseBuildProvenance()
 
 const report = {
   status: failures.length === 0 ? 'passed' : required ? 'failed' : existsSync(distDir) ? 'failed' : 'skipped',
@@ -51,6 +57,7 @@ const report = {
   unexpectedUploadableAssets: uploadableAssets.filter((file) => !isExpectedUploadableReleaseAsset(file, expectedVersion)),
   expectedMacAssets: expectedMacAssets(expectedVersion),
   packagedRuntime,
+  releaseProvenanceRequired,
   git,
   signing: macSigning.status,
   signingEvidence: macSigning,
@@ -140,8 +147,20 @@ function validateDist() {
   }
 }
 
+function validateReleaseBuildProvenance() {
+  if (!releaseProvenanceRequired) return
+  if (!packagedRuntime.releaseProvenance) {
+    failures.push('release build provenance is unavailable')
+    return
+  }
+  for (const [name, passed] of Object.entries(packagedRuntime.releaseProvenance.checks)) {
+    if (!passed) failures.push(`release build provenance check failed: ${name}`)
+  }
+}
+
 function inspectPackagedRuntime() {
-  const asarPath = path.join(distDir, 'mac', 'CaoGen.app', 'Contents', 'Resources', 'app.asar')
+  const appPath = path.join(distDir, 'mac', 'CaoGen.app')
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
   const requiredRuntimeFiles = [
     '/node_modules/tree-sitter/index.js',
     '/node_modules/node-gyp-build/index.js',
@@ -152,16 +171,27 @@ function inspectPackagedRuntime() {
       asarPath: path.relative(repoRoot, asarPath),
       asarPresent: false,
       requiredRuntimeFiles,
-      missingRuntimeFiles: requiredRuntimeFiles
+      missingRuntimeFiles: requiredRuntimeFiles,
+      releaseProvenance: null
     }
   }
   try {
     const entries = new Set(listPackage(asarPath))
+    const inspectedProvenance = readPackagedReleaseProvenance(appPath)
     return {
       asarPath: path.relative(repoRoot, asarPath),
       asarPresent: true,
       requiredRuntimeFiles,
-      missingRuntimeFiles: requiredRuntimeFiles.filter((file) => !entries.has(file))
+      missingRuntimeFiles: requiredRuntimeFiles.filter((file) => !entries.has(file)),
+      releaseProvenance: {
+        present: inspectedProvenance.present,
+        value: inspectedProvenance.value,
+        error: inspectedProvenance.error,
+        checks: releaseProvenanceChecks(inspectedProvenance.value, {
+          gitCommit: git.commit,
+          packageVersion: expectedVersion
+        })
+      }
     }
   } catch (error) {
     return {
@@ -169,6 +199,7 @@ function inspectPackagedRuntime() {
       asarPresent: true,
       requiredRuntimeFiles,
       missingRuntimeFiles: requiredRuntimeFiles,
+      releaseProvenance: null,
       error: error instanceof Error ? error.message : String(error)
     }
   }

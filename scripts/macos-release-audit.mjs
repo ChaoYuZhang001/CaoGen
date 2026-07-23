@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
+const { readPackagedReleaseProvenance, releaseProvenanceChecks } = require('./lib/release-provenance.cjs')
 const required = process.argv.includes('--required')
 const configOnly = process.argv.includes('--config-only')
 const targetArch = argValue('--arch') || 'x64'
@@ -39,6 +41,8 @@ const archDefaults = targetArch === 'arm64'
 const appPath = resolvePath(argValue('--app') || archDefaults.app)
 const dmgPath = resolvePath(argValue('--dmg') || archDefaults.dmg)
 const zipPath = resolvePath(argValue('--zip') || archDefaults.zip)
+const git = readGitState()
+const artifactSet = inspectArtifactSet()
 const configPath = path.join(repoRoot, 'electron-builder.release.cjs')
 const mainEntitlementKeys = [
   'com.apple.security.automation.apple-events',
@@ -73,6 +77,7 @@ let appEntitlements = null
 let machOAudit = null
 let claudeAudit = null
 const archiveAudits = {}
+const buildProvenance = { app: null, dmg: null, zip: null }
 
 if (!configOnly) inspectArtifacts()
 
@@ -86,6 +91,9 @@ const report = {
   packageVersion: version,
   targetArch,
   platform: process.platform,
+  git,
+  artifactSetSha256: artifactSet.artifactSetSha256,
+  artifactSet,
   config: configSummary,
   artifacts,
   appSigning,
@@ -93,6 +101,7 @@ const report = {
   machOAudit,
   claudeAudit,
   archiveAudits,
+  buildProvenance,
   summary: summarizeChecks(checks),
   redactionPolicy: 'Credential values and signing material are never read into the report. Command output is redacted before storage.',
   checks,
@@ -208,6 +217,7 @@ function inspectArtifacts() {
   check('app', 'release app exists', artifactPresence.app, reportPath(appPath))
   check('dmg', 'release DMG exists', artifactPresence.dmg, reportPath(dmgPath))
   check('zip', 'release ZIP exists', artifactPresence.zip, reportPath(zipPath))
+  check('artifact_set', 'all expected uploadable assets exist', artifactSet.complete, artifactSet.missing.join(', '))
 
   if (process.platform !== 'darwin') {
     warnings.push('Artifact signing, notarization, and archive checks require macOS.')
@@ -226,6 +236,7 @@ function inspectArtifacts() {
 }
 
 function inspectApp() {
+  buildProvenance.app = inspectBuildProvenance('app', appPath)
   commandCheck('app', 'codesign verifies the app deeply and strictly', 'codesign', [
     '--verify',
     '--deep',
@@ -465,6 +476,8 @@ function inspectArchivedApp(scope, archivedApp) {
   const startIndex = checks.length
   check(scope, 'archived app bundle exists', isDirectory(archivedApp))
   if (!isDirectory(archivedApp)) return summarizeChecks(checks.slice(startIndex))
+  const provenanceKey = scope === 'dmg_app' ? 'dmg' : 'zip'
+  buildProvenance[provenanceKey] = inspectBuildProvenance(scope, archivedApp)
   commandCheck(scope, 'archived app signature verifies deeply and strictly', 'codesign', [
     '--verify',
     '--deep',
@@ -487,6 +500,26 @@ function inspectArchivedApp(scope, archivedApp) {
   inspectArchivedArchitecture(scope, archivedApp)
   inspectArchivedClaude(scope, archivedApp)
   return summarizeChecks(checks.slice(startIndex))
+}
+
+function inspectBuildProvenance(scope, targetApp) {
+  const inspected = readPackagedReleaseProvenance(targetApp)
+  const provenanceChecks = releaseProvenanceChecks(inspected.value, {
+    gitCommit: git.commit,
+    packageVersion: version
+  })
+  check(scope, 'release build provenance is readable', !inspected.error, inspected.error || undefined)
+  check(scope, 'release build provenance is present', provenanceChecks.present)
+  check(scope, 'release build provenance schema is supported', provenanceChecks.schemaVersionMatches)
+  check(scope, 'release build provenance commit matches current HEAD', provenanceChecks.gitCommitMatches)
+  check(scope, 'release build provenance records a clean worktree', provenanceChecks.worktreeWasClean)
+  check(scope, 'release build provenance version matches package.json', provenanceChecks.packageVersionMatches)
+  return {
+    asarPath: reportPath(inspected.asarPath),
+    present: inspected.present,
+    ...(inspected.value || {}),
+    error: inspected.error
+  }
 }
 
 function inspectArchivedArchitecture(scope, archivedApp) {
@@ -656,6 +689,65 @@ function summarizeChecks(items) {
   const counts = { passed: 0, failed: 0 }
   for (const item of items) counts[item.status] += 1
   return { total: items.length, counts }
+}
+
+function inspectArtifactSet() {
+  const files = targetArch === 'arm64'
+    ? [
+        `CaoGen-${version}-arm64-mac.zip`,
+        `CaoGen-${version}-arm64-mac.zip.blockmap`,
+        `CaoGen-${version}-arm64.dmg`,
+        `CaoGen-${version}-arm64.dmg.blockmap`,
+        'latest-mac.yml'
+      ]
+    : [
+        `CaoGen-${version}-mac.zip`,
+        `CaoGen-${version}-mac.zip.blockmap`,
+        `CaoGen-${version}.dmg`,
+        `CaoGen-${version}.dmg.blockmap`,
+        'latest-mac.yml'
+      ]
+  const sortedFiles = files.sort()
+  const missing = sortedFiles.filter((file) => !isFile(path.join(repoRoot, 'dist', file)))
+  const digests = Object.fromEntries(sortedFiles
+    .filter((file) => !missing.includes(file))
+    .map((file) => {
+      const absolutePath = path.join(repoRoot, 'dist', file)
+      return [file, {
+        size: statSync(absolutePath).size,
+        sha256: createHash('sha256').update(readFileSync(absolutePath)).digest('hex')
+      }]
+    }))
+  return {
+    complete: missing.length === 0,
+    missing,
+    files: digests,
+    artifactSetSha256: missing.length === 0
+      ? createHash('sha256').update(JSON.stringify(digests)).digest('hex')
+      : null
+  }
+}
+
+function readGitState() {
+  const commit = gitOutput(['rev-parse', 'HEAD'])
+  const status = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+  return {
+    commit,
+    worktreeClean: status !== null && status.length === 0,
+    statusEntryCount: status ? status.split(/\r?\n/).filter(Boolean).length : 0
+  }
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  } catch {
+    return null
+  }
 }
 
 function versionAtLeast(value, minimum) {
