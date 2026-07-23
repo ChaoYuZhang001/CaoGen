@@ -117,7 +117,7 @@ async function main() {
     let read = await ms.readProjectMemory(proj, memRoot)
     assert((read.drafts || []).some((d) => d.id === draft.id), `未见草稿:${JSON.stringify(read).slice(0, 160)}`)
     // 确认制:草稿必须显式接受才成为正式记忆(避免记错毒化)
-    await ms.acceptMemoryDraft(proj, memRoot, draft.id)
+    await ms.acceptMemoryDraft(proj, memRoot, draft.id, M('main/learning/learning-security.js').createTrustedUserLearningDecision('itest-2:memory:accept'))
     read = await ms.readProjectMemory(proj, memRoot)
     assert(JSON.stringify(read.entries || []).includes('pnpm'), '确认后记忆未持久化')
   })

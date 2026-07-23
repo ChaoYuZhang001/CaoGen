@@ -2,7 +2,13 @@ import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { normalizeCaoGenDriveMode } from '../shared/types'
-import type { AppSettings, ModelRoutingRule, ModelRoutingTaskKind, SchedulerStrategy } from '../shared/types'
+import type {
+  AppSettings,
+  ModelRoutingRule,
+  ModelRoutingTaskKind,
+  OfficeQualityMode,
+  SchedulerStrategy
+} from '../shared/types'
 
 const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 420
@@ -79,7 +85,7 @@ const DEFAULTS: AppSettings = {
   hookPostEditCommand: '',
   hookTurnEndCommand: '',
   autoSkillLearningEnabled: false,
-  office: { showBadges: true, liveliness: 1, catEars: false },
+  office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
   layout: {
     sidebarCollapsed: false,
     sidebarWidth: 264,
@@ -113,6 +119,20 @@ function normalizeLayout(raw: unknown): AppSettings['layout'] {
     ),
     chatScale: clampNumber(layout.chatScale, DEFAULTS.layout.chatScale, CHAT_SCALE_MIN, CHAT_SCALE_MAX, 2),
     chatDensity: layout.chatDensity === 'compact' ? 'compact' : 'comfortable'
+  }
+}
+
+function normalizeOfficeQualityMode(raw: unknown, fallback: OfficeQualityMode): OfficeQualityMode {
+  return raw === 'auto' || raw === 'high' || raw === 'balanced' || raw === 'low' ? raw : fallback
+}
+
+function normalizeOffice(raw: unknown, fallback: AppSettings['office']): AppSettings['office'] {
+  const office = raw && typeof raw === 'object' ? (raw as Partial<AppSettings['office']>) : {}
+  return {
+    qualityMode: normalizeOfficeQualityMode(office.qualityMode, fallback.qualityMode),
+    showBadges: typeof office.showBadges === 'boolean' ? office.showBadges : fallback.showBadges,
+    liveliness: clampNumber(office.liveliness, fallback.liveliness, 0.2, 1.2, 1),
+    catEars: typeof office.catEars === 'boolean' ? office.catEars : fallback.catEars
   }
 }
 
@@ -196,7 +216,7 @@ export function getSettings(): AppSettings {
       sandboxMode: normalizeSandboxMode(sandboxMode),
       schedulerStrategy: normalizeSchedulerStrategy(raw.schedulerStrategy, DEFAULTS.schedulerStrategy),
       modelRoutingRules: normalizeModelRoutingRules(raw.modelRoutingRules),
-      office: { ...DEFAULTS.office, ...(raw.office ?? {}) },
+      office: normalizeOffice(raw.office, DEFAULTS.office),
       layout: normalizeLayout(raw.layout)
     }
   } catch {
@@ -218,15 +238,16 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
         : normalizeSchedulerStrategy(patch.schedulerStrategy, prev.schedulerStrategy),
     modelRoutingRules:
       patch.modelRoutingRules === undefined ? prev.modelRoutingRules : normalizeModelRoutingRules(patch.modelRoutingRules),
-    office: { ...prev.office, ...(patch.office ?? {}) },
+    office: normalizeOffice(patch.office, prev.office),
     layout: normalizeLayout({ ...prev.layout, ...(patch.layout ?? {}) })
   }
-  cache = next
   try {
     mkdirSync(dirname(settingsFile()), { recursive: true })
     writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
   } catch (err) {
     console.error('[agent-desk] 保存设置失败:', err)
+    throw err
   }
+  cache = next
   return next
 }

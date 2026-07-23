@@ -31,6 +31,8 @@ export interface DagTaskRunContext {
 export interface DagTaskRunResult {
   sessionId: string
   dispatchItem: SubagentDispatchItem
+  /** Invoked only after the scheduler has registered the new child session. */
+  start?: () => void | Promise<void>
 }
 
 export interface DagTaskCompletion {
@@ -40,14 +42,21 @@ export interface DagTaskCompletion {
 }
 
 export interface TaskDagSchedulerCallbacks {
-  runTask(task: TaskDagTask, context: DagTaskRunContext): DagTaskRunResult
+  runTask(task: TaskDagTask, context: DagTaskRunContext): DagTaskRunResult | Promise<DagTaskRunResult>
   onUpdate(execution: TaskDagExecutionView): void
-  onComplete?(execution: TaskDagExecutionView): void
+  onTaskProvisioned?(execution: TaskDagExecutionView, sessionId: string): void | Promise<void>
+  onComplete?(execution: TaskDagExecutionView): void | Promise<void>
   onTaskTimeout?(sessionId: string, taskId: string, error: string): void
 }
 
 interface TaskState extends TaskDagExecutionTask {
   runningSessionId?: string
+}
+
+interface DeferredTaskStart {
+  state: TaskState
+  sessionId: string
+  start?: () => void | Promise<void>
 }
 
 const DEFAULT_MAX_RETRIES = 2
@@ -63,6 +72,12 @@ function normalizeTaskTimeoutMs(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_TASK_TIMEOUT_MS
   if (value <= 0) return 0
   return Math.min(24 * 60 * 60 * 1000, Math.max(100, Math.floor(value)))
+}
+
+function isNonRetryableTaskError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const tagged = error as { nonRetryable?: unknown; requiresReconciliation?: unknown }
+  return tagged.nonRetryable === true || tagged.requiresReconciliation === true
 }
 
 function normalizeDependencies(task: TaskDagTask): string[] {
@@ -183,6 +198,8 @@ export class TaskDagScheduler {
   private readonly maxRetries: number
   private readonly taskTimeoutMs: number
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private scheduling: Promise<void> | null = null
+  private scheduleRequested = false
 
   constructor(
     private readonly parentSessionId: string,
@@ -231,25 +248,80 @@ export class TaskDagScheduler {
       },
       callbacks
     )
+    scheduler.deferCompletionNotification = true
     scheduler.restoreExecution(execution, runtime, activeSessionIds)
     return scheduler
   }
 
-  start(): SubagentDispatchItem[] {
+  async start(): Promise<SubagentDispatchItem[]> {
     const before = new Set(this.sessionToTask.keys())
-    this.scheduleReadyTasks()
+    await this.scheduleReadyTasks()
     return this.newDispatchItemsSince(before)
   }
 
-  resume(): SubagentDispatchItem[] {
+  async resume(): Promise<SubagentDispatchItem[]> {
     const before = new Set(this.sessionToTask.keys())
+    this.deferCompletionNotification = false
     this.emitUpdate()
-    this.scheduleReadyTasks()
+    await this.scheduleReadyTasks()
+    await this.notifyCompletionOnce()
     return this.newDispatchItemsSince(before)
   }
 
   hasSession(sessionId: string): boolean {
     return this.sessionToTask.has(sessionId)
+  }
+
+  async adoptProvisionedSession(taskId: string, meta: SubagentDispatchItem['meta']): Promise<SubagentDispatchItem | null> {
+    if (this.completed || this.recoveryBlockedError || this.sessionToTask.has(meta.id)) return null
+    const state = this.states.get(taskId)
+    if (!state || state.status !== 'waiting' || state.runningSessionId) return null
+    if (!this.dependenciesComplete(state.task)) return null
+    const context = {
+      attempt: state.attempts + 1,
+      dependencyResults: this.dependencyResults(state.task)
+    }
+    const item = { taskId, prompt: buildDagTaskPrompt(state.task, context), meta }
+    state.status = 'running'
+    state.attempts += 1
+    state.startedAt = Date.now()
+    state.runningSessionId = meta.id
+    state.sessionIds.push(meta.id)
+    this.sessionToTask.set(meta.id, taskId)
+    this.dispatchItems.set(meta.id, item)
+    this.emitUpdate()
+    await this.callbacks.onTaskProvisioned?.(this.view(), meta.id)
+    return item
+  }
+
+  async startProvisionedSession(
+    sessionId: string,
+    start: () => void | Promise<void>
+  ): Promise<boolean> {
+    const taskId = this.sessionToTask.get(sessionId)
+    const state = taskId ? this.states.get(taskId) : undefined
+    if (!state) return false
+    return this.startDeferredTask({ state, sessionId, start }, [])
+  }
+
+  async blockRecoveryTask(taskId: string, sessionId: string, error: string): Promise<boolean> {
+    if (this.completed && !this.recoveryBlockedError) return false
+    const state = this.states.get(taskId)
+    if (!state || terminal(state.status)) return false
+    const now = Date.now()
+    this.clearTaskTimer(sessionId)
+    state.status = 'failed'
+    state.attempts = Math.max(1, state.attempts)
+    state.startedAt ??= now
+    state.completedAt = now
+    state.error = error
+    state.runningSessionId = undefined
+    if (!state.sessionIds.includes(sessionId)) state.sessionIds.push(sessionId)
+    this.sessionToTask.set(sessionId, taskId)
+    this.setRecoveryBlock(error, now)
+    this.emitUpdate()
+    await this.notifyCompletionOnce()
+    return true
   }
 
   runtimeSnapshot(options?: {
@@ -276,12 +348,13 @@ export class TaskDagScheduler {
         taskTimeoutMs: this.taskTimeoutMs
       },
       runningTasks,
+      ...(this.recoveryBlockedError ? { recoveryBlockedError: this.recoveryBlockedError } : {}),
       ...(options?.mergeSessions ? { mergeSessions: options.mergeSessions } : {}),
       ...(options?.autoMerge ? { autoMerge: options.autoMerge } : {})
     }
   }
 
-  completeSession(sessionId: string, completion: DagTaskCompletion): void {
+  async completeSession(sessionId: string, completion: DagTaskCompletion): Promise<void> {
     const taskId = this.sessionToTask.get(sessionId)
     if (!taskId || this.completed) return
     const state = this.states.get(taskId)
@@ -289,13 +362,31 @@ export class TaskDagScheduler {
 
     this.clearTaskTimer(sessionId)
     state.runningSessionId = undefined
+    const recoveryBlocked = Boolean(this.recoveryBlockedError)
     if (completion.ok) {
       state.status = 'success'
       state.resultText = completion.resultText
       state.error = undefined
       state.completedAt = Date.now()
+      if (recoveryBlocked) {
+        this.finishRecoveryBlockIfSettled(state.completedAt)
+        this.emitUpdate()
+        await this.notifyCompletionOnce()
+        return
+      }
       this.emitUpdate()
-      this.scheduleReadyTasks()
+      await this.scheduleReadyTasks()
+      return
+    }
+
+    if (recoveryBlocked) {
+      state.status = 'failed'
+      state.error = completion.error || completion.resultText || '子任务失败'
+      state.resultText = completion.resultText
+      state.completedAt = Date.now()
+      this.finishRecoveryBlockIfSettled(state.completedAt)
+      this.emitUpdate()
+      await this.notifyCompletionOnce()
       return
     }
 
@@ -303,7 +394,7 @@ export class TaskDagScheduler {
       state.status = 'waiting'
       state.error = completion.error || completion.resultText || '子任务失败,准备重试'
       this.emitUpdate()
-      this.startTask(state)
+      await this.scheduleReadyTasks()
       return
     }
 
@@ -313,12 +404,12 @@ export class TaskDagScheduler {
     state.resultText = completion.resultText
     state.completedAt = Date.now()
     this.emitUpdate()
-    this.scheduleReadyTasks()
+    await this.scheduleReadyTasks()
   }
 
   view(): TaskDagExecutionView {
     const states = [...this.states.values()]
-    const status = executionStatus(states)
+    const status = this.recoveryBlockedError ? 'failed' : executionStatus(states)
     return {
       id: this.input.dag.id,
       parentSessionId: this.parentSessionId,
@@ -330,11 +421,16 @@ export class TaskDagScheduler {
       layers: this.layers.map((layer) => [...layer]),
       tasks: states.map(cloneTaskState),
       summary: this.completed ? buildSummary(states) : undefined,
-      error: status === 'failed' ? '存在失败任务,已升级主 Agent 汇总处理' : undefined
+      error: this.recoveryBlockedError ??
+        (status === 'failed' ? '存在失败任务,已升级主 Agent 汇总处理' : undefined)
     }
   }
 
   private readonly dispatchItems = new Map<string, SubagentDispatchItem>()
+  private recoveryBlockedError?: string
+  private completionNotified = false
+  private completionNotification: Promise<void> | null = null
+  private deferCompletionNotification = false
 
   private findDispatchItem(sessionId: string): SubagentDispatchItem | undefined {
     return this.dispatchItems.get(sessionId)
@@ -365,88 +461,239 @@ export class TaskDagScheduler {
     this.sessionToTask.clear()
     this.dispatchItems.clear()
     this.clearAllTimers()
+    const recoveryBlocks: string[] = []
     for (const taskView of execution.tasks) {
-      const state = this.states.get(taskView.task.id)
-      if (!state) continue
-      const runningSessionId = runningByTask.get(taskView.task.id)
-      const canReuseRunningSession =
-        taskView.status === 'running' &&
-        typeof runningSessionId === 'string' &&
-        taskView.sessionIds.includes(runningSessionId) &&
-        activeSessionIds.has(runningSessionId)
-
-      state.task = { ...taskView.task, dependencies: normalizeDependencies(taskView.task) }
-      state.status = taskView.status
-      state.attempts = Math.max(0, Math.floor(taskView.attempts))
-      state.sessionIds = [...taskView.sessionIds]
-      state.startedAt = taskView.startedAt
-      state.completedAt = taskView.completedAt
-      state.resultText = taskView.resultText
-      state.error = taskView.error
-      state.runningSessionId = undefined
-
-      for (const sessionId of state.sessionIds) {
-        this.sessionToTask.set(sessionId, state.task.id)
-      }
-
-      if (canReuseRunningSession) {
-        state.status = 'running'
-        state.runningSessionId = runningSessionId
-        this.armTaskTimer(runningSessionId, state.task.id)
-      } else if (taskView.status === 'running') {
-        state.status = 'waiting'
-        state.error =
-          taskView.error ||
-          'DAG child session was not active after snapshot recovery; scheduling a fresh attempt.'
-      }
+      this.restoreTaskState(taskView, runningByTask, activeSessionIds, recoveryBlocks)
     }
 
-    this.completed = execution.status === 'success' || execution.status === 'failed'
+    this.completed = execution.completedAt !== undefined &&
+      (execution.status === 'success' || execution.status === 'failed')
     this.restoredCompletedAt = execution.completedAt
+    const persistedBlock = runtime.recoveryBlockedError ??
+      (execution.status === 'failed' && execution.completedAt === undefined ? execution.error : undefined)
+    if (persistedBlock) recoveryBlocks.unshift(persistedBlock)
+    if (recoveryBlocks.length > 0) {
+      this.completed = false
+      this.restoredCompletedAt = undefined
+      this.setRecoveryBlock(`DAG recovery blocked: ${recoveryBlocks.join('; ')}`)
+    }
   }
 
-  private scheduleReadyTasks(): void {
-    if (this.completed) return
-    let launched = false
-    for (const state of this.states.values()) {
-      if (state.status !== 'waiting' || state.runningSessionId) continue
-      if (!this.dependenciesComplete(state.task)) continue
-      this.startTask(state)
-      launched = true
+  private restoreTaskState(
+    taskView: TaskDagExecutionView['tasks'][number],
+    runningByTask: ReadonlyMap<string, string>,
+    activeSessionIds: ReadonlySet<string>,
+    recoveryBlocks: string[]
+  ): void {
+    const state = this.states.get(taskView.task.id)
+    if (!state) return
+    const runningSessionId = runningByTask.get(taskView.task.id)
+    const canReuseRunningSession = taskView.status === 'running' &&
+      typeof runningSessionId === 'string' &&
+      taskView.sessionIds.includes(runningSessionId) &&
+      activeSessionIds.has(runningSessionId)
+    Object.assign(state, {
+      task: { ...taskView.task, dependencies: normalizeDependencies(taskView.task) },
+      status: taskView.status,
+      attempts: Math.max(0, Math.floor(taskView.attempts)),
+      sessionIds: [...taskView.sessionIds],
+      startedAt: taskView.startedAt,
+      completedAt: taskView.completedAt,
+      resultText: taskView.resultText,
+      error: taskView.error,
+      runningSessionId: undefined
+    })
+    for (const sessionId of state.sessionIds) this.sessionToTask.set(sessionId, state.task.id)
+    if (canReuseRunningSession) {
+      state.status = 'running'
+      state.runningSessionId = runningSessionId
+      this.armTaskTimer(runningSessionId, state.task.id)
+    } else if (taskView.status === 'running') {
+      state.status = 'failed'
+      state.completedAt = Date.now()
+      state.error = taskView.error ||
+        `DAG child ${runningSessionId ?? 'unknown'} was not active after snapshot recovery; ` +
+        'automatic replacement is blocked to preserve its snapshot and worktree evidence.'
+      recoveryBlocks.push(`${state.task.id}: ${state.error}`)
     }
-    if (!launched) this.maybeComplete()
   }
 
-  private startTask(state: TaskState): void {
-    const context: DagTaskRunContext = {
-      attempt: state.attempts + 1,
-      dependencyResults: this.dependencyResults(state.task)
+  private scheduleReadyTasks(): Promise<void> {
+    if (this.completed || this.recoveryBlockedError) return Promise.resolve()
+    this.scheduleRequested = true
+    if (!this.scheduling) {
+      this.scheduling = this.drainReadyTasks().finally(() => {
+        this.scheduling = null
+      })
     }
-    state.status = 'running'
-    state.attempts += 1
-    state.startedAt = Date.now()
-    try {
-      const run = this.callbacks.runTask(state.task, context)
-      state.runningSessionId = run.sessionId
-      state.sessionIds.push(run.sessionId)
-      this.sessionToTask.set(run.sessionId, state.task.id)
-      this.dispatchItems.set(run.sessionId, run.dispatchItem)
-      this.armTaskTimer(run.sessionId, state.task.id)
-      this.emitUpdate()
-    } catch (err) {
-      state.runningSessionId = undefined
-      state.status = 'waiting'
-      state.error = err instanceof Error ? err.message : String(err)
-      if (state.attempts <= this.maxRetries) {
+    return this.scheduling
+  }
+
+  private async drainReadyTasks(): Promise<void> {
+    while (this.scheduleRequested && !this.completed && !this.recoveryBlockedError) {
+      this.scheduleRequested = false
+      const ready = [...this.states.values()].filter(
+        (state) => state.status === 'waiting' &&
+          !state.runningSessionId &&
+          this.dependenciesComplete(state.task)
+      )
+      if (ready.length === 0) {
+        await this.maybeComplete()
+        continue
+      }
+      const deferredStarts: DeferredTaskStart[] = []
+      for (const state of ready) {
+        const deferred = await this.provisionTask(state)
+        if (deferred) deferredStarts.push(deferred)
+        if (this.completed || this.recoveryBlockedError) {
+          await this.abortDeferredStarts(deferredStarts)
+          return
+        }
+      }
+      for (const [index, deferred] of deferredStarts.entries()) {
+        const started = await this.startDeferredTask(deferred, deferredStarts.slice(index + 1))
+        if (!started) return
+      }
+    }
+  }
+
+  private async provisionTask(state: TaskState): Promise<DeferredTaskStart | undefined> {
+    while (!this.completed && !this.recoveryBlockedError && state.status === 'waiting' && !state.runningSessionId) {
+      const context: DagTaskRunContext = {
+        attempt: state.attempts + 1,
+        dependencyResults: this.dependencyResults(state.task)
+      }
+      state.status = 'running'
+      state.attempts += 1
+      state.startedAt = Date.now()
+      let provisionedSessionId: string | undefined
+      try {
+        const run = await this.callbacks.runTask(state.task, context)
+        provisionedSessionId = run.sessionId
+        state.runningSessionId = run.sessionId
+        state.sessionIds.push(run.sessionId)
+        this.sessionToTask.set(run.sessionId, state.task.id)
+        this.dispatchItems.set(run.sessionId, run.dispatchItem)
         this.emitUpdate()
-        this.startTask(state)
-      } else {
+        await this.callbacks.onTaskProvisioned?.(this.view(), run.sessionId)
+        return { state, sessionId: run.sessionId, start: run.start }
+      } catch (err) {
+        state.runningSessionId = undefined
+        state.status = 'waiting'
+        state.error = err instanceof Error ? err.message : String(err)
+        if (provisionedSessionId) this.clearTaskTimer(provisionedSessionId)
+        const recoveryBlocked = Boolean(provisionedSessionId) || isNonRetryableTaskError(err)
+        if (!recoveryBlocked && state.attempts <= this.maxRetries) {
+          this.emitUpdate()
+          continue
+        }
         state.status = 'failed'
         state.completedAt = Date.now()
+        if (recoveryBlocked) {
+          const blockError =
+            `DAG provisioning blocked at ${state.task.id}: ${state.error}. ` +
+            'Automatic downstream scheduling is disabled until the original lifecycle evidence is reconciled.'
+          this.setRecoveryBlock(blockError, state.completedAt)
+          this.emitUpdate()
+          await this.notifyCompletionOnce()
+          return undefined
+        }
         this.emitUpdate()
-        this.scheduleReadyTasks()
+        this.scheduleRequested = true
+        return undefined
       }
     }
+    return undefined
+  }
+
+  private async startDeferredTask(
+    deferred: DeferredTaskStart,
+    notStarted: DeferredTaskStart[]
+  ): Promise<boolean> {
+    if (deferred.state.status !== 'running' || deferred.state.runningSessionId !== deferred.sessionId) {
+      await this.abortDeferredStarts([deferred, ...notStarted])
+      return false
+    }
+    try {
+      await deferred.start?.()
+    } catch (error) {
+      await this.blockProvisionedStart(deferred, notStarted, error)
+      return false
+    }
+    if (deferred.state.status === 'running' && deferred.state.runningSessionId === deferred.sessionId) {
+      this.armTaskTimer(deferred.sessionId, deferred.state.task.id)
+    }
+    return true
+  }
+
+  private async abortDeferredStarts(deferredStarts: DeferredTaskStart[]): Promise<void> {
+    const now = Date.now()
+    for (const deferred of deferredStarts) {
+      const { state, sessionId } = deferred
+      if (state.runningSessionId !== sessionId) continue
+      this.clearTaskTimer(sessionId)
+      state.runningSessionId = undefined
+      state.status = 'failed'
+      state.completedAt = now
+      state.error =
+        `DAG ready-batch provisioning was blocked before prompt delivery; ` +
+        `session ${sessionId} is frozen for reconciliation.`
+    }
+    const blockError = `${this.recoveryBlockedError ?? 'DAG provisioning blocked.'} ` +
+      'No prompt was sent to earlier sessions in the ready batch.'
+    this.setRecoveryBlock(blockError, now)
+    this.emitUpdate()
+    await this.notifyCompletionOnce()
+  }
+
+  private async blockProvisionedStart(
+    deferred: DeferredTaskStart,
+    notStarted: DeferredTaskStart[],
+    error: unknown
+  ): Promise<void> {
+    const detail = error instanceof Error ? error.message : String(error)
+    const now = Date.now()
+    this.clearTaskTimer(deferred.sessionId)
+    deferred.state.runningSessionId = undefined
+    deferred.state.status = 'failed'
+    deferred.state.completedAt = now
+    deferred.state.error = `Prompt delivery failed for frozen session ${deferred.sessionId}: ${detail}`
+    for (const pending of notStarted) {
+      this.clearTaskTimer(pending.sessionId)
+      pending.state.runningSessionId = undefined
+      pending.state.status = 'failed'
+      pending.state.completedAt = now
+      pending.state.error =
+        `DAG prompt delivery was blocked before session ${pending.sessionId} started; ` +
+        'the frozen session is retained for reconciliation.'
+    }
+    this.setRecoveryBlock(
+      `DAG prompt delivery blocked at ${deferred.state.task.id}; automatic downstream scheduling is disabled.`,
+      now
+    )
+    this.emitUpdate()
+    await this.notifyCompletionOnce()
+  }
+
+  private setRecoveryBlock(error: string, now = Date.now()): void {
+    this.recoveryBlockedError = error
+    this.scheduleRequested = false
+    this.finishRecoveryBlockIfSettled(now)
+  }
+
+  private finishRecoveryBlockIfSettled(now = Date.now()): void {
+    if (!this.recoveryBlockedError) return
+    const hasRunningSessions = [...this.states.values()].some(
+      (state) => state.status === 'running' && Boolean(state.runningSessionId)
+    )
+    if (hasRunningSessions) {
+      this.completed = false
+      this.restoredCompletedAt = undefined
+      return
+    }
+    this.completed = true
+    this.restoredCompletedAt = now
+    this.clearAllTimers()
   }
 
   private dependenciesComplete(task: TaskDagTask): boolean {
@@ -468,13 +715,26 @@ export class TaskDagScheduler {
     })
   }
 
-  private maybeComplete(): void {
+  private async maybeComplete(): Promise<void> {
     if ([...this.states.values()].some((state) => !terminal(state.status))) return
     this.completed = true
     this.clearAllTimers()
     const finalView = this.view()
     this.callbacks.onUpdate(finalView)
-    this.callbacks.onComplete?.(finalView)
+    await this.notifyCompletionOnce(finalView)
+  }
+
+  private async notifyCompletionOnce(view = this.view()): Promise<void> {
+    if (!this.completed || this.deferCompletionNotification || this.completionNotified) return
+    if (this.completionNotification) return this.completionNotification
+    const notification = Promise.resolve(this.callbacks.onComplete?.(view))
+    this.completionNotification = notification
+    try {
+      await notification
+      this.completionNotified = true
+    } finally {
+      if (this.completionNotification === notification) this.completionNotification = null
+    }
   }
 
   private armTaskTimer(sessionId: string, taskId: string): void {
@@ -485,7 +745,9 @@ export class TaskDagScheduler {
       if (this.completed) return
       const error = `DAG 子任务 ${taskId} 超时(${this.taskTimeoutMs}ms), 已按失败重试或升级`
       this.callbacks.onTaskTimeout?.(sessionId, taskId, error)
-      this.completeSession(sessionId, { ok: false, error })
+      void this.completeSession(sessionId, { ok: false, error }).catch((err) => {
+        console.error('[caogen] DAG timeout scheduling failed:', err)
+      })
     }, this.taskTimeoutMs)
     if (typeof timer.unref === 'function') timer.unref()
     this.timers.set(sessionId, timer)

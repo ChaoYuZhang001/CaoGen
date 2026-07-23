@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
+import { buildMcpProcessEnv } from './mcp/mcp-client'
+import { mcpNetworkErrorMessage, requestMcpNetworkUrl } from './mcp/mcp-network-policy'
 
 /**
  * MCP 运行态探测(P5.9 治理):对配置里的 MCP server 做真实连接测试。
@@ -62,16 +64,18 @@ async function probeHttp(id: string, url: string): Promise<McpProbeResult> {
     const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
     let res: Response
     try {
-      res = await fetch(url, { method: 'HEAD', signal: controller.signal })
+      res = (await requestMcpNetworkUrl(url, { method: 'HEAD', signal: controller.signal })).response
       // 部分 server 不支持 HEAD
       if (res.status === 405 || res.status === 404) {
-        res = await fetch(url, { method: 'GET', signal: controller.signal })
+        await res.body?.cancel()
+        res = (await requestMcpNetworkUrl(url, { method: 'GET', signal: controller.signal })).response
       }
     } finally {
       clearTimeout(timer)
     }
     // 401/403 = server 在线但要鉴权;仍算"可达"
     const reachable = res.ok || [301, 302, 401, 403, 405].includes(res.status)
+    await res.body?.cancel().catch(() => undefined)
     return {
       id,
       ok: reachable,
@@ -85,7 +89,7 @@ async function probeHttp(id: string, url: string): Promise<McpProbeResult> {
       ok: false,
       transport: 'http',
       latencyMs: Date.now() - started,
-      error: err instanceof Error ? err.message : String(err)
+      error: mcpNetworkErrorMessage(err)
     }
   }
 }
@@ -116,7 +120,7 @@ async function probeStdio(
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(command, args, {
-        env: { ...process.env, ...extraEnv },
+        env: buildMcpProcessEnv(extraEnv),
         stdio: ['pipe', 'pipe', 'pipe']
       })
     } catch (err) {

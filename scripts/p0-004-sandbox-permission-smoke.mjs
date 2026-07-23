@@ -75,16 +75,7 @@ function compileModules() {
 }
 
 async function verifyLocalExecution(localExecution) {
-  const disabledCommand = await localExecution.runLocalCommand({
-    command: 'echo must-not-run',
-    cwd: projectDir,
-    mode: 'disabled',
-    timeoutMs: 10_000,
-    maxBufferBytes: 1024 * 1024
-  })
-  assert(!disabledCommand.ok, 'legacy strict migration must keep local commands disabled')
-  assert(disabledCommand.modeUsed === 'disabled', 'disabled local command must report the migration mode')
-  assert(disabledCommand.output.includes('不会自动降级为宿主机执行'), 'disabled command must explain the safety boundary')
+  await verifyCommandTermination(localExecution)
 
   const disabledWritePath = path.join(projectDir, 'disabled-write.txt')
   const disabledWrite = await localExecution.writeTextFileLocally({
@@ -105,6 +96,7 @@ async function verifyLocalExecution(localExecution) {
     maxBufferBytes: 1024 * 1024
   })
   assert(standard.ok, `local shell should pass: ${standard.output}`)
+  assert(standard.commandTermination === 'exited', 'successful local shell must be classified as exited')
   assert(standard.output.includes('caogen-p0-004'), 'local shell output missing marker')
   assert(standard.modeUsed === 'restrictedLocal', `expected restrictedLocal mode, got ${standard.modeUsed}`)
   assert(standard.sandboxed === false, 'local shell must not be marked sandboxed')
@@ -309,6 +301,49 @@ async function verifyLocalExecution(localExecution) {
   assert(!existsSync(path.join(approvedRoot, 'nested')), 'replacement root must remain untouched')
 }
 
+async function verifyCommandTermination(localExecution) {
+  const disabledCommand = await localExecution.runLocalCommand({
+    command: 'echo must-not-run', cwd: projectDir, mode: 'disabled',
+    timeoutMs: 10_000, maxBufferBytes: 1024 * 1024
+  })
+  assert(!disabledCommand.ok, 'legacy strict migration must keep local commands disabled')
+  assert(disabledCommand.modeUsed === 'disabled', 'disabled local command must report the migration mode')
+  assert(disabledCommand.commandTermination === 'not_started', 'disabled command must not claim process exit')
+  assert(disabledCommand.output.includes('不会自动降级为宿主机执行'), 'disabled command must explain the safety boundary')
+  const emptyCommand = await localExecution.runLocalCommand({
+    command: '   ', cwd: projectDir, mode: 'restrictedLocal', timeoutMs: 10_000, maxBufferBytes: 1024
+  })
+  assert(emptyCommand.commandTermination === 'not_started', 'empty command must be classified as not started')
+  const preAborted = new AbortController()
+  preAborted.abort()
+  const abortedCommand = await localExecution.runLocalCommand({
+    command: nodeCommand('setTimeout(() => {}, 1000)'), cwd: projectDir, mode: 'restrictedLocal',
+    timeoutMs: 10_000, maxBufferBytes: 1024, signal: preAborted.signal
+  })
+  assert(abortedCommand.commandTermination === 'aborted', 'pre-aborted command must be classified as aborted')
+  const timedOutCommand = await localExecution.runLocalCommand({
+    command: nodeCommand('setTimeout(() => {}, 1000)'), cwd: projectDir, mode: 'restrictedLocal',
+    timeoutMs: 20, maxBufferBytes: 1024
+  })
+  assert(timedOutCommand.commandTermination === 'timed_out', 'timed-out command must retain its termination cause')
+  const outputLimitedCommand = await localExecution.runLocalCommand({
+    command: nodeCommand("process.stdout.write('x'.repeat(4096)); setTimeout(() => {}, 1000)"),
+    cwd: projectDir, mode: 'restrictedLocal', timeoutMs: 10_000, maxBufferBytes: 32
+  })
+  assert(outputLimitedCommand.commandTermination === 'output_limit', 'output-limited command must retain its termination cause')
+  const spawnErrorCommand = await localExecution.runLocalCommand({
+    command: 'echo unreachable', cwd: path.join(tempRoot, 'missing-command-cwd'), mode: 'restrictedLocal',
+    timeoutMs: 10_000, maxBufferBytes: 1024
+  })
+  assert(spawnErrorCommand.commandTermination === 'spawn_error', 'spawn failure must not claim process exit')
+  const failedExit = await localExecution.runLocalCommand({
+    command: nodeCommand('process.exit(7)'), cwd: projectDir, mode: 'restrictedLocal',
+    timeoutMs: 10_000, maxBufferBytes: 1024
+  })
+  assert(failedExit.commandTermination === 'exited', 'nonzero process exit must remain an exited command')
+  assert(failedExit.exitCode === 7, 'nonzero process exit must preserve the real exit code')
+}
+
 async function verifySafeProjectPath(safePath, localExecution) {
   const outsideDir = path.join(tempRoot, 'outside')
   const outsideFile = path.join(outsideDir, 'secret.txt')
@@ -438,6 +473,11 @@ function verifyOpenAiToolsBridge(idempotency) {
   const text = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
   assert(text.includes("options.sandboxMode ?? 'restrictedLocal'"), 'bash must default to restricted local execution')
   assert(text.includes('runLocalCommand'), 'bash must call local command wrapper')
+  assert(text.includes('exitCode: result.exitCode'), 'bash must preserve the structured process exit code')
+  assert(
+    text.includes('commandTermination: result.commandTermination'),
+    'bash must preserve the structured command termination cause'
+  )
   assert(text.includes('writeTextFileLocally'), 'file writes must call guarded local writer')
   assert(text.includes('localFileWrite'), 'OpenAI file tools must route through localFileWrite')
   for (const marker of ["case 'bash'", "case 'read_file'", "case 'write_file'"]) {
@@ -445,8 +485,23 @@ function verifyOpenAiToolsBridge(idempotency) {
   }
   const engine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
   assert(
-    engine.includes("settings.sandboxMode === 'disabled' && !disabledModeInspectionCall"),
-    'OpenAI engine must block every mutating Agent tool while legacy local execution awaits confirmation'
+    engine.match(/commandTermination: exec\.commandTermination/g)?.length === 2,
+    'OpenAI Responses and Chat bridges must both emit command termination'
+  )
+  assert(
+    engine.includes('new NativeToolRuntime(this.meta') &&
+      engine.includes('this.nativeToolRuntime.executeToolWithPermission(name, input, toolUseId, signal)'),
+    'OpenAI engine must delegate every Agent tool through the shared native permission runtime'
+  )
+  const nativeRuntime = readFileSync(path.join(repoRoot, 'src/main/native-tool-runtime.ts'), 'utf8')
+  assert(
+    nativeRuntime.includes("settings.sandboxMode === 'disabled' && !disabledModeInspectionCall"),
+    'native permission runtime must block every mutating Agent tool while legacy local execution awaits confirmation'
+  )
+  const anthropicEngine = readFileSync(path.join(repoRoot, 'src/main/anthropicEngine.ts'), 'utf8')
+  assert(
+    anthropicEngine.includes('commandTermination: execution.commandTermination'),
+    'Anthropic bridge must emit command termination'
   )
   const disabledAllowed = [...idempotency.OPENAI_DISABLED_MODE_INSPECTION_TOOLS].sort()
   assert(
@@ -516,10 +571,21 @@ function verifyClaudePermissionBridge() {
     ),
     'Claude canUseTool callback must retain the disabled migration gate'
   )
-  assert(
-    text.includes("{ settingSources: [], strictMcpConfig: true }"),
-    'disabled Claude query must isolate filesystem settings and MCP configuration'
-  )
+  for (const marker of [
+    'createClaudeRuntimeLaunchPolicy(this.buildEnv())',
+    'assertClaudeRuntimeLaunchPolicy(runtimePolicy)',
+    'settingSources: runtimePolicy.settingSources',
+    'strictMcpConfig: runtimePolicy.strictMcpConfig'
+  ]) {
+    assert(
+      text.includes(marker),
+      `Claude query must use the isolated runtime launch policy: ${marker}`
+    )
+  }
+}
+
+function nodeCommand(source) {
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`
 }
 
 function verifySecuritySettingsUi() {

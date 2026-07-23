@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { ensureProjectSkillReadinessSync } from '../learning/learning-lifecycle'
 
 export type SkillScope = 'builtin' | 'global' | 'project'
 
@@ -34,7 +35,7 @@ export interface SkillDefinition {
 }
 
 export interface SkillLoadDiagnostic {
-  code: 'root_missing' | 'read_failed' | 'invalid_skill'
+  code: 'root_missing' | 'read_failed' | 'invalid_skill' | 'materialization_failed'
   path: string
   message: string
 }
@@ -69,11 +70,35 @@ export function loadSkills(projectRoot?: string): SkillLoadResult {
   const diagnostics: SkillLoadDiagnostic[] = []
   const loaded: SkillDefinition[] = [...builtinSkills()]
   const roots = defaultSkillRoots(projectRoot)
+  let projectMaterializationError: string | undefined
+
+  if (projectRoot?.trim()) {
+    try {
+      ensureProjectSkillReadinessSync(projectRoot)
+    } catch (error) {
+      projectMaterializationError = error instanceof Error ? error.message : String(error)
+    }
+  }
 
   for (const item of roots) {
+    if (item.scope === 'project' && projectMaterializationError) {
+      diagnostics.push({
+        code: 'materialization_failed',
+        path: item.root,
+        message: `Project Skills blocked until Learning recovery succeeds: ${projectMaterializationError}`
+      })
+      continue
+    }
     if (!existsSync(item.root)) {
       diagnostics.push({ code: 'root_missing', path: item.root, message: 'Skill 根目录不存在。' })
       continue
+    }
+    if (item.scope === 'project') {
+      const rootStat = lstatSync(item.root)
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+        diagnostics.push({ code: 'invalid_skill', path: item.root, message: '项目 Skill 根目录必须是真实目录,不能是符号链接。' })
+        continue
+      }
     }
     for (const skillPath of findSkillFiles(item.root)) {
       const parsed = readSkillFile(skillPath, item.scope)

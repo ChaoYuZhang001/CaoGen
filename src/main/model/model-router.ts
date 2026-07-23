@@ -83,15 +83,16 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
   const sourceProfiles = viable.length > 0 ? viable : profiles.filter((profile) => !excluded.has(profile.model))
   const candidates = sourceProfiles.map((profile) => scoreCandidate(profile, task))
   if (candidates.length === 0) throw new Error('没有可路由的模型候选')
+  const rankedCandidates = rankCandidates(candidates, task.strategy)
 
   const warnings: string[] = []
-  const manual = applyManualOverride(candidates, request.manualOverride)
+  const manual = applyManualOverride(rankedCandidates, request.manualOverride)
   if (manual) {
     const overBudget = isOverBudget(manual, request.budget)
     if (!overBudget || request.manualOverride?.allowBudgetOverflow) {
       return buildDecision({
         selected: manual,
-        candidates,
+        candidates: rankedCandidates,
         task,
         manualOverrideApplied: true,
         manualOverrideReason: request.manualOverride?.reason,
@@ -103,9 +104,8 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
     warnings.push('手动覆盖命中预算上限，已按硬预算尝试降级。')
   }
 
-  const sorted = rankCandidates(candidates, task.strategy)
-  const primary = sorted[0]
-  const budgetSafe = chooseBudgetSafeCandidate(sorted, request.budget)
+  const primary = rankedCandidates[0]
+  const budgetSafe = chooseBudgetSafeCandidate(rankedCandidates, request.budget)
   const selected = budgetSafe ?? primary
   const budgetDowngraded = selected.profile.model !== primary.profile.model || selected.profile.providerId !== primary.profile.providerId
   if (isOverBudget(selected, request.budget) && request.budget?.hardLimit) {
@@ -114,7 +114,7 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
 
   return buildDecision({
     selected,
-    candidates: sorted,
+    candidates: rankedCandidates,
     task,
     manualOverrideApplied: false,
     manualOverrideReason: manual ? request.manualOverride?.reason : undefined,
@@ -191,31 +191,65 @@ function applyManualOverride(
   override?: ManualModelOverride
 ): ModelRouteCandidate | undefined {
   if (!override?.providerId && !override?.model) return undefined
-  return candidates.find((candidate) => {
-    const providerMatches = !override.providerId || candidate.profile.providerId === override.providerId
-    const modelMatches = !override.model || candidate.profile.model === override.model
-    return providerMatches && modelMatches
-  })
+  return candidates
+    .filter((candidate) => {
+      const providerMatches = !override.providerId || candidate.profile.providerId === override.providerId
+      const modelMatches = !override.model || candidate.profile.model === override.model
+      return providerMatches && modelMatches
+    })
+    .sort(compareCandidateIdentity)[0]
 }
 
 function rankCandidates(candidates: ModelRouteCandidate[], strategy: SchedulerStrategy): ModelRouteCandidate[] {
-  return [...candidates].sort((a, b) => {
-    if (strategy === 'speed') {
-      const latencyClassDelta = latencyClassRank(b.profile.latency) - latencyClassRank(a.profile.latency)
-      if (latencyClassDelta !== 0) return latencyClassDelta
-      const aLatency = a.latencyEmaMs
-      const bLatency = b.latencyEmaMs
-      if (aLatency !== undefined || bLatency !== undefined) {
-        const latencyDelta = (aLatency ?? Number.MAX_SAFE_INTEGER) - (bLatency ?? Number.MAX_SAFE_INTEGER)
-        if (latencyDelta !== 0) return latencyDelta
-      }
-    }
-    const scoreDelta = b.score - a.score
-    if (scoreDelta !== 0) return scoreDelta
-    if (strategy === 'cost') return a.estimatedCostUsd - b.estimatedCostUsd
-    if (strategy === 'quality') return b.reliability - a.reliability
-    return (a.latencyEmaMs ?? Number.MAX_SAFE_INTEGER) - (b.latencyEmaMs ?? Number.MAX_SAFE_INTEGER)
-  })
+  const comparators: CandidateComparator[] = strategy === 'speed'
+    ? [compareLatencyClass, compareMeasuredLatency, compareScore, compareCandidateIdentity]
+    : [compareScore, strategyTieComparator(strategy), compareCandidateIdentity]
+  return [...candidates].sort((a, b) => firstComparison(comparators, a, b))
+}
+
+type CandidateComparator = (a: ModelRouteCandidate, b: ModelRouteCandidate) => number
+
+function firstComparison(
+  comparators: CandidateComparator[],
+  a: ModelRouteCandidate,
+  b: ModelRouteCandidate
+): number {
+  for (const compare of comparators) {
+    const result = compare(a, b)
+    if (result !== 0) return result
+  }
+  return 0
+}
+
+function strategyTieComparator(strategy: SchedulerStrategy): CandidateComparator {
+  if (strategy === 'cost') return compareEstimatedCost
+  if (strategy === 'quality') return compareReliability
+  return compareMeasuredLatency
+}
+
+function compareLatencyClass(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  return latencyClassRank(b.profile.latency) - latencyClassRank(a.profile.latency)
+}
+
+function compareMeasuredLatency(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  return (a.latencyEmaMs ?? Number.MAX_SAFE_INTEGER) - (b.latencyEmaMs ?? Number.MAX_SAFE_INTEGER)
+}
+
+function compareScore(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  return b.score - a.score
+}
+
+function compareEstimatedCost(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  return a.estimatedCostUsd - b.estimatedCostUsd
+}
+
+function compareReliability(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  return b.reliability - a.reliability
+}
+
+function compareCandidateIdentity(a: ModelRouteCandidate, b: ModelRouteCandidate): number {
+  const providerDelta = a.profile.providerId.localeCompare(b.profile.providerId)
+  return providerDelta !== 0 ? providerDelta : a.profile.model.localeCompare(b.profile.model)
 }
 
 function latencyClassRank(latency: ModelProfile['latency']): number {
@@ -234,7 +268,10 @@ function chooseBudgetSafeCandidate(
   const affordable = candidates.filter((candidate) => candidate.estimatedCostUsd <= remainingUsd)
   if (affordable.length > 0) return affordable[0]
   if (!budget.hardLimit) return candidates[0]
-  return [...candidates].sort((a, b) => a.estimatedCostUsd - b.estimatedCostUsd)[0]
+  return [...candidates].sort((a, b) => {
+    const costDelta = a.estimatedCostUsd - b.estimatedCostUsd
+    return costDelta !== 0 ? costDelta : compareCandidateIdentity(a, b)
+  })[0]
 }
 
 function isOverBudget(candidate: ModelRouteCandidate, budget?: ModelRouterBudget): boolean {

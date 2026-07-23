@@ -1,10 +1,12 @@
 <div align="center">
 
+<p><strong>简体中文</strong> | <a href="./README.en.md">English</a></p>
+
 <img src="./resources/icon.png" alt="CaoGen" width="96" height="96">
 
 # CaoGen
 
-### 国产开源 · 多厂商不绑定 · AI 工作桌面
+## 不锁厂商的本地 AI 工作桌面——用你自己的 key 跑任意模型，一个挂了自动换。
 
 <img src="https://img.shields.io/badge/version-v0.1.6-blue" alt="version">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
@@ -12,195 +14,37 @@
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
-**多模型、多项目、多文件、多任务、多工具，统一放进一个可控的桌面工作室。**
+[下载](https://github.com/ChaoYuZhang001/CaoGen/releases) · [快速开始](#quick-start) · [贡献](#贡献-caogen) · [路线图](#roadmap--长期愿景建设中)
 
-[官方网站](https://www.caogen.dev) | [立即下载](https://github.com/ChaoYuZhang001/CaoGen/releases) | [快速开始](#3-分钟快速开始) | [商业授权](./COMMERCIAL-LICENSE.md) | [贡献指南](./CONTRIBUTING.md) | [安全报告](./SECURITY.md) | [路线图](./ROADMAP.md) | [反馈问题](https://github.com/ChaoYuZhang001/CaoGen/issues)
+![CaoGen 主界面](./docs/screenshot-app.jpg)
 
 </div>
 
----
+## 这是什么
 
-## 目录
+CaoGen 是一个开源、厂商中立、本地优先的 AI 工作桌面，把多厂商模型、你的本地项目和完成任务所需的工具放在同一个 Electron 应用里。它和 ChatGPT、Claude 官方桌面版的关键区别是：你使用自己的 API Key，Provider 只是可替换的算力，项目目录、worktree、工具与审查流程留在自己的桌面工作流中。
 
-- [核心优势](#核心优势)
-- [界面预览](#界面预览)
-- [工作桌面能力](#工作桌面能力)
-- [核心功能](#核心功能)
-- [3 分钟快速开始](#3-分钟快速开始)
-- [下载安装](#下载安装)
-- [校验下载文件](#校验下载文件)
-- [常见问题](#常见问题)
-- [开发与贡献](#开发与贡献)
-- [架构速览](#架构速览)
-- [项目状态](#项目状态)
-- [安全](#安全)
-- [开源协议与商业授权](#开源协议与商业授权)
+> “任意模型”指通过 CaoGen 当前支持的 OpenAI-compatible、Anthropic Messages 或 Claude Agent SDK 路径接入；实际可用性取决于模型服务的协议兼容性、账号、网络和额度。
 
-## 核心优势
+## 当前核心能力
 
-| 多厂商统一 | 项目与会话 | 完整工作桌面 |
-| :--- | :--- | :--- |
-| 支持多模型、多密钥、多厂商配置，也能接入中转站和本地兼容服务。活动密钥鉴权、额度或限流失败时先切同 Provider 备用密钥，仍失败再切健康 Provider。 | 会话可关联项目，也可统一收纳在“未关联项目”；每个项目可独立配置工作规则，并支持归档、恢复和安全删除。 | 内置代码执行、项目理解、任务拆解、终端、文件、Diff、Git、预览、浏览器批注、插件扩展和 3D 办公区。 |
+- **连接多种 Provider 并 BYOK**：配置多个 Provider、多个 API Key、自定义 Base URL、中转站或本地 OpenAI-compatible 服务，覆盖 DeepSeek、Kimi、GLM、Claude、GPT 等常见模型来源。
+- **按策略路由并自动切换**：根据模型能力、成本、速度、预算与健康状态选择目标；遇到额度、限流、服务端或网络类可恢复错误时，先尝试备用 Key，再切到已配置的健康 Provider。
+- **隔离任务改动**：为会话创建独立 Git worktree，在合并前查看 Diff、检查冲突、导出或应用 patch，不满意可以直接丢弃隔离工作区。
+- **在工作台完成任务**：在应用内使用终端、文件浏览、文本编辑、浏览器、Diff、Git，以及 HTML/Markdown/JSON/CSV/图片/PDF/Office 文档预览。
+- **查看 3D 办公区**：用真实会话状态展示运行、等待审批、完成、失败、Provider、成本、子任务与 worktree/Git 信号；当前发布的是机器人办公区，不是路线图中的水墨角色形态。
 
-一句话：**CaoGen 是一个多厂商 AI 工作桌面，让用户在一个桌面环境里完成从想法、需求、资料、方案到代码、内容、测试、审查与交付的完整 AI 工作流程。**
+![CaoGen 3D 办公区](./docs/screenshot-office.jpg)
 
-## 界面预览
+## Quick Start
 
-| 主界面 | 3D 办公区 |
-| :---: | :---: |
-| ![CaoGen 主界面](./docs/screenshot-app.jpg) | ![CaoGen Agent 控制室](./docs/screenshot-office.jpg) |
+1. **下载**：从 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 选择与你的平台和架构匹配的资产。当前公开发布以 macOS x64 v0.1.6、Windows x64 v0.1.5 和较早的 macOS arm64 资产为主；Linux 暂以源码运行或自行构建为主。
+2. **添加 Provider 和 Key**：打开设置，选择 Provider 模板或填写兼容服务的 Base URL，再添加你自己的 API Key。密钥不会提交到本仓库。
+3. **开始第一个任务**：新建会话，选择本地项目目录或使用“未关联项目”，然后输入：`先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。`
 
-> 3D 办公区不是装饰：每个会话对应一个工位，运行中、等待审批、完成、失败、成本气泡和子代理消息流都来自真实会话状态。
+> 当前公开安装包未完成正式签名/公证。macOS 和 Windows 首次打开可能显示系统安全提示；请仅从本项目 Releases 下载并核对对应 Release 说明。正式 1.0 验收和发布准备状态以 [STATUS.md](./STATUS.md) 为准。
 
-## 工作桌面能力
-
-| 能力域 | CaoGen 当前目标 |
-|---|---|
-| 模型与服务 | 多协议、多厂商、网关、中转站和本地模型统一配置；Provider、模型、密钥、Base URL 和健康状态集中管理。 |
-| 项目与规则 | 会话可关联项目或保持未关联；项目支持归档、恢复和删除，并独立保存提示词、技术栈、常用命令、测试/构建命令、调度策略和项目记忆。 |
-| 文件与资料 | 在应用内查看 HTML、Markdown、JSON、CSV、PDF、图片和 Office 文档；macOS 可生成隔离的系统文档预览，结构页、工作表和幻灯片可单独发送给 Agent。 |
-| 任务与交付 | 支持任务拆解、命令执行、Diff 审查、Git 操作、worktree 隔离、冲突检查和交付前验证。 |
-| 调度与成本 | 支持均衡、成本优先、质量优先和速度优先，按任务类型、项目规则、用户规则、Provider 健康状态、预算和失败记录选择模型，并保留可读的路由原因。 |
-| 可视化办公 | 3D 办公区展示会话、工位、审批、失败、成本、耗时、子任务消息和工作区状态。 |
-
-## 核心功能
-
-### 多厂商模型配置
-
-- 多 Provider、多 API Key、自定义 Base URL、中转站和本地兼容服务统一管理；密钥只由主进程读取，系统安全存储可用时加密保存。安全存储不可用时仍存在可逆编码 fallback，这是待移除的 P0 安全缺口，当前不宣称所有环境均加密落盘。
-- 支持主流文本生成协议、流式输出和工具调用循环。
-- 常用 Provider 模板覆盖海外、国产、网关和本地模型服务。
-- Chat Completions 兼容模型可通过工具调用循环读文件、改代码、跑命令，不只是聊天。
-- 智能路由、同 Provider 备用密钥接管、跨 Provider 故障切换、模型健康记录和预算闸门已接入。
-- 速度优先会先比较模型延迟档，再参考历史延迟 EMA；质量优先与速度优先对同一复杂任务可产生不同选择。
-- 调度策略按“项目规则 > Core 用户策略 > 专用工作模式预设”生效，设置页和自定义规则均可保存速度优先条件。
-- 模型不可用时必须明确提示原因，不伪装成可用。
-
-### 项目与会话管理
-
-- 新建会话时项目不是必选项；可选择已有项目、新目录或“未关联项目”。
-- 未关联项目的会话统一收纳，不再散落在项目列表之外。
-- 项目可归档和恢复；删除项目只移除 CaoGen 中的项目记录，不删除本地目录或会话，相关会话会进入“未关联项目”。
-- 每个项目可独立配置提示词、项目背景、技术栈说明和输出风格。
-- 可记录启动命令、测试命令、构建命令、关键目录、禁止修改路径和验收标准。
-- 可配置默认模型、规划模型、编码模型、审查模型、低成本模型和 fallback 顺序。
-- `caogen.md` 的模型调度策略可影响自动路由，并在调度理由里显示来源。
-- 项目记忆、历史决策和常见问题可复用，但沉淀前需要用户确认。
-- 未配置 `caogen.md` 的新项目也会注入项目身份和工作目录边界，避免规则链路静默失效。
-
-### 编码核心能力
-
-- `@` 文件引用、文件补全、多图粘贴/拖拽、图片 OCR。
-- 命令执行、文件读写、精确搜索替换、代码/符号检索、依赖查看等原生工具。
-- 外部副作用已接入持久 Effect Ledger、资源级 lease/fencing、强杀恢复和人工对账；文件写入、Git commit/push 支持只读后置状态核验，其他未注册 Reconciler 的操作仍按 fail-closed 处理。
-- Diff 审查、逐 hunk stage/discard、应用内 Git 提交。
-- Worktree 合并审查、patch 导出/应用、冲突文件查看、PR/MR 创建（`gh` / `glab`）。
-- `Esc Esc` / `/rewind` 检查点回溯；空闲时可即时重建引擎截断上下文，运行中下次 resume 截断。
-- 本地命令明确在宿主机执行，不宣称系统级沙箱；文件工具限制在项目目录，敏感操作进入权限审批。
-
-### 多 Agent 与多任务
-
-- 主 Agent 一次最多派发 33 个子 Agent，并行处理复杂任务。
-- 子代理结果自动回灌父会话，由父 Agent 汇总成败、冲突风险和合并顺序。
-- DAG 任务调度已接入，可表达任务依赖、失败重试和断点恢复。
-- DAG 自动合并属于高风险工作流，适合在测试仓库或明确验证命令下使用。
-- 任务快照与会话历史持久化，重启后可恢复上下文。
-
-### 文件预览与桌面体验
-
-- 内置终端，不用切出应用跑命令。
-- 内置文件浏览和文本编辑器。
-- HTML / Markdown / Text / CSV / JSON / 图片 / PDF 预览；PDF 支持内嵌查看和文本层 best-effort 提取。
-- Word / Excel / PowerPoint 已接入 OOXML 文本与结构预览(`.docx` / `.xlsx` / `.pptx`)；结构视图支持页、工作表和幻灯片导航及当前单元引用。macOS 可显示无网络、sandbox 隔离的系统文档预览，失败时回退首屏缩略图或结构视图；系统渲染可能与原应用中的完整原版式存在差异。
-- 内置浏览器，支持选区批注、DOM 圈选、元素截图、控制台错误和网络失败观测。
-- 系统通知和防休眠：任务完成、失败、等待审批时能提醒。
-- GUI 自动化支持 Windows/macOS 路径，但默认关闭，属于高风险能力，需要显式授权。
-
-### 特色功能
-
-- 写实 3D 办公区：多会话、多 Provider、成本、状态、父子 Agent 消息流可视化。
-- 3D 办公区可直接新建会话，也可切回列表视图继续管理项目和会话。
-- “开工建议”从聊天顶部菜单手动触发，只使用当前工作目录及其关联的项目记忆、历史、Routine、worktree 和当前会话 Provider 健康信号，不会在新会话中自动展开。
-- 项目记忆、分层记忆和记忆建议，确认后才沉淀。
-- plugin、skill、agent、MCP 扫描，支持启停、投递给 Agent 和 MCP 运行态探测。
-- 自动 Skill 学习、复用和优化的基础链路已接入。
-- 本地 Routines：可创建、编辑、运行、记录 run log；云端 Runner 不在当前版本范围内。
-- 中英双语、深色/浅色/跟随系统主题。
-- VS Code / JetBrains 插件与 IDE Bridge 正在推进，当前按实验性能力看待。
-
-## 3 分钟快速开始
-
-1. **下载安装**：从 [Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载对应系统安装包。
-2. **添加模型**：打开设置，选择 Provider 模板或自定义中转站，填入 API Key。
-3. **新建会话**：可选择已有项目、新目录，也可使用“未关联项目”直接开始；项目不是必选项。
-4. **开始工作**：让 AI 理解目录、处理文件、拆解任务、跑验证和审查 Diff；需要建议时再从聊天顶部菜单打开“开工建议”。
-
-第一次建议试这个提示词：
-
-```text
-帮我阅读这个项目，指出最重要的入口文件、启动方式和当前最值得修的 3 个问题。先不要改代码。
-```
-
-## 下载安装
-
-从 [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases) 下载最新版本：
-
-| 平台 | 当前发布包 | 状态 | 说明 |
-|---|---|---|---|
-| macOS Apple Silicon | `CaoGen-0.1.3-arm64.dmg` / `CaoGen-0.1.3-arm64-mac.zip` | 历史版本 | v0.1.6 不发布 arm64 包 |
-| macOS Intel | `CaoGen-0.1.6.dmg` / `CaoGen-0.1.6-mac.zip` | [v0.1.6 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) | 修复打包启动时缺少 `node-gyp-build` 的崩溃 |
-| Windows x64 | `CaoGen.Setup.0.1.5.exe` | [v0.1.5 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.5) | 未签名，首次运行可能触发 SmartScreen |
-| Linux | 暂未上传 Release 资产 | 源码运行/自行打包 | `package.json` 已配置 AppImage 打包目标 |
-
-> **macOS 首次打开说明**：当前安装包未签名，首次打开会被拦截。右键点击应用图标 → 选择「打开」→ 弹窗里再点「打开」即可；也可以在「系统设置 → 隐私与安全性」底部点「仍要打开」。之后正常双击即可。
-
-> **Windows 首次运行说明**：当前安装包未进行 Authenticode 签名。请先核对 SHA256；如果 SmartScreen 显示“未知发布者”，请只在校验值一致且下载来源为本项目 GitHub Release 时继续。
-
-也可以直接从源码运行，见下方「开发与贡献」。
-
-## 校验下载文件
-
-下载后可用 `shasum -a 256 <文件名>` 校验安装包。当前已发布主要资产的 SHA256 如下：
-
-| 文件 | SHA256 |
-|---|---|
-| `CaoGen-0.1.6.dmg` | `7b193469e2c3b87546c797436652c8d73121f2bcdd7357850fa5521d605ef1f9` |
-| `CaoGen-0.1.6-mac.zip` | `4ac838081f17ae2a645909171a7370bc348840894156f20d8ee76ba8c1a19b75` |
-| `latest-mac.yml` | `419a2f6266cee414b44c0a608c6f3b9cd0469c47f293c2d6317782c4697aa4de` |
-| `CaoGen.Setup.0.1.5.exe` | `0787db30200018355e848f83f035c6ff87f115a2db3aef8f07b20be049e2b43a` |
-| `latest.yml` | `5073a2921e43fd45532817208771a879ce23cc06bb9429951a77e6fcc7eb0817` |
-
-## 常见问题
-
-**Q: 必须绑定某个厂商账号才能用吗？**
-
-A: 不需要。CaoGen 支持多厂商和本地兼容服务。某些引擎或 Provider 需要对应账号、API Key 或本机登录态，但它们不是使用 CaoGen 的唯一入口。
-
-**Q: 支持本地模型吗？**
-
-A: 支持。只要你的本地服务提供 OpenAI 兼容接口，例如 Ollama、vLLM、LM Studio 或 one-api/new-api，就可以用 Chat Completions 协议接入。
-
-**Q: AI 改坏我的代码怎么办？**
-
-A: 建议新会话开启 worktree 隔离。AI 在独立 worktree 里改，合并前你可以看 Diff、导出 patch、检查冲突；不想要就丢掉。检查点回溯也可以恢复聊天上下文和代码改动。
-
-**Q: 新建会话必须先创建项目吗？**
-
-A: 不必须。可以选择“未关联项目”直接开始，这类会话会在侧边栏统一收纳。之后删除 CaoGen 中的项目记录也不会删除本地目录和会话。
-
-**Q: 会上传我的代码吗？**
-
-A: CaoGen 没有自己的云端代码托管服务。代码会留在本机，但你发给 Agent 的上下文和工具结果会发送给你选择的模型 Provider 或本地/网关服务；请按自己的保密要求选择 Provider。
-
-**Q: 现在适合正式生产使用吗？**
-
-A: 当前是 beta。核心编码链路已经可试用，但项目状态仍明确标注未达最终发布标准；高风险任务请先用测试仓库或 worktree 隔离。
-
-## 开发与贡献
-
-欢迎提交 Issue 和 PR。开始前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，安全问题请按 [SECURITY.md](./SECURITY.md) 处理，不要把漏洞细节、密钥或私有日志直接贴到公开 Issue。
-
-### 本地运行
+从源码运行：
 
 ```bash
 git clone https://github.com/ChaoYuZhang001/CaoGen.git
@@ -209,74 +53,16 @@ npm install
 npm run dev
 ```
 
-### 构建与测试
+## Roadmap / 长期愿景（建设中）
 
-```bash
-npm run typecheck  # TypeScript 类型检查
-npm run build      # 构建生产产物到 out/
-npm start          # 预览构建产物
-npm run test:deep  # 深度测试矩阵，当前为 84 required + 3 optional
-npm run secret:scan # 扫描当前工作树中的明显密钥
-```
+CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、WorkItem、数字员工、Artifact/Evidence、验收和恢复机制承载完整工作流，并继续演进 3D 办公体验。这些是路线图和建设目标，不等于当前已发布能力；请查看 [项目立项书](./docs/PROJECT-CHARTER.md)、[产品需求](./docs/PRODUCT-REQUIREMENTS.md)、[路线图](./ROADMAP.md) 与 [当前状态](./STATUS.md) 了解边界和进度。
 
-需要真实厂商 Key 的端到端脚本不进 CI，适合本机手动跑：
+## 贡献 CaoGen
 
-```bash
-CHAT_E2E_KEY=sk-... npx electron scripts/chat-protocol-e2e.cjs
-CHAT_E2E_KEY=sk-... npx electron scripts/orchestration-e2e.cjs
-CHAT_E2E_KEY=sk-... npx electron scripts/stress-32-agents.cjs
-CHAT_E2E_KEY=sk-... npx electron scripts/coding-agent-e2e.cjs
-```
+**我们在找志同道合的人，一起把“厂商中立、本地优先的 AI 工作桌面”做成真正可靠的开源基础设施。**
 
-## 架构速览
+- 阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，了解开发环境、六环架构链路和 PR 流程。
+- 从 [good first issue 草稿](./docs/good-first-issues.md) 或 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) 开始。
+- 提交 [Bug](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=bug_report.yml)、[功能建议](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=feature_request.yml) 或 Pull Request。
 
-```text
-src/
-  shared/types.ts        主/渲染进程共享类型、IPC 协议、事件模型
-  main/
-    engine.ts/engines.ts 引擎接口与注册表
-    agentSession.ts      Agent SDK 会话封装
-    openaiEngine.ts      Responses / Chat Completions 原生编码 Agent
-    sessionManager.ts    多会话、子代理、DAG、预算、历史
-    providers.ts         Provider、密钥加密、模型列表探测
-    worktreeMerge.ts     worktree 合并审查、patch、PR/MR
-    browserView.ts       内置浏览器、批注、页面观测
-    pluginRegistry.ts    plugin/skill/agent/MCP 扫描
-    routineStore.ts      本地 Routines
-  preload/index.ts       contextBridge 暴露 window.agentDesk
-  renderer/src/          React + Zustand UI
-```
-
-新增能力遵循「主进程模块 → IPC → preload → 类型 → store → UI」链路；提交前至少跑通 `npm run typecheck` 和 `npm run build`。
-
-## 项目状态
-
-- 当前公开版本：[**v0.1.6**](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)。
-- v0.1.6 发布 macOS x64 安装包；Windows x64 继续使用 v0.1.5，macOS arm64 与 Linux 不在本轮发布范围。
-- v0.1.6 包含未关联项目会话、项目归档/恢复/删除、3D 办公新建会话、手动开工建议，以及打包运行时完整性与真实启动回归门禁。
-- 正式引擎包括 SDK Agent runtime 与通用 Responses / Chat Completions 兼容 runtime；已验证过的关键链路包括国产模型原生编码 Agent、子代理编排、双协议对话、32 并发压测和多项 Electron mock E2E。
-- 仍需实测/收口：签名与公证、部分 CLI 登录后的真对话、Office 复杂公式/动画与原版式一致性、N1 迁移 30 分钟真人计时、Linux 包发布验证。
-
-后续路线图见 [ROADMAP.md](./ROADMAP.md)，完整需求边界见 [REQUIREMENTS.md](./REQUIREMENTS.md)。
-
-## 安全
-
-如果你发现漏洞、供应链风险或误提交密钥，请先阅读 [SECURITY.md](./SECURITY.md)。如果密钥已经泄露，请先在对应平台撤销或轮换密钥，再提交不含敏感细节的报告。
-
-## 开源协议与商业授权
-
-当前源码树及后续版本基于 [GNU Affero General Public License v3.0 only](./LICENSE) 开源。AGPL 允许使用、修改、分发和商用；分发受许可作品，或通过网络向用户提供修改版时，必须按 AGPL 履行对应源代码和许可义务。**完全遵守 AGPL 的商业使用不需要另行购买授权。**
-
-如果你需要在闭源产品中集成 CaoGen、分发专有衍生作品，或无法履行 AGPL 义务，可向版权持有人申请独立商业授权。详见 [商业授权说明](./COMMERCIAL-LICENSE.md)。
-
-公开商务邮箱：[2900814034@qq.com](mailto:2900814034@qq.com)。
-
-**许可历史：** 已经以 MIT License 发布的 `v0.1.5` 及更早版本继续适用其原 MIT 许可，不受后续许可变更影响。第三方依赖和素材分别适用各自的许可条款。
-
-版权声明见 [NOTICE](./NOTICE)。
-
----
-
-<div align="center">
-<sub>CaoGen · 国产开源 AI 工作桌面 · 不绑厂商，不锁模型</sub>
-</div>
+安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。CaoGen 采用 [AGPL-3.0-only](./LICENSE) 开源许可，并提供独立的 [商业授权](./COMMERCIAL-LICENSE.md)。

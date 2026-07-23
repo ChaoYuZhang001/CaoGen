@@ -19,6 +19,8 @@ try {
   }
   assert(toolsModule.READONLY_TOOLS.has('draft_skill'), 'draft_skill should be readonly')
   assert(toolsModule.READONLY_TOOLS.has('route_model'), 'route_model should be readonly')
+  assert(toolsModule.READONLY_TOOLS.has('china_notify'), 'china_notify preview should be readonly')
+  assert(toolsModule.READONLY_TOOLS.has('gitee_prepare'), 'gitee_prepare preview should be readonly')
   assert(!toolsModule.READONLY_TOOLS.has('optimize_skill'), 'optimize_skill writes project skill state and must not be readonly')
 
   const draft = await toolsModule.executeCodingTool(
@@ -69,8 +71,9 @@ try {
     projectRoot
   )
   assertEqual(optimized.ok, true)
-  assert(optimized.output.includes('"status": "updated"'), 'optimize_skill should update project skill after correction')
-  assert(readFileSync(skillPath, 'utf8').includes('自动优化记录'), 'optimized skill should include optimization section')
+  assert(optimized.output.includes('"status": "drafted"'), 'optimize_skill should create a pending Skill draft')
+  assert(optimized.output.includes('"draftStatus": "draft"'), 'optimize_skill should disclose draft status')
+  assert(!readFileSync(skillPath, 'utf8').includes('自动优化记录'), 'unapproved optimization must not modify active SKILL.md')
 
   const routed = await toolsModule.executeCodingTool(
     'route_model',
@@ -98,6 +101,23 @@ try {
   assertEqual(notify.ok, true)
   assert(notify.output.includes('"dryRun": true'), 'china_notify should default to dry-run')
 
+  const notifySecretCanary = 'china-notify-secret-canary'
+  const rejectedNotify = await toolsModule.executeCodingTool(
+    'china_notify',
+    {
+      channel: 'dingtalk',
+      title: 'P2 smoke',
+      text: 'must remain preview-only',
+      webhookUrl: `https://notify.example.test/${notifySecretCanary}`,
+      secret: notifySecretCanary,
+      dry_run: false
+    },
+    projectRoot
+  )
+  assertEqual(rejectedNotify.ok, false)
+  assert(rejectedNotify.output.includes('仅支持无凭据预览'), 'china_notify should fail closed for legacy live-send arguments')
+  assert(!rejectedNotify.output.includes(notifySecretCanary), 'china_notify rejection must not echo webhook or secret values')
+
   const gitee = await toolsModule.executeCodingTool(
     'gitee_prepare',
     {
@@ -114,6 +134,24 @@ try {
   assertEqual(gitee.ok, true)
   assert(gitee.output.includes('gitee.example.test/org/repo/issues/new'), 'gitee_prepare should return a custom web URL')
   assert(gitee.output.includes('gitee.example.test/api/v5/repos/org/repo/issues'), 'gitee_prepare should return a custom API URL')
+  assert(!gitee.output.includes('access_token'), 'gitee_prepare preview must not include an access token field')
+
+  const giteeTokenCanary = 'gitee-token-canary'
+  const rejectedGitee = await toolsModule.executeCodingTool(
+    'gitee_prepare',
+    {
+      action: 'issue',
+      owner: 'org',
+      repo: 'repo',
+      title: 'P2 smoke',
+      accessToken: giteeTokenCanary,
+      send: true
+    },
+    projectRoot
+  )
+  assertEqual(rejectedGitee.ok, false)
+  assert(rejectedGitee.output.includes('仅支持无凭据预览'), 'gitee_prepare should fail closed for legacy live-send arguments')
+  assert(!rejectedGitee.output.includes(giteeTokenCanary), 'gitee_prepare rejection must not echo access tokens')
 
   console.log('openaiP2Tools smoke ok')
 } finally {

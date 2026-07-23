@@ -5,6 +5,7 @@ import type {
   ProjectMemoryEntry,
   ReadProjectMemoryResult
 } from '../../../shared/types'
+import LearningApprovalPanel from './LearningApprovalPanel'
 
 const EMPTY_FORM = { kind: 'note', title: '', body: '', reason: '' }
 type LoopOutcome = 'success' | 'partial' | 'failure'
@@ -36,6 +37,7 @@ interface Props {
  */
 export default function MemoryPanel({ sessionId, onClose, initialForm }: Props): React.JSX.Element {
   const [data, setData] = useState<ReadProjectMemoryResult | null>(null)
+  const [learningRefreshToken, setLearningRefreshToken] = useState(0)
   const [layered, setLayered] = useState<LayeredMemoryEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -58,6 +60,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
       ])
       setData(result)
       setLayered(layeredEntries)
+      setLearningRefreshToken((value) => value + 1)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -187,8 +190,6 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     setReviewNotice('')
     try {
       let drafts = 0
-      let memories = 0
-      const label = outcomeLabel(reviewForm.outcome)
 
       if (summary) {
         const body = renderTaskReviewBody({
@@ -206,14 +207,6 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           reason: reviewForm.outcome === 'success' ? '任务完成后沉淀可复用上下文' : '任务结束后沉淀当前真实状态'
         })
         drafts++
-        await window.agentDesk.addLayeredMemory(sessionId, {
-          layer: 'working',
-          title: `任务复盘: ${title}`,
-          body,
-          source: 'memory-loop',
-          tags: ['任务复盘', label]
-        })
-        memories++
       }
 
       if (reviewForm.outcome !== 'success' || failure) {
@@ -226,14 +219,6 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           reason: '失败或未完成任务需要形成下次开工前可检索的复盘建议'
         })
         drafts++
-        await window.agentDesk.addLayeredMemory(sessionId, {
-          layer: 'project',
-          title: `失败复盘: ${title}`,
-          body,
-          source: 'memory-loop',
-          tags: ['失败复盘', '踩坑']
-        })
-        memories++
       }
 
       if (preference) {
@@ -246,18 +231,10 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
           reason: '用户偏好或长期约定,需要确认后进入项目记忆'
         })
         drafts++
-        await window.agentDesk.addLayeredMemory(sessionId, {
-          layer: 'project',
-          title: titleText,
-          body: preference,
-          source: 'memory-loop',
-          tags: ['偏好学习']
-        })
-        memories++
       }
 
       setReviewForm({ ...EMPTY_REVIEW_FORM })
-      setReviewNotice(`已生成 ${drafts} 条待确认草稿,沉淀 ${memories} 条分层记忆`)
+      setReviewNotice(`已生成 ${drafts} 条待确认草稿`)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -496,6 +473,8 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
               </div>
             )}
           </div>
+
+          <LearningApprovalPanel sessionId={sessionId} refreshToken={learningRefreshToken} />
 
           <div className="memory-group">
             <h4 className="settings-h3">分层记忆 · {layered.length}</h4>

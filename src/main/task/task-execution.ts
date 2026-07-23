@@ -5,14 +5,13 @@ import type {
   EffectLease,
   EffectRecord,
   EffectStatus,
-  EffectTarget,
-  FileSystemIdentity,
   TaskRunRecord,
   TaskStepRecord,
   TaskStepStatus,
   ToolExecutionRecord,
   ToolExecutionStatus
 } from '../../shared/types'
+import { isEffectTarget } from './effect-target-validation'
 import {
   buildToolIdempotencyKey,
   normalizeToolName,
@@ -569,67 +568,6 @@ function isEffectEvidenceRecord(value: unknown): value is EffectEvidenceRecord {
     isString(record.verifier) &&
     isPositiveInteger(record.generation)
   )
-}
-
-function isEffectTarget(value: unknown): value is EffectTarget {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  if (record.kind === 'file_content') {
-    return (
-      isString(record.rootPath) &&
-      (record.rootIdentity === undefined || isFileSystemIdentity(record.rootIdentity)) &&
-      isString(record.relativePath) &&
-      (record.preState === 'absent' || record.preState === 'file') &&
-      (record.preFileIdentity === undefined || isFileSystemIdentity(record.preFileIdentity)) &&
-      isOptionalString(record.preSha256) &&
-      isString(record.expectedSha256) &&
-      isOptionalNonNegativeInteger(record.expectedBytes) &&
-      record.expectedBytes !== undefined
-    )
-  }
-  if (record.kind === 'git_commit') {
-    return (
-      isString(record.repoRoot) &&
-      isString(record.branch) &&
-      isString(record.preHead) &&
-      isString(record.stagedDiffDigest) &&
-      isString(record.messageDigest)
-    )
-  }
-  if (record.kind === 'git_merge') {
-    return (
-      isString(record.repoRoot) &&
-      isString(record.gitCommonDir) &&
-      isString(record.worktreeGitDir) &&
-      isFileSystemIdentity(record.repoRootIdentity) &&
-      isFileSystemIdentity(record.gitCommonDirIdentity) &&
-      isFileSystemIdentity(record.worktreeGitDirIdentity) &&
-      isString(record.destinationRef) &&
-      isString(record.preHead) &&
-      isString(record.preTree) &&
-      isString(record.sourceRef) &&
-      isString(record.sourceSha) &&
-      typeof record.sourceWasAncestor === 'boolean' &&
-      record.mode === 'no_ff_v1'
-    )
-  }
-  if (record.kind === 'git_push') {
-    return (
-      isString(record.repoRoot) &&
-      isString(record.remote) &&
-      isString(record.pushUrlDigest) &&
-      isString(record.branch) &&
-      isString(record.ref) &&
-      isString(record.intendedSha)
-    )
-  }
-  return record.kind === 'unsupported' && isString(record.toolName)
-}
-
-function isFileSystemIdentity(value: unknown): value is FileSystemIdentity {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  return isString(record.device) && isString(record.inode)
 }
 
 function isFiniteNumber(value: unknown): value is number {

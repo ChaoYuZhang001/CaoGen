@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Vector3 } from 'three'
 import type { Group } from 'three'
-import AvatarRig from './AvatarRig'
 import type { AvatarRefs } from './AvatarRig'
+import ProgressiveAvatarRig from './ProgressiveAvatarRig'
 import { applyIdle, applyStandingTalking, applyWalking } from './AvatarAnimations'
 import { vendorSkin } from './VendorSkins'
 import { providerLogoFor } from './ProviderLogos'
@@ -29,6 +29,7 @@ export interface AgentWalkerSpec {
 interface AgentWalkersProps {
   specs: AgentWalkerSpec[]
   activeSessionId?: string | null
+  loadRobotAssets?: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
@@ -315,12 +316,14 @@ function skinKey(providerName?: string, modelName?: string, providerBaseUrl?: st
 function OneAgentWalker({
   spec,
   active,
+  loadRobotAssets,
   onAwayChange,
   onSelect,
   onOpen
 }: {
   spec: AgentWalkerSpec
   active: boolean
+  loadRobotAssets: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
@@ -451,7 +454,8 @@ function OneAgentWalker({
     }
 
     group.position.copy(position)
-    group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, 0.18)
+    const turnFactor = 1 - Math.pow(1 - 0.18, Math.min(delta, 0.1) * 60)
+    group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, turnFactor)
     group.visible = nextAway
 
     const secondsToStop =
@@ -535,8 +539,8 @@ function OneAgentWalker({
         onPointerOver={cursorOver}
         onPointerOut={cursorOut}
       >
-        <mesh name="walker-select-hitbox" position={[0, 0.88, 0]}>
-          <boxGeometry args={[0.82, 1.76, 0.66]} />
+        <mesh name="walker-select-hitbox" position={[0, 1.08, 0]}>
+          <boxGeometry args={[0.82, 2.16, 0.66]} />
           <meshBasicMaterial transparent opacity={0.001} depthWrite={false} colorWrite={false} />
         </mesh>
         <mesh position={[0, 0.012, 0]} receiveShadow>
@@ -560,8 +564,11 @@ function OneAgentWalker({
             ))}
           </>
         )}
-        <AvatarRig
+        <ProgressiveAvatarRig
           ref={rigRef}
+          loadModel={loadRobotAssets}
+          sessionId={spec.sessionId}
+          detailLevel={active ? 'full' : 'low'}
           bodyColor={skin.bodyColor}
           skinColor={skin.shellColor}
           accentColor={WALKER_ACCENT}
@@ -578,6 +585,7 @@ function OneAgentWalker({
 export default function AgentWalkers({
   specs,
   activeSessionId,
+  loadRobotAssets = true,
   onAwayChange,
   onSelect,
   onOpen
@@ -590,6 +598,7 @@ export default function AgentWalkers({
           key={spec.id}
           spec={spec}
           active={spec.sessionId === activeSessionId}
+          loadRobotAssets={loadRobotAssets}
           onAwayChange={onAwayChange}
           onSelect={onSelect}
           onOpen={onOpen}

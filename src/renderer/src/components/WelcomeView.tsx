@@ -1,14 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, useStore } from '../store'
+import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
-import { AUTO_MODEL, AUTO_PROVIDER_ID, caogenDrivePolicyView } from '../../../shared/types'
+import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
 import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+import { useExperienceProjection } from './experience/ExperienceProjection'
+import AssistantStartNotice from './experience/AssistantStartNotice'
+import WelcomeRoutingControls, {
+  AssistantComputeIndicator
+} from './experience/WelcomeRoutingControls'
+import {
+  assistantSafeStartError,
+  hasAvailableCompute,
+  welcomeSessionOptions,
+  welcomeValidationKey,
+  type WelcomeRoutingMode
+} from './experience/welcome-session-projection'
 
 const NEW_PROJECT = '__new_project__'
 const UNASSIGNED = '__unassigned__'
-type RoutingMode = 'fixed' | 'provider' | 'global'
 
 interface WelcomeTool {
   key: string
@@ -30,11 +41,14 @@ const WELCOME_TOOLS: WelcomeTool[] = [
  */
 export default function WelcomeView(): React.JSX.Element {
   const t = useT()
+  const projection = useExperienceProjection()
   const settings = useStore((s) => s.settings)
   const providers = useStore((s) => s.providers)
   const projects = useStore((s) => s.projects)
   const requestedProjectId = useStore((s) => s.newSessionProjectId)
   const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
+  const refreshProviders = useStore((s) => s.refreshProviders)
+  const setShowSettings = useStore((s) => s.setShowSettings)
 
   const availableProjects = useMemo(() => projects.filter((project) => !project.archived), [projects])
   const initialProject = availableProjects.find((project) => project.id === requestedProjectId) ?? availableProjects[0]
@@ -43,7 +57,7 @@ export default function WelcomeView(): React.JSX.Element {
   const [projectChoice, setProjectChoice] = useState(initialProject?.id ?? NEW_PROJECT)
   const [cwd, setCwd] = useState(initialProject?.path ?? '')
   const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [routingMode, setRoutingMode] = useState<RoutingMode>('global')
+  const [routingMode, setRoutingMode] = useState<WelcomeRoutingMode>('global')
   const [providerId, setProviderId] = useState(initialProvider?.id ?? '')
   const [model, setModel] = useState(
     initialProvider
@@ -57,7 +71,9 @@ export default function WelcomeView(): React.JSX.Element {
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [computeRecovery, setComputeRecovery] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const computeAvailable = hasAvailableCompute(providers)
 
   useEffect(() => {
     if (projectChoice !== NEW_PROJECT || cwd || availableProjects.length === 0) return
@@ -118,7 +134,7 @@ export default function WelcomeView(): React.JSX.Element {
 
   const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
 
-  const onRoutingModeChange = (mode: RoutingMode): void => {
+  const onRoutingModeChange = (mode: WelcomeRoutingMode): void => {
     setRoutingMode(mode)
     if (mode === 'fixed') {
       setModel(fixedModelOptions[0]?.value ?? '')
@@ -152,47 +168,52 @@ export default function WelcomeView(): React.JSX.Element {
       setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT)
       setCwd(dir)
       setError('')
+      setComputeRecovery(false)
     }
   }
 
   const submit = async (): Promise<void> => {
     const prompt = text.trim()
     if (!prompt || busy) return
-    if (!cwd.trim()) {
-      setError(t('errNeedProjectDir'))
-      return
+    const draft = {
+      cwd,
+      driveMode,
+      model,
+      permissionMode,
+      projectId: availableProjects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
+      providerId,
+      routingMode,
+      unassigned: projectChoice === UNASSIGNED
     }
-    if (routingMode === 'global' && !providers.some((provider) => provider.hasToken && provider.models.length > 0)) {
-      setError(t('explicitProviderRequired'))
-      return
-    }
-    if (routingMode !== 'global' && !providerId) {
-      setError(t('explicitProviderRequired'))
-      return
-    }
-    if (routingMode === 'fixed' && (!model || model === AUTO_MODEL)) {
-      setError(t('explicitModelRequired'))
+    const validationKey = welcomeValidationKey(projection, draft, computeAvailable)
+    if (validationKey) {
+      setError(t(validationKey))
+      setComputeRecovery(projection === 'assistant' && validationKey === 'assistantComputeUnavailable')
       return
     }
     setBusy(true)
     setError('')
+    setComputeRecovery(false)
     try {
-      await startSessionWithPrompt(
-        {
-          cwd: cwd.trim(),
-          projectId: availableProjects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
-          unassigned: projectChoice === UNASSIGNED,
-          driveMode,
-          model: routingMode === 'fixed' ? model : AUTO_MODEL,
-          providerId: routingMode === 'global' ? AUTO_PROVIDER_ID : providerId,
-          routingScope: routingMode,
-          initialPrompt: prompt,
-          permissionMode
-        },
-        prompt
-      )
+      await startSessionWithPrompt(welcomeSessionOptions(projection, draft, prompt), prompt)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const safeKey = assistantSafeStartError(projection, err)
+      setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
+      setComputeRecovery(Boolean(safeKey))
+      setBusy(false)
+    }
+  }
+
+  const retryCompute = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await refreshProviders()
+      setError('')
+      setComputeRecovery(false)
+    } catch {
+      setError(t('assistantComputeCheckFailed'))
+      setComputeRecovery(true)
+    } finally {
       setBusy(false)
     }
   }
@@ -276,87 +297,39 @@ export default function WelcomeView(): React.JSX.Element {
               autoFocus
             />
             <div className="welcome-composer-bar">
-              <div className="welcome-routing-modes" role="group" aria-label={t('routingMode')}>
-                {(['fixed', 'provider', 'global'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={routingMode === mode ? 'active' : ''}
-                    onClick={() => onRoutingModeChange(mode)}
-                  >
-                    {t(
-                      mode === 'fixed'
-                        ? 'routingModeFixed'
-                        : mode === 'provider'
-                          ? 'routingModeProvider'
-                          : 'routingModeGlobal'
-                    )}
-                  </button>
-                ))}
-              </div>
-              {routingMode !== 'global' && (
-                <select
-                  className="welcome-mini-select"
-                  value={providerId}
-                  onChange={(e) => onProviderChange(e.target.value)}
-                >
-                  <option value="" disabled>
-                    {t('selectProviderPlaceholder')}
-                  </option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id} disabled={!p.hasToken}>
-                      {p.name}
-                      {p.hasToken ? '' : ` (${t('noKeyConfigured')})`}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <select
-                className="welcome-mini-select"
-                value={driveMode}
-                onChange={(e) => onDriveChange(e.target.value as CaoGenDriveMode)}
-              >
-                {DRIVE_MODE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {routingMode === 'fixed' ? (
-                <select className="welcome-mini-select" value={model} onChange={(e) => setModel(e.target.value)}>
-                  <option value="" disabled>
-                    {t('selectModelPlaceholder')}
-                  </option>
-                  {fixedModelOptions.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+              {projection === 'assistant' ? (
+                <AssistantComputeIndicator available={computeAvailable} />
               ) : (
-                <span className="welcome-routing-summary">
-                  {routingMode === 'global' ? t('routingModeGlobalSummary') : t('routingModeProviderSummary')}
-                  {' · '}
-                  {routingStrategyLabel}
-                </span>
+                <WelcomeRoutingControls
+                  driveMode={driveMode}
+                  fixedModelOptions={fixedModelOptions}
+                  model={model}
+                  permissionMode={permissionMode}
+                  providerId={providerId}
+                  providers={providers}
+                  routingMode={routingMode}
+                  routingStrategyLabel={routingStrategyLabel}
+                  onDriveChange={onDriveChange}
+                  onModelChange={setModel}
+                  onPermissionChange={setPermissionMode}
+                  onProviderChange={onProviderChange}
+                  onRoutingModeChange={onRoutingModeChange}
+                />
               )}
-              <select
-                className="welcome-mini-select"
-                value={permissionMode}
-                onChange={(e) => setPermissionMode(e.target.value as PermissionModeId)}
-              >
-                {PERMISSION_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
               <button className="welcome-send" disabled={busy || !text.trim()} onClick={() => void submit()}>
                 {busy ? '···' : '↑'}
               </button>
             </div>
           </div>
-          {error && <div className="notice notice-error welcome-error">{error}</div>}
+          {projection === 'assistant' ? (
+            <AssistantStartNotice
+              busy={busy}
+              error={error}
+              recoverable={computeRecovery}
+              onOpenSettings={() => setShowSettings(true)}
+              onRetry={() => void retryCompute()}
+            />
+          ) : error ? <div className="notice notice-error welcome-error">{error}</div> : null}
         </div>
       </div>
     </div>

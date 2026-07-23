@@ -65,7 +65,7 @@ try {
   })
 
   assert(persisted.drafts.length >= 3, `expected at least 3 project drafts, got ${persisted.drafts.length}`)
-  assert(persisted.layered.length >= 3, `expected layered memories, got ${persisted.layered.length}`)
+  assert(persisted.layered.length === 0, 'automatic review must not bypass approval into layered memory')
 
   const projectMemory = await store.readProjectMemory(projectRoot, memoryRoot)
   assert(projectMemory.entries.length === 0, 'memory loop should not auto-confirm project memories')
@@ -77,7 +77,7 @@ try {
     layers: ['working', 'project'],
     limit: 10
   })
-  assert(hits.some((hit) => hit.entry.title.includes('失败复盘')), 'failure memory should be searchable')
+  assert(hits.length === 0, 'unapproved review must not be searchable from the active layered-memory surface')
 
   console.log('memoryLoop smoke ok')
 } finally {

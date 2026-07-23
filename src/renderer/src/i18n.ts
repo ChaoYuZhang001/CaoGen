@@ -1,5 +1,7 @@
 import { useStore } from './store'
 import type { AppLanguage } from '../../shared/types'
+import { PROVIDER_CREDENTIAL_TRANSLATIONS } from './i18n/providerCredentialTranslations'
+import { ASSISTANT_PROJECTION_TRANSLATIONS } from './i18n/assistantProjectionTranslations'
 
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
@@ -57,6 +59,7 @@ const DICT: Dict = {
   noSessions: { zh: '暂无会话', en: 'No sessions' },
   cancel: { zh: '取消', en: 'Cancel' },
   save: { zh: '保存', en: 'Save' },
+  settingsSaveFailed: { zh: '设置保存失败，请检查磁盘权限后重试。', en: 'Could not save settings. Check disk permissions and try again.' },
   rename: { zh: '重命名', en: 'Rename' },
   delete: { zh: '删除', en: 'Delete' },
   closeSessionConfirm: { zh: '关闭会话「{title}」?', en: 'Close session "{title}"?' },
@@ -229,6 +232,7 @@ const DICT: Dict = {
   explicitEngineRequired: { zh: '请选择 Agent 引擎', en: 'Select an Agent engine' },
   explicitProviderRequired: { zh: '请选择已配置 API key 的 Provider', en: 'Select a Provider with an API key' },
   explicitModelRequired: { zh: '请选择模型或自动调度', en: 'Select a model or auto route' },
+  ...ASSISTANT_PROJECTION_TRANSLATIONS,
   selectEnginePlaceholder: { zh: '请选择 Agent 引擎', en: 'Select Agent engine' },
   optionalEngine: { zh: '有凭据，兼容性未验证', en: 'Credential found, compatibility unverified' },
   optionalEngineNotConfigured: { zh: '未保存凭据，可选', en: 'No saved credential, optional' },
@@ -239,6 +243,7 @@ const DICT: Dict = {
   noDefaultModel: { zh: '不设置模型偏好', en: 'No model preference' },
   officialAnthropicDefault: { zh: '未选择 Provider', en: 'No Provider selected' },
   noKeyConfigured: { zh: '未配置密钥', en: 'No API key' },
+  ...PROVIDER_CREDENTIAL_TRANSLATIONS,
   autoRoute: { zh: '🧭 自动调度', en: '🧭 Auto route' },
   routingMode: { zh: '调度范围', en: 'Routing scope' },
   routingModeFixed: { zh: '指定模型', en: 'Fixed model' },
@@ -652,6 +657,11 @@ const DICT: Dict = {
   officeShowBadges: { zh: '显示控制台厂商标识', en: 'Show vendor badge on console' },
   officeLiveliness: { zh: '动效强度', en: 'Motion intensity' },
   officeCatEars: { zh: '趣味外观:头像猫耳', en: 'Fun appearance: cat ears' },
+  officeQualityMode: { zh: '3D 画质', en: '3D quality' },
+  officeQualityAuto: { zh: '自动', en: 'Auto' },
+  officeQualityHigh: { zh: '高', en: 'High' },
+  officeQualityBalanced: { zh: '均衡', en: 'Balanced' },
+  officeQualityLow: { zh: '低', en: 'Low' },
   layoutSection: { zh: '工作台布局', en: 'Workbench layout' },
   layoutSidebarCollapsed: { zh: '默认收回侧栏', en: 'Collapse sidebar by default' },
   layoutSidebarWidth: { zh: '侧栏宽度', en: 'Sidebar width' },
@@ -689,12 +699,13 @@ const DICT: Dict = {
   providerAddTitle: { zh: '添加 Provider', en: 'Add Provider' },
   providerEngineLabel: { zh: '执行引擎', en: 'Execution engine' },
   providerEngineOpenAI: { zh: 'OpenAI-compatible', en: 'OpenAI-compatible' },
+  providerEngineAnthropic: { zh: 'Anthropic Messages API', en: 'Anthropic Messages API' },
   providerEngineClaude: { zh: 'Claude Agent SDK', en: 'Claude Agent SDK' },
   quickTemplate: { zh: '快速模板', en: 'Quick templates' },
   pickTemplate: { zh: '选择一个模板…', en: 'Pick a template…' },
   gatewayNote1: {
-    zh: 'OpenAI 可选 Responses API 引擎直连;Claude 引擎接入 ',
-    en: 'OpenAI can connect directly through the Responses API engine. With the Claude engine, '
+    zh: 'OpenAI-compatible 使用 Responses / Chat Completions;Anthropic Messages 使用原生 /v1/messages。Claude Agent SDK 接入 ',
+    en: 'OpenAI-compatible uses Responses / Chat Completions; Anthropic Messages uses native /v1/messages. With Claude Agent SDK, '
   },
   gatewayNoteBold: { zh: 'OpenAI / Gemini / 国产模型', en: 'OpenAI / Gemini / other vendors' },
   gatewayNote2: {
@@ -752,12 +763,10 @@ const DICT: Dict = {
     zh: '获取失败；{baseUrl} 的模型缓存已标记为陈旧。',
     en: 'Fetch failed. The model cache for {baseUrl} is now marked stale.'
   },
-  customHeadersLabel: { zh: '自定义请求头', en: 'Custom headers' },
-  customHeadersHint: { zh: '(可选,每行 Name: value)', en: '(optional, one "Name: value" per line)' },
   openaiProtocolLabel: { zh: 'OpenAI 引擎协议', en: 'OpenAI engine protocol' },
   openaiProtocolHint: {
-    zh: '(仅 OpenAI 引擎会话生效;Claude 引擎忽略)',
-    en: '(only used by OpenAI-engine sessions; ignored by the Claude engine)'
+    zh: '(仅 OpenAI-compatible 会话生效;Anthropic Messages 与 Claude Agent SDK 忽略)',
+    en: '(only used by OpenAI-compatible sessions; ignored by Anthropic Messages and Claude Agent SDK)'
   },
   openaiProtocolResponses: {
     zh: 'Responses(OpenAI 原生)',

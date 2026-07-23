@@ -130,6 +130,35 @@ try {
   assert(taskRun.isTaskRunRecord(cancelled), 'valid TaskRun should pass runtime validation')
   assert(!taskRun.isTaskRunRecord({ ...cancelled, revision: 'bad' }), 'invalid TaskRun must be rejected')
 
+  const operationSources = [
+    ['renderer', 'file_write'],
+    ['dag', 'worktree_patch_apply'],
+    ['session_lifecycle', 'managed_worktree_create']
+  ]
+  for (const [source, kind] of operationSources) {
+    const operationRun = taskRun.createTaskRun({
+      id: `operation-${source}`,
+      sessionId: `operation-${source}`,
+      taskId: `operation-${source}`,
+      operation: {
+        schemaVersion: 1,
+        operationId: `operation-${source}`,
+        source,
+        kind,
+        sourceSessionId: `source-${source}`,
+        title: `${source} operation`
+      }
+    })
+    assert(taskRun.isTaskRunRecord(operationRun), `${source} operation metadata must survive validation`)
+    assert(
+      !taskRun.isTaskRunRecord({
+        ...operationRun,
+        operation: { ...operationRun.operation, source: 'unknown-source' }
+      }),
+      'unknown operation source must fail runtime validation'
+    )
+  }
+
   let cursorRun = taskRun.createTaskRun({
     id: 'run-cursor',
     sessionId: 'session-cursor',

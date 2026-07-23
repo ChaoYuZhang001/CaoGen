@@ -48,11 +48,17 @@ const toolOutput = loadTsModule('src/main/agent/tool-output.ts')
 const view = loadTsModule('src/main/agent/tools/view.ts')
 
 const chatViewSource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ChatView.tsx'), 'utf8')
+const chatStatusBarSource = readFileSync(
+  path.join(repoRoot, 'src/renderer/src/components/experience/ChatStatusBar.tsx'),
+  'utf8'
+)
 const storeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
 const agentSessionSource = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
 check(
   'UI 状态栏显示 contextTokens',
-  chatViewSource.includes('meta.contextTokens') && chatViewSource.includes("t('statusContext')")
+  chatViewSource.includes('<ChatStatusBar') &&
+    chatStatusBarSource.includes('meta.contextTokens') &&
+    chatStatusBarSource.includes("t('statusContext')")
 )
 
 check(

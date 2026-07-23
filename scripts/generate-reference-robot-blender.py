@@ -13,13 +13,18 @@ from mathutils import Quaternion, Vector
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = REPO_ROOT / "src/renderer/src/assets/robots"
 GLB_PATH = ASSET_DIR / "reference-office-robot.glb"
+LOD_GLB_PATH = ASSET_DIR / "reference-office-robot-lod.glb"
 BLEND_PATH = ASSET_DIR / "reference-office-robot.blend"
+HELMET_SOURCE_BLEND = ASSET_DIR / "reference-helmet-source.blend"
 PREVIEW_DIR = REPO_ROOT / "test-results/reference-robot-blender"
 REFERENCE_ORIGINAL = REPO_ROOT / "docs/visual-references/reference-robot-original.jpeg"
 REFERENCE_SHEET = REPO_ROOT / "docs/visual-references/reference-robot-orthographic-sheet.png"
 OFFICIAL_G1_DIR = REPO_ROOT / "third_party/unitree-g1-rev1"
 OFFICIAL_G1_MESH_DIR = OFFICIAL_G1_DIR / "meshes"
 OFFICIAL_G1_XML = OFFICIAL_G1_DIR / "g1_29dof_rev_1_0.xml"
+
+LOD_DECIMATE_RATIO = 0.18
+LOD_DECIMATE_MIN_FACES = 1_000
 
 JOINT_POSE_RADIANS = {
     # Keep the upper arms hanging from the shoulders. The source forearms point
@@ -451,6 +456,13 @@ def add_bezier_profile_extrusion_x(
             center_weight = math.sin(math.pi * normalized) ** 0.8
             factor = 1.0 - width_taper * (1.0 - center_weight)
             vertex.co.x *= factor
+
+    mesh = bmesh.new()
+    mesh.from_mesh(obj.data)
+    bmesh.ops.remove_doubles(mesh, verts=list(mesh.verts), dist=1e-5)
+    mesh.normal_update()
+    mesh.to_mesh(obj.data)
+    mesh.free()
     obj.data.update()
     smooth_mesh(obj)
     parent_object(obj, parent)
@@ -513,6 +525,53 @@ def add_lofted_helmet_cowl(
     return obj
 
 
+def sample_closed_catmull_rom(
+    points: list[tuple[float, float]],
+    samples_per_segment: int = 5,
+) -> list[tuple[float, float]]:
+    if len(points) < 4 or samples_per_segment < 2:
+        return points
+
+    sampled: list[tuple[float, float]] = []
+    count = len(points)
+    for index in range(count):
+        p0 = points[(index - 1) % count]
+        p1 = points[index]
+        p2 = points[(index + 1) % count]
+        p3 = points[(index + 2) % count]
+        for sample_index in range(samples_per_segment):
+            t = sample_index / samples_per_segment
+            t2 = t * t
+            t3 = t2 * t
+            sampled.append(
+                tuple(
+                    0.5
+                    * (
+                        2.0 * p1[axis]
+                        + (-p0[axis] + p2[axis]) * t
+                        + (2.0 * p0[axis] - 5.0 * p1[axis] + 4.0 * p2[axis] - p3[axis]) * t2
+                        + (-p0[axis] + 3.0 * p1[axis] - 3.0 * p2[axis] + p3[axis]) * t3
+                    )
+                    for axis in range(2)
+                )
+            )
+    return sampled
+
+
+def interpolate_profile(points: list[tuple[float, float]], coordinate: float) -> float:
+    ordered = sorted(points)
+    if coordinate <= ordered[0][0]:
+        return ordered[0][1]
+    if coordinate >= ordered[-1][0]:
+        return ordered[-1][1]
+    for (start_coordinate, start_value), (end_coordinate, end_value) in zip(ordered, ordered[1:]):
+        if start_coordinate <= coordinate <= end_coordinate:
+            span = max(end_coordinate - start_coordinate, 1e-6)
+            ratio = (coordinate - start_coordinate) / span
+            return start_value + (end_value - start_value) * ratio
+    return ordered[-1][1]
+
+
 def add_rounded_profile_shell_x(
     name: str,
     profile_yz: list[tuple[float, float]],
@@ -523,8 +582,10 @@ def add_rounded_profile_shell_x(
     crown_rounding: float = 0.065,
     depth_rounding: float = 0.06,
     lower_width_taper: float = 0.30,
+    upper_width_taper: float = 0.0,
     parent: bpy.types.Object | None = None,
 ) -> bpy.types.Object:
+    profile_yz = sample_closed_catmull_rom(profile_yz)
     vertices: list[tuple[float, float, float]] = []
     half_width = width / 2
     min_z = min(z for _, z in profile_yz)
@@ -537,10 +598,14 @@ def add_rounded_profile_shell_x(
         z_offset = crown_rounding * rounded_factor
         for y, z in profile_yz:
             height_ratio = (z - min_z) / height
+            crown_ratio = max(0.0, min(1.0, (height_ratio - 0.35) / 0.65))
+            crown_weight = crown_ratio * crown_ratio * (3.0 - 2.0 * crown_ratio)
             taper_weight = min(1.0, height_ratio / 0.62)
             width_scale = 1.0 - lower_width_taper * (1.0 - taper_weight)
+            upper_ratio = max(0.0, min(1.0, (height_ratio - 0.55) / 0.45))
+            width_scale *= 1.0 - upper_width_taper * upper_ratio * upper_ratio
             x = half_width * normalized_x * width_scale
-            vertices.append((x, y * y_scale, z + z_offset))
+            vertices.append((x, y * y_scale, z + z_offset * crown_weight))
 
     faces: list[tuple[int, ...]] = []
     profile_count = len(profile_yz)
@@ -557,9 +622,39 @@ def add_rounded_profile_shell_x(
                     next_section_start + index,
                 )
             )
-    faces.append(tuple(range(profile_count - 1, -1, -1)))
+    first_center_index = len(vertices)
+    first_boundary = vertices[:profile_count]
+    first_center_x = min(vertex[0] for vertex in first_boundary) * 0.985
+    vertices.append(
+        (
+            first_center_x,
+            sum(vertex[1] for vertex in first_boundary) / profile_count,
+            sum(vertex[2] for vertex in first_boundary) / profile_count,
+        )
+    )
+    faces.extend(
+        (first_center_index, (index + 1) % profile_count, index)
+        for index in range(profile_count)
+    )
     final_start = (cross_sections - 1) * profile_count
-    faces.append(tuple(final_start + index for index in range(profile_count)))
+    final_center_index = len(vertices)
+    final_boundary = vertices[final_start:final_start + profile_count]
+    final_center_x = max(vertex[0] for vertex in final_boundary) * 0.985
+    vertices.append(
+        (
+            final_center_x,
+            sum(vertex[1] for vertex in final_boundary) / profile_count,
+            sum(vertex[2] for vertex in final_boundary) / profile_count,
+        )
+    )
+    faces.extend(
+        (
+            final_center_index,
+            final_start + index,
+            final_start + (index + 1) % profile_count,
+        )
+        for index in range(profile_count)
+    )
 
     mesh = bpy.data.meshes.new(f"{name}_mesh")
     mesh.from_pydata(vertices, [], faces)
@@ -648,6 +743,85 @@ def add_curve_tube(
     return obj
 
 
+def add_annular_face_shell(
+    name: str,
+    outer_xz: list[tuple[float, float]],
+    inner_xz: list[tuple[float, float]],
+    material: bpy.types.Material,
+    *,
+    front_y_top: float,
+    front_y_bottom: float,
+    thickness: float,
+    bevel: float,
+    parent: bpy.types.Object | None = None,
+) -> bpy.types.Object:
+    if len(outer_xz) != len(inner_xz) or len(outer_xz) < 4:
+        raise ValueError("annular face shell requires matching outer and inner loops")
+    outer_xz = sample_closed_catmull_rom(outer_xz, samples_per_segment=4)
+    inner_xz = sample_closed_catmull_rom(inner_xz, samples_per_segment=4)
+
+    min_z = min(z for _, z in outer_xz)
+    max_z = max(z for _, z in outer_xz)
+    z_span = max(max_z - min_z, 1e-6)
+
+    def front_y(z: float) -> float:
+        ratio = (z - min_z) / z_span
+        return front_y_bottom + (front_y_top - front_y_bottom) * ratio
+
+    front_outer = [(x, front_y(z), z) for x, z in outer_xz]
+    front_inner = [(x, front_y(z), z) for x, z in inner_xz]
+    back_outer = [(x, y + thickness, z) for x, y, z in front_outer]
+    back_inner = [(x, y + thickness, z) for x, y, z in front_inner]
+    vertices = front_outer + front_inner + back_outer + back_inner
+    count = len(outer_xz)
+    front_outer_start = 0
+    front_inner_start = count
+    back_outer_start = count * 2
+    back_inner_start = count * 3
+    faces: list[tuple[int, ...]] = []
+    for index in range(count):
+        next_index = (index + 1) % count
+        faces.extend(
+            (
+                (
+                    front_outer_start + index,
+                    front_outer_start + next_index,
+                    front_inner_start + next_index,
+                    front_inner_start + index,
+                ),
+                (
+                    back_outer_start + next_index,
+                    back_outer_start + index,
+                    back_inner_start + index,
+                    back_inner_start + next_index,
+                ),
+                (
+                    front_outer_start + next_index,
+                    front_outer_start + index,
+                    back_outer_start + index,
+                    back_outer_start + next_index,
+                ),
+                (
+                    front_inner_start + index,
+                    front_inner_start + next_index,
+                    back_inner_start + next_index,
+                    back_inner_start + index,
+                ),
+            )
+        )
+
+    mesh = bpy.data.meshes.new(f"{name}_mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    apply_bevel(obj, bevel, 5)
+    smooth_mesh(obj, angle=math.radians(32))
+    assign_material(obj, material)
+    parent_object(obj, parent)
+    return obj
+
+
 def add_reference_images() -> None:
     collection = bpy.data.collections.new("ModelingReferences")
     bpy.context.scene.collection.children.link(collection)
@@ -725,11 +899,12 @@ def reshape_reference_torso(obj: bpy.types.Object) -> None:
     obj.data.update()
 
 
-def build_reference_helmet(
+def build_reference_helmet_authoring_geometry(
     root: bpy.types.Object,
     materials: dict[str, bpy.types.Material],
     base_z: float,
 ) -> bpy.types.Object:
+    """Procedural seed used only to rebuild the editable helmet source asset."""
     black = materials["black"]
     black_soft = materials["black_soft"]
     joint = materials["joint"]
@@ -737,96 +912,270 @@ def build_reference_helmet(
     glass = materials["glass"]
     cyan = materials["cyan"]
 
-    neck = add_empty("helmet_neck_assembly", (0, 0, base_z - 0.055), root)
+    neck = add_empty("helmet_neck_assembly", (0, 0.002, base_z + 0.015), root)
     add_lofted_helmet_cowl(
         "black_tapered_neck_shroud",
         [
-            (-0.078, 0.015, 0.098, 0.06),
-            (-0.062, 0.005, 0.082, 0.057),
-            (-0.045, -0.005, 0.066, 0.052),
-            (-0.025, -0.015, 0.052, 0.046),
-            (-0.005, -0.022, 0.044, 0.041),
-            (0.015, -0.028, 0.039, 0.037),
-            (0.03, -0.03, 0.037, 0.034),
+            (-0.086, 0.010, 0.060, 0.041),
+            (-0.060, 0.008, 0.088, 0.038),
+            (-0.034, 0.005, 0.080, 0.034),
+            (-0.008, 0.002, 0.061, 0.030),
+            (0.018, 0.000, 0.045, 0.027),
         ],
         black_soft,
         parent=neck,
     )
-    add_box("rear_neck_service_channel", (0.038, 0.018, 0.076), (0, 0.018, -0.008), carbon, bevel=0.008, parent=neck)
-
-    head = add_empty("helmet_head", (0, 0, base_z), root)
-    head.scale = (0.72, 0.68, 0.70)
-    head["reference_head_scale"] = 0.70
-    head["reference_head_scale_xyz"] = (0.72, 0.68, 0.70)
+    add_box("rear_neck_service_channel", (0.030, 0.016, 0.062), (0, 0.042, -0.054), carbon, bevel=0.006, parent=neck)
+    head = add_empty("helmet_head", (0, 0, base_z + 0.060), root)
+    # The sheet's full-body front view puts the helmet at roughly 40 percent
+    # of shoulder width. Keep this scale explicit so child tweaks cannot drift.
+    head.scale = (0.52, 0.39, 0.58)
+    head["reference_head_scale"] = 0.55
+    head["reference_head_scale_xyz"] = (0.52, 0.39, 0.58)
     cowl = add_rounded_profile_shell_x(
         "helmet_black_smooth_cowl",
         [
-            (-0.205, 0.165),
-            (-0.19, 0.19),
-            (-0.175, 0.22),
-            (-0.145, 0.255),
-            (-0.10, 0.285),
-            (-0.06, 0.305),
-            (-0.02, 0.32),
-            (0.03, 0.327),
-            (0.08, 0.325),
-            (0.125, 0.315),
-            (0.17, 0.30),
-            (0.205, 0.28),
-            (0.235, 0.255),
-            (0.248, 0.23),
-            (0.25, 0.215),
-            (0.245, 0.195),
-            (0.235, 0.18),
-            (0.17, 0.165),
-            (0.08, 0.155),
-            (-0.01, 0.145),
-            (-0.08, 0.125),
-            (-0.14, 0.105),
-            (-0.18, 0.115),
+            (-0.178, 0.142),
+            (-0.18, 0.165),
+            (-0.168, 0.190),
+            (-0.143, 0.214),
+            (-0.105, 0.232),
+            (-0.058, 0.247),
+            (0.0, 0.255),
+            (0.064, 0.253),
+            (0.150, 0.245),
+            (0.210, 0.232),
+            (0.260, 0.215),
+            (0.285, 0.195),
+            (0.290, 0.181),
+            (0.270, 0.166),
+            (0.220, 0.154),
+            (0.130, 0.146),
+            (0.040, 0.139),
+            (-0.070, 0.132),
+            (-0.130, 0.126),
+            (-0.164, 0.13),
         ],
-        0.31,
+        0.325,
         black,
+        cross_sections=33,
+        crown_rounding=0.064,
+        depth_rounding=0.035,
+        lower_width_taper=0.12,
+        upper_width_taper=0.16,
         parent=head,
     )
-    cowl.scale = (0.91, 0.84, 0.66)
-    cowl.location = (0.0, -0.205 * (1.0 - 0.84), 0.165 * (1.0 - 0.66))
-    cowl["reference_shape_scale"] = (0.91, 0.84, 0.66)
-    cowl["reference_silhouette"] = "rounded_profile_open_face_cowl"
+    cowl["reference_shape_scale"] = (1.0, 1.0, 1.0)
+    cowl["reference_silhouette"] = "orthographic_annular_frame_occipital_bridge"
 
-    visor_points = [
-        (0.0, -0.211, 0.172),
-        (-0.085, -0.212, 0.17),
-        (-0.122, -0.212, 0.148),
-        (-0.135, -0.207, 0.095),
-        (-0.134, -0.195, 0.025),
-        (-0.122, -0.17, -0.04),
-        (-0.095, -0.135, -0.09),
-        (-0.055, -0.108, -0.12),
-        (0.0, -0.09, -0.13),
-        (0.055, -0.108, -0.12),
-        (0.095, -0.135, -0.09),
-        (0.122, -0.17, -0.04),
-        (0.134, -0.195, 0.025),
-        (0.135, -0.207, 0.095),
-        (0.122, -0.212, 0.148),
-        (0.085, -0.212, 0.17),
+    rear_spine_profile = [
+        (0.086, -0.048),
+        (0.116, -0.055),
+        (0.143, -0.032),
+        (0.158, 0.012),
+        (0.174, 0.064),
+        (0.198, 0.118),
+        (0.232, 0.160),
+        (0.278, 0.184),
+        (0.255, 0.150),
+        (0.225, 0.124),
+        (0.208, 0.070),
+        (0.192, 0.018),
+        (0.170, -0.025),
+        (0.138, -0.049),
     ]
-    visor_frame = add_curve_tube("black_u_visor_frame", visor_points, 0.017, joint, cyclic=True, parent=head)
+    occipital_bridge_profile = [
+        (0.018, -0.056),
+        (0.060, -0.066),
+        (0.125, -0.060),
+        (0.158, -0.048),
+        (0.150, -0.030),
+        (0.110, -0.035),
+        (0.065, -0.045),
+    ]
+    visor_contour_side_offsets = [
+        (-0.080, 0.082),
+        (-0.055, 0.092),
+        (-0.020, 0.108),
+        (0.020, 0.121),
+        (0.070, 0.126),
+        (0.120, 0.116),
+        (0.160, 0.090),
+        (0.184, 0.080),
+    ]
+
+    def follow_visor_contour(obj: bpy.types.Object, side: int) -> None:
+        for vertex in obj.data.vertices:
+            vertex.co.x += side * interpolate_profile(visor_contour_side_offsets, vertex.co.z)
+        obj.data.update()
+        obj["reference_side"] = side
+        obj["reference_offset_profile"] = "visor_contour_following"
+
+    for side, label in ((-1, "left"), (1, "right")):
+        rear_spine = add_bezier_profile_extrusion_x(
+            f"helmet_rear_occipital_spine_{label}",
+            rear_spine_profile,
+            0.015,
+            black_soft,
+            edge_rounding=0.008,
+            width_taper=0.08,
+            parent=head,
+        )
+        follow_visor_contour(rear_spine, side)
+        rear_spine["reference_component"] = "paired_rear_neck_support"
+        occipital_bridge = add_profile_extrusion_x(
+            f"helmet_occipital_neck_bridge_{label}",
+            occipital_bridge_profile,
+            0.018,
+            black_soft,
+            bevel=0.004,
+            parent=head,
+        )
+        follow_visor_contour(occipital_bridge, side)
+        occipital_bridge["reference_component"] = "paired_occipital_neck_bridge"
+
+    visor_outer_xz = [
+        (0.0, 0.166),
+        (-0.074, 0.164),
+        (-0.108, 0.150),
+        (-0.128, 0.118),
+        (-0.136, 0.070),
+        (-0.133, 0.018),
+        (-0.118, -0.032),
+        (-0.090, -0.068),
+        (-0.052, -0.090),
+        (0.0, -0.098),
+        (0.052, -0.090),
+        (0.090, -0.068),
+        (0.118, -0.032),
+        (0.133, 0.018),
+        (0.136, 0.070),
+        (0.128, 0.118),
+        (0.108, 0.150),
+        (0.074, 0.164),
+    ]
+    visor_inner_xz = [
+        (0.0, 0.139),
+        (-0.064, 0.140),
+        (-0.090, 0.130),
+        (-0.108, 0.104),
+        (-0.116, 0.067),
+        (-0.113, 0.025),
+        (-0.100, -0.015),
+        (-0.076, -0.048),
+        (-0.043, -0.070),
+        (0.0, -0.078),
+        (0.043, -0.070),
+        (0.076, -0.048),
+        (0.100, -0.015),
+        (0.113, 0.025),
+        (0.116, 0.067),
+        (0.108, 0.104),
+        (0.090, 0.130),
+        (0.064, 0.140),
+    ]
+    visor_frame = add_annular_face_shell(
+        "black_u_visor_frame",
+        visor_outer_xz,
+        visor_inner_xz,
+        joint,
+        front_y_top=-0.188,
+        front_y_bottom=-0.154,
+        thickness=0.026,
+        bevel=0.0045,
+        parent=cowl,
+    )
     visor_frame["visor_attachment"] = "helmet_black_smooth_cowl"
-    visor_center_z = 0.03
-    visor_light_points = [
-        (x * 1.01, y - 0.019, visor_center_z + (z - visor_center_z) * 1.01)
-        for x, y, z in visor_points
-    ]
-    visor_light = add_curve_tube("cyan_u_visor_light", visor_light_points, 0.0046, cyan, cyclic=True, parent=head)
+    visor_frame["reference_component"] = "beveled_annular_face_shell"
+    visor_light_points = []
+    min_visor_z = min(z for _, z in visor_outer_xz)
+    max_visor_z = max(z for _, z in visor_outer_xz)
+    visor_z_span = max_visor_z - min_visor_z
+    for (outer_x, outer_z), (inner_x, inner_z) in zip(visor_outer_xz, visor_inner_xz):
+        x = outer_x * 0.80 + inner_x * 0.20
+        z = outer_z * 0.80 + inner_z * 0.20
+        depth_ratio = (z - min_visor_z) / visor_z_span
+        surface_y = -0.154 + (-0.188 + 0.154) * depth_ratio
+        visor_light_points.append((x, surface_y - 0.0008, z))
+    visor_light = add_curve_tube("cyan_u_visor_light", visor_light_points, 0.0024, cyan, cyclic=True, parent=visor_frame)
     visor_light["visor_attachment"] = "black_u_visor_frame"
-    add_box("dark_glass_sensor_band", (0.21, 0.024, 0.044), (0, -0.216, 0.128), glass, bevel=0.012, parent=head)
-    add_box("cyan_horizontal_sensor_slit", (0.185, 0.008, 0.011), (0, -0.232, 0.12), cyan, bevel=0.005, parent=head)
-    add_box("bright_sensor_core", (0.126, 0.005, 0.005), (0, -0.237, 0.12), cyan, bevel=0.0025, parent=head)
-    for index, x in enumerate((-0.066, -0.022, 0.022, 0.066)):
-        add_cylinder(f"front_sensor_camera_{index}", 0.0055, 0.005, (x, -0.229, 0.132), glass, rotation=(math.radians(90), 0, 0), bevel=0.0015, vertices=32, parent=head)
-    add_cylinder("lower_sensor_puck", 0.024, 0.018, (0, -0.213, 0.088), joint, rotation=(math.radians(90), 0, 0), bevel=0.004, vertices=48, parent=head)
+    visor_light["reference_component"] = "flush_inset_light_tube"
+    visor_light["surface_offset_m"] = 0.0008
+    add_box("dark_glass_sensor_band", (0.21, 0.022, 0.038), (0, -0.184, 0.124), glass, bevel=0.01, parent=head)
+    add_box("cyan_horizontal_sensor_slit", (0.19, 0.008, 0.01), (0, -0.198, 0.118), cyan, bevel=0.0045, parent=head)
+    add_box("bright_sensor_core", (0.122, 0.004, 0.004), (0, -0.203, 0.118), cyan, bevel=0.002, parent=head)
+    for index, x in enumerate((-0.058, -0.019, 0.019, 0.058)):
+        add_cylinder(f"front_sensor_camera_{index}", 0.0048, 0.004, (x, -0.198, 0.132), glass, rotation=(math.radians(90), 0, 0), bevel=0.0012, vertices=32, parent=head)
+    add_cylinder("lower_sensor_puck", 0.009, 0.007, (0, -0.181, 0.105), joint, rotation=(math.radians(90), 0, 0), bevel=0.002, vertices=48, parent=head)
+    return head
+
+
+def load_reference_helmet_source(
+    head_mount: bpy.types.Object,
+    materials: dict[str, bpy.types.Material],
+) -> bpy.types.Object:
+    if not HELMET_SOURCE_BLEND.exists():
+        raise FileNotFoundError(f"missing reference helmet source asset: {HELMET_SOURCE_BLEND}")
+
+    source_collection_name = "ReferenceHelmetSource"
+    with bpy.data.libraries.load(str(HELMET_SOURCE_BLEND), link=False) as (data_from, data_to):
+        if source_collection_name not in data_from.collections:
+            raise RuntimeError(
+                f"reference helmet source must contain collection {source_collection_name!r}"
+            )
+        data_to.collections = [source_collection_name]
+
+    source_collection = data_to.collections[0]
+    if source_collection is None:
+        raise RuntimeError("reference helmet source collection could not be appended")
+    bpy.context.scene.collection.children.link(source_collection)
+    source_objects = list(source_collection.all_objects)
+    objects_by_name = {obj.name: obj for obj in source_objects}
+    required_names = {
+        "helmet_head",
+        "helmet_black_smooth_cowl",
+        "black_u_visor_frame",
+        "cyan_u_visor_light",
+        "dark_glass_sensor_band",
+        "cyan_horizontal_sensor_slit",
+    }
+    missing_names = sorted(required_names - objects_by_name.keys())
+    if missing_names:
+        raise RuntimeError(f"reference helmet source is missing objects: {missing_names}")
+
+    head = objects_by_name["helmet_head"]
+    if head.parent is not None:
+        raise RuntimeError("reference helmet source helmet_head must be a collection root")
+    head.parent = head_mount
+    head.location = (0.0, 0.0, 0.0)
+    head.rotation_euler = (0.0, 0.0, 0.0)
+    head.scale = (1.0, 1.0, 1.0)
+
+    for obj in source_objects:
+        material_role = obj.get("helmet_material_role")
+        if not material_role or not obj.data or not hasattr(obj.data, "materials"):
+            continue
+        if material_role not in materials:
+            raise RuntimeError(
+                f"reference helmet object {obj.name!r} uses unknown material role {material_role!r}"
+            )
+        obj.data.materials.clear()
+        obj.data.materials.append(materials[material_role])
+
+    shell = objects_by_name["helmet_black_smooth_cowl"]
+    if shell.get("reference_component") != "single_continuous_subd_shell":
+        raise RuntimeError("reference helmet source must use the single continuous SubD shell")
+    subdivision_modifiers = [modifier for modifier in shell.modifiers if modifier.type == "SUBSURF"]
+    if not subdivision_modifiers:
+        raise RuntimeError("reference helmet source shell must retain a Subdivision modifier")
+    for modifier in subdivision_modifiers:
+        modifier.show_viewport = False
+        modifier.show_render = False
+    shell["production_subdivision_disabled"] = True
+
+    head["reference_style"] = "orthographic single-shell service helmet"
+    head["reference_source"] = "src/renderer/src/assets/robots/reference-helmet-source.blend"
+    head["source_asset_pipeline"] = "appended_blender_subd_source"
     return head
 
 
@@ -1204,7 +1553,7 @@ def build_official_g1_robot(materials: dict[str, bpy.types.Material]) -> bpy.typ
         head_source_parent.matrix_world.to_quaternion().inverted()
         @ root.matrix_world.to_quaternion()
     )
-    head_control = build_reference_helmet(head_mount, materials, 0.025)
+    head_control = load_reference_helmet_source(head_mount, materials)
     head_control["reference_style"] = "orthographic open-face service helmet"
     head_control["reference_source"] = "docs/visual-references/reference-robot-orthographic-sheet.png"
 
@@ -1301,8 +1650,19 @@ def render_views(root: bpy.types.Object, materials: dict[str, bpy.types.Material
         scene.render.filepath = str(PREVIEW_DIR / f"{name}.png")
         bpy.ops.render.render(write_still=True)
 
+    camera_data.ortho_scale = 0.54
+    detail_views = {
+        "head-front-current": ((0.0, -5.2, 1.30), (0.0, 0.0, 1.30)),
+        "head-side-current": ((5.2, 0.0, 1.30), (0.0, 0.0, 1.30)),
+    }
+    for name, (position, target) in detail_views.items():
+        camera.location = position
+        point_camera(camera, target)
+        scene.render.filepath = str(PREVIEW_DIR / f"{name}.png")
+        bpy.ops.render.render(write_still=True)
 
-def export_model(root: bpy.types.Object) -> None:
+
+def export_model(root: bpy.types.Object, output_path: Path) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     root.select_set(True)
     for child in root.children_recursive:
@@ -1310,7 +1670,7 @@ def export_model(root: bpy.types.Object) -> None:
     bpy.context.view_layer.objects.active = root
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(
-        filepath=str(GLB_PATH),
+        filepath=str(output_path),
         export_format="GLB",
         use_selection=True,
         export_yup=True,
@@ -1319,7 +1679,37 @@ def export_model(root: bpy.types.Object) -> None:
         export_cameras=False,
         export_lights=False,
         export_extras=True,
+        export_draco_mesh_compression_enable=True,
+        export_draco_mesh_compression_level=6,
+        export_draco_position_quantization=14,
+        export_draco_normal_quantization=10,
     )
+
+
+def prepare_lod_model(root: bpy.types.Object) -> tuple[int, int]:
+    source_faces = 0
+    lod_faces = 0
+    for obj in [root, *root.children_recursive]:
+        if obj.type != "MESH":
+            continue
+        source_faces += len(obj.data.polygons)
+        if len(obj.data.polygons) >= LOD_DECIMATE_MIN_FACES:
+            if obj.data.users > 1:
+                obj.data = obj.data.copy()
+            bpy.ops.object.select_all(action="DESELECT")
+            obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
+            modifier = obj.modifiers.new(name="OfficeLodDecimate", type="DECIMATE")
+            modifier.ratio = LOD_DECIMATE_RATIO
+            modifier.use_collapse_triangulate = True
+            bpy.ops.object.modifier_apply(modifier=modifier.name)
+        lod_faces += len(obj.data.polygons)
+
+    root["office_lod_level"] = "low"
+    root["office_lod_source_faces"] = source_faces
+    root["office_lod_faces"] = lod_faces
+    root["office_lod_decimate_ratio"] = LOD_DECIMATE_RATIO
+    return source_faces, lod_faces
 
 
 def main() -> None:
@@ -1348,10 +1738,17 @@ def main() -> None:
     add_reference_images()
     root = build_official_g1_robot(materials)
     align_model_to_floor(root)
-    export_model(root)
+    root["office_lod_level"] = "full"
+    export_model(root, GLB_PATH)
     render_views(root, materials)
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), compress=True)
+    source_faces, lod_faces = prepare_lod_model(root)
+    export_model(root, LOD_GLB_PATH)
     print(f"generated GLB: {GLB_PATH}")
+    print(
+        f"generated LOD GLB: {LOD_GLB_PATH} "
+        f"({source_faces} -> {lod_faces} Blender faces)"
+    )
     print(f"saved Blender source: {BLEND_PATH}")
     print(f"rendered orthographic previews: {PREVIEW_DIR}")
 

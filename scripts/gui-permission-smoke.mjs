@@ -186,20 +186,22 @@ check('gui tools are not accidentally read-only or edit auto-allow tools', () =>
   }
 })
 
-check('openai gate evaluates gui permission before bypassPermissions', () => {
-  const text = source('src/main/openaiEngine.ts')
-  const gateStart = text.indexOf('private async gateTool')
-  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+check('native tool gate evaluates gui permission before bypassPermissions', () => {
+  const text = source('src/main/native-tool-runtime.ts')
+  const openai = source('src/main/openaiEngine.ts')
+  const gateStart = text.indexOf('async gateTool')
+  const preflightStart = text.indexOf('\n  preflightToolGate(', gateStart)
   const gateBlock = text.slice(gateStart, preflightStart)
   const preflightCall = gateBlock.indexOf('this.preflightToolGate(name, input, toolUseId)')
   const guiAllow = gateBlock.indexOf("guiDecision.kind === 'allow'")
   const guiAsk = gateBlock.indexOf("guiDecision.kind === 'ask'")
   const bypass = gateBlock.indexOf("mode === 'bypassPermissions'")
   const preflightGuiDecision = text.indexOf('decideGuiPermission(name,', preflightStart)
-  assert(gateStart !== -1 && preflightStart !== -1, 'OpenAI gate/preflight markers not found')
+  assert(gateStart !== -1 && preflightStart !== -1, 'native tool gate/preflight markers not found')
   assert(preflightCall !== -1 && preflightGuiDecision !== -1, 'gateTool must invoke GUI-aware preflight')
   assert(guiAllow !== -1 && guiAsk !== -1 && bypass !== -1, 'gateTool GUI/bypass markers not found')
   assert(preflightCall < guiAllow && guiAllow < bypass && guiAsk < bypass, 'GUI decision must run before bypassPermissions check')
+  assert(openai.includes('new NativeToolRuntime('), 'OpenAIEngine must delegate tool permission and Effect semantics to NativeToolRuntime')
 })
 
 check('claude gate evaluates gui permission before bypassPermissions', () => {
@@ -211,10 +213,10 @@ check('claude gate evaluates gui permission before bypassPermissions', () => {
   assert(guiDecision < bypass, 'Claude GUI decision must run before bypassPermissions check')
 })
 
-check('openai gate evaluates policy denylist before gui permission allow or ask', () => {
-  const text = source('src/main/openaiEngine.ts')
-  const gateStart = text.indexOf('private async gateTool')
-  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+check('native tool gate evaluates policy denylist before gui permission allow or ask', () => {
+  const text = source('src/main/native-tool-runtime.ts')
+  const gateStart = text.indexOf('async gateTool')
+  const preflightStart = text.indexOf('\n  preflightToolGate(', gateStart)
   const policy = text.indexOf('const policy = evaluateToolPermission', preflightStart)
   const policyDeny = text.indexOf("policy.kind === 'deny'", policy)
   const guiDecision = text.indexOf('decideGuiPermission(name,', preflightStart)
@@ -222,10 +224,10 @@ check('openai gate evaluates policy denylist before gui permission allow or ask'
   assert(policy < guiDecision && policyDeny < guiDecision, 'policy denylist must run before GUI allow/ask path')
 })
 
-check('openai gui gate decisions are audit logged', () => {
-  const text = source('src/main/openaiEngine.ts')
-  const gateStart = text.indexOf('private async gateTool')
-  const preflightStart = text.indexOf('private preflightToolGate', gateStart)
+check('native gui gate decisions are audit logged', () => {
+  const text = source('src/main/native-tool-runtime.ts')
+  const gateStart = text.indexOf('async gateTool')
+  const preflightStart = text.indexOf('\n  preflightToolGate(', gateStart)
   const auditStart = text.indexOf('private auditGateDecision', preflightStart)
   const gateBlock = text.slice(gateStart, preflightStart)
   const preflightBlock = text.slice(preflightStart, auditStart)
@@ -252,8 +254,8 @@ check('permission policy classifies browser_navigate file URLs as paths', () => 
   assert(fileUrlToPath !== -1, 'file:// URL extraction must use fileURLToPath')
 })
 
-check('openai permission response grants temporary gui authorization only via message token', () => {
-  const text = source('src/main/openaiEngine.ts')
+check('native permission response grants temporary gui authorization only via message token', () => {
+  const text = source('src/main/native-tool-runtime.ts')
   const token = text.indexOf('message === GUI_TEMPORARY_GRANT_MESSAGE')
   const guiPending = text.indexOf("pending.info.toolName.startsWith('gui_')", token)
   const grant = text.indexOf('grantTemporaryGuiAutomation()', token)

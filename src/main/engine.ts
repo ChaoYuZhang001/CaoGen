@@ -11,6 +11,11 @@ import type {
   SessionMeta,
   TranscriptEntry
 } from '../shared/types'
+import type { NativeRuntimeAdapterDeclaration } from '../shared/native-runtime-types'
+import { assertNativeRuntimeAdapterDeclaration } from './native-runtime-contract'
+import { bindEngineToNativeRuntime } from './native-runtime-engine'
+import { assertNativeProtocolAdapter } from './protocol-adapters/shared'
+import type { NativeProtocolAdapter } from './protocol-adapters/types'
 
 /**
  * M6 · EngineAdapter:桌面会话与底层 Agent 引擎之间的契约。
@@ -65,13 +70,30 @@ export interface EngineFactory {
   optional?: boolean
   /** 当前是否存在用户凭据；不代表端点协议兼容，探测失败也不阻塞引擎列表。 */
   configured?(): boolean
+  /** 1.0 builtin engines declare the same frozen provider-neutral runtime contract. */
+  nativeRuntime?: NativeRuntimeAdapterDeclaration
+  /** Provider protocol translation and validation boundary paired with the native runtime. */
+  protocolAdapter?: NativeProtocolAdapter
   create(meta: SessionMeta, emit: EngineEmit, resumeSdkSessionId?: string, initialEventSeq?: number): Engine
 }
 
 const registry = new Map<string, EngineFactory>()
 
 export function registerEngine(factory: EngineFactory): void {
+  assertFactoryAdapterBinding(factory)
   registry.set(factory.kind, factory)
+}
+
+export function listNativeRuntimeAdapters(): NativeRuntimeAdapterDeclaration[] {
+  return [...registry.values()].flatMap((factory) =>
+    factory.nativeRuntime ? [factory.nativeRuntime] : []
+  )
+}
+
+export function listProtocolAdapters(): NativeProtocolAdapter[] {
+  return [...registry.values()].flatMap((factory) =>
+    factory.protocolAdapter ? [factory.protocolAdapter] : []
+  )
 }
 
 export function listEngines(): Array<{
@@ -111,5 +133,36 @@ export function createEngine(
   const factory = registry.get(kind)
   if (!factory) throw new Error(`Agent 引擎未注册:${kind}`)
   if (!factory.available()) throw new Error(`Agent 引擎不可用:${factory.label}`)
-  return factory.create(meta, emit, resumeSdkSessionId, initialEventSeq)
+  if (!factory.nativeRuntime || !factory.protocolAdapter) {
+    return factory.create(meta, emit, resumeSdkSessionId, initialEventSeq)
+  }
+  return bindEngineToNativeRuntime({
+    adapter: factory.nativeRuntime,
+    protocolAdapter: factory.protocolAdapter,
+    meta,
+    emit,
+    initialEventSeq,
+    resume: Boolean(resumeSdkSessionId),
+    create: (runtimeEmit) => factory.create(
+      meta,
+      runtimeEmit,
+      resumeSdkSessionId,
+      initialEventSeq
+    )
+  })
+}
+
+function assertFactoryAdapterBinding(factory: EngineFactory): void {
+  const hasRuntime = factory.nativeRuntime !== undefined
+  const hasProtocol = factory.protocolAdapter !== undefined
+  if (hasRuntime !== hasProtocol) {
+    throw new Error(`Agent 引擎 ${factory.kind} 必须同时声明 native runtime 与 protocol adapter`)
+  }
+  if (!factory.nativeRuntime || !factory.protocolAdapter) return
+  assertNativeRuntimeAdapterDeclaration(factory.nativeRuntime, factory.kind)
+  assertNativeProtocolAdapter(
+    factory.protocolAdapter,
+    factory.kind,
+    factory.nativeRuntime.protocol
+  )
 }

@@ -306,6 +306,9 @@ export class TranscriptWriter {
       mkdirSync(transcriptsDir(), { recursive: true })
       appendFileSync(fileFor(this.sdkSessionId), `${JSON.stringify(entry)}\n`)
     } catch (err) {
+      if (!this.buffer.some((candidate) => candidate.eventId === entry.eventId && candidate.seq === entry.seq)) {
+        this.buffer.push(entry)
+      }
       console.error('[agent-desk] 写入转录失败:', err)
     }
   }
@@ -316,6 +319,9 @@ export class TranscriptWriter {
       mkdirSync(eventReceiptsDir(), { recursive: true })
       appendFileSync(eventReceiptsFile(this.sdkSessionId), `${JSON.stringify(receipt)}\n`)
     } catch (err) {
+      if (!this.receiptBuffer.some((candidate) => candidate.eventId === receipt.eventId)) {
+        this.receiptBuffer.push(receipt)
+      }
       console.error('[agent-desk] 写入事件回执失败:', err)
     }
   }

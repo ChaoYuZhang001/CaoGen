@@ -84,9 +84,7 @@ let suggestions = []
 try {
   await waitForDebugPort(remotePort, 20_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  const pages = await browser.pages()
-  const page = pages.find((item) => !item.url().startsWith('devtools://')) || pages[0]
-  if (!page) throw new Error('Electron page target not found')
+  const page = await waitForElectronPage(browser, 20_000)
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       report.warnings.push(`console ${msg.type()}: ${msg.text()}`)
@@ -262,7 +260,12 @@ try {
       8_000,
       `waiting for sent suggestion ${target.id} to be ignored locally`
     )
-    assert(mock.requests.length >= 1, 'mock OpenAI server did not receive the sent suggestion turn')
+    await waitForValue(
+      () => mock.requests.length,
+      (requestCount) => requestCount >= 1,
+      15_000,
+      'waiting for mock OpenAI server to receive the sent suggestion turn'
+    )
     report.sentSuggestionId = target.id
     report.sentPrompt = apiSuggestion.prompt
     report.userMessages = transcript
@@ -557,6 +560,17 @@ function describeSuggestions(items) {
 
 async function waitForAgentDesk(page) {
   await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: 15_000 })
+}
+
+async function waitForElectronPage(browser, timeoutMs) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const pages = await browser.pages()
+    const page = pages.find((item) => !item.url().startsWith('devtools://'))
+    if (page) return page
+    await sleep(100)
+  }
+  throw new Error('Electron page target not found before timeout')
 }
 
 async function waitForValue(producer, predicate, timeout, label) {

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "1.0.0",
+  "gitCommit": "40-character release commit",
+  "worktreeClean": true,
+  "protocol": "openai-compatible",
+  "redacted": true,
+  "providerTarget": {
+    "kind": "sha256",
+    "sha256": "sha256:64-hex-character private provider target digest"
+  },
+  "sendPassed": true,
+  "toolPassed": true,
+  "artifactPassed": true,
+  "recoveryPassed": true,
+  "usagePassed": true,
+  "billingPassed": true,
+  "requestCount": 2,
+  "toolCallCount": 1,
+  "transcriptSha256": "sha256:64-hex-character redacted transcript digest",
+  "artifactSha256": "sha256:64-hex-character artifact digest",
+  "recoverySha256": "sha256:64-hex-character recovery evidence digest",
+  "startedAt": "2026-07-20T09:00:00.000+08:00",
+  "sendCompletedAt": "2026-07-20T09:00:01.000+08:00",
+  "toolCompletedAt": "2026-07-20T09:00:02.000+08:00",
+  "artifactVerifiedAt": "2026-07-20T09:00:03.000+08:00",
+  "recoveryVerifiedAt": "2026-07-20T09:00:04.000+08:00",
+  "usageVerifiedAt": "2026-07-20T09:00:05.000+08:00",
+  "billingVerifiedAt": "2026-07-20T09:00:06.000+08:00",
+  "finishedAt": "2026-07-20T09:00:07.000+08:00"
+}

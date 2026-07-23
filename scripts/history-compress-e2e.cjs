@@ -26,6 +26,14 @@ async function invoke(channel, ...args) {
   if (!map || !map.has(channel)) throw new Error(`通道未注册: ${channel}`)
   return map.get(channel)({}, ...args)
 }
+async function waitForHandler(channel, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (ipcMain._invokeHandlers?.has(channel)) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`等待 IPC 通道超时: ${channel}`)
+}
 
 let lastMessagesLen = 0
 let sawSummarizeCall = false
@@ -60,7 +68,7 @@ const server = http.createServer((req, res) => {
 async function run() {
   const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
   require(path.join(repoOut, 'index.js'))
-  await new Promise((r) => setTimeout(r, 900))
+  await waitForHandler('providers:create')
 
   const provider = await invoke('providers:create', {
     name: 'mock-chat', baseUrl: `http://127.0.0.1:${port}`, models: ['mock-chat'],
@@ -93,6 +101,7 @@ async function run() {
   const turns = entries.filter((e) => e.event.kind === 'turn-result')
   check('全部轮次成功(压缩不破坏对话)', turns.length >= 9 && turns.every((t) => !t.event.isError))
 
+  await invoke('sessions:close', meta.id)
   return finish(results.every((r) => r.ok) ? 0 : 1)
 }
 async function waitTurns(id, n) {

@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url'
 const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-auto-skill-review-'))
 const outDir = path.join(tempRoot, 'compiled')
+const learningRoot = path.join(tempRoot, 'user-data', 'learning')
+process.env.CAOGEN_USER_DATA_DIR = path.join(tempRoot, 'user-data')
 
 try {
   mkdirSync(outDir, { recursive: true })
@@ -22,6 +24,7 @@ try {
 
   const modulePath = findCompiled(outDir, 'auto-skill-review.js')
   const { runAutoSkillReview } = await import(pathToFileURL(modulePath).href)
+  const lifecycle = await import(pathToFileURL(findCompiled(outDir, 'learning-lifecycle.js')).href)
 
   const projectRoot = path.join(tempRoot, 'project')
   const skillRoot = path.join(projectRoot, '.caogen', 'skills')
@@ -93,14 +96,17 @@ try {
   assert(disabled.status === 'disabled', 'disabled mode should skip work')
   assert(!existsSync(skillRoot), 'disabled mode should not create skill root')
 
-  const stored = await runAutoSkillReview(input, { enabled: true })
-  assert(stored.status === 'stored', `enabled mode should store skill: ${JSON.stringify(stored)}`)
-  assert(stored.path?.startsWith(skillRoot), 'stored path should stay under project skill root')
-  assert(existsSync(stored.path), 'stored SKILL.md should exist')
-  const markdown = readFileSync(stored.path, 'utf8')
-  assert(markdown.includes('---\n#'), 'stored skill frontmatter must be separated from body')
-  assert(markdown.includes('name: 自动 Skill 沉淀闭环'), 'stored skill should include title')
-  assert(markdown.includes('## 验证'), 'stored skill should include verification section')
+  const drafted = await runAutoSkillReview(input, { enabled: true })
+  assert(drafted.status === 'drafted', `enabled mode should create a draft: ${JSON.stringify(drafted)}`)
+  assert(drafted.path?.startsWith(skillRoot), 'planned materialization path should stay under project skill root')
+  assert(!existsSync(drafted.path), 'unapproved auto Skill draft must not create SKILL.md')
+  const snapshot = await lifecycle.listLearningProject(projectRoot, learningRoot)
+  const record = snapshot.drafts.find((item) => item.id === drafted.draftId)
+  assert(record?.kind === 'skill' && record.payload.type === 'skill', 'auto review Skill draft must be persisted')
+  const markdown = record.payload.markdown
+  assert(markdown.includes('---\n#'), 'draft skill frontmatter must be separated from body')
+  assert(markdown.includes('name: 自动 Skill 沉淀闭环'), 'draft skill should include title')
+  assert(markdown.includes('## 验证'), 'draft skill should include verification section')
 
   let escaped = false
   try {
@@ -148,16 +154,22 @@ function compile(files, outDir) {
 }
 
 function findCompiled(root, fileName) {
+  const found = findCompiledOptional(root, fileName)
+  if (found) return found
+  throw new Error(`compiled file not found: ${fileName}`)
+}
+
+function findCompiledOptional(root, fileName) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const fullPath = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      const found = findCompiled(fullPath, fileName)
+      const found = findCompiledOptional(fullPath, fileName)
       if (found) return found
     } else if (entry.isFile() && entry.name === fileName) {
       return fullPath
     }
   }
-  throw new Error(`compiled file not found: ${fileName}`)
+  return null
 }
 
 function assert(condition, message) {
@@ -175,8 +187,11 @@ function assertRuntimeWiring() {
   assert(sessionManager.includes('session.meta.parentSessionId || session.meta.childRole'), 'auto skill hook must skip child review/arbitration sessions')
 
   const agentSession = read('src/main/agentSession.ts')
-  assert(agentSession.includes('buildSkillInvocationPrompt'), 'Claude/session path must inject learned skills')
-  assert(agentSession.includes('autoSkillLearningEnabled'), 'Claude/session path must honor skill invocation setting')
+  assert(agentSession.includes('prepareClaudeUserMessage'), 'Claude/session path must use the shared message preparation boundary')
+
+  const claudeUserMessage = read('src/main/claude-user-message.ts')
+  assert(claudeUserMessage.includes('buildSkillInvocationPrompt'), 'Claude/session path must inject learned skills')
+  assert(claudeUserMessage.includes('autoSkillLearningEnabled'), 'Claude/session path must honor skill invocation setting')
 
   const openaiEngine = read('src/main/openaiEngine.ts')
   assert(openaiEngine.includes('buildSkillInvocationPrompt'), 'OpenAI path must inject learned skills')

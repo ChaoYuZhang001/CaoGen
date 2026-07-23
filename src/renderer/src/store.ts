@@ -67,6 +67,8 @@ import type {
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../../shared/types'
+import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
+import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -480,7 +482,7 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
     case 'status': {
       const meta = { ...s.meta, status: ev.status, lastError: ev.error ?? s.meta.lastError }
       let items = s.items
-      if (ev.status === 'error' && ev.error) {
+      if (ev.error && ev.status !== 'closed') {
         items = [...items, { id: genId(), kind: 'notice', level: 'error', text: ev.error }]
       }
       return { ...s, meta, items }
@@ -730,8 +732,9 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore {
+interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
   ready: boolean
+  hydrated: boolean
   sessions: Record<string, SessionState>
   order: string[]
   activeId: string | null
@@ -763,12 +766,6 @@ interface AppStore {
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
   startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
   recoverTaskSnapshot(snapshotId: string): Promise<void>
-  resolveTaskEffect(
-    snapshotId: string,
-    effectId: string,
-    expectedRevision: number,
-    resolution: 'confirmed_applied' | 'confirmed_not_applied'
-  ): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   decomposeAndDispatchTaskDag(
     request: string,
@@ -962,6 +959,7 @@ export const useStore = create<AppStore>((set, get) => {
 
   return {
   ready: false,
+  hydrated: false,
   sessions: {},
   order: [],
   activeId: null,
@@ -1020,7 +1018,7 @@ export const useStore = create<AppStore>((set, get) => {
     hookPostEditCommand: '',
     hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
-    office: { showBadges: true, liveliness: 0.6, catEars: false },
+    office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
     layout: {
       sidebarCollapsed: false,
       sidebarWidth: 264,
@@ -1034,6 +1032,7 @@ export const useStore = create<AppStore>((set, get) => {
   taskSnapshots: [],
   taskSnapshotsLoading: false,
   view: 'list',
+  ...createExperienceModeSlice((update) => set(update)),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -1099,13 +1098,11 @@ export const useStore = create<AppStore>((set, get) => {
     window.agentDesk.onMemorySuggestion((event) => get().handleMemorySuggestion(event))
     window.agentDesk.onTerminalEvent((event) => get().handleTerminalEvent(event))
     window.agentDesk.onBrowserEvent((event) => get().handleBrowserEvent(event))
-    const [metas, history, settings, providers, projects, taskSnapshots] = await Promise.all([
+    // Sessions and persisted Office quality define the first usable workspace frame.
+    // Secondary panels hydrate independently so they cannot block navigation or transcript recovery.
+    const [metas, settings] = await Promise.all([
       window.agentDesk.listSessions(),
-      window.agentDesk.listHistory(),
-      window.agentDesk.getSettings(),
-      window.agentDesk.listProviders(),
-      window.agentDesk.listProjects(),
-      window.agentDesk.listTaskSnapshots()
+      window.agentDesk.getSettings()
     ])
     set((s) => {
       const sessions = { ...s.sessions }
@@ -1117,37 +1114,56 @@ export const useStore = create<AppStore>((set, get) => {
         }
       }
       return {
+        hydrated: true,
         sessions,
         order,
-        history,
         settings,
-        providers,
-        projects,
-        taskSnapshots,
         activeId: s.activeId ?? order[0] ?? null
       }
     })
     // 渲染进程重载会丢掉未决权限请求 + 聊天记录;从主进程补回
-    for (const meta of metas) {
-      const [reqs, transcript] = await Promise.all([
-        window.agentDesk.listPendingPermissions(meta.id),
-        window.agentDesk.getTranscript(meta.id)
-      ])
-      set((s) => {
-        const session = s.sessions[meta.id]
-        if (!session) return s
-        let next = session
-        if (reqs.length > 0) {
-          const known = new Set(session.pendingPermissions.map((p) => p.requestId))
-          const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
-          next = { ...next, pendingPermissions: merged }
+    const transcriptHydration = Promise.all(
+      metas.map(async (meta) => {
+        const [permissionsResult, transcriptResult] = await Promise.allSettled([
+          window.agentDesk.listPendingPermissions(meta.id),
+          window.agentDesk.getTranscript(meta.id)
+        ])
+        if (permissionsResult.status === 'rejected') {
+          console.warn(`Failed to restore pending permissions for ${meta.id}`, permissionsResult.reason)
         }
-        if (transcript.length > 0) {
-          next = replayTranscript(next, transcript)
+        if (transcriptResult.status === 'rejected') {
+          console.warn(`Failed to restore transcript for ${meta.id}`, transcriptResult.reason)
         }
-        return { sessions: { ...s.sessions, [meta.id]: next } }
+        const reqs = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
+        const transcript = transcriptResult.status === 'fulfilled' ? transcriptResult.value : []
+        if (reqs.length === 0 && transcript.length === 0) return
+        set((s) => {
+          const session = s.sessions[meta.id]
+          if (!session) return s
+          let next = session
+          if (reqs.length > 0) {
+            const known = new Set(session.pendingPermissions.map((p) => p.requestId))
+            const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
+            next = { ...next, pendingPermissions: merged }
+          }
+          if (transcript.length > 0) next = replayTranscript(next, transcript)
+          return { sessions: { ...s.sessions, [meta.id]: next } }
+        })
       })
-    }
+    )
+    const secondaryLabels = ['history', 'providers', 'projects', 'task recovery']
+    const secondaryResults = await Promise.allSettled([
+      window.agentDesk.listHistory().then((history) => set({ history })),
+      window.agentDesk.listProviders().then((providers) => set({ providers })),
+      window.agentDesk.listProjects().then((projects) => set({ projects })),
+      get().hydrateTaskRecoveryCandidates()
+    ])
+    secondaryResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`Failed to hydrate ${secondaryLabels[index]}`, result.reason)
+      }
+    })
+    await transcriptHydration
   },
 
   handleEvent(sessionId, event, seq, eventId) {
@@ -1385,35 +1401,7 @@ export const useStore = create<AppStore>((set, get) => {
       })
     }
   },
-
-  async resolveTaskEffect(snapshotId, effectId, expectedRevision, resolution) {
-    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
-    try {
-      const updated = await window.agentDesk.resolveTaskEffect(
-        snapshotId,
-        effectId,
-        expectedRevision,
-        resolution
-      )
-      set((s) => ({
-        taskSnapshots: s.taskSnapshots.map((snapshot) =>
-          snapshot.id === updated.id ? updated : snapshot
-        ),
-        taskSnapshotsLoading: false,
-        taskSnapshotsError: undefined
-      }))
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      let taskSnapshots = get().taskSnapshots
-      try {
-        taskSnapshots = await window.agentDesk.listTaskSnapshots()
-      } catch {
-        // 保留原始 CAS/IPC 错误，刷新失败不覆盖根因。
-      }
-      set({ taskSnapshots, taskSnapshotsLoading: false, taskSnapshotsError: message })
-      throw err
-    }
-  },
+  ...createTaskRecoveryActions((update) => set(update), get),
 
   async dispatchSubagents(input) {
     const parentId = get().activeId
@@ -1947,7 +1935,7 @@ export const useStore = create<AppStore>((set, get) => {
         diffError: result.ok ? undefined : result.error
       }
     }))
-    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus()])
+    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus(), ...(result.effectStatus === 'waiting_reconciliation' ? [get().refreshTaskSnapshots()] : [])])
     return result
   },
 
@@ -3638,16 +3626,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async refreshTaskSnapshots() {
-    set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })
-    try {
-      const taskSnapshots = await window.agentDesk.listTaskSnapshots()
-      set({ taskSnapshots, taskSnapshotsLoading: false, taskSnapshotsError: undefined })
-    } catch (err) {
-      set({
-        taskSnapshotsLoading: false,
-        taskSnapshotsError: err instanceof Error ? err.message : String(err)
-      })
-    }
+    await get().hydrateTaskRecoveryCandidates()
   },
 
   async deleteTaskSnapshot(snapshotId) {
@@ -3891,9 +3870,9 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 ]
 
 /**
- * Provider 预设模板。Claude 引擎使用 Anthropic Messages API;OpenAI 引擎
- * 支持 Responses(OpenAI 原生)与 Chat Completions(通用)两种协议,按预设的
- * openaiProtocol 预填。模板预填 baseUrl 与常见模型名,降低配置成本。
+ * Provider 预设模板。Anthropic 引擎使用原生 Messages API;Claude 引擎使用
+ * Claude Agent SDK;OpenAI 引擎支持 Responses(OpenAI 原生)与 Chat Completions
+ * (通用)两种协议。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
   key: string
@@ -3918,11 +3897,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     key: 'anthropic',
-    label: 'Anthropic Messages 端点',
-    baseUrl: '',
+    label: 'Anthropic(Messages API 直连)',
+    baseUrl: 'https://api.anthropic.com',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
-    engine: 'claude',
-    hint: '直连 Anthropic 或任何原生 Messages API 端点,填入自己的 API Key。'
+    engine: 'anthropic',
+    hint: '直连 Anthropic 官方 Messages API,不经过 Claude Agent SDK;填入自己的 Anthropic API Key。'
   },
   {
     key: 'openai',

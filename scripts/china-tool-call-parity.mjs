@@ -19,7 +19,7 @@ const providerTemplate = [
     id: 'openai-baseline',
     name: 'OpenAI baseline',
     group: 'baseline',
-    apiFormat: 'openai-compatible',
+    apiFormat: 'openai-responses',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
     apiKey: '<secret>'
@@ -71,9 +71,11 @@ if (!enabled || !rawProviders?.trim()) {
 const requireBaseline = process.env.CAOGEN_CHINA_PARITY_REQUIRE_BASELINE !== '0'
 let providers
 let maxGap
+let requestTimeoutMs
 try {
   providers = parseProviders(rawProviders)
   maxGap = parseMaxGap(process.env.CAOGEN_CHINA_PARITY_MAX_GAP)
+  requestTimeoutMs = parseRequestTimeout(process.env.CAOGEN_CHINA_PARITY_TIMEOUT_MS)
   const configurationFailures = []
   if (requireBaseline && !providers.some((provider) => provider.group === 'baseline')) {
     configurationFailures.push('missing baseline provider; add group=baseline or set CAOGEN_CHINA_PARITY_REQUIRE_BASELINE=0')
@@ -125,22 +127,22 @@ const goldenCases = expandToolChoiceModes([
   })
 ])
 
-const results = []
-for (const provider of providers) {
+const results = await Promise.all(providers.map(async (provider) => {
   const cases = []
   for (const item of goldenCases) cases.push(await runGoldenCase(provider, item))
   const passed = cases.filter((item) => item.ok).length
-  results.push({
+  return {
     id: provider.id,
     name: provider.name,
     group: provider.group,
     apiFormat: provider.apiFormat,
+    ...(provider.thinkingMode ? { thinkingMode: provider.thinkingMode } : {}),
     model: provider.model,
     endpoint: maskUrl(provider.baseUrl),
     passRate: passed / cases.length,
     cases
-  })
-}
+  }
+}))
 
 const baselines = results.filter((item) => item.group === 'baseline')
 const chinaProviders = results.filter((item) => item.group === 'china')
@@ -173,6 +175,8 @@ const report = {
   configurationGuide,
   requireBaseline,
   maxGap,
+  requestTimeoutMs,
+  providerConcurrency: providers.length,
   bestBaseline,
   results,
   reportDir,
@@ -197,6 +201,7 @@ function blockConfiguration(reason) {
     providerTemplate,
     requireBaseline: process.env.CAOGEN_CHINA_PARITY_REQUIRE_BASELINE !== '0',
     maxGap: null,
+    requestTimeoutMs: null,
     goldenCases: 0,
     results: [],
     parityFailures: [reason]
@@ -213,13 +218,41 @@ function blockConfiguration(reason) {
 
 async function runGoldenCase(provider, item) {
   if (provider.apiFormat === 'anthropic') return runAnthropicGoldenCase(provider, item)
+  if (provider.apiFormat === 'openai-responses') return runOpenAiResponsesGoldenCase(provider, item)
   return runOpenAiCompatibleGoldenCase(provider, item)
+}
+
+async function runOpenAiResponsesGoldenCase(provider, item) {
+  const started = Date.now()
+  try {
+    const { response, attempts } = await fetchWithTransientRetry(responsesEndpoint(provider.baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify({
+        model: provider.model,
+        input: item.prompt,
+        tools: [toOpenAiResponsesTool(item.tool)],
+        tool_choice: openAiResponsesToolChoice(item),
+        max_output_tokens: 512,
+        store: false
+      })
+    })
+    const text = await response.text()
+    const parsed = parseJson(text)
+    const toolCall = Array.isArray(parsed?.output)
+      ? parsed.output.find((entry) => entry?.type === 'function_call')
+      : undefined
+    const args = typeof toolCall?.arguments === 'string' ? parseJson(toolCall.arguments) : toolCall?.arguments
+    return validateToolCall(item, response.status, response.ok, toolCall?.name, args, Date.now() - started, text, attempts)
+  } catch (error) {
+    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 async function runOpenAiCompatibleGoldenCase(provider, item) {
   const started = Date.now()
   try {
-    const response = await fetch(chatCompletionsEndpoint(provider.baseUrl), {
+    const { response, attempts } = await fetchWithTransientRetry(chatCompletionsEndpoint(provider.baseUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${provider.apiKey}` },
       body: JSON.stringify({
@@ -227,6 +260,7 @@ async function runOpenAiCompatibleGoldenCase(provider, item) {
         messages: [{ role: 'user', content: item.prompt }],
         tools: [item.tool],
         tool_choice: openAiToolChoice(item),
+        ...(provider.thinkingMode ? { thinking: { type: provider.thinkingMode } } : {}),
         stream: false
       })
     })
@@ -236,7 +270,7 @@ async function runOpenAiCompatibleGoldenCase(provider, item) {
     const name = toolCall?.function?.name
     const argsText = toolCall?.function?.arguments
     const args = typeof argsText === 'string' ? parseJson(argsText) : argsText
-    return validateToolCall(item, response.status, response.ok, name, args, Date.now() - started, text)
+    return validateToolCall(item, response.status, response.ok, name, args, Date.now() - started, text, attempts)
   } catch (error) {
     return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
   }
@@ -245,7 +279,7 @@ async function runOpenAiCompatibleGoldenCase(provider, item) {
 async function runAnthropicGoldenCase(provider, item) {
   const started = Date.now()
   try {
-    const response = await fetch(anthropicMessagesEndpoint(provider.baseUrl), {
+    const { response, attempts } = await fetchWithTransientRetry(anthropicMessagesEndpoint(provider.baseUrl), {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -263,13 +297,38 @@ async function runAnthropicGoldenCase(provider, item) {
     const text = await response.text()
     const parsed = parseJson(text)
     const toolUse = Array.isArray(parsed?.content) ? parsed.content.find((part) => part?.type === 'tool_use') : undefined
-    return validateToolCall(item, response.status, response.ok, toolUse?.name, toolUse?.input, Date.now() - started, text)
+    return validateToolCall(item, response.status, response.ok, toolUse?.name, toolUse?.input, Date.now() - started, text, attempts)
   } catch (error) {
     return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
   }
 }
 
-function validateToolCall(item, statusCode, responseOk, name, args, latencyMs, rawText) {
+async function fetchWithTransientRetry(url, options) {
+  const delaysMs = [250, 750]
+  let lastError
+  for (let attempt = 1; attempt <= delaysMs.length + 1; attempt += 1) {
+    try {
+      const response = await fetch(url, { ...options, signal: AbortSignal.timeout(requestTimeoutMs) })
+      if (!isTransientStatus(response.status) || attempt > delaysMs.length) return { response, attempts: attempt }
+      await response.arrayBuffer()
+    } catch (error) {
+      lastError = error
+      if (attempt > delaysMs.length) throw error
+    }
+    await delay(delaysMs[attempt - 1])
+  }
+  throw lastError || new Error('transient request retry exhausted')
+}
+
+function isTransientStatus(statusCode) {
+  return statusCode === 429 || statusCode === 500 || statusCode === 502 || statusCode === 503 || statusCode === 504
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function validateToolCall(item, statusCode, responseOk, name, args, latencyMs, rawText, attempts) {
   const ok =
     responseOk &&
     name === item.expectedName &&
@@ -280,6 +339,7 @@ function validateToolCall(item, statusCode, responseOk, name, args, latencyMs, r
     mode: item.toolChoiceMode,
     ok,
     statusCode,
+    attempts,
     latencyMs,
     toolName: name,
     argumentKeys: isRecord(args) ? Object.keys(args).sort() : [],
@@ -295,9 +355,25 @@ function toAnthropicTool(openAiTool) {
   }
 }
 
+function toOpenAiResponsesTool(openAiTool) {
+  return {
+    type: 'function',
+    name: openAiTool.function.name,
+    description: openAiTool.function.description,
+    parameters: openAiTool.function.parameters,
+    ...(typeof openAiTool.function.strict === 'boolean' ? { strict: openAiTool.function.strict } : {})
+  }
+}
+
 function openAiToolChoice(item) {
   return item.toolChoiceMode === 'forced'
     ? { type: 'function', function: { name: item.expectedName } }
+    : 'auto'
+}
+
+function openAiResponsesToolChoice(item) {
+  return item.toolChoiceMode === 'forced'
+    ? { type: 'function', name: item.expectedName }
     : 'auto'
 }
 
@@ -379,7 +455,8 @@ function parseProviders(text) {
     const id = stringField(item, 'id')
     const name = stringField(item, 'name') || id
     const group = stringField(item, 'group') === 'baseline' ? 'baseline' : 'china'
-    const apiFormat = stringField(item, 'apiFormat') === 'anthropic' ? 'anthropic' : 'openai-compatible'
+    const apiFormat = parseApiFormat(stringField(item, 'apiFormat'), index)
+    const thinkingMode = parseThinkingMode(stringField(item, 'thinkingMode'), apiFormat, index)
     const baseUrl = normalizeBaseUrl(stringField(item, 'baseUrl'), apiFormat)
     const model = stringField(item, 'model')
     const apiKey = stringField(item, 'apiKey')
@@ -387,8 +464,27 @@ function parseProviders(text) {
     if (!id || !baseUrl || !model || !apiKey) throw new Error(`provider[${index}] missing id/baseUrl/model/apiKey`)
     const endpointFailure = publicEndpointFailure(baseUrl, `provider[${index}]`)
     if (endpointFailure) throw new Error(endpointFailure)
-    return { id, name, group, apiFormat, baseUrl, model, apiKey, anthropicVersion }
+    return { id, name, group, apiFormat, baseUrl, model, apiKey, anthropicVersion, thinkingMode }
   })
+}
+
+function parseApiFormat(value, index) {
+  const format = value || 'openai-compatible'
+  if (!['openai-compatible', 'openai-responses', 'anthropic'].includes(format)) {
+    throw new Error(`provider[${index}] apiFormat must be openai-compatible, openai-responses, or anthropic`)
+  }
+  return format
+}
+
+function parseThinkingMode(value, apiFormat, index) {
+  if (!value) return ''
+  if (apiFormat !== 'openai-compatible') {
+    throw new Error(`provider[${index}] thinkingMode is only supported for openai-compatible providers`)
+  }
+  if (!['disabled', 'enabled'].includes(value)) {
+    throw new Error(`provider[${index}] thinkingMode must be disabled or enabled`)
+  }
+  return value
 }
 
 function parseMaxGap(value) {
@@ -398,6 +494,15 @@ function parseMaxGap(value) {
   const parsed = Number(text)
   if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 1) {
     throw new Error('CAOGEN_CHINA_PARITY_MAX_GAP must be a finite number in [0, 1)')
+  }
+  return parsed
+}
+
+function parseRequestTimeout(value) {
+  if (value === undefined || value.trim() === '') return 20_000
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1_000 || parsed > 120_000) {
+    throw new Error('CAOGEN_CHINA_PARITY_TIMEOUT_MS must be an integer between 1000 and 120000')
   }
   return parsed
 }
@@ -424,6 +529,13 @@ function chatCompletionsEndpoint(baseUrl) {
   if (/\/chat\/completions$/i.test(clean)) return clean
   if (/\/(?:v\d+|api\/v\d+|compatible-mode\/v\d+)$/i.test(clean)) return `${clean}/chat/completions`
   return `${clean}/v1/chat/completions`
+}
+
+function responsesEndpoint(baseUrl) {
+  const clean = baseUrl.replace(/\/+$/, '')
+  if (/\/responses$/i.test(clean)) return clean
+  if (/\/(?:v\d+|api\/v\d+)$/i.test(clean)) return `${clean}/responses`
+  return `${clean}/v1/responses`
 }
 
 function anthropicMessagesEndpoint(baseUrl) {

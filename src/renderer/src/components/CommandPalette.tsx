@@ -7,6 +7,7 @@ import {
   filterCommandItems,
   type CommandDescriptor
 } from '../commands'
+import { projectedPaletteItems } from './experience/projectedComposerCommands'
 
 type PaletteSection = 'command' | 'session' | 'history' | 'plugin'
 
@@ -16,10 +17,10 @@ interface PaletteItem extends CommandDescriptor {
 
 export default function CommandPalette(): React.JSX.Element {
   const t = useT()
+  const projection = useStore((s) => s.experienceMode)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-
   const order = useStore((s) => s.order)
   const activeId = useStore((s) => s.activeId)
   const sessions = useStore((s) => s.sessions)
@@ -49,7 +50,6 @@ export default function CommandPalette(): React.JSX.Element {
   const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
   const updateSettings = useStore((s) => s.updateSettings)
   const setModel = useStore((s) => s.setModel)
-
   useEffect(() => {
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
@@ -133,7 +133,7 @@ export default function CommandPalette(): React.JSX.Element {
       dispatchPluginAgent
     }).map((item) => ({ ...item, section: 'plugin' }))
 
-    return [...commandItems, ...activeSessionItems, ...historyItems, ...pluginItems]
+    return projectedPaletteItems(projection, [...commandItems, ...activeSessionItems, ...historyItems, ...pluginItems])
   }, [
     activeId,
     dispatchPluginAgent,
@@ -150,6 +150,7 @@ export default function CommandPalette(): React.JSX.Element {
     openWorktreePanel,
     order,
     pluginRegistry,
+    projection,
     providers,
     resumeFromHistory,
     selectSession,

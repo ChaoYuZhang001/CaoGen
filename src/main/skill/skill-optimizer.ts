@@ -2,9 +2,16 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import {
+  createLearningDraft,
+  getLearningRecord,
+  importSkillLearningBaseline
+} from '../learning/learning-lifecycle'
+import { resolveDefaultLearningRoot } from '../learning/learning-store'
 import { SkillManager } from './skill-manager'
 import { testSkillMarkdown, type SkillTestDiagnostic } from './skill-tester'
 import type { SkillDefinition } from './skill-loader'
+import type { LearningStatus } from '../../shared/learning-types'
 
 export type SkillFeedbackOutcome = 'failed' | 'corrected' | 'succeeded'
 
@@ -21,7 +28,7 @@ export interface SkillFeedbackInput {
 
 export type SkillOptimizationStatus =
   | 'recorded'
-  | 'updated'
+  | 'drafted'
   | 'not_found'
   | 'not_project_skill'
   | 'validation_failed'
@@ -39,7 +46,10 @@ export interface SkillFeedbackStore {
   skillId: string
   skillName: string
   records: SkillFeedbackRecord[]
+  /** Legacy ids from releases that directly materialized optimization output. */
   appliedRecordIds: string[]
+  draftedRecordIds: string[]
+  learningDraftIds: Record<string, string>
 }
 
 export interface SkillOptimizationResult {
@@ -48,17 +58,30 @@ export interface SkillOptimizationResult {
   skillName?: string
   skillPath?: string
   feedbackPath?: string
-  applied?: boolean
+  applied?: false
+  draftId?: string
+  draftStatus?: LearningStatus
   recordCount?: number
   diagnostics?: SkillTestDiagnostic[]
   reason?: string
+}
+
+interface SkillOptimizationContext {
+  projectRoot: string
+  skillRoot: string
+  learningRoot: string
+  skill: SkillDefinition
+  skillPath: string
+  feedbackPath: string
+  store: SkillFeedbackStore
+  record: SkillFeedbackRecord
 }
 
 const DEFAULT_FAILURE_THRESHOLD = 2
 const MAX_RECORDS = 50
 const MAX_TEXT_CHARS = 1_200
 
-export async function recordSkillFeedback(input: SkillFeedbackInput): Promise<SkillOptimizationResult> {
+export async function proposeSkillOptimization(input: SkillFeedbackInput): Promise<SkillOptimizationResult> {
   const projectRoot = resolve(input.projectRoot)
   const skillRoot = resolve(projectRoot, '.caogen', 'skills')
   const skill = findProjectSkill(projectRoot, input.skillIdOrName)
@@ -73,63 +96,145 @@ export async function recordSkillFeedback(input: SkillFeedbackInput): Promise<Sk
   assertInside(skillRoot, feedbackPath)
 
   const store = readFeedbackStore(feedbackPath, skill)
-  const record = normalizeRecord(input)
-  const known = new Set(store.records.map((item) => item.id))
-  if (!known.has(record.id)) {
-    store.records.push(record)
+  const normalizedRecord = normalizeRecord(input)
+  const existingRecord = store.records.find((item) => item.id === normalizedRecord.id)
+  const record = existingRecord ?? normalizedRecord
+  if (!existingRecord) {
+    store.records.push(normalizedRecord)
     store.records = store.records.slice(-MAX_RECORDS)
   }
 
-  const shouldApply = shouldApplyOptimization(store, record, normalizeThreshold(input.failureThreshold))
-  if (!shouldApply) {
-    await writeFeedbackStore(feedbackPath, store)
-    return {
-      status: 'recorded',
-      skillId: skill.id,
-      skillName: skill.name,
-      skillPath,
-      feedbackPath,
-      applied: false,
-      recordCount: store.records.length
-    }
+  // Unbound ids came from the pre-Learning sidecar schema and cannot prove a live proposal.
+  store.draftedRecordIds = store.draftedRecordIds.filter((id) => Boolean(store.learningDraftIds[id]))
+  const learningRoot = await resolveDefaultLearningRoot(projectRoot)
+  const context = { projectRoot, skillRoot, learningRoot, skill, skillPath, feedbackPath, store, record }
+  const boundResult = await resolveBoundProposal(context)
+  if (boundResult) return boundResult
+  if (!shouldDraftOptimization(store, record, normalizeThreshold(input.failureThreshold))) {
+    return recordFeedbackOnly(context)
   }
+  return createSkillOptimizationProposal(context)
+}
 
-  const markdown = readFileSync(skillPath, 'utf8')
-  const nextMarkdown = appendOptimizationSection(markdown, skill, store, record)
-  const validation = testSkillMarkdown(nextMarkdown, { sourcePath: skillPath, scope: 'project' })
-  if (!validation.ok) {
-    await writeFeedbackStore(feedbackPath, store)
-    return {
-      status: 'validation_failed',
-      skillId: skill.id,
-      skillName: skill.name,
-      skillPath,
-      feedbackPath,
-      applied: false,
-      recordCount: store.records.length,
-      diagnostics: validation.diagnostics
-    }
+async function resolveBoundProposal(context: SkillOptimizationContext): Promise<SkillOptimizationResult | undefined> {
+  const boundDraftId = context.store.learningDraftIds[context.record.id]
+  if (!boundDraftId) return undefined
+  const boundRecord = await getLearningRecord(context.projectRoot, context.learningRoot, boundDraftId)
+  if (!boundRecord || isRetryableProposalStatus(boundRecord.status)) {
+    releaseBoundFeedback(context.store, boundDraftId)
+    return undefined
   }
-
-  store.appliedRecordIds = unique([...store.appliedRecordIds, record.id])
-  await writeTextAtomically(skillPath, nextMarkdown)
-  await writeFeedbackStore(feedbackPath, store)
   return {
-    status: 'updated',
-    skillId: skill.id,
-    skillName: skill.name,
-    skillPath,
-    feedbackPath,
-    applied: true,
-    recordCount: store.records.length,
-    diagnostics: validation.diagnostics
+    status: boundRecord.status === 'draft' ? 'drafted' : 'recorded',
+    skillId: context.skill.id,
+    skillName: context.skill.name,
+    skillPath: context.skillPath,
+    feedbackPath: context.feedbackPath,
+    ...(boundRecord.status === 'draft' ? { applied: false as const } : {}),
+    draftId: boundRecord.id,
+    draftStatus: boundRecord.status,
+    recordCount: context.store.records.length
   }
+}
+
+async function recordFeedbackOnly(context: SkillOptimizationContext): Promise<SkillOptimizationResult> {
+  await writeFeedbackSidecar(context.feedbackPath, context.store)
+  return {
+    status: 'recorded',
+    skillId: context.skill.id,
+    skillName: context.skill.name,
+    skillPath: context.skillPath,
+    feedbackPath: context.feedbackPath,
+    applied: false,
+    recordCount: context.store.records.length
+  }
+}
+
+async function createSkillOptimizationProposal(context: SkillOptimizationContext): Promise<SkillOptimizationResult> {
+  const markdown = readFileSync(context.skillPath, 'utf8')
+  const nextMarkdown = appendOptimizationSection(markdown, context.skill, context.store, context.record)
+  const validation = testSkillMarkdown(nextMarkdown, { sourcePath: context.skillPath, scope: 'project' })
+  if (!validation.ok) return persistValidationFailure(context, validation.diagnostics)
+
+  // Persist the feedback first so a crash/retry rebuilds the exact same proposal.
+  await writeFeedbackSidecar(context.feedbackPath, context.store)
+  const relativePath = relative(context.skillRoot, context.skillPath).split('\\').join('/')
+  const baseline = await importSkillLearningBaseline(context.projectRoot, context.learningRoot, {
+    type: 'skill',
+    name: context.skill.name,
+    description: context.skill.description,
+    markdown,
+    relativePath
+  })
+  const proposal = baseline.status === 'draft' && baseline.payload.type === 'skill' && baseline.payload.markdown === nextMarkdown.trim()
+    ? baseline
+    : await createLearningDraft(context.projectRoot, context.learningRoot, {
+      kind: 'skill',
+      source: `optimize_skill:${context.record.outcome}`,
+      confidence: optimizationConfidence(context.record),
+      supersedes: baseline.id,
+      payload: {
+        type: 'skill',
+        name: context.skill.name,
+        description: context.skill.description,
+        markdown: nextMarkdown,
+        relativePath
+      }
+    }, {
+      actor: { type: 'agent', id: 'skill-optimizer', source: 'optimize_skill' }
+    })
+  return persistDraftProposal(context, proposal.id, validation.diagnostics)
+}
+
+async function persistValidationFailure(
+  context: SkillOptimizationContext,
+  diagnostics: SkillTestDiagnostic[]
+): Promise<SkillOptimizationResult> {
+  await writeFeedbackSidecar(context.feedbackPath, context.store)
+  return {
+    status: 'validation_failed',
+    skillId: context.skill.id,
+    skillName: context.skill.name,
+    skillPath: context.skillPath,
+    feedbackPath: context.feedbackPath,
+    applied: false,
+    recordCount: context.store.records.length,
+    diagnostics
+  }
+}
+
+async function persistDraftProposal(
+  context: SkillOptimizationContext,
+  draftId: string,
+  diagnostics: SkillTestDiagnostic[]
+): Promise<SkillOptimizationResult> {
+  const draftedFeedbackIds = relatedOptimizationRecords(context.store, context.record).map((item) => item.id)
+  context.store.draftedRecordIds = unique([...context.store.draftedRecordIds, ...draftedFeedbackIds])
+  for (const feedbackId of draftedFeedbackIds) context.store.learningDraftIds[feedbackId] = draftId
+  await writeFeedbackSidecar(context.feedbackPath, context.store)
+  return {
+    status: 'drafted',
+    skillId: context.skill.id,
+    skillName: context.skill.name,
+    skillPath: context.skillPath,
+    feedbackPath: context.feedbackPath,
+    applied: false,
+    draftId,
+    draftStatus: 'draft',
+    recordCount: context.store.records.length,
+    diagnostics
+  }
+}
+
+/** @deprecated Use proposeSkillOptimization so production call sites make draft-only intent explicit. */
+export async function recordSkillFeedback(input: SkillFeedbackInput): Promise<SkillOptimizationResult> {
+  return proposeSkillOptimization(input)
 }
 
 export async function applySkillCorrection(
   input: Omit<SkillFeedbackInput, 'outcome'> & { summary: string; correctionSteps: string[] }
 ): Promise<SkillOptimizationResult> {
-  return recordSkillFeedback({ ...input, outcome: 'corrected', failureThreshold: 1 })
+  return proposeSkillOptimization({ ...input, outcome: 'corrected', failureThreshold: 1 })
 }
 
 function findProjectSkill(projectRoot: string, idOrName: string): SkillDefinition | undefined {
@@ -153,9 +258,20 @@ function normalizeRecord(input: SkillFeedbackInput): SkillFeedbackRecord {
   return { id, outcome: input.outcome, summary, correctionSteps, verification, occurredAt }
 }
 
+function optimizationConfidence(record: SkillFeedbackRecord): number {
+  return record.outcome === 'corrected' ? 0.95 : 0.8
+}
+
 function readFeedbackStore(feedbackPath: string, skill: SkillDefinition): SkillFeedbackStore {
   if (!existsSync(feedbackPath)) {
-    return { skillId: skill.id, skillName: skill.name, records: [], appliedRecordIds: [] }
+    return {
+      skillId: skill.id,
+      skillName: skill.name,
+      records: [],
+      appliedRecordIds: [],
+      draftedRecordIds: [],
+      learningDraftIds: {}
+    }
   }
   try {
     const parsed = JSON.parse(readFileSync(feedbackPath, 'utf8')) as Partial<SkillFeedbackStore>
@@ -165,19 +281,47 @@ function readFeedbackStore(feedbackPath: string, skill: SkillDefinition): SkillF
       records: Array.isArray(parsed.records) ? parsed.records.filter(isFeedbackRecord).slice(-MAX_RECORDS) : [],
       appliedRecordIds: Array.isArray(parsed.appliedRecordIds)
         ? parsed.appliedRecordIds.filter((item): item is string => typeof item === 'string')
-        : []
+        : [],
+      draftedRecordIds: Array.isArray(parsed.draftedRecordIds)
+        ? parsed.draftedRecordIds.filter((item): item is string => typeof item === 'string')
+        : [],
+      learningDraftIds: isStringRecord(parsed.learningDraftIds) ? parsed.learningDraftIds : {}
     }
   } catch {
-    return { skillId: skill.id, skillName: skill.name, records: [], appliedRecordIds: [] }
+    return {
+      skillId: skill.id,
+      skillName: skill.name,
+      records: [],
+      appliedRecordIds: [],
+      draftedRecordIds: [],
+      learningDraftIds: {}
+    }
   }
 }
 
-function shouldApplyOptimization(store: SkillFeedbackStore, record: SkillFeedbackRecord, threshold: number): boolean {
-  if (store.appliedRecordIds.includes(record.id)) return false
+function isRetryableProposalStatus(status: LearningStatus): boolean {
+  return status === 'rejected' || status === 'deleted'
+}
+
+function releaseBoundFeedback(store: SkillFeedbackStore, draftId: string): string[] {
+  const releasedIds = new Set(
+    Object.entries(store.learningDraftIds)
+      .filter(([, value]) => value === draftId)
+      .map(([feedbackId]) => feedbackId)
+  )
+  for (const feedbackId of releasedIds) delete store.learningDraftIds[feedbackId]
+  store.draftedRecordIds = store.draftedRecordIds.filter((feedbackId) => !releasedIds.has(feedbackId))
+  return [...releasedIds]
+}
+
+function shouldDraftOptimization(store: SkillFeedbackStore, record: SkillFeedbackRecord, threshold: number): boolean {
+  if (store.appliedRecordIds.includes(record.id) || store.draftedRecordIds.includes(record.id)) return false
   if (record.outcome === 'corrected') return true
   if (record.outcome !== 'failed') return false
   const unappliedFailures = store.records.filter(
-    (item) => item.outcome === 'failed' && !store.appliedRecordIds.includes(item.id)
+    (item) => item.outcome === 'failed' &&
+      !store.appliedRecordIds.includes(item.id) &&
+      !store.draftedRecordIds.includes(item.id)
   )
   return unappliedFailures.length >= threshold
 }
@@ -212,11 +356,22 @@ function appendOptimizationSection(
 function relatedOptimizationRecords(store: SkillFeedbackStore, record: SkillFeedbackRecord): SkillFeedbackRecord[] {
   if (record.outcome === 'corrected') return [record]
   return store.records
-    .filter((item) => item.outcome === 'failed' && !store.appliedRecordIds.includes(item.id))
+    .filter((item) => item.outcome === 'failed' &&
+      !store.appliedRecordIds.includes(item.id) &&
+      !store.draftedRecordIds.includes(item.id))
     .slice(-DEFAULT_FAILURE_THRESHOLD)
 }
 
-async function writeFeedbackStore(feedbackPath: string, store: SkillFeedbackStore): Promise<void> {
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
+}
+
+async function writeFeedbackSidecar(feedbackPath: string, store: SkillFeedbackStore): Promise<void> {
+  if (join(dirname(feedbackPath), 'skill-feedback.json') !== feedbackPath) {
+    throw new Error(`反馈存储必须是非活动 Skill sidecar: ${feedbackPath}`)
+  }
+  // SkillManager only loads SKILL.md; this sidecar never becomes active Skill content.
   await writeTextAtomically(feedbackPath, `${JSON.stringify(store, null, 2)}\n`)
 }
 

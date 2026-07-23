@@ -5,6 +5,9 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { EffectRecord, EffectTarget, FileSystemIdentity } from '../../shared/types'
+import { reconcileCodeForgePatchEffectTarget } from '../code-forge/patch-effect'
+import { reconcileGitIndexEffectTarget } from '../git/git-index-effect'
+import { reconcileManagedWorktreeLifecycleTarget } from '../git/managed-worktree-effect'
 import {
   gitAlternateObjectDirectories,
   isolatedLocalGitEnv,
@@ -21,8 +24,24 @@ import {
   type SearchReplacePlan
 } from '../agent/tools/search-replace'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
+import {
+  confirmed,
+  notApplied,
+  unresolved,
+  type EffectReconciliationResult
+} from './effect-reconciliation-result'
+import {
+  reconcilePullRequestCreate,
+  reconcileWorktreePatchApply,
+  type OperationEffectReconcilerContext
+} from './operation-effect-reconciler'
+import { buildEffectTarget, type EffectTargetBuilderContext } from './effect-target-builder'
+import {
+  reconcileFileContentObservation,
+  type FileContentObservation
+} from './file-effect-reconciliation'
+import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
-
 const GIT_LOCAL_TIMEOUT_MS = 15_000
 const GIT_SCAN_TIMEOUT_MS = 30_000
 const GIT_REMOTE_TIMEOUT_MS = 30_000
@@ -32,15 +51,14 @@ const MAX_GIT_COMMIT_CANDIDATES = 64
 const GIT_COMMIT_RECONCILIATION_BUDGET_MS = 30_000
 const MAX_GIT_MERGE_CANDIDATES = 64
 const MAX_FILE_RECONCILIATION_BYTES = 64 * 1024 * 1024
-export const EFFECT_RECONCILER_VERSION = 'effect-reconciler-v1'
-
+export { EFFECT_RECONCILER_VERSION } from './effect-reconciliation-result'
+export type { EffectReconciliationResult } from './effect-reconciliation-result'
 interface GitRunResult {
   ok: boolean
   status: number | null
   stdout: string
   error: string
 }
-
 export interface EffectDescriptor {
   target: EffectTarget
   targetDigest: string
@@ -48,60 +66,47 @@ export interface EffectDescriptor {
   inputDigest: string
   reconcilability: EffectRecord['reconcilability']
 }
-
-export interface EffectReconciliationResult {
-  kind: 'confirmed' | 'not_applied' | 'unresolved'
-  evidenceDigest: string
-  verifier: string
-  reason: string
-}
-
 export interface EffectFileObservationOptions {
   beforeRead?: (filePath: string) => Promise<void> | void
 }
+const operationEffectReconcilerContext: OperationEffectReconcilerContext = {
+  resolveRepoRoot,
+  resolveGitDirectory,
+  gitText,
+  gitLines,
+  gitRun,
+  readFileObservation: (filePath, maxHashBytes) => observeFile(filePath, maxHashBytes, {}),
+  fileSystemIdentity,
+  sameFileSystemIdentity,
+  sanitizeRemoteUrl,
+  sha256,
+  confirmed,
+  notApplied,
+  unresolved
+}
+
+const effectTargetBuilderContext: EffectTargetBuilderContext = {
+  fileWriteTarget,
+  searchReplaceTarget,
+  exactFileEditTarget,
+  gitCommitTarget,
+  gitMergeTarget,
+  gitPushTarget
+}
 
 export async function buildEffectDescriptor(input: {
+  sessionId?: string
   toolName: string
   toolInput: Record<string, unknown>
   cwd: string
 }, observationOptions: EffectFileObservationOptions = {}): Promise<EffectDescriptor> {
-  const rawToolName = input.toolName.trim()
-  const toolName = normalizeToolName(input.toolName)
+  const { toolName, target } = await buildEffectTarget(
+    input,
+    observationOptions,
+    effectTargetBuilderContext,
+    operationEffectReconcilerContext
+  )
   const inputDigest = stableValueDigest(input.toolInput)
-  let target: EffectTarget
-
-  if (toolName === 'write_file') {
-    target = await fileWriteTarget(input.cwd, input.toolInput, observationOptions)
-  } else if (toolName === 'search_replace' && input.toolInput.dry_run !== true) {
-    target = await searchReplaceTarget(input.cwd, input.toolInput)
-  } else if (toolName === 'edit_file') {
-    if (rawToolName === 'MultiEdit' || rawToolName === 'NotebookEdit') {
-      target = { kind: 'unsupported', toolName }
-    } else {
-      if (
-        typeof input.toolInput.old_string !== 'string' ||
-        typeof input.toolInput.new_string !== 'string'
-      ) {
-        throw new Error('edit_file 效果描述要求 old_string 与 new_string 为字符串')
-      }
-      if (
-        input.toolInput.replace_all !== undefined &&
-        typeof input.toolInput.replace_all !== 'boolean'
-      ) {
-        throw new Error('edit_file 效果描述要求 replace_all 为布尔值')
-      }
-      target = await exactFileEditTarget(input.cwd, input.toolInput)
-    }
-  } else if (toolName === 'git_commit') {
-    target = await gitCommitTarget(input.cwd, input.toolInput)
-  } else if (toolName === 'git_merge') {
-    target = await gitMergeTarget(input.cwd, input.toolInput)
-  } else if (toolName === 'git_push') {
-    target = await gitPushTarget(input.cwd, input.toolInput)
-  } else {
-    target = { kind: 'unsupported', toolName }
-  }
-
   const targetDigest = stableValueDigest(target)
   return {
     target,
@@ -117,24 +122,30 @@ export async function reconcileEffect(
   observationOptions: EffectFileObservationOptions = {}
 ): Promise<EffectReconciliationResult> {
   try {
-    const observedTargetDigest = stableValueDigest(effect.target)
-    const observedIntentDigest = stableValueDigest({
-      toolName: effect.toolName,
-      targetDigest: effect.targetDigest,
-      inputDigest: effect.inputDigest
-    })
-    if (observedTargetDigest !== effect.targetDigest || observedIntentDigest !== effect.intentDigest) {
+    if (!effectRecordIntegrityMatches(effect)) {
       return unresolved({ kind: 'integrity_error', reason: 'EffectRecord 摘要校验失败，禁止读取或重放目标' })
     }
     if (effect.target.kind === 'file_content') return await reconcileFileContent(effect.target, observationOptions)
     if (effect.target.kind === 'git_commit') return await reconcileGitCommit(effect.target)
+    if (effect.target.kind === 'git_index_update') return reconcileGitIndexEffectTarget(effect.target)
     if (effect.target.kind === 'git_merge') return await reconcileGitMerge(effect.target)
     if (effect.target.kind === 'git_push') return await reconcileGitPush(effect.target)
-    return unresolved({
-      kind: 'unsupported',
-      toolName: effect.target.toolName,
-      reason: '该副作用没有注册只读查询器，禁止自动重放'
-    })
+    if (effect.target.kind === 'worktree_patch_apply') {
+      return await reconcileWorktreePatchApply(effect.target, operationEffectReconcilerContext)
+    }
+    if (effect.target.kind === 'code_forge_patch') return reconcileCodeForgePatchEffectTarget(effect.target)
+    if (effect.target.kind === 'git_worktree_create' || effect.target.kind === 'git_worktree_remove') return reconcileManagedWorktreeLifecycleTarget(effect.target)
+    if (effect.target.kind === 'pull_request_create') {
+      return await reconcilePullRequestCreate(effect.target, operationEffectReconcilerContext)
+    }
+    if (effect.target.kind === 'unsupported') {
+      return unresolved({
+        kind: 'unsupported',
+        toolName: effect.target.toolName,
+        reason: '该副作用没有注册只读查询器，禁止自动重放'
+      })
+    }
+    return unresolved({ kind: 'unknown_effect_target', reason: 'EffectTarget 类型无法识别，禁止自动重放' })
   } catch (error) {
     return unresolved({
       kind: effect.target.kind,
@@ -348,49 +359,11 @@ async function reconcileFileContent(
     MAX_FILE_RECONCILIATION_BYTES,
     observationOptions
   )
-  if (observation.state === 'absent') {
-    const payload = { kind: target.kind, observedState: 'absent', relativePath: target.relativePath }
-    return target.preState === 'absent'
-      ? notApplied(payload, '目标仍不存在，已证明写入没有发生')
-      : unresolved({ ...payload, reason: '目标文件在对账时缺失' })
-  }
-  const observedIdentity = observation.identity
-  const observedBytes = observation.bytes
-  const payload = {
-    kind: target.kind,
-    relativePath: target.relativePath,
-    observedState: 'file',
-    observedBytes,
-    observedIdentity
-  }
-  const couldBeExpected = observedBytes === target.expectedBytes
-  const couldBePreState =
-    target.preState === 'file' &&
-    target.preBytes === observedBytes &&
-    typeof target.preSha256 === 'string'
-  if (!couldBeExpected && !couldBePreState) {
-    return unresolved({ ...payload, reason: '文件大小既不匹配执行前状态，也不匹配预期状态' })
-  }
-  if (typeof observation.sha256 !== 'string') {
-    return unresolved({
-      ...payload,
-      maxHashBytes: MAX_FILE_RECONCILIATION_BYTES,
-      reason: '目标文件超过自动对账哈希上限，已转人工确认'
-    })
-  }
-  const observedSha256 = observation.sha256
-  const hashedPayload = { ...payload, observedSha256 }
-  if (observedSha256 === target.expectedSha256 && couldBeExpected) {
-    return confirmed(hashedPayload, '文件内容与预期摘要完全一致')
-  }
-  if (
-    target.preState === 'file' &&
-    target.preSha256 === observedSha256 &&
-    (!target.preFileIdentity || sameFileSystemIdentity(target.preFileIdentity, observedIdentity))
-  ) {
-    return notApplied(hashedPayload, '文件仍是执行前内容，已授权后续生成新 lease 重试')
-  }
-  return unresolved({ ...hashedPayload, reason: '文件既不是执行前状态，也不是预期状态' })
+  return reconcileFileContentObservation(
+    target,
+    observation as FileContentObservation,
+    MAX_FILE_RECONCILIATION_BYTES
+  )
 }
 
 async function reconcileGitCommit(
@@ -687,36 +660,6 @@ async function reconcileGitPush(
     ...payload,
     reason: observedSha ? '远端 ref 已指向其他 SHA' : '远端 ref 不存在或无法确认'
   })
-}
-
-function confirmed(payload: unknown, reason: string): EffectReconciliationResult {
-  return {
-    kind: 'confirmed',
-    evidenceDigest: stableValueDigest(payload),
-    verifier: EFFECT_RECONCILER_VERSION,
-    reason
-  }
-}
-
-function notApplied(payload: unknown, reason: string): EffectReconciliationResult {
-  return {
-    kind: 'not_applied',
-    evidenceDigest: stableValueDigest(payload),
-    verifier: EFFECT_RECONCILER_VERSION,
-    reason
-  }
-}
-
-function unresolved(payload: unknown): EffectReconciliationResult {
-  const reason = typeof payload === 'object' && payload && 'reason' in payload
-    ? String((payload as { reason: unknown }).reason)
-    : '外部状态无法确认'
-  return {
-    kind: 'unresolved',
-    evidenceDigest: stableValueDigest(payload),
-    verifier: EFFECT_RECONCILER_VERSION,
-    reason
-  }
 }
 
 async function resolveRepoRoot(cwd: string): Promise<string> {

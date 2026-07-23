@@ -86,10 +86,25 @@ try {
     assert(selected?.id === 'cooling', `cooled key should recover: ${selected?.id}`)
   })
 
+  check('session-only key pools still rotate without persisted credential fields', () => {
+    const sessionKeys = [
+      key('session-primary', 'Session Primary', { encryptedToken: '', sessionOnly: true }),
+      key('session-backup', 'Session Backup', { encryptedToken: '', sessionOnly: true })
+    ]
+    const selected = routing.pickNextProviderKey(sessionKeys, {
+      activeKeyId: 'session-primary',
+      failedKeyId: 'session-primary',
+      now
+    })
+    assert(selected?.id === 'session-backup', `expected session backup key, got ${selected?.id}`)
+  })
+
   check('main engines switch keys before provider failover and expose labels only', () => {
     const providers = read('src/main/providers.ts')
     const openai = read('src/main/openaiEngine.ts')
     const sdk = read('src/main/agentSession.ts')
+    const sdkResult = read('src/main/task/claude-result-runtime.ts')
+    const sdkStreamFailure = read('src/main/task/claude-stream-failure-runtime.ts')
     const types = read('src/shared/types.ts')
     const store = read('src/renderer/src/store.ts')
     const message = read('src/renderer/src/components/MessageItem.tsx')
@@ -99,7 +114,9 @@ try {
     assert(providers.includes('recordProviderKeySuccess'), 'successful keys must clear failure metadata')
     assert(openai.indexOf('tryProviderKeyFailover(text') < openai.indexOf('recordFailure(this.meta.providerId, text)'), 'OpenAI must rotate a key before marking the Provider failed')
     assert(sdk.includes('providerTokenFingerprint(selection.token)'), 'SDK credential changes must rebuild even when key presence stays true')
-    assert(sdk.includes('await this.tryProviderKeyFailover(errorText)'), 'SDK result failures must try another key')
+    assert(sdk.includes('tryProviderKeyFailover: (errorText) => this.tryProviderKeyFailover(errorText)'), 'SDK result runtime must receive the key failover callback')
+    assert(sdkResult.includes('await input.tryProviderKeyFailover(parsed.errorText)'), 'SDK result failures must try another key')
+    assert(sdkStreamFailure.includes('await input.tryProviderKeyFailover(message)'), 'SDK stream failures must try another key')
     assert(types.includes("kind: 'provider-key-failover'"), 'shared event contract must include key failover')
     assert(!types.match(/provider-key-failover[\s\S]{0,500}(token|encryptedToken):/), 'key failover event must not expose secret fields')
     assert(store.includes("case 'provider-key-failover'"), 'renderer store must preserve key failover')
