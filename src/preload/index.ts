@@ -8,7 +8,6 @@ import type {
   DispatchSubagentsInput,
   LayeredMemorySearchInput,
   LayeredMemoryUpdateInput,
-  LayeredMemoryWriteInput,
   MarkRunOptions,
   MenuCommand,
   MemorySuggestionEvent,
@@ -29,6 +28,13 @@ import type {
   TaskDecomposeInput,
   UpdateRoutineInput
 } from '../shared/types'
+import { resolveTaskDagFinalization } from './task-dag-finalization'
+import { workflowLedgerApi } from './workflow-ledger'
+import { projectWorkspaceApi } from './project-workspace'
+import { digitalWorkerApi } from './digital-worker'
+import { modelAttemptRecoveryApi } from './model-attempt-recovery'
+import { learningApi } from './learning'
+import { supervisorApi } from './supervisor'
 
 const api: AgentDeskApi = {
   listSessions: () => ipcRenderer.invoke('sessions:list'),
@@ -54,6 +60,12 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('sessions:dispatchTaskDag', parentSessionId, input),
   listSupportedAgents: (sessionId: string) => ipcRenderer.invoke('sessions:supportedAgents', sessionId),
   listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
+  ...workflowLedgerApi,
+  ...projectWorkspaceApi,
+  ...digitalWorkerApi,
+  ...modelAttemptRecoveryApi,
+  ...learningApi,
+  ...supervisorApi,
   recoverTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:recover', snapshotId),
   resolveTaskEffect: (
@@ -68,6 +80,7 @@ const api: AgentDeskApi = {
     expectedRevision,
     resolution
   ),
+  resolveTaskDagFinalization,
   deleteTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:delete', snapshotId),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>
@@ -246,8 +259,6 @@ const api: AgentDeskApi = {
   listLayeredMemories: () => ipcRenderer.invoke('memory:layeredList'),
   searchLayeredMemories: (sessionId: string | undefined, input: LayeredMemorySearchInput) =>
     ipcRenderer.invoke('memory:layeredSearch', sessionId, input),
-  addLayeredMemory: (sessionId: string | undefined, input: LayeredMemoryWriteInput) =>
-    ipcRenderer.invoke('memory:layeredAdd', sessionId, input),
   archiveLayeredMemories: (olderThanDays?: number) =>
     ipcRenderer.invoke('memory:layeredArchive', olderThanDays),
   exportLayeredMemories: () => ipcRenderer.invoke('memory:layeredExport'),

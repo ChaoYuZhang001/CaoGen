@@ -1555,6 +1555,24 @@ textarea {
   flex-shrink: 0;
 }
 
+.session-model-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.session-model-control .select {
+  width: 100%;
+}
+
+.session-model-error {
+  max-width: 220px;
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .chat-layout-controls {
   display: inline-flex;
   align-items: center;
@@ -4012,6 +4030,29 @@ textarea {
   flex-shrink: 0;
 }
 
+.model-attempt-recovery-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.model-attempt-recovery-heading {
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-attempt-recovery-warning {
+  margin-top: -2px;
+}
+
+.model-attempt-recovery-unavailable {
+  color: var(--yellow);
+}
+
+.model-attempt-recovery-row {
+  border-color: color-mix(in srgb, var(--yellow) 34%, var(--border));
+}
+
 .task-recovery-effects {
   margin-top: 10px;
   padding-top: 9px;
@@ -4352,6 +4393,90 @@ textarea {
   white-space: pre-wrap;
 }
 
+.learning-skill-preview {
+  width: 100%;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.learning-skill-preview > summary {
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.learning-skill-versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.learning-skill-version {
+  min-width: 0;
+}
+
+.learning-skill-version + .learning-skill-version {
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.learning-skill-markdown,
+.learning-skill-diff {
+  max-height: 320px;
+  margin: 4px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.learning-skill-diff-section {
+  margin-top: 10px;
+}
+
+.learning-diff-line {
+  display: block;
+  min-height: 1.5em;
+}
+
+.learning-diff-removed {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+
+.learning-diff-added {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+
+.learning-diff-context {
+  color: var(--text-faint);
+}
+
+.learning-skill-preview > .notice {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .learning-skill-versions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .learning-skill-version + .learning-skill-version {
+    padding-top: 10px;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
 .provider-gateway-note {
   margin: 10px 0 4px;
   padding: 10px 12px;
@@ -4457,6 +4582,298 @@ textarea {
 .control-section {
   padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+.workflow-ledger-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.workflow-ledger-summary span {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.workflow-ledger-valid {
+  color: var(--success, #2f9e63);
+}
+
+.workflow-ledger-pending {
+  color: var(--text-dim);
+}
+
+.workflow-ledger-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-acceptance-authoring {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.workflow-acceptance-authoring-head,
+.workflow-acceptance-authoring-actions,
+.workflow-criterion-editor-head,
+.workflow-acceptance-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-acceptance-authoring h4,
+.workflow-acceptance-list h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workflow-acceptance-authoring .settings-hint {
+  margin: 4px 0 0;
+}
+
+.workflow-criterion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workflow-criterion-editor {
+  min-width: 0;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+
+.workflow-criterion-editor legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workflow-criterion-input {
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.workflow-criterion-policy-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr);
+  gap: 10px;
+}
+
+.workflow-criterion-policy-grid .field-label {
+  margin-top: 10px;
+}
+
+.workflow-policy-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 30px;
+  align-items: center;
+}
+
+.workflow-policy-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.workflow-acceptance-authoring-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.workflow-acceptance-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-acceptance-row {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.workflow-acceptance-policy-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.workflow-acceptance-policy {
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.workflow-acceptance-review {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-acceptance-review-head,
+.workflow-acceptance-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-evidence-authoring {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.workflow-evidence-summary-input {
+  min-height: 48px;
+  resize: vertical;
+}
+
+.workflow-criterion-review-list {
+  display: grid;
+  gap: 7px;
+}
+
+.workflow-criterion-review {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.workflow-criterion-review legend {
+  max-width: 100%;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.workflow-evidence-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.workflow-evidence-option span {
+  overflow-wrap: anywhere;
+}
+
+.workflow-waiver-field {
+  max-width: 520px;
+}
+
+.workflow-acceptance-retest {
+  display: flex;
+  align-items: center;
+}
+
+.workflow-ledger-list {
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.workflow-ledger-row-main,
+.workflow-ledger-row-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workflow-ledger-row-main {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.workflow-ledger-row-side {
+  flex-shrink: 0;
+}
+
+.workflow-ledger-meta {
+  color: var(--text-dim);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.workflow-ledger-status {
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  background: var(--bg-card);
+}
+
+.workflow-ledger-status-running,
+.workflow-ledger-status-verifying {
+  color: var(--accent);
+}
+
+.workflow-ledger-status-failed,
+.workflow-ledger-status-blocked {
+  color: var(--danger, #c34b4b);
+}
+
+.workflow-ledger-empty {
+  margin: 8px 0 0;
 }
 
 .control-form-grid,
@@ -7700,6 +8117,11 @@ button.task-dag-node:hover {
     height: 30px;
   }
 
+  .session-model-control {
+    flex: 1 1 136px;
+    width: 100%;
+  }
+
   .chat-controls .btn-danger {
     min-height: 30px;
     padding: 4px 9px;
@@ -7936,6 +8358,15 @@ button.task-dag-node:hover {
   .routing-rule-condition-grid,
   .routing-rule-task-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-criterion-policy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-criterion-editor-head,
+  .workflow-acceptance-authoring-head {
+    align-items: flex-start;
   }
 
   .control-center-head {

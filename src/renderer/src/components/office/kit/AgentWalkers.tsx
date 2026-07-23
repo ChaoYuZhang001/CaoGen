@@ -539,8 +539,8 @@ function OneAgentWalker({
         onPointerOver={cursorOver}
         onPointerOut={cursorOut}
       >
-        <mesh name="walker-select-hitbox" position={[0, 0.88, 0]}>
-          <boxGeometry args={[0.82, 1.76, 0.66]} />
+        <mesh name="walker-select-hitbox" position={[0, 1.08, 0]}>
+          <boxGeometry args={[0.82, 2.16, 0.66]} />
           <meshBasicMaterial transparent opacity={0.001} depthWrite={false} colorWrite={false} />
         </mesh>
         <mesh position={[0, 0.012, 0]} receiveShadow>
