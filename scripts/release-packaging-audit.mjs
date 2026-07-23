@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import releaseProvenance from './lib/release-provenance.cjs'
+import { macUpdateMetadataChecks } from './lib/release-matrix-evidence.mjs'
 import { requiresReleasePlatformMatrix, requiresTrustedMacDistribution } from './lib/release-packaging-policy.mjs'
 
 const { readPackagedReleaseProvenance, releaseProvenanceChecks } = releaseProvenance
@@ -33,6 +34,7 @@ const git = readGitState()
 const packagedRuntime = inspectPackagedRuntime()
 const macSigning = inspectMacSigning()
 const releaseProvenanceRequired = requiresTrustedMacDistribution(expectedVersion)
+const macUpdateMetadata = inspectMacUpdateMetadata()
 
 validatePackage()
 validateMacSigning()
@@ -62,6 +64,7 @@ const report = {
   git,
   signing: macSigning.status,
   signingEvidence: macSigning,
+  macUpdateMetadata,
   publish: summarizePublish(packageJson.build?.publish),
   warnings,
   failures
@@ -137,6 +140,7 @@ function validateDist() {
   if (latestMac !== undefined && !latestMac.includes(`version: ${expectedVersion}`)) {
     failures.push(`latest-mac.yml does not reference version ${expectedVersion}`)
   }
+  validateMacUpdateMetadataReport()
   if (!packagedRuntime.asarPresent) {
     failures.push(`packaged app archive is missing: ${packagedRuntime.asarPath}`)
   } else if (packagedRuntime.error) {
@@ -145,6 +149,23 @@ function validateDist() {
     for (const missing of packagedRuntime.missingRuntimeFiles) {
       failures.push(`packaged app is missing required runtime file: ${missing}`)
     }
+  }
+}
+
+function validateMacUpdateMetadataReport() {
+  for (const failure of macUpdateMetadata.failures) failures.push(`latest-mac.yml check failed: ${failure}`)
+}
+
+function inspectMacUpdateMetadata() {
+  if (!requiresReleasePlatformMatrix(expectedVersion)) return { required: false, checks: {}, failures: [] }
+  const checks = macUpdateMetadataChecks(readDistText('latest-mac.yml') || '', {
+    version: expectedVersion,
+    distDir
+  })
+  return {
+    required: true,
+    checks,
+    failures: Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name)
   }
 }
 
