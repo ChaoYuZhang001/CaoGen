@@ -1,9 +1,4 @@
-import {
-  addMemory,
-  type LayeredMemoryEntry,
-  type MemoryLayer,
-  type MemoryWriteInput
-} from './memory-manager'
+import type { MemoryLayer, MemoryWriteInput } from './memory-manager'
 import {
   shouldExtractMemory,
   summarizeMemoryTitle
@@ -51,13 +46,12 @@ export interface PersistMemoryLoopInput {
   memoryRoot: string
   projectRoot: string
   review: MemoryLoopReviewInput
-  persistLayered?: boolean
 }
 
 export interface PersistMemoryLoopResult {
   review: MemoryLoopReview
   drafts: ProjectMemoryDraft[]
-  layered: LayeredMemoryEntry[]
+  layered: []
 }
 
 const FAILURE_RE = /\b(failed|failure|error|exception|crash|blocked|timeout|timed out|cancelled)\b|失败|报错|异常|崩溃|阻塞|超时|取消|根因/i
@@ -180,22 +174,12 @@ export async function persistMemoryLoopReview(input: PersistMemoryLoopInput): Pr
     projectRoot: input.review.projectRoot ?? projectRoot
   })
   const drafts: ProjectMemoryDraft[] = []
-  const layered: LayeredMemoryEntry[] = []
 
   for (const draft of review.projectDrafts) {
     drafts.push(await proposeMemoryDraft(projectRoot, memoryRoot, draft))
   }
 
-  if (input.persistLayered !== false) {
-    for (const memory of review.layeredMemories) {
-      layered.push(await addMemory(memoryRoot, {
-        ...memory,
-        projectRoot: memory.layer === 'user' ? memory.projectRoot : (memory.projectRoot ?? projectRoot)
-      }))
-    }
-  }
-
-  return { review, drafts, layered }
+  return { review, drafts, layered: [] }
 }
 
 function renderTaskReviewBody(input: {

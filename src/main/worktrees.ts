@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path'
 import { app } from 'electron'
 import { withSafeLocalGitConfig } from './git/safe-git'
+import { inspectPullRequestCapability } from './git/pull-request-effect'
 import type {
   ManagedWorktreeView,
   WorktreeApplyResult,
@@ -13,67 +14,98 @@ import type {
   WorktreeMergeSummary,
   WorktreePatchResult,
   WorktreePullRequestResult,
-  WorktreeRemoveResult,
   WorktreeSummary
 } from '../shared/types'
 import {
   appendMergeReceipt,
   applySquashPatch,
   canFastApplyPatch,
-  createPullRequest,
   createSquashPatch,
   getConflictFiles,
   inspectMerge,
   listMergeReceipts,
   patchSha256
 } from './worktreeMerge'
+import {
+  listManagedWorktreeRecords,
+  managedWorktreeRecordForSession as recordForSession,
+  type ManagedWorktreeRecord
+} from './managed-worktree-lifecycle'
 
-const WORKTREE_BRANCH_PREFIX = 'caogen'
+export {
+  inspectManagedWorktreeRegistryProjection,
+  inspectManagedWorktreeIdentity,
+  inspectManagedWorktreeRegistryRecord,
+  managedWorktreeRecordForSession,
+  prepareManagedWorktreeCreateEffect,
+  prepareManagedWorktreeRemoveEffect,
+  prepareWorktree,
+  projectConfirmedManagedWorktreeTarget,
+  projectManagedWorktreeCreated,
+  projectManagedWorktreeRemoved,
+  removeManagedWorktree,
+  removeManagedWorktreeView
+} from './managed-worktree-lifecycle'
+export type {
+  ManagedWorktreeCreateEffectOptions,
+  ManagedWorktreeCreateEffectPlan,
+  ManagedWorktreeCreateEffectPlanResult,
+  ManagedWorktreeCreateEffectToolInput,
+  ManagedWorktreeLifecycleEffectTarget,
+  ManagedWorktreeRecord,
+  ManagedWorktreeRegistryRecordLookup,
+  ManagedWorktreeRegistryProjectionState,
+  ManagedWorktreeRemoveEffectOptions,
+  ManagedWorktreeRemoveEffectPlan,
+  ManagedWorktreeRemoveEffectPlanResult,
+  ManagedWorktreeRemoveEffectToolInput,
+  ManagedWorktreeState,
+  WorktreeOpResult,
+  WorktreePrepareOptions,
+  WorktreePrepareResult
+} from './managed-worktree-lifecycle'
+
 const GIT_TIMEOUT_MS = 120_000
 
-export type ManagedWorktreeState = 'active' | 'removed'
-
-export interface ManagedWorktreeRecord {
+export interface ManagedWorktreePatchEffectPlan {
   sessionId: string
   repoRoot: string
-  sourceCwd: string
   worktreePath: string
-  cwd: string
-  branch: string
   baseSha: string
-  baseBranch: string | null
-  state: ManagedWorktreeState
-  createdAt: number
-  updatedAt: number
+  headSha: string
+  patchPath: string
+  patchSha256: string
+  patchBytes: number
 }
 
-export interface WorktreePrepareOptions {
+export type ManagedWorktreePatchEffectPlanResult =
+  | { ok: true; plan: ManagedWorktreePatchEffectPlan }
+  | { ok: true; noop: Extract<WorktreeApplyResult, { ok: true }> }
+  | { ok: false; error: string }
+
+export interface ManagedWorktreePullRequestEffectPlan {
   sessionId: string
-  cwd: string
-  isolated?: boolean
+  worktreePath: string
+  branch: string
+  title: string
+  body: string
+  base?: string
 }
 
-export type WorktreePrepareResult =
-  | { ok: true; isolated: boolean; cwd: string; record?: ManagedWorktreeRecord }
-  | { ok: false; isolated: boolean; cwd: string; error: string }
+export type ManagedWorktreePullRequestEffectPlanResult =
+  | { ok: true; plan: ManagedWorktreePullRequestEffectPlan }
+  | { ok: true; unavailable: true; message: string }
+  | { ok: false; error: string }
 
-export type WorktreeOpResult =
-  | { ok: true; record: ManagedWorktreeRecord }
-  | { ok: false; error: string; record?: ManagedWorktreeRecord }
+type PreparedWorktreePatchInput =
+  | { ok: true; record: ManagedWorktreeRecord; patchText: string }
+  | { ok: false; error: string }
 
 interface WorktreeDiffStats {
   changedFiles: number
   insertions?: number
   deletions?: number
   dirty: boolean
-}
-
-function worktreesRoot(): string {
-  return join(app.getPath('userData'), 'worktrees')
-}
-
-function registryFile(): string {
-  return join(worktreesRoot(), 'index.json')
 }
 
 function patchesRoot(): string {
@@ -138,10 +170,6 @@ function bufferText(value: Buffer | string | undefined): string {
   return Buffer.isBuffer(value) ? value.toString('utf8').trim() : value.trim()
 }
 
-function branchFor(sessionId: string): string {
-  return `${WORKTREE_BRANCH_PREFIX}/${sessionId}`
-}
-
 function safePathSegment(sessionId: string): string {
   const safe = sessionId.replace(/[^A-Za-z0-9._-]/g, '_')
   if (safe && safe === sessionId && safe !== '.' && safe !== '..') return safe
@@ -150,100 +178,8 @@ function safePathSegment(sessionId: string): string {
   return `${prefix}-${hash}`
 }
 
-function worktreePathFor(sessionId: string): string {
-  return join(worktreesRoot(), safePathSegment(sessionId))
-}
-
-function normalizeSessionId(sessionId: string): string {
-  const normalized = sessionId.trim()
-  if (!normalized) throw new Error('sessionId 不能为空')
-  return normalized
-}
-
-function sourceSubdirFor(cwd: string): string {
-  return git(cwd, ['rev-parse', '--show-prefix']).replace(/[\\/]+$/, '')
-}
-
-function cwdForWorktree(worktreePath: string, sourceCwd: string): string {
-  const subdir = sourceSubdirFor(sourceCwd)
-  return subdir ? join(worktreePath, subdir) : worktreePath
-}
-
-function currentBranchFor(repoRoot: string): string | null {
-  const branch = gitOrNull(repoRoot, ['symbolic-ref', '--short', '-q', 'HEAD'])
-  return branch || null
-}
-
-function branchExists(repoRoot: string, branch: string): boolean {
-  try {
-    execFileSync('git', withSafeLocalGitConfig(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]), {
-      cwd: repoRoot,
-      stdio: 'ignore',
-      timeout: GIT_TIMEOUT_MS
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-
-function isRecord(value: unknown): value is ManagedWorktreeRecord {
-  if (!value || typeof value !== 'object') return false
-  const record = value as Partial<ManagedWorktreeRecord>
-  return (
-    typeof record.sessionId === 'string' &&
-    typeof record.repoRoot === 'string' &&
-    typeof record.sourceCwd === 'string' &&
-    typeof record.worktreePath === 'string' &&
-    typeof record.cwd === 'string' &&
-    typeof record.branch === 'string' &&
-    typeof record.baseSha === 'string' &&
-    (typeof record.baseBranch === 'string' || record.baseBranch === null) &&
-    (record.state === 'active' || record.state === 'removed') &&
-    typeof record.createdAt === 'number' &&
-    typeof record.updatedAt === 'number'
-  )
-}
-
-function loadRegistry(): ManagedWorktreeRecord[] {
-  try {
-    const raw = JSON.parse(readFileSync(registryFile(), 'utf8')) as unknown
-    if (Array.isArray(raw)) return raw.filter(isRecord)
-    if (raw && typeof raw === 'object') {
-      const maybeRecords = (raw as { records?: unknown }).records
-      if (Array.isArray(maybeRecords)) return maybeRecords.filter(isRecord)
-    }
-  } catch {
-    // Registry is optional and can be recreated from future successful operations.
-  }
-  return []
-}
-
-function saveRegistry(records: ManagedWorktreeRecord[]): void {
-  mkdirSync(worktreesRoot(), { recursive: true })
-  writeFileSync(registryFile(), JSON.stringify(records, null, 2))
-}
-
-function upsertRecord(records: ManagedWorktreeRecord[], record: ManagedWorktreeRecord): void {
-  const index = records.findIndex((item) => item.sessionId === record.sessionId)
-  if (index >= 0) records[index] = record
-  else records.push(record)
-}
-
-function updateRecord(record: ManagedWorktreeRecord): ManagedWorktreeRecord {
-  const records = loadRegistry()
-  upsertRecord(records, record)
-  saveRegistry(records)
-  return record
-}
-
 function toView(record: ManagedWorktreeRecord): ManagedWorktreeView {
   return { ...record }
-}
-
-function recordForSession(sessionId: string): ManagedWorktreeRecord | null {
-  const normalizedSessionId = normalizeSessionId(sessionId)
-  return loadRegistry().find((item) => item.sessionId === normalizedSessionId) ?? null
 }
 
 function diffStats(record: ManagedWorktreeRecord): WorktreeDiffStats {
@@ -332,70 +268,9 @@ export function repoRootFor(cwd: string): string | null {
   return gitOrNull(cwd, ['rev-parse', '--show-toplevel'])
 }
 
-export function prepareWorktree(opts: WorktreePrepareOptions): WorktreePrepareResult {
-  const sourceCwd = typeof opts.cwd === 'string' ? opts.cwd : ''
-  const requestedIsolation = opts.isolated === true
-  const shouldAutoIsolate = opts.isolated === undefined
-
-  try {
-    const sessionId = normalizeSessionId(opts.sessionId)
-    const repoRoot = repoRootFor(sourceCwd)
-    if (!repoRoot) {
-      if (requestedIsolation) {
-        return { ok: false, isolated: true, cwd: sourceCwd, error: '当前目录不是 Git 仓库' }
-      }
-      return { ok: true, isolated: false, cwd: sourceCwd }
-    }
-
-    if (!requestedIsolation && !shouldAutoIsolate) {
-      return { ok: true, isolated: false, cwd: sourceCwd }
-    }
-
-    const records = loadRegistry()
-    const existing = records.find(
-      (record) => record.sessionId === sessionId && record.state === 'active'
-    )
-    if (existing && existsSync(existing.worktreePath)) {
-      return { ok: true, isolated: true, cwd: existing.cwd, record: existing }
-    }
-
-    const branch = branchFor(sessionId)
-    git(repoRoot, ['check-ref-format', '--branch', branch])
-
-    const worktreePath = worktreePathFor(sessionId)
-    const cwd = cwdForWorktree(worktreePath, sourceCwd)
-    const baseSha = git(repoRoot, ['rev-parse', 'HEAD'])
-    const baseBranch = currentBranchFor(repoRoot)
-
-    mkdirSync(worktreesRoot(), { recursive: true })
-    git(repoRoot, ['worktree', 'add', '-b', branch, worktreePath, 'HEAD'])
-    mkdirSync(cwd, { recursive: true })
-
-    const now = Date.now()
-    const record: ManagedWorktreeRecord = {
-      sessionId,
-      repoRoot,
-      sourceCwd,
-      worktreePath,
-      cwd,
-      branch,
-      baseSha,
-      baseBranch,
-      state: 'active',
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now
-    }
-    upsertRecord(records, record)
-    saveRegistry(records)
-    return { ok: true, isolated: true, cwd, record }
-  } catch (err) {
-    return { ok: false, isolated: requestedIsolation || shouldAutoIsolate, cwd: sourceCwd, error: errorText(err) }
-  }
-}
-
 export function listManagedWorktrees(): ManagedWorktreeRecord[] {
   try {
-    return loadRegistry().sort((a, b) => b.updatedAt - a.updatedAt)
+    return listManagedWorktreeRecords()
   } catch {
     return []
   }
@@ -486,7 +361,7 @@ export function createManagedWorktreeMergePatch(sessionId: string): WorktreePatc
 export function checkManagedWorktreeApply(sessionId: string): WorktreeApplyCheckResult {
   try {
     const patch = createManagedWorktreeMergePatch(sessionId)
-    if (!patch.ok) return { ok: false, error: patch.error ?? '无法生成 worktree patch' }
+    if ('error' in patch) return { ok: false, error: patch.error || '无法生成 worktree patch' }
     return canFastApplyPatch(patch.repoRoot ?? '', patch.patchText ?? '')
   } catch (err) {
     return { ok: false, error: errorText(err) }
@@ -494,40 +369,128 @@ export function checkManagedWorktreeApply(sessionId: string): WorktreeApplyCheck
 }
 
 export function applyManagedWorktreePatch(sessionId: string): WorktreeApplyResult {
+  void sessionId
+  return {
+    ok: false,
+    error: '直接应用 worktree patch 的同步入口已禁用；必须通过 Operation Effect Gateway 执行'
+  }
+}
+
+export function prepareManagedWorktreePatchEffect(
+  sessionId: string
+): ManagedWorktreePatchEffectPlanResult {
   try {
     const record = recordForSession(sessionId)
+    if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+    if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+      return { ok: false, error: 'worktree 已不存在或已移除' }
+    }
     const patch = createManagedWorktreeMergePatch(sessionId)
-    if (!patch.ok) return { ok: false, error: patch.error ?? '无法生成 worktree patch' }
-    const apply = applySquashPatch(patch.repoRoot ?? '', patch.patchText ?? '')
-    if (!apply.ok) return apply
-    // 合并成功后落回执:文件数/增删行/patch sha256/时间,供事后验收。
-    // 回执写失败不影响合并结果(patch 已应用),静默忽略。
-    if (record && apply.applied) {
-      try {
-        const stats = diffStats(record)
-        appendMergeReceipt(mergeReceiptsFile(), {
-          sessionId: record.sessionId,
-          branch: record.branch,
-          baseSha: record.baseSha,
-          filesChanged: apply.changedFiles,
-          insertions: stats.insertions ?? 0,
-          deletions: stats.deletions ?? 0,
-          mergedAt: Date.now(),
-          patchSha256: patchSha256(patch.patchText ?? '')
-        })
-      } catch {
-        // 回执是附加验收信息,写盘失败不阻断合并主流程。
+    if ('error' in patch) return { ok: false, error: patch.error || '无法生成 worktree patch' }
+    if (
+      !patch.repoRoot ||
+      !patch.worktreePath ||
+      !patch.baseSha ||
+      !patch.headSha ||
+      !patch.path ||
+      typeof patch.patchText !== 'string'
+    ) {
+      return { ok: false, error: 'worktree patch 缺少建立效果记录所需的冻结字段' }
+    }
+    if (patch.patchText.trim() === '') {
+      return {
+        ok: true,
+        noop: {
+          ok: true,
+          repoRoot: patch.repoRoot,
+          worktreePath: patch.worktreePath,
+          baseSha: patch.baseSha,
+          headSha: patch.headSha,
+          path: patch.path,
+          bytes: 0,
+          changedFiles: 0,
+          applied: false
+        }
       }
     }
     return {
-      ...apply,
-      path: patch.path,
-      headSha: patch.headSha,
-      baseSha: patch.baseSha,
-      worktreePath: patch.worktreePath
+      ok: true,
+      plan: {
+        sessionId: record.sessionId,
+        repoRoot: patch.repoRoot,
+        worktreePath: patch.worktreePath,
+        baseSha: patch.baseSha,
+        headSha: patch.headSha,
+        patchPath: patch.path,
+        patchSha256: patchSha256(patch.patchText),
+        patchBytes: Buffer.byteLength(patch.patchText, 'utf8')
+      }
     }
   } catch (err) {
     return { ok: false, error: errorText(err) }
+  }
+}
+
+export function applyPreparedManagedWorktreePatch(
+  plan: ManagedWorktreePatchEffectPlan
+): WorktreeApplyResult {
+  try {
+    const prepared = loadPreparedWorktreePatch(plan)
+    if ('error' in prepared) return { ok: false, error: prepared.error }
+    const apply = applySquashPatch(plan.repoRoot, prepared.patchText)
+    if (!apply.ok) return apply
+    if (apply.applied) appendWorktreeMergeReceipt(prepared.record, apply, plan.patchSha256)
+    return {
+      ...apply,
+      path: plan.patchPath,
+      headSha: plan.headSha,
+      baseSha: plan.baseSha,
+      worktreePath: plan.worktreePath
+    }
+  } catch (err) {
+    return { ok: false, error: errorText(err) }
+  }
+}
+
+function loadPreparedWorktreePatch(plan: ManagedWorktreePatchEffectPlan): PreparedWorktreePatchInput {
+  const record = recordForSession(plan.sessionId)
+  if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
+  if (record.state !== 'active' || !existsSync(record.worktreePath)) {
+    return { ok: false, error: 'worktree 已不存在或已移除' }
+  }
+  const identityMatches = record.repoRoot === plan.repoRoot
+    && record.worktreePath === plan.worktreePath
+    && record.baseSha === plan.baseSha
+    && git(record.worktreePath, ['rev-parse', '--verify', 'HEAD^{commit}']) === plan.headSha
+  if (!identityMatches) return { ok: false, error: 'managed worktree 已偏离效果审批时状态' }
+  if (!existsSync(plan.patchPath)) return { ok: false, error: '冻结的 worktree patch artifact 已不存在' }
+  const patchText = readFileSync(plan.patchPath, 'utf8')
+  const artifactMatches = Buffer.byteLength(patchText, 'utf8') === plan.patchBytes
+    && patchSha256(patchText) === plan.patchSha256
+  return artifactMatches
+    ? { ok: true, record, patchText }
+    : { ok: false, error: '冻结的 worktree patch artifact 已发生变化' }
+}
+
+function appendWorktreeMergeReceipt(
+  record: ManagedWorktreeRecord,
+  apply: Extract<WorktreeApplyResult, { ok: true }>,
+  sha256: string
+): void {
+  try {
+    const stats = diffStats(record)
+    appendMergeReceipt(mergeReceiptsFile(), {
+      sessionId: record.sessionId,
+      branch: record.branch,
+      baseSha: record.baseSha,
+      filesChanged: apply.changedFiles,
+      insertions: stats.insertions ?? 0,
+      deletions: stats.deletions ?? 0,
+      mergedAt: Date.now(),
+      patchSha256: sha256
+    })
+  } catch {
+    // 回执是附加验收信息,写盘失败不阻断已经生效的 patch。
   }
 }
 
@@ -555,82 +518,47 @@ export function listWorktreeMergeReceipts(): WorktreeMergeReceipt[] {
 }
 
 export function createManagedWorktreePullRequest(sessionId: string): WorktreePullRequestResult {
+  void sessionId
+  return {
+    ok: false,
+    error: '直接 push 并创建 PR/MR 的复合入口已禁用；必须通过独立 git_push 与 PR Effect 执行'
+  }
+}
+
+export function prepareManagedWorktreePullRequestEffect(
+  sessionId: string
+): ManagedWorktreePullRequestEffectPlanResult {
   try {
     const record = recordForSession(sessionId)
     if (!record) return { ok: false, error: '当前会话没有 CaoGen 管理的 worktree' }
     if (record.state !== 'active' || !existsSync(record.worktreePath)) {
       return { ok: false, error: 'worktree 已不存在或已移除' }
     }
-    const title = `${record.branch}: CaoGen worktree changes`
-    const body = [
-      `Automated pull request for CaoGen managed worktree \`${record.branch}\`.`,
-      '',
-      `- Base: ${record.baseBranch ?? 'detached'} (${record.baseSha.slice(0, 12)})`,
-      `- Worktree: ${record.worktreePath}`
-    ].join('\n')
-    return createPullRequest({
-      repoRoot: record.repoRoot,
-      worktreePath: record.worktreePath,
-      branch: record.branch,
-      title,
-      body,
-      baseBranch: record.baseBranch
-    })
-  } catch (err) {
-    return { ok: false, error: errorText(err) }
-  }
-}
-
-export function removeManagedWorktree(
-  sessionId: string,
-  opts: { deleteBranch?: boolean; force?: boolean } = {}
-): WorktreeOpResult {
-  try {
-    const normalizedSessionId = normalizeSessionId(sessionId)
-    const record = loadRegistry().find((item) => item.sessionId === normalizedSessionId)
-    if (!record) {
-      return { ok: false, error: `未找到 session ${normalizedSessionId} 的 worktree 记录` }
-    }
-
-    if (record.state !== 'removed' && existsSync(record.worktreePath)) {
-      git(record.repoRoot, [
-        'worktree',
-        'remove',
-        ...(opts.force === true ? ['--force'] : []),
-        record.worktreePath
-      ])
-    }
-
-    const removedRecord = updateRecord({
-      ...record,
-      state: 'removed',
-      updatedAt: Date.now()
-    })
-
-    if (opts.deleteBranch === true && branchExists(record.repoRoot, record.branch)) {
-      try {
-        git(record.repoRoot, ['branch', opts.force === true ? '-D' : '-d', record.branch])
-      } catch (err) {
-        return {
-          ok: false,
-          error: `worktree 已移除，但删除分支失败: ${errorText(err)}`,
-          record: removedRecord
-        }
+    const capability = inspectPullRequestCapability(record.worktreePath)
+    if (!capability.available) {
+      return {
+        ok: true,
+        unavailable: true,
+        message: capability.message ?? '未检测到可用的 PR/MR 工具，已跳过创建'
       }
     }
-
-    return { ok: true, record: removedRecord }
+    return {
+      ok: true,
+      plan: {
+        sessionId: record.sessionId,
+        worktreePath: record.worktreePath,
+        branch: record.branch,
+        title: `${record.branch}: CaoGen worktree changes`,
+        body: [
+          `Automated pull request for CaoGen managed worktree \`${record.branch}\`.`,
+          '',
+          `- Base: ${record.baseBranch ?? 'detached'} (${record.baseSha.slice(0, 12)})`,
+          `- Worktree: ${record.worktreePath}`
+        ].join('\n'),
+        ...(record.baseBranch ? { base: record.baseBranch } : {})
+      }
+    }
   } catch (err) {
     return { ok: false, error: errorText(err) }
   }
-}
-
-export function removeManagedWorktreeView(
-  sessionId: string,
-  opts: { deleteBranch?: boolean; force?: boolean } = {}
-): WorktreeRemoveResult {
-  const result = removeManagedWorktree(sessionId, opts)
-  if (result.ok) return { ok: true, record: toView(result.record) }
-  const failed = result as Extract<WorktreeOpResult, { ok: false }>
-  return { ok: false, error: failed.error, record: failed.record ? toView(failed.record) : undefined }
 }

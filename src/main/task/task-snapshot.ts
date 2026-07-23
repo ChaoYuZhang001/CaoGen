@@ -1,39 +1,55 @@
 import { app } from 'electron'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
-import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
-import { constants } from 'node:fs'
+import { open, readFile, rename, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import initSqlJs from 'sql.js'
 import type {
-  AgentEvent,
-  EffectRecord,
-  EngineKind,
-  SessionMeta,
-  SessionStatus,
-  TaskDagExecutionView,
-  TaskDagRuntimeSnapshot,
-  TaskSnapshotExecutionPosition,
-  TaskSnapshotReason,
+  EffectRecord, TaskDagFinalizationRecord,
   TaskSnapshotRecord,
-  TaskSnapshotReplayCandidate,
-  TaskRunRecord,
-  TaskSnapshotSubtaskState,
-  TaskSnapshotSubtaskStatus,
-  TaskSnapshotWorktreeInfo,
-  TranscriptEntry,
-  UsageTotals
+  TaskRunRecord
 } from '../../shared/types'
-import { isTaskRunRecord, mergeTaskRunRecords } from './task-run'
+export { buildTaskSnapshot } from './task-snapshot-builder'
+export type { BuildTaskSnapshotInput } from './task-snapshot-builder'
+import { mergeTaskRunRecords } from './task-run'
+import {
+  assertTaskDagFinalizationParentDeletable,
+  findTaskDagFinalization,
+  selectTaskDagFinalizations,
+  upsertTaskDagFinalization
+} from './task-dag-finalization-store'
+import { appendTaskRunEvidence, backfillTaskEvidence, selectTaskRunsForEvidence } from './task-evidence-store'
+import { backfillWorkflowLedger, projectRunIntoWorkflow, resolveRunWorkflowProjectionContext } from './workflow-ledger-projection'
+import { projectTaskEvidenceIntoWorkflow } from './workflow-ledger-evidence-projection'
+import {
+  ensureWorkflowLedgerTaskStoreReady,
+  type WorkflowLedgerMigrationSource
+} from './workflow-ledger-migration'
+import { validateLegacyJsonMigrationSource } from './workflow-ledger-readiness'
+import { effectTargetsConflict } from './effect-target-conflict'
+import { setupTaskSnapshotSchema } from './task-snapshot-schema'
 import { stableValueDigest } from './tool-idempotency'
+import {
+  backfillWorkflowRecoverySessions,
+  commitWorkflowLedgerReadMode,
+  deleteWorkflowRecoverySession,
+  findRecoverySnapshot,
+  findRecoveryTaskRun,
+  getWorkflowLedgerReadMode as getConfiguredWorkflowLedgerReadMode,
+  normalizeWorkflowLedgerReadMode,
+  selectRecoverySnapshots,
+  selectRecoveryTaskRuns,
+  upsertWorkflowRecoverySession,
+  type WorkflowLedgerReadMode
+} from './workflow-ledger-recovery'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
-type SqlDatabase = InstanceType<SqlJsStatic['Database']>
+export type TaskSnapshotDatabase = InstanceType<SqlJsStatic['Database']>
+type SqlDatabase = TaskSnapshotDatabase
 
 // Finder/Dock may launch the app with cwd="/"; resolve packaged WASM beside the bundled module.
 const nodeRequire = createRequire(__filename)
-const STORE_VERSION = 4
+const STORE_VERSION = 8
 export const TASK_SNAPSHOT_EVENT_INTERVAL = 5
 const TASK_SNAPSHOT_DB_FILE = 'task-snapshots.db'
 const UNRESOLVED_EFFECT_STATUSES = new Set<EffectRecord['status']>([
@@ -42,28 +58,8 @@ const UNRESOLVED_EFFECT_STATUSES = new Set<EffectRecord['status']>([
   'waiting_reconciliation'
 ])
 
-interface TaskSnapshotFile {
-  version: number
-  snapshots: TaskSnapshotRecord[]
-}
-
 let sqlPromise: Promise<SqlJsStatic> | null = null
 const mutationQueues = new Map<string, Promise<unknown>>()
-
-export interface BuildTaskSnapshotInput {
-  meta: SessionMeta
-  transcript: TranscriptEntry[]
-  lastSeq: number
-  lastEventId?: string
-  lastEventKind?: AgentEvent['kind']
-  eventCount: number
-  reason: TaskSnapshotReason
-  run?: TaskRunRecord
-  subtasks?: TaskSnapshotSubtaskState[]
-  dagExecutions?: TaskDagExecutionView[]
-  dagRuntimes?: TaskDagRuntimeSnapshot[]
-  now?: number
-}
 
 export function taskSnapshotsFile(rootDir = app.getPath('userData')): string {
   return join(rootDir, 'task-snapshots.json')
@@ -73,48 +69,29 @@ export function taskSnapshotsDbFile(rootDir = app.getPath('userData')): string {
   return join(rootDir, TASK_SNAPSHOT_DB_FILE)
 }
 
-export function buildTaskSnapshot(input: BuildTaskSnapshotInput): TaskSnapshotRecord {
-  const now = input.now ?? Date.now()
-  const transcript = input.transcript.filter(isTranscriptEntry)
-  const ids = latestTranscriptIds(transcript)
-  const execution: TaskSnapshotExecutionPosition = {
-    status: input.meta.status,
-    lastSeq: input.lastSeq,
-    cursor: { seq: input.lastSeq, eventId: input.lastEventId },
-    lastEventId: input.lastEventId,
-    lastEventKind: input.lastEventKind,
-    lastEventAt: now,
-    sdkSessionId: input.meta.sdkSessionId,
-    resumeSessionAt: input.meta.resumeSessionAt,
-    lastCheckpointMessageId: ids.lastCheckpointMessageId,
-    lastUserMessageId: ids.lastUserMessageId
-  }
-  const worktree = worktreeFromMeta(input.meta)
-  const projectPath = input.meta.sourceCwd ?? input.meta.cwd
-  const replayCandidate = replayCandidateFromTranscript(transcript, input.meta.status, now)
-  return {
-    id: input.meta.id,
-    taskId: input.meta.childTaskId ?? input.meta.id,
-    sessionId: input.meta.id,
-    title: input.meta.title,
-    projectPath,
-    engine: input.meta.engine,
-    model: input.meta.model,
-    providerId: input.meta.providerId,
-    createdAt: input.meta.createdAt,
-    updatedAt: now,
-    eventCount: Math.max(0, Math.floor(input.eventCount)),
-    reason: input.reason,
-    meta: { ...input.meta },
-    execution,
-    ...(input.run ? { run: { ...input.run } } : {}),
-    ...(replayCandidate ? { replayCandidate } : {}),
-    ...(worktree ? { worktree } : {}),
-    transcript,
-    subtasks: (input.subtasks ?? []).filter(isSubtaskState),
-    dagExecutions: (input.dagExecutions ?? []).filter(isTaskDagExecutionView),
-    dagRuntimes: (input.dagRuntimes ?? []).filter(isTaskDagRuntimeSnapshot)
-  }
+export type { WorkflowLedgerReadMode } from './workflow-ledger-recovery'
+
+export function getWorkflowLedgerReadMode(rootDir?: string): WorkflowLedgerReadMode {
+  return getConfiguredWorkflowLedgerReadMode(taskSnapshotsDbFile(rootDir))
+}
+
+export async function configureWorkflowLedgerReadMode(
+  value: unknown,
+  rootDir?: string
+): Promise<WorkflowLedgerReadMode> {
+  const mode = normalizeWorkflowLedgerReadMode(value)
+  return enqueueMutation(rootDir, async () => {
+    const store = await openStore(rootDir, mode, true)
+    try {
+      // Exercise both canonical recovery surfaces before publishing the database-scoped flip.
+      selectRecoverySnapshots(store.db, mode)
+      selectRecoveryTaskRuns(store.db, mode)
+    } finally {
+      store.db.close()
+    }
+    commitWorkflowLedgerReadMode(store.path, mode)
+    return mode
+  })
 }
 
 export async function listTaskSnapshots(rootDir?: string): Promise<TaskSnapshotRecord[]> {
@@ -126,26 +103,109 @@ export async function getTaskSnapshot(snapshotId: string, rootDir?: string): Pro
   const id = snapshotId.trim()
   if (!id) return null
   await waitForPendingMutations(rootDir)
-  return readStore(rootDir).then((snapshots) => snapshots.find((snapshot) => snapshot.id === id || snapshot.sessionId === id) ?? null)
+  const store = await openStore(rootDir)
+  try {
+    return findRecoverySnapshot(store.db, id, id, store.readMode)
+  } finally {
+    store.db.close()
+  }
 }
 
 export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string): Promise<TaskSnapshotRecord> {
   return enqueueMutation(rootDir, async () => {
     const store = await openStore(rootDir)
     try {
-      const previous = findSnapshotInDb(store.db, snapshot.id, snapshot.sessionId)
+      const previous = findRecoverySnapshot(store.db, snapshot.id, snapshot.sessionId, store.readMode)
       let nextSnapshot = previous ? mergeTaskSnapshots(previous, snapshot) : snapshot
       if (nextSnapshot.run) {
-        const persistedRun = upsertTaskRun(store.db, nextSnapshot.run)
+        const persistedRun = upsertTaskRun(
+          store.db, nextSnapshot.run, store.readMode, nextSnapshot.meta.projectId, nextSnapshot
+        )
         nextSnapshot = {
           ...nextSnapshot,
           updatedAt: Math.max(nextSnapshot.updatedAt, persistedRun.updatedAt),
           run: persistedRun
         }
       }
-      upsertSnapshot(store.db, nextSnapshot)
+      upsertSnapshot(store.db, nextSnapshot, store.readMode)
       await persistStore(store)
       return nextSnapshot
+    } finally {
+      store.db.close()
+    }
+  })
+}
+
+export async function listTaskDagFinalizations(
+  parentSessionId?: string,
+  rootDir?: string
+): Promise<TaskDagFinalizationRecord[]> {
+  await waitForPendingMutations(rootDir)
+  const store = await openStore(rootDir)
+  try {
+    return selectTaskDagFinalizations(store.db, parentSessionId)
+  } finally {
+    store.db.close()
+  }
+}
+
+export async function getTaskDagFinalization(
+  executionId: string,
+  rootDir?: string
+): Promise<TaskDagFinalizationRecord | null> {
+  const id = executionId.trim()
+  if (!id) return null
+  await waitForPendingMutations(rootDir)
+  const store = await openStore(rootDir)
+  try {
+    return findTaskDagFinalization(store.db, id)
+  } finally {
+    store.db.close()
+  }
+}
+
+export function saveTaskDagFinalizationBarrier(
+  snapshot: TaskSnapshotRecord,
+  finalization: TaskDagFinalizationRecord,
+  options: { expectedRevision?: number; rootDir?: string } = {}
+): Promise<{ snapshot: TaskSnapshotRecord; finalization: TaskDagFinalizationRecord }> {
+  return enqueueMutation(options.rootDir, async () => {
+    const store = await openStore(options.rootDir)
+    try {
+      const currentFinalization = findTaskDagFinalization(store.db, finalization.executionId)
+      const currentRevision = currentFinalization?.revision ?? 0
+      const expectedRevision = options.expectedRevision ?? Math.max(0, finalization.revision - 1)
+      if (currentRevision !== expectedRevision) {
+        throw new Error(
+          `stale_revision: DAG finalizer ${finalization.executionId} 已从 ${expectedRevision} 更新到 ${currentRevision}`
+        )
+      }
+      if (finalization.revision !== currentRevision + 1) {
+        throw new Error(
+          `DAG finalizer revision 必须连续递增:${finalization.revision} != ${currentRevision + 1}`
+        )
+      }
+      if (snapshot.sessionId !== finalization.parentSessionId) {
+        throw new Error('DAG finalizer parentSessionId 与任务快照不一致')
+      }
+      const previousSnapshot = findRecoverySnapshot(
+        store.db, snapshot.id, snapshot.sessionId, store.readMode
+      )
+      let nextSnapshot = previousSnapshot ? mergeTaskSnapshots(previousSnapshot, snapshot) : snapshot
+      if (nextSnapshot.run) {
+        const persistedRun = upsertTaskRun(
+          store.db, nextSnapshot.run, store.readMode, nextSnapshot.meta.projectId, nextSnapshot
+        )
+        nextSnapshot = {
+          ...nextSnapshot,
+          updatedAt: Math.max(nextSnapshot.updatedAt, persistedRun.updatedAt),
+          run: persistedRun
+        }
+      }
+      upsertSnapshot(store.db, nextSnapshot, store.readMode)
+      upsertTaskDagFinalization(store.db, finalization)
+      await persistStore(store)
+      return { snapshot: nextSnapshot, finalization }
     } finally {
       store.db.close()
     }
@@ -162,13 +222,17 @@ export function deleteTaskSnapshot(
   return enqueueMutation(rootDir, async () => {
     const store = await openStore(rootDir)
     try {
-      const previous = findSnapshotInDb(store.db, id, id)
-      if (finalRun) upsertTaskRun(store.db, finalRun)
+      assertTaskDagFinalizationParentDeletable(store.db, id)
+      const previous = findRecoverySnapshot(store.db, id, id, store.readMode)
+      if (finalRun) {
+        upsertTaskRun(store.db, finalRun, store.readMode, previous?.meta.projectId, previous ?? undefined)
+      }
       if (!previous) {
         if (finalRun) await persistStore(store)
         return false
       }
       store.db.run('DELETE FROM task_snapshots WHERE id = ? OR session_id = ?', [id, id])
+      deleteWorkflowRecoverySession(store.db, id)
       await persistStore(store)
       return true
     } finally {
@@ -181,7 +245,7 @@ export async function listTaskRuns(sessionId?: string, rootDir?: string): Promis
   await waitForPendingMutations(rootDir)
   const store = await openStore(rootDir)
   try {
-    return selectTaskRuns(store.db, sessionId)
+    return selectRecoveryTaskRuns(store.db, store.readMode, sessionId)
   } finally {
     store.db.close()
   }
@@ -195,7 +259,7 @@ export function saveTaskRunBarrier(run: TaskRunRecord, rootDir?: string): Promis
   return enqueueMutation(rootDir, async () => {
     const store = await openStore(rootDir)
     try {
-      const persistedRuns = selectTaskRuns(store.db)
+      const persistedRuns = selectRecoveryTaskRuns(store.db, store.readMode)
       const previous = persistedRuns.find((item) => item.id === run.id) ?? null
       const candidateRun = previous ? mergeTaskRunRecords(previous, run) : run
       const conflictingEffect = findConflictingEffectLease(persistedRuns, candidateRun)
@@ -204,20 +268,22 @@ export function saveTaskRunBarrier(run: TaskRunRecord, rootDir?: string): Promis
           `相同资源的外部效果在其他会话仍未收敛(${conflictingEffect.status})，已阻止第二个执行 lease`
         )
       }
-      const matchingSnapshots = selectSnapshots(store.db).filter((snapshot) =>
+      const matchingSnapshots = selectRecoverySnapshots(store.db, store.readMode).filter((snapshot) =>
         snapshot.sessionId === candidateRun.sessionId && (!snapshot.run || snapshot.run.id === candidateRun.id)
       )
       if (matchingSnapshots.length === 0) {
         throw new Error('效果持久化屏障缺少可恢复任务快照，已阻止外部执行')
       }
       const persistedRun = assignResourceFencingTokens(store.db, candidateRun, persistedRuns)
-      upsertTaskRun(store.db, persistedRun)
+      upsertTaskRun(
+        store.db, persistedRun, store.readMode, matchingSnapshots[0]?.meta.projectId, matchingSnapshots[0]
+      )
       for (const snapshot of matchingSnapshots) {
         upsertSnapshot(store.db, {
           ...snapshot,
           updatedAt: Math.max(snapshot.updatedAt, persistedRun.updatedAt),
           run: snapshot.run ? mergeTaskRunRecords(snapshot.run, persistedRun) : persistedRun
-        })
+        }, store.readMode)
       }
       await persistStore(store)
       return persistedRun
@@ -257,50 +323,7 @@ function findConflictingEffectLease(
 function effectLeasesConflict(left: EffectRecord, right: EffectRecord): boolean {
   if (left.id === right.id) return false
   if (effectResourceKey(left) === effectResourceKey(right)) return true
-  if (
-    left.target.kind === 'file_content' &&
-    right.target.kind === 'file_content' &&
-    fileContentTargetsConflict(left.target, right.target)
-  ) {
-    return true
-  }
-  return (
-    (isOpaqueFileEdit(left) && isFileEdit(right)) ||
-    (isOpaqueFileEdit(right) && isFileEdit(left))
-  )
-}
-
-function fileContentTargetsConflict(
-  left: Extract<EffectRecord['target'], { kind: 'file_content' }>,
-  right: Extract<EffectRecord['target'], { kind: 'file_content' }>
-): boolean {
-  if (
-    left.preFileIdentity &&
-    right.preFileIdentity &&
-    left.preFileIdentity.device === right.preFileIdentity.device &&
-    left.preFileIdentity.inode === right.preFileIdentity.inode
-  ) {
-    return true
-  }
-  return (
-    resolve(left.rootPath, left.relativePath) ===
-    resolve(right.rootPath, right.relativePath)
-  )
-}
-
-function isFileEdit(effect: EffectRecord): boolean {
-  return isQueryableFileEdit(effect) || isOpaqueFileEdit(effect)
-}
-
-function isQueryableFileEdit(effect: EffectRecord): boolean {
-  return effect.target.kind === 'file_content'
-}
-
-function isOpaqueFileEdit(effect: EffectRecord): boolean {
-  return (
-    effect.target.kind === 'unsupported' &&
-    (effect.toolName === 'search_replace' || effect.toolName === 'edit_file')
-  )
+  return effectTargetsConflict(left.target, right.target)
 }
 
 function assignResourceFencingTokens(
@@ -402,26 +425,34 @@ export function supersedeToolExecution(
     const store = await openStore(rootDir)
     try {
       let changed = false
-      for (const run of selectTaskRuns(store.db)) {
+      const persistedUpdates = new Map<string, TaskRunRecord>()
+      const snapshots = selectRecoverySnapshots(store.db, store.readMode)
+      for (const run of selectRecoveryTaskRuns(store.db, store.readMode)) {
         const updated = markToolExecutionSuperseded(run, executionId, replacementExecutionId, now)
         if (!updated) continue
-        upsertTaskRun(store.db, updated)
+        const snapshot = snapshots.find((candidate) => candidate.run?.id === run.id)
+        persistedUpdates.set(
+          run.id,
+          upsertTaskRun(store.db, updated, store.readMode, snapshot?.meta.projectId, snapshot)
+        )
         changed = true
       }
-      for (const snapshot of selectSnapshots(store.db)) {
+      for (const snapshot of snapshots) {
         if (!snapshot.run) continue
-        const updatedRun = markToolExecutionSuperseded(
-          snapshot.run,
-          executionId,
-          replacementExecutionId,
-          now
+        const persisted = persistedUpdates.get(snapshot.run.id)
+        const updatedRun = persisted ?? markToolExecutionSuperseded(
+          snapshot.run, executionId, replacementExecutionId, now
         )
         if (!updatedRun) continue
+        const nextRun = persisted ?? upsertTaskRun(
+          store.db, updatedRun, store.readMode, snapshot.meta.projectId, snapshot
+        )
+        persistedUpdates.set(nextRun.id, nextRun)
         upsertSnapshot(store.db, {
           ...snapshot,
-          updatedAt: Math.max(snapshot.updatedAt, now),
-          run: updatedRun
-        })
+          updatedAt: Math.max(snapshot.updatedAt, now, nextRun.updatedAt),
+          run: nextRun
+        }, store.readMode)
         changed = true
       }
       if (changed) await persistStore(store)
@@ -436,34 +467,132 @@ export function flushTaskSnapshotMutations(rootDir?: string): Promise<void> {
   return waitForPendingMutations(rootDir)
 }
 
-async function readStore(rootDir?: string): Promise<TaskSnapshotRecord[]> {
+/** Read the shared task database under the same mutation queue used by snapshots. */
+export async function readTaskSnapshotDatabase<T>(
+  rootDir: string | undefined,
+  reader: (db: TaskSnapshotDatabase) => T | Promise<T>
+): Promise<T> {
+  await waitForPendingMutations(rootDir)
   const store = await openStore(rootDir)
   try {
-    return selectSnapshots(store.db)
+    return await reader(store.db)
   } finally {
     store.db.close()
   }
 }
 
-async function openStore(rootDir?: string): Promise<{ db: SqlDatabase; path: string }> {
+/** Mutate the shared task database atomically with snapshot/effect writes. */
+export function mutateTaskSnapshotDatabase<T>(
+  rootDir: string | undefined,
+  mutator: (db: TaskSnapshotDatabase) => T | Promise<T>
+): Promise<T> {
+  return enqueueMutation(rootDir, async () => {
+    const store = await openStore(rootDir)
+    try {
+      const result = await mutator(store.db)
+      await persistStore(store)
+      return result
+    } finally {
+      store.db.close()
+    }
+  })
+}
+
+/** Serialize maintenance that replaces the task database with normal writers. */
+export function withTaskSnapshotDatabaseMutationBarrier<T>(
+  rootDir: string | undefined,
+  maintenance: () => Promise<T>
+): Promise<T> {
+  return enqueueMutation(rootDir, maintenance)
+}
+
+async function readStore(rootDir?: string): Promise<TaskSnapshotRecord[]> {
+  const store = await openStore(rootDir)
+  try {
+    return selectRecoverySnapshots(store.db, store.readMode)
+  } finally {
+    store.db.close()
+  }
+}
+
+async function openStore(
+  rootDir?: string,
+  requestedReadMode?: WorkflowLedgerReadMode,
+  forceReadinessRefresh = false
+): Promise<{ db: SqlDatabase; path: string; readMode: WorkflowLedgerReadMode }> {
   const SQL = await loadSql()
   const dbPath = taskSnapshotsDbFile(rootDir)
-  await mkdir(dirname(dbPath), { recursive: true })
-  const dbExists = await access(dbPath, constants.R_OK)
-    .then(() => true)
-    .catch(() => false)
-  const db = dbExists ? new SQL.Database(await readFile(dbPath)) : new SQL.Database()
-  const previousVersion = readStoreVersion(db)
-  if (previousVersion > STORE_VERSION) {
+  const readMode = requestedReadMode ?? getConfiguredWorkflowLedgerReadMode(dbPath)
+  await ensureWorkflowLedgerTaskStoreReady({
+    databasePath: dbPath,
+    legacyJsonPath: taskSnapshotsFile(rootDir),
+    supportedStoreVersion: STORE_VERSION,
+    targetStoreVersion: STORE_VERSION,
+    readMode,
+    forceRefresh: forceReadinessRefresh,
+    buildCandidate: buildMigrationCandidate
+  })
+  const db = new SQL.Database(await readFile(dbPath))
+  try {
+    const previousVersion = readStoreVersion(db)
+    if (previousVersion > STORE_VERSION) {
+      throw new Error(`任务快照数据库版本过新:${previousVersion} > ${STORE_VERSION}`)
+    }
+    return { db, path: dbPath, readMode }
+  } catch (error) { db.close(); throw error }
+}
+
+/** Build migration bytes without touching the production database path. */
+async function buildMigrationCandidate(source: WorkflowLedgerMigrationSource): Promise<Uint8Array> {
+  const SQL = await loadSql()
+  const db = source.sourceKind === 'sqlite'
+    ? new SQL.Database(source.sourceBytes)
+    : new SQL.Database()
+  try {
+    const previousVersion = readStoreVersion(db)
+    if (previousVersion > STORE_VERSION) {
+      throw new Error(`任务快照数据库版本过新:${previousVersion} > ${STORE_VERSION}`)
+    }
+    setupTaskSnapshotSchema(db, STORE_VERSION)
+    if (source.sourceKind === 'legacy_json') {
+      importLegacySnapshots(db, source.sourceBytes)
+    }
+    const snapshots = selectRecoverySnapshots(db, 'legacy')
+    const taskRuns = selectTaskRunsForEvidence(db)
+    backfillTaskEvidence(
+      db,
+      taskRuns,
+      snapshots.map(({ sessionId, meta }) => ({ sessionId, projectId: meta.projectId }))
+    )
+    backfillWorkflowLedger(db, taskRuns, snapshots)
+    projectTaskEvidenceIntoWorkflow(db)
+    backfillWorkflowRecoverySessions(db, snapshots)
+    return db.export()
+  } finally {
     db.close()
-    throw new Error(`任务快照数据库版本过新:${previousVersion} > ${STORE_VERSION}`)
   }
-  setupSchema(db)
-  const migratedLegacyJson = migrateLegacyJson(db, rootDir)
-  if (migratedLegacyJson || (dbExists && previousVersion < STORE_VERSION)) {
-    await persistStore({ db, path: dbPath })
+}
+
+function importLegacySnapshots(db: SqlDatabase, sourceBytes: Uint8Array): void {
+  const snapshots = validateLegacyJsonSource(sourceBytes)
+  for (const snapshot of snapshots) {
+    if (snapshot.run) {
+      db.run(
+        `INSERT INTO task_runs(id, session_id, updated_at, payload) VALUES (?, ?, ?, ?)`,
+        [snapshot.run.id, snapshot.run.sessionId, snapshot.run.updatedAt, JSON.stringify(snapshot.run)]
+      )
+    }
+    db.run(
+      `INSERT INTO task_snapshots(id, session_id, updated_at, payload) VALUES (?, ?, ?, ?)`,
+      [snapshot.id, snapshot.sessionId, snapshot.updatedAt, JSON.stringify(snapshot)]
+    )
   }
-  return { db, path: dbPath }
+}
+
+function validateLegacyJsonSource(sourceBytes: Uint8Array): TaskSnapshotRecord[] {
+  // Keep the migration parser strict; the normal reader must never silently
+  // discard a legacy row that the preservation gate is expected to retain.
+  return [...validateLegacyJsonMigrationSource(sourceBytes)]
 }
 
 async function persistStore(store: { db: SqlDatabase; path: string }): Promise<void> {
@@ -515,113 +644,18 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function setupSchema(db: SqlDatabase): void {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS task_snapshots (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      payload TEXT NOT NULL
-    );
-  `)
-  db.run('CREATE INDEX IF NOT EXISTS idx_task_snapshots_session_id ON task_snapshots(session_id);')
-  db.run('CREATE INDEX IF NOT EXISTS idx_task_snapshots_updated_at ON task_snapshots(updated_at);')
-  db.run(`
-    CREATE TABLE IF NOT EXISTS task_runs (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      payload TEXT NOT NULL
-    );
-  `)
-  db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_session_id ON task_runs(session_id);')
-  db.run('CREATE INDEX IF NOT EXISTS idx_task_runs_updated_at ON task_runs(updated_at);')
-  db.run(`
-    CREATE TABLE IF NOT EXISTS effect_resource_fences (
-      resource_key TEXT PRIMARY KEY,
-      fencing_token INTEGER NOT NULL
-    );
-  `)
-  db.run('PRAGMA user_version = ' + STORE_VERSION)
-}
-
 function readStoreVersion(db: SqlDatabase): number {
   const result = db.exec('PRAGMA user_version')
   const value = result[0]?.values[0]?.[0]
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
 }
 
-function migrateLegacyJson(db: SqlDatabase, rootDir?: string): boolean {
-  if (tableRowCount(db, 'task_snapshots') > 0 || tableRowCount(db, 'task_runs') > 0) return false
-  let migrated = false
-  for (const snapshot of readLegacyJsonSnapshots(rootDir)) {
-    if (snapshot.run) upsertTaskRun(db, snapshot.run)
-    upsertSnapshot(db, snapshot)
-    migrated = true
-  }
-  return migrated
-}
-
-function tableRowCount(db: SqlDatabase, table: 'task_snapshots' | 'task_runs'): number {
-  const result = db.exec(`SELECT COUNT(*) FROM ${table}`)
-  const value = result[0]?.values[0]?.[0]
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
-
-function readLegacyJsonSnapshots(rootDir?: string): TaskSnapshotRecord[] {
-  const file = taskSnapshotsFile(rootDir)
-  try {
-    if (!existsSync(file)) return []
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
-    if (Array.isArray(parsed)) return parsed.filter(isTaskSnapshotRecord)
-    const record = asRecord(parsed)
-    if (!record) return []
-    const snapshots = record.snapshots
-    return Array.isArray(snapshots) ? snapshots.filter(isTaskSnapshotRecord) : []
-  } catch {
-    return []
-  }
-}
-
-function selectSnapshots(db: SqlDatabase): TaskSnapshotRecord[] {
-  const snapshots: TaskSnapshotRecord[] = []
-  const stmt = db.prepare('SELECT payload FROM task_snapshots ORDER BY updated_at DESC')
-  try {
-    while (stmt.step()) {
-      const row = stmt.getAsObject()
-      const payload = row.payload
-      if (typeof payload !== 'string') continue
-      try {
-        const parsed = JSON.parse(payload) as unknown
-        if (isTaskSnapshotRecord(parsed)) snapshots.push(parsed)
-      } catch {
-        // 损坏行不阻断其他快照恢复。
-      }
-    }
-  } finally {
-    stmt.free()
-  }
-  return snapshots
-}
-
-function findSnapshotInDb(db: SqlDatabase, id: string, sessionId: string): TaskSnapshotRecord | null {
-  const stmt = db.prepare('SELECT payload FROM task_snapshots WHERE id = ? OR session_id = ? LIMIT 1')
-  try {
-    stmt.bind([id, sessionId])
-    if (!stmt.step()) return null
-    const payload = stmt.getAsObject().payload
-    if (typeof payload !== 'string') return null
-    const parsed = JSON.parse(payload) as unknown
-    return isTaskSnapshotRecord(parsed) ? parsed : null
-  } catch {
-    return null
-  } finally {
-    stmt.free()
-  }
-}
-
-function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
-  const previous = findSnapshotInDb(db, snapshot.id, snapshot.sessionId)
+function upsertSnapshot(
+  db: SqlDatabase,
+  snapshot: TaskSnapshotRecord,
+  readMode: WorkflowLedgerReadMode
+): void {
+  const previous = findRecoverySnapshot(db, snapshot.id, snapshot.sessionId, readMode)
   const next = previous ? mergeTaskSnapshots(previous, snapshot) : snapshot
   db.run(
     `
@@ -634,11 +668,19 @@ function upsertSnapshot(db: SqlDatabase, snapshot: TaskSnapshotRecord): void {
     `,
     [next.id, next.sessionId, next.updatedAt, JSON.stringify(next)]
   )
+  upsertWorkflowRecoverySession(db, next)
 }
 
-function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): TaskRunRecord {
-  const previous = findTaskRunInDb(db, run.id)
+function upsertTaskRun(
+  db: SqlDatabase,
+  run: TaskRunRecord,
+  readMode: WorkflowLedgerReadMode,
+  projectId?: string,
+  snapshot?: TaskSnapshotRecord
+): TaskRunRecord {
+  const previous = findRecoveryTaskRun(db, run.id, readMode)
   const next = previous ? mergeTaskRunRecords(previous, run) : run
+  const workflowContext = resolveRunWorkflowProjectionContext(db, next, projectId, snapshot)
   db.run(
     `
       INSERT INTO task_runs(id, session_id, updated_at, payload)
@@ -650,23 +692,10 @@ function upsertTaskRun(db: SqlDatabase, run: TaskRunRecord): TaskRunRecord {
     `,
     [next.id, next.sessionId, next.updatedAt, JSON.stringify(next)]
   )
+  appendTaskRunEvidence(db, next, workflowContext.projectId)
+  projectRunIntoWorkflow(db, next, workflowContext)
+  projectTaskEvidenceIntoWorkflow(db, { runId: next.id })
   return next
-}
-
-function findTaskRunInDb(db: SqlDatabase, id: string): TaskRunRecord | null {
-  const stmt = db.prepare('SELECT payload FROM task_runs WHERE id = ? LIMIT 1')
-  try {
-    stmt.bind([id])
-    if (!stmt.step()) return null
-    const payload = stmt.getAsObject().payload
-    if (typeof payload !== 'string') return null
-    const parsed = JSON.parse(payload) as unknown
-    return isTaskRunRecord(parsed) ? parsed : null
-  } catch {
-    return null
-  } finally {
-    stmt.free()
-  }
 }
 
 function compareSnapshotFreshness(left: TaskSnapshotRecord, right: TaskSnapshotRecord): number {
@@ -686,7 +715,9 @@ function mergeTaskSnapshots(
   const preferred = compareSnapshotFreshness(current, incoming) >= 0 ? current : incoming
   const other = preferred === current ? incoming : current
   const run = preferred.run && other.run
-    ? mergeTaskRunRecords(preferred.run, other.run)
+    ? preferred.run.id === other.run.id
+      ? mergeTaskRunRecords(preferred.run, other.run)
+      : preferred.run
     : preferred.run ?? other.run
   return {
     ...preferred,
@@ -696,28 +727,6 @@ function mergeTaskSnapshots(
   }
 }
 
-function selectTaskRuns(db: SqlDatabase, sessionId?: string): TaskRunRecord[] {
-  const runs: TaskRunRecord[] = []
-  const stmt = sessionId
-    ? db.prepare('SELECT payload FROM task_runs WHERE session_id = ? ORDER BY updated_at DESC')
-    : db.prepare('SELECT payload FROM task_runs ORDER BY updated_at DESC')
-  try {
-    if (sessionId) stmt.bind([sessionId])
-    while (stmt.step()) {
-      const payload = stmt.getAsObject().payload
-      if (typeof payload !== 'string') continue
-      try {
-        const parsed = JSON.parse(payload) as unknown
-        if (isTaskRunRecord(parsed)) runs.push(parsed)
-      } catch {
-        // 损坏 run 不阻断其他任务历史读取。
-      }
-    }
-  } finally {
-    stmt.free()
-  }
-  return runs
-}
 
 function markToolExecutionSuperseded(
   run: TaskRunRecord,
@@ -758,12 +767,10 @@ function enqueueMutation<T>(rootDir: string | undefined, task: () => Promise<T>)
   mutationQueues.set(key, queued)
   return next
 }
-
 async function waitForPendingMutations(rootDir: string | undefined): Promise<void> {
   const pending = mutationQueues.get(taskSnapshotsDbFile(rootDir))
   if (pending) await pending.catch(() => undefined)
 }
-
 function loadSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
@@ -772,420 +779,4 @@ function loadSql(): Promise<SqlJsStatic> {
     })
   }
   return sqlPromise
-}
-
-function worktreeFromMeta(meta: SessionMeta): TaskSnapshotWorktreeInfo | undefined {
-  const worktree: TaskSnapshotWorktreeInfo = {
-    isolated: meta.isolated,
-    sourceCwd: meta.sourceCwd,
-    repoRoot: meta.repoRoot,
-    worktreePath: meta.worktreePath,
-    branch: meta.branch,
-    baseBranch: meta.baseBranch,
-    baseSha: meta.baseSha,
-    state: meta.worktreeState
-  }
-  return Object.values(worktree).some((value) => value !== undefined) ? worktree : undefined
-}
-
-function latestTranscriptIds(transcript: TranscriptEntry[]): {
-  lastCheckpointMessageId?: string
-  lastUserMessageId?: string
-} {
-  let lastCheckpointMessageId: string | undefined
-  let lastUserMessageId: string | undefined
-  for (let index = transcript.length - 1; index >= 0; index -= 1) {
-    const event = transcript[index].event
-    if (!lastCheckpointMessageId && event.kind === 'checkpoint') {
-      lastCheckpointMessageId = event.messageId
-    }
-    if (!lastUserMessageId && event.kind === 'user-message') {
-      lastUserMessageId = event.messageId
-    }
-    if (lastCheckpointMessageId && lastUserMessageId) break
-  }
-  return { lastCheckpointMessageId, lastUserMessageId }
-}
-
-function replayCandidateFromTranscript(
-  transcript: TranscriptEntry[],
-  status: SessionStatus,
-  now: number
-): TaskSnapshotReplayCandidate | undefined {
-  if (status !== 'starting' && status !== 'running' && status !== 'error') return undefined
-  for (let index = transcript.length - 1; index >= 0; index -= 1) {
-    const entry = transcript[index]
-    const event = entry.event
-    if (event.kind !== 'user-message') continue
-    const text = event.text.trim()
-    const messageId = event.messageId?.trim()
-    if (!text || !messageId) return undefined
-    const completedAfterUser = transcript
-      .slice(index + 1)
-      .some((next) => next.event.kind === 'turn-result' && next.event.isError === false)
-    if (completedAfterUser) return undefined
-    return {
-      messageId,
-      text,
-      seq: entry.seq,
-      capturedAt: now,
-      reason: 'running-user-message'
-    }
-  }
-  return undefined
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === 'string'
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === 'string'
-}
-
-function isOptionalNumber(value: unknown): value is number | undefined {
-  return value === undefined || (typeof value === 'number' && Number.isFinite(value))
-}
-
-function isSessionStatus(value: unknown): value is SessionStatus {
-  return (
-    value === 'starting' ||
-    value === 'running' ||
-    value === 'idle' ||
-    value === 'error' ||
-    value === 'closed'
-  )
-}
-
-function isEngineKind(value: unknown): value is EngineKind {
-  return value === 'claude' || value === 'openai'
-}
-
-function isUsageTotals(value: unknown): value is UsageTotals {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    typeof record.input === 'number' &&
-    typeof record.output === 'number' &&
-    typeof record.cacheRead === 'number' &&
-    typeof record.cacheCreation === 'number'
-  )
-}
-
-function isSessionMeta(value: unknown): value is SessionMeta {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.id) &&
-    isString(record.title) &&
-    isString(record.cwd) &&
-    isString(record.model) &&
-    isString(record.providerId) &&
-    isSessionStatus(record.status) &&
-    isString(record.permissionMode) &&
-    isUsageTotals(record.usage) &&
-    typeof record.costUsd === 'number' &&
-    typeof record.contextTokens === 'number' &&
-    typeof record.createdAt === 'number' &&
-    (record.engine === undefined || isEngineKind(record.engine))
-  )
-}
-
-function isTaskSnapshotReason(value: unknown): value is TaskSnapshotReason {
-  return (
-    value === 'created' ||
-    value === 'important-event' ||
-    value === 'event-batch' ||
-    value === 'shutdown' ||
-    value === 'recovered'
-  )
-}
-
-function isAgentEvent(value: unknown): value is AgentEvent {
-  const record = asRecord(value)
-  if (!record || typeof record.kind !== 'string') return false
-  return [
-    'status',
-    'init',
-    'meta',
-    'user-message',
-    'checkpoint',
-    'checkpoint-restore',
-    'routing',
-    'failover',
-    'provider-key-failover',
-    'text-delta',
-    'thinking-delta',
-    'tool-start',
-    'assistant-message',
-    'tool-result',
-    'permission-request',
-    'permission-resolved',
-    'turn-result',
-    'subagent-result',
-    'task-dag-update',
-    'hook-event'
-  ].includes(record.kind)
-}
-
-function isTranscriptEntry(value: unknown): value is TranscriptEntry {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    typeof record.seq === 'number' &&
-    isOptionalString(record.eventId) &&
-    isOptionalNumber(record.occurredAt) &&
-    isOptionalString(record.streamId) &&
-    isOptionalString(record.causationId) &&
-    isOptionalString(record.correlationId) &&
-    isAgentEvent(record.event)
-  )
-}
-
-function isEventCursor(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    typeof record.seq === 'number' &&
-    Number.isInteger(record.seq) &&
-    record.seq >= 0 &&
-    isOptionalString(record.eventId)
-  )
-}
-
-function isExecutionPosition(value: unknown): value is TaskSnapshotExecutionPosition {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isSessionStatus(record.status) &&
-    typeof record.lastSeq === 'number' &&
-    (record.cursor === undefined || isEventCursor(record.cursor)) &&
-    isOptionalString(record.lastEventId) &&
-    typeof record.lastEventAt === 'number' &&
-    (record.lastEventKind === undefined || isAgentEvent({ kind: record.lastEventKind })) &&
-    isOptionalString(record.sdkSessionId) &&
-    isOptionalString(record.resumeSessionAt) &&
-    isOptionalString(record.lastCheckpointMessageId) &&
-    isOptionalString(record.lastUserMessageId)
-  )
-}
-
-function isReplayCandidate(value: unknown): value is TaskSnapshotReplayCandidate {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.messageId) &&
-    isString(record.text) &&
-    typeof record.seq === 'number' &&
-    typeof record.capturedAt === 'number' &&
-    record.reason === 'running-user-message'
-  )
-}
-
-function isWorktreeInfo(value: unknown): value is TaskSnapshotWorktreeInfo {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    (record.isolated === undefined || typeof record.isolated === 'boolean') &&
-    isOptionalString(record.sourceCwd) &&
-    isOptionalString(record.repoRoot) &&
-    isOptionalString(record.worktreePath) &&
-    isOptionalString(record.branch) &&
-    (record.baseBranch === undefined || record.baseBranch === null || typeof record.baseBranch === 'string') &&
-    isOptionalString(record.baseSha) &&
-    (record.state === undefined || record.state === 'active' || record.state === 'removed')
-  )
-}
-
-function isSubtaskStatus(value: unknown): value is TaskSnapshotSubtaskStatus {
-  return (
-    value === 'pending' ||
-    value === 'running' ||
-    value === 'success' ||
-    value === 'failed' ||
-    value === 'closed'
-  )
-}
-
-function isSubtaskState(value: unknown): value is TaskSnapshotSubtaskState {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.sessionId) &&
-    isSubtaskStatus(record.status) &&
-    isOptionalString(record.taskId) &&
-    isOptionalString(record.role) &&
-    isOptionalString(record.resultText) &&
-    isOptionalNumber(record.costUsd) &&
-    isOptionalString(record.branch) &&
-    isOptionalString(record.worktreePath)
-  )
-}
-
-function isTaskDagTask(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.id) &&
-    isString(record.title) &&
-    isString(record.description) &&
-    Array.isArray(record.dependencies) &&
-    record.dependencies.every(isString) &&
-    isString(record.role) &&
-    isString(record.prompt)
-  )
-}
-
-function isTaskDag(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.id) &&
-    isString(record.title) &&
-    isString(record.source) &&
-    (record.complexity === 'single' || record.complexity === 'multi') &&
-    typeof record.createdAt === 'number' &&
-    Array.isArray(record.tasks) &&
-    record.tasks.every(isTaskDagTask)
-  )
-}
-
-function isTaskDagTaskStatus(value: unknown): boolean {
-  return value === 'waiting' || value === 'running' || value === 'success' || value === 'failed'
-}
-
-function isTaskDagExecutionTask(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isTaskDagTask(record.task) &&
-    isTaskDagTaskStatus(record.status) &&
-    typeof record.attempts === 'number' &&
-    Array.isArray(record.sessionIds) &&
-    record.sessionIds.every(isString) &&
-    isOptionalNumber(record.startedAt) &&
-    isOptionalNumber(record.completedAt) &&
-    isOptionalString(record.resultText) &&
-    isOptionalString(record.error)
-  )
-}
-
-function isTaskDagExecutionView(value: unknown): value is TaskDagExecutionView {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.id) &&
-    isString(record.parentSessionId) &&
-    isTaskDag(record.dag) &&
-    (record.status === 'waiting' ||
-      record.status === 'running' ||
-      record.status === 'success' ||
-      record.status === 'failed') &&
-    typeof record.maxRetries === 'number' &&
-    typeof record.startedAt === 'number' &&
-    isOptionalNumber(record.completedAt) &&
-    Array.isArray(record.layers) &&
-    record.layers.every((layer) => Array.isArray(layer) && layer.every(isString)) &&
-    Array.isArray(record.tasks) &&
-    record.tasks.every(isTaskDagExecutionTask) &&
-    isOptionalString(record.summary) &&
-    isOptionalString(record.error)
-  )
-}
-
-function isTaskDagRuntimeDispatchOptions(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isOptionalString(record.cwd) &&
-    (record.isolated === undefined || typeof record.isolated === 'boolean') &&
-    isOptionalString(record.driveMode) &&
-    isOptionalString(record.model) &&
-    isOptionalString(record.providerId) &&
-    (record.engine === undefined || isEngineKind(record.engine)) &&
-    (record.permissionMode === undefined || isString(record.permissionMode)) &&
-    typeof record.taskTimeoutMs === 'number'
-  )
-}
-
-function isTaskDagRuntimeRunningTask(value: unknown): boolean {
-  const record = asRecord(value)
-  return !!record && isString(record.taskId) && isString(record.sessionId)
-}
-
-function isTaskDagRuntimeAutoMergeOptions(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    typeof record.enabled === 'boolean' &&
-    isOptionalString(record.verificationCommand)
-  )
-}
-
-function isTaskDagRuntimeMergeSession(value: unknown): boolean {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.sessionId) &&
-    isOptionalString(record.taskId) &&
-    isOptionalString(record.repoRoot) &&
-    isOptionalString(record.worktreePath) &&
-    isOptionalString(record.baseSha) &&
-    isOptionalString(record.branch) &&
-    isOptionalString(record.resultText)
-  )
-}
-
-function isTaskDagRuntimeSnapshot(value: unknown): value is TaskDagRuntimeSnapshot {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.executionId) &&
-    isString(record.parentSessionId) &&
-    typeof record.capturedAt === 'number' &&
-    isTaskDagRuntimeDispatchOptions(record.dispatchOptions) &&
-    Array.isArray(record.runningTasks) &&
-    record.runningTasks.every(isTaskDagRuntimeRunningTask) &&
-    (record.mergeSessions === undefined ||
-      (Array.isArray(record.mergeSessions) && record.mergeSessions.every(isTaskDagRuntimeMergeSession))) &&
-    (record.autoMerge === undefined || isTaskDagRuntimeAutoMergeOptions(record.autoMerge))
-  )
-}
-
-function isTaskSnapshotRecord(value: unknown): value is TaskSnapshotRecord {
-  const record = asRecord(value)
-  return (
-    !!record &&
-    isString(record.id) &&
-    isString(record.taskId) &&
-    isString(record.sessionId) &&
-    isString(record.title) &&
-    isString(record.projectPath) &&
-    (record.engine === undefined || isEngineKind(record.engine)) &&
-    isString(record.model) &&
-    isString(record.providerId) &&
-    typeof record.createdAt === 'number' &&
-    typeof record.updatedAt === 'number' &&
-    typeof record.eventCount === 'number' &&
-    isTaskSnapshotReason(record.reason) &&
-    isSessionMeta(record.meta) &&
-    isExecutionPosition(record.execution) &&
-    (record.run === undefined || isTaskRunRecord(record.run)) &&
-    (record.replayCandidate === undefined || isReplayCandidate(record.replayCandidate)) &&
-    (record.worktree === undefined || isWorktreeInfo(record.worktree)) &&
-    Array.isArray(record.transcript) &&
-    record.transcript.every(isTranscriptEntry) &&
-    Array.isArray(record.subtasks) &&
-    record.subtasks.every(isSubtaskState) &&
-    Array.isArray(record.dagExecutions) &&
-    record.dagExecutions.every(isTaskDagExecutionView) &&
-    (record.dagRuntimes === undefined ||
-      (Array.isArray(record.dagRuntimes) && record.dagRuntimes.every(isTaskDagRuntimeSnapshot)))
-  )
 }

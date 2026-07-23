@@ -1,4 +1,5 @@
-import { addMemory, type LayeredMemoryEntry, type MemoryLayer } from './memory-manager'
+import type { MemoryLayer } from './memory-manager'
+import { proposeMemoryDraft, type ProjectMemoryDraft } from '../memoryStore'
 
 export interface MemoryExtractionInput {
   rootDir: string
@@ -24,16 +25,20 @@ export function summarizeMemoryTitle(text: string): string {
   return first || '记忆条目'
 }
 
-export async function writeExtractedMemory(input: MemoryExtractionInput): Promise<LayeredMemoryEntry | null> {
+export async function writeExtractedMemory(input: MemoryExtractionInput): Promise<ProjectMemoryDraft | null> {
   if (!shouldExtractMemory(input.text)) return null
+  if (!input.projectRoot) return null
   const layer = input.defaultLayer ?? (input.projectRoot ? 'project' : 'user')
-  return addMemory(input.rootDir, {
-    layer,
-    projectRoot: input.projectRoot,
+  const tags = inferTags(input.text)
+  return proposeMemoryDraft(input.projectRoot, input.rootDir, {
+    kind: `auto-extracted-${layer}`,
     title: summarizeMemoryTitle(input.text),
     body: input.text.trim(),
     source: input.source,
-    tags: inferTags(input.text)
+    reason: `自动抽取的 ${layer} 记忆候选，需用户批准后生效${tags.length > 0 ? `；标签: ${tags.join(', ')}` : ''}`
+  }, {
+    confidence: 0.8,
+    actor: { type: 'runtime', id: 'memory-auto-extract', source: input.source }
   })
 }
 

@@ -124,7 +124,9 @@ export interface GenesisHumanConfirmationPoint {
 
 export interface GenesisDeliveryStrategy {
   tool: 'code_forge_delivery'
-  recommendedMode: CodeForgeDeliveryMode
+  requestedMode: CodeForgeDeliveryMode
+  recommendedMode: Extract<CodeForgeDeliveryMode, 'report' | 'patch'>
+  verificationTool: 'bash'
   verificationCommands: string[]
   requiresCleanWorktree: true
   stageAllDefault: false
@@ -464,9 +466,17 @@ function buildDeliveryStrategy(
   deliveryMode: CodeForgeDeliveryMode,
   verificationCommands: string[]
 ): GenesisDeliveryStrategy {
+  const recommendedMode = deliveryMode === 'report' ? 'report' : 'patch'
+  const persistentHandoff = deliveryMode === 'commit'
+    ? '验证和 Code Forge patch 完成后，依次调用 git_stage/git_stage_all 与 git_commit。'
+    : deliveryMode === 'pr'
+      ? '验证和 Code Forge patch 完成后，依次调用 git_stage/git_stage_all、git_commit、git_push 与 git_create_pr。'
+      : ''
   return {
     tool: 'code_forge_delivery',
-    recommendedMode: deliveryMode,
+    requestedMode: deliveryMode,
+    recommendedMode,
+    verificationTool: 'bash',
     verificationCommands,
     requiresCleanWorktree: true,
     stageAllDefault: false,
@@ -477,8 +487,11 @@ function buildDeliveryStrategy(
       '所有 validation gates 均通过',
       '用户已确认需要的交付模式'
     ],
-    handoff:
-      '后续如需真实交付，应调用 code_forge_delivery 并传入 verificationCommands；commit/pr 模式必须带明确提交信息并经过权限审批。'
+    handoff: [
+      '先逐条使用显式 bash 工具执行 verificationCommands，并审查每条命令的独立结果。',
+      `验证通过后调用 code_forge_delivery mode=${recommendedMode} 生成结构化交付产物；不得把验证命令传给 Code Forge。`,
+      persistentHandoff
+    ].filter(Boolean).join(' ')
   }
 }
 

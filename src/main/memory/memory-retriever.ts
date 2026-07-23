@@ -1,4 +1,5 @@
 import { searchMemories, type MemoryLayer, type MemorySearchHit } from './memory-manager'
+import { buildMemorySystemAppend } from '../memoryInject'
 
 export interface BuildMemoryPromptInput {
   rootDir: string
@@ -33,4 +34,12 @@ export async function buildLayeredMemoryPrompt(input: BuildMemoryPromptInput): P
     ].filter(Boolean).join('\n')
   })
   return `## Relevant CaoGen Memory\n\n${blocks.join('\n\n')}\n`
+}
+
+export async function buildEffectiveMemoryPrompt(input: BuildMemoryPromptInput): Promise<string> {
+  const [projectMemory, layeredMemory] = await Promise.all([
+    input.projectRoot ? buildMemorySystemAppend(input.projectRoot, input.rootDir) : '',
+    buildLayeredMemoryPrompt(input)
+  ])
+  return [projectMemory, layeredMemory].filter((item) => item.trim().length > 0).join('\n\n')
 }

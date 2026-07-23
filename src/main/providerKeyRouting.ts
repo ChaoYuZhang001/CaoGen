@@ -17,7 +17,7 @@ export function pickNextProviderKey(
     cooldownMs?: number
   }
 ): ProviderApiKey | undefined {
-  const enabled = keys.filter((key) => key.encryptedToken && !key.disabled)
+  const enabled = keys.filter((key) => (key.encryptedToken || key.sessionOnly) && !key.disabled)
   if (enabled.length < 2) return undefined
 
   const now = options.now ?? Date.now()

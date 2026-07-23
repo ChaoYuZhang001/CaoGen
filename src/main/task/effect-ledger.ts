@@ -11,6 +11,7 @@ import type {
   ToolExecutionRecord
 } from '../../shared/types'
 import type { EffectDescriptor, EffectReconciliationResult } from './effect-reconciler'
+import { effectTargetsConflict } from './effect-target-conflict'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
 
 export const EFFECT_LEASE_TTL_MS = 30 * 60 * 1000
@@ -39,31 +40,57 @@ export interface PrepareEffectInput {
   leaseTtlMs?: number
 }
 
+interface PrepareEffectResult {
+  run: TaskRunRecord
+  handle: EffectExecutionHandle
+  created: boolean
+}
+
 export function prepareEffect(
   run: TaskRunRecord,
   input: PrepareEffectInput
-): { run: TaskRunRecord; handle: EffectExecutionHandle; created: boolean } {
+): PrepareEffectResult {
   const now = input.now ?? Date.now()
   const toolName = normalizeToolName(input.toolName)
   const effectKey = buildEffectKey(input.cwd, toolName, input.descriptor)
   const resourceKey = buildResourceKey(input.cwd, toolName, input.descriptor, effectKey)
-  const existingByToolUse = (run.effects ?? []).find((effect) => effect.toolUseId === input.toolUseId)
-  if (existingByToolUse) {
-    if (existingByToolUse.effectKey !== effectKey || existingByToolUse.resourceKey !== resourceKey) {
-      throw new Error('同一 toolUseId 的效果意图发生变化，已按 fail-closed 阻止')
-    }
-    const handle = handleForEffect(existingByToolUse)
-    if (!handle || existingByToolUse.lease?.ownerId !== input.ownerId) {
-      throw new Error('效果记录已存在但当前执行者不持有 lease')
-    }
-    return { run, handle, created: false }
-  }
-
-  const sameKey = (run.effects ?? []).filter((effect) => effect.effectKey === effectKey)
-  const sameResource = (run.effects ?? []).filter((effect) =>
+  const existing = existingPreparation(run, input, effectKey, resourceKey)
+  if (existing) return existing
+  const effects = run.effects ?? []
+  const sameKey = effects.filter((effect) => effect.effectKey === effectKey)
+  const sameResource = effects.filter((effect) =>
     effect.resourceKey === resourceKey ||
-    effectTargetsShareFile(effect.target, input.descriptor.target)
+    effectTargetsConflict(effect.target, input.descriptor.target)
   )
+  assertEffectCanBePrepared(sameKey, sameResource)
+  const effect = createPreparedEffect(run, input, toolName, effectKey, resourceKey, sameKey, sameResource, now)
+  const next = updateRun(run, [...effects, effect], now)
+  return {
+    run: projectEffectToToolExecution(next, effect),
+    handle: handleForEffect(effect) as EffectExecutionHandle,
+    created: true
+  }
+}
+
+function existingPreparation(
+  run: TaskRunRecord,
+  input: PrepareEffectInput,
+  effectKey: string,
+  resourceKey: string
+): PrepareEffectResult | undefined {
+  const effect = (run.effects ?? []).find((candidate) => candidate.toolUseId === input.toolUseId)
+  if (!effect) return undefined
+  if (effect.effectKey !== effectKey || effect.resourceKey !== resourceKey) {
+    throw new Error('同一 toolUseId 的效果意图发生变化，已按 fail-closed 阻止')
+  }
+  const handle = handleForEffect(effect)
+  if (!handle || effect.lease?.ownerId !== input.ownerId) {
+    throw new Error('效果记录已存在但当前执行者不持有 lease')
+  }
+  return { run, handle, created: false }
+}
+
+function assertEffectCanBePrepared(sameKey: EffectRecord[], sameResource: EffectRecord[]): void {
   const unresolved = sameResource.find((effect) =>
     effect.status === 'prepared' ||
     effect.status === 'executing' ||
@@ -80,6 +107,18 @@ export function prepareEffect(
   ) {
     throw new Error('上一代效果没有可验证的重试授权证据，禁止创建新 lease')
   }
+}
+
+function createPreparedEffect(
+  run: TaskRunRecord,
+  input: PrepareEffectInput,
+  toolName: string,
+  effectKey: string,
+  resourceKey: string,
+  sameKey: EffectRecord[],
+  sameResource: EffectRecord[],
+  now: number
+): EffectRecord {
   const generation = sameKey.reduce((max, effect) => Math.max(max, effect.generation), 0) + 1
   const fencingToken = sameResource.reduce(
     (max, effect) => Math.max(max, effect.lease?.fencingToken ?? 0),
@@ -96,7 +135,7 @@ export function prepareEffect(
   const activeStep = [...(run.steps ?? [])].reverse().find((step) =>
     step.status !== 'completed' && step.status !== 'failed' && step.status !== 'cancelled'
   )
-  const effect: EffectRecord = {
+  return {
     schemaVersion: 1,
     id: randomUUID(),
     effectKey,
@@ -126,12 +165,6 @@ export function prepareEffect(
     })],
     createdAt: now,
     updatedAt: now
-  }
-  const next = updateRun(run, [...(run.effects ?? []), effect], now)
-  return {
-    run: projectEffectToToolExecution(next, effect),
-    handle: handleForEffect(effect) as EffectExecutionHandle,
-    created: true
   }
 }
 
@@ -325,11 +358,41 @@ function buildEffectKey(
   toolName: string,
   descriptor: EffectDescriptor
 ): string {
+  const target = descriptor.target
+  // Patch artifacts are regenerated on a retry. Their temp path and inode are
+  // intentionally volatile, while the repository/HEAD/digest/direction define
+  // the same externally visible operation and must share one generation chain.
+  const stableTargetDigest = target.kind === 'worktree_patch_apply'
+    ? stableValueDigest({
+        kind: target.kind,
+        repoRoot: realpathSync(resolve(target.repoRoot)),
+        worktreePath: realpathSync(resolve(target.worktreePath)),
+        baseSha: target.baseSha,
+        headSha: target.headSha,
+        patchSha256: target.patchSha256,
+        patchBytes: target.patchBytes,
+        changedPaths: [...target.changedPaths].sort(),
+        mode: target.mode ?? 'apply'
+      })
+    : target.kind === 'code_forge_patch'
+      ? stableValueDigest({
+          kind: target.kind,
+          repoRoot: realpathSync(resolve(target.repoRoot)),
+          worktreePath: realpathSync(resolve(target.worktreePath)),
+          baseSha: target.baseSha,
+          headSha: target.headSha,
+          patchSha256: target.patchSha256,
+          patchBytes: target.patchBytes,
+          artifactPath: resolve(target.artifactPath)
+        })
+    : descriptor.targetDigest
   return `effect-v1:${stableValueDigest({
     cwd: realpathSync(resolve(cwd)),
     toolName,
-    targetDigest: descriptor.targetDigest,
-    intentDigest: descriptor.intentDigest
+    targetDigest: stableTargetDigest,
+    intentDigest: target.kind === 'worktree_patch_apply' || target.kind === 'code_forge_patch'
+      ? stableValueDigest({ toolName, targetDigest: stableTargetDigest })
+      : descriptor.intentDigest
   })}`
 }
 
@@ -359,11 +422,45 @@ function buildResourceKey(
       ref: target.destinationRef
     })}`
   }
+  if (target.kind === 'git_index_update') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'git-index',
+      gitCommonDir: realpathSync(resolve(target.gitCommonDir)),
+      worktreeGitDir: realpathSync(resolve(target.worktreeGitDir)),
+      indexPath: resolve(target.indexPath)
+    })}`
+  }
   if (target.kind === 'git_push') {
     return `resource-v1:${stableValueDigest({
       scope: 'git-remote-ref',
       pushUrlDigest: target.pushUrlDigest,
       ref: target.ref
+    })}`
+  }
+  if (target.kind === 'worktree_patch_apply') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'git-worktree-files',
+      repoRoot: realpathSync(resolve(target.repoRoot))
+    })}`
+  }
+  if (target.kind === 'code_forge_patch') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'code-forge-patch-artifact',
+      artifactRoot: realpathSync(resolve(target.artifactRoot)),
+      artifactPath: resolve(target.artifactPath)
+    })}`
+  }
+  if (target.kind === 'git_worktree_create' || target.kind === 'git_worktree_remove') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'git-worktree-lifecycle',
+      gitCommonDir: realpathSync(resolve(target.gitCommonDir))
+    })}`
+  }
+  if (target.kind === 'pull_request_create') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'pull-request-source',
+      repositoryDigest: target.repositoryDigest,
+      sourceBranch: target.sourceBranch
     })}`
   }
   return `resource-v1:${stableValueDigest({
@@ -372,23 +469,6 @@ function buildResourceKey(
     toolName,
     effectKey
   })}`
-}
-
-function effectTargetsShareFile(left: EffectTarget, right: EffectTarget): boolean {
-  if (left.kind !== 'file_content' || right.kind !== 'file_content') return false
-  if (
-    left.preFileIdentity &&
-    right.preFileIdentity &&
-    left.preFileIdentity.device === right.preFileIdentity.device &&
-    left.preFileIdentity.inode === right.preFileIdentity.inode
-  ) {
-    return true
-  }
-  const leftRoot = realpathSync(resolve(left.rootPath))
-  const rightRoot = realpathSync(resolve(right.rootPath))
-  const leftPath = resolve(leftRoot, left.relativePath)
-  const rightPath = resolve(rightRoot, right.relativePath)
-  return leftPath === rightPath
 }
 
 function transitionEffect(

@@ -255,6 +255,7 @@ export async function decomposeTask(
         warnings: []
       }
     } catch (err) {
+      if (isModelAttemptPersistenceFailure(err)) throw err
       const fallback = localDecompose(request, estimate)
       return {
         ...fallback,
@@ -267,4 +268,11 @@ export async function decomposeTask(
   }
 
   return localDecompose(request, estimate)
+}
+
+function isModelAttemptPersistenceFailure(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'ModelAttemptPersistenceError') return false
+  const record = error as Error & { phase?: unknown; operationStarted?: unknown }
+  return (record.phase === 'start' || record.phase === 'complete') &&
+    typeof record.operationStarted === 'boolean'
 }

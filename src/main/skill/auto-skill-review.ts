@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AgentEvent, SessionMeta, TranscriptEntry } from '../../shared/types'
+import { createLearningDraft } from '../learning/learning-lifecycle'
+import { resolveDefaultLearningRoot } from '../learning/learning-store'
 import { SkillLearner } from './skill-learner'
 import { testSkillMarkdown, type SkillTestDiagnostic } from './skill-tester'
 
@@ -18,11 +19,15 @@ export interface AutoSkillReviewOptions {
   now?: () => number
 }
 
-export type AutoSkillReviewStatus = 'disabled' | 'skipped' | 'stored' | 'validation_failed'
+export type AutoSkillReviewStatus = 'disabled' | 'skipped' | 'drafted' | 'validation_failed'
 
 export interface AutoSkillReviewResult {
   status: AutoSkillReviewStatus
+  draftId?: string
+  draftStatus?: 'draft'
+  /** Intended path after approval. The file does not exist merely because a draft was created. */
   path?: string
+  materializationPath?: string
   diagnostics?: SkillTestDiagnostic[]
   reason?: string
 }
@@ -69,12 +74,40 @@ export async function runAutoSkillReview(
   const diagnostics = [...draft.diagnostics, ...validation.diagnostics]
   if (!draft.ok || !validation.ok) return { status: 'validation_failed', diagnostics }
 
-  const dir = nextSkillDir(skillRoot, draft.name, summary)
+  const dir = nextSkillDir(skillRoot, draft.name, summary, options.now)
   assertInside(skillRoot, dir)
   const target = join(dir, 'SKILL.md')
   assertInside(skillRoot, target)
-  await writeSkillAtomically(dir, target, draft.markdown)
-  return { status: 'stored', path: target, diagnostics }
+  const relativePath = relative(controlledRoot, target).split('\\').join('/')
+  const learningRoot = await resolveDefaultLearningRoot(projectRoot)
+  const record = await createLearningDraft(projectRoot, learningRoot, {
+    kind: 'skill',
+    source: `auto-skill-review:${input.meta.id}`,
+    confidence: 0.8,
+    payload: {
+      type: 'skill',
+      name: draft.name,
+      description: draft.description,
+      markdown: draft.markdown,
+      relativePath
+    }
+  }, {
+    actor: {
+      type: 'agent',
+      id: 'auto-skill-review',
+      source: `session:${input.meta.id}`
+    },
+    now: options.now
+  })
+  if (record.status !== 'draft') throw new Error(`自动 Skill 评审未生成草稿: ${record.status}`)
+  return {
+    status: 'drafted',
+    draftId: record.id,
+    draftStatus: 'draft',
+    path: target,
+    materializationPath: target,
+    diagnostics
+  }
 }
 
 export function scheduleAutoSkillReview(input: AutoSkillReviewInput, options: AutoSkillReviewOptions): void {
@@ -137,24 +170,12 @@ function inferTrigger(meta: SessionMeta, summary: string): string {
     .join(' ')
 }
 
-function nextSkillDir(root: string, name: string, summary: string): string {
+function nextSkillDir(root: string, name: string, summary: string, now: (() => number) | undefined): string {
   const slug = slugify(name)
   const hash = createHash('sha256').update(`${name}\0${summary}`).digest('hex').slice(0, 8)
   const base = join(root, `${slug}-${hash}`)
   if (!existsSync(base)) return base
-  return join(root, `${slug}-${hash}-${Date.now().toString(36)}`)
-}
-
-async function writeSkillAtomically(dir: string, target: string, markdown: string): Promise<void> {
-  await mkdir(dir, { recursive: true })
-  const temp = `${target}.${process.pid}.${Date.now().toString(36)}.tmp`
-  try {
-    await writeFile(temp, markdown, 'utf8')
-    await rename(temp, target)
-  } catch (err) {
-    await unlink(temp).catch(() => undefined)
-    throw err
-  }
+  return join(root, `${slug}-${hash}-${(now ? now() : Date.now()).toString(36)}`)
 }
 
 function assertInside(root: string, target: string): void {

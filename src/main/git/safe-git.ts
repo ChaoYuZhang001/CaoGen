@@ -69,6 +69,31 @@ export function withSafeLocalGitConfig(args: readonly string[]): string[] {
   return [...SAFE_LOCAL_GIT_CONFIG, ...args]
 }
 
+export function withSafeIndexGitConfig(args: readonly string[], hooksPath: string): string[] {
+  return [
+    ...SAFE_LOCAL_GIT_CONFIG,
+    '-c',
+    `core.hooksPath=${hooksPath}`,
+    '-c',
+    'core.preloadIndex=false',
+    '-c',
+    'core.splitIndex=false',
+    '-c',
+    'core.untrackedCache=false',
+    '-c',
+    'gc.auto=0',
+    '-c',
+    'maintenance.auto=false',
+    '-c',
+    'maintenance.autoDetach=false',
+    '-c',
+    'submodule.recurse=false',
+    '-c',
+    'protocol.allow=never',
+    ...args
+  ]
+}
+
 // Remote reconciliation is a read-only probe, so it must not inherit command
 // hooks from repository/global Git config or the parent process environment.
 export function withSafeRemoteGitConfig(args: readonly string[]): string[] {

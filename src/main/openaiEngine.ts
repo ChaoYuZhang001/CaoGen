@@ -11,6 +11,7 @@ import {
   resolveProviderToken,
   rotateProviderKey
 } from './providers'
+import { mergeProviderCredentialHeaders } from './providerRuntimeAuth'
 import { listHistory } from './history'
 import {
   classifyFailure,
@@ -25,46 +26,27 @@ import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './mod
 import { settingsForCaoGenDrive } from './model/drive'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import { canRotateProviderKey } from './providerKeyRouting'
-import {
-  EDIT_TOOLS,
-  OPENAI_CODING_TOOLS,
-  RESPONSES_CODING_TOOLS,
-  executeCodingTool
-} from './openaiTools'
-import type { ToolExecResult } from './openaiTools'
+import { OPENAI_CODING_TOOLS, RESPONSES_CODING_TOOLS } from './openaiTools'
+import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
 import { buildProjectContextSystemAppendSync } from './agent/context-loader'
-import { buildLayeredMemoryPrompt } from './memory/memory-retriever'
+import { buildEffectiveMemoryPrompt } from './memory/memory-retriever'
 import { buildSkillInvocationPrompt } from './skill/skill-invocation'
 import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
 import {
-  adaptChatCompletionRequest,
-  buildChinaProviderPromptAppend,
-  type ProviderAdapterContext
+  adaptChatCompletionRequest, buildChinaProviderPromptAppend, type ProviderAdapterContext
 } from './model/llm-providers/china-provider-adapter'
 import {
-  DEFAULT_KEEP_RECENT_MESSAGES,
-  estimateContextTokens,
-  evaluateContextUsage,
-  planCompressionBoundary,
-  type ContextUsageState
+  DEFAULT_KEEP_RECENT_MESSAGES, estimateContextTokens, evaluateContextUsage,
+  planCompressionBoundary, type ContextUsageState
 } from './agent/context-compressor'
-import {
-  GUI_TEMPORARY_GRANT_MESSAGE,
-  decideGuiPermission,
-  grantTemporaryGuiAutomation
-} from './permission/permission-manager'
 import { isGuiToolName } from './agent/tools/gui-tools'
-import { writeAuditLog } from './permission/audit-log'
-import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
-import { isDisabledModeInspectionToolCall, isReadOnlyToolCall } from './task/tool-idempotency'
+import { normalizeStableMessagePayload } from './stable-message-payload'
+import { isModelAttemptPersistenceError, unwrapModelAttemptOperationError } from './task/model-attempt-runtime'
+import { addUsageTotals, OpenAIModelAttemptTracker } from './task/openai-model-attempt-runtime'
 import {
-  cancelEffectExecution,
-  completeEffectExecution,
-  markEffectExecutionStarted,
-  prepareEffectExecution,
-  type PrepareEffectExecutionInput
-} from './task/effect-runtime'
+  assertDigitalWorkerProviderDispatchAllowed, isDigitalWorkerProviderDispatchDeniedError
+} from './digital-worker/session-action-policy'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
@@ -77,18 +59,12 @@ import type {
   PermissionRequestInfo,
   SendMessagePayload,
   SessionMeta,
-  ToolRiskLevel,
   TranscriptEntry,
   UsageTotals
 } from '../shared/types'
 
-type EffectAwareToolExecResult = ToolExecResult & { effectStatus?: EffectStatus }
-type EffectExecutionHandle = Awaited<ReturnType<typeof prepareEffectExecution>>
-
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
-const LOCAL_EXECUTION_DISABLED_MESSAGE =
-  'Agent 本地执行能力已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。当前仅保留最小项目检查能力，请先在设置 > 权限中确认启用。'
 
 /** Chat Completions 多轮历史消息(text 或 text+图片混合内容) */
 type ChatContent = string | Array<Record<string, unknown>>
@@ -134,33 +110,6 @@ interface OpenAIAuthConfig {
 const MAX_TOOL_ITERATIONS = 40
 
 /**
- * 全局并发闸门:限制"同一时刻在途的模型请求数",防 32+ 子代理突发把
- * Node 的连接/socket 层打爆(实测 32 并发出现大量 fetch failed)。
- * 模块级共享 —— 所有 OpenAIEngine 实例(含子代理)排队通过同一个信号量。
- * 上限可由 env CAOGEN_MAX_INFLIGHT 覆盖(默认 8,兼顾吞吐与稳定)。
- */
-const MAX_INFLIGHT = Math.max(1, Number(process.env.CAOGEN_MAX_INFLIGHT) || 8)
-let inflight = 0
-const waitQueue: Array<() => void> = []
-
-function acquireSlot(): Promise<void> {
-  if (inflight < MAX_INFLIGHT) {
-    inflight++
-    return Promise.resolve()
-  }
-  return new Promise((resolve) => waitQueue.push(resolve))
-}
-
-function releaseSlot(): void {
-  const next = waitQueue.shift()
-  if (next) {
-    next() // 队首直接接棒占用,inflight 不变
-  } else {
-    inflight = Math.max(0, inflight - 1)
-  }
-}
-
-/**
  * OpenAIEngine —— 原生 OpenAI 协议适配器,支持两种协议:
  * - 'responses':OpenAI 原生 Responses API(/v1/responses,协议默认)
  * - 'chat':通用 Chat Completions(/v1/chat/completions)——DeepSeek/Qwen/
@@ -182,13 +131,10 @@ export class OpenAIEngine implements Engine {
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
+  private readonly modelAttempts = new OpenAIModelAttemptTracker()
+  private readonly nativeToolRuntime: NativeToolRuntime
   /** chat 协议的多轮历史(user/assistant/tool);responses 协议不使用 */
   private chatHistory: ChatMessage[] = []
-  /** 挂起的权限审批(chat 协议工具调用) */
-  private readonly pendingPerms = new Map<
-    string,
-    { resolve: (r: { allow: boolean; message?: string }) => void; info: PermissionRequestInfo }
-  >()
   /** 本轮流式累积的工具调用(SSE delta 分片拼装) */
   private pendingToolCalls: PendingToolCall[] = []
   /** 本轮 GUI 工具失败;最终文本不能掩盖真实桌面自动化失败 */
@@ -207,6 +153,7 @@ export class OpenAIEngine implements Engine {
       const entry = this.transcript.nextEntry(event)
       emit(event, entry.seq, entry)
     }
+    this.nativeToolRuntime = new NativeToolRuntime(this.meta, (event) => this.emit(event))
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
       this.rebuildChatHistory()
@@ -253,13 +200,14 @@ export class OpenAIEngine implements Engine {
   send(input: string | SendMessagePayload): void {
     if (this.disposed) return
     if (this.abort) {
-      this.setStatus('error', '上一轮仍在运行,请等待完成或中断后再发送。')
+      this.rejectSend('上一轮仍在运行,请等待完成或中断后再发送。')
       return
     }
-    const payload = normalizePayload(input)
-    if (!payload) return
+    const payload = normalizeStableMessagePayload(input)
+    if (!payload.text && payload.images.length === 0) return
 
-    const messageId = randomUUID()
+    const messageId = payload.messageId || randomUUID()
+    this.modelAttempts.startTurn(messageId)
     this.emit({
       kind: 'user-message',
       text: payload.text,
@@ -345,6 +293,7 @@ export class OpenAIEngine implements Engine {
           projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
         if (smart.kind === 'routed') {
+          this.modelAttempts.setRouteReason(smart.reason)
           this.routedModel = smart.model
           if (smart.switchedProvider) this.meta.providerId = smart.providerId
           this.emit({
@@ -371,6 +320,7 @@ export class OpenAIEngine implements Engine {
         currentProviderId: this.meta.providerId
       })
       if (!decision) return
+      this.modelAttempts.setRouteReason(decision.reason)
       this.routedModel = decision.model
       if (decision.switchedProvider) {
         this.meta.providerId = decision.providerId
@@ -399,7 +349,7 @@ export class OpenAIEngine implements Engine {
   }
 
   rejectSend(message: string): void {
-    this.setStatus('error', message)
+    this.setStatus(this.abort ? 'running' : 'error', message)
   }
 
   async interrupt(): Promise<void> {
@@ -413,238 +363,15 @@ export class OpenAIEngine implements Engine {
 
   /** 中断/销毁时统一拒绝所有挂起审批,防 Agent 循环悬挂 */
   private rejectAllPendingPerms(message: string): void {
-    for (const [requestId, pending] of this.pendingPerms) {
-      this.emit({ kind: 'permission-resolved', requestId, behavior: 'deny' })
-      pending.resolve({ allow: false, message })
-    }
-    this.pendingPerms.clear()
+    this.nativeToolRuntime.rejectAllPending(message)
   }
 
   respondPermission(requestId: string, allow: boolean, message?: string): void {
-    const pending = this.pendingPerms.get(requestId)
-    if (!pending) return
-    this.pendingPerms.delete(requestId)
-    if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && pending.info.toolName.startsWith('gui_')) {
-      grantTemporaryGuiAutomation()
-    }
-    writeAuditLog(this.meta.cwd, {
-      action: allow ? 'allow' : 'deny',
-      source: 'user',
-      toolName: pending.info.toolName,
-      input: pending.info.input,
-      message
-    })
-    this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
-    pending.resolve({ allow, message })
+    this.nativeToolRuntime.respondPermission(requestId, allow, message)
   }
 
   pendingPermissions(): PermissionRequestInfo[] {
-    return [...this.pendingPerms.values()].map((p) => p.info)
-  }
-
-  /** 按 permissionMode 决定工具是否需要人工审批;需要则挂起等 UI 决定 */
-  private async gateTool(name: string, input: Record<string, unknown>, toolUseId: string): Promise<{ allow: boolean; message?: string }> {
-    const preflight = this.preflightToolGate(name, input, toolUseId)
-    if (!preflight.allow) return preflight
-    const { policy, readOnlyCall, guiDecision, idempotency } = preflight
-
-    if (idempotency.kind === 'ask') {
-      this.auditGateDecision('ask', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
-      return this.requestToolPermission(
-        name,
-        input,
-        toolUseId,
-        idempotency.reason,
-        idempotency.duplicateExecutionId
-      )
-    }
-    if (guiDecision.kind === 'allow') {
-      this.auditGateDecision('allow', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: true }
-    }
-    if (guiDecision.kind === 'ask') {
-      this.auditGateDecision('ask', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
-      return this.requestToolPermission(name, input, toolUseId, guiDecision.reason)
-    }
-    if (policy.kind === 'allow') {
-      writeAuditLog(this.meta.cwd, {
-        action: 'allow',
-        source: 'policy',
-        toolName: name,
-        input,
-        message: policy.reason,
-        riskLevel: policy.risk.level,
-        riskReasons: policy.risk.reasons
-      })
-      return { allow: true, message: policy.reason }
-    }
-
-    const mode = this.meta.permissionMode
-    if (mode === 'bypassPermissions') {
-      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: true }
-    }
-    if (readOnlyCall) {
-      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: true }
-    }
-    if (mode === 'acceptEdits' && EDIT_TOOLS.has(name)) {
-      this.auditGateDecision('allow', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: true }
-    }
-    // default 模式的写入/bash,以及 acceptEdits 模式的 bash → 人工审批
-    this.auditGateDecision('ask', 'permission-mode', name, input, policy.reason, policy.risk.level, policy.risk.reasons)
-    return this.requestToolPermission(name, input, toolUseId, policy.reason)
-  }
-
-  private preflightToolGate(name: string, input: Record<string, unknown>, toolUseId: string) {
-    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
-    const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
-    if (policy.kind === 'deny') {
-      writeAuditLog(this.meta.cwd, {
-        action: 'deny',
-        source: 'policy',
-        toolName: name,
-        input,
-        message: policy.reason,
-        riskLevel: policy.risk.level,
-        riskReasons: policy.risk.reasons
-      })
-      return { allow: false as const, message: policy.reason }
-    }
-
-    const readOnlyCall = isReadOnlyToolCall(name, input)
-    const disabledModeInspectionCall = isDisabledModeInspectionToolCall(name)
-    if (settings.sandboxMode === 'disabled' && !disabledModeInspectionCall) {
-      this.auditGateDecision('deny', 'policy', name, input, LOCAL_EXECUTION_DISABLED_MESSAGE, policy.risk.level, policy.risk.reasons)
-      return { allow: false as const, message: LOCAL_EXECUTION_DISABLED_MESSAGE }
-    }
-    const guiDecision = decideGuiPermission(name, settings)
-    if (guiDecision.kind === 'deny') {
-      this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: false as const, message: guiDecision.reason }
-    }
-    const mode = this.meta.permissionMode
-    if (mode === 'plan' && !readOnlyCall) {
-      const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
-      this.auditGateDecision('deny', 'permission-mode', name, input, message, policy.risk.level, policy.risk.reasons)
-      return { allow: false as const, message }
-    }
-    const idempotency = taskRuntimeRegistry.evaluateTool({
-      sessionId: this.meta.id,
-      cwd: this.meta.cwd,
-      toolName: name,
-      toolInput: input,
-      toolUseId
-    })
-    if (idempotency.kind === 'deny') {
-      this.auditGateDecision('deny', 'idempotency', name, input, idempotency.reason, policy.risk.level, policy.risk.reasons)
-      return { allow: false as const, message: idempotency.reason }
-    }
-    return { allow: true as const, policy, readOnlyCall, guiDecision, idempotency }
-  }
-
-  private auditGateDecision(
-    action: 'allow' | 'deny' | 'ask',
-    source: 'policy' | 'permission-mode' | 'idempotency',
-    toolName: string,
-    input: Record<string, unknown>,
-    message: string,
-    riskLevel: ToolRiskLevel,
-    riskReasons: string[]
-  ): void {
-    writeAuditLog(this.meta.cwd, { action, source, toolName, input, message, riskLevel, riskReasons })
-  }
-
-  private requestToolPermission(
-    name: string,
-    input: Record<string, unknown>,
-    toolUseId: string,
-    decisionReason?: string,
-    duplicateExecutionId?: string
-  ): Promise<{ allow: boolean; message?: string }> {
-    const requestId = randomUUID()
-    const info: PermissionRequestInfo = {
-      requestId,
-      toolName: name,
-      input,
-      toolUseId,
-      decisionReason,
-      duplicateExecutionId
-    }
-    this.emit({ kind: 'permission-request', request: info })
-    return new Promise((resolve) => {
-      this.pendingPerms.set(requestId, { resolve, info })
-    })
-  }
-
-  private async executeAllowedTool(
-    name: string,
-    input: Record<string, unknown>,
-    toolUseId: string,
-    effectHandle: EffectExecutionHandle,
-    effectInput: PrepareEffectExecutionInput,
-    signal?: AbortSignal
-  ): Promise<EffectAwareToolExecResult> {
-    const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
-    if (signal?.aborted) {
-      await cancelEffectExecution(effectHandle, '操作在外部执行前已中断')
-      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
-    }
-    try {
-      await markEffectExecutionStarted(effectHandle, effectInput)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return { ok: false, output: `外部副作用账本准备失败，已阻止执行:${message}` }
-    }
-    if (signal?.aborted) {
-      await cancelEffectExecution(effectHandle, '操作在外部执行前已中断')
-      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
-    }
-    const exec = await executeCodingTool(name, input, this.meta.cwd, {
-      signal,
-      sandboxMode: settings.sandboxMode,
-      chinaMirrorEnabled: settings.chinaEcosystemMirrorEnabled,
-      npmRegistry: settings.chinaNpmRegistry,
-      pipIndexUrl: settings.chinaPipIndexUrl,
-      sessionId: this.meta.id,
-      worktreeContext: {
-        sessionId: this.meta.id,
-        repoRoot: this.meta.repoRoot,
-        sourceCwd: this.meta.sourceCwd,
-        worktreePath: this.meta.worktreePath,
-        branch: this.meta.branch,
-        baseBranch: this.meta.baseBranch,
-        baseSha: this.meta.baseSha
-      },
-      effectTarget: effectHandle?.target
-    })
-    const executionPolicy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
-    writeAuditLog(this.meta.cwd, {
-      action: 'execute',
-      source: 'local-execution',
-      toolName: name,
-      input,
-      ok: exec.ok,
-      riskLevel: executionPolicy.risk.level,
-      riskReasons: executionPolicy.risk.reasons,
-      sandboxMode: exec.sandboxMode,
-      modeUsed: exec.modeUsed,
-      sandboxed: exec.sandboxed,
-      fallbackReason: exec.fallbackReason
-    })
-    try {
-      const effect = await completeEffectExecution(effectHandle, exec)
-      return effect ? { ...exec, effectStatus: effect.status } : exec
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return {
-        ...exec,
-        ok: false,
-        output: `${exec.output}\n\n外部操作结果未能写入效果账本，已进入未知结果保护:${message}`,
-        effectStatus: 'waiting_reconciliation'
-      }
-    }
+    return this.nativeToolRuntime.pendingPermissions()
   }
 
   private async executeToolWithPermission(
@@ -652,59 +379,8 @@ export class OpenAIEngine implements Engine {
     input: Record<string, unknown>,
     toolUseId: string,
     signal?: AbortSignal
-  ): Promise<EffectAwareToolExecResult> {
-    if (signal?.aborted) return { ok: false, output: '操作已中断，未进入权限判断' }
-    const preflight = this.preflightToolGate(name, input, toolUseId)
-    if (!preflight.allow) {
-      return { ok: false, output: `操作已被权限策略拒绝${preflight.message ? `:${preflight.message}` : ''}` }
-    }
-    const effectInput: PrepareEffectExecutionInput = {
-      sessionId: this.meta.id,
-      cwd: this.meta.cwd,
-      toolUseId,
-      toolName: name,
-      toolInput: input
-    }
-    let effectHandle: EffectExecutionHandle
-    try {
-      // Bind the durable effect intent before permission can wait on user input.
-      effectHandle = await prepareEffectExecution(effectInput)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      return { ok: false, output: `外部副作用账本准备失败，已阻止审批和执行:${message}` }
-    }
-    if (signal?.aborted) {
-      await cancelEffectExecution(effectHandle, '操作在权限判断前已中断')
-      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
-    }
-
-    let gate: { allow: boolean; message?: string }
-    try {
-      gate = await this.gateTool(name, input, toolUseId)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      await cancelEffectExecution(effectHandle, `权限判断异常，未执行:${message}`).catch(() => undefined)
-      throw error
-    }
-    if (!gate.allow) {
-      const reason = `用户拒绝了此操作${gate.message ? `:${gate.message}` : ''}`
-      try {
-        await cancelEffectExecution(effectHandle, reason)
-        return { ok: false, output: reason, effectStatus: effectHandle ? 'abandoned' : undefined }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        return {
-          ok: false,
-          output: `${reason}\n\n拒绝结果未能写入效果账本，已保持 fail-closed:${message}`,
-          effectStatus: effectHandle ? 'waiting_reconciliation' : undefined
-        }
-      }
-    }
-    if (signal?.aborted) {
-      await cancelEffectExecution(effectHandle, '操作在审批后、外部执行前已中断')
-      return { ok: false, output: '操作已中断，外部执行未开始', effectStatus: effectHandle ? 'abandoned' : undefined }
-    }
-    return this.executeAllowedTool(name, input, toolUseId, effectHandle, effectInput, signal)
+  ): Promise<NativeToolExecutionResult> {
+    return this.nativeToolRuntime.executeToolWithPermission(name, input, toolUseId, signal)
   }
 
   getTranscript(): TranscriptEntry[] {
@@ -776,7 +452,16 @@ export class OpenAIEngine implements Engine {
         this.finishTurn(true, '已中断', 'interrupted')
         return
       }
-      const text = errText(err)
+      if (isDigitalWorkerProviderDispatchDeniedError(err)) {
+        this.finishTurn(true, err.message, 'policy-denied')
+        return
+      }
+      if (isModelAttemptPersistenceError(err)) {
+        const phase = err.phase === 'start' ? '启动' : '完成'
+        this.finishTurn(true, `模型请求账本${phase}落盘失败，已阻止请求重放:${err.message}`, 'ledger-error')
+        return
+      }
+      const text = errText(unwrapModelAttemptOperationError(err))
       if (auth && (await this.tryProviderKeyFailover(text, payload, controller, auth))) return
       recordFailure(this.meta.providerId, text)
       recordModelFailure(this.effectiveModel())
@@ -795,7 +480,7 @@ export class OpenAIEngine implements Engine {
         query: payload.text,
         maxSkills: 2
       })
-      const memory = await buildLayeredMemoryPrompt({
+      const memory = await buildEffectiveMemoryPrompt({
         rootDir: openAiMemoryRoot(),
         query: payload.text,
         projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
@@ -834,7 +519,7 @@ export class OpenAIEngine implements Engine {
   private async runResponsesLoop(
     payload: SendMessagePayload,
     controller: AbortController,
-    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+    auth: OpenAIAuthConfig
   ): Promise<void> {
     let input: unknown[] = [{ role: 'user', content: buildInputContent(payload) }]
 
@@ -851,7 +536,7 @@ export class OpenAIEngine implements Engine {
         ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
         stream: true
       }
-      const res = await this.fetchWithRetry(
+      await this.fetchWithRetry(
         openAiEndpoint(auth.baseUrl, 'responses'),
         {
           method: 'POST',
@@ -859,10 +544,13 @@ export class OpenAIEngine implements Engine {
           body: JSON.stringify(body),
           signal: controller.signal
         },
-        controller.signal
+        controller.signal,
+        auth,
+        async (res) => {
+          if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
+          await this.consumeResponse(res)
+        }
       )
-      if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
-      await this.consumeResponse(res)
 
       const calls = this.pendingResponseCalls.filter((c) => c.name && c.callId)
       this.pendingResponseCalls = []
@@ -884,8 +572,7 @@ export class OpenAIEngine implements Engine {
           blocks: [{ type: 'tool_use', id: call.callId, name: call.name, input: args }]
         })
         const exec = await this.executeToolWithPermission(call.name, args, call.callId, controller.signal)
-        const resultText = exec.output
-        const isError = !exec.ok
+        const resultText = exec.output, isError = !exec.ok
         const effectStatus = exec.effectStatus
         this.recordGuiToolFailure(call.name, call.callId, resultText, isError)
         this.emit({
@@ -893,15 +580,17 @@ export class OpenAIEngine implements Engine {
           toolUseId: call.callId,
           content: resultText,
           isError,
+          ...(exec.exitCode === undefined ? {} : { exitCode: exec.exitCode }),
+          ...(exec.commandTermination ? { commandTermination: exec.commandTermination } : {}),
           effectStatus
         })
+        assertToolEffectSettled(effectStatus, call.name, call.callId)
         outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
       }
       input = outputs // 下一轮只发工具结果(previous_response_id 续上文)
     }
     this.appendText(`\n\n[已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次,任务可能未完成;请拆分任务后继续]`)
   }
-
   /**
    * OpenAI 引擎跨厂商故障切换:错误可切换时挑健康厂商换家重试。
    * 比 Claude 引擎轻得多 —— 无需重建进程,authConfig 每请求现读,
@@ -936,6 +625,8 @@ export class OpenAIEngine implements Engine {
     }
     // Responses 的 response id 不跨厂商;换家后重新开始服务端上下文链
     this.lastResponseId = undefined
+    const routeReason = [failure.label, target.preference].filter(Boolean).join(' · ')
+    this.modelAttempts.setRouteReason(routeReason)
     this.emit({
       kind: 'failover',
       fromProviderId: fromId,
@@ -943,7 +634,7 @@ export class OpenAIEngine implements Engine {
       fromName,
       toName: target.name,
       model: target.model,
-      reason: [failure.label, target.preference].filter(Boolean).join(' · ')
+      reason: routeReason
     })
     this.emit({ kind: 'meta', meta: { ...this.meta } })
 
@@ -973,6 +664,7 @@ export class OpenAIEngine implements Engine {
 
     this.triedProviderKeys.add(rotation.toKeyId)
     this.lastResponseId = undefined
+    this.modelAttempts.setRouteReason(`Provider key failover: ${failure.label}`)
     this.emit({
       kind: 'provider-key-failover',
       providerId: rotation.providerId,
@@ -997,7 +689,7 @@ export class OpenAIEngine implements Engine {
   private async runChatCompletion(
     payload: SendMessagePayload,
     controller: AbortController,
-    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+    auth: OpenAIAuthConfig
   ): Promise<void> {
     const userMessage: ChatMessage = { role: 'user', content: buildChatContent(payload) }
     this.chatHistory.push(userMessage)
@@ -1023,7 +715,7 @@ export class OpenAIEngine implements Engine {
         for (const warning of adaptation.warnings) {
           this.emit({ kind: 'hook-event', event: 'provider-adapter', detail: warning })
         }
-        const res = await this.fetchWithRetry(
+        await this.fetchWithRetry(
           openAiEndpoint(auth.baseUrl, 'chat/completions'),
           {
             method: 'POST',
@@ -1035,10 +727,13 @@ export class OpenAIEngine implements Engine {
             body: JSON.stringify(adaptation.body),
             signal: controller.signal
           },
-          controller.signal
+          controller.signal,
+          auth,
+          async (res) => {
+            if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
+            await this.consumeChatStream(res)
+          }
         )
-        if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
-        await this.consumeChatStream(res)
 
         const segmentText = this.assistantText.slice(textBefore.length).trim()
         // 部分端点省略 tool_call id / 空槽:补全 id、丢掉没有函数名的碎片
@@ -1078,10 +773,8 @@ export class OpenAIEngine implements Engine {
             kind: 'assistant-message',
             blocks: [{ type: 'tool_use', id: call.id, name: call.name, input: args }]
           })
-
           const exec = await this.executeToolWithPermission(call.name, args, call.id, controller.signal)
-          const resultText = exec.output
-          const isError = !exec.ok
+          const resultText = exec.output, isError = !exec.ok
           const effectStatus = exec.effectStatus
           this.recordGuiToolFailure(call.name, call.id, resultText, isError)
           this.emit({
@@ -1089,8 +782,11 @@ export class OpenAIEngine implements Engine {
             toolUseId: call.id,
             content: resultText,
             isError,
+            ...(exec.exitCode === undefined ? {} : { exitCode: exec.exitCode }),
+            ...(exec.commandTermination ? { commandTermination: exec.commandTermination } : {}),
             effectStatus
           })
+          assertToolEffectSettled(effectStatus, call.name, call.id)
           this.chatHistory.push({ role: 'tool', tool_call_id: call.id, content: resultText })
         }
       }
@@ -1113,11 +809,7 @@ export class OpenAIEngine implements Engine {
    * 保留最近若干轮原文。关键约束 —— 绝不切断 tool_call 配对:切点必须落在
    * 一条 user 消息之前(user 一定是干净的轮边界)。摘要失败则跳过压缩(不阻塞对话)。
    */
-  private async compressHistoryIfNeeded(auth: {
-    baseUrl: string
-    token: string
-    headers: Record<string, string>
-  }, systemMessage: ChatMessage): Promise<void> {
+  private async compressHistoryIfNeeded(auth: OpenAIAuthConfig, systemMessage: ChatMessage): Promise<void> {
     const before = this.currentContextUsage(systemMessage)
     this.recordContextUsage(before)
     if (!before.shouldCompress) return
@@ -1129,7 +821,11 @@ export class OpenAIEngine implements Engine {
 
     const older = this.chatHistory.slice(0, boundary.keepFrom)
     const recent = this.chatHistory.slice(boundary.keepFrom)
-    const summary = await this.summarize(older, auth).catch(() => null)
+    const summary = await this.summarize(older, auth).catch((error) => {
+      if (isModelAttemptPersistenceError(error)) throw error
+      this.modelAttempts.discardPendingFailover()
+      return null
+    })
     if (!summary) return // 摘要失败:保持原样,下轮再试
 
     this.chatHistory = [
@@ -1177,7 +873,7 @@ export class OpenAIEngine implements Engine {
   /** 用当前模型把一段历史压成简洁中文摘要(非流式,低温度,不带工具) */
   private async summarize(
     messages: ChatMessage[],
-    auth: { baseUrl: string; token: string; headers: Record<string, string> }
+    auth: OpenAIAuthConfig
   ): Promise<string | null> {
     const transcript = messages
       .map((m) => {
@@ -1187,29 +883,39 @@ export class OpenAIEngine implements Engine {
       })
       .join('\n')
       .slice(0, 40_000)
-    const res = await fetch(openAiEndpoint(auth.baseUrl, 'chat/completions'), {
-      method: 'POST',
-      headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
-      body: JSON.stringify({
-        model: this.effectiveModel(),
-        messages: [
-          {
-            role: 'system',
-            content:
-              '把下面的编码会话历史压成要点摘要:保留关键决策、已完成的改动、待办、重要文件路径与结论,丢弃寒暄与冗余。用简洁中文,不超过 400 字。'
-          },
-          { role: 'user', content: transcript }
-        ],
-        stream: false,
-        max_tokens: 800
-      })
-    })
-    if (!res.ok) return null
-    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
-    const choices = Array.isArray(json?.choices) ? (json?.choices as Array<Record<string, unknown>>) : []
-    const msg = choices[0]?.message as Record<string, unknown> | undefined
-    const text = typeof msg?.content === 'string' ? msg.content.trim() : ''
-    return text || null
+    const body = {
+      model: this.effectiveModel(),
+      messages: [
+        {
+          role: 'system',
+          content:
+            '把下面的编码会话历史压成要点摘要:保留关键决策、已完成的改动、待办、重要文件路径与结论,丢弃寒暄与冗余。用简洁中文,不超过 400 字。'
+        },
+        { role: 'user', content: transcript }
+      ],
+      stream: false,
+      max_tokens: 800
+    }
+    return this.fetchWithRetry(
+      openAiEndpoint(auth.baseUrl, 'chat/completions'),
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+        body: JSON.stringify(body)
+      },
+      this.abort?.signal ?? new AbortController().signal,
+      auth,
+      async (res) => {
+        if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
+        const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
+        this.applyChatUsage(json)
+        const choices = Array.isArray(json?.choices) ? (json.choices as Array<Record<string, unknown>>) : []
+        const message = choices[0]?.message as Record<string, unknown> | undefined
+        const text = typeof message?.content === 'string' ? message.content.trim() : ''
+        if (!text) throw new Error('上下文摘要响应缺少 content')
+        return text
+      }
+    )
   }
 
   /** 编码 Agent 系统提示:工作目录 + 人设(每请求现算,设置变更即时生效) */
@@ -1223,12 +929,12 @@ export class OpenAIEngine implements Engine {
       providerPrompt,
       '你是 CaoGen 桌面工作室里的编码 Agent。',
       `当前工作目录: ${this.meta.cwd}`,
-      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_commit/git_push/git_create_pr/git_merge/code_forge_delivery)读写项目文件、执行命令、规划编排和完成 Git 流程。',
+      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_stage/git_stage_all/git_commit/git_push/git_create_pr/git_merge/code_forge_delivery)读写项目文件、执行命令、规划编排和完成 Git 流程。',
       '开始任务时先用 search_symbol/search_code/find_file 定位相关文件和符号,不要盲猜路径;修改文件前用 get_dependencies 查看正向/反向依赖影响面。',
       '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
       'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
       '修改前可用 search_replace dry_run=true 预览 diff;完成后简要说明改动、测试和备份路径。',
-      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;验证命令必须作为显式 bash 工具单独执行和审批,git_commit 不会隐式运行 caogen.md 命令或 Git hooks;需要闭环交付时优先用 code_forge_delivery 生成结构化报告;git_push/git_create_pr/git_merge/code_forge_delivery(commit/pr) 属高风险操作,必须尊重权限审批和失败输出。',
+      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;提交前优先用 git_stage 精确暂存文件,仅在确认当前范围全部改动都应纳入时使用 git_stage_all,禁止用 bash git add 绕过可对账的 Git index Effect;验证命令必须作为显式 bash 工具单独执行和审批,git_commit 不会隐式运行 caogen.md 命令或 Git hooks;code_forge_delivery 仅生成 report/patch,不会执行验证、暂存、提交、推送或创建 PR;git_stage_all/git_push/git_create_pr/git_merge 属高风险操作,必须尊重权限审批和失败输出。',
       '复杂或跨模块任务先用 task_decompose 生成 DAG;用户明确要求 Genesis/多 Agent/隔离交付时,优先用 genesis_orchestrate 生成可审查的编排/验证/交付协议。genesis_orchestrate 第一版只规划,不会真实控制外部子 Agent、不会创建 worktree、不会提交或推送。',
       '只有在用户明确要求并通过权限审批后,才使用 task_dispatch_dag 或 task_decompose_and_dispatch_dag 启动子任务调度;Spark/Core/Forge 不应默认推动 Genesis 编排,Command/Genesis 才是编排类任务的目标档位。',
       settings.guiAutomationEnabled
@@ -1314,9 +1020,7 @@ export class OpenAIEngine implements Engine {
     const cacheRead = numberField(details?.cached_tokens)
     if (input + output + cacheRead === 0) return
     const totals: UsageTotals = { input, output, cacheRead, cacheCreation: 0 }
-    this.turnUsage = totals
-    this.meta.usage = totals
-    this.recordContextTokens(input + cacheRead)
+    this.recordTurnUsage(totals)
   }
 
   /**
@@ -1434,29 +1138,26 @@ export class OpenAIEngine implements Engine {
    * 高并发下常见)重试最多 2 次(0.5s、1.5s 退避)。用户中断与 HTTP 错误不重试
    * (HTTP 错误交给上层 failover/如实报错)。解决 32 并发突发下的偶发 fetch failed。
    */
-  private async fetchWithRetry(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
-    // 先过并发闸门:限制同时在途请求数,防突发打爆 socket 层
-    await acquireSlot()
-    try {
-      const delays = [500, 1500]
-      let lastErr: unknown
-      for (let attempt = 0; attempt <= delays.length; attempt++) {
-        if (signal.aborted) throw new Error('已中断')
-        try {
-          return await fetch(url, init)
-        } catch (err) {
-          // AbortError(用户中断)不重试
-          if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) throw err
-          lastErr = err
-          if (attempt < delays.length) {
-            await new Promise((r) => setTimeout(r, delays[attempt]))
-          }
-        }
-      }
-      throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
-    } finally {
-      releaseSlot()
-    }
+  private async fetchWithRetry<T>(
+    url: string,
+    init: RequestInit,
+    signal: AbortSignal,
+    auth: OpenAIAuthConfig,
+    consume: (response: Response) => Promise<T>
+  ): Promise<T> {
+    return this.modelAttempts.fetch({
+      run: taskRuntimeRegistry.get(this.meta.id),
+      providerId: this.meta.providerId || 'openai',
+      model: this.effectiveModel(),
+      protocol: this.protocol() === 'chat' ? 'openai.chat-completions' : 'openai.responses',
+      url,
+      init: { ...init, signal },
+      signal,
+      auth,
+      preflight: () => assertDigitalWorkerProviderDispatchAllowed(this.meta),
+      readUsage: () => this.turnUsage,
+      consume
+    })
   }
 
   /** 按 output_index 取/建一个 Responses 函数调用累积槽 */
@@ -1525,11 +1226,13 @@ export class OpenAIEngine implements Engine {
   private applyUsage(value: unknown): void {
     const usage = normalizeOpenAIUsage((value as Record<string, unknown> | null)?.usage)
     if (!usage) return
-    this.turnUsage = usage
-    this.meta.usage = usage
+    this.recordTurnUsage(usage)
+  }
+  private recordTurnUsage(usage: UsageTotals): void {
+    this.turnUsage = addUsageTotals(this.turnUsage, usage)
+    this.meta.usage = this.turnUsage
     this.recordContextTokens(usage.input + usage.cacheRead + usage.cacheCreation)
   }
-
   /** 缺 key 文案:用当前 Provider 名而非写死 'OpenAI'(DeepSeek 等场景不再误导) */
   private missingKeyMessage(): string {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
@@ -1548,7 +1251,7 @@ export class OpenAIEngine implements Engine {
     return {
       baseUrl,
       token: selection.token,
-      headers: parseHeaders(provider?.customHeaders),
+      headers: mergeProviderCredentialHeaders(provider, selection.token, parseHeaders(provider?.customHeaders)),
       keyId: selection.keyId,
       keyLabel: selection.keyLabel
     }
@@ -1591,12 +1294,6 @@ export class OpenAIEngine implements Engine {
     const auth = this.authConfig()
     return `${message}\n${formatProviderErrorContext(this.openAIErrorContext(auth))}`
   }
-}
-
-function normalizePayload(input: string | SendMessagePayload): SendMessagePayload | null {
-  const payload = typeof input === 'string' ? { text: input.trim() } : { text: input.text.trim(), images: input.images }
-  if (!payload.text && (!payload.images || payload.images.length === 0)) return null
-  return payload
 }
 
 function buildInputContent(payload: SendMessagePayload): Array<Record<string, string>> {
@@ -1755,6 +1452,16 @@ function extractErrorMessage(error: unknown): string {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+function assertToolEffectSettled(
+  status: EffectStatus | undefined,
+  toolName: string,
+  toolUseId: string
+): void {
+  if (status === 'waiting_reconciliation') {
+    throw new Error(`工具效果状态未知,需先完成对账:${toolName}(${toolUseId})`)
+  }
 }
 
 export const openAIEngineFactory: EngineFactory = {

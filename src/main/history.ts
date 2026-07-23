@@ -44,6 +44,10 @@ function truncate(list: HistoryEntry[]): HistoryEntry[] {
 
 export function upsertHistory(entry: HistoryEntry): void {
   const prev = listHistory().find((e) => e.id === entry.id || e.sdkSessionId === entry.sdkSessionId)
+  if (prev?.digitalWorkerBinding && (!entry.digitalWorkerBinding ||
+    JSON.stringify(prev.digitalWorkerBinding) !== JSON.stringify(entry.digitalWorkerBinding))) {
+    throw new Error(`Session ${entry.id} DigitalWorker identity binding is immutable`)
+  }
   // 恢复的会话是新 id + 同一 sdkSessionId,两个维度都要去重,否则同一对话反复出现
   const list = listHistory().filter(
     (e) => e.id !== entry.id && e.sdkSessionId !== entry.sdkSessionId
