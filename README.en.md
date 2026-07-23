@@ -6,7 +6,7 @@
 
 # CaoGen
 
-## A local AI work desktop without vendor lock-in. Bring your own keys, run the models you choose, and fail over when one provider goes down.
+## A multi-vendor AI work desktop. Bring your own keys, run the models you choose, and fail over by policy when a service becomes unavailable.
 
 <img src="https://img.shields.io/badge/version-v0.1.6-blue" alt="version">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
@@ -22,13 +22,24 @@
 
 ## What is CaoGen?
 
-CaoGen is an open-source, vendor-neutral, local-first AI work desktop that brings multi-provider models, your local projects, and the tools needed to complete work into one Electron app. Unlike the official ChatGPT or Claude desktop apps, CaoGen uses your own API keys and treats providers as replaceable compute while your project directory, worktrees, tools, and review flow remain in your desktop workspace.
+CaoGen is an open-source, vendor-neutral, local-first AI work desktop that brings multi-provider models, your local projects, and the tools needed to complete work into one Electron app. You use your own API keys and treat providers as replaceable compute while project directories, worktrees, tools, and review stay in your desktop workflow.
 
-> “The models you choose” means models reachable through CaoGen's currently supported OpenAI-compatible, Anthropic Messages, or Claude Agent SDK paths. Availability still depends on protocol compatibility, account access, network conditions, and quota.
+It gives users one reviewable local workspace for multiple models, projects, files, tasks, and tools.
+
+> “The models you choose” means models reachable through CaoGen's currently supported OpenAI-compatible, Anthropic Messages, or optional Agent SDK paths. Availability still depends on protocol compatibility, account access, network conditions, and quota.
+
+| Capability | CaoGen today | Evidence boundary |
+|---|---|---|
+| Providers and models | Multiple providers, BYOK, and custom compatible services | Only configured, protocol-compatible targets are in scope |
+| Failure recovery | Controlled failover across backup keys and configured providers | External accounts, networks, and quota can still block requests |
+| Local workflow | Local projects, Git worktrees, Diff, terminal, and file tools | High-risk actions remain subject to permission and acceptance gates |
+| Openness | AGPL-3.0-only with separate commercial licensing | Public installers are not yet formally signed or notarized |
+
+This table describes the current product structure. It does not claim that every model, provider, or external network condition has been validated; see [STATUS.md](./STATUS.md) for exact boundaries.
 
 ## Core capabilities available today
 
-- **Connect multiple providers with BYOK**: configure multiple providers and API keys, custom base URLs, gateways, or local OpenAI-compatible services for common sources such as DeepSeek, Kimi, GLM, Claude, and GPT.
+- **Connect multiple providers with BYOK**: configure multiple providers and API keys, custom base URLs, gateways, or local OpenAI-compatible services for common compatible model sources such as DeepSeek, Kimi, and GLM.
 - **Route work and fail over automatically**: choose targets by capability, cost, speed, budget, and health; for recoverable quota, rate-limit, server, or network failures, try a backup key first and then a configured healthy provider.
 - **Isolate task changes**: create a dedicated Git worktree for a session, inspect diffs and conflicts before merging, export or apply patches, and discard the isolated workspace when needed.
 - **Finish work inside one workbench**: use an integrated terminal, file browser, text editor, browser, Diff and Git tools, plus previews for HTML, Markdown, JSON, CSV, images, PDF, and Office documents.
@@ -55,7 +66,7 @@ npm run dev
 
 ## Roadmap / Long-term vision (under construction)
 
-CaoGen's long-term direction is a vendor-neutral Agent Work OS built around persistent Goals, WorkItems, digital workers, Artifacts/Evidence, acceptance, and recovery, alongside a richer 3D office experience. These are roadmap goals, not a claim about features available today; read the [Project Charter](./docs/PROJECT-CHARTER.md), [Product Requirements](./docs/PRODUCT-REQUIREMENTS.md), [Roadmap](./ROADMAP.md), and [Current Status](./STATUS.md) for the intended scope and verified progress.
+CaoGen's long-term direction is a vendor-neutral Agent Work OS built around persistent Goals, WorkItems, digital workers, Artifacts/Evidence, acceptance, and recovery, alongside a richer 3D office experience. These are roadmap goals, not a claim about features available today; read the [active execution plan](./docs/PLAN.md), [Project Charter](./docs/PROJECT-CHARTER.md), [Product Requirements](./docs/PRODUCT-REQUIREMENTS.md), and [Current Status](./STATUS.md) for the intended scope and verified progress.
 
 ## Contribute to CaoGen
 
