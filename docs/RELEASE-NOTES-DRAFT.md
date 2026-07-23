@@ -67,6 +67,8 @@ reports, local evidence, and intermediate build directories are never release as
 
 ## Known Blockers
 
+- `p2_required`: release-scope P2 evidence is not yet fully proved on the exact
+  candidate commit.
 - `release_identity`: the gate hardening changes are not yet bound to a clean final
   candidate commit.
 - `deep_test`: the full required Deep gate must be rerun on that exact clean commit.
