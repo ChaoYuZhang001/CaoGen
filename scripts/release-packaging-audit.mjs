@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { listPackage } from '@electron/asar'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -27,8 +27,10 @@ const uploadableAssetDigests = digestAssets(uploadableAssets)
 const artifactSetSha256 = digestJson(uploadableAssetDigests)
 const git = readGitState()
 const packagedRuntime = inspectPackagedRuntime()
+const macSigning = inspectMacSigning()
 
 validatePackage()
+validateMacSigning()
 validateDist()
 
 const report = {
@@ -50,7 +52,8 @@ const report = {
   expectedMacAssets: expectedMacAssets(expectedVersion),
   packagedRuntime,
   git,
-  signing: packageJson.build?.mac?.identity === null ? 'unsigned' : 'configured-or-auto',
+  signing: macSigning.status,
+  signingEvidence: macSigning,
   publish: summarizePublish(packageJson.build?.publish),
   warnings,
   failures
@@ -87,8 +90,18 @@ function validatePackage() {
       failures.push('build.publish still points at example.com; set a real update source or explicitly allow placeholder publish metadata')
     }
   }
-  if (packageJson.build?.mac?.identity === null) {
+}
+
+function validateMacSigning() {
+  if (macSigning.status === 'invalid') failures.push('packaged macOS app has an invalid code signature')
+  if (macSigning.status === 'unsigned') {
     warnings.push('macOS package is unsigned; release notes must include first-open Gatekeeper instructions')
+  }
+  if (macSigning.status === 'signed' && !macSigning.developerIdApplication) {
+    warnings.push('macOS package is signed, but not with a Developer ID Application identity')
+  }
+  if (macSigning.status === 'not_inspected' && packageJson.build?.mac?.identity === null) {
+    warnings.push('macOS signing could not be inspected on this platform; package.json configures the default macOS build as unsigned')
   }
 }
 
@@ -159,6 +172,73 @@ function inspectPackagedRuntime() {
       error: error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+function inspectMacSigning() {
+  const appPath = path.join(distDir, 'mac', 'CaoGen.app')
+  const relativeAppPath = path.relative(repoRoot, appPath)
+  if (!existsSync(appPath)) return emptySigningEvidence('missing', relativeAppPath)
+  if (process.platform !== 'darwin') {
+    return {
+      ...emptySigningEvidence('not_inspected', relativeAppPath),
+      reason: 'codesign inspection requires macOS'
+    }
+  }
+
+  const detail = runCodesign(['-d', '--verbose=4', appPath])
+  const verification = runCodesign(['--verify', '--deep', '--strict', appPath])
+  const detailOutput = `${detail.stdout || ''}\n${detail.stderr || ''}`.trim()
+  const verificationOutput = `${verification.stdout || ''}\n${verification.stderr || ''}`.trim()
+  const authority = detailOutput.match(/^Authority=(.+)$/m)?.[1]?.trim() || null
+  const teamIdentifier = detailOutput.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() || null
+  const developerIdApplication = Boolean(authority?.startsWith('Developer ID Application:'))
+  const hardenedRuntime = /flags=.*\bruntime\b/i.test(detailOutput) || /^Runtime Version=/m.test(detailOutput)
+  const unsigned = /code object is not signed at all/i.test(`${detailOutput}\n${verificationOutput}`)
+  const verified = verification.status === 0
+  const status = resolveSigningStatus({ unsigned, verified, developerIdApplication })
+  const evidence = {
+    status,
+    appPath: relativeAppPath,
+    inspected: true,
+    verified,
+    developerIdApplication,
+    authority,
+    teamIdentifier,
+    hardenedRuntime
+  }
+  if (status === 'invalid') evidence.failure = summarizeCodesignFailure(verificationOutput)
+  return evidence
+}
+
+function emptySigningEvidence(status, appPath) {
+  return {
+    status,
+    appPath,
+    inspected: false,
+    verified: false,
+    developerIdApplication: false,
+    authority: null,
+    teamIdentifier: null,
+    hardenedRuntime: false
+  }
+}
+
+function runCodesign(args) {
+  return spawnSync('codesign', args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+}
+
+function resolveSigningStatus({ unsigned, verified, developerIdApplication }) {
+  if (unsigned) return 'unsigned'
+  if (!verified) return 'invalid'
+  return developerIdApplication ? 'developer-id-signed' : 'signed'
+}
+
+function summarizeCodesignFailure(output) {
+  return output.split(/\r?\n/).filter(Boolean).slice(0, 2).join(' | ') || 'codesign verification failed'
 }
 
 function expectedReleaseAssets(version) {

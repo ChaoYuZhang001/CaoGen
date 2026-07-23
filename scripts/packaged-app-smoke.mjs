@@ -17,6 +17,7 @@ let child
 let stderr = ''
 let target
 let failure
+let cleanupFailure
 
 try {
   if (process.platform !== 'darwin') throw new Error('packaged macOS app smoke requires macOS')
@@ -44,8 +45,14 @@ try {
   failure = error instanceof Error ? error.message : String(error)
 } finally {
   await stopChild(child)
-  rmSync(userDataDir, { recursive: true, force: true })
+  try {
+    await removeDirectoryWhenQuiescent(userDataDir, 15_000)
+  } catch (error) {
+    cleanupFailure = error instanceof Error ? error.message : String(error)
+  }
 }
+
+if (!failure && cleanupFailure) failure = `temporary user-data cleanup failed: ${cleanupFailure}`
 
 const report = {
   status: failure ? 'failed' : 'passed',
@@ -55,7 +62,11 @@ const report = {
   appExecutable: path.relative(repoRoot, appExecutable),
   git,
   target,
-  failure
+  failure,
+  cleanup: {
+    status: cleanupFailure ? 'failed' : 'passed',
+    failure: cleanupFailure
+  }
 }
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
@@ -112,6 +123,22 @@ async function stopChild(processHandle) {
     delay(5_000).then(() => false)
   ])
   if (!exited) processHandle.kill('SIGKILL')
+}
+
+async function removeDirectoryWhenQuiescent(targetPath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      rmSync(targetPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      if (!existsSync(targetPath)) return
+    } catch (error) {
+      lastError = error
+    }
+    await delay(250)
+  }
+  if (lastError) throw lastError
+  throw new Error(`temporary directory still exists after ${timeoutMs}ms: ${targetPath}`)
 }
 
 function readGitState() {
