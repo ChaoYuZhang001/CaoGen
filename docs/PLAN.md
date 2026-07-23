@@ -66,7 +66,7 @@ README、官网、STATUS 三处必须一致:
 
 当前基线(2026-07-23,以 STATUS.md 和机器验收映射为准):64 个 P0 中 21 个已验证、
 17 个部分完成、25 个立项目标、1 个仅达到基础。官网旧的"5 完成/17 部分/42 立项"
-口径仍需在下次发布前对齐(见 M1-T4)。
+口径已于 M1-T4 对齐并增加四分类总和门禁。
 
 ---
 
@@ -89,7 +89,7 @@ README、官网、STATUS 三处必须一致:
   - [ ] 在最终 clean commit 上完成 x64 notarize、staple、Gatekeeper 与 required release audit
   - [ ] 在 Apple Silicon 真机完成 arm64 原生签名、公证、安装和启动证据
   - [ ] 在 Windows x64 签名环境完成签名、安装和启动证据
-- [ ] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
+- [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
 - [x] M1-T5 文档收敛:旧规划文档移入 docs/archive/,README 增加对比表与可见 Roadmap
 - [ ] M1-T6 发布 v0.1.7,Release Notes 只写当前真实能力,不写路线图功能
 
