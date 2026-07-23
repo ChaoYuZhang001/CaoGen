@@ -37,6 +37,10 @@ It gives users one reviewable local workspace for multiple models, projects, fil
 
 This table describes the current product structure. It does not claim that every model, provider, or external network condition has been validated; see [STATUS.md](./STATUS.md) for exact boundaries.
 
+## Current progress
+
+As of 2026-07-23, the PRD has 64 P0s: 21 verified, 17 partially complete, 25 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; `0.1.7` remains a signed-wedge candidate, not 1.0 stable.
+
 ## Core capabilities available today
 
 - **Connect multiple providers with BYOK**: configure multiple providers and API keys, custom base URLs, gateways, or local OpenAI-compatible services for common compatible model sources such as DeepSeek, Kimi, and GLM.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { parseRequirements } from './lib/product-acceptance-map.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required') || process.env.CAOGEN_PRODUCT_POSITIONING_REQUIRED === '1'
@@ -78,6 +79,7 @@ for (const relativePath of publicFiles) {
 
 scanWelcomeI18n()
 validateCorePositioning()
+const formalStatus = validateFormalStatusConsistency()
 validateBrandAssets()
 
 const report = {
@@ -94,6 +96,7 @@ const report = {
     claims: 'Relay and complete Office layout rendering stay conditional until proved by live evidence.',
     brand: 'Public UI brand marks must use the official CaoGen app icon, not temporary diamond placeholders.'
   },
+  formalStatus,
   warnings,
   failures
 }
@@ -133,6 +136,35 @@ function validateCorePositioning() {
   requireText('docs/CAOGEN-OPTIMIZATION-PLAN.md', 'Project-level working rules', 'optimization plan must include project-level working rules')
   requireText('docs/RELEASE-NOTES-DRAFT.md', 'multi-vendor AI work desktop', 'release notes must use the product definition')
   requireText('docs/RELEASE-GATE-DRAFT.md', 'multi-vendor AI work desktop', 'release gate must enforce the product definition')
+}
+
+function validateFormalStatusConsistency() {
+  const prdPath = path.join(repoRoot, 'docs', 'PRODUCT-REQUIREMENTS.md')
+  if (!existsSync(prdPath)) {
+    failures.push('cannot derive public status: docs/PRODUCT-REQUIREMENTS.md is missing')
+    return null
+  }
+
+  const p0 = parseRequirements(readFileSync(prdPath, 'utf8'))
+    .filter((requirement) => requirement.priority === 'P0')
+  const snapshot = {
+    total: p0.length,
+    verified: p0.filter((requirement) => requirement.status === '当前已验证').length,
+    partial: p0.filter((requirement) => requirement.status.startsWith('部分完成')).length,
+    targets: p0.filter((requirement) => requirement.status === '立项目标').length,
+    foundation: p0.filter((requirement) => requirement.status === '当前已验证（基础）').length
+  }
+  const classified = snapshot.verified + snapshot.partial + snapshot.targets + snapshot.foundation
+  if (classified !== snapshot.total) {
+    failures.push(`public status classifier covers ${classified}/${snapshot.total} P0 requirements`)
+  }
+
+  const chineseSnapshot = `PRD ${snapshot.total} 个 P0 = ${snapshot.verified} 个已验证 + ${snapshot.partial} 个部分完成 + ${snapshot.targets} 个立项目标 + ${snapshot.foundation} 个仅达到基础`
+  const englishSnapshot = `PRD has ${snapshot.total} P0s: ${snapshot.verified} verified, ${snapshot.partial} partially complete, ${snapshot.targets} project targets, and ${snapshot.foundation} foundation only`
+  requireText('README.md', chineseSnapshot, 'README must match the PRD-derived four-state P0 snapshot')
+  requireText('STATUS.md', chineseSnapshot, 'STATUS must match the PRD-derived four-state P0 snapshot')
+  requireText('README.en.md', englishSnapshot, 'English README must match the PRD-derived four-state P0 snapshot')
+  return snapshot
 }
 
 function validateBrandAssets() {
