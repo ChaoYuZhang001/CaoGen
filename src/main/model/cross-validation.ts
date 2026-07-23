@@ -19,6 +19,9 @@ export interface CrossValidationArbitrationInput {
 
 export type CrossValidationTarget = ModelRoutePlanView['validators'][number]
 
+export type CrossValidationReviewConclusion = 'PASS' | 'CONCERNS' | 'BLOCKED' | 'ARBITRATION_REQUIRED'
+export type CrossValidationArbitrationConclusion = 'PRIMARY_OK' | 'REVIEWER_OK' | 'BOTH_NEED_FIX' | 'NEED_HUMAN'
+
 const MAX_USER_PROMPT_CHARS = 2000
 const MAX_RESULT_CHARS = 6000
 
@@ -33,8 +36,37 @@ export function arbitrationCrossValidationTarget(plan: ModelRoutePlanView): Cros
 }
 
 export function needsCrossValidationArbitration(reviewText: string): boolean {
-  const upper = reviewText.toUpperCase()
-  return upper.includes('ARBITRATION_REQUIRED') || upper.includes('BLOCKED') || upper.includes('CONCERNS')
+  const conclusion = parseCrossValidationReviewConclusion(reviewText)
+  return conclusion === 'CONCERNS' || conclusion === 'BLOCKED' || conclusion === 'ARBITRATION_REQUIRED'
+}
+
+export function parseCrossValidationReviewConclusion(reviewText: string): CrossValidationReviewConclusion | null {
+  return parseFirstLineConclusion(
+    reviewText,
+    ['复核结论', '结论', 'Review Conclusion', 'Conclusion'],
+    ['PASS', 'CONCERNS', 'BLOCKED', 'ARBITRATION_REQUIRED']
+  )
+}
+
+export function parseCrossValidationArbitrationConclusion(
+  arbitrationText: string
+): CrossValidationArbitrationConclusion | null {
+  return parseFirstLineConclusion(
+    arbitrationText,
+    ['仲裁结论', 'Arbitration Conclusion'],
+    ['PRIMARY_OK', 'REVIEWER_OK', 'BOTH_NEED_FIX', 'NEED_HUMAN']
+  )
+}
+
+export function crossValidationFailureVerdict(
+  review: CrossValidationReviewConclusion | null,
+  arbitration: CrossValidationArbitrationConclusion | null
+): 'concerns' | 'blocked' | null {
+  if (arbitration === 'BOTH_NEED_FIX' && review && review !== 'PASS') return 'blocked'
+  if (arbitration !== 'REVIEWER_OK') return null
+  if (review === 'BLOCKED') return 'blocked'
+  if (review === 'CONCERNS') return 'concerns'
+  return null
 }
 
 export function buildCrossValidationReviewPrompt(input: CrossValidationReviewInput): string {
@@ -69,7 +101,7 @@ export function buildCrossValidationReviewPrompt(input: CrossValidationReviewInp
     '4. 测试缺口: 指出还需要跑的最小验证命令',
     '5. 仲裁建议: 如果与主模型结论冲突，说明是否需要第三模型或人工仲裁',
     '',
-    '要求: 用中文回答，优先给文件/函数级证据；没有问题时明确说 PASS。'
+    '要求: 首个非空行只能是“结论: <TOKEN>”，该行不得追加说明；用中文回答，优先给文件/函数级证据。'
   ]
   return lines.filter((line) => line.length > 0).join('\n')
 }
@@ -108,7 +140,7 @@ export function buildCrossValidationArbitrationPrompt(input: CrossValidationArbi
     '3. 最小验证命令: 给出下一步应跑的命令',
     '4. 风险等级: low / medium / high',
     '',
-    '要求: 用中文回答，证据优先；不能判断时输出 NEED_HUMAN。'
+    '要求: 首个非空行只能是“仲裁结论: <TOKEN>”，该行不得追加说明；用中文回答，证据优先；不能判断时输出 NEED_HUMAN。'
   ]
   return lines.filter((line) => line.length > 0).join('\n')
 }
@@ -123,6 +155,42 @@ function latestUserPrompt(transcript: readonly TranscriptEntry[]): string {
 
 function formatModel(model: { providerId: string; providerName?: string; model: string }): string {
   return `${model.providerName ?? model.providerId}/${model.model}`
+}
+
+function parseFirstLineConclusion<T extends string>(text: string, labels: readonly string[], tokens: readonly T[]): T | null {
+  const firstLine = text.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim()
+  if (!firstLine) return null
+
+  const undecorated = firstLine
+    .replace(/^#{1,6}[\t ]+/u, '')
+    .replace(/^\d{1,2}(?:[.)]|、)[\t ]*/u, '')
+    .trim()
+  const candidates = [undecorated]
+  if (undecorated.startsWith('**') && undecorated.endsWith('**') && undecorated.length > 4) {
+    candidates.push(undecorated.slice(2, -2).trim())
+  }
+
+  const labelPattern = labels.map(escapeRegExp).join('|')
+  const tokenPattern = tokens.map(escapeRegExp).join('|')
+  const patterns = [
+    new RegExp(`^(?:${labelPattern})[\\t ]*[:：][\\t ]*(${tokenPattern})$`, 'u'),
+    new RegExp(`^\\*\\*(?:${labelPattern})\\*\\*[\\t ]*[:：][\\t ]*(${tokenPattern})$`, 'u'),
+    new RegExp(`^(?:${labelPattern})[\\t ]*[:：][\\t ]*\\*\\*(${tokenPattern})\\*\\*$`, 'u'),
+    new RegExp(`^\\*\\*(?:${labelPattern})\\*\\*[\\t ]*[:：][\\t ]*\\*\\*(${tokenPattern})\\*\\*$`, 'u'),
+    new RegExp(`^\\*\\*(?:${labelPattern})[\\t ]*[:：]\\*\\*[\\t ]*(${tokenPattern})$`, 'u'),
+    new RegExp(`^\\*\\*(?:${labelPattern})[\\t ]*[:：]\\*\\*[\\t ]*\\*\\*(${tokenPattern})\\*\\*$`, 'u')
+  ]
+  for (const candidate of candidates) {
+    for (const pattern of patterns) {
+      const match = candidate.match(pattern)
+      if (match) return match[1] as T
+    }
+  }
+  return null
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function truncate(value: string, maxChars: number): string {

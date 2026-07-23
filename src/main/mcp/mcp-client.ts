@@ -3,6 +3,14 @@ import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
+import {
+  authorizeMcpNetworkUrl,
+  mcpNetworkErrorMessage,
+  requestAuthorizedMcpUrl,
+  requestMcpNetworkUrl,
+  resolveMcpSseEndpoint,
+  type AuthorizedMcpNetworkTarget
+} from './mcp-network-policy'
 
 declare const __CAOGEN_APP_VERSION__: string
 
@@ -53,6 +61,22 @@ export interface ClaudeDesktopMcpImportResult {
   servers: Record<string, McpServerConfig>
 }
 
+export interface ClaudeDesktopMcpServerSummary {
+  serverId: string
+  transport: McpTransport
+  commandConfigured: boolean
+  argumentCount: number
+  environmentVariableCount: number
+  urlConfigured: boolean
+  headerCount: number
+}
+
+export interface ClaudeDesktopMcpImportSummary {
+  source: 'claude-desktop'
+  serverCount: number
+  servers: ClaudeDesktopMcpServerSummary[]
+}
+
 interface JsonRpcRequest {
   jsonrpc: '2.0'
   id: number
@@ -78,6 +102,26 @@ interface SseEvent {
 
 const PROTOCOL_VERSION = '2024-11-05'
 const DEFAULT_TIMEOUT_MS = 10_000
+const MAX_MCP_HTTP_RESPONSE_BYTES = 1024 * 1024
+const MAX_MCP_SSE_EVENT_CHARS = 256 * 1024
+const MCP_BASE_ENV_KEYS = [
+  'PATH',
+  'Path',
+  'HOME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'SystemRoot',
+  'WINDIR',
+  'COMSPEC',
+  'PATHEXT',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA'
+] as const
 const CLIENT_VERSION =
   typeof __CAOGEN_APP_VERSION__ === 'string'
     ? __CAOGEN_APP_VERSION__
@@ -156,6 +200,23 @@ export async function loadClaudeDesktopMcpServers(
   return { configPath: resolvedPath, servers }
 }
 
+export function summarizeClaudeDesktopMcpImport(
+  imported: ClaudeDesktopMcpImportResult
+): ClaudeDesktopMcpImportSummary {
+  const servers = Object.entries(imported.servers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([serverId, config]) => ({
+      serverId,
+      transport: mcpTransport(config),
+      commandConfigured: typeof config.command === 'string' && config.command.length > 0,
+      argumentCount: config.args?.length ?? 0,
+      environmentVariableCount: Object.keys(config.env ?? {}).length,
+      urlConfigured: typeof config.url === 'string' && config.url.length > 0,
+      headerCount: Object.keys(config.headers ?? {}).length
+    }))
+  return { source: 'claude-desktop', serverCount: servers.length, servers }
+}
+
 export function builtinMcpServerTemplates(): Record<string, McpServerConfig> {
   return {
     filesystem: {
@@ -199,7 +260,7 @@ function createHttpClient(config: McpServerConfig, timeoutMs: number): McpClient
       try {
         const requestId = ++id
         const body: JsonRpcRequest = { jsonrpc: '2.0', id: requestId, method, ...(params === undefined ? {} : { params }) }
-        const response = await fetch(url, {
+        const { response } = await requestMcpNetworkUrl(url, {
           method: 'POST',
           headers: { 'content-type': 'application/json', ...(config.headers ?? {}) },
           body: JSON.stringify(body),
@@ -207,7 +268,7 @@ function createHttpClient(config: McpServerConfig, timeoutMs: number): McpClient
         })
         if (!response.ok) throw new Error(`MCP HTTP ${response.status}`)
         if (isEventStreamResponse(response)) return await readSseResponse(response, requestId, controller)
-        return decodeResponse(await response.json(), requestId)
+        return decodeResponse(await readJsonResponse(response), requestId)
       } finally {
         clearTimeout(timer)
       }
@@ -223,41 +284,54 @@ function createSseClient(config: McpServerConfig, timeoutMs: number): McpClient 
   if (!url) throw new Error('MCP SSE URL 不能为空')
 
   let id = 0
-  let endpoint: string | null = null
+  let target: AuthorizedMcpNetworkTarget | null = null
+  let endpoint: URL | null = null
+  let streamError: Error | null = null
   let closed = false
   const controller = new AbortController()
   const pending = new Map<number, PendingRequest>()
   let endpointReadyResolve: (() => void) | null = null
-  const endpointReady = new Promise<void>((resolveReady) => {
+  let endpointReadyReject: ((error: Error) => void) | null = null
+  let endpointReadySettled = false
+  const endpointReady = new Promise<void>((resolveReady, rejectReady) => {
     endpointReadyResolve = resolveReady
+    endpointReadyReject = rejectReady
   })
-  const ready = openSseStream(url, config.headers, controller, (event) => {
-    if (event.event === 'endpoint') {
-      endpoint = resolveSseEndpoint(url, event.data)
-      endpointReadyResolve?.()
-      return
+  const failStream = (error: unknown): void => {
+    const safe = safeMcpNetworkError(error)
+    streamError = safe
+    if (!endpointReadySettled) {
+      endpointReadySettled = true
+      endpointReadyReject?.(safe)
     }
-    const message = parseJsonRpcEvent(event.data)
-    if (!message || typeof message.id !== 'number') return
-    const item = pending.get(message.id)
-    if (!item) return
-    pending.delete(message.id)
-    clearTimeout(item.timer)
-    try {
-      item.resolve(decodeResponse(message, message.id))
-    } catch (error) {
-      item.reject(error instanceof Error ? error : new Error(String(error)))
-    }
-  }).catch((error) => {
-    rejectPending(pending, error instanceof Error ? error : new Error(String(error)))
-  })
+    rejectPending(pending, safe)
+    if (!controller.signal.aborted) controller.abort()
+  }
+  const ready = (async () => {
+    target = await authorizeMcpNetworkUrl(url)
+    const opened = await openSseStream(target, config.headers, controller)
+    void consumeSseStream(opened.response, opened.finalUrl, target, (event, streamUrl, authorizedTarget) => {
+      if (event.event === 'endpoint') {
+        const resolved = resolveMcpSseEndpoint(authorizedTarget, streamUrl, event.data)
+        if (endpoint && endpoint.href !== resolved.href) throw new Error('MCP SSE endpoint changed')
+        endpoint = resolved
+        if (!endpointReadySettled) {
+          endpointReadySettled = true
+          endpointReadyResolve?.()
+        }
+        return
+      }
+      resolveSseMessage(event, pending)
+    }).catch(failStream)
+  })()
 
   return {
     async request(method: string, params?: unknown): Promise<unknown> {
       if (closed) throw new Error('MCP SSE client 已关闭')
-      await ready
-      await endpointReady
-      if (!endpoint) throw new Error('MCP SSE server 未返回 endpoint 事件')
+      await waitForSseStartup(ready, timeoutMs, controller)
+      await waitForSseStartup(endpointReady, timeoutMs, controller)
+      if (streamError) throw streamError
+      if (!target || !endpoint) throw new Error('MCP SSE server 未返回 endpoint 事件')
 
       const requestId = ++id
       const payload: JsonRpcRequest = { jsonrpc: '2.0', id: requestId, method, ...(params === undefined ? {} : { params }) }
@@ -267,16 +341,18 @@ function createSseClient(config: McpServerConfig, timeoutMs: number): McpClient 
           rejectPromise(new Error(`MCP SSE 请求超时: ${method}`))
         }, timeoutMs)
         pending.set(requestId, { resolve: resolvePromise, reject: rejectPromise, timer })
-        void fetch(endpoint as string, {
+        void requestAuthorizedMcpUrl(target as AuthorizedMcpNetworkTarget, endpoint as URL, {
           method: 'POST',
           headers: { 'content-type': 'application/json', ...(config.headers ?? {}) },
-          body: JSON.stringify(payload)
-        }).then((response) => {
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        }).then(async ({ response }) => {
           if (!response.ok) throw new Error(`MCP SSE POST ${response.status}`)
+          await response.body?.cancel()
         }).catch((error) => {
           pending.delete(requestId)
           clearTimeout(timer)
-          rejectPromise(error instanceof Error ? error : new Error(String(error)))
+          rejectPromise(safeMcpNetworkError(error))
         })
       })
     },
@@ -288,10 +364,24 @@ function createSseClient(config: McpServerConfig, timeoutMs: number): McpClient 
   }
 }
 
+function resolveSseMessage(event: SseEvent, pending: Map<number, PendingRequest>): void {
+  const message = parseJsonRpcEvent(event.data)
+  if (!message || typeof message.id !== 'number') return
+  const item = pending.get(message.id)
+  if (!item) return
+  pending.delete(message.id)
+  clearTimeout(item.timer)
+  try {
+    item.resolve(decodeResponse(message, message.id))
+  } catch (error) {
+    item.reject(error instanceof Error ? error : new Error('MCP SSE response failed'))
+  }
+}
+
 function createStdioClient(config: McpServerConfig, timeoutMs: number): McpClient {
   const args = Array.isArray(config.args) ? config.args : []
   const child = spawn(config.command as string, args, {
-    env: { ...process.env, ...(config.env ?? {}) },
+    env: buildMcpProcessEnv(config.env),
     stdio: ['pipe', 'pipe', 'pipe']
   })
   let id = 0
@@ -348,6 +438,23 @@ function createStdioClient(config: McpServerConfig, timeoutMs: number): McpClien
   }
 }
 
+function mcpTransport(config: McpServerConfig): McpTransport {
+  if (config.command) return 'stdio'
+  return config.transport === 'sse' ? 'sse' : 'http'
+}
+
+export function buildMcpProcessEnv(configEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of MCP_BASE_ENV_KEYS) {
+    const value = process.env[key]
+    if (typeof value === 'string') env[key] = value
+  }
+  for (const [key, value] of Object.entries(configEnv ?? {})) {
+    if (typeof value === 'string') env[key] = value
+  }
+  return env
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
@@ -370,10 +477,44 @@ function rejectPending(pending: Map<number, PendingRequest>, error: Error): void
 function decodeResponse(value: unknown, id: number): unknown {
   if (!isRecord(value)) throw new Error(`MCP 响应不是对象: ${id}`)
   if (isRecord(value.error)) {
-    const message = typeof value.error.message === 'string' ? value.error.message : JSON.stringify(value.error)
-    throw new Error(`MCP 错误: ${message}`)
+    const code = typeof value.error.code === 'number' ? ` (${value.error.code})` : ''
+    throw new Error(`MCP server returned an error${code}`)
   }
   return value.result
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  if (!response.body) throw new Error('MCP HTTP response body is missing')
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_MCP_HTTP_RESPONSE_BYTES) {
+    await response.body.cancel().catch(() => undefined)
+    throw new Error('MCP HTTP response exceeded the size limit')
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_MCP_HTTP_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw new Error('MCP HTTP response exceeded the size limit')
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'MCP HTTP response exceeded the size limit') throw error
+    throw new Error('MCP HTTP response could not be read')
+  } finally {
+    reader.releaseLock()
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString('utf8')) as unknown
+  } catch {
+    throw new Error('MCP HTTP response is not valid JSON')
+  }
 }
 
 async function readSseResponse(response: Response, id: number, controller: AbortController): Promise<unknown> {
@@ -388,25 +529,67 @@ async function readSseResponse(response: Response, id: number, controller: Abort
 }
 
 async function openSseStream(
-  url: string,
+  target: AuthorizedMcpNetworkTarget,
   headers: Record<string, string> | undefined,
-  controller: AbortController,
-  onEvent: (event: SseEvent) => void
-): Promise<void> {
-  const response = await fetch(url, {
+  controller: AbortController
+): Promise<{ response: Response; finalUrl: URL }> {
+  const opened = await requestAuthorizedMcpUrl(target, target.url, {
     method: 'GET',
     headers: { accept: 'text/event-stream', ...(headers ?? {}) },
     signal: controller.signal
   })
+  const { response } = opened
   if (!response.ok) throw new Error(`MCP SSE GET ${response.status}`)
   if (!response.body) throw new Error('MCP SSE stream 缺少 body')
-  ;(async () => {
-    try {
-      for await (const event of iterateSseEvents(response.body as ReadableStream<Uint8Array>)) onEvent(event)
-    } catch (error) {
-      if (!controller.signal.aborted) throw error
-    }
-  })().catch(() => undefined)
+  return opened
+}
+
+async function consumeSseStream(
+  response: Response,
+  streamUrl: URL,
+  target: AuthorizedMcpNetworkTarget,
+  onEvent: (event: SseEvent, streamUrl: URL, target: AuthorizedMcpNetworkTarget) => void
+): Promise<void> {
+  if (!response.body) throw new Error('MCP SSE stream 缺少 body')
+  for await (const event of iterateSseEvents(response.body)) onEvent(event, streamUrl, target)
+}
+
+async function waitForSseStartup(
+  promise: Promise<void>,
+  timeoutMs: number,
+  controller: AbortController
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      promise,
+      new Promise<void>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort()
+          reject(new Error('MCP SSE startup timed out'))
+        }, timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function safeMcpNetworkError(error: unknown): Error {
+  const networkMessage = mcpNetworkErrorMessage(error)
+  if (networkMessage !== 'MCP network request failed') return new Error(networkMessage)
+  const message = error instanceof Error ? error.message : ''
+  if (
+    /^MCP SSE (?:GET|POST) \d+$/.test(message) ||
+    message === 'MCP SSE startup timed out' ||
+    message === 'MCP SSE endpoint changed' ||
+    message === 'MCP SSE event exceeded the size limit' ||
+    message === 'MCP SSE stream 缺少 body' ||
+    message === 'MCP SSE server 未返回 endpoint 事件'
+  ) {
+    return new Error(message)
+  }
+  return new Error(networkMessage)
 }
 
 async function* iterateSseEvents(stream: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
@@ -421,11 +604,14 @@ async function* iterateSseEvents(stream: ReadableStream<Uint8Array>): AsyncGener
       const parts = buffer.split(/\r?\n\r?\n/)
       buffer = parts.pop() ?? ''
       for (const part of parts) {
+        if (part.length > MAX_MCP_SSE_EVENT_CHARS) throw new Error('MCP SSE event exceeded the size limit')
         const event = parseSseEvent(part)
         if (event) yield event
       }
+      if (buffer.length > MAX_MCP_SSE_EVENT_CHARS) throw new Error('MCP SSE event exceeded the size limit')
     }
     buffer += decoder.decode()
+    if (buffer.length > MAX_MCP_SSE_EVENT_CHARS) throw new Error('MCP SSE event exceeded the size limit')
     const event = parseSseEvent(buffer)
     if (event) yield event
   } finally {
@@ -460,14 +646,6 @@ function parseJsonRpcEvent(data: string): JsonRpcResponse | null {
 
 function isEventStreamResponse(response: Response): boolean {
   return (response.headers.get('content-type') ?? '').toLowerCase().includes('text/event-stream')
-}
-
-function resolveSseEndpoint(baseUrl: string, endpointValue: string): string {
-  try {
-    return new URL(endpointValue, baseUrl).toString()
-  } catch {
-    throw new Error(`MCP SSE endpoint 无效: ${endpointValue}`)
-  }
 }
 
 function readServerInfo(value: unknown): { name?: string; version?: string } | undefined {

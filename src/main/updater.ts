@@ -55,7 +55,7 @@ function emit(event: UpdaterEvent): void {
 function loadAutoUpdater(): { autoUpdater: any } | null {
   try {
     // 动态 require,避免在未安装依赖时破坏静态编译与打包。
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- optional dependency is probed at runtime
     const mod = require('electron-updater') as { autoUpdater?: unknown }
     if (mod && typeof mod.autoUpdater === 'object' && mod.autoUpdater) {
       return { autoUpdater: mod.autoUpdater }

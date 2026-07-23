@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 const IMAGE_MIME_BY_EXTENSION = {
   '.png': 'image/png',
@@ -20,6 +21,12 @@ export interface CopyImageAttachmentOptions {
 
 export interface SaveImageAttachmentBytesOptions extends CopyImageAttachmentOptions {
   mime?: string
+}
+
+export interface DurableImageAttachmentReference {
+  hash?: string
+  mime: string
+  bytes: number
 }
 
 export interface ImageAttachmentSuccess {
@@ -117,6 +124,74 @@ export async function imageToContentBlock(imagePath: string): Promise<Record<str
       data: buffer.toString('base64')
     }
   }
+}
+
+/** Resolve a durable transcript reference without trusting a persisted path or encoded payload. */
+export function imageAttachmentRefToContentBlock(
+  reference: DurableImageAttachmentReference,
+  attachmentsRoot: string,
+  options: CopyImageAttachmentOptions = {}
+): Record<string, unknown> {
+  const hash = durableAttachmentHash(reference.hash)
+  const extension = extensionFromMime(reference.mime)
+  const maxBytes = positiveLimit(options.maxBytes, DEFAULT_MAX_IMAGE_BYTES)
+  if (!Number.isSafeInteger(reference.bytes) || reference.bytes <= 0 || reference.bytes > maxBytes) {
+    throw new Error(`图片引用大小无效或超过上限 ${maxBytes} bytes`)
+  }
+
+  const requestedRoot = path.resolve(attachmentsRoot)
+  const rootInfo = lstatSync(requestedRoot)
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error('附件目录必须是普通目录')
+  const root = realpathSync(requestedRoot)
+  if (!statSync(root).isDirectory()) throw new Error('附件目录不存在或不是目录')
+  const targetPath = path.join(root, `${hash}${canonicalExtension(extension)}`)
+  ensureInsideRoot(root, targetPath)
+  const targetInfo = lstatSync(targetPath)
+  if (targetInfo.isSymbolicLink() || !targetInfo.isFile()) throw new Error('附件引用目标必须是普通文件')
+  const resolvedTarget = realpathSync(targetPath)
+  ensureInsideRoot(root, resolvedTarget)
+  if (targetInfo.size !== reference.bytes || targetInfo.size > maxBytes) {
+    throw new Error('附件引用大小与对象不匹配')
+  }
+
+  const buffer = readFileSync(resolvedTarget)
+  if (buffer.byteLength !== reference.bytes || !matchesImageSignature(buffer, extension)) {
+    throw new Error('附件引用 MIME 或内容签名不匹配')
+  }
+  if (sha256(buffer) !== hash) throw new Error('附件引用摘要与对象不匹配')
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: IMAGE_MIME_BY_EXTENSION[extension],
+      data: buffer.toString('base64')
+    }
+  }
+}
+
+export function sessionImageAttachmentsRoot(userDataRoot: string, sessionId: string): string {
+  const normalizedSessionId = sessionId.trim()
+  if (
+    normalizedSessionId === '.' ||
+    normalizedSessionId === '..' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(normalizedSessionId)
+  ) {
+    throw new Error('会话附件目录标识无效')
+  }
+  const requestedBase = path.resolve(userDataRoot, 'attachments')
+  let canonicalBase = requestedBase
+  try {
+    const baseInfo = lstatSync(requestedBase)
+    if (baseInfo.isSymbolicLink() || !baseInfo.isDirectory()) {
+      throw new Error('附件基础目录必须是普通目录')
+    }
+    canonicalBase = realpathSync(requestedBase)
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error
+  }
+  const target = path.resolve(canonicalBase, normalizedSessionId)
+  ensureInsideRoot(canonicalBase, target)
+  return target
 }
 
 async function persistImageAttachment(
@@ -293,6 +368,16 @@ function normalizeMime(mime: string | undefined): string | undefined {
   const normalized = mime.split(';', 1)[0]?.trim().toLowerCase()
   if (!normalized) return undefined
   return normalized
+}
+
+function durableAttachmentHash(value: string | undefined): string {
+  const hash = value?.trim() ?? ''
+  if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('附件引用缺少有效 SHA-256 摘要')
+  return hash
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
 
 function sha256(buffer: Buffer): string {

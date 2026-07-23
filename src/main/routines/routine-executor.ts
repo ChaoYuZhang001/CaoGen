@@ -49,8 +49,9 @@ export async function executeRoutine(
         rootDir,
         routine,
         async (current) => {
-          const meta = sessionManager.create({
+          const meta = await sessionManager.createManaged({
             cwd: current.projectCwd,
+            isolated: false,
             model: current.model || undefined,
             providerId: current.providerId || undefined,
             budgetUsd: current.budgetUsd,

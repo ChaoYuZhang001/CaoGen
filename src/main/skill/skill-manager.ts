@@ -30,7 +30,8 @@ export class SkillManager {
   }
 
   list(): SkillDefinition[] {
-    if (this.skills.length === 0) this.reload()
+    // Learning expiry and crash recovery are checked by every reload.
+    this.reload()
     return [...this.skills]
   }
 

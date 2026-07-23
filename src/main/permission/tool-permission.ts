@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, posix, relative, resolve } from 'node:path'
 import type { AppSettings, ToolRiskLevel } from '../../shared/types'
 
 export type ToolPermissionDecisionKind = 'allow' | 'deny' | 'neutral'
@@ -8,7 +8,9 @@ export interface ToolRiskAssessment {
   level: ToolRiskLevel
   reasons: string[]
   path?: string
+  paths?: string[]
   pathInsideCwd?: boolean
+  invalidInput?: boolean
 }
 
 export interface ToolPermissionDecision {
@@ -35,9 +37,34 @@ interface PermissionRule {
   until?: number
 }
 
+interface ExtractedPaths {
+  values: string[]
+  invalidReason?: string
+}
+
+interface ClassifiedPath {
+  path: string
+  inside: boolean
+  sensitive: boolean
+}
+
+interface ClassifiedRequestPaths {
+  states: ClassifiedPath[]
+  rejection?: ToolRiskAssessment
+}
+
+type PathRuleMatchMode = 'any' | 'all'
+
 const RISK_ORDER: ToolRiskLevel[] = ['low', 'medium', 'high', 'critical']
 const READ_TOOLS = new Set(['read_file', 'view', 'list_dir', 'search_symbol', 'search_code', 'find_file', 'get_dependencies', 'task_decompose'])
 const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])
+const FIXED_MUTATION_RISKS: Partial<Record<string, { level: ToolRiskLevel; reason: string }>> = {
+  git_stage: { level: 'medium', reason: '暂存指定 Git 文件' },
+  git_stage_all: { level: 'high', reason: '暂存当前范围全部 Git 变更' },
+  mcp_discover: { level: 'high', reason: 'MCP 连接可能启动本机进程或访问外部服务' },
+  mcp_call_tool: { level: 'high', reason: 'MCP 连接可能启动本机进程或调用外部工具' }
+}
+const BLOCKED_CODE_FORGE_MODES = new Set(['commit', 'pr'])
 const CRITICAL_COMMAND_PATTERNS = [
   /\brm\s+-rf\s+(?:\/|\*)/i,
   /\bdel\s+\/[sq]\b/i,
@@ -63,12 +90,9 @@ export function classifyToolRisk(
   cwd: string
 ): ToolRiskAssessment {
   const reasons: string[] = []
-  const pathValue = extractPath(toolName, input)
-  const pathState = pathValue ? classifyPath(cwd, pathValue) : undefined
-  if (pathState && !pathState.inside) {
-    reasons.push('路径越界')
-    return { level: 'critical', reasons, path: pathState.path, pathInsideCwd: false }
-  }
+  const classifiedPaths = classifyRequestPaths(toolName, input, cwd)
+  if (classifiedPaths.rejection) return classifiedPaths.rejection
+  const pathStates = classifiedPaths.states
 
   let level: ToolRiskLevel = 'medium'
   if (READ_TOOLS.has(toolName)) {
@@ -80,6 +104,10 @@ export function classifyToolRisk(
   } else if (EDIT_TOOLS.has(toolName)) {
     level = 'medium'
     reasons.push('文件写入工具')
+  } else if (FIXED_MUTATION_RISKS[toolName]) {
+    const fixedRisk = FIXED_MUTATION_RISKS[toolName] as { level: ToolRiskLevel; reason: string }
+    level = fixedRisk.level
+    reasons.push(fixedRisk.reason)
   } else if (toolName === 'bash') {
     const command = stringField(input.command)
     const commandRisk = classifyCommand(command)
@@ -95,20 +123,15 @@ export function classifyToolRisk(
     level = 'high'
     reasons.push('Genesis 编排会规划多 Agent、隔离执行、验证 gate 和交付策略')
   } else if (toolName === 'code_forge_delivery') {
-    const mode = stringField(input.mode)
-    if (mode === 'commit' || mode === 'pr') {
-      level = 'high'
-      reasons.push('Code Forge 会提交或发布工程交付产物')
-    } else {
-      level = 'medium'
-      reasons.push('Code Forge 会运行验证并生成交付报告或补丁')
-    }
+    const codeForge = classifyCodeForgeRisk(input)
+    level = codeForge.level
+    reasons.push(codeForge.reason)
   } else {
     level = 'medium'
     reasons.push('未知或扩展工具')
   }
 
-  if (pathState?.sensitive) {
+  if (pathStates.some((state) => state.sensitive)) {
     level = maxRisk(level, 'high')
     reasons.push('敏感路径')
   }
@@ -116,9 +139,57 @@ export function classifyToolRisk(
   return {
     level,
     reasons,
-    path: pathState?.path,
-    pathInsideCwd: pathState?.inside
+    path: pathStates[0]?.path,
+    paths: pathStates.length > 0 ? pathStates.map((state) => state.path) : undefined,
+    pathInsideCwd: pathStates.length > 0 ? true : undefined
   }
+}
+
+function classifyRequestPaths(
+  toolName: string,
+  input: Record<string, unknown>,
+  cwd: string
+): ClassifiedRequestPaths {
+  const extracted = extractPaths(toolName, input)
+  if (extracted.invalidReason) {
+    return {
+      states: [],
+      rejection: {
+        level: 'critical',
+        reasons: [extracted.invalidReason],
+        pathInsideCwd: false,
+        invalidInput: true
+      }
+    }
+  }
+  const states = extracted.values.map((value) => classifyPath(cwd, value))
+  const outside = states.find((state) => !state.inside)
+  if (!outside) return { states }
+  return {
+    states,
+    rejection: {
+      level: 'critical',
+      reasons: ['路径越界'],
+      path: outside.path,
+      paths: states.map((state) => state.path),
+      pathInsideCwd: false
+    }
+  }
+}
+
+function classifyCodeForgeRisk(input: Record<string, unknown>): { level: ToolRiskLevel; reason: string } {
+  const mode = stringField(input.mode)
+  if (BLOCKED_CODE_FORGE_MODES.has(mode)) {
+    return { level: 'high', reason: '已停用的 Code Forge 复合持久交付请求' }
+  }
+  const legacyInput = input.createPatch === true ||
+    input.verificationCommand !== undefined ||
+    input.verificationCommands !== undefined ||
+    ['repoRoot', 'worktreePath', 'baseSha', 'baseBranch', 'branch'].some((field) => input[field] !== undefined)
+  if ((mode === '' || mode === 'report') && !legacyInput) {
+    return { level: 'low', reason: '只读 Code Forge 交付报告' }
+  }
+  return { level: 'medium', reason: 'Code Forge 会生成可查询 patch artifact' }
 }
 
 export function evaluateToolPermission(
@@ -126,17 +197,30 @@ export function evaluateToolPermission(
   request: ToolPermissionRequest
 ): ToolPermissionDecision {
   const risk = classifyToolRisk(request.toolName, request.input, request.cwd)
-  const deny = findMatchingRule(joinRules(settings.permissionDenylist, settings.disallowedTools), request, risk)
+  if (risk.invalidInput) {
+    return { kind: 'deny', reason: `无效工具输入:${risk.reasons.join(',')}`, risk }
+  }
+  const deny = findMatchingRule(
+    joinRules(settings.permissionDenylist, settings.disallowedTools),
+    request,
+    risk,
+    'any'
+  )
   if (deny) {
     return { kind: 'deny', reason: `命中黑名单:${deny.raw}`, risk, matchedRule: deny.raw }
   }
 
-  const temporary = findMatchingRule(settings.permissionTemporaryAllowlist, request, risk)
+  const temporary = findMatchingRule(settings.permissionTemporaryAllowlist, request, risk, 'all')
   if (temporary) {
     return { kind: 'allow', reason: `命中临时允许:${temporary.raw}`, risk, matchedRule: temporary.raw }
   }
 
-  const allow = findMatchingRule(joinRules(settings.permissionAllowlist, settings.allowedTools), request, risk)
+  const allow = findMatchingRule(
+    joinRules(settings.permissionAllowlist, settings.allowedTools),
+    request,
+    risk,
+    'all'
+  )
   if (allow) {
     return { kind: 'allow', reason: `命中白名单:${allow.raw}`, risk, matchedRule: allow.raw }
   }
@@ -180,6 +264,38 @@ function extractPath(toolName: string, input: Record<string, unknown>): string |
   return undefined
 }
 
+function extractPaths(toolName: string, input: Record<string, unknown>): ExtractedPaths {
+  if (toolName === 'git_stage') return extractGitStagePaths(input.paths)
+  const pathValue = extractPath(toolName, input)
+  return { values: pathValue ? [pathValue] : [] }
+}
+
+function extractGitStagePaths(value: unknown): ExtractedPaths {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { values: [], invalidReason: 'git_stage paths 必须是非空数组' }
+  }
+  const paths: string[] = []
+  for (const candidate of value) {
+    if (typeof candidate !== 'string') {
+      return { values: [], invalidReason: 'git_stage paths 只接受字符串路径' }
+    }
+    const normalized = candidate.trim()
+    if (normalized !== candidate || !isValidGitStagePath(normalized)) {
+      return { values: [], invalidReason: 'git_stage paths 包含空值、绝对路径、越界路径或 pathspec' }
+    }
+    paths.push(normalized)
+  }
+  return { values: paths }
+}
+
+function isValidGitStagePath(value: string): boolean {
+  if (!value || value.includes('\0')) return false
+  if (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) return false
+  if (value.startsWith(':')) return false
+  const normalized = posix.normalize(value.replace(/\\/g, '/'))
+  return normalized !== '.' && normalized !== '..' && !normalized.startsWith('../')
+}
+
 function extractFileUrlPath(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined
   let url: URL
@@ -196,7 +312,7 @@ function extractFileUrlPath(value: unknown): string | undefined {
   }
 }
 
-function classifyPath(cwd: string, rawPath: string): { path: string; inside: boolean; sensitive: boolean } {
+function classifyPath(cwd: string, rawPath: string): ClassifiedPath {
   const target = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd, rawPath)
   const rel = relative(resolve(cwd), target)
   const inside = !(rel.startsWith('..') || isAbsolute(rel))
@@ -211,10 +327,11 @@ function classifyPath(cwd: string, rawPath: string): { path: string; inside: boo
 function findMatchingRule(
   rawRules: string | undefined,
   request: ToolPermissionRequest,
-  risk: ToolRiskAssessment
+  risk: ToolRiskAssessment,
+  pathMode: PathRuleMatchMode
 ): PermissionRule | undefined {
   const rules = parseRules(rawRules, request.now ?? Date.now())
-  return rules.find((rule) => matchesRule(rule, request, risk))
+  return rules.find((rule) => matchesRule(rule, request, risk, pathMode))
 }
 
 function parseRules(rawRules: string | undefined, now: number): PermissionRule[] {
@@ -254,16 +371,27 @@ function parseRule(line: string): PermissionRule | null {
 function matchesRule(
   rule: PermissionRule,
   request: ToolPermissionRequest,
-  risk: ToolRiskAssessment
+  risk: ToolRiskAssessment,
+  pathMode: PathRuleMatchMode
 ): boolean {
   if (rule.tool && !wildcardMatch(rule.tool, request.toolName)) return false
-  if (rule.path && (!risk.path || !pathMatches(rule.path, risk.path, request.cwd))) {
-    return false
-  }
+  if (rule.path && !matchesRiskPaths(rule.path, risk, request.cwd, pathMode)) return false
   if (rule.risk && risk.level !== rule.risk) return false
   if (rule.riskAtLeast && compareRisk(risk.level, rule.riskAtLeast) < 0) return false
   if (rule.riskAtMost && compareRisk(risk.level, rule.riskAtMost) > 0) return false
   return true
+}
+
+function matchesRiskPaths(
+  pattern: string,
+  risk: ToolRiskAssessment,
+  cwd: string,
+  mode: PathRuleMatchMode
+): boolean {
+  const paths = risk.paths ?? (risk.path ? [risk.path] : [])
+  if (paths.length === 0) return false
+  const matches = (candidate: string): boolean => pathMatches(pattern, candidate, cwd)
+  return mode === 'any' ? paths.some(matches) : paths.every(matches)
 }
 
 function wildcardMatch(pattern: string, value: string): boolean {

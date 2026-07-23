@@ -403,7 +403,7 @@ export class SkillFabric {
     if (descriptor.type !== 'skillPrompt') {
       return { ok: false, capabilityId: capability.id, kind: capability.kind, execution: 'blocked', output: '', error: 'Capability is not a skill.' }
     }
-    const skill = this.skills.find((item) => item.id === descriptor.skillId)
+    const skill = this.manager.list().find((item) => item.id === descriptor.skillId)
     if (!skill) {
       return { ok: false, capabilityId: capability.id, kind: capability.kind, execution: 'blocked', output: '', error: 'Skill is not loaded.' }
     }

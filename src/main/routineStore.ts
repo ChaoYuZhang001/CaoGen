@@ -92,7 +92,7 @@ const PERMISSION_MODES = new Set<RoutinePermissionMode>([
   'plan',
   'bypassPermissions'
 ])
-const ENGINE_KINDS = new Set<EngineKind>(['claude', 'openai'])
+const ENGINE_KINDS = new Set<EngineKind>(['claude', 'anthropic', 'openai'])
 const DEFAULT_NOTIFICATION: RoutineNotificationOptions = {
   enabled: false,
   onSuccess: true,
@@ -377,7 +377,7 @@ function normalizePermissionMode(value: unknown): RoutinePermissionMode {
 function normalizeOptionalEngine(value: unknown): EngineKind | undefined {
   if (value === undefined || value === null || value === '') return undefined
   if (!isEngineKind(value)) {
-    throw new RoutineStoreValidationError('engine must be one of: claude, openai')
+    throw new RoutineStoreValidationError('engine must be one of: claude, anthropic, openai')
   }
   return value
 }

@@ -1,0 +1,54 @@
+import { ipcMain } from 'electron'
+import { dirname } from 'node:path'
+import {
+  acceptMemoryDraft,
+  deleteMemoryEntry,
+  proposeMemoryDraft,
+  readProjectMemory,
+  type ProjectMemoryDraftInput,
+  type ProjectMemoryTarget
+} from '../memoryStore'
+import { createTrustedUserLearningDecision } from '../learning/learning-security'
+import { verifyProductionProjectMutation } from '../project-aggregate/project-mutation-ingress'
+
+export interface ProjectMemoryIpcOptions {
+  memoryRoot: () => string
+  targetForSession: (sessionId: string) => ProjectMemoryTarget | null
+}
+
+export function registerProjectMemoryIpc(options: ProjectMemoryIpcOptions): void {
+  ipcMain.handle('memory:read', (_event, sessionId: string) => {
+    const target = options.targetForSession(sessionId)
+    return target
+      ? readProjectMemory(target, options.memoryRoot())
+      : { projectHash: '', markdown: '', entries: [], drafts: [] }
+  })
+  ipcMain.handle('memory:propose', (_event, sessionId: string, input: ProjectMemoryDraftInput) =>
+    verifiedMemoryMutation(options, sessionId, (target, root) => proposeMemoryDraft(target, root, input)))
+  ipcMain.handle('memory:accept', (_event, sessionId: string, draftId: string) =>
+    verifiedMemoryMutation(options, sessionId, (target, root) => acceptMemoryDraft(
+      target, root, draftId, createTrustedUserLearningDecision('ipc:memory:accept')
+    )))
+  ipcMain.handle('memory:delete', (_event, sessionId: string, entryId: string) =>
+    verifiedMemoryMutation(options, sessionId, (target, root) => deleteMemoryEntry(
+      target, root, entryId, createTrustedUserLearningDecision('ipc:memory:delete')
+    )))
+}
+
+async function verifiedMemoryMutation<T>(
+  options: ProjectMemoryIpcOptions,
+  sessionId: string,
+  mutation: (target: ProjectMemoryTarget, root: string) => Promise<T>
+): Promise<T> {
+  const target = requiredTarget(options, sessionId)
+  const root = options.memoryRoot()
+  const result = await mutation(target, root)
+  if (target.projectId) await verifyProductionProjectMutation(dirname(root), target.projectId)
+  return result
+}
+
+function requiredTarget(options: ProjectMemoryIpcOptions, sessionId: string): ProjectMemoryTarget {
+  const target = options.targetForSession(sessionId)
+  if (!target) throw new Error('会话不存在')
+  return target
+}

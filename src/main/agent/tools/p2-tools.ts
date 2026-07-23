@@ -1,15 +1,15 @@
 import { listProviders } from '../../providers'
 import { draftSkillFromSummary } from '../../skill/skill-learner'
-import { recordSkillFeedback, type SkillFeedbackOutcome } from '../../skill/skill-optimizer'
+import { proposeSkillOptimization, type SkillFeedbackOutcome } from '../../skill/skill-optimizer'
 import { routeModel } from '../../model/model-router'
-import { sendFeishuNotification } from '../../notification/feishu'
-import { sendDingTalkNotification } from '../../notification/dingtalk'
-import { sendWeComNotification } from '../../notification/wecom'
+import { buildFeishuWebhookPayload } from '../../notification/feishu'
+import { buildDingTalkWebhookPayload } from '../../notification/dingtalk'
+import { buildWeComWebhookPayload } from '../../notification/wecom'
 import {
+  buildGiteeIssueApiRequest,
   buildGiteeIssueUrl,
+  buildGiteePullRequestApiRequest,
   buildGiteePullRequestUrl,
-  sendGiteeIssue,
-  sendGiteePullRequest
 } from './gitee-tools'
 import type { ProviderView, SchedulerStrategy } from '../../../shared/types'
 import type { ModelTaskKind } from '../../model/model-profile'
@@ -46,7 +46,7 @@ export const P2_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'optimize_skill',
-      description: '记录项目本地 Skill 的失败/用户修正反馈；累计失败或收到修正后安全更新 SKILL.md。仅允许修改 .caogen/skills 下的项目 Skill。',
+      description: '记录项目本地 Skill 的失败/用户修正反馈；累计失败或收到修正后生成待用户批准的 Learning Skill 草稿，批准前不会修改活动 SKILL.md。',
       parameters: {
         type: 'object',
         properties: {
@@ -105,17 +105,14 @@ export const P2_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'china_notify',
-      description: '构造或发送飞书/钉钉/企业微信机器人通知；默认 dry_run，不传 dry_run=false 不会触网。',
+      description: '构造飞书/钉钉/企业微信机器人通知预览；只返回 payload，不接受 webhook 或签名密钥，也不会触网。',
       parameters: {
         type: 'object',
         properties: {
           channel: { type: 'string', enum: ['feishu', 'dingtalk', 'wecom'] },
           title: { type: 'string' },
           text: { type: 'string' },
-          linkUrl: { type: 'string' },
-          webhookUrl: { type: 'string' },
-          secret: { type: 'string', description: '飞书/钉钉签名密钥，可选' },
-          dry_run: { type: 'boolean', description: '默认 true；只有 false 才发送' }
+          linkUrl: { type: 'string' }
         },
         required: ['channel', 'title', 'text']
       }
@@ -125,7 +122,7 @@ export const P2_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'gitee_prepare',
-      description: '构造 Gitee PR/Issue Web URL 和 API 请求；默认不发送，send=true 且提供 accessToken 才触发请求。',
+      description: '构造 Gitee PR/Issue Web URL 和无凭据 API 请求预览；不会发送请求。',
       parameters: {
         type: 'object',
         properties: {
@@ -137,10 +134,8 @@ export const P2_TOOLS: ToolDefinition[] = [
           head: { type: 'string', description: 'PR 源分支' },
           base: { type: 'string', description: 'PR 目标分支' },
           labels: { type: 'array', items: { type: 'string' } },
-          accessToken: { type: 'string' },
           baseApiUrl: { type: 'string', description: '可选：Gitee API 基础地址，支持企业版或代理地址' },
-          webBaseUrl: { type: 'string', description: '可选：Gitee Web 基础地址，支持企业版或代理地址' },
-          send: { type: 'boolean', description: '默认 false' }
+          webBaseUrl: { type: 'string', description: '可选：Gitee Web 基础地址，支持企业版或代理地址' }
         },
         required: ['action', 'owner', 'repo', 'title']
       }
@@ -165,7 +160,7 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
   }
 
   if (name === 'optimize_skill') {
-    const result = await recordSkillFeedback({
+    const result = await proposeSkillOptimization({
       projectRoot: _cwd,
       skillIdOrName: requiredString(args.id, 'id'),
       outcome: skillFeedbackOutcome(args.outcome),
@@ -175,7 +170,7 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
       failureThreshold: optionalNumber(args.failureThreshold)
     })
     return {
-      ok: result.status === 'recorded' || result.status === 'updated',
+      ok: result.status === 'recorded' || result.status === 'drafted',
       output: JSON.stringify(result, null, 2)
     }
   }
@@ -206,33 +201,44 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
     return { ok: true, output: JSON.stringify(decision, null, 2) }
   }
 
-  if (name === 'china_notify') {
-    const channel = requiredString(args.channel, 'channel')
-    const input = {
-      title: requiredString(args.title, 'title'),
-      text: requiredString(args.text, 'text'),
-      linkUrl: optionalString(args.linkUrl)
-    }
-    const options = {
-      webhookUrl: optionalString(args.webhookUrl),
-      secret: optionalString(args.secret),
-      dryRun: args.dry_run !== false
-    }
-    if (channel === 'feishu') {
-      const result = await sendFeishuNotification(input, options)
-      return { ok: result.ok, output: JSON.stringify(result, null, 2) }
-    }
-    if (channel === 'dingtalk') {
-      const result = await sendDingTalkNotification(input, options)
-      return { ok: result.ok, output: JSON.stringify(result, null, 2) }
-    }
-    if (channel === 'wecom') {
-      const result = await sendWeComNotification(input, { webhookUrl: options.webhookUrl, dryRun: options.dryRun })
-      return { ok: result.ok, output: JSON.stringify(result, null, 2) }
-    }
-    return { ok: false, output: `不支持的通知渠道: ${channel}` }
-  }
+  if (name === 'china_notify') return executeChinaNotifyPreview(args)
+  return executeGiteePreview(args)
+}
 
+function executeChinaNotifyPreview(args: Record<string, unknown>): P2ToolResult {
+  if (hasOwn(args, 'webhookUrl') || hasOwn(args, 'secret') || args.dry_run === false) {
+    return {
+      ok: false,
+      output: 'china_notify 仅支持无凭据预览；webhookUrl、secret 和 dry_run=false 已禁用。'
+    }
+  }
+  const channel = requiredString(args.channel, 'channel')
+  const input = {
+    title: requiredString(args.title, 'title'),
+    text: requiredString(args.text, 'text'),
+    linkUrl: optionalString(args.linkUrl)
+  }
+  const payload = channel === 'feishu'
+    ? buildFeishuWebhookPayload(input)
+    : channel === 'dingtalk'
+      ? buildDingTalkWebhookPayload(input)
+      : channel === 'wecom'
+        ? buildWeComWebhookPayload(input)
+        : undefined
+  if (!payload) return { ok: false, output: `不支持的通知渠道: ${channel}` }
+  return {
+    ok: true,
+    output: JSON.stringify({ ok: true, dryRun: true, sent: false, channel, payload }, null, 2)
+  }
+}
+
+function executeGiteePreview(args: Record<string, unknown>): P2ToolResult {
+  if (hasOwn(args, 'accessToken') || args.send === true) {
+    return {
+      ok: false,
+      output: 'gitee_prepare 仅支持无凭据预览；accessToken 和 send=true 已禁用。'
+    }
+  }
   const action = requiredString(args.action, 'action')
   const common = {
     owner: requiredString(args.owner, 'owner'),
@@ -240,7 +246,6 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
     title: requiredString(args.title, 'title'),
     body: optionalString(args.body)
   }
-  const accessToken = optionalString(args.accessToken)
   const baseApiUrl = optionalString(args.baseApiUrl)
   const webBaseUrl = optionalString(args.webBaseUrl)
   if (action === 'pull_request') {
@@ -249,15 +254,15 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
       head: requiredString(args.head, 'head'),
       base: requiredString(args.base, 'base')
     }
-    const url = buildGiteePullRequestUrl(input, webBaseUrl)
-    const result = await sendGiteePullRequest(input, { accessToken, baseApiUrl, dryRun: args.send !== true })
-    return { ok: result.ok, output: JSON.stringify({ webUrl: url, result }, null, 2) }
+    const webUrl = buildGiteePullRequestUrl(input, webBaseUrl)
+    const request = buildGiteePullRequestApiRequest(input, { baseApiUrl })
+    return { ok: true, output: JSON.stringify({ ok: true, dryRun: true, sent: false, webUrl, request }, null, 2) }
   }
   if (action === 'issue') {
     const input = { ...common, labels: stringArray(args.labels) }
-    const url = buildGiteeIssueUrl(input, webBaseUrl)
-    const result = await sendGiteeIssue(input, { accessToken, baseApiUrl, dryRun: args.send !== true })
-    return { ok: result.ok, output: JSON.stringify({ webUrl: url, result }, null, 2) }
+    const webUrl = buildGiteeIssueUrl(input, webBaseUrl)
+    const request = buildGiteeIssueApiRequest(input, { baseApiUrl })
+    return { ok: true, output: JSON.stringify({ ok: true, dryRun: true, sent: false, webUrl, request }, null, 2) }
   }
   return { ok: false, output: `不支持的 Gitee 动作: ${action}` }
 }
@@ -269,6 +274,10 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -298,28 +307,32 @@ function skillFeedbackOutcome(value: unknown): SkillFeedbackOutcome {
 
 function providerViews(value: unknown): ProviderView[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const providers: ProviderView[] = []
-  for (const item of value) {
-    if (!isRecord(item)) continue
-    const id = optionalString(item.id)
-    const name = optionalString(item.name)
-    const models = stringArray(item.models)
-    if (!id || !name || !models || models.length === 0) continue
-    providers.push({
-      id,
-      name,
-      baseUrl: optionalString(item.baseUrl) ?? '',
-      models,
-      engine: item.engine === 'claude' ? 'claude' : 'openai',
-      budgetUsd: optionalNumber(item.budgetUsd) ?? 0,
-      customHeaders: optionalString(item.customHeaders),
-      openaiProtocol: item.openaiProtocol === 'chat' || item.openaiProtocol === 'responses' ? item.openaiProtocol : undefined,
-      note: optionalString(item.note),
-      createdAt: optionalNumber(item.createdAt) ?? Date.now(),
-      hasToken: item.hasToken === true
-    })
-  }
+  const providers = value.map(providerView).filter((item): item is ProviderView => item !== undefined)
   return providers.length > 0 ? providers : undefined
+}
+
+function providerView(value: unknown): ProviderView | undefined {
+  if (!isRecord(value)) return undefined
+  const id = optionalString(value.id)
+  const name = optionalString(value.name)
+  const models = stringArray(value.models)
+  if (!id || !name || !models) return undefined
+  const hasToken = value.hasToken === true
+  return {
+    id,
+    name,
+    baseUrl: optionalString(value.baseUrl) ?? '',
+    models,
+    engine: value.engine === 'claude' ? 'claude' : 'openai',
+    budgetUsd: optionalNumber(value.budgetUsd) ?? 0,
+    customHeaders: optionalString(value.customHeaders),
+    credentialHeaderNames: stringArray(value.credentialHeaderNames),
+    openaiProtocol: value.openaiProtocol === 'chat' || value.openaiProtocol === 'responses' ? value.openaiProtocol : undefined,
+    note: optionalString(value.note),
+    createdAt: optionalNumber(value.createdAt) ?? Date.now(),
+    hasToken,
+    credentialStorage: hasToken ? 'encrypted' : 'none'
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

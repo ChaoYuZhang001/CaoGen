@@ -13,7 +13,9 @@ import {
   type GitPushOperationResult,
   type GitStatusOperationResult
 } from '../../git/git-helper'
-import type { EffectTarget } from '../../../shared/types'
+import type { EffectTarget, GitOperationResult } from '../../../shared/types'
+import { executeGitIndexEffectTarget } from '../../git/git-index-effect'
+import { executePullRequestEffectTarget } from '../../git/pull-request-effect'
 import {
   formatCodeForgeDeliveryReport,
   runCodeForgeDelivery,
@@ -25,6 +27,8 @@ import type { ToolDefinition, ToolExecResult } from './tool-types'
 export const GIT_TOOL_NAMES = [
   'git_status',
   'git_diff',
+  'git_stage',
+  'git_stage_all',
   'git_commit',
   'git_push',
   'git_create_pr',
@@ -75,6 +79,38 @@ export const GIT_TOOLS: ToolDefinition[] = [
         properties: {
           file: { type: 'string', description: '可选仓库内相对路径或绝对路径。' }
         }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_stage',
+      description:
+        '把明确列出的仓库内文件暂存到 Git index。只接受普通相对文件路径；必须通过冻结的 git_index_update Effect 执行，不会退回 shell git add。',
+      parameters: {
+        type: 'object',
+        properties: {
+          paths: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description: '要暂存的仓库内相对文件路径列表；不接受目录或 pathspec 魔法。'
+          }
+        },
+        required: ['paths']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_stage_all',
+      description:
+        '暂存当前工作目录范围内的全部 Git 变更。必须通过冻结的 git_index_update Effect 执行；仅在确认全部改动都应纳入交付时使用。',
+      parameters: {
+        type: 'object',
+        properties: {}
       }
     }
   },
@@ -142,35 +178,15 @@ export const GIT_TOOLS: ToolDefinition[] = [
     function: {
       name: 'code_forge_delivery',
       description:
-        'Code Forge 工程交付闭环:汇总 worktree/repo diff,运行验证命令,按 report/patch/commit/pr 模式生成结构化交付报告。commit/pr 为高风险动作,必须显式提供 mode 和必要参数。',
+        '汇总 worktree/repo diff，并按 report/patch 模式生成结构化交付报告或补丁。不执行验证命令，也不暂存、提交、推送或创建 PR；验证必须先显式调用 bash。',
       parameters: {
         type: 'object',
         properties: {
           mode: {
             type: 'string',
-            enum: ['report', 'patch', 'commit', 'pr'],
-            description: '交付模式:report 只报告;patch 生成补丁;commit 提交当前 worktree/repo;pr 提交后尝试创建 PR/MR。默认 report。'
-          },
-          verificationCommand: { type: 'string', description: '单条验证命令,在当前 cwd/worktree 内运行。' },
-          verificationCommands: {
-            type: 'array',
-            items: { type: 'string' },
-            description: '多条验证命令,按顺序运行;任一失败则报告不可合并。'
-          },
-          verificationTimeoutMs: { type: 'number', description: '每条验证命令超时毫秒数,默认 180000。' },
-          commitMessage: { type: 'string', description: 'commit/pr 模式的提交信息。' },
-          stageAll: {
-            type: 'boolean',
-            description: '是否先 git add --all。默认 false;在非隔离主工作区中要谨慎使用。'
-          },
-          createPatch: { type: 'boolean', description: '即使 mode=report/commit 也额外生成 patch 文件。' },
-          prTitle: { type: 'string', description: 'PR/MR 标题;省略时使用提交信息或默认标题。' },
-          prBody: { type: 'string', description: 'PR/MR 正文。' },
-          baseBranch: { type: 'string', description: 'PR/MR 目标分支。' },
-          repoRoot: { type: 'string', description: '可选原仓库根目录;通常由 CaoGen managed worktree metadata 自动填充。' },
-          worktreePath: { type: 'string', description: '可选 worktree 根目录;通常自动填充。' },
-          baseSha: { type: 'string', description: '可选 worktree 基线 sha;通常自动填充。' },
-          branch: { type: 'string', description: '可选当前 worktree/PR 分支名;通常自动填充。' }
+            enum: ['report', 'patch'],
+            description: '交付模式:report 只生成报告;patch 额外生成补丁。默认 report。'
+          }
         }
       }
     }
@@ -188,63 +204,119 @@ export async function executeGitTool(
       return stringifyResult(gitStatus(cwd))
     case 'git_diff':
       return stringifyResult(gitDiff(cwd, optionalString(args.file)))
+    case 'git_stage':
+    case 'git_stage_all':
+      return executeGitIndexTool(name, args, cwd, context.effectTarget)
     case 'git_commit':
       return stringifyResult(gitCommit(cwd, requiredString(args.message, 'message')))
     case 'git_push':
       return stringifyResult(gitPush(cwd, optionalString(args.branch)))
     case 'git_create_pr':
-      return stringifyResult(
-        gitCreatePr(
-          cwd,
-          requiredString(args.title, 'title'),
-          typeof args.body === 'string' ? args.body : '',
-          optionalString(args.base)
-        )
+      return executeCreatePullRequestTool(
+        args,
+        cwd,
+        context.effectTarget?.kind === 'pull_request_create' ? context.effectTarget : undefined
       )
     case 'git_merge':
-      return stringifyResult(gitMerge(
-        cwd,
-        requiredString(args.branch, 'branch'),
-        context.effectTarget?.kind === 'git_merge'
-          ? {
-              repoRoot: context.effectTarget.repoRoot,
-              gitCommonDir: context.effectTarget.gitCommonDir,
-              worktreeGitDir: context.effectTarget.worktreeGitDir,
-              repoRootIdentity: context.effectTarget.repoRootIdentity,
-              gitCommonDirIdentity: context.effectTarget.gitCommonDirIdentity,
-              worktreeGitDirIdentity: context.effectTarget.worktreeGitDirIdentity,
-              destinationRef: context.effectTarget.destinationRef,
-              preHead: context.effectTarget.preHead,
-              sourceRef: context.effectTarget.sourceRef,
-              sourceSha: context.effectTarget.sourceSha,
-              sourceWasAncestor: context.effectTarget.sourceWasAncestor,
-              mode: context.effectTarget.mode
-            }
-          : undefined
-      ))
+      return executeMergeTool(args, cwd, context.effectTarget)
     case 'code_forge_delivery':
-      return stringifyCodeForgeResult(runCodeForgeDelivery({
-        cwd,
-        mode: deliveryMode(args.mode),
-        verificationCommand: optionalString(args.verificationCommand),
-        verificationCommands: stringArray(args.verificationCommands),
-        verificationTimeoutMs: optionalNumber(args.verificationTimeoutMs),
-        commitMessage: optionalString(args.commitMessage),
-        stageAll: typeof args.stageAll === 'boolean' ? args.stageAll : undefined,
-        createPatch: typeof args.createPatch === 'boolean' ? args.createPatch : undefined,
-        prTitle: optionalString(args.prTitle),
-        prBody: optionalString(args.prBody),
-        baseBranch: optionalString(args.baseBranch),
-        repoRoot: optionalString(args.repoRoot),
-        worktreePath: optionalString(args.worktreePath),
-        baseSha: optionalString(args.baseSha),
-        branch: optionalString(args.branch),
-        worktreeContext: {
-          ...context.worktreeContext,
-          sessionId: context.worktreeContext?.sessionId ?? context.sessionId
-        }
-      }))
+      return executeCodeForgeDeliveryTool(args, cwd, context)
   }
+}
+
+function executeGitIndexTool(
+  name: 'git_stage' | 'git_stage_all',
+  args: Record<string, unknown>,
+  cwd: string,
+  effectTarget: EffectTarget | undefined
+): ToolExecResult {
+  const expectedOperation = name === 'git_stage' ? 'stage_paths' : 'stage_all'
+  if (effectTarget?.kind !== 'git_index_update') {
+    return stringifyResult({
+      ok: false,
+      error: `${name} 缺少冻结的 git_index_update EffectTarget，已阻止直接修改 Git index`
+    })
+  }
+  if (effectTarget.operation !== expectedOperation) {
+    return stringifyResult({
+      ok: false,
+      error: `${name} 与冻结的 Git index 操作 ${effectTarget.operation} 不一致，已阻止执行`
+    })
+  }
+  return stringifyResult(executeGitIndexEffectTarget(effectTarget, {
+    toolName: name,
+    cwd,
+    toolInput: args
+  }))
+}
+
+async function executeCreatePullRequestTool(
+  args: Record<string, unknown>,
+  cwd: string,
+  effectTarget: Extract<EffectTarget, { kind: 'pull_request_create' }> | undefined
+): Promise<ToolExecResult> {
+  const title = requiredString(args.title, 'title')
+  const body = typeof args.body === 'string' ? args.body : ''
+  const result = effectTarget
+    ? await executePullRequestEffectTarget({ target: effectTarget, title, body })
+    : gitCreatePr(cwd, title, body, optionalString(args.base))
+  return stringifyResult(result)
+}
+
+function executeMergeTool(
+  args: Record<string, unknown>,
+  cwd: string,
+  effectTarget: EffectTarget | undefined
+): ToolExecResult {
+  const frozen = effectTarget?.kind === 'git_merge'
+    ? {
+        repoRoot: effectTarget.repoRoot,
+        gitCommonDir: effectTarget.gitCommonDir,
+        worktreeGitDir: effectTarget.worktreeGitDir,
+        repoRootIdentity: effectTarget.repoRootIdentity,
+        gitCommonDirIdentity: effectTarget.gitCommonDirIdentity,
+        worktreeGitDirIdentity: effectTarget.worktreeGitDirIdentity,
+        destinationRef: effectTarget.destinationRef,
+        preHead: effectTarget.preHead,
+        sourceRef: effectTarget.sourceRef,
+        sourceSha: effectTarget.sourceSha,
+        sourceWasAncestor: effectTarget.sourceWasAncestor,
+        mode: effectTarget.mode
+      }
+    : undefined
+  return stringifyResult(gitMerge(cwd, requiredString(args.branch, 'branch'), frozen))
+}
+
+function executeCodeForgeDeliveryTool(
+  args: Record<string, unknown>,
+  cwd: string,
+  context: GitToolExecutionContext
+): ToolExecResult {
+  const mode = deliveryMode(args.mode)
+  if (mode === 'commit' || mode === 'pr') {
+    return {
+      ok: false,
+      output: mode === 'commit'
+        ? 'code_forge_delivery mode=commit 把 stage/commit 组合成单个不可对账副作用，已阻止；请依次显式暂存并调用 git_commit。'
+        : 'code_forge_delivery mode=pr 把 commit/push/PR 组合成单个不可对账副作用，已阻止；请依次显式调用 git_commit、git_push、git_create_pr。'
+    }
+  }
+  for (const field of ['repoRoot', 'worktreePath', 'baseSha', 'baseBranch', 'branch'] as const) {
+    if (args[field] !== undefined) {
+      return { ok: false, output: `code_forge_delivery 不接受模型覆盖 ${field}；目标只来自当前 session/worktree 上下文。` }
+    }
+  }
+  return stringifyCodeForgeResult(runCodeForgeDelivery({
+    cwd,
+    mode,
+    verificationCommand: args.verificationCommand as string | undefined,
+    verificationCommands: args.verificationCommands as string[] | undefined,
+    createPatch: typeof args.createPatch === 'boolean' ? args.createPatch : undefined,
+    worktreeContext: {
+      ...context.worktreeContext,
+      sessionId: context.worktreeContext?.sessionId ?? context.sessionId
+    }
+  }, context.effectTarget?.kind === 'code_forge_patch' ? context.effectTarget : undefined))
 }
 
 export function formatGitResult(
@@ -255,6 +327,7 @@ export function formatGitResult(
     | GitPushOperationResult
     | GitCreatePrOperationResult
     | GitMergeOperationResult
+    | GitOperationResult
     | CodeForgeDeliveryResult
 ): string {
   return JSON.stringify(result, null, 2)
@@ -272,6 +345,7 @@ function stringifyResult(
     | GitPushOperationResult
     | GitCreatePrOperationResult
     | GitMergeOperationResult
+    | GitOperationResult
 ): ToolExecResult {
   return { ok: result.ok, output: formatGitResult(result) }
 }
@@ -287,16 +361,6 @@ function optionalString(value: unknown): string | undefined {
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} 不能为空`)
   return value.trim()
-}
-
-function stringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-  return items.length > 0 ? items.map((item) => item.trim()) : undefined
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function deliveryMode(value: unknown): 'report' | 'patch' | 'commit' | 'pr' | undefined {

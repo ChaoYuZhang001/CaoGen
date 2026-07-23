@@ -42,7 +42,7 @@ export async function syncIdeBridgeFromSettings(): Promise<IdeBridgeStatus> {
     token: config.token,
     sessionPort: {
       listSessions: () => sessionManager.list(),
-      createSession: (options) => sessionManager.create(options),
+      createSession: (options) => sessionManager.createManaged(options),
       sendMessage: (sessionId, message) => {
         sessionManager.send(sessionId, message)
       },

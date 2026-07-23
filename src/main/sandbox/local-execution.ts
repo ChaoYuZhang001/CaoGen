@@ -3,7 +3,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { constants } from 'node:fs'
 import { link, lstat, mkdir, open, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
-import type { SandboxMode } from '../../shared/types'
+import type { CommandTermination, SandboxMode } from '../../shared/types'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
 
 export interface LocalCommandOptions {
@@ -22,9 +22,14 @@ export interface LocalCommandResult {
   ok: boolean
   output: string
   exitCode: number
+  commandTermination?: CommandTermination
   modeUsed: SandboxMode
   sandboxed: boolean
   fallbackReason?: string
+}
+
+export interface LocalCommandExecutionResult extends LocalCommandResult {
+  commandTermination: CommandTermination
 }
 
 export interface LocalFileWriteOptions {
@@ -71,10 +76,11 @@ interface ExecFileResult {
   stdout: string
   stderr: string
   exitCode: number
+  commandTermination: CommandTermination
   errorMessage?: string
 }
 
-export async function runLocalCommand(options: LocalCommandOptions): Promise<LocalCommandResult> {
+export async function runLocalCommand(options: LocalCommandOptions): Promise<LocalCommandExecutionResult> {
   if (options.mode === 'disabled') return localExecutionDisabledResult()
   if (options.signal?.aborted) return abortedResult(options.mode)
   const command = options.command.trim()
@@ -83,6 +89,7 @@ export async function runLocalCommand(options: LocalCommandOptions): Promise<Loc
       ok: false,
       output: '命令不能为空',
       exitCode: 1,
+      commandTermination: 'not_started',
       modeUsed: options.mode,
       sandboxed: false
     }
@@ -447,7 +454,7 @@ function isAbsentFilePrecondition(
 
 async function runHostCommand(
   options: LocalCommandOptions & { command: string }
-): Promise<LocalCommandResult> {
+): Promise<LocalCommandExecutionResult> {
   const shell = process.platform === 'win32' ? 'cmd' : '/bin/sh'
   const args = process.platform === 'win32' ? ['/c', options.command] : ['-c', options.command]
   const result = await execFilePromise(shell, args, {
@@ -460,7 +467,11 @@ async function runHostCommand(
   return formatResult(result, options.mode, false)
 }
 
-function formatResult(result: ExecFileResult, modeUsed: SandboxMode, sandboxed: boolean): LocalCommandResult {
+function formatResult(
+  result: ExecFileResult,
+  modeUsed: SandboxMode,
+  sandboxed: boolean
+): LocalCommandExecutionResult {
   const output = [
     result.stdout,
     result.stderr ? `[stderr]\n${result.stderr}` : '',
@@ -473,6 +484,7 @@ function formatResult(result: ExecFileResult, modeUsed: SandboxMode, sandboxed: 
     ok: result.ok,
     output: output || '(无输出)',
     exitCode: result.exitCode,
+    commandTermination: result.commandTermination,
     modeUsed,
     sandboxed
   }
@@ -509,23 +521,29 @@ function execFilePromise(
 ): Promise<ExecFileResult> {
   return new Promise((resolvePromise) => {
     if (options.signal?.aborted) {
-      resolvePromise({ ok: false, stdout: '', stderr: '', exitCode: 1, errorMessage: '操作已中断' })
+      resolvePromise({
+        ok: false,
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+        commandTermination: 'aborted',
+        errorMessage: '操作已中断'
+      })
       return
     }
-    let aborted = options.signal?.aborted === true
-    let timedOut = false
-    let overflowed = false
+    let forcedTermination: 'timed_out' | 'aborted' | 'output_limit' | undefined
     let settled = false
     let outputBytes = 0
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     let child: ChildProcess | undefined
     let forceKillTimer: NodeJS.Timeout | undefined
+    let timeout: NodeJS.Timeout | undefined
     let terminationRequested = false
     const finish = (result: ExecFileResult): void => {
       if (settled) return
       settled = true
-      clearTimeout(timeout)
+      if (timeout) clearTimeout(timeout)
       if (forceKillTimer) clearTimeout(forceKillTimer)
       options.signal?.removeEventListener('abort', abort)
       resolvePromise(result)
@@ -535,9 +553,13 @@ function execFilePromise(
       terminationRequested = true
       forceKillTimer = terminateProcessTree(child)
     }
-    const abort = (): void => {
-      aborted = true
+    const requestTermination = (reason: NonNullable<typeof forcedTermination>): void => {
+      if (forcedTermination) return
+      forcedTermination = reason
       terminate()
+    }
+    const abort = (): void => {
+      requestTermination('aborted')
     }
     const collect = (chunks: Buffer[], value: Buffer | string): void => {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
@@ -547,17 +569,26 @@ function execFilePromise(
         chunks.push(kept)
         outputBytes += kept.byteLength
       }
-      if (chunk.byteLength > remaining && !overflowed) {
-        overflowed = true
-        terminate()
-      }
+      if (chunk.byteLength > remaining) requestTermination('output_limit')
     }
-    child = spawn(file, args, {
-      cwd: options.cwd,
-      env: options.env,
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
+    try {
+      child = spawn(file, args, {
+        cwd: options.cwd,
+        env: options.env,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      finish({
+        ok: false,
+        stdout: '',
+        stderr: '',
+        exitCode: 1,
+        commandTermination: 'spawn_error',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      })
+      return
+    }
     child.stdout?.on('data', (chunk: Buffer) => collect(stdout, chunk))
     child.stderr?.on('data', (chunk: Buffer) => collect(stderr, chunk))
     child.once('error', (error) => {
@@ -566,30 +597,31 @@ function execFilePromise(
         stdout: Buffer.concat(stdout).toString(),
         stderr: Buffer.concat(stderr).toString(),
         exitCode: 1,
+        commandTermination: 'spawn_error',
         errorMessage: error.message
       })
     })
     child.once('close', (code) => {
-      const errorMessage = aborted
+      const errorMessage = forcedTermination === 'aborted'
         ? '操作已中断'
-        : timedOut
+        : forcedTermination === 'timed_out'
           ? `操作超时(${options.timeoutMs}ms)`
-          : overflowed
+          : forcedTermination === 'output_limit'
             ? `输出超过限制(${options.maxBufferBytes} bytes)`
             : code === 0
               ? undefined
               : `进程退出码 ${code ?? 1}`
       finish({
-        ok: code === 0 && !aborted && !timedOut && !overflowed,
+        ok: code === 0 && forcedTermination === undefined,
         stdout: Buffer.concat(stdout).toString(),
         stderr: Buffer.concat(stderr).toString(),
         exitCode: typeof code === 'number' ? code : 1,
+        commandTermination: forcedTermination ?? 'exited',
         errorMessage
       })
     })
-    const timeout = setTimeout(() => {
-      timedOut = true
-      terminate()
+    timeout = setTimeout(() => {
+      requestTermination('timed_out')
     }, options.timeoutMs)
     timeout.unref()
     options.signal?.addEventListener('abort', abort, { once: true })
@@ -597,23 +629,25 @@ function execFilePromise(
   })
 }
 
-function abortedResult(modeUsed: SandboxMode): LocalCommandResult {
+function abortedResult(modeUsed: SandboxMode): LocalCommandExecutionResult {
   return {
     ok: false,
     output: '操作已中断',
     exitCode: 1,
+    commandTermination: 'aborted',
     modeUsed,
     sandboxed: false
   }
 }
 
-function localExecutionDisabledResult(): LocalCommandResult {
+function localExecutionDisabledResult(): LocalCommandExecutionResult {
   const message =
     '本地执行已禁用:旧严格 Docker 设置已下线,且不会自动降级为宿主机执行。请在设置 > 权限中确认启用宿主机本地执行。'
   return {
     ok: false,
     output: message,
     exitCode: 1,
+    commandTermination: 'not_started',
     modeUsed: 'disabled',
     sandboxed: false,
     fallbackReason: message

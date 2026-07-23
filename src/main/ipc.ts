@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { homedir } from 'node:os'
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
+import { applySessionModelSwitch } from './ipc/session-model-switch-handler'
 import { getSettings, updateSettings } from './settings'
 import { syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
@@ -23,15 +24,9 @@ import {
   readProjectContext,
   writeProjectContext
 } from './agent/context-loader'
+import { registerProjectMemoryIpc } from './ipc/memory-handlers'
+import { readProjectMemory } from './memoryStore'
 import {
-  readProjectMemory,
-  proposeMemoryDraft,
-  acceptMemoryDraft,
-  deleteMemoryEntry,
-  type ProjectMemoryDraftInput
-} from './memoryStore'
-import {
-  addMemory,
   archiveStaleMemories,
   deleteMemory as deleteLayeredMemoryEntry,
   exportMemories,
@@ -39,38 +34,44 @@ import {
   searchMemories,
   updateMemory as updateLayeredMemoryEntry,
   type MemorySearchInput,
-  type MemoryUpdateInput,
-  type MemoryWriteInput
+  type MemoryUpdateInput
 } from './memory/memory-manager'
 import { writeExtractedMemory } from './memory/memory-writer'
 import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
-import { listProjectFiles, readTextFile, writeTextFile } from './fileOps'
+import { listProjectFiles, readTextFile } from './fileOps'
 import { preparePreview } from './previewOps'
 import { prepareOfficeVisualPreview } from './previewVisual'
 import { listPreviewAnnotations, savePreviewAnnotation } from './previewAnnotations'
-import {
-  commit as gitCommit,
-  gitStatus,
-  stageAll,
-  stageFiles,
-  unstageFiles
-} from './gitOps'
-import { applyHunk, getWorkspaceDiff } from './gitDiff'
+import { gitStatus } from './gitOps'
+import { getWorkspaceDiff } from './gitDiff'
 import { getStartSuggestions, type StartSuggestionSignal } from './startSuggestions'
-import { stableValueDigest } from './task/tool-idempotency'
 import {
-  applyManagedWorktreePatch,
-  checkManagedWorktreeApply,
-  createManagedWorktreeMergePatch,
-  createManagedWorktreePullRequest,
-  exportManagedWorktreePatch,
-  getManagedWorktreeSummary,
-  getWorktreeConflictFiles,
-  inspectManagedWorktreeMerge,
-  listWorktreeMergeReceipts,
-  removeManagedWorktreeView
+  checkManagedWorktreeApply, createManagedWorktreeMergePatch,
+  exportManagedWorktreePatch, getManagedWorktreeSummary,
+  getWorktreeConflictFiles, inspectManagedWorktreeMerge,
+  listWorktreeMergeReceipts
 } from './worktrees'
+import { fallbackEffectIntentDescription, fallbackEffectTargetDescription } from './ipc/effect-descriptions'
+import { resolveTaskSnapshotEffect } from './ipc/effect-resolution'
+import { registerTaskRecoveryIpc } from './ipc/task-recovery-handlers'
+import { registerWorkflowLedgerIpc } from './ipc/workflow-ledger-handlers'
+import { registerProjectWorkspaceIpc } from './ipc/project-workspace-handlers'
+import { registerDigitalWorkerIpc } from './ipc/digital-worker-handlers'
+import { registerSupervisorIpc } from './ipc/supervisor-handlers'
+import { registerLearningIpc } from './ipc/learning-handlers'
+import {
+  executeInteractiveOperationEffectApplyPatch,
+  executeInteractiveOperationEffectCreatePr,
+  executeInteractiveOperationEffectRemoveWorktree
+} from './ipc/worktree-operation-handlers'
+import {
+  executeInteractiveOperationEffectDiscardHunk,
+  executeInteractiveOperationEffectGitCommit,
+  executeInteractiveOperationEffectGitIndex,
+  executeInteractiveOperationEffectWriteFile
+} from './ipc/renderer-mutation-handlers'
+import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
@@ -298,7 +299,7 @@ function effectTargetDescription(effect: EffectRecord): string {
   if (effect.target.kind === 'git_push') {
     return `${effect.target.remote}/${effect.target.branch} -> ${effect.target.intendedSha.slice(0, 12)}`
   }
-  return `${effect.target.toolName}（无自动查询器）`
+  return fallbackEffectTargetDescription(effect)
 }
 
 function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRecord): string {
@@ -312,34 +313,11 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
     return `${effect.target.mode} · parents ${effect.target.preHead.slice(0, 12)} + ${effect.target.sourceSha.slice(0, 12)}`
   }
   if (effect.target.kind === 'git_push') return `push ${effect.target.intendedSha.slice(0, 12)}`
-  for (const entry of [...snapshot.transcript].reverse()) {
-    if (entry.event.kind !== 'assistant-message') continue
-    const block = entry.event.blocks.find(
-      (item) => item.type === 'tool_use' && item.id === effect.toolUseId
-    )
-    if (!block || block.type !== 'tool_use') continue
-    const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
-      ? block.input as Record<string, unknown>
-      : {}
-    if (stableValueDigest(input) !== effect.inputDigest) break
-    if (typeof input.command === 'string') return `command: ${redactEffectText(input.command)}`
-    const path = input.path ?? input.file_path
-    if (typeof path === 'string') return `path: ${redactEffectText(path)}`
-    return `input keys: ${Object.keys(input).sort().join(', ') || '(none)'} · sha256 ${effect.inputDigest.slice(0, 16)}`
-  }
-  return `input sha256 ${effect.inputDigest.slice(0, 16)}（原始输入不可用）`
-}
-
-function redactEffectText(value: string): string {
-  const redacted = value
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
-    .replace(/\b(api[-_]?key|token|password|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
-    .replace(/\b(https?:\/\/)([^\s/@]+):([^\s/@]+)@/gi, '$1[REDACTED]@')
-  return redacted.length > 600 ? `${redacted.slice(0, 600)}...[truncated]` : redacted
+  return fallbackEffectIntentDescription(snapshot, effect)
 }
 
 export function registerIpc(): void {
-  registerQuickbarIpc()
+  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -348,15 +326,6 @@ export function registerIpc(): void {
   )
 
   ipcMain.handle('sessions:transcript', (_e, id: string) => sessionManager.getTranscript(id))
-
-  ipcMain.handle('taskSnapshots:list', () => sessionManager.listTaskSnapshots())
-
-  ipcMain.handle('taskSnapshots:recover', (_e, snapshotId: string) => {
-    if (typeof snapshotId !== 'string' || snapshotId.trim().length === 0) {
-      throw new Error('必须指定任务快照 ID')
-    }
-    return sessionManager.recoverTaskSnapshot(snapshotId)
-  })
 
   ipcMain.handle(
     'taskSnapshots:resolveEffect',
@@ -367,57 +336,15 @@ export function registerIpc(): void {
       expectedRevision: number,
       resolution: 'confirmed_applied' | 'confirmed_not_applied'
     ) => {
-      if (typeof snapshotId !== 'string' || !snapshotId.trim()) throw new Error('必须指定任务快照 ID')
-      if (typeof effectId !== 'string' || !effectId.trim()) throw new Error('必须指定 EffectRecord ID')
-      if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
-        throw new Error('必须指定有效的 EffectRecord revision')
-      }
-      if (resolution !== 'confirmed_applied' && resolution !== 'confirmed_not_applied') {
-        throw new Error('无效的效果处置类型')
-      }
-      const snapshot = (await sessionManager.listTaskSnapshots()).find((item) => item.id === snapshotId)
-      const effect = snapshot?.run?.effects?.find((item) => item.id === effectId)
-      if (!snapshot || !effect) throw new Error('EffectRecord 已不存在，请刷新恢复列表')
-      if (effect.status !== 'waiting_reconciliation') {
-        throw new Error(`EffectRecord 不在等待对账状态:${effect.status}`)
-      }
-      if (effect.revision !== expectedRevision) {
-        throw new Error(`stale_revision: EffectRecord 已从 ${expectedRevision} 更新到 ${effect.revision}`)
-      }
-      const confirmsApplied = resolution === 'confirmed_applied'
-      const parent = BrowserWindow.fromWebContents(event.sender)
-      const options = {
-        type: 'warning' as const,
-        title: '确认外部效果状态',
-        message: confirmsApplied ? '确认该外部操作已经执行？' : '确认该外部操作没有执行？',
-        detail: [
-          `工具: ${effect.toolName}`,
-          `目标: ${effectTargetDescription(effect)}`,
-          `意图: ${effectIntentDescription(snapshot, effect)}`,
-          effect.error ? `当前证据: ${effect.error}` : '',
-          confirmsApplied
-            ? '确认后会把效果记为已执行，不会再次执行。'
-            : '确认后会生成重试授权，后续可能再次产生该外部副作用。'
-        ].filter(Boolean).join('\n'),
-        buttons: ['取消', confirmsApplied ? '确认已执行' : '确认未执行并允许重试'],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        checkboxLabel: '我已核对上方工具、目标和当前证据',
-        checkboxChecked: false
-      }
-      const confirmation = parent
-        ? await dialog.showMessageBox(parent, options)
-        : await dialog.showMessageBox(options)
-      if (confirmation.response !== 1 || confirmation.checkboxChecked !== true) return snapshot
-      return sessionManager.resolveTaskEffect(snapshotId, effectId, expectedRevision, resolution)
+      return resolveTaskSnapshotEffect(event.sender, snapshotId, effectId, expectedRevision, resolution, {
+        listTaskSnapshots: () => sessionManager.listTaskSnapshots(),
+        resolveTaskEffect: (...args) => sessionManager.resolveTaskEffect(...args),
+        updateWorktreeState: (sessionId, state) => sessionManager.updateWorktreeState(sessionId, state),
+        describeTarget: effectTargetDescription,
+        describeIntent: effectIntentDescription
+      })
     }
   )
-
-  ipcMain.handle('taskSnapshots:delete', (_e, snapshotId: string) => {
-    if (typeof snapshotId !== 'string' || snapshotId.trim().length === 0) return false
-    return sessionManager.deleteTaskSnapshot(snapshotId)
-  })
 
   ipcMain.handle('sessions:suggestFiles', (_e, id: string, query: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -475,29 +402,21 @@ export function registerIpc(): void {
     return gitStatus(cwd)
   })
 
-  ipcMain.handle('git:stage', (_e, id: string, paths: string[]) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return stageFiles(cwd, paths)
-  })
+  ipcMain.handle('git:stage', (_e, id: string, paths: string[]) =>
+    executeInteractiveOperationEffectGitIndex(id, 'git:stage', { paths }, executeInteractiveOperationEffect)
+  )
 
-  ipcMain.handle('git:stageAll', (_e, id: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return stageAll(cwd)
-  })
+  ipcMain.handle('git:stageAll', (_e, id: string) =>
+    executeInteractiveOperationEffectGitIndex(id, 'git:stageAll', {}, executeInteractiveOperationEffect)
+  )
 
-  ipcMain.handle('git:unstage', (_e, id: string, paths: string[]) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return unstageFiles(cwd, paths)
-  })
+  ipcMain.handle('git:unstage', (_e, id: string, paths: string[]) =>
+    executeInteractiveOperationEffectGitIndex(id, 'git:unstage', { paths }, executeInteractiveOperationEffect)
+  )
 
-  ipcMain.handle('git:commit', (_e, id: string, message: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return gitCommit(cwd, message)
-  })
+  ipcMain.handle('git:commit', (_e, id: string, message: string) =>
+    executeInteractiveOperationEffectGitCommit(id, message, executeInteractiveOperationEffect)
+  )
 
   ipcMain.handle('workspace:diff', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -507,17 +426,23 @@ export function registerIpc(): void {
     return getWorkspaceDiff(cwd)
   })
 
-  ipcMain.handle('workspace:applyHunk', (_e, id: string, filePath: string, hunkPatch: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return applyHunk(cwd, typeof filePath === 'string' ? filePath : '', hunkPatch, { reverse: false })
-  })
+  ipcMain.handle('workspace:applyHunk', (_e, id: string, filePath: string, hunkPatch: string) =>
+    executeInteractiveOperationEffectGitIndex(
+      id,
+      'workspace:applyHunk',
+      { filePath, hunkPatch },
+      executeInteractiveOperationEffect
+    )
+  )
 
-  ipcMain.handle('workspace:discardHunk', (_e, id: string, filePath: string, hunkPatch: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return applyHunk(cwd, typeof filePath === 'string' ? filePath : '', hunkPatch, { reverse: true })
-  })
+  ipcMain.handle('workspace:discardHunk', (_e, id: string, filePath: string, hunkPatch: string) =>
+    executeInteractiveOperationEffectDiscardHunk(
+      id,
+      filePath,
+      hunkPatch,
+      executeInteractiveOperationEffect
+    )
+  )
 
   ipcMain.handle('worktrees:summary', (_e, id: string) => getManagedWorktreeSummary(id))
 
@@ -535,36 +460,18 @@ export function registerIpc(): void {
   // 合并回执列表(最新在前),验收"上次到底合了什么"。
   ipcMain.handle('worktrees:mergeReceipts', () => listWorktreeMergeReceipts())
 
-  ipcMain.handle('worktrees:applyPatch', (_e, id: string) => {
-    const session = sessionManager.get(id)
-    // 仅 running(agent 正在改文件)时拦截,避免边改边合并的竞态;
-    // starting(SDK 尚未真正开跑,可能因未配 provider 长期停留)不阻止合并。
-    if (session?.meta.status === 'running') {
-      return { ok: false, error: '会话正在运行，停止后才能合并 worktree 改动' }
-    }
-    return applyManagedWorktreePatch(id)
-  })
+  ipcMain.handle('worktrees:applyPatch', (_e, id: string) =>
+    executeInteractiveOperationEffectApplyPatch(id, executeInteractiveOperationEffect)
+  )
 
-  ipcMain.handle('worktrees:createPr', (_e, id: string) => {
-    const session = sessionManager.get(id)
-    // 与 applyPatch 一致:running 时拦截,避免边改边推送/建 PR 的竞态。
-    if (session?.meta.status === 'running') {
-      return { ok: false, error: '会话正在运行，停止后才能创建 PR' }
-    }
-    return createManagedWorktreePullRequest(id)
-  })
+  ipcMain.handle('worktrees:createPr', (_e, id: string) =>
+    executeInteractiveOperationEffectCreatePr(id, executeInteractiveOperationEffect)
+  )
 
   ipcMain.handle(
     'worktrees:remove',
-    (_e, id: string, opts?: { deleteBranch?: boolean; force?: boolean }) => {
-      const session = sessionManager.get(id)
-      if (session?.meta.status === 'running') {
-        return { ok: false, error: '会话正在运行，停止后才能丢弃 worktree' }
-      }
-      const result = removeManagedWorktreeView(id, opts ?? {})
-      if (result.ok) sessionManager.updateWorktreeState(id, result.record?.state ?? 'removed')
-      return result
-    }
+    (_e, id: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
+      executeInteractiveOperationEffectRemoveWorktree(id, opts ?? {}, executeInteractiveOperationEffect)
   )
 
   ipcMain.handle('files:list', (_e, id: string) => {
@@ -579,11 +486,9 @@ export function registerIpc(): void {
     return readTextFile(cwd, typeof relPath === 'string' ? relPath : '')
   })
 
-  ipcMain.handle('files:write', (_e, id: string, relPath: string, content: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return writeTextFile(cwd, typeof relPath === 'string' ? relPath : '', typeof content === 'string' ? content : '')
-  })
+  ipcMain.handle('files:write', (_e, id: string, relPath: string, content: string) =>
+    executeInteractiveOperationEffectWriteFile(id, relPath, content, executeInteractiveOperationEffect)
+  )
 
   ipcMain.handle('preview:prepare', (_e, id: string, relPath: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -703,7 +608,7 @@ export function registerIpc(): void {
     terminalManager.close(id)
   })
 
-  ipcMain.handle('sessions:create', (_e, opts: CreateSessionOptions) => {
+  ipcMain.handle('sessions:create', async (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string') {
       throw new Error('创建会话参数无效')
     }
@@ -711,7 +616,7 @@ export function registerIpc(): void {
     if (opts.cwd.trim().length === 0) {
       return sessionManager.create({ ...opts, cwd: app.getPath('home'), isolated: false })
     }
-    return sessionManager.create(opts)
+    return await sessionManager.createManaged(opts)
   })
 
   ipcMain.handle('sessions:dispatchSubagents', (_e, parentSessionId: string, input: DispatchSubagentsInput) => {
@@ -794,7 +699,7 @@ export function registerIpc(): void {
         source: 'session:auto-extract',
         defaultLayer: projectRoot ? 'project' : 'user'
       }).catch((error) => {
-        console.error('[caogen] layered memory auto-extract failed:', error)
+        console.error('[caogen] memory draft auto-extract failed:', error)
       })
     }
     sessionManager.send(id, payload)
@@ -817,9 +722,8 @@ export function registerIpc(): void {
     await sessionManager.get(id)?.setPermissionMode(mode)
   })
 
-  ipcMain.handle('sessions:setModel', async (_e, id: string, model: string) => {
-    await sessionManager.get(id)?.setModel(typeof model === 'string' ? model : '')
-  })
+  ipcMain.handle('sessions:setModel', (_e, id: string, model: string) =>
+    applySessionModelSwitch(sessionManager.get(id), model))
 
   ipcMain.handle('sessions:rename', (_e, id: string, title: string) => {
     if (typeof title === 'string') sessionManager.get(id)?.rename(title)
@@ -1011,7 +915,10 @@ export function registerIpc(): void {
     const resolvedProjectRoot = resolve(projectRoot)
     const belongsToCurrentProject = (cwd: unknown): cwd is string =>
       typeof cwd === 'string' && cwd.trim().length > 0 && resolve(cwd) === resolvedProjectRoot
-    const memory = await readProjectMemory(projectRoot, memoryRoot()).catch(() => ({ entries: [] }))
+    const memory = await readProjectMemory({
+      projectRoot,
+      projectId: session.meta.workspaceId
+    }, memoryRoot()).catch(() => ({ entries: [] }))
     const worktree = getManagedWorktreeSummary(id)
     const historySignals: StartSuggestionSignal[] = listHistory()
       .filter((entry) => belongsToCurrentProject(entry.sourceCwd ?? entry.cwd))
@@ -1132,44 +1039,25 @@ export function registerIpc(): void {
     return generateProjectContextTemplate(projectPath)
   })
 
-  // 项目记忆:草稿→确认制,按项目隔离。projectRoot 取会话源目录(worktree 前的原仓库)
   const memoryRoot = (): string => join(app.getPath('userData'), 'memory')
   const projectRootFor = (sessionId: string): string | null => {
     const meta = sessionManager.get(sessionId)?.meta
     return meta ? (meta.sourceCwd ?? meta.cwd) : null
   }
-  ipcMain.handle('memory:read', (_e, sessionId: string) => {
-    const root = projectRootFor(sessionId)
-    if (!root) return { projectHash: '', markdown: '', entries: [], drafts: [] }
-    return readProjectMemory(root, memoryRoot())
+  registerProjectMemoryIpc({
+    memoryRoot,
+    targetForSession: (sessionId) => {
+      const meta = sessionManager.get(sessionId)?.meta
+      return meta ? { projectRoot: meta.sourceCwd ?? meta.cwd, projectId: meta.workspaceId } : null
+    }
   })
-  ipcMain.handle('memory:propose', (_e, sessionId: string, input: ProjectMemoryDraftInput) => {
-    const root = projectRootFor(sessionId)
-    if (!root) throw new Error('会话不存在')
-    return proposeMemoryDraft(root, memoryRoot(), input)
-  })
-  ipcMain.handle('memory:accept', (_e, sessionId: string, draftId: string) => {
-    const root = projectRootFor(sessionId)
-    if (!root) throw new Error('会话不存在')
-    return acceptMemoryDraft(root, memoryRoot(), draftId)
-  })
-  ipcMain.handle('memory:delete', (_e, sessionId: string, entryId: string) => {
-    const root = projectRootFor(sessionId)
-    if (!root) throw new Error('会话不存在')
-    return deleteMemoryEntry(root, memoryRoot(), entryId)
-  })
+
+  registerLearningIpc({ projectRootFor })
 
   ipcMain.handle('memory:layeredList', () => listMemories(memoryRoot()))
   ipcMain.handle('memory:layeredSearch', (_e, sessionId: string | undefined, input: MemorySearchInput) => {
     const projectRoot = sessionId ? projectRootFor(sessionId) : null
     return searchMemories(memoryRoot(), {
-      ...(input ?? {}),
-      projectRoot: projectRoot ?? input?.projectRoot
-    })
-  })
-  ipcMain.handle('memory:layeredAdd', (_e, sessionId: string | undefined, input: MemoryWriteInput) => {
-    const projectRoot = sessionId ? projectRootFor(sessionId) : null
-    return addMemory(memoryRoot(), {
       ...(input ?? {}),
       projectRoot: projectRoot ?? input?.projectRoot
     })
