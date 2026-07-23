@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 test-results/
+/caogen-website/
 .vscode-test/
 plugins/vscode/out/
 plugins/jetbrains/build/

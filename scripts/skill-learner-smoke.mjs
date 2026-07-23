@@ -92,16 +92,22 @@ function compile(files, outDir) {
 }
 
 function findCompiled(root, fileName) {
+  const found = findCompiledOptional(root, fileName)
+  if (found) return found
+  throw new Error(`compiled file not found: ${fileName}`)
+}
+
+function findCompiledOptional(root, fileName) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const fullPath = path.join(root, entry.name)
     if (entry.isDirectory()) {
-      const found = findCompiled(fullPath, fileName)
+      const found = findCompiledOptional(fullPath, fileName)
       if (found) return found
     } else if (entry.isFile() && entry.name === fileName) {
       return fullPath
     }
   }
-  throw new Error(`compiled file not found: ${fileName}`)
+  return null
 }
 
 function assert(condition, message) {

@@ -76,6 +76,8 @@ async function runX1Scenario() {
         await clickByText(cdp, '+ 新建会话')
         await waitForText(cdp, '今天想做点什么?')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
+        await clickByText(cdp, '工作台')
+        await clickByText(cdp, '会话与工具')
         const selected = await selectedNewSessionValues(cdp)
         assert(selected.modalCount === 0, `new session must not open a modal: ${JSON.stringify(selected)}`)
         assert(selected.engineSelectCount === 0, `conversation engine selector must be absent: ${JSON.stringify(selected)}`)

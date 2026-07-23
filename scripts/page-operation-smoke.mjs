@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { assertRelayProviderPersistence } from './lib/page-provider-credential-fixture.mjs'
 
 const repoRoot = process.cwd()
 const outDir = path.join(repoRoot, 'test-results', 'caogen-deep')
@@ -297,28 +298,21 @@ try {
     await setInputByPlaceholder(cdp, '例如:主账号 / 备用额度 / 中转站 A', '主账号')
     await setInputByPlaceholder(cdp, '备用额度=sk-...\n中转站 A=sk-...', '备用额度=sk-page-smoke-backup')
     await setInputByPlaceholder(cdp, 'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro', 'caogen-relay-fast\ncaogen-relay-strong')
+    await setInputByPlaceholder(cdp, 'api-key\nOcp-Apim-Subscription-Key', 'api-key\nOcp-Apim-Subscription-Key')
     await screenshot(cdp, '02-provider-editor-filled')
     await clickProviderEditorSave(cdp)
     await waitForText(cdp, 'CaoGen Relay UI Smoke', 10_000)
     await waitForText(cdp, 'https://gpt.zhangrui.xyz/dashboard', 10_000)
     await waitForText(cdp, '2 个模型', 10_000)
     await waitForText(cdp, '2 个可用密钥', 10_000)
+    const providerListText = await evalValue(cdp, 'document.body.innerText')
 
-    const settingsAfter = JSON.parse(readFileSync(path.join(userDataDir, 'settings.json'), 'utf8'))
-    assert(settingsAfter.defaultProviderId === settingsBefore.defaultProviderId, 'relay template save should not set a default provider')
-    assert(settingsAfter.defaultModel === settingsBefore.defaultModel, 'relay template save should not set a default model')
-
-    const providers = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
-    const relay = providers.find((provider) => provider.name === 'CaoGen Relay UI Smoke')
-    assert(relay, 'saved relay provider not found')
-    assert(relay.id !== 'caogen-relay', 'preset key must not be persisted as a hidden provider id')
-    assert(relay.baseUrl === 'https://gpt.zhangrui.xyz/dashboard', `unexpected relay baseUrl: ${relay.baseUrl}`)
-    assert(relay.openaiProtocol === 'chat', `unexpected relay protocol: ${relay.openaiProtocol}`)
-    assert(JSON.stringify(relay.models) === JSON.stringify(['caogen-relay-fast', 'caogen-relay-strong']), `unexpected relay models: ${JSON.stringify(relay.models)}`)
-    assert(Array.isArray(relay.apiKeys) && relay.apiKeys.length === 2, `relay should save primary + backup keys: ${JSON.stringify(relay.apiKeys)}`)
-    assert(relay.apiKeys.every((key) => /^enc:|^b64:/.test(key.encryptedToken)), 'relay keys must be encrypted/encoded, not plaintext')
-    assert(!JSON.stringify(relay).includes('sk-page-smoke'), 'relay provider must not persist plaintext API keys')
-    assert(relay.activeKeyId === relay.apiKeys[0].id, 'primary relay key should be active after creation')
+    assertRelayProviderPersistence({
+      settingsBefore,
+      settingsAfter: JSON.parse(readFileSync(path.join(userDataDir, 'settings.json'), 'utf8')),
+      providers: JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8')),
+      providerListText, userDataDir, legacyProviderId: PAGE_SMOKE_PROVIDER_ID, assert
+    })
     await clickByText(cdp, '取消')
   })
   await screenshot(cdp, '02-provider-relay')
@@ -404,9 +398,9 @@ try {
   })
 
   await check(cdp, 'inline new session workspace creates a Provider-scoped project session', async () => {
-    await clickByText(cdp, '+ 新建会话')
-    await waitForText(cdp, '今天想做点什么?')
+    await clickByText(cdp, '+ 新建会话'); await waitForText(cdp, '今天想做点什么?')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
+    await clickByText(cdp, '工作台'); await clickByText(cdp, '会话与工具')
     await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_PROVIDER_NAME)
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_MODEL)
@@ -449,7 +443,7 @@ try {
   await screenshot(cdp, '03-project-rules')
 
   await check(cdp, 'chat layout controls resize and density toggle are interactive', async () => {
-    await waitForAriaLabel(cdp, '聊天布局控制', 10_000)
+    await clickByText(cdp, '会话与工具'); await waitForAriaLabel(cdp, '聊天布局控制', 10_000)
     await clickByAriaLabel(cdp, '放大聊天内容')
     await waitForText(cdp, '105%', 5_000)
     await clickByAriaLabel(cdp, '切换紧凑聊天密度')
@@ -472,14 +466,8 @@ try {
     await dragByAriaLabel(cdp, '拖拽调整侧栏宽度', 60, 0)
     const resized = await sidebarState(cdp)
     assert(resized.width > before.width + 24, `sidebar width did not grow: ${JSON.stringify({ before, resized })}`)
-    await clickByAriaLabel(cdp, '收回侧栏')
-    const collapsed = await sidebarState(cdp)
-    assert(collapsed.collapsed === true, `sidebar did not collapse: ${JSON.stringify(collapsed)}`)
-    assert(collapsed.width <= 80, `collapsed sidebar width too large: ${JSON.stringify(collapsed)}`)
-    await clickByAriaLabel(cdp, '展开侧栏')
-    const expanded = await sidebarState(cdp)
-    assert(expanded.collapsed === false, `sidebar did not expand: ${JSON.stringify(expanded)}`)
-    assert(expanded.width >= 280, `expanded sidebar did not restore width: ${JSON.stringify(expanded)}`)
+    await clickByAriaLabel(cdp, '收回侧栏'); await waitForSidebarState(cdp, (state) => state.ok && state.collapsed && state.width <= 80, 'collapsed sidebar did not settle')
+    await clickByAriaLabel(cdp, '展开侧栏'); await waitForSidebarState(cdp, (state) => state.ok && !state.collapsed && state.width >= 280, 'expanded sidebar did not restore width')
   })
   await screenshot(cdp, '03-sidebar-layout')
 
@@ -799,7 +787,7 @@ try {
     await clickSelector(cdp, '.history-card .session-card-more')
     await clickByText(cdp, '删除')
     await waitForNoSelector(cdp, '.history-card', 10_000)
-    await focusWelcomeComposer(cdp)
+    await clickByText(cdp, '会话与工具'); await focusWelcomeComposer(cdp)
     await typeText(cdp, '删除后仍可输入')
     const inputValue = await evalValue(cdp, `document.querySelector('.welcome-composer-input')?.value || ''`)
     assert(inputValue === '删除后仍可输入', `new-session composer rejected input after delete: ${JSON.stringify(inputValue)}`)
@@ -983,6 +971,12 @@ async function sidebarState(cdp) {
     })()`
   )
 }
+
+async function waitForSidebarState(cdp, predicate, failureMessage, timeout = 5000) {
+  const start = Date.now(); let lastState = null; while (Date.now() - start < timeout) {
+    lastState = await sidebarState(cdp); if (predicate(lastState)) return lastState; await sleep(150)
+  }
+  throw new Error(`${failureMessage}: ${JSON.stringify(lastState)}`) }
 
 async function toolPanelState(cdp) {
   return evalValue(

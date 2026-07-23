@@ -216,6 +216,10 @@ function chinaToolCallParityCheck() {
     baselineCount,
     chinaCount,
     providerIds: validation.providers.map((provider) => provider.id),
+    providerApiFormats: Object.fromEntries(validation.providers.map((provider) => [provider.id, provider.apiFormat])),
+    providerThinkingModes: Object.fromEntries(
+      validation.providers.filter((provider) => provider.thinkingMode).map((provider) => [provider.id, provider.thinkingMode])
+    ),
     requiredEnvironment: ['CAOGEN_CHINA_TOOL_CALL_PARITY=1', 'CAOGEN_CHINA_PARITY_PROVIDERS'],
     command: 'npm.cmd run test:china-tool-call-parity:required',
     failures
@@ -260,13 +264,23 @@ function validateProviders(text) {
       const id = stringField(item, 'id')
       const group = stringField(item, 'group') === 'baseline' ? 'baseline' : 'china'
       const apiFormat = stringField(item, 'apiFormat') || 'openai-compatible'
+      if (!['openai-compatible', 'openai-responses', 'anthropic'].includes(apiFormat)) {
+        throw new Error(`provider[${index}] apiFormat must be openai-compatible, openai-responses, or anthropic`)
+      }
+      const thinkingMode = stringField(item, 'thinkingMode')
+      if (thinkingMode && apiFormat !== 'openai-compatible') {
+        throw new Error(`provider[${index}] thinkingMode is only supported for openai-compatible providers`)
+      }
+      if (thinkingMode && !['disabled', 'enabled'].includes(thinkingMode)) {
+        throw new Error(`provider[${index}] thinkingMode must be disabled or enabled`)
+      }
       const baseUrl = stringField(item, 'baseUrl')
       const model = stringField(item, 'model')
       const apiKey = stringField(item, 'apiKey')
       if (!id || !baseUrl || !model || !apiKey) throw new Error(`provider[${index}] missing id/baseUrl/model/apiKey`)
       const endpointFailure = publicEndpointFailure(baseUrl, `provider[${index}]`)
       if (endpointFailure) throw new Error(endpointFailure)
-      return { id, group, apiFormat, baseUrl: maskUrl(baseUrl), model }
+      return { id, group, apiFormat, baseUrl: maskUrl(baseUrl), model, thinkingMode }
     })
     return { ok: true, providers }
   } catch (error) {

@@ -121,7 +121,12 @@ try {
   assertEqual(directReport.risk.level, 'high')
   assert(directReport.humanConfirmationPoints.length >= 3, 'Genesis report should include human confirmation points')
   assertEqual(directReport.deliveryStrategy.tool, 'code_forge_delivery')
-  assertEqual(directReport.deliveryStrategy.recommendedMode, 'commit')
+  assertEqual(directReport.deliveryStrategy.requestedMode, 'commit')
+  assertEqual(directReport.deliveryStrategy.recommendedMode, 'patch')
+  assertEqual(directReport.deliveryStrategy.verificationTool, 'bash')
+  assert(directReport.deliveryStrategy.handoff.includes('显式 bash'), 'Genesis handoff must run validation via bash')
+  assert(directReport.deliveryStrategy.handoff.includes('git_commit'), 'commit handoff must use the explicit Git tool')
+  assert(!directReport.deliveryStrategy.handoff.includes('并传入 verificationCommands'), 'handoff must not embed shell validation in Code Forge')
   assertEqual(directReport.deliveryStrategy.executed, false)
   assertEqual(directReport.truthBoundary.externalAgentsControlled, false)
   assertEqual(directReport.truthBoundary.childSessionsCreated, 0)
@@ -153,6 +158,8 @@ try {
   assert(!toolResult.output.includes('"externalAgentsControlled": true'), 'tool output must not claim external agent control')
   assert(!toolResult.output.includes('"actualWorktreesCreated": true'), 'tool output must not claim worktrees were created')
   assert(toolReport.deliveryStrategy.verificationCommands.includes('npm run typecheck'), 'tool should infer package validation gates')
+  assertEqual(toolReport.deliveryStrategy.recommendedMode, 'report')
+  assertEqual(toolReport.deliveryStrategy.verificationTool, 'bash')
 
   console.log('genesis smoke ok')
 } finally {

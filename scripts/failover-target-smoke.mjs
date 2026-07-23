@@ -94,7 +94,9 @@ try {
       'OpenAI failover must update fixed meta.model when a target model is selected'
     )
     assert(
-      openaiEngine.includes("reason: [failure.label, target.preference].filter(Boolean).join(' · ')"),
+      openaiEngine.includes("const routeReason = [failure.label, target.preference].filter(Boolean).join(' · ')") &&
+        openaiEngine.includes('this.modelAttempts.setRouteReason(routeReason)') &&
+        openaiEngine.includes('reason: routeReason'),
       'OpenAI failover event must include the user-visible preference reason'
     )
   })
@@ -113,9 +115,17 @@ try {
 
   check('renderer shows a readable failover note', () => {
     const messageItem = readFileSync(path.join(repoRoot, 'src/renderer/src/components/MessageItem.tsx'), 'utf8')
+    const routingMessage = readFileSync(
+      path.join(repoRoot, 'src/renderer/src/components/experience/RoutingMessage.tsx'),
+      'utf8'
+    )
     const i18n = readFileSync(path.join(repoRoot, 'src/renderer/src/i18n.ts'), 'utf8')
     assert(messageItem.includes("case 'failover'"), 'MessageItem must render failover events')
-    assert(messageItem.includes("t('failoverText'"), 'failover note must use localized copy')
+    assert(
+      messageItem.includes('<FailoverMessage item={item} />') && routingMessage.includes("t('failoverText'"),
+      'failover note must use localized copy through the experience projection'
+    )
+    assert(routingMessage.includes("t('assistantFailoverStatus')"), 'Assistant projection must keep a simplified failover status')
     assert(i18n.includes('已切换 → {to},自动重试中'), 'Chinese failover copy must explain the retry target')
   })
 

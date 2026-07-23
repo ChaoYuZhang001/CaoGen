@@ -1,0 +1,78 @@
+name: Good first issue proposal / 入门任务提案
+description: Propose a small, independently verifiable contributor task / 提议一个可独立验证的小型贡献任务
+title: "[Good first issue]: "
+labels:
+  - good first issue
+  - help wanted
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to propose a beginner-friendly task. Good first issues must avoid the Effect/Workflow Ledger core, release credentials, and broad refactors.
+
+        此模板用于提议新手友好任务。入门任务必须避开 Effect/Workflow Ledger 核心、发布凭据和大范围重构。
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Contributor outcome / 贡献者要完成什么
+      description: One independently shippable result / 一个可独立交付的结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Repository evidence / 仓库证据
+      description: Include `wc -l`, `rg` findings, and the current code path that proves the task exists. / 附上 `wc -l`、`rg` 结果和证明任务真实存在的代码路径。
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Suggested files / 建议文件
+      placeholder: |
+        - src/...
+        - scripts/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / 验收标准
+      description: Include exact commands and observable behavior. / 包含精确命令和可观察行为。
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Explicitly out of scope / 明确不做
+      description: Name adjacent modules or behavior that the contributor must not change. / 写明不得修改的相邻模块或行为。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: size
+    attributes:
+      label: Expected size / 预计规模
+      options:
+        - Documentation only / 仅文档
+        - Small code change plus focused test / 小型代码改动和聚焦测试
+        - Small six-link change with maintainer guidance / 需要维护者指导的小型六环改动
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Scope checks / 范围确认
+      options:
+        - label: This task does not touch Effect Ledger or Workflow Ledger internals. / 此任务不触碰 Effect Ledger 或 Workflow Ledger 内部。
+          required: true
+        - label: This task does not require real API keys or paid generation. / 此任务不需要真实 API Key 或付费生成。
+          required: true
+        - label: A contributor can verify it independently. / 贡献者可以独立验证。
+          required: true

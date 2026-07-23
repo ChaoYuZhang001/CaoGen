@@ -53,7 +53,7 @@ try {
   )
   const preShutdownEvents = []
   firstManager.subscribe((payload) => preShutdownEvents.push(payload))
-  const parent = firstManager.create({
+  const parent = await firstManager.create({
     cwd: repoDir,
     isolated: false,
     engine: 'openai',
@@ -97,7 +97,7 @@ try {
     ]
   }
 
-  firstManager.dispatchTaskDag(parent.id, {
+  await firstManager.dispatchTaskDag(parent.id, {
     dag,
     cwd: repoDir,
     isolated: false,
@@ -186,27 +186,13 @@ try {
     available: () => true,
     create: (meta, emit, resumeSdkSessionId) => new DagRecoveryFakeEngine(meta, emit, resumeSdkSessionId)
   })
+  const sentBeforeRecovery = sentInputs.length
+  const frozenPrepB = parentSnapshot.dagExecutions[0].tasks.find((task) => task.task.id === 'prep-b')
   await freshManager.recoverTaskSnapshot(parent.id)
 
-  await waitFor(() => sentInputs.some((item) => item.taskId === 'verify'), 5000, 'verify task dispatch')
-  const verifyInput = sentInputs.find((item) => item.taskId === 'verify')
-  assert(verifyInput.text.includes('prep-a initial result'), 'verify prompt should include prep-a result')
-  assert(verifyInput.text.includes('prep-b recovered result'), 'verify prompt should include prep-b result')
-
-  await waitFor(() => {
-    const final = latestDagUpdate(recoveredEvents, parent.id)
-    return final?.status === 'success' && final.tasks.every((task) => task.status === 'success')
-  }, 5000, 'final recovered DAG success')
-  const final = latestDagUpdate(recoveredEvents, parent.id)
-  assert(final.tasks.find((task) => task.task.id === 'verify').resultText.includes('verify completed'))
-  const taskRunsAfterRecovery = await snapshotStore.listTaskRuns(undefined, userData)
-  const verifyRun = taskRunsAfterRecovery.find((run) => run.taskId === 'verify' && run.status === 'completed')
-  assert(verifyRun, 'recovered DAG verification child should persist a completed TaskRun')
-  assert.equal(verifyRun.toolExecutions.length, 1, 'verification TaskRun should persist its tool execution')
-  assert.equal(verifyRun.toolExecutions[0].status, 'succeeded')
-  assert.match(verifyRun.toolExecutions[0].idempotencyKey, /^tool-v1:/)
-  assert.equal(typeof verifyRun.toolExecutions[0].inputDigest, 'string')
-  assert.equal(typeof verifyRun.toolExecutions[0].outputDigest, 'string')
+  await assertRecoveryBlocked({
+    recoveredEvents, parentId: parent.id, frozenPrepB, sentBeforeRecovery, freshManager, snapshotStore
+  })
 
   await freshManager.disposeAll()
   await snapshotStore.flushTaskSnapshotMutations(userData)
@@ -216,6 +202,27 @@ try {
   restoreModuleLoad()
   fs.rmSync(tmpRoot, { recursive: true, force: true })
 }
+}
+
+async function assertRecoveryBlocked(input) {
+  const { recoveredEvents, parentId, frozenPrepB, sentBeforeRecovery, freshManager, snapshotStore } = input
+  await waitFor(() => latestDagUpdate(recoveredEvents, parentId)?.status === 'failed', 5000,
+    'missing-child DAG recovery block')
+  const final = latestDagUpdate(recoveredEvents, parentId)
+  assert.match(final.error, /DAG recovery blocked/, 'recovery must expose its fail-closed reason')
+  const blockedPrepB = final.tasks.find((task) => task.task.id === 'prep-b')
+  assert.equal(blockedPrepB.status, 'failed')
+  assert.deepEqual(blockedPrepB.sessionIds, frozenPrepB.sessionIds,
+    'recovery must retain the frozen child session id')
+  assert.match(blockedPrepB.error, /snapshot and worktree evidence/)
+  assert.equal(sentInputs.length, sentBeforeRecovery, 'recovery must not send a prompt to a replacement child')
+  assert.equal(freshManager.list().filter((meta) => meta.childTaskId === 'prep-b').length, 0,
+    'recovery must not activate a replacement prep-b Engine')
+  assert.equal(final.tasks.find((task) => task.task.id === 'verify').status, 'waiting',
+    'downstream work must remain blocked while child delivery state is unknown')
+  const taskRunsAfterRecovery = await snapshotStore.listTaskRuns(undefined, userData)
+  assert(!taskRunsAfterRecovery.some((run) => run.taskId === 'verify'),
+    'blocked recovery must not create a downstream TaskRun')
 }
 
 function compileMain() {
@@ -327,8 +334,9 @@ class DagRecoveryFakeEngine {
 
   send(input) {
     const text = typeof input === 'string' ? input : input.text
+    const messageId = typeof input === 'string' ? undefined : input.messageId
     sentInputs.push({ sessionId: this.meta.id, taskId: this.meta.childTaskId, text })
-    this.push({ kind: 'user-message', messageId: `msg-${this.meta.id}-${this.seq + 1}`, text })
+    this.push({ kind: 'user-message', messageId: messageId || `msg-${this.meta.id}-${this.seq + 1}`, text })
     if (!autoCompleteRecoveredRoots && completeInitialTaskIds.has(this.meta.childTaskId)) {
       setTimeout(() => this.finish(`${this.meta.childTaskId} initial result`), 20)
       return

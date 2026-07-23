@@ -16,9 +16,25 @@ let finalError = null
 
 try {
   const esbuild = require('esbuild')
+  const harnessPath = path.join(tempRoot, 'routing-visibility-harness.tsx')
   const bundlePath = path.join(tempRoot, 'message-item.cjs')
+  writeFileSync(
+    harnessPath,
+    [
+      "import React from 'react'",
+      `import MessageItem from ${JSON.stringify(path.join(repoRoot, 'src/renderer/src/components/MessageItem.tsx'))}`,
+      `import { ExperienceProjectionProvider } from ${JSON.stringify(path.join(repoRoot, 'src/renderer/src/components/experience/ExperienceProjection.tsx'))}`,
+      'export function StudioMessageItem(props) {',
+      "  return <ExperienceProjectionProvider mode=\"studio\"><MessageItem {...props} /></ExperienceProjectionProvider>",
+      '}',
+      'export function AssistantMessageItem(props) {',
+      '  return <MessageItem {...props} />',
+      '}'
+    ].join('\n'),
+    'utf8'
+  )
   esbuild.buildSync({
-    entryPoints: [path.join(repoRoot, 'src/renderer/src/components/MessageItem.tsx')],
+    entryPoints: [harnessPath],
     outfile: bundlePath,
     bundle: true,
     platform: 'node',
@@ -30,12 +46,11 @@ try {
   symlinkSync(path.join(repoRoot, 'node_modules'), path.join(tempRoot, 'node_modules'), 'dir')
 
   const module = require(bundlePath)
-  const MessageItem = module.default?.default ?? module.default
-  assert(MessageItem, 'MessageItem should bundle for server rendering')
+  const StudioMessageItem = module.StudioMessageItem
+  const AssistantMessageItem = module.AssistantMessageItem
+  assert(StudioMessageItem && AssistantMessageItem, 'routing visibility harness should bundle for server rendering')
 
-  const html = renderToStaticMarkup(
-    React.createElement(MessageItem, {
-      item: {
+  const item = {
         id: 'route-visibility',
         kind: 'routing',
         providerId: 'provider-a',
@@ -81,10 +96,14 @@ try {
           policy: 'review-primary',
           reason: '高风险任务已生成异质模型复核计划。'
         }
-      },
+      }
+  const props = {
+      item,
       toolResults: {},
       runningTools: {}
-    })
+    }
+  const html = renderToStaticMarkup(
+    React.createElement(StudioMessageItem, props)
   )
 
   assert(html.includes('data-routing-provider="provider-a"'), 'routing note should expose provider id')
@@ -98,6 +117,9 @@ try {
   assert(html.includes('预算降级') && html.includes('跨厂商'), 'routing summary should show critical decision badges')
   assert(html.includes('Provider B') && html.includes('strong-model'), 'routing details should show alternatives')
   assert(html.includes('预算上限'), 'routing details should show warnings')
+  const assistantHtml = renderToStaticMarkup(React.createElement(AssistantMessageItem, props))
+  assert(assistantHtml.includes('data-assistant-routing-status="route"'), 'Assistant routing note should expose a simplified status')
+  assert(!assistantHtml.includes('provider-a') && !assistantHtml.includes('fast-model'), 'Assistant routing note must hide provider and model details')
 
   const storeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
   assert(storeSource.includes('providerId: ev.providerId'), 'renderer store must preserve routing provider id')

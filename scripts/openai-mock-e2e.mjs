@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import http from 'node:http'
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -49,7 +49,9 @@ const report = {
   checks: [],
   screenshots: [],
   warnings: [],
-  requests: []
+  requests: [],
+  e2eErrors: [],
+  providerStorage: null
 }
 
 const mock = await startOpenAiMock()
@@ -99,6 +101,8 @@ try {
     await clickByText(cdp, '+ 新建会话')
     await waitForText(cdp, '新建会话')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
+    await clickByText(cdp, '工作台')
+    await clickByText(cdp, '会话与工具')
     await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, 'CaoGen OpenAI Mock')
     await chooseSelectOptionByText(cdp, 'mock-responses')
@@ -122,18 +126,22 @@ try {
   await check(cdp, 'usage stats and request body prove the real engine path ran', async () => {
     await waitForText(cdp, '↑37 ↓11', 10_000)
     assert(mock.requests.length === 2, `expected failed primary + successful backup requests, got ${mock.requests.length}`)
-    assert(mock.requests[0].authorization === 'Bearer expired-key', `primary key was not attempted first: ${mock.requests[0].authorization}`)
+    assert(mock.requests[0].authorization === 'Bearer expired-key', 'primary key was not attempted first')
+    assert(mock.requests[0].managedCredentialHeaderMatches, 'managed credential header must use the primary Broker key')
+    assert(mock.requests[0].rapidApiHostMatches, 'non-secret RapidAPI host header must remain configurable')
     const request = mock.requests[1]
     assert(request.url === '/v1/responses', `wrong request URL: ${request.url}`)
-    assert(request.authorization === 'Bearer mock-key', `wrong auth header: ${request.authorization}`)
+    assert(request.authorization === 'Bearer mock-key', 'wrong auth header')
+    assert(request.managedCredentialHeaderMatches, 'managed credential header must rotate to the backup Broker key')
     assert(request.body?.model === 'mock-responses', `wrong model: ${JSON.stringify(request.body)}`)
     assert(JSON.stringify(request.body).includes(prompt), 'prompt missing from OpenAI request body')
     assert(String(request.body?.instructions ?? '').includes(projectContextNeedle), 'caogen.md context missing from Responses instructions')
-    report.requests = mock.requests
+    report.requests = redactMockRequests(mock.requests)
   })
 
   await check(cdp, 'failed primary key persists sanitized state and backup becomes active', async () => {
-    const providers = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
+    const providerFile = path.join(userDataDir, 'providers.json')
+    const providers = JSON.parse(readFileSync(providerFile, 'utf8'))
     const provider = providers.find((item) => item.id === 'mock-openai')
     assert(provider?.activeKeyId === 'backup-key', `backup key did not become active: ${provider?.activeKeyId}`)
     const primary = provider?.apiKeys?.find((item) => item.id === 'primary-key')
@@ -141,7 +149,30 @@ try {
     assert(primary?.lastFailureReason === '鉴权失败', `primary failure reason missing: ${primary?.lastFailureReason}`)
     assert(Number.isFinite(primary?.lastFailureAt), 'primary failure timestamp missing')
     assert(Number.isFinite(backup?.lastUsedAt), 'backup last-used timestamp missing')
-    assert(!JSON.stringify(provider).includes('Bearer '), 'provider persistence must not contain authorization headers')
+    const serialized = JSON.stringify(provider)
+    assert(!serialized.includes('Bearer '), 'provider persistence must not contain authorization headers')
+    assert(Array.isArray(provider?.apiKeys) && provider.apiKeys.length === 2, 'provider must retain both failover key records')
+    const encryptedKeyCount = provider.apiKeys.filter((key) => key.encryptedToken?.startsWith('enc:')).length
+    const legacyKeyCount = provider.apiKeys.filter((key) => key.encryptedToken?.startsWith('b64:')).length
+    assert(
+      encryptedKeyCount === 2 || legacyKeyCount === 2,
+      'legacy keys must migrate together when secure storage is available'
+    )
+    assert(provider.apiKeys.every((key) => key.sessionOnly !== true), 'legacy fixture must not persist session-only markers')
+    assert(
+      JSON.stringify(provider.credentialHeaderNames) === JSON.stringify(['authorization', 'x-rapidapi-key']),
+      `managed credential header names were not normalized: ${JSON.stringify(provider.credentialHeaderNames)}`
+    )
+    const fileMode = process.platform === 'win32' ? null : statSync(providerFile).mode & 0o777
+    if (fileMode !== null) assert(fileMode === 0o600, `providers.json permissions must be 0600, got ${fileMode.toString(8)}`)
+    report.providerStorage = {
+      keyCount: provider.apiKeys.length,
+      encryptedKeyCount,
+      legacyKeyCount,
+      sessionOnlyKeyCount: provider.apiKeys.filter((key) => key.sessionOnly === true).length,
+      credentialHeaderNames: provider.credentialHeaderNames,
+      fileMode: fileMode === null ? null : fileMode.toString(8)
+    }
   })
 
   await check(cdp, 'default permission can deny OpenAI write_file tool call', async () => {
@@ -191,14 +222,17 @@ try {
     )
   })
 
-  report.requests = mock.requests
+  report.requests = redactMockRequests(mock.requests)
+  await check(cdp, 'renderer reports no uncaught errors', async () => {
+    report.e2eErrors = await evalValue(cdp, 'globalThis.__caogenE2eErrors || []')
+    assert(report.e2eErrors.length === 0, 'renderer emitted uncaught errors')
+  })
   await screenshot(cdp, '02-openai-response-complete')
   await cdp.close()
 } finally {
   const exited = await terminate(app)
   await closeServer(mock.server)
   report.warnings.push(...summarizeProcessOutput(stdout, stderr, exited))
-  report.e2eErrors = []
   writeFileSync(path.join(runDir, 'openai-mock-e2e.json'), JSON.stringify(report, null, 2))
   cleanupTempRoot(tempRoot)
 }
@@ -241,6 +275,8 @@ function writeMockUserData(port) {
           // mock server 只实现 /v1/responses;非 api.openai.com 端点的智能默认
           // 是 chat,故显式声明 responses(与真实用户在 UI 里选协议一致)
           openaiProtocol: 'responses',
+          credentialHeaderNames: ['Authorization', 'X-RapidAPI-Key'],
+          customHeaders: 'X-RapidAPI-Host: 127.0.0.1',
           note: 'Local system-test provider; no real API key required.',
           createdAt: Date.now()
         }
@@ -287,6 +323,9 @@ async function startOpenAiMock() {
       method: req.method,
       url: req.url,
       authorization: req.headers.authorization || '',
+      managedCredentialHeaderMatches:
+        req.headers['x-rapidapi-key'] === String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''),
+      rapidApiHostMatches: req.headers['x-rapidapi-host'] === '127.0.0.1',
       body,
       kind
     })
@@ -351,6 +390,13 @@ async function startOpenAiMock() {
     server.listen(port, '127.0.0.1', resolve)
   })
   return { server, port, requests }
+}
+
+function redactMockRequests(requests) {
+  return requests.map(({ authorization, ...item }) => ({
+    ...item,
+    authorizationPresent: Boolean(authorization)
+  }))
 }
 
 function classifyMockRequest(body, prompt) {

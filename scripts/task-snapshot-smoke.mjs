@@ -12,7 +12,8 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-
+import { verifyRecoveryUiAndTray, verifyTaskDagFinalizerStore } from './lib/task-snapshot-finalizer-checks.mjs'
+import { verifySequentialRunReplacement } from './lib/task-snapshot-sequential-run-checks.mjs'
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
 process.env.NODE_PATH = path.join(repoRoot, 'node_modules')
@@ -26,11 +27,14 @@ const sqliteV2Root = path.join(tempRoot, 'sqlite-v2-store')
 const sqliteFutureRoot = path.join(tempRoot, 'sqlite-future-store')
 const supersedeRoot = path.join(tempRoot, 'supersede-store')
 const barrierRoot = path.join(tempRoot, 'barrier-store')
+const identityMismatchRoot = path.join(tempRoot, 'identity-mismatch-store')
 const crossSessionBarrierRoot = path.join(tempRoot, 'cross-session-barrier-store')
 const legacyFileEffectBarrierRoot = path.join(tempRoot, 'legacy-file-effect-barrier-store')
 const effectFirstRaceRoot = path.join(tempRoot, 'effect-first-race-store')
 const eventFirstRaceRoot = path.join(tempRoot, 'event-first-race-store')
-
+const finalizerRoot = path.join(tempRoot, 'dag-finalizer-store'),
+  finalizerAtomicFailureRoot = path.join(tempRoot, 'dag-finalizer-atomic-failure-store')
+const finalizerCorruptionRoot = path.join(tempRoot, 'dag-finalizer-corruption-store')
 try {
   execFileSync(
     process.execPath,
@@ -52,7 +56,6 @@ try {
     ],
     { cwd: repoRoot, stdio: 'inherit' }
   )
-
   const electronDir = path.join(outDir, 'node_modules', 'electron')
   mkdirSync(electronDir, { recursive: true })
   writeFileSync(
@@ -61,7 +64,8 @@ try {
   )
   writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n')
 
-  const compiledModule = findCompiledModule(outDir)
+  const compiledModule = path.join(outDir, 'main', 'task', 'task-snapshot.js')
+  assert(existsSync(compiledModule), `compiled task-snapshot.js not found at ${compiledModule}`)
   const snapshotStore = await import(pathToFileURL(compiledModule).href)
   const initSqlJs = require('sql.js')
   const SQL = await initSqlJs({
@@ -216,6 +220,12 @@ try {
   assertEqual(snapshot.dagRuntimes[0].autoMerge.verificationCommand, 'npm.cmd run typecheck')
 
   await assertRejects(
+    () => snapshotStore.saveTaskSnapshot({ ...snapshot, taskId: 'foreign-task' }, identityMismatchRoot),
+    'ownership differs from Snapshot'
+  )
+  assertEqual((await snapshotStore.listTaskSnapshots(identityMismatchRoot)).length, 0)
+
+  await assertRejects(
     () => snapshotStore.saveTaskRunBarrier(snapshot.run, barrierRoot),
     '缺少可恢复任务快照'
   )
@@ -229,6 +239,8 @@ try {
   await snapshotStore.saveTaskRunBarrier(barrierRun, barrierRoot)
   const barrierSnapshots = await snapshotStore.listTaskSnapshots(barrierRoot)
   assertEqual(barrierSnapshots[0].run.revision, barrierRun.revision)
+
+  await verifySequentialRunReplacement(snapshotStore, path.join(tempRoot, 'sequential-run-store'), meta, assertEqual)
 
   for (const [raceIndex, raceRoot] of [effectFirstRaceRoot, eventFirstRaceRoot].entries()) {
     const sessionId = `effect-event-race-${raceIndex}`
@@ -878,6 +890,10 @@ try {
   assertEqual((await snapshotStore.getTaskSnapshot('session-a', explicitRoot)).run.status, 'executing')
   assertEqual((await snapshotStore.getTaskSnapshot('session-a', explicitRoot)).run.toolExecutions[0].status, 'succeeded')
 
+  await verifyTaskDagFinalizerStore({
+    assertRejects, finalizerAtomicFailureRoot, finalizerCorruptionRoot, finalizerRoot, meta, snapshotStore, SQL
+  })
+
   const supersededSnapshot = {
     ...snapshot,
     id: 'session-supersede',
@@ -971,8 +987,8 @@ try {
   writeFileSync(snapshotStore.taskSnapshotsFile(explicitRoot), '{ bad json', 'utf8')
   assertEqual((await snapshotStore.listTaskSnapshots(explicitRoot)).length, 0)
 
-  mkdirSync(legacyRoot, { recursive: true })
   const { run: _legacyRun, ...legacySnapshotWithoutRun } = snapshot
+  mkdirSync(legacyRoot, { recursive: true })
   writeFileSync(
     snapshotStore.taskSnapshotsFile(legacyRoot),
     `${JSON.stringify({ version: 1, snapshots: [legacySnapshotWithoutRun] }, null, 2)}\n`,
@@ -1009,7 +1025,7 @@ try {
   const migratedV2 = await snapshotStore.listTaskSnapshots(sqliteV2Root)
   assertEqual(migratedV2.length, 1)
   assertEqual(migratedV2[0].run, undefined)
-  assertEqual(readSqliteUserVersion(SQL, snapshotStore.taskSnapshotsDbFile(sqliteV2Root)), 4)
+  assertEqual(readSqliteUserVersion(SQL, snapshotStore.taskSnapshotsDbFile(sqliteV2Root)), 8)
   assertEqual((await snapshotStore.listTaskRuns('session-a', sqliteV2Root)).length, 0)
 
   mkdirSync(sqliteFutureRoot, { recursive: true })
@@ -1017,11 +1033,11 @@ try {
     SQL,
     snapshotStore.taskSnapshotsDbFile(sqliteFutureRoot),
     legacySnapshotWithoutRun,
-    5
+    9
   )
   await assertRejects(
     () => snapshotStore.listTaskSnapshots(sqliteFutureRoot),
-    '任务快照数据库版本过新:5 > 4'
+    '任务快照数据库版本过新:9 > 8'
   )
   assert(typeof snapshotStore.flushTaskSnapshotMutations === 'function', 'snapshot store should expose flushTaskSnapshotMutations')
   const taskSnapshotSource = readFileSync(path.join(repoRoot, 'src/main/task/task-snapshot.ts'), 'utf8')
@@ -1029,7 +1045,7 @@ try {
   assert(taskSnapshotSource.includes('rename(tmpPath, targetPath)'), 'snapshot store should use fs rename for replacement')
   assert(taskSnapshotSource.includes("'.tmp'") || taskSnapshotSource.includes('}.tmp`'), 'snapshot store should write a temp db file')
   assert(taskSnapshotSource.includes('mutationQueues.get(key) === queued'), 'settled snapshot mutation queues should be released')
-  verifyRecoveryUiAndTray()
+  verifyRecoveryUiAndTray(repoRoot)
 
   console.log('taskSnapshot smoke ok')
 } finally {
@@ -1061,20 +1077,6 @@ function meta(id, status) {
     contextTokens: 0,
     createdAt: 1000
   }
-}
-
-function findCompiledModule(root) {
-  const entries = readdirSync(root, { withFileTypes: true })
-  for (const entry of entries) {
-    const fullPath = path.join(root, entry.name)
-    if (entry.isDirectory()) {
-      const found = findCompiledModule(fullPath)
-      if (found) return found
-    } else if (entry.isFile() && entry.name === 'task-snapshot.js') {
-      return fullPath
-    }
-  }
-  throw new Error(`compiled task-snapshot.js not found under ${root}`)
 }
 
 function assertNoTempFiles(root) {
@@ -1112,53 +1114,6 @@ function readSqliteUserVersion(SQL, dbPath) {
     db.close()
   }
 }
-
-function verifyRecoveryUiAndTray() {
-  const appSource = readFileSync(path.join(repoRoot, 'src/renderer/src/App.tsx'), 'utf8')
-  assert(appSource.includes('TaskRecoveryModal'), 'App should mount TaskRecoveryModal')
-  const recoverySource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/TaskRecoveryModal.tsx'), 'utf8')
-  for (const marker of ['taskSnapshots', 'recoverTaskSnapshot', 'resolveTaskEffect', 'deleteTaskSnapshot', 'setShowTaskRecovery']) {
-    assert(recoverySource.includes(marker), `TaskRecoveryModal missing ${marker}`)
-  }
-  const storeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
-  assert(storeSource.includes('async recoverTaskSnapshot'), 'store should register recovered sessions')
-  assert(storeSource.includes('window.agentDesk.listTaskSnapshots()'), 'store should own task snapshot listing')
-  assert(storeSource.includes('async resolveTaskEffect'), 'store should own effect resolution state')
-  assert(storeSource.includes('effectStatus: ev.effectStatus'), 'store should preserve live effect status')
-  const toolCardSource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ToolCallCard.tsx'), 'utf8')
-  assert(toolCardSource.includes("effectStatus === 'waiting_reconciliation'"), 'tool card should distinguish reconciliation')
-  assert(toolCardSource.includes("t('toolWaitingReconciliation')"), 'tool card should label reconciliation')
-  const mainSource = readFileSync(path.join(repoRoot, 'src/main/index.ts'), 'utf8')
-  for (const marker of ['Tray', 'hasRunningSessions', 'win.hide()', 'updateTray']) {
-    assert(mainSource.includes(marker), `main process missing tray marker ${marker}`)
-  }
-  assert(mainSource.includes('await sessionManager.disposeAll()'), 'main process should await snapshot shutdown flush')
-  const sessionManagerSource = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
-  for (const marker of [
-    'flushTaskSnapshotMutations',
-    "event.kind === 'turn-result' && event.isError",
-    'event.isError === false &&',
-    'restoreTranscriptIfMissing',
-    'task-snapshot-replay',
-    'buildTaskSnapshotReplayPrompts',
-    'recoverable = await this.listTaskSnapshots()'
-  ]) {
-    assert(sessionManagerSource.includes(marker), `sessionManager missing snapshot marker ${marker}`)
-  }
-  assert(
-    sessionManagerSource.indexOf('const recoverable = await this.listTaskSnapshots()') <
-      sessionManagerSource.indexOf('this.restoreActiveSessions('),
-    'task snapshots must take recovery precedence over the legacy active-session registry'
-  )
-  assert(
-    !sessionManagerSource.includes('this.preservingSnapshotsOnDispose = false'),
-    'shutdown snapshot protection must remain active for late provider events'
-  )
-  assert(sessionManagerSource.includes('run: this.taskRuns.get(sessionId)'), 'snapshot writes must include TaskRun state')
-  const transcriptSource = readFileSync(path.join(repoRoot, 'src/main/transcript.ts'), 'utf8')
-  assert(transcriptSource.includes('restoreTranscriptIfMissing'), 'transcript should restore missing snapshot transcripts')
-}
-
 function assertEqual(actual, expected) {
   assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
@@ -1230,7 +1185,6 @@ async function assertRejects(fn, expectedMessage) {
   }
   throw new Error(`expected rejection containing ${JSON.stringify(expectedMessage)}`)
 }
-
 function assert(condition, message = 'assertion failed') {
   if (!condition) throw new Error(message)
 }

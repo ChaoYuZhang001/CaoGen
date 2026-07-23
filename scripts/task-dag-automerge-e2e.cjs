@@ -4,7 +4,8 @@
  * - Uses a local mock OpenAI Responses endpoint, so no real key/network is needed.
  * - Dispatches a DAG with two independent child agents in managed worktrees.
  * - Each child really calls write_file; SessionManager then completes the DAG and runs autoMerge.
- * - Verifies task-dag-update carries autoMerge and that patches landed in the source repo.
+ * - Verifies each autoMerge patch has a confirmed operation Effect, no recovery snapshot remains,
+ *   and patches landed without implicitly committing the child worktrees.
  */
 const { execFileSync, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -46,6 +47,14 @@ async function invoke(channel, ...args) {
   const map = ipcMain._invokeHandlers
   if (!map || !map.has(channel)) throw new Error(`IPC channel not registered: ${channel}`)
   return map.get(channel)({}, ...args)
+}
+async function waitForHandler(channel, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (ipcMain._invokeHandlers?.has(channel)) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(`timed out waiting for IPC channel: ${channel}`)
 }
 
 function sse(res, events) {
@@ -173,8 +182,10 @@ async function waitForAutoMerge(parentSessionId, timeoutMs = 45000) {
       .filter((event) => event && event.kind === 'task-dag-update')
       .map((event) => event.execution)
     latestUpdate = updates[updates.length - 1] ?? latestUpdate
-    const withAutoMerge = updates.find((execution) => execution.autoMerge)
-    if (withAutoMerge) return withAutoMerge
+    const withSettledAutoMerge = [...updates]
+      .reverse()
+      .find((execution) => execution.autoMerge && execution.autoMerge.status !== 'running')
+    if (withSettledAutoMerge) return withSettledAutoMerge
     await new Promise((resolve) => setTimeout(resolve, 300))
   }
   throw new Error(`timed out waiting for autoMerge; latest=${JSON.stringify(latestUpdate)}`)
@@ -185,7 +196,7 @@ async function run() {
   initProjectRepo()
 
   require(path.join(repoOut, 'index.js'))
-  await new Promise((resolve) => setTimeout(resolve, 900))
+  await waitForHandler('providers:create')
 
   const provider = await invoke('providers:create', {
     name: 'mock-dag-automerge',
@@ -231,8 +242,34 @@ async function run() {
   check('autoMerge status is success', autoMerge && autoMerge.status === 'success', autoMerge?.status)
   check('autoMerge merged both entries', autoMerge && autoMerge.mergedCount === 2, `merged=${autoMerge?.mergedCount}`)
   check('autoMerge verification passed', autoMerge?.verification?.status === 'passed', autoMerge?.verification?.status)
+  const effectEntries = autoMerge?.entries?.filter((entry) => entry.status === 'merged') ?? []
+  const operationIds = effectEntries.map((entry) => entry.operationId).filter(Boolean)
+  check(
+    'autoMerge patch Effects are confirmed',
+    effectEntries.length === 2 && effectEntries.every((entry) => entry.effectStatus === 'confirmed'),
+    effectEntries.map((entry) => `${entry.taskId}:${entry.effectStatus ?? 'missing'}`).join(', ')
+  )
+  check(
+    'autoMerge exposes one distinct operation per patch',
+    operationIds.length === 2 && new Set(operationIds).size === 2,
+    operationIds.join(', ')
+  )
   check('source repo has alpha file', normalizeText(readText(path.join(projectDir, 'alpha.txt'))) === 'alpha from dag auto merge\n')
   check('source repo has beta file', normalizeText(readText(path.join(projectDir, 'beta.txt'))) === 'beta from dag auto merge\n')
+  check(
+    'autoMerge did not commit child worktrees',
+    dispatch.children.every((child) => git(child.meta.worktreePath, ['rev-parse', 'HEAD']) === child.meta.baseSha),
+    dispatch.children.map((child) => `${child.meta.id}:${git(child.meta.worktreePath, ['rev-parse', 'HEAD'])}`).join(', ')
+  )
+  const snapshots = await invoke('taskSnapshots:list')
+  const residualOperationSnapshots = snapshots.filter((snapshot) =>
+    operationIds.includes(snapshot.run?.operation?.operationId)
+  )
+  check(
+    'autoMerge operation snapshots are fully cleared',
+    operationIds.length === 2 && residualOperationSnapshots.length === 0,
+    residualOperationSnapshots.map((snapshot) => snapshot.id).join(', ') || 'none'
+  )
   check('mock saw both child tool loops', requests.includes('alpha-output') && requests.includes('beta-output'), requests.join(', '))
 
   await invoke('sessions:close', parent.id)
