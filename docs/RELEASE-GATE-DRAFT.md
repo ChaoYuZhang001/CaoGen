@@ -13,7 +13,7 @@ claims supported by the exact 0.1.7 candidate evidence.
 | Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Package and lockfile | `0.1.7` |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for a truthful 0.1.x wedge release |
-| Clean Deep | `153/153` required pass; 3 optional skip; report bound to clean branch commit `b05032f1` |
+| Clean Deep | `153/153` required pass; 3 optional skip; latest report bound to clean commit `7035a6c5`; final candidate rerun pending |
 | Release identity | Ready for version 0.1.7 on a clean commit |
 | macOS preflight | Developer ID identity present; notarization configuration missing in the current process |
 | Native arm64 | Open; current host is Intel and cannot provide Apple Silicon runtime evidence |
@@ -28,7 +28,7 @@ claims supported by the exact 0.1.7 candidate evidence.
 | Secret history | `npm run secret:scan:history` | Passes on the branch; rerun before publication |
 | Product positioning | `npm run test:product-positioning:required` | Ready |
 | macOS x64 preflight | `npm run release:mac:preflight:x64` | Blocked only by missing notarization configuration |
-| macOS x64 release | `npm run dist:mac:release:x64` and required macOS audit | Open; no signed/notarized/stapled 0.1.7 assets |
+| macOS x64 release | `npm run dist:mac:release:x64` and required macOS audit | Open; local signed baseline lacks notarization, staple, Gatekeeper acceptance, and build provenance |
 | macOS arm64 release | Native Apple Silicon build, install, launch, and required audit | External hardware required |
 | Windows x64 release | Signed native build plus install and launch evidence | External Windows/signing lane required |
 | Packaging/runtime | Required packaging audit and packaged-app launch against exact assets | Open for 0.1.7 |
@@ -41,6 +41,9 @@ claims supported by the exact 0.1.7 candidate evidence.
 - Preview builds never satisfy the signed release gate.
 - Formal builds use `electron-builder.release.cjs`, Developer ID signing, Hardened
   Runtime, explicit entitlements, notarization, stapling, and macOS 14 or newer.
+- Every 0.1.7+ formal app, DMG payload, and ZIP payload must embed the same schema,
+  full Git commit, clean-worktree state, and package version; the required audit binds
+  that provenance to the current commit and exact uploadable artifact-set digest.
 - x64 and arm64 are separate assets. Embedded arm64 binaries do not prove an arm64 app
   ran on Apple Silicon.
 - Do not print, persist, stage, or upload certificate contents, passwords, API private

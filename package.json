@@ -239,6 +239,7 @@
     "test:1.0-soak-audit:smoke": "node scripts/product-1.0-soak-audit-smoke.mjs",
     "test:release-packaging-audit": "node scripts/release-packaging-audit.mjs",
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
+    "test:release-packaging-policy": "node scripts/release-packaging-policy-smoke.mjs",
     "test:macos-release-config": "node scripts/macos-release-preflight.mjs --config-only",
     "test:macos-release-audit": "node scripts/macos-release-audit.mjs",
     "test:macos-release-audit:required": "node scripts/macos-release-audit.mjs --required",

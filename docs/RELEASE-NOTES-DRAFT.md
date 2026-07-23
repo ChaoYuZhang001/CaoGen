@@ -15,7 +15,9 @@ requirements are complete.
 One Developer ID Application identity is available on the current Intel Mac. The
 release configuration, Hardened Runtime, entitlements, DMG/ZIP targets, and minimum
 macOS version pass config audit. The current process does not have notarization
-credentials configured, no 0.1.7 artifact has been signed or notarized, and a native
+credentials configured. A local x64 Developer ID-signed baseline exists, but it was
+explicitly built without notarization and without build-commit provenance, so it is
+not a release candidate. No 0.1.7 artifact is notarized or uploaded, and a native
 arm64 release requires Apple Silicon hardware.
 
 ## Candidate Highlights
@@ -56,8 +58,12 @@ reports, local evidence, and intermediate build directories are never release as
 
 ## Known Blockers
 
-- `packaging_release`: no complete 0.1.7 signed asset set exists. The current process
-  lacks notarization configuration, and native arm64 evidence requires Apple Silicon.
+- `release_identity`: the gate hardening changes are not yet bound to a clean final
+  candidate commit.
+- `deep_test`: the full required Deep gate must be rerun on that exact clean commit.
+- `packaging_release`: no complete provenance-bound, signed, notarized 0.1.7 asset set
+  exists. The current process lacks notarization configuration, and native arm64
+  evidence requires Apple Silicon.
 - `release_notes`: this is a draft. Exact asset names, SHA256 values, platform support,
   signing state, final Doctor binding, and post-upload audit are still missing.
 - Do not publish while Release Doctor is `not_ready`.
