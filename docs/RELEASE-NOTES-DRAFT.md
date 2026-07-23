@@ -24,7 +24,10 @@ The release gate now requires a complete macOS x64, macOS arm64, and Windows x64
 matrix. Each platform must provide an independent distribution audit, clean-commit
 build provenance, native installation, and real renderer launch. Windows additionally
 requires PE x64, NSIS, and timestamped Authenticode evidence for both the unpacked app
-and installer. These gates are implemented; their final platform evidence is not.
+and installer. A manual, read-only candidate workflow now orchestrates those three
+native lanes and independently revalidates the downloaded 12-asset set; it does not
+publish. These gates are implemented; the workflow has not run with real release
+credentials and their final platform evidence is not complete.
 
 ## Candidate Highlights
 

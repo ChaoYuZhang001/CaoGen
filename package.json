@@ -240,6 +240,9 @@
     "test:release-packaging-audit": "node scripts/release-packaging-audit.mjs",
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
     "test:release-packaging-policy": "node scripts/release-packaging-policy-smoke.mjs",
+    "test:release-workflow-contract": "node scripts/release-workflow-contract-smoke.mjs",
+    "release:candidate:preflight": "node scripts/release-candidate-preflight.mjs",
+    "release:matrix:assemble": "node scripts/release-matrix-assemble.mjs",
     "test:macos-release-config": "node scripts/macos-release-preflight.mjs --config-only",
     "test:macos-release-audit": "node scripts/macos-release-audit.mjs",
     "test:macos-release-audit:required": "node scripts/macos-release-audit.mjs --required",
@@ -430,6 +433,7 @@
     "electron": "40.10.2",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.0.0",
+    "js-yaml": "^4.3.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"
   }

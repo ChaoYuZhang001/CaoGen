@@ -85,6 +85,7 @@ README、官网、STATUS 三处必须一致:
   - [x] 0.1.7+ 发布门禁硬化:未通过 required macOS audit、公证/staple 或包内 clean-commit provenance 绑定时,Release Doctor 必须保持 `packaging_release` open
   - [x] 0.1.7+ 三平台发布矩阵门禁:macOS x64、macOS arm64、Windows x64 必须各自通过签名/公证审计、clean-commit provenance、原生安装和 renderer 启动;最终 packaging audit 必须同时绑定 12 项发布资产
   - [x] macOS 签名只对 Apple 时间戳服务瞬时错误执行最多 5 次有界重试;证书、entitlement、Keychain 与其他签名错误立即失败
+  - [x] 手动候选管线已固化:`workflow_dispatch` 只接受已在 `main` 的完整 commit SHA;macOS Intel、Apple Silicon、Windows x64 三条原生 lane 并行生成签名/安装/启动证据,汇总端重新计算资产摘要与双架构 `latest-mac.yml`;只上传未发布候选证据包,不自动建 tag/Release
   - [ ] 在最终 clean commit 上完成 x64 notarize、staple、Gatekeeper 与 required release audit
   - [ ] 在 Apple Silicon 真机完成 arm64 原生签名、公证、安装和启动证据
   - [ ] 在 Windows x64 签名环境完成签名、安装和启动证据
@@ -187,7 +188,7 @@ Assistant/Studio 双模式无损切换可用。**
 | 07-24 五 | 旧规划文档移入 `docs/archive/`;PLAN.md 链接生效;STATUS.md 更新并提交(第一个"周五 STATUS"例行) | M1-T5 |
 | 07-25 六 | README 改写:加对比表、可见 Roadmap 段落(3-5 行) | M1-T5 |
 | 07-27 一 | macOS x64 + arm64 签名 + 公证走通,干净用户环境验证安装无拦截 | M1-T3 |
-| 07-28 二 | Windows x64 签名;发布管线脚本固化进 `scripts/` | M1-T3 |
+| 07-28 二 | Windows x64 签名;执行已提前固化的三平台手动候选管线并下载未发布证据包 | M1-T3 |
 | 07-29 三 | 三处口径对齐:README / 官网 / STATUS.md 完成度数字一致(统一用 §2 口径) | M1-T4 |
 | 07-30 四 | 官网首页收敛:1.0 愿景内容折叠到独立 Vision 页,首页只放当前能力 + 截图 + 下载 | M1-T4 |
 | 07-31 五 | v0.1.7 候选包全平台安装自测;Release Notes 起草(只写已验证能力);STATUS 例行更新 | M1-T6 |

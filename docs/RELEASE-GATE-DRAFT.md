@@ -13,12 +13,13 @@ claims supported by the exact 0.1.7 candidate evidence.
 | Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Package and lockfile | `0.1.7` |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for a truthful 0.1.x wedge release |
-| Clean Deep | `154/154` required pass; 3 optional skip; latest report bound to clean commit `dd5fefd6`; matrix increment rerun pending |
+| Clean Deep | `155/155` required pass; 3 optional skip; latest report bound to clean commit `4a3f6359`; workflow increment rerun pending |
 | Release identity | Package version is 0.1.7; exact clean matrix commit and rerun still pending |
 | macOS preflight | Developer ID identity present; notarization configuration missing in the current process |
 | Native arm64 | Open; current host is Intel and cannot provide Apple Silicon runtime evidence |
 | Windows release config | Pass; NSIS and mandatory code signing are configured, but native signed artifacts are absent |
 | Platform matrix | macOS x64, macOS arm64, and Windows x64 each require distribution plus native install/renderer evidence; incomplete |
+| Candidate workflow | Manual-only, read-only workflow implemented; it has not run with real signing/notarization secrets |
 | Release decision | `not_ready`; `packaging_release` and `release_notes` remain open |
 
 ## Required Before 0.1.7
@@ -33,6 +34,7 @@ claims supported by the exact 0.1.7 candidate evidence.
 | macOS x64 release | `npm run dist:mac:release:x64` and required macOS audit | Open; local signed baseline lacks notarization, staple, Gatekeeper acceptance, and build provenance |
 | macOS arm64 release | Native Apple Silicon build, install, launch, and required audit | External hardware required |
 | Windows x64 release | Signed native build plus install and launch evidence | External Windows/signing lane required |
+| Candidate workflow | Dispatch `.github/workflows/release-candidate-evidence.yml` with the exact full `main` SHA and version | Implemented; real credential-backed run pending |
 | Packaging/runtime | Required packaging audit over all 12 assets plus per-platform installed-app launch | Open for 0.1.7 |
 | Final notes | Exact uploaded names, SHA256 values, platforms, signing state, and residual risks | Draft only |
 | Final Doctor | Required refreshed Doctor for version 0.1.7 | `not_ready` until packaging and notes close |
@@ -62,6 +64,33 @@ claims supported by the exact 0.1.7 candidate evidence.
   renderer-start, uninstall, and cleanup record.
 - Every platform report must bind the exact package version, clean Git commit, build
   provenance, target architecture, and that platform's artifact-set digest.
+- The aggregate job must recalculate every downloaded asset digest, generate and parse
+  one shared dual-architecture `latest-mac.yml`, require the exact-commit Deep report,
+  and pass the complete packaging audit before it can upload an unpublished candidate bundle.
+
+## Manual Candidate Workflow
+
+The workflow is intentionally separate from publication. It accepts only
+`workflow_dispatch`, has repository `contents: read` permission, pins every action by
+full commit, and requires the selected 40-character SHA to already be reachable from
+`origin/main`. It never creates a tag, GitHub Release, or public update entry.
+
+Required GitHub Actions repository secrets:
+
+- `MACOS_CERTIFICATE_P12_BASE64` and `MACOS_CERTIFICATE_PASSWORD`
+- `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`
+- `WINDOWS_CERTIFICATE_P12_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`
+
+The certificate values are base64-encoded PKCS#12 payloads; the Apple API value is the
+complete private `.p8` text. They are materialized only under the ephemeral runner temp
+directory, removed in `always()` cleanup steps, and never included in artifacts or
+reports. A missing value fails its native lane before packaging.
+
+Run the workflow only after the intended commit is on `main`. Its final artifact is
+named `caogen-unpublished-candidate-<version>-<commit>` and expires after 14 days. A
+successful workflow proves the candidate evidence matrix, not publication approval;
+the final release notes, required Doctor, explicit owner release decision, tag, upload,
+and post-upload audit remain separate steps.
 
 ## Release Notes Contract
 
