@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report / 安全报告
+    url: https://github.com/ChaoYuZhang001/CaoGen/blob/main/SECURITY.md
+    about: Report vulnerabilities and credential exposure privately / 私下报告漏洞与凭据泄露
+  - name: Good first issue drafts / 入门任务草稿
+    url: https://github.com/ChaoYuZhang001/CaoGen/blob/main/docs/good-first-issues.md
+    about: Review scoped draft issues before proposing a new one / 提议新任务前先查看已核对的草稿

@@ -22,11 +22,17 @@ process.env.NODE_PATH = path.join(repoRoot, 'node_modules')
 require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-git-tools-'))
 const outDir = path.join(tempRoot, 'compiled')
+const userData = path.join(tempRoot, 'user-data')
 const projectDir = path.join(tempRoot, 'project')
 const successfulMergeDir = path.join(tempRoot, 'successful-merge-project')
 const conflictingMergeDir = path.join(tempRoot, 'conflicting-merge-project')
 const structuredReadFilterDir = path.join(tempRoot, 'structured-read-filter-project')
 const structuredReadSubmoduleDir = path.join(tempRoot, 'structured-read-submodule-project')
+const selectedStageDir = path.join(tempRoot, 'agent-selected-stage-project')
+const alternateStageDir = path.join(tempRoot, 'agent-alternate-stage-project')
+const stageAllDir = path.join(tempRoot, 'agent-stage-all-project')
+
+process.env.CAOGEN_TEST_USER_DATA = userData
 
 try {
   execFileSync(
@@ -34,6 +40,8 @@ try {
     [
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/agent/tools/git-tools.ts',
+      'src/main/permission/tool-permission.ts',
+      'src/main/task/tool-idempotency.ts',
       '--outDir',
       outDir,
       '--rootDir',
@@ -50,6 +58,7 @@ try {
     ],
     { cwd: repoRoot, stdio: 'inherit' }
   )
+  installElectronStub()
 
   const gitHelperPath = path.join(outDir, 'main/git/git-helper.js')
   writeFileSync(
@@ -59,8 +68,13 @@ try {
   )
   const gitTools = await import(pathToFileURL(path.join(outDir, 'main/agent/tools/git-tools.js')).href)
   const gitHelper = await import(pathToFileURL(gitHelperPath).href)
+  const gitIndexEffect = await import(pathToFileURL(path.join(outDir, 'main/git/git-index-effect.js')).href)
+  const permissions = await import(pathToFileURL(path.join(outDir, 'main/permission/tool-permission.js')).href)
+  const idempotency = await import(pathToFileURL(path.join(outDir, 'main/task/tool-idempotency.js')).href)
 
   assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_status'), 'git_status schema missing')
+  assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_stage'), 'git_stage schema missing')
+  assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_stage_all'), 'git_stage_all schema missing')
   assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'git_create_pr'), 'git_create_pr schema missing')
   assert(gitTools.GIT_TOOLS.some((item) => item.function?.name === 'code_forge_delivery'), 'code_forge_delivery schema missing')
   const openaiToolsSource = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
@@ -79,6 +93,135 @@ try {
   assert(sharedReadonlyBlock.includes("'git_diff'"), 'git_diff should be readonly')
   assert(!sharedReadonlyBlock.includes("'code_forge_delivery'"), 'code_forge_delivery should not be readonly')
   assert(openaiToolsSource.includes("export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])"), 'git tools should not be acceptEdits-only')
+  assert(permissions.classifyToolRisk('git_stage', { paths: ['a.txt'] }, projectDir).level === 'medium', 'git_stage should be a medium-risk index write')
+  const sensitiveStageRisk = permissions.classifyToolRisk('git_stage', { paths: ['src/a.ts', '.env'] }, projectDir)
+  assert(sensitiveStageRisk.level === 'high', 'any sensitive git_stage path must raise the request to high risk')
+  assert(sensitiveStageRisk.paths?.length === 2, 'git_stage risk must retain every classified path')
+  const permissionSettings = {
+    permissionDenylist: 'tool=git_stage path=.env',
+    disallowedTools: '',
+    permissionTemporaryAllowlist: '',
+    permissionAllowlist: '',
+    allowedTools: ''
+  }
+  const deniedSensitiveStage = permissions.evaluateToolPermission(permissionSettings, {
+    toolName: 'git_stage',
+    input: { paths: ['src/a.ts', '.env'] },
+    cwd: projectDir
+  })
+  assert(deniedSensitiveStage.kind === 'deny', 'deny path rules must match any git_stage path')
+  const mixedAllowStage = permissions.evaluateToolPermission({
+    ...permissionSettings,
+    permissionDenylist: '',
+    permissionAllowlist: 'tool=git_stage path=src/**'
+  }, {
+    toolName: 'git_stage',
+    input: { paths: ['src/a.ts', '.env'] },
+    cwd: projectDir
+  })
+  assert(mixedAllowStage.kind !== 'allow', 'allow path rules must cover every git_stage path')
+  for (const invalidInput of [
+    { paths: [] },
+    { paths: [''] },
+    { paths: [' a.txt '] },
+    { paths: ['../outside.txt'] },
+    { paths: [':(glob)**'] },
+    { paths: [':!a.txt'] },
+    { paths: 'a.txt' },
+    { paths: [42] }
+  ]) {
+    const invalidRisk = permissions.classifyToolRisk('git_stage', invalidInput, projectDir)
+    assert(invalidRisk.level === 'critical' && invalidRisk.invalidInput, 'invalid git_stage paths must be critical')
+    const invalidDecision = permissions.evaluateToolPermission({
+      ...permissionSettings,
+      permissionDenylist: '',
+      permissionAllowlist: 'tool=git_stage'
+    }, {
+      toolName: 'git_stage',
+      input: invalidInput,
+      cwd: projectDir
+    })
+    assert(invalidDecision.kind === 'deny', 'invalid git_stage paths must fail closed before allow rules')
+  }
+  assert(permissions.classifyToolRisk('git_stage_all', {}, projectDir).level === 'high', 'git_stage_all should be a high-risk broad index write')
+  assert(idempotency.requiresDuplicateConfirmation('git_stage_all', {}), 'repeated git_stage_all calls should require confirmation because the frozen target can change')
+
+  initRepo(selectedStageDir)
+  commitFiles(selectedStageDir, 'base', { 'a.txt': 'a0\n', 'b.txt': 'b0\n' })
+  writeFileSync(path.join(selectedStageDir, 'a.txt'), 'a0\na1\n', 'utf8')
+  writeFileSync(path.join(selectedStageDir, 'b.txt'), 'b0\nb1\n', 'utf8')
+  const missingTargetStage = await gitTools.executeGitTool('git_stage', { paths: ['a.txt'] }, selectedStageDir)
+  assert(!missingTargetStage.ok, 'git_stage must fail closed without a frozen EffectTarget')
+  assert(missingTargetStage.output.includes('git_index_update EffectTarget'), 'git_stage should explain the missing frozen target')
+  assert(git(selectedStageDir, ['diff', '--cached', '--name-only']).trim() === '', 'missing target must not mutate the Git index')
+  const selectedStageInput = { toolName: 'git_stage', cwd: selectedStageDir, toolInput: { paths: ['a.txt'] } }
+  const selectedStageTarget = gitIndexEffect.buildGitIndexEffectTarget(selectedStageInput)
+  assertThrows(
+    () => gitIndexEffect.buildGitIndexEffectTarget({
+      toolName: 'git_stage',
+      cwd: selectedStageDir,
+      toolInput: { paths: [':!a.txt'] }
+    }),
+    /普通相对路径/,
+    'git index target builder must reject short-form pathspec magic'
+  )
+  const differentPathsStage = await gitTools.executeGitTool(
+    'git_stage',
+    { paths: ['b.txt'] },
+    selectedStageDir,
+    { effectTarget: selectedStageTarget }
+  )
+  assert(!differentPathsStage.ok, 'git_stage must reject different paths for the same-operation frozen target')
+  assert(differentPathsStage.output.includes('调用路径与冻结目标不一致'), 'git_stage should explain frozen path drift')
+  assert(git(selectedStageDir, ['diff', '--cached', '--name-only']).trim() === '', 'path drift must not mutate the Git index')
+  initRepo(alternateStageDir)
+  commitFiles(alternateStageDir, 'base', { 'a.txt': 'alternate0\n' })
+  writeFileSync(path.join(alternateStageDir, 'a.txt'), 'alternate1\n', 'utf8')
+  const differentCwdStage = await gitTools.executeGitTool(
+    'git_stage',
+    selectedStageInput.toolInput,
+    alternateStageDir,
+    { effectTarget: selectedStageTarget }
+  )
+  assert(!differentCwdStage.ok, 'git_stage must reject a target frozen for another repository or worktree')
+  assert(differentCwdStage.output.includes('调用 cwd 与冻结仓库或 worktree 身份不一致'), 'git_stage should explain frozen cwd identity drift')
+  assert(git(alternateStageDir, ['diff', '--cached', '--name-only']).trim() === '', 'cwd drift must not mutate the alternate Git index')
+  assert(git(selectedStageDir, ['diff', '--cached', '--name-only']).trim() === '', 'cwd drift must not mutate the frozen target Git index')
+  const selectedStage = await gitTools.executeGitTool(
+    'git_stage',
+    selectedStageInput.toolInput,
+    selectedStageDir,
+    { effectTarget: selectedStageTarget }
+  )
+  assert(selectedStage.ok, selectedStage.output)
+  assert(git(selectedStageDir, ['diff', '--cached', '--name-only']).trim() === 'a.txt', 'git_stage should stage only the frozen selected path')
+  const mismatchedTarget = gitIndexEffect.buildGitIndexEffectTarget({
+    toolName: 'git_stage_all',
+    cwd: selectedStageDir,
+    toolInput: {}
+  })
+  const mismatchedStage = await gitTools.executeGitTool(
+    'git_stage',
+    { paths: ['b.txt'] },
+    selectedStageDir,
+    { effectTarget: mismatchedTarget }
+  )
+  assert(!mismatchedStage.ok, 'git_stage must reject a stage_all target')
+  assert(git(selectedStageDir, ['diff', '--cached', '--name-only']).trim() === 'a.txt', 'mismatched target must not mutate the Git index')
+
+  initRepo(stageAllDir)
+  commitFiles(stageAllDir, 'base', { 'tracked.txt': 'before\n', 'deleted.txt': 'delete\n' })
+  writeFileSync(path.join(stageAllDir, 'tracked.txt'), 'after\n', 'utf8')
+  rmSync(path.join(stageAllDir, 'deleted.txt'))
+  writeFileSync(path.join(stageAllDir, 'new.txt'), 'new\n', 'utf8')
+  const stageAllInput = { toolName: 'git_stage_all', cwd: stageAllDir, toolInput: {} }
+  const stageAllTarget = gitIndexEffect.buildGitIndexEffectTarget(stageAllInput)
+  const stageAll = await gitTools.executeGitTool('git_stage_all', {}, stageAllDir, { effectTarget: stageAllTarget })
+  assert(stageAll.ok, stageAll.output)
+  assert(
+    git(stageAllDir, ['diff', '--cached', '--name-only']).trim().split('\n').sort().join(',') === 'deleted.txt,new.txt,tracked.txt',
+    'git_stage_all should apply the frozen broad index update'
+  )
 
   initRepo(projectDir)
   const commandMarker = path.join(projectDir, 'caogen-command-ran.txt')
@@ -766,6 +909,12 @@ function initRepo(dir) {
   git(dir, ['config', 'user.name', 'CaoGen Smoke'])
 }
 
+function installElectronStub() {
+  const electronDir = path.join(outDir, 'node_modules', 'electron')
+  mkdirSync(electronDir, { recursive: true })
+  writeFileSync(path.join(electronDir, 'index.js'), 'module.exports = { app: { getPath: () => process.env.CAOGEN_TEST_USER_DATA } }\n')
+}
+
 function commitFiles(dir, message, files) {
   for (const [file, content] of Object.entries(files)) {
     writeFileSync(path.join(dir, file), content, 'utf8')
@@ -905,4 +1054,14 @@ function parseJson(text) {
 
 function assert(condition, message = 'assertion failed') {
   if (!condition) throw new Error(message)
+}
+
+function assertThrows(callback, pattern, message) {
+  try {
+    callback()
+  } catch (error) {
+    assert(pattern.test(String(error)), `${message}: ${String(error)}`)
+    return
+  }
+  throw new Error(message)
 }

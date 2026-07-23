@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { renderReleaseDoctorMarkdown } from './lib/release-doctor-render.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -27,7 +28,13 @@ const reports = {
   chinaRealNetwork: readJson('test-results/china-real-network/latest.json'),
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json'),
   n1MigrationAudit: readJson('test-results/n1-migration-audit/latest.json'),
+  product1SoakAudit: readJson('test-results/product-1.0-soak-audit/latest.json'),
+  product1AcceptanceAudit: readJson('test-results/product-1.0-acceptance-audit/latest.json'),
+  product1AcceptanceMap: readJson('test-results/product-1.0-acceptance-map/latest.json'),
+  realProviderRelease: readJson('test-results/real-provider-release/latest.json'),
+  releaseSbomAudit: readJson('test-results/release-sbom/latest.json'),
   releasePackagingAudit: readJson('test-results/release-packaging-audit/latest.json'),
+  macosReleaseAudit: readJson('test-results/macos-release-audit/latest.json'),
   packagedAppSmoke: readJson('test-results/packaged-app-smoke/latest.json'),
   releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
   productPositioningAudit: readJson('test-results/product-positioning-audit/latest.json'),
@@ -51,10 +58,15 @@ const nonBlockingP2Ids = {
 
 const domains = [
   ...(refresh ? [refreshDomain()] : []),
+  stableProductAcceptanceDomain(),
+  realDefaultProviderDomain(),
+  sbomDomain(),
   releaseIdentityDomain(),
   deepTestDomain(),
+  dagFinalizationDomain(),
   p2Domain(),
   n1Domain(),
+  product1SoakDomain(),
   packagingDomain(packageJson),
   productPositioningDomain(),
   releaseNotesDomain(),
@@ -101,12 +113,19 @@ const report = {
   domains,
   openDomains: openDomains.map((domain) => domain.id),
   manualDomains: manualDomains.map((domain) => domain.id),
+  waivedDomains: domains.filter((domain) => domain.status === 'waived').map((domain) => domain.id),
   parallelAgents: buildParallelAgents(),
   releaseStopConditions: [
     'Do not publish a new release while workos-release-doctor status is not ready.',
+    'Do not label a 1.x build stable while any PRD P0 remains short of the exact current-verified state.',
+    'Do not publish a 1.x stable release without release-bound real default OpenAI-compatible provider evidence.',
+    'Do not label a 1.x build stable without a release-bound CycloneDX/SPDX inventory and vulnerability disposition.',
+    'Do not publish a 1.x macOS stable build without Developer ID signing, Hardened Runtime, notarization, stapling, and the required macOS release audit.',
+    'Do not publish until the required taskDag durable finalization crash e2e is present and passing in the release-bound Deep report.',
     'Do not publish while release-scope P2 evidence is missing: P2-002, P2-003, and P2-005 must be proved.',
     'Do not claim P2-001 Windows GUI evidence or P2-004 China external evidence as release-proved until their separate required gates pass.',
     'Do not make N1 30-minute human migration claims in release notes without a passed private N1 audit record.',
+    'Do not publish a 1.x stable release without a passed private seven-day soak record bound to the exact frozen version, commit, and artifact set, except 1.0.0 when its explicit version-scoped owner waiver validates; that waiver never applies to another release.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
     'Do not publish public product or release copy that mentions external product names, uses comparison framing, or forces a fixed future version target.',
     'Do not publish until npm run test:release-notes-audit:final passes for the exact GitHub Release body.',
@@ -118,9 +137,9 @@ const report = {
 
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-writeFileSync(path.join(reportDir, 'report.md'), renderMarkdown(report), 'utf8')
+writeFileSync(path.join(reportDir, 'report.md'), renderReleaseDoctorMarkdown(report), 'utf8')
 writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-writeFileSync(path.join(reportRoot, 'latest.md'), renderMarkdown(report), 'utf8')
+writeFileSync(path.join(reportRoot, 'latest.md'), renderReleaseDoctorMarkdown(report), 'utf8')
 
 console.log(JSON.stringify(report, null, 2))
 if (required && report.status !== 'ready') process.exitCode = 1
@@ -210,6 +229,176 @@ function releaseIdentityDomain() {
   }
 }
 
+function stableProductAcceptanceDomain() {
+  const audit = reports.product1AcceptanceAudit
+  const acceptanceMap = reports.product1AcceptanceMap
+  if (!requiresStableProductAcceptance()) {
+    return {
+      id: 'product_1_0_acceptance',
+      title: 'Formal 1.0 product acceptance',
+      status: 'not_required_before_1_0',
+      blocking: false,
+      commands: ['npm run test:product-1.0-acceptance'],
+      nextActions: ['Use the formal PRD gate for every 1.x stable candidate.']
+    }
+  }
+  const checks = {
+    auditPassed: audit.data?.status === 'passed',
+    acceptanceMapStructured: acceptanceMap.data?.structuralStatus === 'passed',
+    acceptanceMapClosed: acceptanceMap.data?.closureStatus === 'passed',
+    packageVersionMatches: audit.data?.packageVersion === releaseTargetVersion,
+    acceptanceMapVersionMatches: acceptanceMap.data?.packageVersion === releaseTargetVersion,
+    acceptanceMapCommitMatches: acceptanceMap.data?.git?.commit === gitState.commit,
+    acceptanceMapClean: acceptanceMap.data?.git?.worktreeClean === true && gitState.worktreeClean,
+    p0InventoryComplete: audit.data?.summary?.p0?.total === 64,
+    p0MapComplete:
+      acceptanceMap.data?.summary?.p0?.total === 64 &&
+      acceptanceMap.data?.summary?.p0?.mapped === 64,
+    p1MapComplete:
+      acceptanceMap.data?.summary?.p1?.total === 38 &&
+      acceptanceMap.data?.summary?.p1?.mapped === 38,
+    everyP0Verified:
+      audit.data?.summary?.p0?.verified === audit.data?.summary?.p0?.total &&
+      audit.data?.summary?.p0?.open === 0,
+    acceptanceMatrixPresent: existsSync(path.join(repoRoot, 'docs', '1.0-ACCEPTANCE-MATRIX.md'))
+  }
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  return {
+    id: 'product_1_0_acceptance',
+    title: 'Formal 1.0 product acceptance',
+    status: failures.length === 0 ? 'ready' : 'open',
+    checks,
+    failures,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      summary: audit.data?.summary,
+      openP0: Array.isArray(audit.data?.openP0) ? audit.data.openP0.map((item) => item.id) : []
+    },
+    acceptanceMap: {
+      path: acceptanceMap.relativePath,
+      exists: acceptanceMap.exists,
+      status: evidenceStatus(acceptanceMap),
+      structuralStatus: acceptanceMap.data?.structuralStatus,
+      closureStatus: acceptanceMap.data?.closureStatus,
+      summary: acceptanceMap.data?.summary,
+      structuralFailures: acceptanceMap.data?.structuralFailures,
+      closureFailureCount: Array.isArray(acceptanceMap.data?.closureFailures)
+        ? acceptanceMap.data.closureFailures.length
+        : undefined,
+      releaseBindingFailures: acceptanceMap.data?.releaseBindingFailures
+    },
+    commands: [
+      'npm run test:product-1.0-acceptance',
+      'npm run test:product-1.0-acceptance:required',
+      'npm run test:1.0-acceptance-map',
+      'npm run test:1.0-acceptance-map:required'
+    ],
+    nextActions: failures.length === 0
+      ? ['Keep all 64 PRD P0 requirements verified and bound to their acceptance evidence.']
+      : [
+          'Use docs/1.0-ACCEPTANCE-MATRIX.md as the owner and evidence ledger for the remaining PRD P0/P1 work.',
+          'Keep the machine-readable acceptance map complete and bind the required result to the clean release commit.',
+          'Do not use a green engineering Deep report as a substitute for the formal 1.0 product acceptance gate.'
+        ]
+  }
+}
+
+function sbomDomain() {
+  const audit = reports.releaseSbomAudit
+  if (!requiresStableProductAcceptance()) {
+    return {
+      id: 'release_sbom',
+      title: 'Release SBOM and dependency decision',
+      status: 'not_required_before_1_0',
+      blocking: false,
+      commands: ['npm run test:release-sbom'],
+      nextActions: ['Generate a release-bound SBOM before any 1.x stable publication.']
+    }
+  }
+  const checks = {
+    auditPassed: audit.data?.status === 'passed',
+    packageVersionMatches: audit.data?.packageVersion === releaseTargetVersion,
+    commitMatches: audit.data?.commit === gitState.commit,
+    cleanCommitEvidence: audit.data?.worktreeClean === true && gitState.worktreeClean,
+    cyclonedxInventoryPresent: audit.data?.bomFormat === 'CycloneDX 1.5' && audit.data?.componentCount > 0,
+    vulnerabilityAuditPassed: audit.data?.vulnerabilityAudit?.status === 'passed'
+  }
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name)
+  return {
+    id: 'release_sbom',
+    title: 'Release SBOM and dependency decision',
+    status: failures.length === 0 ? 'ready' : 'open',
+    checks,
+    failures,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      packageVersion: audit.data?.packageVersion,
+      commit: audit.data?.commit,
+      worktreeClean: audit.data?.worktreeClean,
+      bomFormat: audit.data?.bomFormat,
+      componentCount: audit.data?.componentCount,
+      vulnerabilityAudit: audit.data?.vulnerabilityAudit,
+      bomDigest: audit.data?.bomDigest
+    },
+    commands: [
+      'npm run test:release-sbom:required'
+    ],
+    nextActions: failures.length === 0
+      ? ['Keep the SBOM, digest, and vulnerability disposition bound to the exact release commit and artifact set.']
+      : ['Run the required SBOM audit with --audit on the clean release commit and record every High/Critical disposition.']
+  }
+}
+
+function realDefaultProviderDomain() {
+  const audit = reports.realProviderRelease
+  if (!requiresStableProductAcceptance()) {
+    return {
+      id: 'real_default_provider',
+      title: 'Real default OpenAI-compatible provider evidence',
+      status: 'not_required_before_1_0',
+      blocking: false,
+      commands: ['npm run test:real-provider-release:required -- --record /private/path/result.json'],
+      nextActions: ['Record release-bound real default provider evidence before any 1.x stable publication.']
+    }
+  }
+  const checks = {
+    auditPassed: audit.data?.status === 'passed',
+    candidateVersionMatches: audit.data?.candidateVersion === releaseTargetVersion,
+    gitCommitMatches: audit.data?.gitCommit === gitState.commit,
+    worktreeClean: audit.data?.worktreeClean === true,
+    protocolOpenAiCompatible: audit.data?.protocol === 'openai-compatible',
+    redacted: audit.data?.redacted === true
+  }
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name)
+  return {
+    id: 'real_default_provider',
+    title: 'Real default OpenAI-compatible provider evidence',
+    status: failures.length === 0 ? 'ready' : 'open',
+    checks,
+    failures,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      candidateVersion: audit.data?.candidateVersion,
+      gitCommit: audit.data?.gitCommit,
+      worktreeClean: audit.data?.worktreeClean,
+      protocol: audit.data?.protocol,
+      redacted: audit.data?.redacted
+    },
+    commands: ['npm run test:real-provider-release:required -- --record /private/path/result.json'],
+    nextActions: failures.length === 0
+      ? ['Keep the redacted real-provider record bound to the exact clean release commit and version.']
+      : ['Run the real default OpenAI-compatible provider release gate with a private record, then rerun Release Doctor on the same candidate.']
+  }
+}
+
 function refreshDomain() {
   const failed = refreshResults.filter((item) => item.status !== 'completed')
   return {
@@ -262,8 +451,65 @@ function deepTestDomain() {
   }
 }
 
+function dagFinalizationDomain() {
+  const audit = reports.deepTest
+  const result = Array.isArray(audit.data?.results)
+    ? audit.data.results.find((item) => item?.name === 'taskDag durable finalization crash e2e')
+    : undefined
+  const checks = {
+    present: Boolean(result),
+    executed: result?.executed === true,
+    required: result?.requirement === 'required',
+    passed: result?.status === 'pass'
+  }
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  return {
+    id: 'dag_finalization',
+    title: 'Durable DAG finalization crash gate',
+    status: failures.length === 0 ? 'ready' : 'open',
+    checks,
+    failures,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      result
+    },
+    commands: ['npm run test:dag-finalization', 'npm run test:deep'],
+    nextActions: failures.length === 0
+      ? ['Keep the durable finalization crash result bound to the exact release commit.']
+      : ['Run the required durable finalization crash E2E through the full Deep gate on the release commit.']
+  }
+}
+
 function refreshLocalEvidence() {
+  const refreshReleaseVersion = argValue('--version') || process.env.CAOGEN_RELEASE_VERSION || stringField(readJson('package.json').data, 'version') || 'unknown'
+  const refreshReleaseMajor = Number(refreshReleaseVersion.split('.')[0])
   const commands = [
+    ...(Number.isFinite(refreshReleaseMajor) && refreshReleaseMajor >= 1
+      ? [{
+          id: 'product_1_0_soak_audit',
+          command: `node scripts/product-1.0-soak-audit.mjs --required --version ${refreshReleaseVersion}`,
+          args: ['scripts/product-1.0-soak-audit.mjs', '--required', '--version', refreshReleaseVersion]
+        }]
+      : []),
+    {
+      id: 'product_1_0_acceptance_audit',
+      command: 'node scripts/product-1.0-acceptance-audit.mjs',
+      args: ['scripts/product-1.0-acceptance-audit.mjs']
+    },
+    {
+      id: 'product_1_0_acceptance_map',
+      command: 'node scripts/product-1.0-acceptance-map.mjs',
+      args: ['scripts/product-1.0-acceptance-map.mjs']
+    },
+    {
+      id: 'release_sbom_audit',
+      command: 'node scripts/release-sbom-audit.mjs --audit',
+      args: ['scripts/release-sbom-audit.mjs', '--audit']
+    },
     {
       id: 'release_packaging_audit',
       command: 'node scripts/release-packaging-audit.mjs',
@@ -275,9 +521,19 @@ function refreshLocalEvidence() {
       args: ['scripts/product-positioning-audit.mjs']
     },
     {
+      id: 'macos_release_audit',
+      command: 'node scripts/macos-release-audit.mjs',
+      args: ['scripts/macos-release-audit.mjs']
+    },
+    {
       id: 'github_release_audit',
       command: 'node scripts/github-release-audit.mjs',
       args: ['scripts/github-release-audit.mjs']
+    },
+    {
+      id: 'secret_history_scan',
+      command: 'node scripts/secret-scan.mjs --worktree --history',
+      args: ['scripts/secret-scan.mjs', '--worktree', '--history']
     }
   ]
   return commands.map((item) => runRefreshCommand(item))
@@ -331,6 +587,7 @@ function nextActionsForP2(id) {
 
 function n1Domain() {
   const audit = reports.n1MigrationAudit
+  const stableRequired = requiresStableProductAcceptance()
   const candidates = [
     'docs/N1-MIGRATION-RESULTS.md',
     'docs/N1-MIGRATION-DRILL-RESULT.md',
@@ -349,8 +606,8 @@ function n1Domain() {
   return {
     id: 'n1_migration',
     title: 'N1 human 30-minute migration drill',
-    status: audit.data?.status === 'passed' ? 'ready' : 'not_required_without_n1_claims',
-    blocking: false,
+    status: audit.data?.status === 'passed' ? 'ready' : stableRequired ? 'open' : 'not_required_without_n1_claims',
+    ...(stableRequired ? {} : { blocking: false }),
     audit: {
       path: audit.relativePath,
       exists: audit.exists,
@@ -361,19 +618,143 @@ function n1Domain() {
     commands: [
       'node scripts/n1-fixture.mjs',
       'npm run dev',
-      'npm run test:n1-migration-audit:required # optional before making N1 claims'
+      stableRequired
+        ? 'npm run test:n1-migration-audit:required'
+        : 'npm run test:n1-migration-audit:required # optional before making N1 claims'
     ],
     nextActions: audit.data?.status === 'passed'
-      ? ['Keep the passed N1 audit report private and only cite it if release notes make N1 claims.']
-      : [
-          'N1 human drill is not a release blocker unless the release notes make N1 claims.',
-          'Do not claim 30-minute human migration in release notes until a private N1 audit record passes.'
-        ]
+      ? ['Keep the passed N1 audit report private and bind it to the exact stable candidate.']
+      : stableRequired
+        ? ['Run the required private 30-minute human migration drill and bind its timestamped result to the stable candidate.']
+        : [
+            'N1 human drill is not a release blocker unless the release notes make N1 claims.',
+            'Do not claim 30-minute human migration in release notes until a private N1 audit record passes.'
+          ]
   }
+}
+
+function product1SoakDomain() {
+  const audit = reports.product1SoakAudit
+  const summary = isRecord(audit.data?.summary) ? audit.data.summary : {}
+  const waiver = isRecord(audit.data?.waiver) ? audit.data.waiver : {}
+  const stableRequired = requiresStableProductAcceptance()
+  const soakArtifactDigest = stringField(summary, 'artifactSetDigest') || ''
+  const packagingArtifactDigest = stringField(reports.releasePackagingAudit.data, 'artifactSetSha256') || ''
+  const soakChecks = buildProduct1SoakChecks(audit, summary, soakArtifactDigest, packagingArtifactDigest)
+  const waiverChecks = buildProduct1SoakWaiverChecks(audit, waiver)
+  const soakPassed = Object.values(soakChecks).every(Boolean)
+  const waiverAccepted = stableRequired && Object.values(waiverChecks).every(Boolean)
+  return {
+    id: 'product_1_0_soak',
+    title: 'Feature-frozen seven-day daily-use soak',
+    status: product1SoakStatus(soakPassed, waiverAccepted, stableRequired),
+    ...(stableRequired && !waiverAccepted ? {} : { blocking: false }),
+    acceptedBy: soakPassed ? 'seven_day_soak' : waiverAccepted ? 'version_scoped_owner_waiver' : undefined,
+    audit: {
+      path: audit.relativePath,
+      exists: audit.exists,
+      status: evidenceStatus(audit),
+      decision: audit.data?.decision,
+      releaseVersion: audit.data?.releaseVersion,
+      summary,
+      waiver
+    },
+    waiver: waiverAccepted ? waiver : undefined,
+    packagingArtifactDigest: packagingArtifactDigest ? `sha256:${packagingArtifactDigest}` : undefined,
+    checks: soakChecks,
+    waiverChecks,
+    failures: product1SoakFailures(soakChecks, waiverChecks, soakPassed, waiverAccepted),
+    commands: [
+      'npm run test:1.0-soak-audit:smoke',
+      'npm run test:1.0-soak-audit:required -- --record /private/path/to/soak.json',
+      'npm run test:1.0-soak-audit:required -- --version 1.0.0 --waiver docs/1.0-SOAK-WAIVER.json',
+      `npm run workos:release-doctor -- --required --version ${releaseTargetVersion}`
+    ],
+    nextActions: product1SoakNextActions(soakPassed, waiverAccepted)
+  }
+}
+
+function buildProduct1SoakChecks(audit, summary, soakArtifactDigest, packagingArtifactDigest) {
+  return {
+    auditPassed: audit.data?.status === 'passed',
+    auditDecisionIsSoak: audit.data?.decision === 'seven_day_soak',
+    auditReleaseVersionMatches: audit.data?.releaseVersion === releaseTargetVersion,
+    candidateVersionMatches: stringField(summary, 'candidateVersion') === releaseTargetVersion,
+    gitCommitMatches: stringField(summary, 'gitCommit') === gitState.commit,
+    artifactSetBound: /^sha256:[0-9a-f]{64}$/i.test(soakArtifactDigest),
+    artifactSetMatchesPackaging: Boolean(packagingArtifactDigest) && soakArtifactDigest === `sha256:${packagingArtifactDigest}`,
+    featureFrozen: summary.featureFrozen === true,
+    sevenConsecutiveDays: summary.dayCount === 7,
+    zeroDataLoss: summary.zeroDataLoss === true,
+    zeroDuplicateHighRiskEffects: summary.zeroDuplicateHighRiskEffects === true,
+    noReset: summary.resetCount === 0
+  }
+}
+
+function buildProduct1SoakWaiverChecks(audit, waiver) {
+  return {
+    auditWaived: audit.data?.status === 'waived',
+    auditHasNoFailures: Array.isArray(audit.data?.failures) && audit.data.failures.length === 0,
+    auditDecisionIsOwnerWaiver: audit.data?.decision === 'owner_waiver',
+    auditReleaseVersionMatches: audit.data?.releaseVersion === releaseTargetVersion,
+    waiverPathRecorded: Boolean(stringField(audit.data, 'waiverPath')?.trim()),
+    releaseVersionIsExactly1_0_0: releaseTargetVersion === '1.0.0',
+    schemaVersionMatches: waiver.schemaVersion === 1,
+    gateMatches: stringField(waiver, 'gateId') === 'product_1_0_soak',
+    decisionRecorded: stringField(waiver, 'decision') === 'waive',
+    waiverVersionMatches: stringField(waiver, 'releaseVersion') === releaseTargetVersion,
+    exactVersionScope: stringField(waiver, 'scope') === 'exact_release_version_only',
+    ownerRecorded: Boolean(stringField(waiver, 'owner')?.trim()),
+    decisionTimeRecorded: Number.isFinite(Date.parse(stringField(waiver, 'decidedAt') || '')),
+    decisionSourceRecorded: Boolean(stringField(waiver, 'decisionSource')?.trim()),
+    reasonRecorded: Boolean(stringField(waiver, 'reason')?.trim()),
+    acceptedRiskRecorded: Boolean(stringField(waiver, 'acceptedRisk')?.trim()),
+    ownerApproved: waiver.approvedByOwner === true,
+    riskAccepted: waiver.riskAccepted === true,
+    futureVersionsExcluded: waiver.appliesToFutureVersions === false,
+    expiresAfter1_0_0: stringField(waiver, 'expiresAfterReleaseVersion') === '1.0.0',
+    substituteEvidenceRecorded:
+      Array.isArray(waiver.substituteEvidence) &&
+      waiver.substituteEvidence.some((item) => typeof item === 'string' && item.trim())
+  }
+}
+
+function product1SoakStatus(soakPassed, waiverAccepted, stableRequired) {
+  if (soakPassed) return 'ready'
+  if (waiverAccepted) return 'waived'
+  return stableRequired ? 'open' : 'not_required_before_1_x'
+}
+
+function product1SoakFailures(soakChecks, waiverChecks, soakPassed, waiverAccepted) {
+  if (soakPassed || waiverAccepted) return []
+  return [
+    ...failedCheckNames('soak', soakChecks),
+    ...failedCheckNames('waiver', waiverChecks)
+  ]
+}
+
+function failedCheckNames(prefix, checks) {
+  return Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => `${prefix}.${name}`)
+}
+
+function product1SoakNextActions(soakPassed, waiverAccepted) {
+  if (soakPassed) {
+    return ['Keep the private soak record and raw evidence bound to the exact release candidate; any candidate change restarts the clock.']
+  }
+  if (waiverAccepted) {
+    return [
+      'Keep the explicit owner, reason, accepted risk, and compensating gates visible in the 1.0.0 release decision.',
+      'This waiver expires with 1.0.0; a later release requires its own policy decision and cannot inherit this waiver.'
+    ]
+  }
+  return ['Run seven consecutive real daily-use days on one feature-frozen candidate, or for exactly 1.0.0 validate the explicit owner waiver; then rerun Release Doctor.']
 }
 
 function packagingDomain(packageJson) {
   const audit = reports.releasePackagingAudit
+  const macosAudit = reports.macosReleaseAudit
   const launchAudit = reports.packagedAppSmoke
   const version = stringField(packageJson, 'version') || 'unknown'
   const distPath = path.join(repoRoot, 'dist')
@@ -391,7 +772,13 @@ function packagingDomain(packageJson) {
     packagedLaunchCommitMatches: launchAudit.data?.git?.commit === gitState.commit,
     packagedLaunchCleanEvidence: launchAudit.data?.git?.worktreeClean === true && gitState.worktreeClean,
     artifactsComplete: artifacts.complete,
-    artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256
+    artifactSetMatches: Boolean(artifacts.artifactSetSha256) && audit.data?.artifactSetSha256 === artifacts.artifactSetSha256,
+    ...(requiresTrustedMacDistribution()
+      ? {
+          macosDistributionAuditPassed: macosAudit.data?.status === 'passed',
+          macosDistributionVersionMatches: macosAudit.data?.packageVersion === releaseTargetVersion
+        }
+      : {})
   }
   const failures = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -426,18 +813,36 @@ function packagingDomain(packageJson) {
       target: launchAudit.data?.target,
       failure: launchAudit.data?.failure
     },
+    macosReleaseAudit: {
+      required: requiresTrustedMacDistribution(),
+      path: macosAudit.relativePath,
+      exists: macosAudit.exists,
+      status: evidenceStatus(macosAudit),
+      packageVersion: macosAudit.data?.packageVersion,
+      targetArch: macosAudit.data?.targetArch,
+      failures: Array.isArray(macosAudit.data?.failures) ? macosAudit.data.failures : undefined
+    },
     commands: [
       'npm run typecheck',
       'npm run build',
       'npm run test:deep',
       'npm run secret:scan:history',
-      'npm run dist:mac:x64',
+      ...(requiresTrustedMacDistribution()
+        ? [
+            'npm run release:mac:preflight:x64',
+            'npm run dist:mac:release:x64',
+            'npm run test:macos-release-audit:required -- --arch x64'
+          ]
+        : ['npm run dist:mac:x64']),
       'npm run test:release-packaging-audit:required',
       'npm run test:packaged-app:mac'
     ],
     nextActions: [
       'Bump package.json and package-lock.json only when all required evidence gates are proved.',
       'Run macOS packaging and inspect dist assets before uploading.',
+      ...(requiresTrustedMacDistribution()
+        ? ['For a 1.x stable release, unsigned preview assets never satisfy the distribution gate.']
+        : []),
       'Run the packaging audit against the intended release version before creating GitHub Release assets.',
       'Launch the packaged macOS app from a fresh user-data directory and require a real renderer target.',
       'Publish only the intended installer/update assets; never upload test-results, out, node_modules, .env files, certs, private keys, or local evidence packs.'
@@ -588,6 +993,25 @@ function githubReleaseDomain() {
 }
 
 function secretDomain() {
+  if (requiresStableProductAcceptance()) {
+    const refreshResult = refreshResults.find((item) => item.id === 'secret_history_scan')
+    const passed = refresh && refreshResult?.status === 'completed'
+    return {
+      id: 'secret_hygiene',
+      title: 'Secret and public repository hygiene',
+      status: passed ? 'ready' : 'open',
+      commands: [
+        'npm run secret:scan',
+        'npm run secret:scan:history',
+        `npm run workos:release-doctor -- --refresh --version ${releaseTargetVersion}`,
+        'git status --short --ignored',
+        'git diff --cached --name-only'
+      ],
+      nextActions: passed
+        ? ['Keep the successful history scan bound to this refreshed release-doctor run.']
+        : ['Run the release doctor with --refresh so the secret-history scan is executed in the same required decision.']
+    }
+  }
   return {
     id: 'secret_hygiene',
     title: 'Secret and public repository hygiene',
@@ -604,6 +1028,15 @@ function secretDomain() {
       'If a real token was ever pushed or shared outside the repo, rotate or revoke it on the provider platform; Git deletion alone is not enough.'
     ]
   }
+}
+
+function requiresStableProductAcceptance() {
+  const major = Number(String(releaseTargetVersion).split('.')[0])
+  return Number.isFinite(major) && major >= 1
+}
+
+function requiresTrustedMacDistribution() {
+  return process.platform === 'darwin' && requiresStableProductAcceptance()
 }
 
 function buildParallelAgents() {
@@ -651,63 +1084,6 @@ function buildParallelAgents() {
       acceptance: 'Release notes and README match current evidence; no new release is published until every required gate is ready.'
     }
   ]
-}
-
-function renderMarkdown(value) {
-  const lines = [
-    '# CaoGen Work OS Release Doctor',
-    '',
-    `Status: ${value.status}`,
-    `Run ID: ${value.runId}`,
-    `Release target: ${value.releaseTarget.label}`,
-    `Package version: ${value.currentPackageVersion}`,
-    '',
-    '## Refresh',
-    '',
-    `- Enabled: ${value.refresh.enabled ? 'yes' : 'no'}`,
-    ...value.refresh.commands.map((item) => `- ${item.id}: ${item.status} (${item.durationMs}ms)`),
-    '',
-    '## Domains',
-    ''
-  ]
-  for (const domain of value.domains) {
-    lines.push(`### ${domain.title}`)
-    lines.push('')
-    lines.push(`- Status: ${domain.status}`)
-    if (domain.proved?.length) lines.push(`- Proved: ${domain.proved.map((item) => `\`${item}\``).join(', ')}`)
-    if (domain.open?.length) lines.push(`- Open: ${domain.open.map((item) => `\`${item.id}:${item.status}\``).join(', ')}`)
-    if (domain.nonBlockingOpen?.length) {
-      lines.push(`- Non-blocking open: ${domain.nonBlockingOpen.map((item) => `\`${item.id}:${item.releasePolicy}\``).join(', ')}`)
-    }
-    if (domain.commands?.length) {
-      lines.push('- Commands:')
-      for (const command of domain.commands) lines.push(`  - \`${command}\``)
-    }
-    if (domain.nextActions?.length) {
-      lines.push('- Next actions:')
-      for (const action of domain.nextActions) lines.push(`  - ${action}`)
-    }
-    lines.push('')
-  }
-  lines.push('## Optional Engines')
-  lines.push('')
-  for (const engine of value.optionalEngines) {
-    lines.push(`- ${engine.id}: release required=${engine.releaseRequired ? 'yes' : 'no'}; default selected=${engine.defaultSelected ? 'yes' : 'no'}. ${engine.policy}`)
-  }
-  lines.push('')
-  lines.push('## Parallel Agents')
-  lines.push('')
-  lines.push('| Agent | Branch | Objective | Acceptance |')
-  lines.push('|---|---|---|---|')
-  for (const agent of value.parallelAgents) {
-    lines.push(`| ${agent.id} | \`${agent.branch}\` | ${agent.objective} | ${agent.acceptance} |`)
-  }
-  lines.push('')
-  lines.push('## Stop Conditions')
-  lines.push('')
-  for (const item of value.releaseStopConditions) lines.push(`- ${item}`)
-  lines.push('')
-  return `${lines.join('\n')}\n`
 }
 
 function readJson(relativePath) {

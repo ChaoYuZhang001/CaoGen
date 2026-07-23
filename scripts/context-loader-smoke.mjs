@@ -179,8 +179,13 @@ try {
   assert(!emptyScopedPrompt.includes('只允许改文档'), 'empty project should not leak other project rules')
   assert(existsSync(path.join(projectDir, 'caogen.md')), 'caogen.md should be written')
   assertSourceContains('src/main/agentSession.ts', [
-    'buildProjectContextSystemAppend',
-    '[projectContextAppend, persona, memoryAppend]',
+    'prepareClaudeUserMessage',
+    'lastProjectContextAppend: this.lastProjectContextAppend',
+    'this.lastProjectContextAppend = prepared.projectContextAppend'
+  ])
+  assertSourceContains('src/main/claude-user-message.ts', [
+    'buildProjectContextSystemAppendSync',
+    'projectContextAppend !== input.lastProjectContextAppend',
     '# 项目上下文已更新'
   ])
   assertSourceContains('src/main/openaiEngine.ts', [

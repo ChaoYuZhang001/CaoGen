@@ -11,6 +11,8 @@ const fixtureDir = path.join(reportRoot, 'fixtures')
 const providerPath = path.join(fixtureDir, 'providers-bom.json')
 const chinaOnlyProviderPath = path.join(fixtureDir, 'providers-china-only.json')
 const localProviderPath = path.join(fixtureDir, 'providers-localhost.json')
+const invalidApiFormatProviderPath = path.join(fixtureDir, 'providers-invalid-api-format.json')
+const invalidThinkingModeProviderPath = path.join(fixtureDir, 'providers-invalid-thinking-mode.json')
 const evidencePath = path.join(fixtureDir, 'jetbrains-evidence-bom.json')
 const weakEvidencePath = path.join(fixtureDir, 'jetbrains-evidence-weak-session.json')
 const stalePluginEvidencePath = path.join(fixtureDir, 'jetbrains-evidence-stale-plugin.json')
@@ -33,6 +35,8 @@ if (createdPluginDistribution) {
 writeFileSync(providerPath, `\uFEFF${JSON.stringify(providerFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(chinaOnlyProviderPath, `${JSON.stringify(chinaOnlyProviderFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(localProviderPath, `${JSON.stringify(localProviderFixture(), null, 2)}\n`, 'utf8')
+writeFileSync(invalidApiFormatProviderPath, `${JSON.stringify(invalidApiFormatProviderFixture(), null, 2)}\n`, 'utf8')
+writeFileSync(invalidThinkingModeProviderPath, `${JSON.stringify(invalidThinkingModeProviderFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(artifactPath, `JetBrains interaction evidence artifact fixture ${runId}\n`, 'utf8')
 writeFileSync(fakeIdePath, `JetBrains executable name fixture ${runId}\n`, 'utf8')
 writeFileSync(evidencePath, `\uFEFF${JSON.stringify(jetBrainsEvidenceFixture(), null, 2)}\n`, 'utf8')
@@ -63,7 +67,34 @@ assertEqual(jetBrains.evidenceJsonValid, true)
 assertEqual(parity.status, 'ready')
 assertEqual(parity.providerSource, 'file')
 assertEqual(parity.providerCount, 2)
+assertEqual(parity.providerApiFormats['baseline-fixture'], 'openai-responses')
+assertEqual(parity.providerApiFormats['deepseek-fixture'], 'openai-compatible')
+assertEqual(parity.providerThinkingModes['deepseek-fixture'], 'disabled')
 assertEqual(chinaNetwork.status, 'missing_configuration')
+
+const invalidApiFormat = runNodeScript('scripts/p2-external-preflight.mjs', readyPreflightEnv(path.join(reportRoot, 'preflight-invalid-api-format'), {
+  CAOGEN_CHINA_PARITY_PROVIDERS: invalidApiFormatProviderPath
+}))
+assert(invalidApiFormat.status === 1, invalidApiFormat.output)
+const invalidApiFormatReport = readJson(path.join(reportRoot, 'preflight-invalid-api-format', 'latest.json'))
+const invalidApiFormatParity = checkByName(invalidApiFormatReport, 'china_tool_call_parity')
+assertEqual(invalidApiFormatParity.status, 'missing_configuration')
+assert(
+  invalidApiFormatParity.failures.some((failure) => failure.includes('apiFormat must be')),
+  'China parity preflight must reject unsupported API formats'
+)
+
+const invalidThinkingMode = runNodeScript('scripts/p2-external-preflight.mjs', readyPreflightEnv(path.join(reportRoot, 'preflight-invalid-thinking-mode'), {
+  CAOGEN_CHINA_PARITY_PROVIDERS: invalidThinkingModeProviderPath
+}))
+assert(invalidThinkingMode.status === 1, invalidThinkingMode.output)
+const invalidThinkingModeReport = readJson(path.join(reportRoot, 'preflight-invalid-thinking-mode', 'latest.json'))
+const invalidThinkingModeParity = checkByName(invalidThinkingModeReport, 'china_tool_call_parity')
+assertEqual(invalidThinkingModeParity.status, 'missing_configuration')
+assert(
+  invalidThinkingModeParity.failures.some((failure) => failure.includes('thinkingMode must be')),
+  'China parity preflight must reject unsupported thinking modes'
+)
 
 const weakJetBrains = runNodeScript('scripts/p2-external-preflight.mjs', readyPreflightEnv(path.join(reportRoot, 'preflight-weak-jetbrains'), {
   CAOGEN_JETBRAINS_IDE_EVIDENCE_JSON: weakEvidencePath
@@ -293,7 +324,7 @@ function providerFixture() {
     {
       id: 'baseline-fixture',
       group: 'baseline',
-      apiFormat: 'openai-compatible',
+      apiFormat: 'openai-responses',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4.1-mini',
       apiKey: 'fixture-key'
@@ -302,6 +333,7 @@ function providerFixture() {
       id: 'deepseek-fixture',
       group: 'china',
       apiFormat: 'openai-compatible',
+      thinkingMode: 'disabled',
       baseUrl: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
       apiKey: 'fixture-key'
@@ -315,6 +347,18 @@ function chinaOnlyProviderFixture() {
 
 function localProviderFixture() {
   return providerFixture().map((provider) => ({ ...provider, baseUrl: 'https://127.0.0.1/v1' }))
+}
+
+function invalidApiFormatProviderFixture() {
+  const fixture = providerFixture()
+  fixture[0].apiFormat = 'openai-hybrid'
+  return fixture
+}
+
+function invalidThinkingModeProviderFixture() {
+  const fixture = providerFixture()
+  fixture[1].thinkingMode = 'automatic'
+  return fixture
 }
 
 function jetBrainsEvidenceFixture() {

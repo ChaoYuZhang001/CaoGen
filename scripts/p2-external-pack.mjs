@@ -127,7 +127,7 @@ function chinaProviderTemplate() {
       id: 'openai-baseline',
       name: 'OpenAI baseline',
       group: 'baseline',
-      apiFormat: 'openai-compatible',
+      apiFormat: 'openai-responses',
       baseUrl: 'https://api.openai.com/v1',
       model: '<baseline-model>',
       apiKey: '<secret>'

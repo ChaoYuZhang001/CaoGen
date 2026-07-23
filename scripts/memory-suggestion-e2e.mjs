@@ -84,9 +84,7 @@ let session
 try {
   await waitForDebugPort(remotePort, 20_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  const pages = await browser.pages()
-  const page = pages.find((item) => !item.url().startsWith('devtools://')) || pages[0]
-  if (!page) throw new Error('Electron page target not found')
+  const page = await waitForElectronPage(browser, 20_000)
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       report.warnings.push(`console ${msg.type()}: ${msg.text()}`)
@@ -155,13 +153,29 @@ try {
     report.duplicateThrottle = { before: before.length, after: after.length }
   })
 
-  await check('accepting a distinct suggestion opens MemoryPanel with prefilled form and no project draft', async () => {
+  await check('accepting a distinct suggestion opens a prefilled form without duplicating or activating auto drafts', async () => {
     await sendMessage(page, session.id, acceptText)
     await waitForValue(
       () => readMemorySuggestionUi(page),
       (value) => value.visible && value.text.includes(acceptText),
       10_000,
       'waiting for second memory suggestion bar'
+    )
+    const beforeAccept = await waitForValue(
+      () =>
+        page.evaluate(async (sessionId) => {
+          const data = await window.agentDesk.readProjectMemory(sessionId)
+          return {
+            draftBodies: data.drafts.map((draft) => draft.body),
+            entries: data.entries.length
+          }
+        }, session.id),
+      (value) =>
+        value.entries === 0 &&
+        value.draftBodies.includes(triggerText) &&
+        value.draftBodies.includes(acceptText),
+      10_000,
+      'waiting for distinct auto-extracted Memory drafts'
     )
     await page.click('[data-memory-suggestion-action="accept"]')
     const panel = await waitForValue(
@@ -180,12 +194,19 @@ try {
             entries: data.entries.length
           }
         }, session.id),
-      (value) => value.panelVisible && value.formVisible && value.body === acceptText && value.drafts === 0,
+      (value) =>
+        value.panelVisible &&
+        value.formVisible &&
+        value.body === acceptText &&
+        value.drafts === beforeAccept.draftBodies.length &&
+        value.entries === 0,
       10_000,
-      'waiting for memory panel prefilled form without persisted draft'
+      'waiting for memory panel prefilled form without duplicate or active Memory'
     )
     assert(panel.kind === 'convention', `wrong prefilled memory kind: ${JSON.stringify(panel)}`)
-    assert(panel.drafts === 0, `accepting suggestion should not persist draft automatically: ${JSON.stringify(panel)}`)
+    assert(beforeAccept.draftBodies.length === 2, `distinct suggestions should create exactly two drafts: ${JSON.stringify(beforeAccept)}`)
+    assert(panel.drafts === beforeAccept.draftBodies.length, `accepting suggestion duplicated a draft: ${JSON.stringify(panel)}`)
+    assert(panel.entries === 0, `accepting suggestion activated Memory without approval: ${JSON.stringify(panel)}`)
     report.acceptedSuggestion = panel
   })
   await screenshot(page, '02-memory-panel-prefill')
@@ -351,6 +372,17 @@ function writeMockUserData(port) {
 
 async function waitForAgentDesk(page) {
   await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: 15_000 })
+}
+
+async function waitForElectronPage(browser, timeoutMs) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const pages = await browser.pages()
+    const page = pages.find((item) => !item.url().startsWith('devtools://'))
+    if (page) return page
+    await sleep(100)
+  }
+  throw new Error('Electron page target not found before timeout')
 }
 
 async function waitForValue(producer, predicate, timeout, label) {

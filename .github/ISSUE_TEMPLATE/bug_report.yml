@@ -1,0 +1,93 @@
+name: Bug report / Bug 报告
+description: Report a reproducible problem in a currently available CaoGen capability / 报告当前可用能力中的可复现问题
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve CaoGen. Security vulnerabilities and leaked credentials must be reported privately through SECURITY.md, not here.
+
+        感谢帮助改进 CaoGen。安全漏洞和凭据泄露请按 SECURITY.md 私下报告，不要发布在公开 Issue。
+
+  - type: input
+    id: version
+    attributes:
+      label: CaoGen version / CaoGen 版本
+      description: Release tag, commit SHA, or branch name / Release 标签、commit SHA 或分支名
+      placeholder: v0.1.6 or 21051cab
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: Install source / 安装来源
+      options:
+        - GitHub Release
+        - Source checkout / 源码运行
+        - Locally packaged build / 本地打包
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment / 环境
+      description: OS, architecture, Node.js version when running from source / 操作系统、架构，源码运行时请附 Node.js 版本
+      placeholder: macOS 26 arm64; Node.js 22.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened? / 实际发生了什么？
+      description: Describe the visible failure and affected workflow / 描述可见故障及受影响流程
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps / 复现步骤
+      placeholder: |
+        1. Open...
+        2. Configure...
+        3. Click...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or recordings / 日志、截图或录屏
+      description: Remove API keys, tokens, private repository content, and sensitive local paths / 请移除 API Key、Token、私有仓库内容和敏感本机路径
+      render: shell
+
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Capability boundary / 能力边界
+      description: Is this a released capability, a conditional integration, or roadmap work? Link STATUS.md or relevant evidence when known. / 这是已发布能力、条件集成还是路线图工作？如已知请链接 STATUS.md 或相关证据。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交确认
+      options:
+        - label: I searched existing issues for duplicates. / 我已搜索现有 Issue，未发现重复项。
+          required: true
+        - label: I removed credentials, private data, and sensitive local paths. / 我已移除凭据、私有数据和敏感本机路径。
+          required: true
+        - label: This is not a private security report. / 这不是需要私下报告的安全问题。
+          required: true
