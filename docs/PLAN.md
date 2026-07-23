@@ -81,6 +81,10 @@ README、官网、STATUS 三处必须一致:
 - [x] M1-T1 提交并整理本地未提交的全部工作(约一周量),git 历史恢复连续(PR #7)
 - [x] M1-T2 版本号定为 0.1.7(package.json 从 1.0.0 回退,延续 0.1.x 发布线);1.0 版本号预留给完整 Work OS
 - [ ] M1-T3 macOS(x64 + arm64)签名 + 公证,Windows x64 签名;发布管线走通
+  - [x] Intel x64 本地签名基线:Developer ID、Hardened Runtime、45/45 Mach-O、DMG/ZIP 内签名和真实 renderer 启动已验证;该基线未公证,不得发布
+  - [ ] 在最终 clean commit 上完成 x64 notarize、staple、Gatekeeper 与 required release audit
+  - [ ] 在 Apple Silicon 真机完成 arm64 原生签名、公证、安装和启动证据
+  - [ ] 在 Windows x64 签名环境完成签名、安装和启动证据
 - [ ] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
 - [x] M1-T5 文档收敛:旧规划文档移入 docs/archive/,README 增加对比表与可见 Roadmap
 - [ ] M1-T6 发布 v0.1.7,Release Notes 只写当前真实能力,不写路线图功能
