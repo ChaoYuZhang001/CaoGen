@@ -13,13 +13,14 @@ on:
         default: 0.1.7
         type: string
       platform_scope:
-        description: Run both macOS lanes only, or the complete macOS and Windows matrix
+        description: Run macOS Intel only, both macOS lanes, or the complete macOS and Windows matrix
         required: true
         default: all
         type: choice
         options:
           - all
           - macos
+          - macos-x64
 
 permissions:
   contents: read
@@ -134,6 +135,11 @@ jobs:
           echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_VALUE" >> "$GITHUB_ENV"
           echo "CAOGEN_RELEASE_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
       - name: Run release-scope P2 gate
+        env:
+          CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000'
+          CAOGEN_P2_RELEASE_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '480000'
+          CAOGEN_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '360000'
+          CAOGEN_JETBRAINS_RECORDER_E2E_MODE: ide-script
         run: npm run test:p2-release-scope:required
       - name: Run exact-commit Deep gate
         run: npm run test:deep
@@ -173,6 +179,7 @@ jobs:
 
   macos-arm64:
     name: macOS Apple Silicon signed candidate
+    if: "${{ inputs.platform_scope != 'macos-x64' }}"
     needs: candidate
     runs-on: macos-15-arm64
     steps:
