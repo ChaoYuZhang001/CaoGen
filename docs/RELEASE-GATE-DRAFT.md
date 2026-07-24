@@ -1,6 +1,6 @@
 # CaoGen 0.1.7 Candidate Release Gate
 
-> Updated: 2026-07-23 Asia/Shanghai. v0.1.6 remains the latest public release.
+> Updated: 2026-07-24 Asia/Shanghai. v0.1.6 remains the latest public release.
 > Package version 0.1.7 is a candidate, not a publication decision or 1.0 stable.
 
 ## Current Decision
@@ -13,22 +13,24 @@ claims supported by the exact 0.1.7 candidate evidence.
 | Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Package and lockfile | `0.1.7` |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for a truthful 0.1.x wedge release |
-| Clean Deep | `155/155` required pass; 3 optional skip; latest report bound to clean commit `4a3f6359`; workflow increment rerun pending |
-| Release identity | Package version is 0.1.7; exact clean matrix commit and rerun still pending |
+| Clean Deep | Latest clean-main report passes `156/156` required checks with 3 optional skips; the report itself is the source of truth for the exact commit, and any new commit invalidates that binding |
+| Release identity | Package and lockfile are 0.1.7; workflow dispatch binds and verifies one exact 40-character SHA already present on `main` |
+| P2 release scope | P2-002, P2-003, and P2-005 are proved; P2-001 Windows GUI and P2-004 China external evidence remain unclaimed, non-blocking boundaries |
 | macOS preflight | Developer ID identity present; notarization configuration missing in the current process |
 | Native arm64 | Open; current host is Intel and cannot provide Apple Silicon runtime evidence |
 | Windows release config | Pass; NSIS and mandatory code signing are configured, but native signed artifacts are absent |
 | Platform matrix | macOS x64, macOS arm64, and Windows x64 each require distribution plus native install/renderer evidence; incomplete |
-| Candidate workflow | Manual-only, read-only workflow implemented; it has not run with real signing/notarization secrets |
+| Candidate workflow | Manual-only, read-only workflow implemented; no credential-backed run exists and required repository secrets are not configured yet |
 | Release decision | `not_ready`; `packaging_release` and `release_notes` remain open |
 
 ## Required Before 0.1.7
 
 | Gate | Required command or evidence | Current status |
 |---|---|---|
-| Final identity | Exact merged clean commit with package and lockfile at 0.1.7 | Rerun after merge |
-| Clean Deep | `npm run test:deep` on the exact final commit | Branch evidence passes; final merge binding pending |
-| Secret history | `npm run secret:scan:history` | Passes on the branch; rerun before publication |
+| Final identity | Exact clean `main` commit with package and lockfile at 0.1.7 | Select the full SHA at dispatch; candidate preflight verifies reachability, version, and clean identity |
+| Clean Deep | `npm run test:deep` on the exact final commit | Latest clean-main run passes; rerun in the x64 candidate lane and after any source or documentation commit |
+| Secret history | `npm run secret:scan:history` | Passes on clean `main`; rerun inside the refreshed Doctor before publication |
+| P2 release scope | P2-002, P2-003, and P2-005 proved on the candidate commit | Ready; do not claim P2-001 or P2-004 until their separate external gates pass |
 | Product positioning | `npm run test:product-positioning:required` | Ready |
 | macOS x64 preflight | `npm run release:mac:preflight:x64` | Blocked only by missing notarization configuration |
 | macOS x64 release | `npm run dist:mac:release:x64` and required macOS audit | Open; local signed baseline lacks notarization, staple, Gatekeeper acceptance, and build provenance |
@@ -86,11 +88,38 @@ complete private `.p8` text. They are materialized only under the ephemeral runn
 directory, removed in `always()` cleanup steps, and never included in artifacts or
 reports. A missing value fails its native lane before packaging.
 
+Configure the values under repository **Settings -> Secrets and variables -> Actions**.
+Verify only the secret names with `gh secret list`; never print secret values into shell
+output, issues, pull requests, reports, or chat. The current workflow needs all seven
+names above before dispatch because all three native lanes are required.
+
+For a local macOS x64 notarization run, the preflight accepts one of these complete
+credential methods:
+
+- App Store Connect API key: `APPLE_API_KEY`, `APPLE_API_KEY_ID`, and
+  `APPLE_API_ISSUER`.
+- Apple ID: `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`.
+- A Keychain profile created by `xcrun notarytool store-credentials`, selected through
+  `APPLE_KEYCHAIN_PROFILE`.
+
+Run `npm run release:mac:preflight:x64` before packaging. It authenticates with Apple
+without emitting credential values and fails closed when the Developer ID identity,
+notarization method, commit provenance, or worktree cleanliness is missing.
+
 Run the workflow only after the intended commit is on `main`. Its final artifact is
 named `caogen-unpublished-candidate-<version>-<commit>` and expires after 14 days. A
 successful workflow proves the candidate evidence matrix, not publication approval;
 the final release notes, required Doctor, explicit owner release decision, tag, upload,
 and post-upload audit remain separate steps.
+
+Dispatch command after all seven secret names are present:
+
+```bash
+gh workflow run release-candidate-evidence.yml \
+  --ref main \
+  -f commit=<full-40-character-main-sha> \
+  -f version=0.1.7
+```
 
 ## Release Notes Contract
 
