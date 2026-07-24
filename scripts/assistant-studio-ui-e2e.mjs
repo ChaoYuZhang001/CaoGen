@@ -196,6 +196,7 @@ try {
     await page.click('.sidebar-office')
     await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
     assert(await page.$('[data-experience-mode-switcher]') === null, 'mode switcher should not cover Office')
+    await page.waitForSelector('.office-actions .btn-primary', { visible: true, timeout: 30_000 })
     await page.click('.office-actions .btn-primary')
     await page.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
     await assertMode(page, 'studio')
