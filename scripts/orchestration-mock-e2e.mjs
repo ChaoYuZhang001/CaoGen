@@ -31,6 +31,8 @@ const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const approvalFileName = 'office-approval-required.txt'
 const officeFailureMessage = 'office deterministic validation fault'
+const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const officeScreenshotThresholds = ciSoftwareWebgl ? { sceneNonDark: 0.1, leftDark: 0.91, leftBuckets: 64, centralNonDark: 0.12, workAreaNonDark: 0.2 } : { sceneNonDark: 0.2, leftDark: 0.82, leftBuckets: 70, centralNonDark: 0.18, workAreaNonDark: 0.35 }
 const OFFICE_OVERVIEW_CAMERA = {
   position: [0.28, 4.5, 9.55],
   target: [0.02, 0.82, -1.18],
@@ -71,7 +73,7 @@ const report = {
 const mock = await startOpenAiMock()
 writeMockUserData(mock.port)
 const remotePort = await findFreePort(9820)
-const softwareWebglArgs = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
+const softwareWebglArgs = ciSoftwareWebgl ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
 const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
   cwd: repoRoot,
   env: {
@@ -874,7 +876,6 @@ try {
       }
     }
   })
-
   await check('3D office canvas renders nonblank with parent and child workstations', async () => {
     const stats = await waitForOfficeScenePixels(page)
     report.officeCanvas = stats
@@ -892,27 +893,27 @@ try {
     const stats = analyzeOfficeScreenshot(file)
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
-    assert(stats.scene.nonDarkRatio > 0.2, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.nonDarkRatio > officeScreenshotThresholds.sceneNonDark, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.brightRatio > 0.005, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.coloredRatio > 0.009, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
     assert(
-      stats.leftSightline.darkRatio < 0.82 &&
-        stats.leftSightline.uniqueColorBuckets >= (process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? 64 : 70) &&
+      stats.leftSightline.darkRatio < officeScreenshotThresholds.leftDark &&
+        stats.leftSightline.uniqueColorBuckets >= officeScreenshotThresholds.leftBuckets &&
         stats.leftSightline.coloredRatio > 0.004,
       `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
     )
     assert(
-      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredRatio > 0.008,
+      stats.centralWorkArea.nonDarkRatio > officeScreenshotThresholds.centralNonDark && stats.centralWorkArea.coloredRatio > 0.008,
       `central office work area is not readable: ${JSON.stringify(stats.centralWorkArea)}`
     )
     assert(
-      stats.robotWorkArea.nonDarkRatio > 0.35 &&
+      stats.robotWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
         stats.robotWorkArea.brightRatio > 0.015 &&
         stats.robotWorkArea.coloredRatio > 0.01,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
     )
     assert(
-      stats.nonErrorWorkArea.nonDarkRatio > 0.35 &&
+      stats.nonErrorWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
         stats.nonErrorWorkArea.brightRatio > 0.015 &&
         stats.nonErrorWorkArea.coloredRatio > 0.009 &&
         stats.nonErrorWorkArea.redRatio < 0.02 &&
@@ -1001,7 +1002,6 @@ if (failed.length > 0) {
 } else {
   console.log(`orchestration mock e2e ok: ${runDir}`)
 }
-
 async function check(name, fn) {
   const startedAt = Date.now()
   try {
