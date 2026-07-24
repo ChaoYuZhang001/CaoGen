@@ -183,6 +183,7 @@
     "test:p1": "node scripts/skill-manager-smoke.mjs && node scripts/layered-memory-smoke.mjs && node scripts/mcp-client-smoke.mjs && node scripts/routine-runner-smoke.mjs && node scripts/openai-p1-tools-smoke.mjs",
     "test:p2": "node scripts/skill-learner-smoke.mjs && node scripts/auto-skill-review-smoke.mjs && node scripts/skill-optimizer-smoke.mjs && node scripts/skill-invocation-smoke.mjs && node scripts/model-router-smoke.mjs && node scripts/routing-visibility-smoke.mjs && node scripts/provider-health-history-smoke.mjs && node scripts/provider-key-failover-smoke.mjs && node scripts/budget-report-smoke.mjs && node scripts/failover-target-smoke.mjs && node scripts/model-optimization-smoke.mjs && node scripts/model-cross-validation-smoke.mjs && node scripts/china-ecosystem-smoke.mjs && node scripts/china-model-provider-smoke.mjs && node scripts/china-real-network-smoke.mjs && node scripts/china-tool-call-parity.mjs && node scripts/p2-external-validators-smoke.mjs && node scripts/ide-bridge-smoke.mjs && node scripts/openai-p2-tools-smoke.mjs",
     "test:p2-required": "node scripts/p2-required-gate.mjs",
+    "test:p2-release-scope:required": "node scripts/p2-release-scope-gate.mjs --required",
     "test:p2-audit": "node scripts/p2-completion-audit.mjs",
     "workos:release-doctor": "node scripts/workos-release-doctor.mjs",
     "secret:scan": "node scripts/secret-scan.mjs --worktree",

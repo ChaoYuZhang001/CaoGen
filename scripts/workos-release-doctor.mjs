@@ -27,6 +27,7 @@ const gitState = readGitState()
 
 const reports = {
   deepTest: readJson('test-results/caogen-deep/latest.json'),
+  p2ReleaseScope: readJson('test-results/p2-release-scope/latest.json'),
   p2Required: readJson('test-results/p2-required/latest.json'),
   p2Audit: readJson('test-results/p2-completion-audit/latest.json'),
   idePlugins: readJson('test-results/ide-plugins/latest.json'),
@@ -65,6 +66,8 @@ const releaseTargetVersion = explicitReleaseVersion || currentPackageVersion
 const releaseTargetLabel = explicitReleaseVersion ? `v${releaseTargetVersion}` : 'not selected; rolling from current package version'
 const p2Requirements = Array.isArray(reports.p2Audit.data?.requirements) ? reports.p2Audit.data.requirements : []
 const p2ById = Object.fromEntries(p2Requirements.filter(isRecord).map((item) => [item.id, item]))
+const p2ReleaseRequirements = Array.isArray(reports.p2ReleaseScope.data?.requirements) ? reports.p2ReleaseScope.data.requirements : []
+const p2ReleaseById = Object.fromEntries(p2ReleaseRequirements.filter(isRecord).map((item) => [item.id, item]))
 const p2RequiredResults = Array.isArray(reports.p2Required.data?.results) ? reports.p2Required.data.results : []
 const p2RequiredByName = Object.fromEntries(p2RequiredResults.filter(isRecord).map((item) => [item.name, item]))
 const releaseRequiredP2Ids = ['P2-002', 'P2-003', 'P2-005']
@@ -162,16 +165,21 @@ console.log(JSON.stringify(report, null, 2))
 if (required && report.status !== 'ready') process.exitCode = 1
 
 function p2Domain() {
-  const releaseChecks = {
+  const releaseScopeExists = reports.p2ReleaseScope.exists && !reports.p2ReleaseScope.error
+  const releaseScopeGit = reports.p2ReleaseScope.data?.git
+  const releaseScopeBound = reports.p2ReleaseScope.data?.status === 'passed' &&
+    releaseScopeGit?.commit === gitState.commit && releaseScopeGit?.worktreeClean === true && releaseScopeGit?.unchanged === true
+  const legacyReleaseChecks = {
     'P2-002': p2ById['P2-002']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
     'P2-003': p2ById['P2-003']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
-    'P2-005':
-      p2ById['P2-005']?.status === 'proved' ||
-      (
-        p2RequiredByName.ide_build_and_vscode_required?.status === 'pass' &&
-        p2RequiredByName.jetbrains_ide_interaction_required?.status === 'pass'
-      )
+    'P2-005': p2ById['P2-005']?.status === 'proved' || (
+      p2RequiredByName.ide_build_and_vscode_required?.status === 'pass' &&
+      p2RequiredByName.jetbrains_ide_interaction_required?.status === 'pass'
+    )
   }
+  const releaseChecks = Object.fromEntries(releaseRequiredP2Ids.map((id) => [id,
+    releaseScopeExists ? releaseScopeBound && p2ReleaseById[id]?.status === 'proved' : legacyReleaseChecks[id]
+  ]))
   const proved = [
     ...releaseRequiredP2Ids.filter((id) => releaseChecks[id]),
     ...Object.keys(nonBlockingP2Ids).filter((id) => p2ById[id]?.status === 'proved')
@@ -199,7 +207,16 @@ function p2Domain() {
     proved,
     open: blockingOpen,
     nonBlockingOpen,
+    audit: {
+      path: reports.p2ReleaseScope.relativePath,
+      exists: reports.p2ReleaseScope.exists,
+      status: evidenceStatus(reports.p2ReleaseScope),
+      commitBound: releaseScopeBound,
+      git: releaseScopeGit,
+      requirements: p2ReleaseRequirements
+    },
     commands: [
+      'npm run test:p2-release-scope:required',
       'npm run test:p2',
       'npm run test:p2-ide-build-and-vscode:required',
       'npm run test:jetbrains-ide-interaction:required',

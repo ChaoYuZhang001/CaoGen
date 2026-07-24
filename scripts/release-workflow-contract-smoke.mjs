@@ -32,6 +32,8 @@ assert(!/(^|\n)\s*(push|pull_request|schedule|release):/m.test(source), 'automat
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'workflow must not publish')
 assert.match(source, /release-candidate-preflight\.mjs --commit/, 'candidate identity preflight is required')
 assert.match(source, /npm run test:deep/, 'the exact candidate must run Deep')
+assert.match(source, /npm run test:p2-release-scope:required/, 'the exact candidate must run release-scope P2')
+assert.match(source, /test-results\/p2-release-scope\/latest\.json/, 'the candidate must carry release-scope P2 evidence')
 assert.match(source, /npm run release:matrix:assemble/, 'cross-runner evidence must be independently assembled')
 assert.match(source, /npm run test:release-packaging-audit:required/, 'the final 12-asset audit is required')
 assert.match(source, /npm run test:product-positioning:required/, 'the candidate must revalidate public positioning')
@@ -226,6 +228,7 @@ function runMatrixAssemblyFixture(parentRoot) {
       required: { total: 1, counts: { pass: 1, skip: 0, blocked: 0, fail: 0 }, blocking: 0 }
     }
   })
+  writeP2ReleaseScopeFixture(inputRoot, commit)
 
   const result = spawnSync(process.execPath, [
     path.join(repoRoot, 'scripts', 'release-matrix-assemble.mjs'),
@@ -237,6 +240,29 @@ function runMatrixAssemblyFixture(parentRoot) {
   const report = JSON.parse(readFileSync(path.join(fixtureRoot, 'test-results', 'release-matrix-assemble', 'latest.json'), 'utf8'))
   assert.equal(report.status, 'passed')
   assert.equal(Object.keys(report.artifacts.files).length, 12)
+  verifyP2ReleaseScopeFixture(fixtureRoot, commit)
+}
+
+function writeP2ReleaseScopeFixture(inputRoot, commit) {
+  writeJson(path.join(inputRoot, 'macos-x64', 'test-results', 'p2-release-scope', 'latest.json'), {
+    status: 'passed',
+    required: true,
+    git: {
+      commit,
+      worktreeClean: true,
+      unchanged: true,
+      start: { commit, worktreeClean: true, statusEntryCount: 0 },
+      end: { commit, worktreeClean: true, statusEntryCount: 0 }
+    },
+    requirements: ['P2-002', 'P2-003', 'P2-005'].map((id) => ({ id, status: 'proved' }))
+  })
+}
+
+function verifyP2ReleaseScopeFixture(fixtureRoot, commit) {
+  const filePath = path.join(fixtureRoot, 'test-results', 'p2-release-scope', 'latest.json')
+  const p2ReleaseScope = JSON.parse(readFileSync(filePath, 'utf8'))
+  assert.equal(p2ReleaseScope.status, 'passed')
+  assert.equal(p2ReleaseScope.git.commit, commit)
 }
 
 function digestFile(filePath) {
