@@ -1,9 +1,13 @@
 const FACILITY_RETRY_OFFSETS = [
   [0, 0],
-  [0, -6],
-  [0, 6],
-  [-8, 0],
-  [8, 0]
+  [0, -12],
+  [0, 12],
+  [-16, 0],
+  [16, 0],
+  [-16, -12],
+  [16, -12],
+  [-16, 12],
+  [16, 12]
 ]
 const WORKSTATION_RETRY_OFFSETS = [
   [0, 0],
@@ -30,16 +34,19 @@ const CAMERA_RESET_MIN_BUDGET_MS = 1_500
 
 export async function clickProjectedFacilityTarget(page, target, camera) {
   let lastState
+  const trace = []
+  await waitForAnimationFrames(page, 8)
   for (let attempt = 0; attempt < FACILITY_RETRY_OFFSETS.length; attempt += 1) {
-    if (attempt > 0) await resetFacilitiesCamera(page)
+    if (attempt > 0 && (lastState.preset !== 'facilities' || lastState.selected)) await resetFacilitiesCamera(page)
     const [offsetX, offsetY] = FACILITY_RETRY_OFFSETS[attempt]
     const click = await clickProjectedOfficeTarget(page, target, camera, { offsetX, offsetY })
     lastState = await waitForFacilitySelection(page, target.id, 1_250)
+    trace.push({ click, state: lastState })
     if (lastState.selected === target.id && lastState.panel === target.id) {
       return { ...click, attempt: attempt + 1 }
     }
   }
-  throw new Error(`facility canvas click did not select ${target.id}: ${JSON.stringify(lastState)}`)
+  throw new Error(`facility canvas click did not select ${target.id}: ${JSON.stringify({ lastState, trace })}`)
 }
 
 export async function clickProjectedWorkstationTarget(page, target, camera) {
@@ -164,7 +171,7 @@ async function resetFacilitiesCamera(page, deadline = Number.POSITIVE_INFINITY) 
   await waitForCameraPreset(page, 'overview', remainingTimeout(deadline, 5_000))
   await page.click('.office-camera-button:nth-child(3)')
   await waitForCameraPreset(page, 'facilities', remainingTimeout(deadline, 5_000))
-  await sleep(Math.min(1_300, remainingTimeout(deadline, 1_300)))
+  await waitForAnimationFrames(page, 8)
 }
 
 async function restoreFacilitiesCamera(page, state, deadline) {
@@ -197,17 +204,33 @@ async function waitForCameraPreset(page, expected, timeout = 5_000) {
 
 async function waitForFacilitySelection(page, expected, timeout) {
   const deadline = Date.now() + timeout
-  let last = { selected: '', panel: '' }
+  let last = { selected: '', panel: '', preset: '' }
   while (Date.now() < deadline) {
     last = await page.evaluate(() => ({
       selected: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-selected-facility') ?? '',
-      panel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? ''
+      panel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? '',
+      preset: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''
     }))
     if (last.selected === expected && last.panel === expected) return last
     if (last.selected && last.selected !== expected) return last
     await sleep(100)
   }
   return last
+}
+
+async function waitForAnimationFrames(page, count) {
+  await page.evaluate(
+    (expected) => new Promise((resolve) => {
+      let remaining = expected
+      const advance = () => {
+        remaining -= 1
+        if (remaining <= 0) resolve()
+        else window.requestAnimationFrame(advance)
+      }
+      window.requestAnimationFrame(advance)
+    }),
+    count
+  )
 }
 
 async function waitForOfficeState(page, predicate, timeout) {
