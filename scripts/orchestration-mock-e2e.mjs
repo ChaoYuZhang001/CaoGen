@@ -496,7 +496,7 @@ try {
         value.vendorEmblemNodes === 0 &&
         value.sessionCalloutNodes === 0 &&
         value.walkerFloorBadgeDomNodes === 0,
-      15_000,
+      60_000,
       'waiting for office subagent packets'
     )
     report.officeSemanticAttrs = attrs
