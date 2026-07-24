@@ -23,10 +23,19 @@ assert.deepEqual(Object.keys(triggers), ['workflow_dispatch'], 'release workflow
 assert.deepEqual(workflow.permissions, { contents: 'read' }, 'workflow permissions must be read-only')
 assert.equal(workflow.concurrency['cancel-in-progress'], false, 'an in-flight signing run must not be cancelled')
 assert.match(workflow.concurrency.group, /inputs\.commit/, 'concurrency must be scoped to the candidate commit')
+assert.deepEqual(triggers.workflow_dispatch.inputs.platform_scope, {
+  description: 'Run both macOS lanes only, or the complete macOS and Windows matrix',
+  required: true,
+  default: 'all',
+  type: 'choice',
+  options: ['all', 'macos']
+}, 'platform scope must preserve the complete matrix as the default')
 assert.deepEqual(Object.keys(workflow.jobs).sort(), ['aggregate', 'candidate', 'macos-arm64', 'macos-x64', 'windows-x64'])
 assert.equal(workflow.jobs['macos-x64']['runs-on'], 'macos-15-intel')
 assert.equal(workflow.jobs['macos-arm64']['runs-on'], 'macos-15-arm64')
 assert.equal(workflow.jobs['windows-x64']['runs-on'], 'windows-2025')
+assert.equal(workflow.jobs['windows-x64'].if, "${{ inputs.platform_scope == 'all' }}")
+assert.equal(workflow.jobs.aggregate.if, "${{ inputs.platform_scope == 'all' }}")
 assert.deepEqual(workflow.jobs.aggregate.needs, ['candidate', 'macos-x64', 'macos-arm64', 'windows-x64'])
 assert(!/(^|\n)\s*(push|pull_request|schedule|release):/m.test(source), 'automatic or release triggers are forbidden')
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'workflow must not publish')
