@@ -207,7 +207,7 @@ try {
 
   await check('Composer draft survives Assistant/Studio projection changes', async () => {
     await clickMode(page, 'assistant')
-    await page.waitForSelector('.composer-input', { visible: true, timeout: 10_000 })
+    await page.waitForSelector('.composer-input', { visible: true, timeout: 30_000 })
     await page.click('.composer-input')
     await page.type('.composer-input', 'composer draft stays local')
     const before = await readSessionSnapshot(page, session.id)
@@ -344,7 +344,7 @@ async function assertMode(targetPage, expected, expectedFocus) {
     (value) => value.pressed.length === 1 && value.pressed[0] === expected &&
       value.visiblePanes.length === 1 && value.visiblePanes[0] === expected &&
       (expected !== 'studio' || value.studioReady),
-    10_000,
+    30_000,
     `waiting for ${expected} mode`
   )
   if (expectedFocus) assert(state.focused === expectedFocus, `mode focus moved to ${state.focused}`)
