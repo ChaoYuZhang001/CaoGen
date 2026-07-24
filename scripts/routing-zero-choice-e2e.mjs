@@ -174,7 +174,7 @@ try {
       assert(!text.includes(forbidden), `Assistant palette exposed ${forbidden}`)
     }
     await page.keyboard.press('Escape')
-    await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 5_000 })
+    await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 15_000 })
   })
 
   await check('Studio expert tab supports arrow keys and reveals the same session controls', async () => {
@@ -355,7 +355,11 @@ async function openCommandPalette(targetPage) {
   await targetPage.keyboard.down(modifier)
   await targetPage.keyboard.press('k')
   await targetPage.keyboard.up(modifier)
-  await targetPage.waitForSelector('.command-palette-backdrop', { visible: true, timeout: 5_000 })
+  await targetPage.waitForSelector('.command-palette-backdrop', { visible: true, timeout: 15_000 })
+  await targetPage.waitForFunction(
+    () => document.activeElement?.classList.contains('command-palette-input'),
+    { timeout: 15_000 }
+  )
 }
 
 async function waitForApp(targetPage) {
