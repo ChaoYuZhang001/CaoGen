@@ -604,9 +604,9 @@ function escapePipe(value) {
 function isMainModule() {
   return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 }
-
 if (isMainModule()) {
   const report = await runDeepTest()
+  for (const result of report.results.filter((item) => item.blocksGate)) console.error(result.summary || result.reason || '(no output)')
   console.log(`deep test report: ${path.join(report.runDir, 'deep-test-report.md')}`)
   process.exitCode = report.exitCode
 }
