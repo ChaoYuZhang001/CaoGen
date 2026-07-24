@@ -470,7 +470,7 @@
     "scripts/orchestration-mock-e2e.mjs": {
       "profile": "automation",
       "lines": 1481,
-      "contentHash": "60b92315363aea7e6d086ebc9c980f31551bfba5798d8678b3f20d570eac9fe0",
+      "contentHash": "3c54348dd1d546697b1ce033481329268b66c6f4b7258097ed38608bcd3400a4",
       "oversizedFunctionCount": 3,
       "maxFunctionLines": 332,
       "complexFunctionCount": 4,
