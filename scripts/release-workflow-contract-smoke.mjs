@@ -74,7 +74,8 @@ assert.deepEqual(p2Step?.env, {
   CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000',
   CAOGEN_P2_RELEASE_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '480000',
   CAOGEN_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '360000',
-  CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script'
+  CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script',
+  JAVA_TOOL_OPTIONS: '-Didea.is.internal=true -Didea.trust.all.projects=true -Didea.initially.ask.config=never -Djb.consents.confirmation.enabled=false -Djb.privacy.policy.text=<!--999.999-->'
 }, 'the x64 release lane must tolerate cold tool downloads and use the deterministic real-IDE starter')
 
 const validIdentity = candidateIdentityChecks({
