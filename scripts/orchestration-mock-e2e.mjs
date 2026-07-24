@@ -13,6 +13,8 @@ import {
 } from './lib/office-canvas-click.mjs'
 import {
   focusElectronPage,
+  readOfficeViewDiagnostics,
+  startOfficeViewDiagnostics,
   waitForOfficeRenderLoop,
   waitForOfficeScenePixels
 } from './lib/office-render-ready.mjs'
@@ -48,17 +50,14 @@ const sourceMainEntry = path.join(sourceOutDir, 'main', 'index.js')
 const sourceRendererEntry = path.join(sourceOutDir, 'renderer', 'index.html')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
-
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(sourceMainEntry)) fail('Built Electron main entry not found. Run npm run build first.')
 if (!existsSync(sourceRendererEntry)) fail('Built Electron renderer entry not found. Run npm run build first.')
-
 mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 copyBuiltApp(isolatedOutDir)
 writeFileSync(path.join(projectDir, 'README.md'), '# CaoGen orchestration mock e2e\n')
-
 const report = {
   runId,
   runDir,
@@ -98,7 +97,6 @@ app.stdout.on('data', (chunk) => {
 app.stderr.on('data', (chunk) => {
   stderr += chunk.toString()
 })
-
 let browser
 let focusSession
 try {
@@ -270,6 +268,7 @@ try {
   await focusElectronPage(page, focusSession)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
   await page.click('.sidebar-office')
+  await startOfficeViewDiagnostics(page)
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
   await waitForOfficeRenderLoop(page, 15_000)
   await check('3D office model exposes parent-child Subagent packets', async () => {
@@ -498,7 +497,7 @@ try {
         value.sessionCalloutNodes === 0 &&
         value.walkerFloorBadgeDomNodes === 0,
       60_000,
-      'waiting for office subagent packets'
+      'waiting for office subagent packets', async () => ({ ...(await readOfficeViewDiagnostics(page)), warnings: report.warnings })
     )
     report.officeSemanticAttrs = attrs
     assert(attrs.subagentPackets === 2, `wrong subagent packet count: ${JSON.stringify(attrs)}`)
@@ -1371,7 +1370,7 @@ async function waitForElectronPage(browser, timeoutMs) {
   throw new Error('Electron page target not found before timeout')
 }
 
-async function waitForValue(producer, predicate, timeout, label) {
+async function waitForValue(producer, predicate, timeout, label, diagnose) {
   const startedAt = Date.now()
   let last
   while (Date.now() - startedAt < timeout) {
@@ -1379,7 +1378,8 @@ async function waitForValue(producer, predicate, timeout, label) {
     if (predicate(last)) return last
     await sleep(250)
   }
-  throw new Error(`${label}: ${JSON.stringify(last)}`)
+  const diagnostics = diagnose ? `; diagnostics: ${JSON.stringify(await diagnose())}` : ''
+  throw new Error(`${label}: ${JSON.stringify(last)}${diagnostics}`)
 }
 
 async function readJson(req) {
