@@ -470,7 +470,7 @@
     "scripts/orchestration-mock-e2e.mjs": {
       "profile": "automation",
       "lines": 1481,
-      "contentHash": "69b711c8590a4584f1f7e03966c1cc690478d1148bcaaf35f0aebc9752b252a0",
+      "contentHash": "fadc055f530df3439be902a32fc1a44c709cd95f246385e8d83131baf22f304b",
       "oversizedFunctionCount": 3,
       "maxFunctionLines": 332,
       "complexFunctionCount": 4,
@@ -1800,7 +1800,7 @@
     "src/renderer/src/components/office/OfficeView.tsx": {
       "profile": "product",
       "lines": 1062,
-      "contentHash": "2f4625e109c8fd3c0f7d093d406a925f3575b8652a8b0cb15e5b398bd6aeabd3",
+      "contentHash": "d1cd66c52202a8a1c40e14185f78941770921989bdc2098a64a07d647cb5e516",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 819,
       "complexFunctionCount": 1,
@@ -1818,11 +1818,11 @@
     "src/renderer/src/components/office/kit/AgentWalkers.tsx": {
       "profile": "product",
       "lines": 609,
-      "contentHash": "88deec8e5337b1a909361dd72fc6384dfec73e72d1920152c66f1d17067b88af",
+      "contentHash": "5ef602c487a05eaedef1ed95e6f87c4b9a93012c650ec78f1c3408bf18068e3d",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 268,
       "complexFunctionCount": 1,
-      "maxComplexity": 26,
+      "maxComplexity": 25,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1833,7 +1833,7 @@
         },
         "useFrame callback#1": {
           "lines": 129,
-          "complexity": 26
+          "complexity": 25
         }
       }
     },
@@ -2038,9 +2038,9 @@
     "src/renderer/src/components/office/kit/WorkstationPro.tsx": {
       "profile": "product",
       "lines": 1026,
-      "contentHash": "12d43c25182ae42f0c8e219b3141f0278788bb4090a4285c288756c3d016fd2c",
+      "contentHash": "2b3001ee505e56f05e30e6fce1fbdd6a6b31eba41ec49e647fb6d203ae41329b",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 353,
+      "maxFunctionLines": 349,
       "complexFunctionCount": 2,
       "maxComplexity": 31,
       "forbiddenSuppressionCount": 0,
@@ -2052,7 +2052,7 @@
           "complexity": 30
         },
         "WorkstationPro#1": {
-          "lines": 353,
+          "lines": 349,
           "complexity": 31
         }
       }

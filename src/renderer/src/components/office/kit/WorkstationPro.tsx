@@ -42,10 +42,14 @@ export interface WorkstationProProps {
   currentTask?: OfficeTask
   taskStats?: OfficeTaskStats
   sessionSignal?: OfficeSessionSignal
+  interactive?: boolean
   onSelect: () => void
   onOpen?: () => void
 }
 
+function whenInteractive<T extends object>(interactive: boolean, handlers: T): T | Record<string, never> {
+  return interactive ? handlers : {}
+}
 /** 活动 → 屏幕/强调色(与办公区状态色规范一致,克制) */
 const ACTIVITY_COLOR: Record<WorkstationActivity, string> = {
   idle: '#7f95a6',
@@ -690,6 +694,7 @@ export default function WorkstationPro({
   currentTask,
   taskStats,
   sessionSignal,
+  interactive = true,
   onSelect,
   onOpen
 }: WorkstationProProps): React.JSX.Element {
@@ -761,6 +766,7 @@ export default function WorkstationPro({
     e.stopPropagation()
     onOpen?.()
   }
+  const interactionProps = whenInteractive(interactive, { onClick: clickSelect, onDoubleClick: doubleClickOpen, onPointerOver: cursorOver, onPointerOut: cursorOut })
 
   if (resolvedDetail === 'compact') {
     return (
@@ -768,10 +774,7 @@ export default function WorkstationPro({
         name="office-workstation-compact"
         userData={{ officeWorkstationDetail: 'compact' }}
         position={position}
-        onClick={clickSelect}
-        onDoubleClick={doubleClickOpen}
-        onPointerOver={cursorOver}
-        onPointerOut={cursorOut}
+        {...interactionProps}
       >
         <mesh name="compact-workstation-hit-target" position={[0, 0.9, 0.08]}>
           <boxGeometry args={[2.1, 1.8, 1.72]} />
@@ -828,10 +831,7 @@ export default function WorkstationPro({
       name="office-workstation-full"
       userData={{ officeWorkstationDetail: 'full' }}
       position={position}
-      onClick={clickSelect}
-      onDoubleClick={doubleClickOpen}
-      onPointerOver={cursorOver}
-      onPointerOut={cursorOut}
+      {...interactionProps}
     >
       {/* 控制台基座:矩形信息区取代玩具感发光圆圈。 */}
       <RoundedBox args={[2.1, 0.045, 1.72]} radius={0.055} smoothness={3} position={[0, 0.024, 0.08]} receiveShadow>

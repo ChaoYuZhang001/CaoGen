@@ -1011,6 +1011,7 @@ export default function OfficeView(): React.JSX.Element {
                     currentTask={officeModel.sessions[id]?.currentTask}
                     taskStats={officeModel.sessions[id]?.taskStats}
                     sessionSignal={officeModel.sessions[id]?.signal}
+                    interactive={cameraPreset !== 'facilities'}
                     onSelect={() => selectOfficeSession(id, 'workstation')}
                     onOpen={() => focus(id)}
                   />
@@ -1046,7 +1047,6 @@ export default function OfficeView(): React.JSX.Element {
               )}
             </>
           )}
-
           <CameraRig
             position={cameraPose.position}
             target={cameraPose.target}
