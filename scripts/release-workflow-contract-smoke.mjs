@@ -24,15 +24,16 @@ assert.deepEqual(workflow.permissions, { contents: 'read' }, 'workflow permissio
 assert.equal(workflow.concurrency['cancel-in-progress'], false, 'an in-flight signing run must not be cancelled')
 assert.match(workflow.concurrency.group, /inputs\.commit/, 'concurrency must be scoped to the candidate commit')
 assert.deepEqual(triggers.workflow_dispatch.inputs.platform_scope, {
-  description: 'Run both macOS lanes only, or the complete macOS and Windows matrix',
+  description: 'Run macOS Intel only, both macOS lanes, or the complete macOS and Windows matrix',
   required: true,
   default: 'all',
   type: 'choice',
-  options: ['all', 'macos']
+  options: ['all', 'macos', 'macos-x64']
 }, 'platform scope must preserve the complete matrix as the default')
 assert.deepEqual(Object.keys(workflow.jobs).sort(), ['aggregate', 'candidate', 'macos-arm64', 'macos-x64', 'windows-x64'])
 assert.equal(workflow.jobs['macos-x64']['runs-on'], 'macos-15-intel')
 assert.equal(workflow.jobs['macos-arm64']['runs-on'], 'macos-15-arm64')
+assert.equal(workflow.jobs['macos-arm64'].if, "${{ inputs.platform_scope != 'macos-x64' }}")
 assert.equal(workflow.jobs['windows-x64']['runs-on'], 'windows-2025')
 assert.equal(workflow.jobs['windows-x64'].if, "${{ inputs.platform_scope == 'all' }}")
 assert.equal(workflow.jobs.aggregate.if, "${{ inputs.platform_scope == 'all' }}")
@@ -68,6 +69,13 @@ assert(
   candidateStepNames.indexOf('Install exact dependencies') < candidateStepNames.indexOf('Verify candidate identity'),
   'the dependency-backed identity preflight must run after npm ci'
 )
+const p2Step = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run release-scope P2 gate')
+assert.deepEqual(p2Step?.env, {
+  CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000',
+  CAOGEN_P2_RELEASE_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '480000',
+  CAOGEN_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '360000',
+  CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script'
+}, 'the x64 release lane must tolerate cold tool downloads and use the deterministic real-IDE starter')
 
 const validIdentity = candidateIdentityChecks({
   requestedCommit: 'a'.repeat(40),
