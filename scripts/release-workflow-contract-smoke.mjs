@@ -16,6 +16,7 @@ import {
 const repoRoot = process.cwd()
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'release-candidate-evidence.yml')
 const source = readFileSync(workflowPath, 'utf8')
+const pageOperationSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'page-operation-smoke.mjs'), 'utf8')
 const workflow = yaml.load(source)
 const triggers = workflow.on
 
@@ -77,6 +78,29 @@ assert.deepEqual(p2Step?.env, {
   CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script',
   JAVA_TOOL_OPTIONS: '-Didea.is.internal=true -Didea.trust.all.projects=true -Didea.initially.ask.config=never -Djb.consents.confirmation.enabled=false -Djb.privacy.policy.text=<!--999.999-->'
 }, 'the x64 release lane must tolerate cold tool downloads and use the deterministic real-IDE starter')
+const deepStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run exact-commit Deep gate')
+assert.deepEqual(
+  deepStep?.env,
+  { CAOGEN_CI_SOFTWARE_WEBGL: '1' },
+  'the x64 Deep gate must request deterministic software WebGL'
+)
+for (const value of [
+  'CAOGEN_CI_SOFTWARE_WEBGL',
+  '--use-gl=angle',
+  '--use-angle=swiftshader',
+  '--enable-unsafe-swiftshader'
+]) {
+  assert(pageOperationSmokeSource.includes(value), `page operations must consume the software WebGL contract: ${value}`)
+}
+const deepFailureDiagnosticsStep = workflow.jobs['macos-x64'].steps.find(
+  (step) => step.name === 'Upload x64 Deep failure diagnostics'
+)
+assert.equal(deepFailureDiagnosticsStep?.if, 'failure()', 'x64 Deep diagnostics must upload after a failed gate')
+assert.match(
+  deepFailureDiagnosticsStep?.with?.path ?? '',
+  /test-results\/caogen-deep\/\*\*/,
+  'x64 Deep diagnostics must retain page reports and screenshots'
+)
 
 const validIdentity = candidateIdentityChecks({
   requestedCommit: 'a'.repeat(40),

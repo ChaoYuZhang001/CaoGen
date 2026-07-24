@@ -14,6 +14,7 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-page-smoke-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const port = await findFreePort(9400)
+const softwareWebglArgs = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
 const PAGE_SMOKE_PROVIDER_ID = 'page-smoke-openai'
 const PAGE_SMOKE_PROVIDER_NAME = 'Page Smoke OpenAI'
 const PAGE_SMOKE_MODEL = 'page-smoke-model'
@@ -22,7 +23,6 @@ const electronBin =
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
     : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
-
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(mainEntry)) fail('Built Electron main entry not found. Run npm run build first.')
 
@@ -120,8 +120,7 @@ writeFileSync(
 writeFileSync(path.join(projectDir, 'broken.docx'), Buffer.from('not an office zip\n'))
 initGitProject(projectDir)
 writePageSmokeUserData()
-
-const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
+const electronArgs = [`--remote-debugging-port=${port}`, ...softwareWebglArgs, mainEntry]
 const app = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
   cwd: repoRoot,
   env: {
@@ -146,6 +145,7 @@ const report = {
   projectDir,
   userDataDir,
   remoteDebuggingPort: port,
+  softwareWebgl: { enabled: softwareWebglArgs.length > 0, args: softwareWebglArgs },
   checks: [],
   screenshots: [],
   warnings: []
@@ -601,7 +601,7 @@ try {
     await waitForText(cdp, 'Word Preview', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     if (process.platform === 'darwin') {
-      const visual = await waitForOfficeVisualState(cdp, 'ready', 10_000)
+      const visual = await waitForOfficeVisualState(cdp, 'ready', 70_000)
       assert(visual.mode === 'visual', `ready Office visual should become the default mode: ${JSON.stringify(visual)}`)
       assert(
         visual.format === 'document'
@@ -730,7 +730,7 @@ try {
   await check(cdp, 'office view loads without blank first screen', async () => {
     await bringPageToFront(cdp)
     await clickByText(cdp, 'Agent 控制室')
-    await waitForText(cdp, 'Agent 控制室', 10_000)
+    await waitForSelector(cdp, '.office', 30_000)
     await bringPageToFront(cdp)
     const officeTelemetry = await waitForOfficeTelemetry(cdp)
     report.officeTelemetry = officeTelemetry
