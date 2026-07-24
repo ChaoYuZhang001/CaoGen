@@ -148,6 +148,8 @@ jobs:
             -Djb.privacy.policy.text=<!--999.999-->
         run: npm run test:p2-release-scope:required
       - name: Run exact-commit Deep gate
+        env:
+          CAOGEN_CI_SOFTWARE_WEBGL: '1'
         run: npm run test:deep
       - name: Build, sign, notarize, install, and launch x64
         run: npm run dist:mac:release:x64

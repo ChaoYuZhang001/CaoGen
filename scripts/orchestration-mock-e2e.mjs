@@ -68,11 +68,11 @@ const report = {
   warnings: [],
   requests: []
 }
-
 const mock = await startOpenAiMock()
 writeMockUserData(mock.port)
 const remotePort = await findFreePort(9820)
-const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const softwareWebglArgs = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
+const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
   cwd: repoRoot,
   env: {
     ...process.env,
