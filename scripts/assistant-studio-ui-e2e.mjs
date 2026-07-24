@@ -24,6 +24,10 @@ const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const softwareWebglArgs = ciSoftwareWebgl
+  ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+  : []
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
@@ -48,6 +52,10 @@ const report = {
   arch: process.arch,
   nodeVersion: process.version,
   electronVersion: electronPackage.version,
+  softwareWebgl: {
+    enabled: ciSoftwareWebgl,
+    electronArgs: softwareWebglArgs
+  },
   checks: [],
   screenshots: [],
   viewports: [],
@@ -70,7 +78,7 @@ const report = {
 
 const mock = await startOpenAiMock()
 const remotePort = await findFreePort(9920)
-const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
   cwd: repoRoot,
   env: {
     ...process.env,
