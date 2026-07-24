@@ -31,6 +31,8 @@ import {
   type ProjectAggregateDraft
 } from './project-ownership-verifier'
 
+const LIVE_STABLE_READ_LIMIT = 4
+
 export class ProjectAggregateService {
   readonly roots: ProjectAggregateRoots
   readonly seals: ProjectAggregateSealStore
@@ -149,10 +151,14 @@ export class ProjectAggregateService {
   /** Validate the current cross-store state without requiring a release seal. */
   async verifyLiveProject(projectId: string): Promise<ProjectAggregateSnapshot> {
     const id = requiredProjectId(projectId)
-    const firstRead = await this.collectProject(id, false)
-    const aggregate = await this.collectProject(id, false)
-    assertStableAggregateRead(firstRead, aggregate)
-    return aggregate
+    let previous = await this.collectProject(id, false)
+    for (let read = 1; read < LIVE_STABLE_READ_LIMIT; read += 1) {
+      const current = await this.collectProject(id, false)
+      if (isStableAggregateRead(previous, current)) return current
+      if (read === LIVE_STABLE_READ_LIMIT - 1) assertStableAggregateRead(previous, current)
+      previous = current
+    }
+    return previous
   }
 
   async authorizeLiveReferences(
@@ -394,12 +400,7 @@ function assertStableAggregateRead(
   first: ProjectAggregateSnapshot,
   second: ProjectAggregateSnapshot
 ): void {
-  if (
-    first.projectId !== second.projectId ||
-    first.identityDigest !== second.identityDigest ||
-    first.projectRevision !== second.projectRevision ||
-    first.aggregateDigest !== second.aggregateDigest
-  ) {
+  if (!isStableAggregateRead(first, second)) {
     throw new ProjectAggregateError(
       'REVISION_CONFLICT',
       `Project aggregate ${second.projectId} changed during the cross-store stable read`,
@@ -412,6 +413,13 @@ function assertStableAggregateRead(
       }
     )
   }
+}
+
+function isStableAggregateRead(first: ProjectAggregateSnapshot, second: ProjectAggregateSnapshot): boolean {
+  return first.projectId === second.projectId &&
+    first.identityDigest === second.identityDigest &&
+    first.projectRevision === second.projectRevision &&
+    first.aggregateDigest === second.aggregateDigest
 }
 
 function byId<T extends { id: string }>(left: T, right: T): number {
