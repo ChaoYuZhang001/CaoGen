@@ -80,6 +80,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Set up JDK 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: '8.10.2'
       - name: Install exact dependencies
         run: npm ci
       - name: Import macOS signing and notarization credentials
@@ -116,6 +125,8 @@ jobs:
           echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID_VALUE" >> "$GITHUB_ENV"
           echo "APPLE_API_ISSUER=$APPLE_API_ISSUER_VALUE" >> "$GITHUB_ENV"
           echo "CAOGEN_RELEASE_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+      - name: Run release-scope P2 gate
+        run: npm run test:p2-release-scope:required
       - name: Run exact-commit Deep gate
         run: npm run test:deep
       - name: Build, sign, notarize, install, and launch x64
@@ -140,6 +151,8 @@ jobs:
             test-results/caogen-deep/latest.json
             test-results/caogen-deep/*/deep-test-report.json
             test-results/caogen-deep/*/deep-test-report.md
+            test-results/p2-release-scope/latest.json
+            test-results/p2-release-scope/*/report.json
       - name: Remove temporary macOS credentials
         if: always()
         shell: bash
@@ -363,3 +376,4 @@ jobs:
             test-results/packaged-app-smoke/latest-macos-arm64.json
             test-results/packaged-app-smoke/latest-windows-x64.json
             test-results/caogen-deep/latest.json
+            test-results/p2-release-scope/latest.json
