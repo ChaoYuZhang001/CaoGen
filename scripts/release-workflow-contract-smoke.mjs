@@ -16,6 +16,7 @@ import {
 const repoRoot = process.cwd()
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'release-candidate-evidence.yml')
 const source = readFileSync(workflowPath, 'utf8')
+const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
 const pageOperationSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'page-operation-smoke.mjs'), 'utf8')
 const assistantStudioUiSource = readFileSync(path.join(repoRoot, 'scripts', 'assistant-studio-ui-e2e.mjs'), 'utf8')
 const workflow = yaml.load(source)
@@ -42,6 +43,11 @@ assert.equal(workflow.jobs.aggregate.if, "${{ inputs.platform_scope == 'all' }}"
 assert.deepEqual(workflow.jobs.aggregate.needs, ['candidate', 'macos-x64', 'macos-arm64', 'windows-x64'])
 assert(!/(^|\n)\s*(push|pull_request|schedule|release):/m.test(source), 'automatic or release triggers are forbidden')
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'workflow must not publish')
+assert.match(
+  packageJson.scripts?.['dist:mac:release:x64'] ?? '',
+  /electron-builder[^&]*--publish\s+never/,
+  'the x64 candidate build must disable electron-builder implicit publishing'
+)
 assert.match(source, /release-candidate-preflight\.mjs --commit/, 'candidate identity preflight is required')
 assert.match(source, /npm run test:deep/, 'the exact candidate must run Deep')
 assert.match(source, /npm run test:p2-release-scope:required/, 'the exact candidate must run release-scope P2')

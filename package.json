@@ -292,7 +292,7 @@
     "dist:mac:unsigned:x64": "npm run dist:mac:x64",
     "release:mac:preflight:x64": "node scripts/macos-release-preflight.mjs --arch x64",
     "release:mac:preflight:arm64": "node scripts/macos-release-preflight.mjs --arch arm64",
-    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --x64 && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
+    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --x64 --publish never && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
     "dist:mac:release:arm64": "npm run release:mac:preflight:arm64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --arm64 && npm run test:macos-release-audit:required -- --arch arm64 && npm run test:packaged-app:mac:arm64",
     "dist:win:release:x64": "npm run test:windows-release-config && npm run build && npm run prepare:native-build && electron-builder --config electron-builder.release.cjs --win --x64 && npm run test:windows-release-audit:required -- --arch x64 && npm run test:packaged-app:win:x64",
     "dist:dir": "npm run build && npm run prepare:native-build && electron-builder --dir",
