@@ -1302,7 +1302,7 @@ function writeMockUserData(port) {
         persona: '',
         allowedTools: '',
         disallowedTools: '',
-        office: { showBadges: true, liveliness: 0.6, catEars: false }
+        office: { qualityMode: 'low', showBadges: true, liveliness: 0.6, catEars: false }
       },
       null,
       2
@@ -1323,7 +1323,7 @@ async function readOfficeCanvasClickPlan(page) {
     const selected = wrap?.getAttribute('data-office-selected-session') ?? ''
     const workstations = readTargets('data-office-workstation-hit-targets')
     const walkers = readTargets('data-office-walker-hit-targets')
-    const walker = walkers[0] || null
+    const walker = walkers.find((target) => target.reason !== 'approval') || walkers[0] || null
     const facilityWalker =
       walkers.find((target) => target.id !== walker?.id && target.reason === 'dining') ||
       walkers.find((target) => target.id !== walker?.id && target.reason === 'restroom') ||
