@@ -36,6 +36,8 @@ jobs:
       - name: Build CaoGen
         run: npm run build
       - name: Run Office orchestration E2E
+        env:
+          CAOGEN_CI_SOFTWARE_WEBGL: '1'
         run: npm run test:orchestration
       - name: Upload Office diagnostics
         if: always()
