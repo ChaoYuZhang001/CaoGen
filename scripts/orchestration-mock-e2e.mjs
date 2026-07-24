@@ -267,10 +267,11 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.app', { timeout: 60_000 })
   await waitForAgentDesk(page, 60_000)
+  await focusElectronPage(page, focusSession)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
   await page.click('.sidebar-office')
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
-
+  await waitForOfficeRenderLoop(page, 15_000)
   await check('3D office model exposes parent-child Subagent packets', async () => {
     const attrs = await waitForValue(
       () =>
@@ -603,7 +604,6 @@ try {
       `office semantic walkers missing: ${JSON.stringify(attrs)}`
     )
   })
-
   await check('3D office walking gait advances through distance-locked phases', async () => {
     await page.click('.office-camera-button:nth-child(1)')
     await waitForValue(
@@ -997,7 +997,7 @@ try {
 
 const failed = report.checks.filter((item) => item.status === 'fail')
 if (failed.length > 0) {
-  console.error(`orchestration mock e2e failed: ${failed.map((item) => item.name).join(', ')}`)
+  console.error(`orchestration mock e2e failed: ${failed.map((item) => `${item.name}: ${item.error ?? 'unknown error'}`).join('; ')}`)
   process.exitCode = 1
 } else {
   console.log(`orchestration mock e2e ok: ${runDir}`)
