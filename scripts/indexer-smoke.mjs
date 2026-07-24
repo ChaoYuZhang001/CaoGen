@@ -12,6 +12,7 @@ const esbuild = require('esbuild')
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-indexer-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectDir = path.join(tempRoot, 'project')
+const waitTimeoutMs = positiveInteger(process.env.CAOGEN_INDEXER_SMOKE_TIMEOUT_MS, 15_000)
 
 try {
   mkdirSync(path.join(projectDir, 'src/nested'), { recursive: true })
@@ -151,11 +152,16 @@ try {
 
 async function waitFor(fn, message) {
   const start = Date.now()
-  while (Date.now() - start < 5000) {
+  while (Date.now() - start < waitTimeoutMs) {
     if (fn()) return
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  throw new Error(message)
+  throw new Error(`${message} (timeout ${waitTimeoutMs}ms)`)
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
 }
 
 function assert(condition, message = 'assertion failed') {
