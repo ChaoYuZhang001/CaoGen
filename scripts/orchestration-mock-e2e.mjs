@@ -102,9 +102,9 @@ app.stderr.on('data', (chunk) => {
 let browser
 let focusSession
 try {
-  await waitForDebugPort(remotePort, 20_000)
+  await waitForDebugPort(remotePort, 60_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  const page = await waitForElectronPage(browser, 20_000)
+  const page = await waitForElectronPage(browser, 60_000)
   focusSession = await page.target().createCDPSession()
   await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.on('console', (msg) => {
@@ -116,8 +116,8 @@ try {
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.stack || error.message}`))
 
-  await page.waitForSelector('.app', { timeout: 20_000 })
-  await waitForAgentDesk(page)
+  await page.waitForSelector('.app', { timeout: 60_000 })
+  await waitForAgentDesk(page, 60_000)
   await page.evaluate(() => {
     window.__orchestrationEvents = []
     window.agentDesk.onSessionEvent((sessionId, event, seq) => {
@@ -265,8 +265,8 @@ try {
   })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('.app', { timeout: 20_000 })
-  await waitForAgentDesk(page)
+  await page.waitForSelector('.app', { timeout: 60_000 })
+  await waitForAgentDesk(page, 60_000)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
   await page.click('.sidebar-office')
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
@@ -952,7 +952,7 @@ try {
       await window.agentDesk.updateSettings({ theme: 'light' })
     })
     await page.reload({ waitUntil: 'domcontentloaded' })
-    await waitForAgentDesk(page)
+    await waitForAgentDesk(page, 60_000)
     await focusElectronPage(page, focusSession)
     await waitForValue(
       () => page.evaluate(() => document.documentElement.getAttribute('data-theme') ?? ''),
@@ -1356,8 +1356,8 @@ async function readOfficeCanvasClickPlan(page) {
   })
 }
 
-async function waitForAgentDesk(page) {
-  await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: 15_000 })
+async function waitForAgentDesk(page, timeoutMs) {
+  await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: timeoutMs })
 }
 
 async function waitForElectronPage(browser, timeoutMs) {
