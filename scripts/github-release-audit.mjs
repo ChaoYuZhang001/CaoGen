@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import https from 'node:https'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -13,11 +14,21 @@ const tagFilter = argValue('--tag') || process.env.CAOGEN_GITHUB_RELEASE_TAG
 const fixturePath = argValue('--json') || process.env.CAOGEN_GITHUB_RELEASES_JSON
 const readTextAssets = process.argv.includes('--read-text-assets') || process.env.CAOGEN_GITHUB_RELEASE_AUDIT_READ_TEXT === '1'
 const expectedAssetsFromDist = process.argv.includes('--expected-assets-from-dist') || process.env.CAOGEN_GITHUB_RELEASE_EXPECT_DIST === '1'
+const expectedAssetsDirArg = argValue('--expected-assets-dir') || process.env.CAOGEN_GITHUB_RELEASE_EXPECTED_ASSETS_DIR
+const expectedAssetsDir = expectedAssetsDirArg
+  ? path.resolve(expectedAssetsDirArg)
+  : expectedAssetsFromDist
+    ? path.join(repoRoot, 'dist')
+    : undefined
 const failures = []
 const warnings = []
-const expectedAssets = expectedAssetsFromDist ? readExpectedDistAssets() : []
+const expectedAssetEvidence = expectedAssetsDir ? readExpectedAssetEvidence(expectedAssetsDir) : {}
+const expectedAssets = Object.keys(expectedAssetEvidence).sort()
 
-if (expectedAssetsFromDist && !tagFilter) failures.push('--expected-assets-from-dist requires an explicit --tag')
+if (expectedAssetsFromDist && expectedAssetsDirArg) {
+  failures.push('use either --expected-assets-from-dist or --expected-assets-dir, not both')
+}
+if (expectedAssetsDir && !tagFilter) failures.push('local expected assets require an explicit --tag')
 
 let releases = []
 let source = fixturePath ? `json:${path.relative(repoRoot, path.resolve(fixturePath))}` : `github:${repo}`
@@ -42,11 +53,12 @@ if (!fetchError) {
     if (required) failures.push('no GitHub Releases were found to audit')
     else warnings.push('no GitHub Releases were found to audit')
   }
-  if (expectedAssetsFromDist && tagFilter && checkedReleases.length === 1) {
+  if (expectedAssetsDir && tagFilter && checkedReleases.length === 1) {
     const actualAssets = checkedReleases[0].assets.map((asset) => asset.name).sort()
     if (JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)) {
       failures.push(`${tagFilter}: release assets must exactly match local dist evidence; expected ${expectedAssets.join(', ')}`)
     }
+    validateExpectedAssetEvidence(checkedReleases[0])
   }
 }
 
@@ -61,7 +73,9 @@ const report = {
   source,
   readTextAssets,
   expectedAssetsFromDist,
+  expectedAssetsDir: expectedAssetsDir || null,
   expectedAssets,
+  expectedAssetEvidence,
   releaseCount: checkedReleases.length,
   assetCount: checkedReleases.reduce((total, release) => total + release.assets.length, 0),
   redactionPolicy: 'No secret values are emitted. The audit reports release tags, asset names, sizes, states, and failure categories only.',
@@ -195,16 +209,43 @@ function shouldReadSmallTextAsset(name, size) {
   return size > 0 && size <= 1024 * 1024 && /\.(ya?ml|json|txt|md)$/i.test(name)
 }
 
-function readExpectedDistAssets() {
-  const distDir = path.join(repoRoot, 'dist')
-  if (!existsSync(distDir)) {
-    failures.push('local dist directory is missing for expected asset comparison')
-    return []
+function readExpectedAssetEvidence(directory) {
+  if (!existsSync(directory)) {
+    failures.push(`local expected assets directory is missing: ${directory}`)
+    return {}
   }
-  return readdirSync(distDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && allowedReleaseAssetName(entry.name))
-    .map((entry) => entry.name)
-    .sort()
+  const evidence = {}
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      failures.push(`local expected assets directory contains a non-file entry: ${entry.name}`)
+      continue
+    }
+    if (!allowedReleaseAssetName(entry.name) || forbiddenReleaseAssetName(entry.name) || suspiciousReleaseAssetName(entry.name)) {
+      failures.push(`local expected assets directory contains an unapproved file: ${entry.name}`)
+      continue
+    }
+    const filePath = path.join(directory, entry.name)
+    evidence[entry.name] = {
+      size: statSync(filePath).size,
+      sha256: createHash('sha256').update(readFileSync(filePath)).digest('hex')
+    }
+  }
+  return evidence
+}
+
+function validateExpectedAssetEvidence(release) {
+  const actualByName = Object.fromEntries(release.assets.map((asset) => [asset.name, asset]))
+  for (const [name, expected] of Object.entries(expectedAssetEvidence)) {
+    const actual = actualByName[name]
+    if (!actual) continue
+    if (actual.size !== expected.size) {
+      failures.push(`${tagFilter}/${name}: public size ${actual.size} does not match local ${expected.size}`)
+    }
+    const expectedDigest = `sha256:${expected.sha256}`
+    if (actual.digest !== expectedDigest) {
+      failures.push(`${tagFilter}/${name}: public digest ${actual.digest || 'missing'} does not match local ${expectedDigest}`)
+    }
+  }
 }
 
 async function readTextAsset(tagName, assetName, urls) {
