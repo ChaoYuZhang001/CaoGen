@@ -52,6 +52,7 @@ assert.match(source, /release-candidate-preflight\.mjs --commit/, 'candidate ide
 assert.match(source, /npm run test:deep/, 'the exact candidate must run Deep')
 assert.match(source, /npm run test:p2-release-scope:required/, 'the exact candidate must run release-scope P2')
 assert.match(source, /npm run test:package-size-policy/, 'candidate source gates must enforce package size policy')
+assert.match(source, /npm run test:macos-dmg-detach:required/, 'candidate source gates must verify DMG detach recovery')
 assert.match(source, /test-results\/p2-release-scope\/latest\.json/, 'the candidate must carry release-scope P2 evidence')
 assert.match(source, /npm run release:matrix:assemble/, 'cross-runner evidence must be independently assembled')
 assert.match(source, /npm run test:release-packaging-audit:required/, 'the final 12-asset audit is required')
