@@ -261,10 +261,6 @@ try {
   assert(runtime.includes('ingestWorkflowAcceptanceFailure'), 'structured failure ingress missing')
   assert(failurePlanner.includes('workspaceId, goalId, workItemId'), 'canonical ownership guard missing')
   assert(runtime.includes('meta.parentSessionId || meta.childRole'), 'recursion guard missing')
-  assert(
-    read('scripts/integration-test.cjs').includes('T18 P2 cross-validation: routing event creates review and arbitration child sessions'),
-    'behavior-level cross-validation integration test missing'
-  )
   assert(read('src/main/model/session-routing.ts').includes('crossValidation: drive.crossValidation'), 'session route should use Drive cross-validation policy')
   assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 2 }"), 'Command Drive policy should keep backup validator for arbitration')
   assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'low', maxValidators: 2 }"), 'Genesis Drive policy should keep backup validator for arbitration')

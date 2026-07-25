@@ -142,10 +142,6 @@ async function runSmoke() {
         CAOGEN_CHINA_PARITY_PROVIDERS: ''
       }
     }, tempRoot)
-    assertExternalSkipProtocol('claude real e2e', electronSpec(), tempRoot, {
-      ANTHROPIC_API_KEY: '',
-      CLAUDE_CODE_HOST_CREDS_FILE: ''
-    })
     assertRequiredExternalBlocked('china-real-required', tempRoot, fixturePath, 'chinaRealNetwork smoke')
     assertRequiredExternalBlocked('china-parity-required', tempRoot, fixturePath, 'chinaToolCallParity smoke')
     assertRequiredExternalBlocked('china-real-partial-required', tempRoot, fixturePath, 'chinaRealNetwork smoke')
@@ -285,9 +281,10 @@ function scenarioCommands(scenario, fixturePath) {
 
 function assertExternalRequirements() {
   const byName = new Map(commands.map((item) => [item.name, item]))
-  for (const name of ['chinaRealNetwork smoke', 'chinaToolCallParity smoke', 'claude real e2e']) {
+  for (const name of ['chinaRealNetwork smoke', 'chinaToolCallParity smoke']) {
     assert.equal(byName.get(name)?.requirement, 'optional', `${name} must be optional in the default deep gate`)
   }
+  assert.equal(byName.has('claude real e2e'), false, 'removed Claude Code runtime must not remain in the deep gate')
   assert.deepEqual(byName.get('chinaRealNetwork smoke')?.requiredWhen, {
     env: ['CAOGEN_CHINA_REAL_NETWORK_REQUIRED'],
     args: ['--required']
@@ -428,15 +425,6 @@ function parityProvider(group) {
     model: group === 'baseline' ? 'gpt-fixture' : 'deepseek-fixture',
     apiKey: 'fixture-key'
   }
-}
-
-function electronSpec() {
-  const electron = path.join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron')
-  assert(existsSync(electron), `Electron binary missing: ${electron}`)
-  if (process.platform === 'win32') {
-    return { command: 'cmd', args: ['/c', electron, path.join(repoRoot, 'scripts', 'claude-real-e2e.cjs')] }
-  }
-  return { command: electron, args: [path.join(repoRoot, 'scripts', 'claude-real-e2e.cjs')] }
 }
 
 function resultByName(report, name) {

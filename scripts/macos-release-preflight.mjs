@@ -33,8 +33,8 @@ check('release provenance clean state is explicit', typeof releaseProvenance?.wo
 check('release minimum macOS is 14.0 or newer', compareVersions(mac.minimumSystemVersion, '14.0') >= 0)
 check('release includes DMG and ZIP targets', hasTarget(mac.target, 'dmg') && hasTarget(mac.target, 'zip'))
 check(
-  'release preserves the upstream Anthropic CLI signature',
-  asArray(mac.signIgnore).some((pattern) => pattern.includes('claude-agent-sdk-darwin-(x64|arm64)/claude$'))
+  'release has no Claude Agent SDK signing exception',
+  !asArray(mac.signIgnore).some((pattern) => pattern.includes('claude-agent-sdk'))
 )
 check(
   'release declares Apple Events usage',

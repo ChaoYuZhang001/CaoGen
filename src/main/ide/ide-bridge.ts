@@ -552,7 +552,7 @@ function optionalFiniteNumber(value: unknown): number | undefined {
 }
 
 function optionalEngine(value: unknown): CreateSessionOptions['engine'] {
-  if (value === 'claude' || value === 'anthropic' || value === 'openai') return value
+  if (value === 'anthropic' || value === 'openai') return value
   return undefined
 }
 

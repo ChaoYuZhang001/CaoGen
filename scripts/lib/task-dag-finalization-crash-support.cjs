@@ -606,10 +606,8 @@ function installModuleStubs() {
     dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
     shell: { showItemInFolder() {}, openExternal: async () => {} }
   }
-  const sdkStub = { query: () => ({ async *[Symbol.asyncIterator]() {} }) }
   Module._load = function patchedLoad(request) {
     if (request === 'electron') return electronStub
-    if (request === '@anthropic-ai/claude-agent-sdk') return sdkStub
     if (request === './terminal' || request.endsWith('/terminal')) {
       return {
         terminalManager: {

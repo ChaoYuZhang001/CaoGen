@@ -146,19 +146,30 @@ function persistedProviders(providers: Provider[]): Provider[] {
 }
 
 function migrateLoadedProviders(providers: Provider[]): { providers: Provider[]; changed: boolean } {
-  return migrateProviderCredentials(providers, {
+  const credentials = migrateProviderCredentials(providers, {
     inspectCredentialHeaderNames,
     legacyKeyId,
     migrateLegacy: (ref, encryptedToken) => credentialBroker.migrateLegacy(ref, encryptedToken),
     migrationMarker: { credentialMigrationRequired: true }
   })
+  const migrated = credentials.providers.map(migrateLegacyProviderEngine)
+  return {
+    providers: migrated,
+    changed: credentials.changed || migrated.some((provider, index) => provider !== credentials.providers[index])
+  }
 }
 
 function sanitizeLoadedProvidersForRuntime(providers: Provider[]): Provider[] {
   return sanitizeProviderCredentialsForRuntime(providers, {
     inspectCredentialHeaderNames,
     migrationMarker: { credentialMigrationRequired: true }
-  })
+  }).map(migrateLegacyProviderEngine)
+}
+
+function migrateLegacyProviderEngine(provider: Provider): Provider {
+  const engine = (provider as unknown as { engine?: string }).engine
+  if (engine !== 'claude') return provider
+  return { ...provider, engine: 'anthropic' }
 }
 
 function normalizedCustomHeaders(value: string | undefined): string | undefined {
@@ -232,15 +243,6 @@ export function providerCredentialHeaders(
     name,
     name.toLowerCase() === 'authorization' ? `Bearer ${token}` : token
   ]))
-}
-
-export function providerCredentialHeaderLines(
-  provider: Pick<Provider, 'credentialHeaderNames'> | undefined,
-  token: string
-): string {
-  return Object.entries(providerCredentialHeaders(provider, token))
-    .map(([name, value]) => `${name}: ${value}`)
-    .join('\n')
 }
 
 function assertProviderCredentialInput(input: Partial<ProviderInput>): void {
@@ -602,12 +604,12 @@ export function getProvider(id: string): Provider | undefined {
 }
 
 export function resolveProviderEngine(provider: Pick<Provider, 'engine' | 'name' | 'baseUrl' | 'models' | 'openaiProtocol'>): EngineKind {
-  if (provider.engine === 'claude' || provider.engine === 'openai' || provider.engine === 'anthropic') {
-    return provider.engine
-  }
+  const engine = (provider as unknown as { engine?: string }).engine
+  if (engine === 'openai' || engine === 'anthropic') return engine
+  if (engine === 'claude') return 'anthropic'
   if (provider.openaiProtocol === 'chat') return 'openai'
   const identity = `${provider.name}\n${provider.baseUrl}\n${provider.models.join('\n')}`.toLowerCase()
-  return /anthropic|claude|\/anthropic(?:\/|$)/.test(identity) ? 'claude' : 'openai'
+  return /anthropic|claude|\/anthropic(?:\/|$)/.test(identity) ? 'anthropic' : 'openai'
 }
 
 /**

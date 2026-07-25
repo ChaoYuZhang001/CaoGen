@@ -40,11 +40,6 @@ export const NATIVE_RUNTIME_CONTRACT: NativeRuntimeContract = Object.freeze({
   capabilities
 })
 
-export const CLAUDE_NATIVE_RUNTIME_ADAPTER = defineNativeRuntimeAdapter(
-  'claude',
-  'claude.agent-sdk'
-)
-
 export const ANTHROPIC_NATIVE_RUNTIME_ADAPTER = defineNativeRuntimeAdapter(
   'anthropic',
   'anthropic.messages'
@@ -152,7 +147,7 @@ function sameStrings(left: readonly unknown[], right: readonly string[]): boolea
 }
 
 function isEngineKind(value: unknown): value is EngineKind {
-  return value === 'claude' || value === 'anthropic' || value === 'openai'
+  return value === 'anthropic' || value === 'openai'
 }
 
 function fail(code: string, message: string): never {

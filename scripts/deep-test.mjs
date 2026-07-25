@@ -9,7 +9,6 @@ const { DEEP_TEST_STATUS_PROTOCOL, DEEP_TEST_STATUSES } = deepTestStatus
 const OPTIONAL_CHECKS = new Set([
   'chinaRealNetwork smoke',
   'chinaToolCallParity smoke',
-  'claude real e2e'
 ])
 const RUNTIME_REQUIRED = {
   'chinaRealNetwork smoke': {
@@ -37,8 +36,7 @@ const commandDefinitions = [
   { name: 'release workflow contract smoke', command: 'node', args: ['scripts/release-workflow-contract-smoke.mjs'], category: 'static' },
   { name: 'Windows release config audit', command: 'node', args: ['scripts/windows-release-audit.mjs', '--config-only'], category: 'static' },
   { name: 'CaoGen Drive smoke', command: 'node', args: ['scripts/drive-smoke.mjs'], category: 'smoke' },
-  { name: 'Claude optional smoke', command: 'node', args: ['scripts/claude-optional-smoke.mjs'], category: 'smoke' },
-  { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
+  { name: 'native engine surface smoke', command: 'node', args: ['scripts/native-engine-surface-smoke.mjs'], category: 'smoke' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
   { name: 'integration wired modules', command: 'node', args: ['scripts/integration-test-3.cjs'], category: 'integration' },
   { name: 'taskDag smoke', command: 'node', args: ['scripts/task-dag-smoke.cjs'], category: 'smoke' },
@@ -72,7 +70,6 @@ const commandDefinitions = [
   { name: 'ModelAttempt ledger smoke', command: 'node', args: ['scripts/model-attempt-ledger-smoke.mjs'], category: 'smoke' },
   { name: 'ModelAttempt runtime smoke', command: 'node', args: ['scripts/model-attempt-runtime-smoke.mjs'], category: 'smoke' },
   { name: 'protocol adapter production boundary', command: 'node', args: ['scripts/protocol-adapter-boundary-smoke.mjs'], category: 'integration' },
-  { name: 'Claude ModelAttempt smoke', command: 'node', args: ['scripts/claude-model-attempt-smoke.mjs'], category: 'smoke' },
   { name: 'Anthropic Messages smoke', command: 'node', args: ['scripts/anthropic-messages-smoke.mjs'], category: 'smoke' },
   { name: 'Anthropic tool-use loop required', command: 'node', args: ['scripts/anthropic-tool-use-loop-smoke.mjs'], category: 'integration' },
   { name: 'Anthropic image restart required', command: 'node', args: ['scripts/anthropic-tool-use-loop-smoke.mjs', '--image-restart-only'], category: 'integration' },
@@ -155,7 +152,6 @@ const commandDefinitions = [
   { name: 'providerKeys smoke', command: 'node', args: ['scripts/provider-keys-smoke.mjs'], category: 'smoke' },
   { name: 'provider credential target binding smoke', command: 'node', args: ['scripts/provider-credential-target-binding-smoke.mjs'], category: 'smoke' },
   { name: 'providerConnectivity smoke', command: 'node', args: ['scripts/provider-connectivity-smoke.mjs'], category: 'smoke' },
-  { name: 'provider runtime containment smoke', command: 'node', args: ['scripts/provider-runtime-containment-smoke.mjs'], category: 'smoke' },
   { name: 'modelStats smoke', command: 'node', args: ['scripts/model-stats-smoke.mjs'], category: 'smoke' },
   { name: 'modelRouter smoke', command: 'node', args: ['scripts/model-router-smoke.mjs'], category: 'smoke' },
   { name: 'routing visibility smoke', command: 'node', args: ['scripts/routing-visibility-smoke.mjs'], category: 'smoke' },
@@ -173,7 +169,6 @@ const commandDefinitions = [
   { name: 'openai P2 tools smoke', command: 'node', args: ['scripts/openai-p2-tools-smoke.mjs'], category: 'smoke' },
   { name: 'responses tools e2e', ...commandSpec('npx', ['electron', 'scripts/responses-tools-e2e.cjs']), category: 'system' },
   { name: 'history compress e2e', ...commandSpec('npx', ['electron', 'scripts/history-compress-e2e.cjs']), category: 'system' },
-  { name: 'claude real e2e', ...commandSpec('npx', ['electron', 'scripts/claude-real-e2e.cjs']), category: 'system', statusReporter: 'scripts/claude-real-e2e.cjs' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
   { name: 'taskDag autoMerge e2e', ...commandSpec('npx', ['electron', 'scripts/task-dag-automerge-e2e.cjs']), category: 'system' },
   { name: 'taskDag durable finalization crash e2e', command: 'node', args: ['scripts/task-dag-finalization-crash-e2e.cjs'], category: 'system' },

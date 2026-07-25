@@ -11,8 +11,6 @@ const workflow = yaml.load(readFileSync(
   path.join(repoRoot, '.github', 'workflows', 'release-candidate-evidence.yml'),
   'utf8'
 ))
-const afterPackSource = readFileSync(path.join(repoRoot, 'scripts', 'after-pack.cjs'), 'utf8')
-
 const rendererOnlyDependencies = [
   '@react-three/drei',
   '@react-three/fiber',
@@ -61,14 +59,17 @@ for (const pattern of requiredBaseFiles) {
   assert(macFiles.includes(pattern), `missing macOS base package filter: ${pattern}`)
 }
 for (const pattern of [
-  '!node_modules/@anthropic-ai/claude-agent-sdk-darwin-!(${arch})/**',
   '!node_modules/**/prebuilds/!(darwin-${arch})/**',
   '!node_modules/@nut-tree-fork/libnut-linux/**',
   '!node_modules/@nut-tree-fork/libnut-win32/**'
 ]) assert(macFiles.includes(pattern), `missing macOS package filter: ${pattern}`)
 
-assert(!afterPackSource.includes('rmSync('), 'afterPack must not delete files after ASAR creation')
-assert(afterPackSource.includes('wrong-architecture Claude SDK survived packaging'))
+assert.equal(packageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'], undefined)
+assert.equal(packageLock.packages?.['']?.dependencies?.['@anthropic-ai/claude-agent-sdk'], undefined)
+assert(!Object.keys(packageLock.packages ?? {}).some((name) => name.includes('claude-agent-sdk')))
+assert(!(packageJson.build?.asarUnpack ?? []).some((pattern) => pattern.includes('claude-agent-sdk')))
+assert.equal(packageJson.build?.afterPack, undefined)
+assert.equal(packageJson.build?.mac?.afterPack, undefined)
 assert(packageJson.scripts?.['dist:mac:release:x64']?.includes('test:macos-package-size:required'))
 
 const x64Steps = workflow.jobs?.['macos-x64']?.steps || []

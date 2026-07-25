@@ -11,7 +11,6 @@ const providerSavedKeys = read('src/renderer/src/components/settings/ProviderSav
 const providerList = read('src/renderer/src/components/settings/ProviderList.tsx')
 const controlCenter = read('src/renderer/src/controlCenter.ts')
 const openaiEngine = read('src/main/openaiEngine.ts')
-const agentSession = read('src/main/agentSession.ts')
 const dagDecomposer = read('src/main/agent/model-dag-decomposer.ts')
 const providerRuntimeAuth = read('src/main/providerRuntimeAuth.ts')
 
@@ -107,8 +106,7 @@ staticAssert(
   'critical provider writes must roll back in-memory credentials when persistence fails'
 )
 staticAssert(
-  providers.includes('export function providerCredentialHeaders')
-    && providers.includes('export function providerCredentialHeaderLines'),
+  providers.includes('export function providerCredentialHeaders'),
   'providers must inject Broker tokens into managed credential header names'
 )
 staticAssert(
@@ -176,17 +174,10 @@ staticAssert(
   'OpenAI requests must receive Broker-managed credential headers'
 )
 staticAssert(
-  agentSession.includes("import { applyClaudeProviderEnvironment } from './providerRuntimeAuth'")
-    && agentSession.includes('applyClaudeProviderEnvironment(env, provider, token)')
-    && providerRuntimeAuth.includes('providerCredentialHeaderLines(provider, token)'),
-  'Claude SDK sessions must receive Broker-managed credential headers'
-)
-staticAssert(
-  providerRuntimeAuth.includes('delete env.ANTHROPIC_CUSTOM_HEADERS')
-    && providerRuntimeAuth.includes("'ANTHROPIC_API_KEY'")
-    && providerRuntimeAuth.includes("'ANTHROPIC_AUTH_TOKEN'")
-    && providerRuntimeAuth.includes('for (const key of CLAUDE_HOST_CREDENTIAL_KEYS) delete env[key]'),
-  'Claude Provider sessions must clear unrelated host credentials before Broker injection'
+  !providerRuntimeAuth.includes('ANTHROPIC_CUSTOM_HEADERS')
+    && !providerRuntimeAuth.includes('applyClaudeProviderEnvironment')
+    && !providerRuntimeAuth.includes('CLAUDE_CODE_'),
+  'native provider auth must not retain Claude Code subprocess environment injection'
 )
 staticAssert(
   dagDecomposer.includes('providerCredentialHeaders(provider, token)'),

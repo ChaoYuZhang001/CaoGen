@@ -75,7 +75,7 @@ CaoGen 已经具备真实差异化:
 
 | 维度 | CaoGen 当前状态 | 竞品基线 | 判断 |
 |---|---|---|---|
-| Agent 执行内核 | Claude Agent SDK + OpenAI-compatible API；Effect Ledger、资源级 lease/fencing、强杀恢复、主要文件编辑与 Git commit/merge/push Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
+| Agent 执行内核 | OpenAI-compatible + 原生 Anthropic Messages；不嵌入 Claude Code SDK/CLI；Effect Ledger、lease/fencing、强杀恢复和主要 Reconciler 已接 | Codex/Claude 有成熟线程与后台会话；OpenClaw Task Flow、Hermes Kanban 有持久状态机 | 内部恢复和有限外部对账较强；仍缺完整副作用覆盖、补偿和统一 Supervisor |
 | 多 Agent | 33 child sessions、DAG、worktree、结果回传、自动合并 | Codex multi-agent 已标 stable；Claude 有 Subagent/Agent View/实验 Teams；OpenClaw/Hermes 有隔离 Agent | 强项；下一步应区分临时子任务、持久会话、Team 和确定性 Workflow |
 | Provider 开放性 | 多厂商、多 Key、健康度、预算、跨厂商 failover | 竞品通常围绕自家模型或单一 Gateway | CaoGen 领先，但上下文和成本账本仍不够耐久 |
 | 权限治理 | 风险分类、审批模式、资源级副作用门禁、文件边界、GUI 权限检查、审计 metadata/hash 和权限输入脱敏已接 | Claude 有宿主权限 + OS sandbox；Codex 有 sandbox/approval/Guardian；OpenClaw/Hermes 提供策略但默认姿态不总是安全 | 中等；缺凭证代理、统一保留策略和更强 OS 隔离 |
@@ -117,7 +117,7 @@ CaoGen 已经具备真实差异化:
 - OpenAI 文件编辑的本地 writer 执行 identity/hash CAS；absent 写入还绑定审批时 root/parent 身份并用 hardlink 原子发布，再复验原路径身份和内容。
 - `git_merge` 已冻结目标 ref、审批前 HEAD/tree、来源 ref/SHA 和 repo/common-dir/worktree-dir 身份；执行时只合并冻结 SHA，拒绝目录身份漂移、隐藏 index 状态、ignored/local path 覆盖和不安全 merge/filter 配置。
 - merge-tree 只在临时 ODB 中运行；真实 ref transaction 会在 prepared 阶段验证 old SHA、两父节点和 expected tree，失败后保持目标 ref、index 与 worktree 不变。
-- OpenAI-compatible 与 Claude SDK 两条正式工具执行路径均接入 prepare → persist barrier → execute → reconcile。
+- OpenAI-compatible 与原生 Anthropic Messages 两条正式工具执行路径均接入 prepare → persist barrier → execute → reconcile。
 - 强杀、关闭、中断、普通事件与 Effect 并发写、目标漂移、路径替换、FIFO、超限 fail-closed、BOM、同内容换 inode、硬链接冲突、Claude prepared 恢复和空 staged commit 已有回归测试。
 - UI 会显示 `waiting_reconciliation`，阻止自动恢复、继续发送和删除恢复入口。
 
@@ -125,10 +125,10 @@ CaoGen 已经具备真实差异化:
 
 - Issue、消息、可查询 MCP 和 Code Forge patch 尚无专用 Reconciler 或未统一经过 Effect Runtime。
 - Existing-file writer 仍原地 `truncate/write`，不具备 writer 内部 crash-atomic；当前强杀 E2E 证明的是 Effect 执行边界恢复，不能证明写入中断后文件一定完整。
-- Claude `MultiEdit/NotebookEdit` 尚无可信 planner；Claude AgentSession 的真实外部 `Edit` 全链仍缺有条件环境集成测试，不能把 mock/模块 smoke 写成真实外部执行证明。
+- 原生 Anthropic 多步文件编辑的真实 Provider 全链仍缺有条件环境集成测试，不能把 mock/模块 smoke 写成真实外部执行证明。
 - `markEffectCompensated` 只有账本状态能力，没有生产级补偿计划、审批和执行器。
 - evidence digest 尚未形成 append-only 哈希链、独立 Effect 表或审计事件关联，不能宣称防篡改不可变账本。
-- Effect Runtime 强杀 E2E 已覆盖文件写入、`search_replace/edit_file` 三态和 effect-bound `git_merge`；Git commit/push、PR、消息、MCP，以及 OpenAIEngine/Claude AgentSession 的完整工具链仍需独立系统测试。
+- Effect Runtime 强杀 E2E 已覆盖文件写入、`search_replace/edit_file` 三态和 effect-bound `git_merge`；Git commit/push、PR、消息、MCP，以及 OpenAI/Anthropic 原生工具链仍需独立系统测试。
 
 竞品信号:
 
@@ -292,7 +292,7 @@ Owner: Platform / Release。
 
 - `src/main/openaiEngine.ts` 的 `lastResponseId` 只在内存中。
 - 跨 Provider 或跨 Key failover 会清空 response id，然后重新发本轮请求。
-- Responses 服务端状态、Chat 本地历史和 Claude SDK session/checkpoint 仍是三套语义。
+- Responses 服务端状态、Chat 本地历史和 Anthropic Messages 本地历史仍未收口为统一 Canonical Conversation Ledger。
 
 实现要求:
 

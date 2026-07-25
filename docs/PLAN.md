@@ -64,8 +64,8 @@ README、官网、STATUS 三处必须一致:
 - **部分完成**:有代码/界面/targeted evidence,但契约、恢复、跨 Provider 连续性或发布绑定未闭环
 - **立项目标**:1.0 完成定义,不代表当前能力
 
-当前基线(2026-07-23,以 STATUS.md 和机器验收映射为准):64 个 P0 中 21 个已验证、
-17 个部分完成、25 个立项目标、1 个仅达到基础。官网旧的"5 完成/17 部分/42 立项"
+当前基线(2026-07-25,以 STATUS.md 和机器验收映射为准):64 个 P0 中 21 个已验证、
+18 个部分完成、24 个立项目标、1 个仅达到基础。官网旧的"5 完成/17 部分/42 立项"
 口径已于 M1-T4 对齐并增加四分类总和门禁。
 
 ---
@@ -87,7 +87,9 @@ README、官网、STATUS 三处必须一致:
   - [x] macOS 签名只对 Apple 时间戳服务瞬时错误执行最多 5 次有界重试;证书、entitlement、Keychain 与其他签名错误立即失败
   - [x] 手动候选管线已固化:`workflow_dispatch` 只接受已在 `main` 的完整 commit SHA;支持 Intel-only 或完整三平台范围;只上传未发布候选证据包,不自动建 tag/Release
   - [x] `main@7a0a4babb9fae90b68c8deef63e185bd44527b5c` 的 Intel-only 候选在 GitHub run `30130085556` 完成 exact-commit Deep、Developer ID 签名、notarize、staple、Gatekeeper、required release audit、DMG 安装和真实 renderer 启动
-  - [x] Intel 无功能损失瘦身本地实测:DMG `197,518,789 B`、ZIP `197,966,775 B`、`.app` 逻辑体积 `555,506,427 B`、`app.asar` `61,742,511 B`;Claude CLI、Tree-sitter、node-pty 和 renderer 均通过运行时验证;最终签名候选仍需在新 commit 上重跑
+  - [x] 运行时收口为 OpenAI-compatible + 原生 Anthropic Messages，删除 Claude Agent SDK、Claude CLI、SDK 专属会话/检查点/Hook/UI 与打包规则；基础发行包必须审计为不含 SDK/CLI
+  - [x] 删除 Claude Runtime 后的本地 unsigned Intel x64 实测：DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` `311,931,918 B`、`app.asar` `61,630,882 B`；package audit 证明 SDK/CLI 不在 ASAR 或 unpacked files，预算收紧为 `160 MB / 160 MB / 400 MB / 80 MB`
+  - [ ] 在新 clean commit 上完成 Developer ID 签名、公证、Gatekeeper、DMG 隔离安装、真实 renderer 与最终资产绑定；本地 unsigned 测量不得替代该证据
   - [ ] Apple Silicon arm64 原生证据(暂停,不计入当前 M1 完成判据)
   - [ ] Windows x64 签名/安装证据(暂停,不计入当前 M1 完成判据)
 - [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
@@ -216,7 +218,7 @@ Assistant/Studio 双模式无损切换可用。**
 
 ## 8. 功能排期(64 个 P0 × 当前进展)
 
-基线(2026-07-22,STATUS.md):64 个 P0 = **21 已验证 + 17 部分完成 + 25 立项目标 + 1 仅基础**。
+基线(2026-07-25,STATUS.md):64 个 P0 = **21 已验证 + 18 部分完成 + 24 立项目标 + 1 仅基础**。
 已验证、无需排期的 21 项:EXP-001/002、PROJ-001/002/003、GOAL-001、WORK-002、
 TEAM-001/002、ROUTE-001/002/003、RUN-001、TRUST-001、AUTO-003/004、VIS-001、
 NFR-PRIV-004、NFR-NEUTRAL-001/003、NFR-ENG-003。

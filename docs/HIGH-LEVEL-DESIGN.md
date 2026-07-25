@@ -8,7 +8,7 @@
 >
 > 安全基线：[`SECURITY-AND-RISK.md`](./SECURITY-AND-RISK.md)
 >
-> 重要边界：Claude Agent SDK 当前仍是可选正式路径；CaoGen Native Runtime + 协议 Adapter 是长期迁移目标，不是当前完成事实
+> 重要边界：当前生产运行时仅为 OpenAI-compatible 与原生 Anthropic Messages；Claude Agent SDK/CLI 已删除，Native Runtime 的跨协议统一恢复语义仍是建设目标
 
 ## 1. 设计目标
 
@@ -69,7 +69,6 @@ flowchart TB
     AdapterOpenAI["OpenAI Responses Adapter"]
     AdapterChat["OpenAI Chat Adapter"]
     AdapterAnthropic["Anthropic Messages Adapter"]
-    ClaudeBridge["Claude Agent SDK Compatibility Bridge"]
   end
 
   subgraph External["外部能力"]
@@ -109,13 +108,9 @@ flowchart TB
   Native --> AdapterOpenAI
   Native --> AdapterChat
   Native --> AdapterAnthropic
-  Supervisor -. "迁移期兼容" .-> ClaudeBridge
   AdapterOpenAI --> Providers
   AdapterChat --> Providers
   AdapterAnthropic --> Providers
-  ClaudeBridge --> Providers
-  ClaudeBridge --> Context
-  ClaudeBridge --> Trust
   GoalService --> DomainDb
   Workflow --> DomainDb
   Context --> EventStore
@@ -132,7 +127,7 @@ flowchart TB
 | Desktop Shell | Electron main/preload/React renderer | 当前已验证，继续沿用 |
 | Engine Registry | `engine.ts`、`engines.ts` | 当前已验证；迁移后降为 Runtime/Bridge 注册 |
 | OpenAI Runtime | `openaiEngine.ts` | 当前已验证；拆出 Native Runtime 和两个 Adapter |
-| Claude Runtime | `agentSession.ts` + Claude Agent SDK | 条件可用；迁移期保留 Compatibility Bridge |
+| Anthropic Runtime | `anthropicEngine.ts` + Anthropic Messages Adapter | 当前已验证本地路径；不依赖 Claude Code 隐藏会话状态 |
 | Model Router | `model/*`、`providerHealth.ts`、`providerKeyRouting.ts` | 当前已验证；补同厂商换模型、跨协议和 half-open |
 | Session/Task Facade | `sessionManager.ts` | 当前已验证；保留 facade，继续下沉领域服务 |
 | Task/Workflow Ledger | `TaskRunRecord`、Task Snapshot SQLite、`workflow-ledger-*` | v8 recovery read-source foundation 已验证；Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link/event chain 可投影和查询，Task Snapshot/TaskRun 恢复读取支持按数据库路径隔离的 `legacy / compare / canonical` 三态，未配置时默认 legacy |
@@ -270,14 +265,6 @@ Capability 来自静态已验证表、Provider 声明和可选 probe。来源和
 - 不依赖 Claude Agent SDK 的隐藏会话状态；
 - Hook、subagent、checkpoint 等产品能力由 CaoGen Native Runtime 提供；
 - Anthropic 兼容端点必须经过协议合约测试。
-
-#### Claude Agent SDK Compatibility Bridge
-
-- **条件可用**：当前继续保留；
-- 把 SDK 事件转换为 RuntimeEvent 和 Ledger 事件；
-- 不新增只有 SDK 会话才能使用的核心产品能力；
-- 旧 SDK 会话保持可读、可恢复条件明确、可从 CaoGen transcript fork；
-- 退出必须由迁移门禁决定，不能按日期硬删。
 
 ## 8. 领域模型
 
@@ -981,7 +968,7 @@ Local userData
 
 ### 21.1 阶段 T0：Trust 与迁移准备（映射 M1）
 
-- 保持 OpenAI-compatible 默认路径和可选 Claude SDK；
+- 固定 OpenAI-compatible 与原生 Anthropic Messages 双运行时边界；
 - 删除 `b64:` 凭据 fallback；
 - 补 Issue、消息、可查询 MCP 和 Code Forge patch Reconciler；
 - v6 Effect evidence、v8 Workflow Ledger、canonical recovery sessions、`legacy / compare / canonical` 恢复读源、可逆 migration 与 committed identity/high-water continuity 已落地；继续把全部入口/外部事件接入 ledger，并补完整 Artifact/blob/sourceRef 生命周期、Canonical Conversation Ledger、scoped permission、保留/导出/修复和生产补偿闭环；
@@ -1006,7 +993,7 @@ Local userData
 
 - 实现 Anthropic 协议合约；
 - 工具、权限、Effect、usage、错误和恢复与 OpenAI Adapter 对齐；
-- Claude SDK 保持可选，进行同任务 parity 和差异记录。
+- 用双协议 fixture 与真实 Provider 条件记录验证同任务 parity。
 
 ### 21.5 阶段 T4：Workflow、Artifact 与数字员工（映射 M3）
 
@@ -1027,19 +1014,19 @@ Local userData
 
 M5 不新增架构子阶段，而是对 T0-T5 进行全链集成、修复、真实用户验收和默认连续 7 天无数据丢失/无重复高风险副作用 soak。精确版本 `1.0.0` 的 release owner 已在 `docs/1.0-SOAK-WAIVER.json` 显式接受跳过 elapsed soak 的残余风险；Doctor 必须显示 `waived` 且仅该版本 non-blocking，不能把它折算为 M5 soak 通过，也不能削弱其他 M5/M6 门禁。
 
-### 21.8 阶段 T6：Claude SDK 退出门禁评估（映射 M6）
+### 21.8 阶段 T6：Claude Runtime 退出收口（映射 M6）
 
-只有以下条件全部通过才进入删除评审：
+SDK/CLI/AgentSession 已按 2026-07-25 产品决策删除；本阶段用以下条件完成验证与发布收口：
 
 1. Anthropic Adapter 的模型、工具、图片、流、错误、usage 和长上下文 parity；
 2. Native Runtime checkpoint、Hook、Skill、MCP、subtask 和恢复语义完整；
 3. 旧 SDK 会话可读取、可 fork，迁移失败可回滚；
 4. `~/.claude/plugins` 等兼容托管根已迁入 CaoGen 自有 registry/store，设置、启用状态和来源可核对；
-5. 真实 Claude 条件验证通过；
+5. 真实 Anthropic Messages Provider 条件验证通过；
 6. 打包体积、性能和供应链收益有量化证据；
 7. 发布说明明确兼容变化。
 
-T6 只输出 Go/No-Go 结论，不直接删除 SDK。未满足时继续保留 Compatibility Bridge；实际删除属于 Go 之后的独立发布决策，不以架构偏好牺牲用户数据。
+T6 未收口时保持发布门禁开放，但不恢复 Compatibility Bridge。
 
 ## 22. 失败恢复设计
 
@@ -1163,7 +1150,7 @@ goalId
 | 顶层工作单元 | Goal，而非 Agent/Provider/Session | 用户管理目标，避免厂商切换负担 |
 | 执行内核 | CaoGen Native Runtime | 统一上下文、工具、权限、恢复和交付 |
 | 模型集成 | Protocol Adapter | 协议可替换，产品语义不外包 |
-| Claude SDK | 迁移期 Compatibility Bridge | 保留当前能力和旧数据，满足门禁后再评估退出 |
+| Claude Code Runtime | 删除 | 减少包体、供应链和隐藏会话语义；旧元数据显式迁移到原生 Anthropic |
 | 状态保存 | 当前状态 + append-only event/evidence | 查询效率、审计和恢复兼顾 |
 | 外部副作用 | Effect Ledger + Reconciler | 防止崩溃和 failover 后重复执行 |
 | 产物 | Artifact Graph + content-addressed Blob | 统一来源、版本、验证和交付 |
@@ -1195,6 +1182,6 @@ goalId
 5. 未知 Effect 能在强杀、重启和 failover 后 fail-closed；
 6. 复核 BLOCKED 能阻止交付并驱动修复闭环；
 7. 3D 水墨人物只消费真实状态，模型切换保持人物身份连续；
-8. 旧数据和 Claude SDK 会话有备份、迁移、读取、fork 和回滚路径；
+8. 旧 `engine: claude` 元数据有备份、迁移、读取、transcript fork 和回滚路径；
 9. required 发布门禁全部通过，外部条件按四态诚实记录；
 10. `STATUS.md`、产品技术要求、概要设计和公开文案保持一致。

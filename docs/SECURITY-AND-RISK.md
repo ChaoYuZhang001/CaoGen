@@ -41,7 +41,7 @@
 ### 2.2 范围内组件
 
 - Electron 主进程、preload 桥、React renderer 和 IPC。
-- 默认 OpenAI-compatible 运行时与可选 Claude Agent SDK 运行时。
+- OpenAI-compatible 与原生 Anthropic Messages 两个 HTTP 运行时；基础发行包不嵌入 Claude Code SDK/CLI。
 - Provider、API Key、模型目录、健康状态、预算、自动路由和故障切换。
 - 项目规则、会话、子会话、DAG、worktree、Git、终端、文件工具和 Effect Ledger。
 - Browser WebContentsView、GUI/Desktop Control、IDE Bridge、Quickbar、附件和文档预览。

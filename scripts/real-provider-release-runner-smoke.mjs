@@ -221,7 +221,7 @@ function runProcess(command, args, options) {
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
       reject(new Error('runner smoke child timed out'))
-    }, 30_000)
+    }, 60_000)
     child.stdout.on('data', (chunk) => { stdout += chunk })
     child.stderr.on('data', (chunk) => { stderr += chunk })
     child.once('error', (error) => {

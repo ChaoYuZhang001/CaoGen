@@ -26,7 +26,7 @@ CaoGen is an open-source, vendor-neutral, local-first AI work desktop that bring
 
 It gives users one reviewable local workspace for multiple models, projects, files, tasks, and tools.
 
-> “The models you choose” means models reachable through CaoGen's currently supported OpenAI-compatible, Anthropic Messages, or optional Agent SDK paths. Availability still depends on protocol compatibility, account access, network conditions, and quota.
+> “The models you choose” means models reachable through CaoGen's OpenAI-compatible or native Anthropic Messages HTTP runtimes. Availability still depends on protocol compatibility, account access, network conditions, and quota. The base distribution embeds no external Agent SDK or CLI.
 
 | Capability | CaoGen today | Evidence boundary |
 |---|---|---|
@@ -39,7 +39,7 @@ This table describes the current product structure. It does not claim that every
 
 ## Current progress
 
-As of 2026-07-23, the PRD has 64 P0s: 21 verified, 17 partially complete, 25 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; `0.1.7` remains a signed-wedge candidate, not 1.0 stable.
+As of 2026-07-25, the PRD has 64 P0s: 21 verified, 18 partially complete, 24 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; `0.1.7` remains a signed-wedge candidate, not 1.0 stable.
 
 ## Core capabilities available today
 

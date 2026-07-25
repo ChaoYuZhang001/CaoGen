@@ -268,8 +268,8 @@ export interface ProviderHealthView {
 }
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
-/** Agent 引擎标识:claude = Claude Agent SDK;anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
-export type EngineKind = 'claude' | 'anthropic' | 'openai'
+/** Agent 引擎标识:anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
+export type EngineKind = 'anthropic' | 'openai'
 export interface EngineInfo {
   kind: string
   label: string
@@ -608,12 +608,6 @@ export interface TaskDagDispatchResult {
   execution: TaskDagExecutionView
   /** 当前调度调用已经启动的 child sessions;后续依赖层通过 task-dag-update 同步。 */
   children: SubagentDispatchItem[]
-}
-
-export interface SdkAgentInfo {
-  name: string
-  description: string
-  model?: string
 }
 
 export type TaskSnapshotReason =
@@ -1062,8 +1056,6 @@ export interface AppSettings {
   notificationsEnabled: boolean
   /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
   preventDisplaySleep: boolean
-  /** Claude SDK agents 桥接:默认关闭,避免老会话系统提示词/Agent 工具上下文变化 */
-  sdkAgentsEnabled: boolean
   /** IDE Bridge:默认关闭,开启后 VS Code/JetBrains 插件可通过本机 WebSocket 连接桌面端。 */
   ideBridgeEnabled: boolean
   /** IDE Bridge 监听地址,默认仅本机。 */
@@ -1072,13 +1064,6 @@ export interface AppSettings {
   ideBridgePort: number
   /** IDE Bridge 可选 token,为空表示本机连接无需 token。 */
   ideBridgeToken: string
-  /**
-   * Hooks:文件写入类工具(Edit/Write)成功后执行的 shell 命令,
-   * 在会话 cwd 下运行,空 = 关闭。典型用法:自动格式化/测试。
-   */
-  hookPostEditCommand: string
-  /** Hooks:每轮结束(Stop)后执行的 shell 命令,空 = 关闭 */
-  hookTurnEndCommand: string
   /** 自动 Skill 沉淀:任务成功完成后后台复盘、验证并写入项目本地 Skill 库。默认关闭。 */
   autoSkillLearningEnabled: boolean
   /** Agent 控制室外观设置 */
@@ -1105,7 +1090,7 @@ export interface Provider {
   /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
   engine?: EngineKind
   /**
-   * 允许列表内的非敏感标准/路由元数据头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
+   * 允许列表内的非敏感标准/路由元数据头,每行 "Name: value",由原生 HTTP 引擎注入请求。
    * 未知头、畸形行、鉴权/密钥头和疑似凭据值禁止保存;凭据必须通过 Provider API 密钥字段配置。
    */
   customHeaders?: string
@@ -1116,7 +1101,7 @@ export interface Provider {
   /**
    * OpenAI 引擎协议:'responses'(OpenAI 官方 Responses API,默认)或
    * 'chat'(通用 /v1/chat/completions,DeepSeek/Qwen/网关/自部署 vLLM 等)。
-   * 仅 openai 引擎读取;Claude Agent SDK 与 Anthropic Messages 引擎忽略。
+   * 仅 openai 引擎读取;Anthropic Messages 引擎忽略。
    */
   openaiProtocol?: OpenAIProtocol
   /** 用户备注 */
@@ -2249,7 +2234,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
     parentSessionId: string,
     input: TaskDagDispatchInput
   ): Promise<TaskDagDispatchResult>
-  listSupportedAgents(sessionId: string): Promise<SdkAgentInfo[]>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
   saveImageAttachmentBytes(
     sessionId: string,

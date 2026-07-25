@@ -83,7 +83,7 @@ try {
       id: 'deepseek-official',
       name: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com',
-      engine: 'claude',
+      engine: 'openai',
       models: ['deepseek-chat', 'deepseek-reasoner'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -93,7 +93,7 @@ try {
       id: 'premium',
       name: 'Premium',
       baseUrl: 'https://example.test',
-      engine: 'claude',
+      engine: 'openai',
       models: ['gpt-4o-mini', 'expensive-reasoner', 'opus'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -112,14 +112,14 @@ try {
     settingsBudgetUsd: spark.budgetUsdPerSession,
     driveMode: 'spark'
   })
-  assert(missingEngineRoute.kind === 'disabled', 'Drive routing must not infer Claude when engine is missing')
+  assert(missingEngineRoute.kind === 'disabled', 'Drive routing must not infer an engine when it is missing')
 
   const sparkRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
-    engine: 'claude',
+    engine: 'openai',
     payload: { text: 'summarize this README quickly', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
@@ -136,7 +136,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
-    engine: 'claude',
+    engine: 'openai',
     payload: { text: 'review and implement production database migration code', images: [] },
     strategy: coreSpeed.schedulerStrategy,
     sessionCostUsd: 0,
@@ -156,7 +156,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
-    engine: 'claude',
+    engine: 'openai',
     payload: { text: 'review and implement production database migration release plan', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
@@ -174,7 +174,7 @@ try {
     currentModel: 'auto',
     providerId: 'deepseek-official',
     providers,
-    engine: 'claude',
+    engine: 'openai',
     payload: { text: 'decompose full-stack launch work into DAG, implement, review, test, and summarize delivery', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,

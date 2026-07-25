@@ -945,16 +945,6 @@ export default function SettingsPage(): React.JSX.Element {
                 <label className="settings-check">
                   <input
                     type="checkbox"
-                    checked={draft.sdkAgentsEnabled}
-                    onChange={(e) => set('sdkAgentsEnabled', e.target.checked)}
-                  />
-                  {t('sdkAgentsEnabled')}
-                </label>
-                <p className="settings-hint">{t('sdkAgentsHint')}</p>
-
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
                     checked={draft.ideBridgeEnabled}
                     onChange={(e) => set('ideBridgeEnabled', e.target.checked)}
                   />
@@ -1017,23 +1007,6 @@ export default function SettingsPage(): React.JSX.Element {
                 />
                 <p className="settings-hint">按当前自然月统计历史会话费用；达到上限后会拦截下一轮发送，auto 调度会优先降级到低成本模型。</p>
 
-                <label className="field-label">{t('hookPostEdit')}</label>
-                <input
-                  className="input input-block"
-                  value={draft.hookPostEditCommand}
-                  placeholder="npx prettier --write . && npm test"
-                  onChange={(e) => set('hookPostEditCommand', e.target.value)}
-                />
-                <p className="settings-hint">{t('hookPostEditHint')}</p>
-
-                <label className="field-label">{t('hookTurnEnd')}</label>
-                <input
-                  className="input input-block"
-                  value={draft.hookTurnEndCommand}
-                  placeholder="npm run lint"
-                  onChange={(e) => set('hookTurnEndCommand', e.target.value)}
-                />
-                <p className="settings-hint">{t('hookTurnEndHint')}</p>
               </>
             )}
 

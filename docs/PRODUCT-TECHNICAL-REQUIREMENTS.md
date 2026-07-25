@@ -67,7 +67,7 @@ Assistant/Studio 双工作台属于立项目标；当前界面尚未完成该模
 | 能力域 | 当前事实 |
 |---|---|
 | 桌面架构 | Electron 主进程、context-isolated preload、React renderer；主窗口 `nodeIntegration=false` |
-| 正式运行时 | 默认 OpenAI-compatible 路径；可选 Claude Agent SDK 路径；已注册并可选择的原生 Anthropic Messages 路径 |
+| 正式运行时 | OpenAI-compatible（Responses / Chat Completions）与原生 Anthropic Messages（`/v1/messages`）；无 Claude Code SDK/CLI |
 | OpenAI 协议 | Responses 与 Chat Completions；两条路径均已接工具循环 |
 | 多厂商 | 多 Provider、多模型、多 Key、自定义 Base URL、中转站和本地兼容服务 |
 | 自动调度 | fixed、Provider 内自动、跨 Provider 自动；按任务、策略、预算、健康、项目规则和历史统计选择 |
@@ -88,7 +88,7 @@ Assistant/Studio 双工作台属于立项目标；当前界面尚未完成该模
 
 | 能力 | 条件或限制 |
 |---|---|
-| Claude Agent SDK | 用户显式选择；需要有效 Claude 登录态、Anthropic Key 或兼容网关；不是默认路径 |
+| Claude 模型 | 通过原生 Anthropic Messages Provider 使用 API Key；不需要 Claude Code 登录或 CLI |
 | 真实中国 Provider parity | 需要用户提供真实 Provider 配置、网络和额度；当前 optional skip 不等于通过 |
 | Windows GUI | v0.1.5 有 Windows x64 包，后续发布和完整可见证据仍需真实 Windows 环境 |
 | Apple Silicon | 历史 v0.1.3 arm64 资产存在；当前 v0.1.6 未发布 arm64，且缺少本轮真机启动、升级和完整功能证明 |
@@ -100,7 +100,7 @@ Assistant/Studio 双工作台属于立项目标；当前界面尚未完成该模
 1. OpenAI Responses 使用服务端 `response_id` 续上下文；跨 Provider 后会清空该链，完整历史桥接尚未完成。
 2. Chat Completions 从转录恢复时当前主要重建文本，不完整回放图片和全部工具历史。
 3. 会话建立后的智能路由按当前执行引擎过滤，尚不是跨协议、跨引擎的统一热切换。
-4. Claude Agent SDK 路径的 failover 候选需要进一步固化协议兼容过滤。
+4. Provider failover 仅允许在相同运行时/协议内发生，跨协议热切换尚未实现。
 5. failed Workflow Acceptance review 已能阻止交付、创建 canonical repair WorkItem/Acceptance 并在修复完成后重新验证；多 criterion Acceptance 必须逐项绑定 Evidence 与匹配的 criterion-scoped `verifies` link。可选不可变 `criterionPolicies` 已支持完整 criterion ID/index、Workflow Evidence kind/source 约束、legacy 无 policy 兼容和 retest 保留；对带 policy 的 Acceptance，typed failure producer 在未显式提供 `criterionIndexes` 时必须恰好匹配一个语义兼容的 criterion 才自动绑定，零个或多个匹配均 fail-closed 且不写 Evidence。repair-derived Acceptance 会在新建、重复恢复和启动恢复时按 repair criterion ID 继承同一 kind/source 语义。终态 canonical gate 每次重新读取 live store，并把 Workflow Evidence 绑定到 `workflow.evidence.recorded` envelope/payload digest、把 Task Evidence 绑定到 `workflow.effect.evidence` 事件及 Run/Effect source；passed 后删除 Workflow Evidence、Task Evidence 或 Evidence Link 会在 ProjectWorkspace 源提交前拒绝，available 本地 ArtifactLocation 的常规文件字节还必须匹配 Artifact/Evidence digest 与 checksum/size。Command/Genesis 交叉验证现以严格首行 parser 区分 review/arbitration 结论，只有 `BOTH_NEED_FIX` 或 reviewer 已判 `CONCERNS/BLOCKED` 后的 `REVIEWER_OK` 会写入结构化失败路径。原生 `bash` 显式测试命令的真实 `tool-result` 只有在 Session/TaskRun/ToolExecution/canonical testing WorkItem、事件摘要全部一致，并同时满足 `commandTermination === 'exited'`、`isError === true`、`exitCode` 为非零安全整数时才会生成测试失败 Evidence；`timed_out`、`aborted`、`output_limit`、`spawn_error`、`not_started` 等基础设施终止不会误报 Acceptance failure。该路径支持启动恢复；policy authoring 与 review/evidence 选择 UI 已由真实 Electron required gate 覆盖；remote/non-file Artifact trust、其他工具/引擎生产者、自动测试编排和 repair Run 仍未接通。
 6. Provider 被判定不健康后缺少 half-open 探测和自动恢复策略。
 7. 运行失败后缺少“同 Provider 换模型”这一层，当前备用 Key 耗尽后主要进入跨 Provider failover。
@@ -135,7 +135,7 @@ CaoGen Application Core
   -> Supervisor
 ```
 
-Claude Agent SDK 在迁移期间继续作为可选正式兼容路径。只有当 Native Runtime、Anthropic Messages Adapter、上下文恢复、工具语义、检查点、Hook 迁移和旧数据读取全部通过验收后，才可以提出删除 SDK；在此之前不得宣称已删除或已完全替代。
+2026-07-25 的产品决策已取消 Claude Code Runtime 兼容路径。基础发行包只允许 OpenAI-compatible 与原生 Anthropic Messages，必须用源码门禁与包内审计同时证明 Claude Agent SDK/CLI 不存在。
 
 ## 6. Native Runtime 要求
 
@@ -205,7 +205,6 @@ Adapter 不得直接写项目文件、管理用户审批、持有长期记忆、
 | OpenAI Responses Adapter | 立项目标 | 复用现有 OpenAIEngine，补齐完整历史桥接、恢复、图片和工具上下文 |
 | OpenAI Chat Completions Adapter | 立项目标 | 复用现有已验证路径，统一工具、压缩、usage、错误和恢复语义 |
 | Anthropic Messages Adapter | 部分完成（本地 targeted 验证） | 已独立注册生产 Engine，覆盖 Messages 流/usage/error、工具循环、NativeToolRuntime 权限与 Effect、Key/同协议 Provider failover 和图片重启恢复；真实 Provider、跨协议统一契约与 clean release-bound parity 仍开放 |
-| Claude Agent SDK Compatibility Bridge | 条件可用 | 迁移期只作为兼容执行器，不继续增加 SDK 独占产品能力 |
 | Gemini 原生协议 Adapter | 后续规划 | 只有出现明确用户需求和协议测试矩阵时进入实现 |
 
 不重新引入 Codex CLI、Gemini CLI 或其他外部 Agent CLI 作为正式运行时。
@@ -499,7 +498,7 @@ IPC/API 分为：
 
 - 现有 `sessions.json`、transcript JSONL、Task Snapshot SQLite/JSON、Provider、项目、记忆、Routine 和插件设置必须有迁移器；
 - 迁移必须先备份、可重复、可中断恢复、可回滚；
-- 旧 Claude SDK 会话必须至少可读取和从 CaoGen transcript fork；不能伪称恢复 SDK 隐藏上下文；
+- 旧 `engine: claude` Provider/会话元数据迁移为 `anthropic`；CaoGen transcript 继续可读/可 fork，不伪称恢复 SDK 隐藏上下文；
 - 当前 `~/.claude/plugins` 只作为显式兼容导入源；插件、Skill、MCP 的托管目录、启用状态、来源和 digest 必须迁移到 CaoGen 自有 registry/store；
 - 删除或退休 Provider 不得破坏历史 Attempt 和 Artifact 的显示。
 
@@ -597,11 +596,11 @@ IPC/API 分为：
 | T3 Anthropic Messages Adapter | M2 | 部分完成（原生路径本地闭环） | 工具、流、usage、错误、保守 failover 和图片重启恢复已通过 targeted required 门禁；跨协议统一 Context/Checkpoint/Hook、真实 Provider 与 clean release evidence 仍开放 |
 | T4 Workflow、Artifact 与数字员工 | M3 | 部分完成（domain、repair/retest 与 structured failure ingress foundations） | Goal、WorkItem、DigitalWorker、Assignment、Artifact Graph、Acceptance 已有持久化基础，failed Acceptance 的 repair/retest、结构化交叉验证失败和原生 `bash` 显式测试失败 producer 已接通；其他测试执行路径与自动编排、完整 WorkItem controls、跨阶段 Artifact/Verification 链、UI/strong-kill 和扩展资产迁入仍开放 |
 | T5 双模式、Supervisor 与 3D 投影 | M3-M4 | 立项目标 | 同一 Goal 无损切换；本地任务可恢复；水墨人物只消费真实状态 |
-| T6 Claude SDK 退出门禁评估 | M6 | 立项目标 | 完成 parity、旧数据与插件迁移、真实条件验证、收益量化并输出 Go/No-Go；不直接等于删除 |
+| T6 Claude Runtime 退出收口 | M6 | 部分完成 | SDK/CLI/AgentSession 已删除，本地 unsigned Intel 包体与 renderer 已复验；完成旧元数据迁移、精确提交 Deep 和签名候选绑定 |
 
 M5 是 T0-T5 的集成、修复、真人验收和默认连续 7 天 soak gate，不新增技术编号。精确 `1.0.0` 采用 `docs/1.0-SOAK-WAIVER.json` 中的 owner 风险接受：该域只能报告 `waived/non-blocking`，不得报告 `passed`，不得继承至其他版本，也不改变其余 M5/M6/T6 门禁。
 
-实际移除 Claude Agent SDK 属于 T6 给出 Go 之后的独立发布决策和后续规划，不预设日期。
+实际移除 Claude Agent SDK 的决策已于 2026-07-25 执行；T6 剩余工作是验证、迁移和发布绑定，不是恢复兼容引擎。
 
 ## 24. 明确不做
 

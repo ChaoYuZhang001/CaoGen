@@ -311,8 +311,7 @@ export function effectiveBudgetUsd(meta: SessionMeta): number {
 
 export function canTrackCost(meta: SessionMeta): boolean {
   // Anthropic Messages reports token usage but not monetary cost. Keep budget enforcement fail-closed.
-  if (meta.engine === 'anthropic') return false
-  return meta.engine === 'claude' || meta.engine === 'openai'
+  return meta.engine === 'openai'
 }
 
 export async function withSessionCreationJournalBarrier<T>(

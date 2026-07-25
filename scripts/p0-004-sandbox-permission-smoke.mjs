@@ -40,7 +40,6 @@ try {
   verifyPermission(permission)
   verifyAudit(audit)
   verifyOpenAiToolsBridge(idempotency)
-  verifyClaudePermissionBridge()
   verifySecuritySettingsUi()
   verifyLocalExecutionBoundary()
 
@@ -544,44 +543,6 @@ function verifyLocalExecutionBoundary() {
   assert(settingsSource.includes("raw === 'restrictedLocal' || raw === 'standardSystem'"), 'legacy standard mode should remain local')
   const packageJson = readFileSync(path.join(repoRoot, 'package.json'), 'utf8')
   assert(!packageJson.includes('resources/sandbox/**/*'), 'package must not ship removed container resources')
-}
-
-function verifyClaudePermissionBridge() {
-  const text = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
-  for (const marker of [
-    'evaluateToolPermission',
-    'writeAuditLog',
-    'authorizeClaudeTool',
-    "settings.sandboxMode !== 'disabled'"
-  ]) {
-    assert(text.includes(marker), `Claude permission bridge missing ${marker}`)
-  }
-  const hookStart = text.indexOf('PreToolUse: [')
-  const requestPermissionStart = text.indexOf('private requestPermission(')
-  assert(hookStart >= 0 && requestPermissionStart > hookStart, 'Claude permission bridge regions missing')
-  assert(
-    text.slice(hookStart, requestPermissionStart).includes(
-      "liveSettings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)"
-    ),
-    'Claude PreToolUse must independently enforce the disabled migration gate'
-  )
-  assert(
-    text.slice(requestPermissionStart).includes(
-      "settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)"
-    ),
-    'Claude canUseTool callback must retain the disabled migration gate'
-  )
-  for (const marker of [
-    'createClaudeRuntimeLaunchPolicy(this.buildEnv())',
-    'assertClaudeRuntimeLaunchPolicy(runtimePolicy)',
-    'settingSources: runtimePolicy.settingSources',
-    'strictMcpConfig: runtimePolicy.strictMcpConfig'
-  ]) {
-    assert(
-      text.includes(marker),
-      `Claude query must use the isolated runtime launch policy: ${marker}`
-    )
-  }
 }
 
 function nodeCommand(source) {

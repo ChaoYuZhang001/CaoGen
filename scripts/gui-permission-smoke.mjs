@@ -189,6 +189,7 @@ check('gui tools are not accidentally read-only or edit auto-allow tools', () =>
 check('native tool gate evaluates gui permission before bypassPermissions', () => {
   const text = source('src/main/native-tool-runtime.ts')
   const openai = source('src/main/openaiEngine.ts')
+  const anthropic = source('src/main/anthropicEngine.ts')
   const gateStart = text.indexOf('async gateTool')
   const preflightStart = text.indexOf('\n  preflightToolGate(', gateStart)
   const gateBlock = text.slice(gateStart, preflightStart)
@@ -202,15 +203,7 @@ check('native tool gate evaluates gui permission before bypassPermissions', () =
   assert(guiAllow !== -1 && guiAsk !== -1 && bypass !== -1, 'gateTool GUI/bypass markers not found')
   assert(preflightCall < guiAllow && guiAllow < bypass && guiAsk < bypass, 'GUI decision must run before bypassPermissions check')
   assert(openai.includes('new NativeToolRuntime('), 'OpenAIEngine must delegate tool permission and Effect semantics to NativeToolRuntime')
-})
-
-check('claude gate evaluates gui permission before bypassPermissions', () => {
-  const text = source('src/main/agentSession.ts')
-  const gateStart = text.indexOf('private requestPermission')
-  const guiDecision = text.indexOf('decideGuiPermission(policyToolName,', gateStart)
-  const bypass = text.indexOf("this.meta.permissionMode === 'bypassPermissions'", gateStart)
-  assert(gateStart !== -1 && guiDecision !== -1 && bypass !== -1, 'Claude permission markers not found')
-  assert(guiDecision < bypass, 'Claude GUI decision must run before bypassPermissions check')
+  assert(anthropic.includes('new NativeToolRuntime('), 'AnthropicEngine must delegate tool permission and Effect semantics to NativeToolRuntime')
 })
 
 check('native tool gate evaluates policy denylist before gui permission allow or ask', () => {
@@ -261,15 +254,6 @@ check('native permission response grants temporary gui authorization only via me
   const grant = text.indexOf('grantTemporaryGuiAutomation()', token)
   assert(token !== -1 && grant !== -1, 'respondPermission must honor GUI_TEMPORARY_GRANT_MESSAGE')
   assert(guiPending !== -1 && guiPending < grant, 'temporary GUI grant token must be scoped to pending gui_* tool')
-})
-
-check('claude permission response grants temporary gui authorization only via message token', () => {
-  const text = source('src/main/agentSession.ts')
-  const token = text.indexOf('message === GUI_TEMPORARY_GRANT_MESSAGE')
-  const guiPending = text.indexOf("normalizeClaudeToolName(pending.info.toolName).startsWith('gui_')", token)
-  const grant = text.indexOf('grantTemporaryGuiAutomation()', token)
-  assert(token !== -1 && grant !== -1, 'Claude respondPermission must honor GUI_TEMPORARY_GRANT_MESSAGE')
-  assert(guiPending !== -1 && guiPending < grant, 'Claude temporary GUI grant token must be scoped to pending gui_* tool')
 })
 
 check('settings defaults keep gui automation disabled', () => {

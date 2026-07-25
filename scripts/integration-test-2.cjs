@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CaoGen 扩充集成测试 — 覆盖并行开发新增、尚未被 integration-test.cjs 覆盖的模块:
+ * CaoGen 模块集成测试:
  * fileOps(编辑器读写+越界防护)、attachmentOps(图片输入)、memoryStore(记忆)、
  * routineStore(本地 Routines)、previewOps(产物预览)、pluginRegistry(生态扫描)、
  * desktopNotify(通知)。目标是找真实缺陷,不是刷绿。

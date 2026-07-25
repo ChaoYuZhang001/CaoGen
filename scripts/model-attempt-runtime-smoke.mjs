@@ -13,7 +13,6 @@ require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-model-attempt-runtime-'))
 const outDir = path.join(tempRoot, 'compiled')
 const openAiCredentialFixture = '<openai-runtime-credential-fixture>'
-const claudeCredentialFixture = '<claude-runtime-credential-fixture>'
 process.env.OPENAI_API_KEY = openAiCredentialFixture
 process.env.OPENAI_BASE_URL = 'http://model-attempt-runtime.test'
 
@@ -22,7 +21,6 @@ try {
   installElectronStub()
   const runtime = await import(pathToFileURL(findCompiledModule(outDir, 'model-attempt-runtime.js')).href)
   const openaiRuntime = await import(pathToFileURL(findCompiledModule(outDir, 'openai-model-attempt-runtime.js')).href)
-  const claudeRuntime = await import(pathToFileURL(findCompiledModule(outDir, 'claude-model-attempt-runtime.js')).href)
   const dagRuntime = await import(pathToFileURL(findCompiledModule(outDir, 'model-dag-decomposer.js')).href)
   const taskDecomposer = await import(pathToFileURL(findCompiledModule(outDir, 'task-decomposer.js')).href)
   await verifySplitPhaseRuntime(runtime)
@@ -38,8 +36,6 @@ try {
   await verifyInvalidDagIsFailed(runtime, dagRuntime)
   verifyRedactionAndClassification(runtime)
   verifyUsageDelta(openaiRuntime)
-  await verifyClaudeTracker(runtime, claudeRuntime)
-  await verifyClaudeTrackerFailureBoundaries(runtime, claudeRuntime)
   verifyRuntimeWiring()
   console.log(JSON.stringify({
     status: 'pass',
@@ -58,11 +54,7 @@ try {
       'stable-key-hash-without-secret',
       'usage-without-invented-cost',
       'per-attempt-usage-is-not-cumulative',
-      'claude-stable-run-step-request-chain',
-      'claude-usage-and-cumulative-cost-delta',
-      'claude-sticky-interrupt-and-stale-generation',
-      'claude-abandonment-and-completion-failure-fail-closed',
-      'openai-dag-and-claude-runtime-wiring'
+      'openai-and-dag-runtime-wiring'
     ]
   }, null, 2))
 } finally {
@@ -311,188 +303,9 @@ function verifyUsageDelta(openaiRuntime) {
   })
 }
 
-async function verifyClaudeTracker(runtime, claudeRuntime) {
-  const dependencies = fakeDependencies()
-  const tracker = new claudeRuntime.ClaudeModelAttemptTracker(dependencies)
-  const firstInput = claudeBeginInput({ generation: 11, stepId: 'step-claude-chain' })
-  const first = await tracker.beginTurn(firstInput)
-  assert.equal(first.runId, firstInput.runId)
-  assert.equal(first.stepId, firstInput.stepId)
-  assert.equal(first.requestId, `model-request:${firstInput.runId}:${firstInput.stepId}`)
-  assert.equal(dependencies.calls.start[0].input.protocol, 'claude-agent-sdk.turn')
-  assert.equal(dependencies.calls.start[0].input.adapterVersion, 'claude-agent-sdk-v1')
-  assert.equal(tracker.activeAttempt?.id, first.id)
-
-  await tracker.failTurn({
-    generation: 11,
-    error: new Error('HTTP 429 rate limit'),
-    usage: usageTotals(10, 3, 2, 1),
-    totalCostUsd: 0.25
-  })
-  const firstCompletion = dependencies.calls.complete[0].input
-  assert.equal(firstCompletion.status, 'failed')
-  assert.equal(firstCompletion.outcome, 'rate_limited')
-  assert.deepEqual(firstCompletion.usage, {
-    inputTokens: 10,
-    outputTokens: 3,
-    cacheReadTokens: 2,
-    cacheWriteTokens: 1
-  })
-  assert.equal(firstCompletion.costUsd, 0.25)
-
-  const successor = await tracker.beginTurn({ ...firstInput, generation: 12, providerId: 'provider-failover' })
-  const successorStart = dependencies.calls.start[1].input
-  assert.equal(successor.requestId, first.requestId)
-  assert.equal(successorStart.failoverFromAttemptId, first.id)
-  assert.match(successorStart.routeReason, /retry\/failover predecessor recorded/)
-  await tracker.completeTurn({
-    generation: 12,
-    usage: usageTotals(7, 5, 1, 0),
-    totalCostUsd: 0.4
-  })
-  const successorCompletion = dependencies.calls.complete[1].input
-  assert.equal(successorCompletion.status, 'succeeded')
-  assert(Math.abs(successorCompletion.costUsd - 0.15) < 1e-12)
-
-  await tracker.beginTurn({ ...firstInput, generation: 13 })
-  assert.equal(
-    dependencies.calls.start[2].input.failoverFromAttemptId,
-    undefined,
-    'failed predecessor must be consumed by exactly one successor'
-  )
-  await tracker.completeTurn({ generation: 13, totalCostUsd: 0.1 })
-  assert.equal(
-    dependencies.calls.complete[2].input.costUsd,
-    0.1,
-    'a reset cumulative cost counter must use the current value as this Attempt delta'
-  )
-  assert.equal(claudeRuntime.claudeModelAttemptCostDelta(0.1, Number.NaN), undefined)
-  assert.equal(claudeRuntime.claudeModelAttemptCostDelta(0.1, -1), undefined)
-}
-
-async function verifyClaudeTrackerFailureBoundaries(runtime, claudeRuntime) {
-  const dependencies = fakeDependencies()
-  const tracker = new claudeRuntime.ClaudeModelAttemptTracker(dependencies)
-  const interruptInput = claudeBeginInput({ generation: 20, stepId: 'step-interrupt' })
-  await tracker.beginTurn(interruptInput)
-  tracker.markInterrupted(20)
-  await tracker.failTurn({ generation: 20, error: new Error('HTTP 503 after interrupt') })
-  assert.equal(dependencies.calls.complete[0].input.status, 'cancelled')
-  assert.equal(dependencies.calls.complete[0].input.outcome, 'cancelled')
-
-  await tracker.beginTurn({ ...interruptInput, generation: 21 })
-  assert.equal(
-    dependencies.calls.start[1].input.failoverFromAttemptId,
-    undefined,
-    'an interrupted Turn must not authorize failover'
-  )
-  await tracker.cancelTurn({ generation: 21, cause: new Error('explicit cancel') })
-  assert.equal(dependencies.calls.complete[1].input.status, 'cancelled')
-
-  const staleInput = claudeBeginInput({ generation: 30, stepId: 'step-stale-generation' })
-  const failed = await tracker.beginTurn(staleInput)
-  await tracker.failTurn({ generation: 30, error: new Error('HTTP 503') })
-  const successor = await tracker.beginTurn({ ...staleInput, generation: 31 })
-  assert.equal(dependencies.calls.start.at(-1).input.failoverFromAttemptId, failed.id)
-  const completionCount = dependencies.calls.complete.length
-  assert.equal(
-    await tracker.completeTurn({ generation: 30, totalCostUsd: 9 }),
-    undefined,
-    'a stale result must be ignored'
-  )
-  assert.equal(dependencies.calls.complete.length, completionCount)
-  assert.equal(tracker.activeAttempt?.id, successor.id, 'stale result must not settle the successor')
-  await tracker.completeTurn({ generation: 31, totalCostUsd: 0.2 })
-
-  const abandonedInput = claudeBeginInput({ generation: 40, stepId: 'step-abandoned' })
-  const abandoned = await tracker.beginTurn(abandonedInput)
-  const beforeAbandonCompletionCount = dependencies.calls.complete.length
-  assert.equal(tracker.abandonGeneration(40)?.id, abandoned.id)
-  assert.equal(await tracker.failTurn({ generation: 40, error: new Error('late old-engine error') }), undefined)
-  assert.equal(
-    dependencies.calls.complete.length,
-    beforeAbandonCompletionCount,
-    'abandoning a generation must leave its durable Attempt started for reconciliation'
-  )
-  await assert.rejects(
-    tracker.beginTurn({ ...abandonedInput, generation: 41 }),
-    (error) => error instanceof runtime.ModelAttemptPersistenceError &&
-      error.phase === 'start' &&
-      error.operationStarted === false &&
-      error.attemptId === abandoned.id &&
-      error.message.includes('requires reconciliation')
-  )
-
-  const missingDependencies = fakeDependencies()
-  const missingTracker = new claudeRuntime.ClaudeModelAttemptTracker(missingDependencies)
-  await assert.rejects(
-    missingTracker.beginTurn({ ...claudeBeginInput({ generation: 50 }), runId: undefined }),
-    (error) => error instanceof runtime.ModelAttemptPersistenceError && !error.operationStarted
-  )
-  await assert.rejects(
-    missingTracker.beginTurn({ ...claudeBeginInput({ generation: 50 }), stepId: undefined }),
-    (error) => error instanceof runtime.ModelAttemptPersistenceError && !error.operationStarted
-  )
-  assert.equal(missingDependencies.calls.start.length, 0, 'missing Run/Step must fail before durable start')
-
-  const persistenceDependencies = fakeDependencies({ completeError: new Error('completion fsync failed') })
-  const persistenceTracker = new claudeRuntime.ClaudeModelAttemptTracker(persistenceDependencies)
-  const persistenceAttempt = await persistenceTracker.beginTurn(
-    claudeBeginInput({ generation: 60, stepId: 'step-completion-failure' })
-  )
-  await assert.rejects(
-    persistenceTracker.failTurn({ generation: 60, error: new Error('HTTP 503') }),
-    (error) => error instanceof runtime.ModelAttemptPersistenceError && error.phase === 'complete'
-  )
-  assert.equal(
-    persistenceTracker.activeAttempt?.id,
-    persistenceAttempt.id,
-    'completion persistence failure must retain a fail-closed active barrier'
-  )
-  await assert.rejects(
-    persistenceTracker.beginTurn(
-      claudeBeginInput({ generation: 61, stepId: 'step-completion-failure' })
-    ),
-    (error) => error instanceof runtime.ModelAttemptPersistenceError &&
-      error.phase === 'start' &&
-      error.attemptId === persistenceAttempt.id
-  )
-  assert.equal(persistenceDependencies.calls.start.length, 1)
-
-  let releaseCompletion
-  const completionWait = new Promise((resolve) => { releaseCompletion = resolve })
-  const settlingDependencies = fakeDependencies({ completeWait: completionWait })
-  const settlingTracker = new claudeRuntime.ClaudeModelAttemptTracker(settlingDependencies)
-  const settlingInput = claudeBeginInput({ generation: 70, stepId: 'step-settling-generation' })
-  const settlingAttempt = await settlingTracker.beginTurn(settlingInput)
-  const settlement = settlingTracker.completeTurn({ generation: 70, totalCostUsd: 0.3 })
-  assert.equal(
-    settlingTracker.abandonGeneration(70),
-    undefined,
-    'generation invalidation must not mark an Attempt abandoned while its completion is writing'
-  )
-  assert.equal(settlingTracker.activeAttempt?.id, settlingAttempt.id)
-  releaseCompletion()
-  await settlement
-  assert.equal(settlingTracker.activeAttempt, undefined)
-  await settlingTracker.beginTurn({ ...settlingInput, generation: 71 })
-  await settlingTracker.cancelTurn({ generation: 71 })
-}
-
 function verifyRuntimeWiring() {
   const openai = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
   const openaiRuntime = readFileSync(path.join(repoRoot, 'src/main/task/openai-model-attempt-runtime.ts'), 'utf8')
-  const claude = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
-  const claudeRuntime = readFileSync(path.join(repoRoot, 'src/main/task/claude-model-attempt-runtime.ts'), 'utf8')
-  const claudeSessionRuntime = readFileSync(
-    path.join(repoRoot, 'src/main/task/claude-agent-session-runtime.ts'),
-    'utf8'
-  )
-  const claudeResultRuntime = readFileSync(path.join(repoRoot, 'src/main/task/claude-result-runtime.ts'), 'utf8')
-  const claudeStreamRuntime = readFileSync(
-    path.join(repoRoot, 'src/main/task/claude-stream-failure-runtime.ts'),
-    'utf8'
-  )
   const dag = readFileSync(path.join(repoRoot, 'src/main/agent/model-dag-decomposer.ts'), 'utf8')
   assert.match(openai, /modelAttempts\.fetch/, 'OpenAI engine must route model requests through its Attempt tracker')
   assert.doesNotMatch(openai, /(^|[^.\w])fetch\s*\(/m, 'OpenAI engine must not retain an untracked direct fetch')
@@ -508,19 +321,6 @@ function verifyRuntimeWiring() {
   assert.match(openai, /setRouteReason\(decision\.reason\)/, 'legacy router reason must reach the Attempt ledger')
   assert.match(openai, /setRouteReason\(routeReason\)/, 'provider failover reason must reach the Attempt ledger')
   assert.match(openai, /setRouteReason\(`Provider key failover:/, 'key failover reason must reach the Attempt ledger')
-  assert.match(claudeRuntime, /beginPersistedModelAttempt/, 'Claude tracker must use durable split-phase begin')
-  const claudeBegin = claude.indexOf('await this.turns.attempts.beginTurn({')
-  const claudePush = claude.indexOf('this.input.push(message as unknown as SDKUserMessage)', claudeBegin)
-  assert(claudeBegin >= 0 && claudePush > claudeBegin, 'Claude durable begin must precede SDK input.push')
-  assert.match(claude, /await this\.handleMessage\([\s\S]{0,100}, gen\)/, 'Claude result handling must carry generation')
-  assert.match(claudeResultRuntime, /turns\.completeTurn\(/, 'Claude success result must complete its Attempt')
-  assert.match(claudeResultRuntime, /turns\.failTurn\(/, 'Claude result failures must complete their Attempt')
-  assert.match(claudeStreamRuntime, /turns\.failTurn\(/, 'Claude stream failures must complete their Attempt')
-  assert.match(
-    claudeSessionRuntime,
-    /attempts\.abandonGeneration\(/,
-    'Claude engine invalidation must preserve unknown Attempts'
-  )
   assert.match(
     openai,
     /const json = \(await res\.json\(\)\.catch\(\(\) => null\)\)[\s\S]{0,160}this\.applyChatUsage\(json\)/,
@@ -612,28 +412,6 @@ function baseInput() {
   }
 }
 
-function claudeBeginInput(overrides = {}) {
-  return {
-    runId: 'run-fixture',
-    stepId: 'step-claude-fixture',
-    generation: 1,
-    providerId: 'claude-provider-fixture',
-    model: 'claude-model-fixture',
-    context: { content: [{ type: 'text', text: 'compiled prompt fixture' }] },
-    routeReason: 'Claude runtime smoke fixture',
-    keyIdentity: {
-      providerId: 'claude-provider-fixture',
-      keyId: 'claude-key-fixture',
-      token: claudeCredentialFixture
-    },
-    ...overrides
-  }
-}
-
-function usageTotals(input, output, cacheRead, cacheCreation) {
-  return { input, output, cacheRead, cacheCreation }
-}
-
 function retryAuthorizationFixture() {
   return {
     attempt: {
@@ -698,7 +476,6 @@ function compileRuntime() {
     path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
     'src/main/task/model-attempt-runtime.ts',
     'src/main/task/openai-model-attempt-runtime.ts',
-    'src/main/task/claude-model-attempt-runtime.ts',
     'src/main/agent/task-decomposer.ts',
     'src/main/agent/model-dag-decomposer.ts',
     '--outDir', outDir,

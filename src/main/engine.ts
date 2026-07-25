@@ -6,7 +6,6 @@ import type {
   PermissionModeId,
   PermissionRequestInfo,
   RewindResult,
-  SdkAgentInfo,
   SendMessagePayload,
   SessionMeta,
   TranscriptEntry
@@ -22,8 +21,8 @@ import type { NativeProtocolAdapter } from './protocol-adapters/types'
  * 事件模型(AgentEvent)与引擎解耦——任何能产出这组事件、
  * 吃进用户消息的 CLI/SDK 都可以成为一个引擎。
  *
- * 现有实现:ClaudeEngine(= AgentSession,Claude Agent SDK)、OpenAIEngine。
- * 会话引擎由 SessionManager 根据 Provider 配置解析;这里不静默回退 Claude。
+ * 现有实现:Anthropic Messages 与 OpenAI-compatible 原生引擎。
+ * 会话引擎由 SessionManager 根据 Provider 配置解析;这里不静默回退其他协议。
  */
 export interface Engine {
   readonly meta: SessionMeta
@@ -39,8 +38,6 @@ export interface Engine {
   emitSyntheticEvent?(event: AgentEvent): void
   setPermissionMode(mode: PermissionModeId): Promise<void>
   setModel(model: string): Promise<void>
-  /** Claude SDK 原生 agents 列表;不支持的引擎可不实现。 */
-  supportedAgents?(): Promise<SdkAgentInfo[]>
   rename(title: string): void
   /** 文件检查点回退(引擎可选;不支持则返回 canRewind:false) */
   rewindFiles?(messageId: string, dryRun: boolean): Promise<RewindResult>

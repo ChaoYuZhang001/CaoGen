@@ -600,7 +600,7 @@ async function runWorker(workerMode) {
       toolName,
       toolInput,
       prompt: 'Claude Edit prepared crash before execution',
-      engine: 'claude'
+      engine: 'anthropic'
     })
     const handle = await effectRuntime.prepareEffectExecution(executionInput)
     assert(handle?.target.kind === 'file_content', 'Claude Edit must produce a queryable file target')

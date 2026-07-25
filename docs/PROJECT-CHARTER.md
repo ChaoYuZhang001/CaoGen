@@ -72,7 +72,7 @@
 
 依据 [`STATUS.md`](../STATUS.md)、[`README.md`](../README.md) 与当前测试门禁，CaoGen 已具备以下基础：
 
-- 多 Provider、多 API Key、自定义 Base URL、OpenAI-compatible 协议和可选 Claude Agent SDK 路径。
+- 多 Provider、多 API Key、自定义 Base URL、OpenAI-compatible 与原生 Anthropic Messages 协议；不嵌入 Claude Code SDK/CLI。
 - 按任务、项目规则、预算、健康状态、成本、质量和速度进行模型路由，并支持同 Provider 密钥切换与跨 Provider failover。
 - 项目和未关联项目会话收纳、项目规则、项目记忆、历史会话和会话恢复。
 - 真实 child sessions、最多 33 个子任务、DAG、重试、worktree 隔离、结果回传与可选自动合并。

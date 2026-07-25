@@ -78,7 +78,8 @@ async function run() {
 
   try {
     const engines = await invoke('engines:list')
-    check('IPC engines:list 含 claude 引擎', Array.isArray(engines) && engines.some((x) => x.kind === 'claude'), JSON.stringify(engines).slice(0, 80))
+    const kinds = Array.isArray(engines) ? engines.map((engine) => engine.kind).sort() : []
+    check('IPC engines:list 仅含两种原生引擎', JSON.stringify(kinds) === JSON.stringify(['anthropic', 'openai']), JSON.stringify(engines).slice(0, 120))
   } catch (e) { check('IPC engines:list', false, String(e.message)) }
 
   try {
