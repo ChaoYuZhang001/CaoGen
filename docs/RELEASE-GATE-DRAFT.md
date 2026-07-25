@@ -1,7 +1,7 @@
 # CaoGen 0.1.7 Intel Release Gate
 
-> Updated: 2026-07-25 Asia/Shanghai. v0.1.6 remains the latest public release until an explicit v0.1.7 publication action succeeds.
-> Package version 0.1.7 is an Intel-only signed candidate, not 1.0 stable.
+> Updated: 2026-07-25 Asia/Shanghai. v0.1.7 is the latest public release.
+> Package version 0.1.7 is an Intel-only signed release, not 1.0 stable.
 
 ## Current Decision
 
@@ -9,16 +9,16 @@ CaoGen remains a multi-vendor AI work desktop. This gate permits only capabiliti
 
 | Item | State |
 |---|---|
-| Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
+| Latest public GitHub Release | [`v0.1.7`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7), published 2026-07-25 |
 | Package and lockfile | `0.1.7` |
 | Current M1 platform scope | macOS Intel x64 only; Apple Silicon and Windows are paused and are not counted as passes |
 | Candidate identity | `main@bbec526554aea9785291edf4d8164084145347ae` |
 | Candidate workflow | [`30162696430`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30162696430), read-only `macos-x64` evidence run |
 | Exact-commit Deep | `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | macOS distribution | `120/120` required audit; Developer ID signing, notarization, staple, Gatekeeper, isolated install, clean detach, and renderer launch passed |
-| Final notes | Exact five Intel assets and four candidate report families from run `30162696430` are bound; clean publication preflight must be rerun after this evidence-sync commit |
+| Final notes | Exact five Intel assets and four candidate report families from run `30162696430` are bound; scoped final audit and clean publication preflight passed |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for an honest 0.1.x wedge release |
-| Publication | Owner authorization was received on 2026-07-25; no tag or GitHub Release has been created yet |
+| Publication | Passed; annotated tag `v0.1.7` targets `d8e883a21b64133b4ec18d20d0c77fd33c054718`, Release is public and is neither draft nor prerelease |
 
 ## M1 Scope Boundary
 
@@ -26,7 +26,7 @@ The current M1 release decision was explicitly narrowed to macOS Intel x64. A su
 
 The repository retains the complete three-platform contract for any future release that claims macOS Intel, macOS Apple Silicon, and Windows together. That contract still requires native distribution and installed-app evidence for each target plus aggregate 12-asset validation.
 
-## Required Before Publication
+## Publication Gate Record
 
 | Gate | Required evidence | State |
 |---|---|---|
@@ -35,10 +35,10 @@ The repository retains the complete three-platform contract for any future relea
 | Release scope | P2-002, P2-003, and P2-005 on the candidate | Passed; P2-001/P2-004 remain outside this Intel release claim |
 | Exact Deep | Required checks pass on the candidate; optional skips remain explicit | Passed: `157/157` required; 2 optional external checks skipped |
 | Signed Intel distribution | DMG/ZIP/update metadata bound to clean provenance and signed installed app | Passed: `120/120`, artifact set `7553d1ef33ec44d69e7b95c74aee8fcb7500a68daf008ed343e66ae3345a036c` |
-| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Exact SHA-256 values updated; clean descendant preflight rerun is next |
+| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Passed on publication-only descendant `d8e883a2` |
 | Owner decision | Explicit authorization to create tag and GitHub Release | Passed on 2026-07-25 |
-| Public upload audit | Tag target, five uploaded assets, hashes, metadata, and public download parity | Pending until publication |
-| Website sync | Intel-only version, download, signing state, and truth boundary match the published Release | Pending until publication |
+| Public upload audit | Tag target, five uploaded assets, hashes, metadata, and public download parity | Passed: 5 assets, 0 warnings, 0 failures; every public SHA-256 digest matches the candidate |
+| Website sync | Intel-only version, download, signing state, and truth boundary match the published Release | Passed on `caogen.dev`, `/en/`, and `/docs/` |
 
 ## Intel Distribution Contract
 
@@ -80,4 +80,4 @@ The workflow has repository `contents: read` permission, accepts only an exact 4
 5. Create tag `v0.1.7`, create the GitHub Release, and upload exactly the five audited assets.
 6. Run the public asset audit, then update the website download and public status.
 
-Steps 4-6 are intentionally not executed by the candidate workflow.
+The candidate workflow intentionally did not execute steps 4-6. The owner-authorized publication flow completed them separately on 2026-07-25.

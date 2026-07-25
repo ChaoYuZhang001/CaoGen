@@ -96,17 +96,19 @@ README、官网、STATUS 三处必须一致:
   - [ ] Windows x64 签名/安装证据(暂停,不计入当前 M1 完成判据)
 - [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
 - [x] M1-T5 文档收敛:旧规划文档移入 docs/archive/,README 增加对比表与可见 Roadmap
-- [ ] M1-T6 发布 v0.1.7,Release Notes 只写当前真实能力,不写路线图功能
+- [x] M1-T6 发布 v0.1.7,Release Notes 只写当前真实能力,不写路线图功能
   - [x] Intel-only final gate 已支持精确五资产与四类候选报告绑定，不再错误要求暂停的 Apple Silicon/Windows 证据
   - [x] run `30150795350` 的最终候选五资产与四类报告已下载并独立核验；Release Notes 已按实算 SHA256 定稿，并在 clean 后继提交上通过 scoped final audit（全候选绑定检查 true，0 warning / 0 failure）
   - [x] 新增只读、fail-closed 的发布交接预检，绑定候选证据、精确五资产、Release Notes、publication-only 后继提交、远端 `main` 及 tag/Release 不存在状态；仅在全绿后输出需明确授权的手工命令，不产生发布副作用
   - [x] 公开 GitHub Release 资产审计升级为逐文件名称、大小与 SHA-256 digest 对本地候选资产精确绑定，并以回归测试覆盖篡改、缺失 digest 和额外文件
   - [x] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；`bd26eaa3` 的 run `30159248949` 暴露 ModelAttempt crash E2E 测试夹具竞态后，worker keepalive 修复本地 targeted 连续 `20/20` 通过。修复提交 `cfce9372` 的 run `30160236851` 已通过主链；PR #8 合并使远端 `main` 前进后，`bbec5265` 的 Intel-only run `30162696430` 重新通过同一 exact-commit Deep、签名/公证/安装与 renderer 主链
-  - [x] run `30162696430` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；创始人已明确授权发布，下一步是在 clean、已推送的 publication-only 后继提交上重跑 fail-closed 发布交接预检，再创建 Tag/Release
-  - [ ] 获得明确发布授权后创建 tag/GitHub Release、上传五项资产、完成公开资产审计并同步官网；本轮不执行
+  - [x] run `30162696430` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；创始人明确授权后，clean、已推送的 publication-only 后继提交 `d8e883a2` 通过 fail-closed 发布交接预检
+  - [x] 创建 annotated tag `v0.1.7` 和正式 GitHub Release，上传精确五项 Intel 资产；公开资产审计 `5/5`、0 warning / 0 failure，官网中英文首页与文档入口已同步
 
 **完成判据**:陌生人从官网下载 macOS Intel x64 安装包,无安全拦截地完成安装,
 按 Quick Start 三步跑通第一个只读任务。
+
+**当前状态**:发布动作已完成；陌生用户 Quick Start 实测尚未完成，因此 M1 整体完成判据仍开放，下一步进入首位用户/N1 onboarding 验收。
 
 ### M2:前 10 个真实用户(目标:M1 后 1-2 个月)
 

@@ -2,8 +2,8 @@
 
 > 更新:2026-07-25· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ⚠️ **尚未正式发布**。`main@bbec526554aea9785291edf4d8164084145347ae` 的 Intel-only 候选 run `30162696430` 已通过精确提交 Deep、Developer ID 签名、公证、staple、Gatekeeper、DMG 隔离安装、真实 renderer 启动和五资产更新元数据绑定；下载证据已独立核验，最终 Release Notes 已更新为新 SHA-256。Apple Silicon 与 Windows 按创始人决定暂停，不能写成已完成，完整三平台 Release Doctor 因此仍为 `not_ready`。创始人已明确授权发布，但当前仍未创建 tag/GitHub Release；必须先在此 publication-only 后继提交上重跑 fail-closed 发布交接预检。Docker 已从产品模式删除；正式运行时只保留 OpenAI-compatible 与原生 Anthropic Messages，不需要 Claude Code 登录、SDK 或 CLI。
-> 当前源码版本为 `0.1.7` 发布候选，不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.7 只按已验证楔子能力发布，不把路线图能力写成已完成。
+> ✅ **v0.1.7 已正式发布**。[GitHub Release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) 于 2026-07-25 发布，annotated tag 指向 `d8e883a21b64133b4ec18d20d0c77fd33c054718`；五项 Intel x64 资产的公开名称、大小与 SHA-256 digest 审计全部通过，`caogen.dev` 中英文首页与文档入口已同步。候选 `main@bbec526554aea9785291edf4d8164084145347ae` 的 run `30162696430` 已通过精确提交 Deep、Developer ID 签名、公证、staple、Gatekeeper、DMG 隔离安装、真实 renderer 启动和五资产更新元数据绑定。Apple Silicon 与 Windows 按创始人决定暂停，不能写成已完成，完整三平台 Release Doctor 因此仍为 `not_ready`。Docker 已从产品模式删除；正式运行时只保留 OpenAI-compatible 与原生 Anthropic Messages，不需要 Claude Code 登录、SDK 或 CLI。
+> 当前源码仍在 `0.1.7` 发布线上，但 v0.1.7 不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.7 只发布已验证楔子能力，不把路线图能力写成已完成。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
 
@@ -13,16 +13,16 @@
 
 # Current Status
 
-- **[v0.1.6 macOS x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)**(2026-07-14)——发布 5 个 DMG、zip、blockmap 和更新元数据资产;macOS Intel 主二进制为 `x86_64`;包内运行时和真实 renderer 启动均纳入发布门禁;仍未签名/公证
-- v0.1.5 Windows x64 安装包继续保留;v0.1.6 不发布 Windows、macOS arm64 或 Linux 资产。
+- **[v0.1.7 macOS Intel x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7)**(2026-07-25)——五项 DMG、ZIP、blockmap 和更新元数据资产已公开；主二进制为 `x86_64`，完成 Developer ID 签名、Apple 公证/staple、Gatekeeper、隔离安装和真实 renderer 启动验证。公开 digest 审计 `5/5` 通过，0 warning / 0 failure。
+- v0.1.5 Windows x64 安装包继续保留；v0.1.7 不发布 Windows、macOS arm64 或 Linux 资产。
 - v0.1.5 新增整页设置与 Provider 编辑、项目级会话收纳、未关联项目会话收纳、三种显式调度范围，以及调研/策划/开发/测试/文档的默认与自定义模型调度。
 - `main@bbec526554aea9785291edf4d8164084145347ae` 的 Intel-only GitHub 最终候选 run [`30162696430`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30162696430) 已成功：release-scope P2 gate 通过，exact-commit Deep 为 `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`，x64 完成 Developer ID 签名、公证、staple、Gatekeeper、`120/120` required release audit、DMG 隔离安装、干净 detach、真实 renderer 启动，以及 `latest-mac.yml` 对 x64 DMG/ZIP 的名称、版本、大小和 SHA-512 绑定。该 run 的 Apple Silicon、Windows 与完整矩阵汇总 job 均按输入范围跳过，因此只证明 Intel，不证明完整三平台。
 - 仓库保留完整三平台矩阵门禁，只有选择完整矩阵范围或宣称三平台发布时才要求 macOS x64、macOS arm64、Windows x64 全部通过 required distribution audit、包内 clean-commit provenance、目标平台原生安装和真实 renderer 启动。创始人已把当前 0.1.7 M1 收窄为 Intel-only；该范围使用 x64 lane 的独立签名/公证/安装审计，不把跳过的 arm64/Windows 算成 pass。完整矩阵 Release Doctor 继续保持 `not_ready`，准确表达未完成的未来三平台能力。
 - `.github/workflows/release-candidate-evidence.yml` 已把 M1-T3 固化为只读、手动、不可发布的候选证据管线：输入必须是已在 `main` 的完整 40 位 SHA 与精确版本；可选择 `macos-x64` 或完整三平台范围。run `30162696430` 已证明仓库中的 Intel 签名/公证 secrets 可用；这不证明 Apple Silicon/Windows secrets 或资产。workflow 不创建 tag/GitHub Release。
 - 移除 Claude Code Runtime 前的本地 unsigned Intel 基线为 DMG `197,518,789 B`、ZIP `197,966,775 B`、`.app` 逻辑体积 `555,506,427 B`、`app.asar` `61,742,511 B`，其中 Claude CLI 为 `240,192,080 B`。移除后的本地 unsigned Intel 实测为 DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` 逻辑体积 `311,931,918 B`、`app.asar` `61,630,882 B`，分别减少 `36.39% / 36.86% / 43.85% / 0.18%`。当前 clean candidate 的签名公证资产为 DMG `127,702,230 B`（SHA-256 `a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b`）与 ZIP `127,016,670 B`（SHA-256 `5f3695fa24117145cd47ecf731660ea3423911ad7bc2de9108c3f786aa78f5e0`）；包含两项 blockmap 与 `latest-mac.yml` 的五文件资产集绑定 `7553d1ef33ec44d69e7b95c74aee8fcb7500a68daf008ed343e66ae3345a036c`。required audit 证明 SDK/CLI 在包内不存在，且 app、DMG、ZIP 的 `0.1.7`、clean worktree 与完整提交 provenance 一致。
-- M1-T4 的仓库公开进度口径已更新为 `64 = 21 已验证 + 18 部分完成 + 24 立项目标 + 1 仅达到基础`。官网当前生产构建仍来自先前提交，需随本次发布决策同步；本仓库改动不代表官网已部署。该文档口径不改变 Release Doctor 的 `not_ready` 状态，也不替代签名、公证或目标平台证据。
+- M1-T4 的仓库公开进度口径已更新为 `64 = 21 已验证 + 18 部分完成 + 24 立项目标 + 1 仅达到基础`。官网生产构建已同步 v0.1.7 下载、Intel-only、签名公证和运行时边界；该文档口径不改变 Release Doctor 的 `not_ready` 状态，也不替代暂停平台、真实 Provider、N1 或完整 1.0 验收证据。
 - 正式运行时只有 OpenAI-compatible（Responses / Chat Completions）与原生 Anthropic Messages（`/v1/messages`）两条执行路径，均已注册到 Provider/SessionManager/UI。Claude Code Agent Runtime、Claude Agent SDK 与 Claude CLI 已从依赖、主进程、IPC/UI、测试宿主和打包规则删除；旧 `engine: claude` Provider/会话只迁移为 `anthropic`，不恢复 SDK 隐藏上下文。当前 Intel 候选 Deep 报告 `2026-07-25T15-06-42-357Z` 为 `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`，开始和结束均绑定 clean `bbec5265`；它只证明该精确提交的 Intel 候选和仓库 required gates，不替代暂停平台、真实 Provider、N1 或完整 1.0 验收证据。
-- M1-T6 已新增只读、fail-closed 的 Intel 发布交接预检：它绑定候选提交、四类报告、五项本地资产、Release Notes、clean 后继提交、远端 `main`，并要求本地/远端 tag 与 GitHub Release 均不存在；全部通过后才输出需创始人明确授权的手工发布命令，脚本自身不创建 tag、Release 或上传资产。发布后公开资产审计现要求每个 GitHub 资产的名称、大小与平台返回的 SHA-256 digest 精确匹配本地候选文件，并拒绝额外本地文件。`bd26eaa3` 的 run [`30159248949`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30159248949) 在 exact-commit Deep 暴露 `ModelAttempt crash reconciliation E2E` worker 事件循环竞态后，测试夹具 keepalive 修复本地 targeted 连续 `20/20` 通过；修复提交 `cfce9372` 的 run `30160236851` 随后完成主链。PR #8 合并使远端 `main` 前进后，旧发布预检按设计拒绝过期 release commit；`bbec5265` 的 run `30162696430` 已重新完成 `157/157` required Deep、Intel 签名、公证、安装、renderer 和五资产证据。新候选 artifact 已下载，五个本地文件的大小和 SHA-256 与 `120/120` macOS audit 完全一致；Release Notes 已更新，clean publication-only 后继提交上的发布交接预检是创建 Tag/Release 前的最后门禁。
+- M1-T6 已完成：只读、fail-closed 的 Intel 发布交接预检在 publication-only 后继提交 `d8e883a2` 上通过后，创始人授权创建 `v0.1.7` Tag/Release 并上传精确五项资产。发布后公开资产审计 `test-results/github-release-audit/latest.json` 为 `passed`，资产数 `5`，每项名称、大小与 GitHub SHA-256 digest 均匹配候选文件，0 warning / 0 failure；官网生产页也已同步。该结果只关闭发布动作，不关闭陌生用户 Quick Start、N1、真实 Provider 或 1.0 验收。
 - Agent 恢复内核已升级为稳定事件身份 + 恢复游标 + 持久 Effect Ledger。`write_file`、`search_replace`、OpenAI/Anthropic 原生文件编辑、Git commit/merge/push、Renderer 文件与 Git Index 操作、文本 hunk 丢弃、managed-worktree create/remove/patch 和 GitHub/GitLab PR/MR 已接入专用只读对账；Operation Gateway、lease/fencing、强杀恢复、DAG autoMerge durable finalizer/receipt 已由 required E2E 覆盖。该边界不等于外部系统事务级 exactly-once，writer 仍可能在强杀/断电/ENOSPC 时留下半写文件。
 - `task-snapshots.db` 当前为 v8：保留 v6 TaskRun Effect evidence append-only hash-chain foundation、Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link 与全局 workflow event chain，并新增 canonical `workflow_recovery_sessions` 和持久 `workflow_store_identity`。显式对象的 main API、IPC/preload、Control Center 查询/校验和 cursor 分页已有 targeted smoke；Artifact Graph 的 edge/location、关系/归属校验、邻域查询、脱敏 export 与只读 diagnose/repair plan 也已接通。Task Snapshot/TaskRun 恢复读取现支持 `legacy`、`compare`、`canonical` 三态：`legacy` 读取旧 Snapshot/TaskRun 表，`compare` 同时读取 legacy 与 canonical 并在差异时 fail-closed，`canonical` 读取 Workflow Run 与 recovery session；未显式配置时仍默认 `legacy`。read mode 按解析后的数据库路径隔离，跨 mode 首次 open 共享同一路径的 single-flight readiness；运行时 mode flip 在数据库 mutation queue 中强制刷新 readiness，并实际读取 recovery sessions 与 Run 历史后才提交。legacy JSON/旧 SQLite 到 v8 的迁移仍使用 `prepared -> backup_verified -> migrated_verified -> committed`、`rollback_pending -> rolled_back`、精确备份/SHA-256/fsync/原子 rename、崩溃 checkpoint 续做和可恢复回滚；future/corrupt source 在 journal 前 fail-closed。committed journal 通过 `workflow_store_identity` 和 committed 高水位连续性阻止目标删除、截断、版本回退或同版本有效空库替换。Canonical-only 历史在后续双写和重启后仍可读取；同一 session 的连续 TaskRun、Snapshot freshness 和历史 Run ownership 已按精确 run/项目上下文收口。该能力完成的是 Task Snapshot/TaskRun 恢复读源的可验证 cutover，不代表所有业务入口已经 canonical，也不等于完整 1.0 Workflow OS。结构化交叉验证仲裁失败与原生 `bash` 显式测试命令的非零退出失败已有受限入口；Routine、DigitalWorker/Assignment、其他工具/引擎测试结果等外部事件仍未全部接入。完整 Artifact Graph 生命周期（blob/sourceRef、版本/保留/删除）、Canonical Conversation Ledger、统一 retention/delete 和生产补偿计划/审批/执行也未闭环。独立 `task_evidence` 子链没有直接 UI 或统一 retention/delete 通道。当前候选 159 项 Deep 已包含 migration、read source、shadow consistency、Workflow Ledger、Artifact Graph、security、maintenance、ModelAttempt crash reconciliation、Canonical Goal/WorkItem schema parity、canonical ProjectWorkspace write-source crash、Acceptance failure ingress、Artifact byte integrity、TEAM-002 真实 Electron 招聘、Provider credential target binding、Assistant/Studio live-switch、Anthropic 生产路径、Code Forge contract smoke 与 Intel 发布元数据证据；报告绑定 `bbec5265` 且开始和结束均为 clean，但仍不等于 1.0 release ready。
 - Canonical ModelAttempt v1 已把 OpenAI-compatible 请求、模型 DAG 与原生 Anthropic Messages 每次底层 HTTP 请求接入 Run/WorkItem 归属、逻辑 request/step、Provider/model/protocol、route reason、usage 和不可变事件链；`started` Attempt 在强杀重启后会把 legacy TaskRun、canonical Run 和匹配 snapshot 原子投影为 `waiting_reconciliation`，普通发送/恢复/删除均 fail-closed。用户只能显式 `retry_authorized` 或 `cancelled_by_user`；授权本身不调用 Provider，successor 必须消费同一 requestId/stepId 并链接 predecessor，二次强杀不会复用旧授权。原生 Anthropic Messages 已注册独立 EngineKind 并接入 Provider/SessionManager/UI；saved Provider/Broker 目标绑定、`/v1/messages`、thinking/redacted thinking/text SSE、usage、HTTP/流错误、取消、`tool_use/tool_result` 多轮 NativeToolRuntime、权限/审计/Effect/幂等、40 请求上限、同 Provider Key 与仅限 Anthropic Engine 的 Provider failover，以及内容寻址图片重启恢复，分别由 `test:anthropic-messages:required` 17/17、`test:anthropic-tool-use-loop:required` 10/10、`test:anthropic-failover:required` 8/8、`test:anthropic-engine-registration:required` 和 `test:anthropic-image-restart:required` 覆盖。partial 输出、abort、账本失败或未决 Effect 会保守阻止重放；当前仍缺真实 Provider、clean release 绑定、完整恢复阶梯与统一 Run/Context 契约，因此 ROUTE-004/RUN-003 仍仅为部分完成。
@@ -58,7 +58,7 @@
 
 # Current Focus
 
-**当前唯一焦点是 M1：发布已签名、可安装、诚实标注边界的 Intel x64 v0.1.7 楔子版。** 当前候选 run `30162696430` 已在 clean `main@bbec5265` 上完成 exact-commit Deep `157/157` required、Developer ID 签名、公证/staple、Gatekeeper、`120/120` release audit、DMG 隔离安装/干净 detach、真实 renderer 和五资产绑定。候选证据已下载并独立核验，Release Notes 已更新到新 SHA-256，创始人已明确授权发布。下一步是在本次 publication-only 后继提交上重跑 fail-closed 发布交接预检，通过后创建 Tag/Release、上传五资产并执行公开资产 digest 审计和官网同步。Apple Silicon 与 Windows 按创始人决定暂停，不计入当前 M1 阻塞项，也不得写成完成。当前候选仍未发布。M1-M3 期间冻结新的 1.0 愿景功能；64 个 P0 仍为 21 已验证、43 开放，不因发布 0.1.7 而改变。
+**当前唯一焦点是 M1 的首位陌生用户验收，并为 M2/N1 onboarding 建立真实基线。** v0.1.7 Intel x64 的候选、签名公证、发布、五资产公开 digest 审计和官网同步已经完成；下一步是让一名非项目参与者从 `caogen.dev` 下载，在 Intel Mac 上无安全拦截地安装启动，按 Quick Start 配置 Provider 并完成第一个只读任务，逐步记录耗时和卡点。Apple Silicon 与 Windows 按创始人决定暂停，不计入当前 M1 阻塞项，也不得写成完成。M1-M3 期间冻结新的 1.0 愿景功能；64 个 P0 仍为 21 已验证、43 开放，不因发布 0.1.7 而改变。
 
 # Goal
 
@@ -66,19 +66,20 @@
 
 # Next Milestone
 
-**v0.1.7 签名楔子版** — Definition of Done:
+**M1 首位陌生用户验收** — Definition of Done:
 
-1. 最终候选提交 worktree clean，`package.json` 与 lock 根版本均为 `0.1.7`
-2. `test:deep` 在该精确提交上 required 全绿；optional skip 保持显式，不算 pass
-3. macOS Intel x64 候选完成签名、notarize、staple、Gatekeeper 和 packaged-app 启动审计；Apple Silicon/Windows 继续显式标记暂停
-4. Release Notes 只写当前已验证能力，`test:release-notes-audit:final` 绑定实际上传资产通过
-5. GitHub Release 与官网只提供已审计资产；不创建 1.0 stable、N1、真实 Provider 或中国外部网络未验证声明
+1. 一名非项目参与者从 `caogen.dev` 进入 v0.1.7 Release，并下载 macOS Intel x64 DMG
+2. 在 Intel Mac 上不使用绕过安全检查的命令完成安装、首次启动和主界面进入
+3. 使用该用户自己的受支持 Provider API Key 完成 Provider 配置
+4. 按 Quick Start 完成第一个只读项目任务，并保留开始时间、完成时间、失败点和恢复动作
+5. 将卡点转成 onboarding 修复或明确 issue；该单人结果只关闭 M1，不冒充 M2 的 3 人 N1 或 10 用户目标
 
 # Priority Tasks
 
 **P0**
 - 用户反馈快修循环(常设)
-- v0.1.7 Intel 签名楔子版:在最终 clean commit 上完成 Deep、macOS x64 打包签名、公证/staple/启动审计、安装包体积门禁和 Release Notes final gate；Apple Silicon/Windows 暂停
+- ~~v0.1.7 Intel 签名楔子版发布:clean candidate、Deep、macOS x64 签名公证/安装/启动审计、Release Notes、公开资产审计和官网同步~~ ✅；Apple Silicon/Windows 暂停
+- M1 首位陌生用户 Quick Start 验收；随后按 M2-T1 扩展到 3 名真实同类工具用户的 N1 30 分钟迁移计时
 - ~~arm64 / universal 打包~~ ✅ 已发布至 v0.1.1
 - P0-1B:~~接入 `search_replace`、OpenAI/Anthropic 原生文件编辑的 queryable file Effect~~ ✅;~~E2A 接入 Renderer worktree patch、独立 push→PR 与 Agent `git_create_pr`~~ ✅;~~E2B-1 接入 Renderer 文件保存/commit并阻止复合 Code Forge commit/pr~~ ✅;~~E2B-2 接入 Renderer stage/stageAll/unstage/accept hunk 的精确 Index CAS~~ ✅;~~E2B-3 接入 discard hunk 独立文件 Target 与强杀对账~~ ✅;~~DAG autoMerge patch Effects 与 completion/finalizer durable outbox/receipt 接入并确认~~ ✅;~~managed-worktree create/remove 生命周期 Effect~~ ✅;继续补齐 Issue、消息、可查询 MCP 与 Code Forge patch
 - P0-1C:TaskRun Effect evidence v6 foundation、v8 Workflow Ledger、canonical recovery sessions、`legacy / compare / canonical` 恢复读源和可逆 migration/continuity 门禁已完成 targeted smoke；Goal/WorkItem/Artifact/Acceptance 基础和有限 IPC/UI/cursor 查询已落地，未显式配置时仍默认 legacy；下一步是全入口接入、完整 Artifact Graph/blob/sourceRef 生命周期、Canonical Conversation Ledger、保留/导出/修复和生产补偿计划/审批/执行
@@ -162,7 +163,7 @@
 # Risks
 
 1. **零外部用户数据**:所有"可用"结论出自 E2E 与自测,N1 从未真人验证 —— 最大未知
-2. **分发摩擦**:0.1.7 历史 Intel x64 clean candidate 已通过 provenance、Developer ID、notarize、staple、Gatekeeper、DMG 隔离安装、真实 renderer 启动和 Release Notes final gate；发布自动化变化后仍需生成新 exact-commit 候选，并在明确授权后完成实际 Release/官网资产交付与陌生用户安装验证。Apple Silicon arm64 与 Windows x64 按当前决定暂停，不得由 Intel 证据替代
+2. **分发摩擦**:v0.1.7 Intel x64 已完成 provenance、Developer ID、notarize、staple、Gatekeeper、DMG 隔离安装、真实 renderer、Release/官网交付与公开资产审计；仍缺陌生用户机器上的下载、安装和 Quick Start 证据。Apple Silicon arm64 与 Windows x64 按当前决定暂停，不得由 Intel 证据替代
 3. **外部凭据轮换状态不可由仓库验证**:疑似外泄 token 必须由持有人在对应平台撤销/重建;仓库只保留占位符、环境变量名和脱敏状态
 4. **长会话膨胀**:~~chat 历史无压缩~~ 已加自动摘要压缩(超 48k token);OpenAI 引擎工具声明每请求固定开销仍在
 
