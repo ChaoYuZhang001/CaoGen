@@ -5,6 +5,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { detachDmg } from './lib/macos-dmg-detach.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -410,7 +411,7 @@ function inspectDmgPayload() {
     return summary
   } finally {
     if (summary.mounted) {
-      const detached = detachDmg(mountPoint)
+      const detached = detachDmg(mountPoint, { runCommand })
       check('dmg_app', 'DMG detaches cleanly', detached.ok, detached.ok ? undefined : commandFailureDetail(detached))
     }
     const cleanupError = removeTemporaryTree(mountPoint)
@@ -583,17 +584,6 @@ function removeTemporaryTree(targetPath) {
   } catch (error) {
     return errorMessage(error)
   }
-}
-
-function detachDmg(mountPoint) {
-  let result
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const args = attempt === 5 ? ['detach', '-force', mountPoint] : ['detach', mountPoint]
-    result = runCommand('hdiutil', args)
-    if (result.ok) return result
-    if (attempt < 5) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 500)
-  }
-  return result
 }
 
 function parseCodeSignDetails(output) {

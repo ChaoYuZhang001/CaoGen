@@ -67,6 +67,7 @@ jobs:
           set -euo pipefail
           npm run test:release-workflow-contract
           npm run test:package-size-policy
+          npm run test:macos-dmg-detach:required
           npm run test:product-positioning:required
           npm run typecheck
           npm run build

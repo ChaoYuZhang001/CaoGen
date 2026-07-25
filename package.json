@@ -243,6 +243,8 @@
     "release:candidate:preflight": "node scripts/release-candidate-preflight.mjs",
     "release:matrix:assemble": "node scripts/release-matrix-assemble.mjs",
     "test:macos-release-config": "node scripts/macos-release-preflight.mjs --config-only",
+    "test:macos-dmg-detach": "node scripts/macos-dmg-detach-smoke.mjs",
+    "test:macos-dmg-detach:required": "npm run test:macos-dmg-detach",
     "test:macos-release-audit": "node scripts/macos-release-audit.mjs",
     "test:macos-release-audit:required": "node scripts/macos-release-audit.mjs --required",
     "test:macos-package-size": "node scripts/macos-package-size-audit.mjs",
