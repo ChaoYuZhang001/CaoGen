@@ -296,6 +296,8 @@ async function runDurableStartWorker() {
     dependencies: {
       start: async (startInput, rootDir) => {
         const attempt = await api.startPersistedModelAttempt(startInput, rootDir)
+        // A pending Promise alone does not keep Node alive while the parent requests SIGKILL.
+        setInterval(() => {}, 1_000)
         process.send?.({ kind: 'durable-start', attemptId: attempt.id })
         await new Promise(() => {})
         return attempt
