@@ -100,7 +100,7 @@ README、官网、STATUS 三处必须一致:
   - [x] run `30150795350` 的最终候选五资产与四类报告已下载并独立核验；Release Notes 已按实算 SHA256 定稿，并在 clean 后继提交上通过 scoped final audit（全候选绑定检查 true，0 warning / 0 failure）
   - [x] 新增只读、fail-closed 的发布交接预检，绑定候选证据、精确五资产、Release Notes、publication-only 后继提交、远端 `main` 及 tag/Release 不存在状态；仅在全绿后输出需明确授权的手工命令，不产生发布副作用
   - [x] 公开 GitHub Release 资产审计升级为逐文件名称、大小与 SHA-256 digest 对本地候选资产精确绑定，并以回归测试覆盖篡改、缺失 digest 和额外文件
-  - [ ] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；在包含新门禁的 exact commit 上重跑 Intel-only 候选并完成预发布交接检查
+  - [ ] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；`d5f0a86f` 的 run `30157730258` 已通过身份/源码门禁但遭遇 GitHub macOS runner internal error，后续同 SHA 重跑和 run `30157949745` 均为 0-job 平台失败；以记录该基础设施失败的 docs-only exact commit 使用新 concurrency key 重跑 Intel-only 候选并完成预发布交接检查
   - [ ] 获得明确发布授权后创建 tag/GitHub Release、上传五项资产、完成公开资产审计并同步官网；本轮不执行
 
 **完成判据**:陌生人从官网下载 macOS Intel x64 安装包,无安全拦截地完成安装,
