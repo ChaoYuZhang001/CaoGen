@@ -26,11 +26,11 @@ The `latest*.yml` metadata and the four installer/update files above are the onl
 
 | Asset | SHA256 |
 |---|---|
-| `CaoGen-0.1.7.dmg` | `486494a8cbbbacfbdc415a71246449424668093d2b7a71f6fe5228ea39f672de` |
-| `CaoGen-0.1.7.dmg.blockmap` | `c0d715cc848a7125cbe3707f22d093cd547c86e31d2c434f8a5ca4aa579e8e2e` |
-| `CaoGen-0.1.7-mac.zip` | `d620ee285d960bba984dcb460a45c4b38ca709c6c3035e2cba975839189a5228` |
-| `CaoGen-0.1.7-mac.zip.blockmap` | `cdf96ba3ccd551ca314da9ebd305bda4979311650bdb0bab653b930b05aeaa25` |
-| `latest-mac.yml` | `fb1fb017787c15f58861d7d43e9c5eb37702f7782ad20be93e5f9fa496babca0` |
+| `CaoGen-0.1.7.dmg` | `a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b` |
+| `CaoGen-0.1.7.dmg.blockmap` | `9763f446a977912fe0c3f76bc795b2f83967b639d07a4491cf3113f59a68b66f` |
+| `CaoGen-0.1.7-mac.zip` | `5f3695fa24117145cd47ecf731660ea3423911ad7bc2de9108c3f786aa78f5e0` |
+| `CaoGen-0.1.7-mac.zip.blockmap` | `7e16207dce03105a8c514a056bf2d6c8ed022f101bb4635ab32fb74910d45739` |
+| `latest-mac.yml` | `a5f400a7cbc4ae5a0f1b1afc0ba8f3f021361b9a33e670c6f37375a6bb2bb2a8` |
 
 ## Truth Boundary
 
@@ -61,8 +61,8 @@ Open `CaoGen-0.1.7.dmg`, drag CaoGen to Applications, and launch it normally. Th
 
 ## Verification
 
-- Candidate commit: `cfce93725972167aad0811d381c710e7cd510b26` on `main`.
-- GitHub candidate run: `30160236851`, scoped to macOS Intel x64; Apple Silicon and Windows jobs were skipped rather than counted as passes.
+- Candidate commit: `bbec526554aea9785291edf4d8164084145347ae` on `main`.
+- GitHub candidate run: `30162696430`, scoped to macOS Intel x64; Apple Silicon and Windows jobs were skipped rather than counted as passes.
 - Exact-commit Deep: `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`.
 - macOS x64 release audit: `120/120` required checks, including package/update metadata, x86_64 architecture, clean provenance, signing, notarization, staple, Gatekeeper, package integrity, and exclusion of external SDK/CLI files.
 - Packaged-app smoke: isolated DMG install, clean detach, and real renderer startup passed.

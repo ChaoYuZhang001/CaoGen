@@ -91,7 +91,7 @@ README、官网、STATUS 三处必须一致:
   - [x] 删除 Claude Runtime 后的本地 unsigned Intel x64 实测：DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` `311,931,918 B`、`app.asar` `61,630,882 B`；package audit 证明 SDK/CLI 不在 ASAR 或 unpacked files，预算收紧为 `160 MB / 160 MB / 400 MB / 80 MB`
   - [x] `main@ee13fffe5ca0e8576ea448fd3253e7cd9cfa9fb8` 的 Intel-only 候选在 GitHub run `30148489031` 完成 clean exact-commit Deep（`154/154` required，2 optional skip）、Developer ID 签名、公证/staple、Gatekeeper、`106/106` required audit、DMG 隔离安装/干净 detach、真实 renderer 与最终资产绑定；签名 DMG `127,703,488 B`，ZIP `127,016,797 B`
   - [x] `main@e8f617f822be458065dabe7f2440d1f5a33ee2b3` 的 Intel-only 最终候选 run `30150795350` 成功：Deep `155/155` required、2 optional skip，`120/120` required macOS audit，五资产 `latest-mac.yml` 元数据、签名/公证/安装/renderer 与 clean provenance 全部绑定；资产集 `0fc626d9ccc3038ca5b3e574b87692f5ec7778c0670b2a6a4139fd804dba216d`
-  - [x] `main@cfce93725972167aad0811d381c710e7cd510b26` 的当前 Intel-only 最终候选 run `30160236851` 成功：Deep `157/157` required、2 optional skip，`120/120` required macOS audit，Developer ID 签名、公证/staple、Gatekeeper、DMG 隔离安装/干净 detach、真实 renderer 和五资产 clean provenance 全部绑定；资产集 `e37365c3d1e2aaca1a26c382fc8439e0975e7e40e83fd6886e045c60a0978d1a`
+  - [x] `main@bbec526554aea9785291edf4d8164084145347ae` 的当前 Intel-only 最终候选 run `30162696430` 成功：Deep `157/157` required、2 optional skip，`120/120` required macOS audit，Developer ID 签名、公证/staple、Gatekeeper、DMG 隔离安装/干净 detach、真实 renderer 和五资产 clean provenance 全部绑定；资产集 `7553d1ef33ec44d69e7b95c74aee8fcb7500a68daf008ed343e66ae3345a036c`
   - [ ] Apple Silicon arm64 原生证据(暂停,不计入当前 M1 完成判据)
   - [ ] Windows x64 签名/安装证据(暂停,不计入当前 M1 完成判据)
 - [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
@@ -101,8 +101,8 @@ README、官网、STATUS 三处必须一致:
   - [x] run `30150795350` 的最终候选五资产与四类报告已下载并独立核验；Release Notes 已按实算 SHA256 定稿，并在 clean 后继提交上通过 scoped final audit（全候选绑定检查 true，0 warning / 0 failure）
   - [x] 新增只读、fail-closed 的发布交接预检，绑定候选证据、精确五资产、Release Notes、publication-only 后继提交、远端 `main` 及 tag/Release 不存在状态；仅在全绿后输出需明确授权的手工命令，不产生发布副作用
   - [x] 公开 GitHub Release 资产审计升级为逐文件名称、大小与 SHA-256 digest 对本地候选资产精确绑定，并以回归测试覆盖篡改、缺失 digest 和额外文件
-  - [x] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；`bd26eaa3` 的 run `30159248949` 暴露 ModelAttempt crash E2E 测试夹具竞态后，worker keepalive 修复本地 targeted 连续 `20/20` 通过。修复提交 `cfce9372` 的 run `30160236851` 已通过 exact-commit Deep、Intel 签名/公证/安装与 renderer 主链
-  - [x] run `30160236851` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；clean、已推送的 publication-only 后继提交通过 fail-closed 发布交接预检，全部检查为 true、无 failure，决定为 `ready_for_owner_decision`
+  - [x] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；`bd26eaa3` 的 run `30159248949` 暴露 ModelAttempt crash E2E 测试夹具竞态后，worker keepalive 修复本地 targeted 连续 `20/20` 通过。修复提交 `cfce9372` 的 run `30160236851` 已通过主链；PR #8 合并使远端 `main` 前进后，`bbec5265` 的 Intel-only run `30162696430` 重新通过同一 exact-commit Deep、签名/公证/安装与 renderer 主链
+  - [x] run `30162696430` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；创始人已明确授权发布，下一步是在 clean、已推送的 publication-only 后继提交上重跑 fail-closed 发布交接预检，再创建 Tag/Release
   - [ ] 获得明确发布授权后创建 tag/GitHub Release、上传五项资产、完成公开资产审计并同步官网；本轮不执行
 
 **完成判据**:陌生人从官网下载 macOS Intel x64 安装包,无安全拦截地完成安装,

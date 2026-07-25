@@ -12,13 +12,13 @@ CaoGen remains a multi-vendor AI work desktop. This gate permits only capabiliti
 | Latest public GitHub Release | [`v0.1.6`](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6) |
 | Package and lockfile | `0.1.7` |
 | Current M1 platform scope | macOS Intel x64 only; Apple Silicon and Windows are paused and are not counted as passes |
-| Candidate identity | `main@cfce93725972167aad0811d381c710e7cd510b26` |
-| Candidate workflow | [`30160236851`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30160236851), read-only `macos-x64` evidence run |
+| Candidate identity | `main@bbec526554aea9785291edf4d8164084145347ae` |
+| Candidate workflow | [`30162696430`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30162696430), read-only `macos-x64` evidence run |
 | Exact-commit Deep | `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | macOS distribution | `120/120` required audit; Developer ID signing, notarization, staple, Gatekeeper, isolated install, clean detach, and renderer launch passed |
-| Final notes | Exact five Intel assets and four candidate report families from run `30160236851` are bound; clean publication preflight passed |
+| Final notes | Exact five Intel assets and four candidate report families from run `30162696430` are bound; clean publication preflight must be rerun after this evidence-sync commit |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for an honest 0.1.x wedge release |
-| Publication | No tag or GitHub Release has been created; owner publication decision remains separate |
+| Publication | Owner authorization was received on 2026-07-25; no tag or GitHub Release has been created yet |
 
 ## M1 Scope Boundary
 
@@ -30,13 +30,13 @@ The repository retains the complete three-platform contract for any future relea
 
 | Gate | Required evidence | State |
 |---|---|---|
-| Candidate source | Exact clean `main` commit with package and lockfile at 0.1.7 | Passed at `cfce9372` |
-| Source gates | Workflow contract, package-size policy, product positioning, typecheck, build, coding standards, and secret-history scan | Passed in run `30160236851` |
+| Candidate source | Exact clean `main` commit with package and lockfile at 0.1.7 | Passed at `bbec5265` |
+| Source gates | Workflow contract, package-size policy, product positioning, typecheck, build, coding standards, and secret-history scan | Passed in run `30162696430` |
 | Release scope | P2-002, P2-003, and P2-005 on the candidate | Passed; P2-001/P2-004 remain outside this Intel release claim |
 | Exact Deep | Required checks pass on the candidate; optional skips remain explicit | Passed: `157/157` required; 2 optional external checks skipped |
-| Signed Intel distribution | DMG/ZIP/update metadata bound to clean provenance and signed installed app | Passed: `120/120`, artifact set `e37365c3d1e2aaca1a26c382fc8439e0975e7e40e83fd6886e045c60a0978d1a` |
-| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Passed; all checks true, zero failures, `ready_for_owner_decision` |
-| Owner decision | Explicit authorization to create tag and GitHub Release | Pending; this gate document does not authorize publication |
+| Signed Intel distribution | DMG/ZIP/update metadata bound to clean provenance and signed installed app | Passed: `120/120`, artifact set `7553d1ef33ec44d69e7b95c74aee8fcb7500a68daf008ed343e66ae3345a036c` |
+| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Exact SHA-256 values updated; clean descendant preflight rerun is next |
+| Owner decision | Explicit authorization to create tag and GitHub Release | Passed on 2026-07-25 |
 | Public upload audit | Tag target, five uploaded assets, hashes, metadata, and public download parity | Pending until publication |
 | Website sync | Intel-only version, download, signing state, and truth boundary match the published Release | Pending until publication |
 
