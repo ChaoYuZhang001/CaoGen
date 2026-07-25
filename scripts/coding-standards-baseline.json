@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 608,
-      "contentHash": "33af9f48c9e4a56ae443f769e77c8734565fcc230178b02c37b9835e6de3bbc4",
+      "lines": 609,
+      "contentHash": "5bc5ef996c08a12577f7299996641bdd51b91fe58f6a19cfca772105ab8b987f",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -594,24 +594,6 @@
         "inspectNeutralArmPoses#1": {
           "lines": 85,
           "complexity": 20
-        }
-      }
-    },
-    "scripts/release-notes-audit.mjs": {
-      "profile": "automation",
-      "lines": 312,
-      "contentHash": "9df0624a916e4099424c56746aca358dba842d284049aebaed0485b47532b95d",
-      "oversizedFunctionCount": 0,
-      "maxFunctionLines": 40,
-      "complexFunctionCount": 1,
-      "maxComplexity": 22,
-      "forbiddenSuppressionCount": 0,
-      "unreasonedSuppressionCount": 0,
-      "malformedDebtMarkerCount": 0,
-      "functionDebt": {
-        "validateDoctorAlignment#1": {
-          "lines": 40,
-          "complexity": 22
         }
       }
     },

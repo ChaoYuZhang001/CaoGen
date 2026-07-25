@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { detachDmg } from './lib/macos-dmg-detach.mjs'
+import { macosX64UpdateMetadataChecks } from './lib/release-matrix-evidence.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -65,7 +66,10 @@ const artifactPresence = {
 const artifacts = {
   app: { path: reportPath(appPath), present: artifactPresence.app },
   dmg: { path: reportPath(dmgPath), present: artifactPresence.dmg },
-  zip: { path: reportPath(zipPath), present: artifactPresence.zip }
+  zip: { path: reportPath(zipPath), present: artifactPresence.zip },
+  updateMetadata: targetArch === 'x64'
+    ? { path: 'dist/latest-mac.yml', present: isFile(path.join(repoRoot, 'dist', 'latest-mac.yml')) }
+    : null
 }
 let appSigning = null
 let appEntitlements = null
@@ -221,6 +225,7 @@ function inspectArtifacts() {
   check('dmg', 'release DMG exists', artifactPresence.dmg, reportPath(dmgPath))
   check('zip', 'release ZIP exists', artifactPresence.zip, reportPath(zipPath))
   check('artifact_set', 'all expected uploadable assets exist', artifactSet.complete, artifactSet.missing.join(', '))
+  if (targetArch === 'x64') inspectX64UpdateMetadata()
 
   if (process.platform !== 'darwin') {
     warnings.push('Artifact signing, notarization, and archive checks require macOS.')
@@ -236,6 +241,23 @@ function inspectArtifacts() {
     commandCheck('zip', 'unzip verifies the ZIP', 'unzip', ['-t', zipPath])
     archiveAudits.zip = inspectZipPayload()
   }
+}
+
+function inspectX64UpdateMetadata() {
+  const metadataPath = path.join(repoRoot, 'dist', 'latest-mac.yml')
+  const metadataText = isFile(metadataPath) ? readFileSync(metadataPath, 'utf8') : ''
+  const metadataChecks = macosX64UpdateMetadataChecks(metadataText, {
+    version,
+    distDir: path.join(repoRoot, 'dist')
+  })
+  for (const [name, passed] of Object.entries(metadataChecks)) {
+    check('update_metadata', name, passed)
+  }
+  check(
+    'update_metadata',
+    'macOS x64 update metadata matches the signed assets',
+    Object.values(metadataChecks).every(Boolean)
+  )
 }
 
 function inspectApp() {
@@ -678,7 +700,8 @@ function inspectArtifactSet() {
         `CaoGen-${version}-mac.zip`,
         `CaoGen-${version}-mac.zip.blockmap`,
         `CaoGen-${version}.dmg`,
-        `CaoGen-${version}.dmg.blockmap`
+        `CaoGen-${version}.dmg.blockmap`,
+        'latest-mac.yml'
       ]
   const sortedFiles = files.sort()
   const missing = sortedFiles.filter((file) => !isFile(path.join(repoRoot, 'dist', file)))

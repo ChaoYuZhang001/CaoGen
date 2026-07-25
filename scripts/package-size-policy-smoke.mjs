@@ -75,6 +75,7 @@ assert(packageJson.scripts?.['dist:mac:release:x64']?.includes('test:macos-packa
 const x64Steps = workflow.jobs?.['macos-x64']?.steps || []
 const x64Upload = x64Steps.find((step) => step.name === 'Upload x64 assets and evidence')
 assert(x64Upload, 'x64 distributable upload step is required')
+assert(String(x64Upload.with?.path || '').includes('dist/latest-mac.yml'))
 assert(!String(x64Upload.with?.path || '').includes('app.asar'), 'x64 distributable evidence must not duplicate app.asar')
 
 const aggregateArchiveUpload = x64Steps.find((step) => step.name === 'Upload x64 archive for complete-matrix assembly')

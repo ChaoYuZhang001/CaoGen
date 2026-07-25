@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { macosX64ReleaseEvidenceChecks } from './lib/macos-x64-release-evidence.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -18,9 +19,32 @@ const expectedVersion = explicitExpectedVersion || packageJson.version || ''
 const gitState = readGitState()
 const failures = []
 const warnings = []
+const platformScope = argValue('--platform-scope') || process.env.CAOGEN_RELEASE_PLATFORM_SCOPE || 'all'
+const macosX64Scope = finalMode && platformScope === 'macos-x64'
+const evidencePaths = {
+  macosAudit: normalizePath(argValue('--macos-audit') || 'test-results/macos-release-audit/latest-x64.json'),
+  packagedApp: normalizePath(argValue('--packaged-app') || 'test-results/packaged-app-smoke/latest-macos-x64.json'),
+  deep: normalizePath(argValue('--deep') || 'test-results/caogen-deep/latest.json'),
+  p2: normalizePath(argValue('--p2') || 'test-results/p2-release-scope/latest.json')
+}
 
 const notes = existsSync(notesPath) ? readFileSync(notesPath, 'utf8') : ''
-const doctor = readOptionalJson(doctorPath)
+const doctor = platformScope === 'all' ? readOptionalJson(doctorPath, 'release doctor') : undefined
+const scopedReports = macosX64Scope
+  ? {
+      macosAudit: readOptionalJson(evidencePaths.macosAudit, 'macOS x64 release audit'),
+      packagedApp: readOptionalJson(evidencePaths.packagedApp, 'packaged app smoke'),
+      deep: readOptionalJson(evidencePaths.deep, 'Deep report'),
+      p2: readOptionalJson(evidencePaths.p2, 'P2 release-scope report')
+    }
+  : {}
+const scopedEvidence = macosX64Scope
+  ? macosX64ReleaseEvidenceChecks({
+      ...scopedReports,
+      expectedVersion,
+      candidateIsAncestor: gitIsAncestor(scopedReports.macosAudit?.git?.commit, gitState.commit)
+    })
+  : undefined
 const doctorPackaging = Array.isArray(doctor?.domains)
   ? doctor.domains.find((domain) => domain?.id === 'packaging_release')
   : undefined
@@ -35,6 +59,7 @@ const report = {
   status: failures.length === 0 ? 'passed' : required ? 'failed' : existsSync(notesPath) ? 'failed' : 'skipped',
   required,
   mode: finalMode ? 'final' : 'draft',
+  platformScope,
   runId,
   reportDir,
   notesPath: path.relative(repoRoot, notesPath),
@@ -45,7 +70,24 @@ const report = {
   doctorOpenDomains: Array.isArray(doctor?.openDomains) ? doctor.openDomains : [],
   doctorReleaseTarget: doctor?.releaseTarget,
   doctorGit: doctor?.git,
-  artifactSetSha256: finalMode ? doctorPackaging?.artifacts?.artifactSetSha256 : undefined,
+  artifactSetSha256: finalMode
+    ? macosX64Scope
+      ? scopedEvidence?.artifactSetSha256
+      : doctorPackaging?.artifacts?.artifactSetSha256
+    : undefined,
+  candidateEvidence: macosX64Scope
+    ? {
+        commit: scopedEvidence?.candidateCommit,
+        paths: Object.fromEntries(Object.entries(evidencePaths).map(([key, value]) => [key, path.relative(repoRoot, value)])),
+        statuses: {
+          macosAudit: scopedReports.macosAudit?.status,
+          packagedApp: scopedReports.packagedApp?.status,
+          deep: scopedReports.deep?.status,
+          p2: scopedReports.p2?.status
+        },
+        checks: scopedEvidence?.checks
+      }
+    : undefined,
   git: gitState,
   redactionPolicy: 'No secret values are emitted. The audit reports only release-note structure, required claims, and failure categories.',
   warnings,
@@ -61,6 +103,12 @@ if (required && report.status !== 'passed') process.exitCode = 1
 if (!required && existsSync(notesPath) && report.status === 'failed') process.exitCode = 1
 
 function validateNotes(text) {
+  if (!['all', 'macos-x64'].includes(platformScope)) {
+    failures.push(`unsupported release platform scope: ${platformScope}`)
+  }
+  if (!finalMode && platformScope !== 'all') {
+    failures.push('draft release notes use the complete release-doctor scope; platform scopes apply only to final notes')
+  }
   if (!expectedVersion) failures.push('unable to determine expected release version from package.json or explicit version')
   else requireText(text, expectedVersion, `release notes must mention ${expectedVersion}`)
   requireHeading(text, 'Release Decision')
@@ -86,55 +134,68 @@ function validateNotes(text) {
 }
 
 function validateDoctorAlignment(text) {
+  if (macosX64Scope) return
+  validateCompleteMatrixDoctorAlignment(text)
+}
+
+function validateCompleteMatrixDoctorAlignment(text) {
   if (!doctor) {
     warnings.push(`release doctor report not found: ${path.relative(repoRoot, doctorPath)}`)
     return
   }
-  if (!finalMode && doctor.status === 'not_ready') {
+  if (finalMode) validateFinalDoctorBinding()
+  else validateDraftDoctorAlignment(text)
+}
+
+function validateDraftDoctorAlignment(text) {
+  if (doctor.status === 'not_ready') {
     requireAny(text, [/Do not publish/i, /not ready/i], 'draft notes must say not to publish while release doctor is not_ready')
   }
   const openDomains = Array.isArray(doctor.openDomains) ? doctor.openDomains : []
-  if (!finalMode) {
-    for (const domain of openDomains) {
-      requireText(text, domain, `release notes must list open release domain: ${domain}`)
-    }
+  for (const domain of openDomains) {
+    requireText(text, domain, `release notes must list open release domain: ${domain}`)
   }
-  if (finalMode) {
-    if (doctor.releaseTarget?.version !== expectedVersion) {
-      failures.push(`final release notes require doctor target version ${expectedVersion}, got ${doctor.releaseTarget?.version || 'missing'}`)
-    }
-    if (doctor.currentPackageVersion !== expectedVersion) {
-      failures.push(`final release notes require doctor package version ${expectedVersion}, got ${doctor.currentPackageVersion || 'missing'}`)
-    }
-    if (doctor.git?.commit !== gitState.commit) {
-      failures.push(`final release notes require doctor commit ${gitState.commit || 'unknown'}, got ${doctor.git?.commit || 'missing'}`)
-    }
-    if (doctor.git?.worktreeClean !== true) {
-      failures.push('final release notes require a doctor report generated from a clean worktree')
-    }
-    if (!gitState.worktreeClean) {
-      failures.push('final release notes must be audited from a clean worktree')
-    }
-    const refreshCommands = Array.isArray(doctor.refresh?.commands) ? doctor.refresh.commands : []
-    if (doctor.refresh?.enabled !== true) {
-      failures.push('final release notes require a refreshed preflight doctor report')
-    }
-    const failedRefreshCommands = refreshCommands.filter((item) => item?.status !== 'completed')
-    if (refreshCommands.length === 0 || failedRefreshCommands.length > 0) {
-      failures.push(`final release notes require every doctor refresh command to complete${failedRefreshCommands.length > 0 ? `: ${failedRefreshCommands.map((item) => item?.id || 'unknown').join(', ')}` : ''}`)
-    }
+}
+
+function validateFinalDoctorBinding() {
+  if (doctor.releaseTarget?.version !== expectedVersion) {
+    failures.push(`final release notes require doctor target version ${expectedVersion}, got ${doctor.releaseTarget?.version || 'missing'}`)
+  }
+  if (doctor.currentPackageVersion !== expectedVersion) {
+    failures.push(`final release notes require doctor package version ${expectedVersion}, got ${doctor.currentPackageVersion || 'missing'}`)
+  }
+  if (doctor.git?.commit !== gitState.commit) {
+    failures.push(`final release notes require doctor commit ${gitState.commit || 'unknown'}, got ${doctor.git?.commit || 'missing'}`)
+  }
+  if (doctor.git?.worktreeClean !== true) {
+    failures.push('final release notes require a doctor report generated from a clean worktree')
+  }
+  if (!gitState.worktreeClean) {
+    failures.push('final release notes must be audited from a clean worktree')
+  }
+  const refreshCommands = Array.isArray(doctor.refresh?.commands) ? doctor.refresh.commands : []
+  if (doctor.refresh?.enabled !== true) {
+    failures.push('final release notes require a refreshed preflight doctor report')
+  }
+  const failedRefreshCommands = refreshCommands.filter((item) => item?.status !== 'completed')
+  if (refreshCommands.length === 0 || failedRefreshCommands.length > 0) {
+    failures.push(`final release notes require every doctor refresh command to complete${failedRefreshCommands.length > 0 ? `: ${failedRefreshCommands.map((item) => item?.id || 'unknown').join(', ')}` : ''}`)
   }
 }
 
 function validateFinalMode(text) {
   if (!finalMode) return
-  if (!doctor) {
-    failures.push('final release notes require a workos-release-doctor report')
+  if (macosX64Scope) {
+    validateMacosX64FinalEvidence()
   } else {
-    const openDomains = Array.isArray(doctor.openDomains) ? doctor.openDomains : []
-    const blockingDomains = openDomains.filter((domain) => domain !== 'release_notes')
-    if (doctor.status !== 'ready' && (openDomains.length === 0 || blockingDomains.length > 0)) {
-      failures.push(`final release notes require every doctor domain except release_notes to be ready${blockingDomains.length > 0 ? `: ${blockingDomains.join(', ')}` : ''}`)
+    if (!doctor) {
+      failures.push('final release notes require a workos-release-doctor report')
+    } else {
+      const openDomains = Array.isArray(doctor.openDomains) ? doctor.openDomains : []
+      const blockingDomains = openDomains.filter((domain) => domain !== 'release_notes')
+      if (doctor.status !== 'ready' && (openDomains.length === 0 || blockingDomains.length > 0)) {
+        failures.push(`final release notes require every doctor domain except release_notes to be ready${blockingDomains.length > 0 ? `: ${blockingDomains.join(', ')}` : ''}`)
+      }
     }
   }
   if (/Do not publish|not ready|No (?:new )?.*assets uploaded yet/i.test(text)) {
@@ -143,10 +204,22 @@ function validateFinalMode(text) {
   validateFinalAssets(text)
 }
 
+function validateMacosX64FinalEvidence() {
+  for (const [name, filePath] of Object.entries(evidencePaths)) {
+    if (!existsSync(filePath)) failures.push(`macOS x64 final notes require ${name} evidence: ${path.relative(repoRoot, filePath)}`)
+  }
+  if (!gitState.worktreeClean) {
+    failures.push('final release notes must be audited from a clean worktree')
+  }
+  for (const [name, passed] of Object.entries(scopedEvidence?.checks || {})) {
+    if (!passed) failures.push(`macOS x64 candidate evidence failed: ${name}`)
+  }
+}
+
 function validateFinalAssets(text) {
-  const expectedFiles = doctorPackaging?.artifacts?.files
+  const expectedFiles = macosX64Scope ? scopedEvidence?.reportedFiles : doctorPackaging?.artifacts?.files
   if (!isRecord(expectedFiles) || Object.keys(expectedFiles).length === 0) {
-    failures.push('final release notes require packaging artifact evidence from the preflight doctor')
+    failures.push('final release notes require packaging artifact evidence for the selected platform scope')
     return
   }
   const section = markdownSection(text, 'Uploaded Assets')
@@ -259,12 +332,12 @@ function requireAny(text, patterns, message) {
   if (!patterns.some((pattern) => pattern.test(text))) failures.push(message)
 }
 
-function readOptionalJson(filePath) {
+function readOptionalJson(filePath, label = 'JSON report') {
   if (!existsSync(filePath)) return undefined
   try {
     return JSON.parse(readFileSync(filePath, 'utf8'))
   } catch (error) {
-    warnings.push(`unable to parse release doctor report: ${error instanceof Error ? error.message : String(error)}`)
+    warnings.push(`unable to parse ${label}: ${error instanceof Error ? error.message : String(error)}`)
     return undefined
   }
 }
@@ -304,6 +377,19 @@ function gitOutput(args) {
     }).trim()
   } catch {
     return ''
+  }
+}
+
+function gitIsAncestor(candidateCommit, currentCommit) {
+  if (!/^[0-9a-f]{40}$/i.test(candidateCommit || '') || !/^[0-9a-f]{40}$/i.test(currentCommit || '')) return false
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', candidateCommit, currentCommit], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'ignore', 'ignore']
+    })
+    return true
+  } catch {
+    return false
   }
 }
 
