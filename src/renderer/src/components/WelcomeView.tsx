@@ -28,8 +28,20 @@ interface WelcomeTool {
   icon: HeaderIconName
 }
 
+type WelcomeRecoveryKind = 'compute' | 'provider'
+
+function welcomeRecoveryKind(validationKey: string): WelcomeRecoveryKind | null {
+  if (validationKey === 'assistantComputeUnavailable') return 'compute'
+  return validationKey === 'explicitProviderRequired' ? 'provider' : null
+}
+
 const WELCOME_TOOLS: WelcomeTool[] = [
-  { key: 'explore', labelKey: 'welcomeExploreCode', promptKey: 'welcomeExploreCodePrompt', icon: 'files' },
+  {
+    key: 'quick_start_project_read_only_v1',
+    labelKey: 'welcomeFirstReadOnly',
+    promptKey: 'welcomeFirstReadOnlyPrompt',
+    icon: 'files'
+  },
   { key: 'build', labelKey: 'welcomeBuildFeature', promptKey: 'welcomeBuildFeaturePrompt', icon: 'terminal' },
   { key: 'review', labelKey: 'welcomeReviewCode', promptKey: 'welcomeReviewCodePrompt', icon: 'review' },
   { key: 'fix', labelKey: 'welcomeFixIssue', promptKey: 'welcomeFixIssuePrompt', icon: 'subagents' }
@@ -71,7 +83,7 @@ export default function WelcomeView(): React.JSX.Element {
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [computeRecovery, setComputeRecovery] = useState(false)
+  const [recoveryKind, setRecoveryKind] = useState<WelcomeRecoveryKind | null>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const computeAvailable = hasAvailableCompute(providers)
 
@@ -168,7 +180,7 @@ export default function WelcomeView(): React.JSX.Element {
       setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT)
       setCwd(dir)
       setError('')
-      setComputeRecovery(false)
+      setRecoveryKind(null)
     }
   }
 
@@ -188,18 +200,18 @@ export default function WelcomeView(): React.JSX.Element {
     const validationKey = welcomeValidationKey(projection, draft, computeAvailable)
     if (validationKey) {
       setError(t(validationKey))
-      setComputeRecovery(projection === 'assistant' && validationKey === 'assistantComputeUnavailable')
+      setRecoveryKind(welcomeRecoveryKind(validationKey))
       return
     }
     setBusy(true)
     setError('')
-    setComputeRecovery(false)
+    setRecoveryKind(null)
     try {
       await startSessionWithPrompt(welcomeSessionOptions(projection, draft, prompt), prompt)
     } catch (err) {
       const safeKey = assistantSafeStartError(projection, err)
       setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
-      setComputeRecovery(Boolean(safeKey))
+      setRecoveryKind(safeKey ? 'compute' : null)
       setBusy(false)
     }
   }
@@ -209,10 +221,11 @@ export default function WelcomeView(): React.JSX.Element {
     try {
       await refreshProviders()
       setError('')
-      setComputeRecovery(false)
+      setRecoveryKind(null)
     } catch {
-      setError(t('assistantComputeCheckFailed'))
-      setComputeRecovery(true)
+      const nextRecovery = recoveryKind ?? (projection === 'assistant' ? 'compute' : 'provider')
+      setError(t(nextRecovery === 'provider' ? 'welcomeProviderRefreshFailed' : 'assistantComputeCheckFailed'))
+      setRecoveryKind(nextRecovery)
     } finally {
       setBusy(false)
     }
@@ -237,6 +250,7 @@ export default function WelcomeView(): React.JSX.Element {
                 key={tool.key}
                 type="button"
                 className="welcome-suggestion"
+                data-welcome-suggestion={tool.key}
                 onClick={() => {
                   setText(t(tool.promptKey))
                   requestAnimationFrame(() => taRef.current?.focus())
@@ -321,15 +335,13 @@ export default function WelcomeView(): React.JSX.Element {
               </button>
             </div>
           </div>
-          {projection === 'assistant' ? (
-            <AssistantStartNotice
-              busy={busy}
-              error={error}
-              recoverable={computeRecovery}
-              onOpenSettings={() => setShowSettings(true)}
-              onRetry={() => void retryCompute()}
-            />
-          ) : error ? <div className="notice notice-error welcome-error">{error}</div> : null}
+          <AssistantStartNotice
+            busy={busy}
+            error={error}
+            recoveryKind={recoveryKind}
+            onOpenSettings={() => setShowSettings(true, 'providers')}
+            onRetry={() => void retryCompute()}
+          />
         </div>
       </div>
     </div>

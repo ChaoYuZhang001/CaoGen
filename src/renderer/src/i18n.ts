@@ -178,6 +178,18 @@ const DICT: Dict = {
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
   welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
   welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
+  welcomeFirstReadOnly: { zh: '先只读了解项目', en: 'Read the project first' },
+  welcomeFirstReadOnlyPrompt: {
+    zh: '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。',
+    en: 'Read this project first. Tell me how to start it, its key entry points, and the three most worthwhile issues to fix. Do not change any code yet.'
+  },
+  welcomeConfigureProvider: { zh: '配置 Provider', en: 'Set up Provider' },
+  welcomeRetryProviders: { zh: '重新加载 Provider', en: 'Reload Providers' },
+  welcomeRefreshingProviders: { zh: '加载中…', en: 'Reloading…' },
+  welcomeProviderRefreshFailed: {
+    zh: '无法刷新 Provider。请检查配置后重试。',
+    en: 'Providers could not be reloaded. Check the configuration and try again.'
+  },
   welcomeExploreCode: { zh: '探索并理解代码', en: 'Explore and understand code' },
   welcomeExploreCodePrompt: { zh: '请帮我探索这个项目并说明核心架构。', en: 'Explore this project and explain its core architecture.' },
   welcomeBuildFeature: { zh: '构建新功能或工具', en: 'Build a feature or tool' },

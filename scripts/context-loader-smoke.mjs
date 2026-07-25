@@ -208,8 +208,17 @@ try {
     'generateProjectContextTemplate'
   ])
   assertSourceContains('src/renderer/src/components/SettingsModal.tsx', [
-    "type Tab = 'control' | 'general' | 'permissions' | 'project'",
+    "import type { SettingsTab } from '../store/settings-navigation'",
+    'useState<SettingsTab>',
     '<ProjectSettings />'
+  ])
+  assertSourceContains('src/renderer/src/store/settings-navigation.ts', [
+    'export type SettingsTab',
+    "| 'control'",
+    "| 'project'",
+    "| 'providers'",
+    "| 'migrate'",
+    'setShowSettings(value: boolean, tab?: SettingsTab): void'
   ])
 
   console.log('context-loader smoke ok')

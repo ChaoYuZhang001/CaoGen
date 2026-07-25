@@ -41,7 +41,7 @@ const report = {
   runId,
   runDir,
   requirement: 'required',
-  requirementIds: ['ROUTE-003', 'NFR-UX-001'],
+  requirementIds: ['ROUTE-003', 'NFR-UX-001', 'M2-T2'],
   packageVersion: packageJson.version,
   gitCommit: '',
   worktreeClean: false,
@@ -102,8 +102,17 @@ try {
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page)
 
+  const quickStartPrompt = '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。'
   const prompt = `zero choice assistant ${runId}`
   const expectedReply = `Zero-choice route completed: ${prompt}`
+
+  await check('published read-only Quick Start template fills the welcome composer exactly', async () => {
+    await page.click('[data-welcome-suggestion="quick_start_project_read_only_v1"]')
+    const value = await page.$eval('.welcome-composer-input', (input) => input.value)
+    assert(value === quickStartPrompt, `Quick Start prompt drifted: ${value}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, 'selecting the Quick Start template created a session')
+  })
 
   await check('Assistant starts with no technical routing controls', async () => {
     await assertMode(page, 'assistant')
@@ -127,7 +136,36 @@ try {
     await screenshot(page, '01-assistant-compute-unavailable')
   })
 
-  await check('retry discovers a real local Responses provider without UI choices', async () => {
+  await check('Expert missing Provider recovery deep-links to Provider settings', async () => {
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    await page.click('.welcome-send')
+    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+    const actions = await page.$$eval('[data-welcome-recovery-action]', (nodes) =>
+      nodes.map((node) => node.getAttribute('data-welcome-recovery-action')).sort()
+    )
+    assert(JSON.stringify(actions) === JSON.stringify(['configure', 'retry']), `unexpected Provider recovery actions: ${JSON.stringify(actions)}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Expert failed start created ${sessions.length} session(s)`)
+
+    await page.click('[data-welcome-recovery-action="configure"]')
+    await page.waitForSelector('.settings-page', { visible: true, timeout: 5_000 })
+    const currentTab = await page.$eval('[data-settings-tab="providers"]', (node) => node.getAttribute('aria-current'))
+    assert(currentTab === 'page', `Provider recovery opened the wrong Settings tab: ${currentTab}`)
+    await screenshot(page, '02-expert-provider-settings')
+
+    await page.click('.settings-page-back')
+    await page.waitForSelector('[data-studio-projection-tab="session"]', { visible: true, timeout: 5_000 })
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    await setValue(page, '.welcome-project-path', projectDir)
+    await setValue(page, '.welcome-composer-input', prompt)
+    await page.click('.welcome-send')
+    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+  })
+
+  await check('Provider retry discovers a real local Responses provider and clears recovery', async () => {
     await page.evaluate(async ({ baseUrl }) => {
       await window.agentDesk.createProvider({
         name: 'Zero Choice Local Service',
@@ -137,9 +175,10 @@ try {
         openaiProtocol: 'responses'
       })
     }, { baseUrl: mock.baseUrl })
-    await page.click('[data-assistant-start-action="retry"]')
-    await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
+    await page.click('[data-welcome-recovery-action="retry"]')
     await page.waitForSelector('[data-assistant-start-state]', { hidden: true, timeout: 5_000 })
+    await clickMode(page, 'assistant')
+    await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
     await assertAssistantProjection(page)
   })
 
@@ -182,6 +221,7 @@ try {
     await page.type('.composer-input', 'projection draft remains local')
     const before = await readSessionSnapshot(page, sessionId)
     await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="workspace"]')
     await page.waitForSelector('[data-studio-projection-tab="workspace"][aria-selected="true"]', { visible: true })
     await page.focus('[data-studio-projection-tab="workspace"]')
     await page.keyboard.press('ArrowRight')
