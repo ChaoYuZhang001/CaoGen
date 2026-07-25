@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import type { ExperienceMode } from '../store/experience-mode'
 import { useT } from '../i18n'
 import AppModeSwitcher from './AppModeSwitcher'
@@ -11,8 +11,9 @@ import StudioProjectionTabs, {
   STUDIO_PROJECTION_TAB_IDS,
   type StudioProjectionSurface
 } from './experience/StudioProjectionTabs'
+import { loadStudioView, preloadStudioView } from './studio/loadStudioView'
 
-const StudioView = lazy(() => import('./studio/StudioView'))
+const StudioView = lazy(loadStudioView)
 
 interface AppListViewProps {
   activeId: string | null
@@ -43,6 +44,10 @@ export default function AppListView({
   const [studioSurface, setStudioSurface] = useState<StudioProjectionSurface>('workspace')
   const sessionHidden = experienceMode === 'studio' && studioSurface === 'workspace'
   const workspaceHidden = experienceMode !== 'studio' || studioSurface !== 'workspace'
+  useEffect(() => preloadStudioView(), [])
+  useEffect(() => {
+    if (showNewSession) setStudioSurface('session')
+  }, [showNewSession])
   return (
     <>
       <button

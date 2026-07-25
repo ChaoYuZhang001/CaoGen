@@ -9,7 +9,6 @@ import RewindPanel from './RewindPanel'
 import StartSuggestionsPanel from './StartSuggestionsPanel'
 import type { PermissionModeId } from '../../../shared/types'
 import type { ChatItem, ToolResultInfo } from '../store'
-import { useExperienceProjection } from './experience/ExperienceProjection'
 import ChatStatusBar from './experience/ChatStatusBar'
 
 const VIRTUAL_MESSAGE_THRESHOLD = 100
@@ -31,7 +30,6 @@ function clamp(value: number, min: number, max: number): number {
 
 export default function ChatView(): React.JSX.Element | null {
   const t = useT()
-  const projection = useExperienceProjection()
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const providers = useStore((s) => s.providers)
@@ -190,7 +188,6 @@ export default function ChatView(): React.JSX.Element | null {
   return (
     <div
       className={`chat chat-density-${layout.chatDensity}`}
-      data-experience-projection={projection}
       style={{ '--chat-scale': layout.chatScale } as React.CSSProperties}
     >
       <header className="chat-header drag-region">

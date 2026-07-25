@@ -123,6 +123,8 @@ README、官网、STATUS 三处必须一致:
   - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；配置动作直达 Providers 页，真实 Electron E2E `9/9` 覆盖提示词精确注入、零误建会话、设置深链、刷新恢复与真实 Router/流式响应
   - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
 - [ ] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
+  - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`
+  - [ ] 用真实外部反馈验证入口可理解、首次维护者回应不超过 48 小时；逾期项必须处理并保留审计告警，不能只以空渠道自证完成
 - [ ] M2-T4 每周发布一个 patch 版本,只修真实用户撞到的问题,不加新功能
 - [ ] M2-T5 官网增加 30 秒演示视频(配 key → 下任务 → failover → Diff 审查)
 

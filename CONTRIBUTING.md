@@ -80,7 +80,7 @@ Effect Ledger、Workflow Ledger、验收/恢复和外部副作用网关属于高
 4. 至少运行 `npm run typecheck && npm run build`，并在 PR 模板中记录结果和未运行的检查。
 5. 提交 PR 后回应 review，必要时说明取舍、风险和回退方法。
 
-**维护者承诺：对公开 Issue 和 Pull Request 在 48 小时内给出首次回应。** 这表示确认、分流或提出下一步，不代表 48 小时内完成 review 或合并。
+**维护者承诺：对公开 Issue、Pull Request 和 Discussion 在 48 小时内给出首次回应。** 这表示确认、分流或提出下一步，不代表 48 小时内完成修复、review 或合并。入口选择见 [SUPPORT.md](./SUPPORT.md)。
 
 推荐使用简短的 Conventional Commit 前缀：
 
@@ -178,7 +178,7 @@ The Effect Ledger, Workflow Ledger, acceptance/recovery paths, and external side
 4. Run at least `npm run typecheck && npm run build`, then record results and skipped checks in the PR template.
 5. Respond to review feedback and explain tradeoffs, risk, and rollback details where relevant.
 
-**Maintainer commitment: every public issue and pull request will receive an initial response within 48 hours.** This means acknowledgment, routing, or a concrete next step; it is not a promise to complete review or merge within 48 hours.
+**Maintainer commitment: every public issue, pull request, and discussion will receive an initial response within 48 hours.** This means acknowledgment, routing, or a concrete next step; it is not a promise to complete a fix, review, or merge within 48 hours. See [SUPPORT.md](./SUPPORT.md) for channel routing.
 
 Short Conventional Commit prefixes are preferred:
 

@@ -33,6 +33,7 @@ export default function App(): React.JSX.Element {
   const setExperienceMode = useStore((s) => s.setExperienceMode)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [studioVisited, setStudioVisited] = useState(experienceMode === 'studio')
+  const closeMobileSidebar = useCallback((): void => setMobileSidebarOpen(false), [])
 
   useThemeEffect()
 
@@ -82,9 +83,7 @@ export default function App(): React.JSX.Element {
     void init()
   }, [init])
 
-  useEffect(() => {
-    preloadOfficeView()
-  }, [])
+  useEffect(() => { preloadOfficeView() }, [])
 
   useEffect(() => {
     if (experienceMode === 'studio') setStudioVisited(true)
@@ -160,7 +159,7 @@ export default function App(): React.JSX.Element {
           mobileSidebarOpen={mobileSidebarOpen}
           showNewSession={showNewSession}
           studioVisited={studioVisited}
-          onCloseMobileSidebar={() => setMobileSidebarOpen(false)}
+          onCloseMobileSidebar={closeMobileSidebar}
           onExperienceModeChange={setExperienceMode}
           onToggleMobileSidebar={() => setMobileSidebarOpen((open) => !open)}
         />
