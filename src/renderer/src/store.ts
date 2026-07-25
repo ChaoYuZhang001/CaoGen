@@ -1010,13 +1010,10 @@ export const useStore = create<AppStore>((set, get) => {
     guiAutomationTemporaryGrantUntil: 0,
     notificationsEnabled: true,
     preventDisplaySleep: true,
-    sdkAgentsEnabled: false,
     ideBridgeEnabled: false,
     ideBridgeHost: '127.0.0.1',
     ideBridgePort: 17365,
     ideBridgeToken: '',
-    hookPostEditCommand: '',
-    hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
     office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
     layout: {
@@ -3870,8 +3867,7 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 ]
 
 /**
- * Provider 预设模板。Anthropic 引擎使用原生 Messages API;Claude 引擎使用
- * Claude Agent SDK;OpenAI 引擎支持 Responses(OpenAI 原生)与 Chat Completions
+ * Provider 预设模板。Anthropic 引擎使用原生 Messages API;OpenAI 引擎支持 Responses(OpenAI 原生)与 Chat Completions
  * (通用)两种协议。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
@@ -3901,7 +3897,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.anthropic.com',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     engine: 'anthropic',
-    hint: '直连 Anthropic 官方 Messages API,不经过 Claude Agent SDK;填入自己的 Anthropic API Key。'
+    hint: '直连 Anthropic 官方 Messages API;填入自己的 Anthropic API Key。'
   },
   {
     key: 'openai',
@@ -3909,14 +3905,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.openai.com',
     models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
     engine: 'openai',
-    hint: '选择 OpenAI 引擎时原生直连(Responses 协议),填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
+    hint: '使用 OpenAI Responses 协议原生直连;填入 OpenAI API Key。'
   },
   {
     key: 'deepseek',
     label: 'DeepSeek(厂商直连)',
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: ['deepseek-chat', 'deepseek-reasoner'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'DeepSeek 厂商 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
   },
   {
@@ -3933,7 +3929,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Kimi / 月之暗面(厂商直连)',
     baseUrl: 'https://api.moonshot.cn/anthropic',
     models: ['kimi-k2-0711-preview', 'moonshot-v1-auto'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'Moonshot 厂商 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
   },
   {
@@ -3941,7 +3937,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '智谱 GLM(厂商直连)',
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: ['glm-4.5', 'glm-4.5-air'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: '智谱厂商 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
   },
   {
@@ -3950,7 +3946,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.x.ai',
     models: ['grok-4', 'grok-4-fast'],
     engine: 'openai',
-    hint: 'xAI 厂商端点同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
+    hint: 'xAI 厂商端点提供 Chat Completions,配 OpenAI-compatible 引擎 Chat 协议。console.x.ai 申请 Key。',
     openaiProtocol: 'chat'
   },
   {
@@ -3994,7 +3990,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'one-api / new-api 网关',
     baseUrl: 'http://localhost:3000',
     models: ['gpt-4o', 'gpt-4o-mini', 'gemini-1.5-pro', 'deepseek-chat'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: '经 one-api/new-api 网关转译:请求走 Anthropic 协议,网关翻译到 OpenAI/Gemini 等后端。模型名需与网关映射一致。'
   },
   {
@@ -4002,7 +3998,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'LiteLLM 网关',
     baseUrl: 'http://localhost:4000',
     models: ['gpt-4o', 'claude-3-5-sonnet', 'gemini/gemini-1.5-pro'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'LiteLLM 以 /v1/messages 暴露 Anthropic 兼容端点,后端可接 OpenAI/Azure/Bedrock 等。'
   },
   {

@@ -95,7 +95,6 @@ import type {
   TaskDecomposeResult,
   SessionEventPayload,
   SessionMeta,
-  SdkAgentInfo,
   SendMessagePayload,
   TaskSnapshotRecord,
   TaskSnapshotReason,
@@ -635,12 +634,6 @@ class SessionManager {
       onTaskTimeout: (sessionId, taskId, error) =>
         this.handleDagTaskTimeout(parentSessionId, sessionId, taskId, error)
     }
-  }
-
-  async supportedAgents(sessionId: string): Promise<SdkAgentInfo[]> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.supportedAgents) return []
-    return session.supportedAgents()
   }
 
   private emitTaskDagUpdate(parentSessionId: string, execution: TaskDagExecutionView): void {
@@ -1449,7 +1442,7 @@ class SessionManager {
   private handleEnginePowerBlocker(sessionId: string, event: AgentEvent): void {
     if (event.kind !== 'status') return
     const engine = this.sessions.get(sessionId)?.meta.engine
-    if (!engine || engine === 'claude') return
+    if (!engine) return
     if (event.status === 'running') {
       this.startEnginePowerBlocker(sessionId)
     } else if (event.status === 'idle' || event.status === 'error' || event.status === 'closed') {
@@ -1464,7 +1457,7 @@ class SessionManager {
       const blockerId = powerSaveBlocker.start('prevent-display-sleep')
       this.enginePowerBlockers.set(sessionId, blockerId)
     } catch (err) {
-      console.error('[caogen] 启动非 Claude 引擎防休眠失败:', err)
+      console.error('[caogen] 启动引擎防休眠失败:', err)
     }
   }
 
@@ -1475,7 +1468,7 @@ class SessionManager {
     try {
       if (powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId)
     } catch (err) {
-      console.error('[caogen] 释放非 Claude 引擎防休眠失败:', err)
+      console.error('[caogen] 释放引擎防休眠失败:', err)
     }
   }
 

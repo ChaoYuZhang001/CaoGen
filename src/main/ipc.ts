@@ -645,11 +645,6 @@ export function registerIpc(): void {
     return sessionManager.dispatchTaskDag(parentSessionId, input)
   })
 
-  ipcMain.handle('sessions:supportedAgents', (_e, sessionId: string) => {
-    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) return []
-    return sessionManager.supportedAgents(sessionId)
-  })
-
   ipcMain.handle('attachments:copyImage', async (_e, id: string, sourcePath: string) => {
     if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
     if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {

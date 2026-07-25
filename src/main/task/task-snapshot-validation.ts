@@ -11,6 +11,7 @@ import { hasConsistentTaskSnapshotIdentity } from './task-snapshot-identity'
 type Validator = (value: unknown) => boolean
 
 const SESSION_STATUSES = new Set<unknown>(['starting', 'running', 'idle', 'error', 'closed'])
+// Legacy Claude snapshots remain readable so recovery can migrate them to native Anthropic.
 const ENGINE_KINDS = new Set<unknown>(['claude', 'anthropic', 'openai'])
 const SNAPSHOT_REASONS = new Set<unknown>(['created', 'important-event', 'event-batch', 'shutdown', 'recovered'])
 const SUBTASK_STATUSES = new Set<unknown>(['pending', 'running', 'success', 'failed', 'closed'])
@@ -84,7 +85,7 @@ function isSessionStatus(value: unknown): value is SessionStatus {
   return SESSION_STATUSES.has(value)
 }
 
-function isEngineKind(value: unknown): value is EngineKind {
+function isEngineKind(value: unknown): boolean {
   return ENGINE_KINDS.has(value)
 }
 

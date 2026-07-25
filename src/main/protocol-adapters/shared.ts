@@ -72,7 +72,7 @@ function assertAdapterMetadata(
   if (adapter.schemaVersion !== PROTOCOL_ADAPTER_SCHEMA_VERSION) {
     fail('adapter_schema', 'protocol adapter schemaVersion must be 1')
   }
-  if (adapter.engineKind !== 'claude' && adapter.engineKind !== 'anthropic' && adapter.engineKind !== 'openai') {
+  if (adapter.engineKind !== 'anthropic' && adapter.engineKind !== 'openai') {
     fail('adapter_engine', 'protocol adapter engineKind is invalid')
   }
   if (expectedKind !== undefined && adapter.engineKind !== expectedKind) {

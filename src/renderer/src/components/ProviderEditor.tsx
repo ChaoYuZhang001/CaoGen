@@ -234,7 +234,6 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         >
           <option value="openai">{t('providerEngineOpenAI')}</option>
           <option value="anthropic">{t('providerEngineAnthropic')}</option>
-          <option value="claude">{t('providerEngineClaude')}</option>
         </select>
 
         <ProviderCredentialStorageNotice storage={provider?.credentialStorage} />

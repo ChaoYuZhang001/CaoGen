@@ -41,7 +41,7 @@ try {
   const sessionRouting = {
     ...sessionRoutingModule,
     resolveSessionModelRoute: (input) =>
-      sessionRoutingModule.resolveSessionModelRoute({ engine: 'claude', ...input })
+      sessionRoutingModule.resolveSessionModelRoute({ engine: 'openai', ...input })
   }
   stats.configureModelStatsDir(dataDir)
   providerHealth.configureProviderHealthDir(path.join(dataDir, 'provider-health'))
@@ -53,7 +53,7 @@ try {
       id: 'deepseek-official',
       name: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com',
-      engine: 'claude',
+      engine: 'openai',
       models: ['deepseek-chat', 'deepseek-reasoner'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -63,7 +63,7 @@ try {
       id: 'premium',
       name: 'Premium',
       baseUrl: 'https://example.test',
-      engine: 'claude',
+      engine: 'openai',
       models: ['expensive-reasoner', 'gpt-4o-mini'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -88,7 +88,7 @@ try {
   const familyProfiles = profiles.buildModelProfiles({
     providerId: 'model-family-fixture',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4', 'gemini-2.5-flash', 'gpt-5.6', 'kimi-k2'],
-    engine: 'claude'
+    engine: 'anthropic'
   })
   const opus = familyProfiles.find((profile) => profile.model.includes('opus'))
   const sonnet = familyProfiles.find((profile) => profile.model.includes('sonnet'))
@@ -118,7 +118,7 @@ try {
       id: 'anthropic-fixture',
       name: 'Anthropic Claude',
       baseUrl: 'https://example.test/anthropic',
-      engine: 'claude',
+      engine: 'anthropic',
       models: ['claude-sonnet-4'],
       budgetUsd: 0,
       createdAt: Date.now(),
@@ -712,18 +712,18 @@ try {
     'second project route reason should not include the first project model preference'
   )
 
-  const claudeChatOnlyRoute = sessionRouting.resolveSessionModelRoute({
+  const anthropicChatOnlyRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,
     currentModel: 'auto',
     providerId: 'chat-only',
     providers: chatOnlyProviders,
-    engine: 'claude',
+    engine: 'anthropic',
     payload: { text: 'implement code with a chat-only provider', images: [] },
     strategy: 'balanced',
     sessionCostUsd: 0,
     settingsBudgetUsd: 0
   })
-  assert(claudeChatOnlyRoute.kind === 'disabled', 'Claude routing must skip OpenAI/chat-only providers')
+  assert(anthropicChatOnlyRoute.kind === 'disabled', 'Anthropic routing must skip OpenAI/chat-only providers')
 
   const unspecifiedEngineRoute = sessionRoutingModule.resolveSessionModelRoute({
     enabled: true,

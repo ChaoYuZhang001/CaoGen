@@ -23,7 +23,7 @@
     "test:coding-standards:strict": "node scripts/coding-standards-audit.mjs --strict",
     "test:coding-standards:baseline": "node scripts/coding-standards-audit.mjs --write-baseline",
     "test:plan-contract": "node scripts/p0-p1-p2-contract-smoke.mjs",
-    "test:claude-optional": "node scripts/claude-optional-smoke.mjs",
+    "test:native-engine-surface": "node scripts/native-engine-surface-smoke.mjs",
     "test:product-positioning": "node scripts/product-positioning-audit.mjs",
     "test:product-positioning:required": "node scripts/product-positioning-audit.mjs --required",
     "test:product-1.0-acceptance": "node scripts/product-1.0-acceptance-audit.mjs",
@@ -109,7 +109,6 @@
     "test:provider-credential-target-binding": "node scripts/provider-credential-target-binding-smoke.mjs",
     "test:provider-credential-target-binding:required": "npm run test:provider-credential-target-binding",
     "test:provider-connectivity": "node scripts/provider-connectivity-smoke.mjs",
-    "test:provider-runtime-containment": "node scripts/provider-runtime-containment-smoke.mjs",
     "test:project-rules-ui": "node scripts/project-rules-ui-smoke.mjs",
     "test:failover-target": "node scripts/failover-target-smoke.mjs",
     "test:full-workflow-surface": "node scripts/full-workflow-surface-runner.mjs",
@@ -153,8 +152,6 @@
     "test:native-runtime-contract:required": "npm run test:native-runtime-contract",
     "test:protocol-adapter-boundary": "node scripts/protocol-adapter-boundary-smoke.mjs",
     "test:protocol-adapter-boundary:required": "npm run test:protocol-adapter-boundary",
-    "test:claude-model-attempt": "node scripts/claude-model-attempt-smoke.mjs",
-    "test:claude-model-attempt:required": "npm run test:claude-model-attempt",
     "test:anthropic-messages": "node scripts/anthropic-messages-smoke.mjs",
     "test:anthropic-messages:required": "npm run test:anthropic-messages",
     "test:anthropic-tool-use-loop": "node scripts/anthropic-tool-use-loop-smoke.mjs",
@@ -167,7 +164,7 @@
     "test:anthropic-engine-registration:required": "npm run test:anthropic-engine-registration",
     "test:model-attempt-reconciliation": "node scripts/model-attempt-reconciliation-smoke.mjs && node scripts/model-attempt-reconciliation-crash-e2e.mjs",
     "test:model-attempt-reconciliation:required": "npm run test:model-attempt-reconciliation",
-    "test:model-attempt-ledger:required": "npm run test:model-attempt-ledger && npm run test:model-attempt-runtime:required && npm run test:claude-model-attempt:required && npm run test:model-attempt-reconciliation:required",
+    "test:model-attempt-ledger:required": "npm run test:model-attempt-ledger && npm run test:model-attempt-runtime:required && npm run test:model-attempt-reconciliation:required",
     "test:workflow-ledger-migration": "node scripts/workflow-ledger-canonical-migration-smoke.mjs",
     "test:workflow-ledger-read-source": "node scripts/workflow-ledger-read-source-smoke.mjs",
     "test:workflow-shadow-consistency": "node scripts/workflow-shadow-consistency-smoke.mjs",
@@ -290,17 +287,16 @@
     "test:deep": "node scripts/deep-test.mjs",
     "test:deep:install-hourly": "node scripts/install-hourly-deep-test.mjs",
     "dist": "npm run build && npm run prepare:native-build && electron-builder",
-    "dist:mac": "npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --mac",
-    "dist:mac:x64": "npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --mac --x64",
+    "dist:mac": "npm run build && npm run prepare:native-build && electron-builder --mac",
+    "dist:mac:x64": "npm run build && npm run prepare:native-build && electron-builder --mac --x64",
     "dist:mac:unsigned:x64": "npm run dist:mac:x64",
     "release:mac:preflight:x64": "node scripts/macos-release-preflight.mjs --arch x64",
     "release:mac:preflight:arm64": "node scripts/macos-release-preflight.mjs --arch arm64",
-    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --x64 --publish never && npm run test:macos-package-size:required -- --arch x64 && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
-    "dist:mac:release:arm64": "npm run release:mac:preflight:arm64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --arm64 && npm run test:macos-package-size:required -- --arch arm64 && npm run test:macos-release-audit:required -- --arch arm64 && npm run test:packaged-app:mac:arm64",
+    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && electron-builder --config electron-builder.release.cjs --mac --x64 --publish never && npm run test:macos-package-size:required -- --arch x64 && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
+    "dist:mac:release:arm64": "npm run release:mac:preflight:arm64 && npm run build && npm run prepare:native-build && electron-builder --config electron-builder.release.cjs --mac --arm64 && npm run test:macos-package-size:required -- --arch arm64 && npm run test:macos-release-audit:required -- --arch arm64 && npm run test:packaged-app:mac:arm64",
     "dist:win:release:x64": "npm run test:windows-release-config && npm run build && npm run prepare:native-build && electron-builder --config electron-builder.release.cjs --win --x64 && npm run test:windows-release-audit:required -- --arch x64 && npm run test:packaged-app:win:x64",
     "dist:dir": "npm run build && npm run prepare:native-build && electron-builder --dir",
-    "prepare:native-build": "node scripts/prepare-native-build.cjs",
-    "prepare:mac-binaries": "node scripts/prepare-mac-binaries.cjs"
+    "prepare:native-build": "node scripts/prepare-native-build.cjs"
   },
   "build": {
     "appId": "com.caogen.app",
@@ -359,7 +355,6 @@
       }
     ],
     "asarUnpack": [
-      "**/node_modules/@anthropic-ai/claude-agent-sdk*/**",
       "**/node_modules/node-pty/**"
     ],
     "mac": {
@@ -380,7 +375,6 @@
         "!node_modules/node-pty/src/**",
         "!node_modules/node-pty/third_party/**",
         "!node_modules/node-pty/typings/**",
-        "!node_modules/@anthropic-ai/claude-agent-sdk-darwin-!(${arch})/**",
         "!node_modules/**/prebuilds/!(darwin-${arch})/**",
         "!node_modules/@nut-tree-fork/libnut-linux/**",
         "!node_modules/@nut-tree-fork/libnut-win32/**"
@@ -425,11 +419,9 @@
       "target": [
         "AppImage"
       ]
-    },
-    "afterPack": "scripts/after-pack.cjs"
+    }
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.0",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
     "node-cron": "^4.6.0",

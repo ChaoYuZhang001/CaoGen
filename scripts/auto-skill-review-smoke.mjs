@@ -186,12 +186,12 @@ function assertRuntimeWiring() {
   assert(sessionManager.includes('getSettings().autoSkillLearningEnabled'), 'auto skill hook must honor default-off setting')
   assert(sessionManager.includes('session.meta.parentSessionId || session.meta.childRole'), 'auto skill hook must skip child review/arbitration sessions')
 
-  const agentSession = read('src/main/agentSession.ts')
-  assert(agentSession.includes('prepareClaudeUserMessage'), 'Claude/session path must use the shared message preparation boundary')
+  const nativePrompt = read('src/main/native-layered-prompt.ts')
+  assert(nativePrompt.includes('buildSkillInvocationPrompt'), 'native Anthropic path must inject learned skills')
+  assert(nativePrompt.includes('autoSkillLearningEnabled'), 'native Anthropic path must honor skill invocation setting')
 
-  const claudeUserMessage = read('src/main/claude-user-message.ts')
-  assert(claudeUserMessage.includes('buildSkillInvocationPrompt'), 'Claude/session path must inject learned skills')
-  assert(claudeUserMessage.includes('autoSkillLearningEnabled'), 'Claude/session path must honor skill invocation setting')
+  const anthropicEngine = read('src/main/anthropicEngine.ts')
+  assert(anthropicEngine.includes('augmentNativePayloadWithLayeredMemory'), 'Anthropic engine must use the native layered prompt')
 
   const openaiEngine = read('src/main/openaiEngine.ts')
   assert(openaiEngine.includes('buildSkillInvocationPrompt'), 'OpenAI path must inject learned skills')

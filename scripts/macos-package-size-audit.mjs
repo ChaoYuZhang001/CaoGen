@@ -18,10 +18,10 @@ const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
 const unpackedRoot = `${asarPath}.unpacked`
 const checks = []
 const budgets = {
-  appBytes: 650_000_000,
-  asarBytes: 110_000_000,
-  dmgBytes: 225_000_000,
-  zipBytes: 225_000_000
+  appBytes: 400_000_000,
+  asarBytes: 80_000_000,
+  dmgBytes: 160_000_000,
+  zipBytes: 160_000_000
 }
 
 check('target architecture is supported', targetArch === 'x64' || targetArch === 'arm64', targetArch)
@@ -74,7 +74,6 @@ for (const dependency of rendererOnlyPackages) {
 }
 
 for (const dependency of [
-  '@anthropic-ai/claude-agent-sdk',
   'node-gyp-build',
   'node-pty',
   'puppeteer-core',
@@ -86,14 +85,17 @@ for (const dependency of [
   check(`${dependency} runtime remains packaged`, asarEntries.some((entry) => entry.startsWith(prefix)))
 }
 
-const wrongArch = targetArch === 'x64' ? 'arm64' : 'x64'
-const targetClaudePrefix = `/node_modules/@anthropic-ai/claude-agent-sdk-darwin-${targetArch}/`
-const wrongClaudePrefix = `/node_modules/@anthropic-ai/claude-agent-sdk-darwin-${wrongArch}/`
-check('target Claude CLI remains packaged', asarEntries.some((entry) => entry === `${targetClaudePrefix}claude`))
-check('wrong-architecture Claude SDK is absent from ASAR header', !asarEntries.some((entry) => entry.startsWith(wrongClaudePrefix)))
+const forbiddenClaudeRuntimeEntries = asarEntries.filter((entry) => entry.includes('/node_modules/@anthropic-ai/claude-agent-sdk'))
 check(
-  'wrong-architecture Claude SDK is absent from unpacked files',
-  !isDirectory(path.join(unpackedRoot, 'node_modules', '@anthropic-ai', `claude-agent-sdk-darwin-${wrongArch}`))
+  'Claude Agent SDK and CLI are absent from ASAR',
+  forbiddenClaudeRuntimeEntries.length === 0,
+  forbiddenClaudeRuntimeEntries.slice(0, 8).join(', ')
+)
+check(
+  'Claude Agent SDK and CLI are absent from unpacked files',
+  !isDirectory(path.join(unpackedRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk')) &&
+    !isDirectory(path.join(unpackedRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-x64')) &&
+    !isDirectory(path.join(unpackedRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64'))
 )
 
 const forbiddenPrebuilds = asarEntries.filter((entry) => {

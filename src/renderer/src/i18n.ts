@@ -621,21 +621,6 @@ const DICT: Dict = {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
     en: 'Keep the display awake while a session runs; off = follow system power settings.'
   },
-  sdkAgentsEnabled: { zh: 'Claude SDK Agents 桥接', en: 'Claude SDK agents bridge' },
-  sdkAgentsHint: {
-    zh: '开启后把项目/用户 .claude/agents 定义注入 Claude SDK；默认关闭以保持老会话上下文不变。',
-    en: 'When enabled, inject project/user .claude/agents definitions into Claude SDK. Off by default to keep existing sessions unchanged.'
-  },
-  hookPostEdit: { zh: 'Hook:文件修改后执行', en: 'Hook: after file edits' },
-  hookPostEditHint: {
-    zh: 'Agent 用 Edit/Write 改完文件后,在会话目录执行此 shell 命令(如自动格式化/跑测试),输出回显到时间线。空 = 关闭。仅 Claude 引擎。',
-    en: 'Shell command run in the session cwd after the agent edits files (e.g. format/test). Output shows in the timeline. Empty = off. Claude engine only.'
-  },
-  hookTurnEnd: { zh: 'Hook:每轮结束后执行', en: 'Hook: after each turn' },
-  hookTurnEndHint: {
-    zh: '每轮对话结束(Stop)后执行此 shell 命令。空 = 关闭。仅 Claude 引擎。',
-    en: 'Shell command run when a turn ends (Stop hook). Empty = off. Claude engine only.'
-  },
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },
@@ -700,17 +685,16 @@ const DICT: Dict = {
   providerEngineLabel: { zh: '执行引擎', en: 'Execution engine' },
   providerEngineOpenAI: { zh: 'OpenAI-compatible', en: 'OpenAI-compatible' },
   providerEngineAnthropic: { zh: 'Anthropic Messages API', en: 'Anthropic Messages API' },
-  providerEngineClaude: { zh: 'Claude Agent SDK', en: 'Claude Agent SDK' },
   quickTemplate: { zh: '快速模板', en: 'Quick templates' },
   pickTemplate: { zh: '选择一个模板…', en: 'Pick a template…' },
   gatewayNote1: {
-    zh: 'OpenAI-compatible 使用 Responses / Chat Completions;Anthropic Messages 使用原生 /v1/messages。Claude Agent SDK 接入 ',
-    en: 'OpenAI-compatible uses Responses / Chat Completions; Anthropic Messages uses native /v1/messages. With Claude Agent SDK, '
+    zh: 'OpenAI-compatible 使用 Responses / Chat Completions;Anthropic Messages 使用原生 /v1/messages。',
+    en: 'OpenAI-compatible uses Responses / Chat Completions; Anthropic Messages uses native /v1/messages. '
   },
   gatewayNoteBold: { zh: 'OpenAI / Gemini / 国产模型', en: 'OpenAI / Gemini / other vendors' },
   gatewayNote2: {
-    zh: ' 仍需经 Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译。',
-    en: ' still needs an Anthropic-compatible gateway (one-api, new-api, LiteLLM, …).'
+    zh: '其他厂商可按实际兼容协议选择对应引擎。',
+    en: 'Choose the engine that matches each provider compatibility protocol.'
   },
   nameLabel: { zh: '名称', en: 'Name' },
   namePlaceholder: { zh: '例如:公司网关 / OpenRouter', en: 'e.g. Company gateway / OpenRouter' },
@@ -765,8 +749,8 @@ const DICT: Dict = {
   },
   openaiProtocolLabel: { zh: 'OpenAI 引擎协议', en: 'OpenAI engine protocol' },
   openaiProtocolHint: {
-    zh: '(仅 OpenAI-compatible 会话生效;Anthropic Messages 与 Claude Agent SDK 忽略)',
-    en: '(only used by OpenAI-compatible sessions; ignored by Anthropic Messages and Claude Agent SDK)'
+    zh: '(仅 OpenAI-compatible 会话生效;Anthropic Messages 忽略)',
+    en: '(only used by OpenAI-compatible sessions; ignored by Anthropic Messages)'
   },
   openaiProtocolResponses: {
     zh: 'Responses(OpenAI 原生)',

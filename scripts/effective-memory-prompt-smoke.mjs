@@ -50,17 +50,12 @@ try {
     equal(requiredRecord(snapshot, expiring.id).status, 'expired', 'expired Memory status')
   })
 
-  await check('Anthropic prepareClaudeUserMessage injects only approved, unexpired project Memory', async () => {
-    const prepared = await runtime.claude.prepareClaudeUserMessage({
-      payload: { text: USER_REQUEST, images: [] },
-      meta: sessionMeta('anthropic-memory-smoke', 'claude'),
-      lastProjectContextAppend: ''
-    })
-    const prompt = prepared.message.message.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('\n')
-    assertEffectivePrompt(prompt, 'Anthropic prepared user message')
+  await check('native Anthropic prompt injects only approved, unexpired project Memory', async () => {
+    const prepared = await runtime.nativePrompt.augmentNativePayloadWithLayeredMemory(
+      { text: USER_REQUEST, images: [] },
+      sessionMeta('anthropic-memory-smoke', 'anthropic')
+    )
+    assertEffectivePrompt(prepared.text, 'native Anthropic prepared user message')
   })
 
   for (const protocol of ['chat', 'responses']) {
@@ -168,7 +163,7 @@ function compileRuntime() {
     [
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/learning/learning-lifecycle.ts',
-      'src/main/claude-user-message.ts',
+      'src/main/native-layered-prompt.ts',
       'src/main/openaiEngine.ts',
       '--outDir',
       outDir,
@@ -201,9 +196,9 @@ function loadRuntime() {
       return originalLoad.call(this, request, parent, isMain)
     }
     return {
-      claude: require(findCompiled(outDir, 'claude-user-message.js')),
       lifecycle: require(findCompiled(outDir, 'learning-lifecycle.js')),
       modelStats: require(findCompiled(outDir, 'modelStats.js')),
+      nativePrompt: require(findCompiled(outDir, 'native-layered-prompt.js')),
       openai: require(findCompiled(outDir, 'openaiEngine.js')),
       providerHealth: require(findCompiled(outDir, 'providerHealth.js')),
       security: require(findCompiled(outDir, 'learning-security.js'))

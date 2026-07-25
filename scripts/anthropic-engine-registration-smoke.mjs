@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import ts from 'typescript'
@@ -18,6 +18,7 @@ const token = 'anthropic-token-for-smoke-registration'
 const model = 'claude-registration-model'
 const prompt = 'prove the registered Anthropic Messages production path'
 const responseText = 'Anthropic production registration OK'
+const projectRule = 'ANTHROPIC_NATIVE_PROJECT_CONTEXT_SENTINEL'
 
 process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
   .filter(Boolean)
@@ -26,6 +27,7 @@ require('node:module').Module._initPaths()
 
 mkdirSync(userData, { recursive: true })
 mkdirSync(project, { recursive: true })
+writeFileSync(path.join(project, 'caogen.md'), `# Project rules\n\n${projectRule}\n`, 'utf8')
 
 verifyStaticRegistrationContracts()
 compileSessionManagerHarness()
@@ -116,8 +118,8 @@ try {
   const engineKinds = new Set(engineModule.listEngines().map((engine) => engine.kind))
   assert.deepEqual(
     engineKinds,
-    new Set(['claude', 'anthropic', 'openai']),
-    'builtins must expose exactly the three formal engines'
+    new Set(['anthropic', 'openai']),
+    'builtins must expose exactly the two formal engines'
   )
 
   const meta = await manager.create({
@@ -167,6 +169,7 @@ try {
   assert.equal(requests[0].headers['anthropic-version'], '2023-06-01')
   assert.equal(requests[0].body.model, model)
   assert.equal(requests[0].body.stream, true)
+  assert.match(requests[0].body.system ?? '', new RegExp(projectRule))
   assert(
     JSON.stringify(requests[0].body.messages).includes(prompt),
     'the SessionManager prompt must reach the Messages request body'
@@ -209,13 +212,13 @@ function verifyStaticRegistrationContracts() {
   const members = stringUnionMembers(sharedTypes, 'EngineKind')
   assert.deepEqual(
     members,
-    new Set(['claude', 'anthropic', 'openai']),
-    'EngineKind must expose exactly the three formal engines'
+    new Set(['anthropic', 'openai']),
+    'EngineKind must expose exactly the two formal engines'
   )
 
   const providerEditor = sourceFile('src/renderer/src/components/ProviderEditor.tsx', ts.ScriptKind.TSX)
   const optionValues = jsxSelectOptionValues(providerEditor, 'engine')
-  for (const kind of ['claude', 'anthropic', 'openai']) {
+  for (const kind of ['anthropic', 'openai']) {
     assert(optionValues.has(kind), `ProviderEditor must expose an independent ${kind} engine option`)
   }
 }

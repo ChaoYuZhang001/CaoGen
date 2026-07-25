@@ -323,7 +323,7 @@ function providerView(value: unknown): ProviderView | undefined {
     name,
     baseUrl: optionalString(value.baseUrl) ?? '',
     models,
-    engine: value.engine === 'claude' ? 'claude' : 'openai',
+    engine: value.engine === 'anthropic' || value.engine === 'claude' ? 'anthropic' : 'openai',
     budgetUsd: optionalNumber(value.budgetUsd) ?? 0,
     customHeaders: optionalString(value.customHeaders),
     credentialHeaderNames: stringArray(value.credentialHeaderNames),

@@ -683,11 +683,6 @@ function assertProductionBoundaries() {
   assertOrder(nativeExecution, 'this.preflightToolGate(', 'this.prepareToolEffect(',
     'native tool policy denial occurs before Effect preparation')
 
-  const claude = source('src/main/agentSession.ts')
-  const claudePermission = between(claude, '  private requestPermission(', '  private recordContextTokens(')
-  assertOrder(claudePermission, 'digitalWorkerToolPermissionDecision(', 'this.authorizeClaudeTool(',
-    'Claude tool guard runs before Effect execution authorization')
-
   const supervisor = source('src/main/task/supervisor-session-control.ts')
   const control = between(supervisor, 'export async function executeSupervisorSessionControl(', 'function findSupervisorRun(')
   assertOrder(control, 'await runtime.preflight?.(', 'await ensureSupervisorRunBinding(',

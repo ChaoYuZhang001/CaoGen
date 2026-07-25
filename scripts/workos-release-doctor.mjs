@@ -109,14 +109,11 @@ const report = {
   },
   git: gitState,
   redactionPolicy: 'No secret values are read or written; only report paths, status fields, env names, and commands are emitted.',
-  optionalEngines: [
-    {
-      id: 'claude',
-      releaseRequired: false,
-      defaultSelected: false,
-      policy: 'Authentication is required only when the user explicitly selects the optional Claude engine.'
-    }
+  nativeEngines: [
+    { id: 'anthropic', protocol: 'anthropic.messages', policy: 'Native Messages runtime; no Claude Code SDK or CLI.' },
+    { id: 'openai', protocol: 'openai.compatible', policy: 'Native Responses and Chat Completions runtime.' }
   ],
+  optionalEngines: [],
   refresh: {
     enabled: refresh,
     commands: refreshResults

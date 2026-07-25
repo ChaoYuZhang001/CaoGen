@@ -349,7 +349,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           isolated: { type: 'boolean', description: '是否使用独立 Git worktree;默认 true' },
           model: { type: 'string', description: '可选:子 Agent 模型' },
           providerId: { type: 'string', description: '可选:子 Agent Provider' },
-          engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
+          engine: { type: 'string', enum: ['anthropic', 'openai'] },
           permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
@@ -375,7 +375,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           isolated: { type: 'boolean', description: '是否使用独立 Git worktree;默认 true' },
           model: { type: 'string', description: '可选:拆解和子 Agent 模型' },
           providerId: { type: 'string', description: '可选:拆解和子 Agent Provider' },
-          engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
+          engine: { type: 'string', enum: ['anthropic', 'openai'] },
           permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
@@ -625,7 +625,7 @@ async function importClaudeDesktopMcp(args: Record<string, unknown>): Promise<To
 }
 
 function engineArg(value: unknown): EngineKind | undefined {
-  return value === 'claude' || value === 'anthropic' || value === 'openai' ? value : undefined
+  return value === 'anthropic' || value === 'openai' ? value : undefined
 }
 
 function permissionModeArg(value: unknown): PermissionModeId | undefined {

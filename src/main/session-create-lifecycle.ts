@@ -416,7 +416,9 @@ export function sessionMetaForPlacement(
 
 export function sessionMetaForRecovery(meta: SessionMeta): SessionMeta {
   const ownership = assertSessionDomainOwnership(meta)
-  return applySessionPlacement({ ...meta, ...ownership }, recoverySessionPlacement(meta))
+  const legacyEngine = (meta as unknown as { engine?: string }).engine
+  const migratedMeta = legacyEngine === 'claude' ? { ...meta, engine: 'anthropic' as const } : meta
+  return applySessionPlacement({ ...migratedMeta, ...ownership }, recoverySessionPlacement(migratedMeta))
 }
 
 export function assertTaskSnapshotWorktreeProjection(
