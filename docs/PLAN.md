@@ -89,7 +89,7 @@ README、官网、STATUS 三处必须一致:
   - [x] `main@7a0a4babb9fae90b68c8deef63e185bd44527b5c` 的 Intel-only 候选在 GitHub run `30130085556` 完成 exact-commit Deep、Developer ID 签名、notarize、staple、Gatekeeper、required release audit、DMG 安装和真实 renderer 启动
   - [x] 运行时收口为 OpenAI-compatible + 原生 Anthropic Messages，删除 Claude Agent SDK、Claude CLI、SDK 专属会话/检查点/Hook/UI 与打包规则；基础发行包必须审计为不含 SDK/CLI
   - [x] 删除 Claude Runtime 后的本地 unsigned Intel x64 实测：DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` `311,931,918 B`、`app.asar` `61,630,882 B`；package audit 证明 SDK/CLI 不在 ASAR 或 unpacked files，预算收紧为 `160 MB / 160 MB / 400 MB / 80 MB`
-  - [ ] 在新 clean commit 上完成 Developer ID 签名、公证、Gatekeeper、DMG 隔离安装、真实 renderer 与最终资产绑定；本地 unsigned 测量不得替代该证据
+  - [x] `main@ee13fffe5ca0e8576ea448fd3253e7cd9cfa9fb8` 的 Intel-only 候选在 GitHub run `30148489031` 完成 clean exact-commit Deep（`154/154` required，2 optional skip）、Developer ID 签名、公证/staple、Gatekeeper、`106/106` required audit、DMG 隔离安装/干净 detach、真实 renderer 与最终资产绑定；签名 DMG `127,703,488 B`，ZIP `127,016,797 B`
   - [ ] Apple Silicon arm64 原生证据(暂停,不计入当前 M1 完成判据)
   - [ ] Windows x64 签名/安装证据(暂停,不计入当前 M1 完成判据)
 - [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
