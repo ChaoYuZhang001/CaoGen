@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import ChatView from '../ChatView'
 import MemoryPanel from '../MemoryPanel'
@@ -16,7 +16,6 @@ import RoutinePanel from './RoutinePanel'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import type { LayoutSettings, Routine, SessionMeta } from '../../../../shared/types'
-import { useExperienceProjection } from '../experience/ExperienceProjection'
 
 type RoutineEditorState = { mode: 'create' } | { mode: 'edit'; id: string }
 
@@ -37,9 +36,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)))
 }
 
-export default function WorkbenchRoot(): React.JSX.Element {
+export default memo(function WorkbenchRoot(): React.JSX.Element {
   const t = useT()
-  const projection = useExperienceProjection()
   const [routineEditor, setRoutineEditor] = useState<RoutineEditorState | null>(null)
   const activeId = useStore((s) => s.activeId)
   const order = useStore((s) => s.order)
@@ -243,7 +241,6 @@ export default function WorkbenchRoot(): React.JSX.Element {
   return (
     <div
       className={`workbench ${sideOpen ? 'workbench-split' : ''}`}
-      data-experience-projection={projection}
       style={{ '--workbench-side-width': `${sideWidth}px` } as React.CSSProperties}
     >
       <DeskControlRail
@@ -363,7 +360,7 @@ export default function WorkbenchRoot(): React.JSX.Element {
       )}
     </div>
   )
-}
+})
 
 interface DeskControlRailProps {
   sideOpen: boolean

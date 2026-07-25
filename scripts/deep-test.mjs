@@ -31,6 +31,8 @@ const commandDefinitions = [
   { name: 'product 1.0 acceptance map smoke', command: 'node', args: ['scripts/product-1.0-acceptance-map-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map structure', command: 'node', args: ['scripts/product-1.0-acceptance-map.mjs'], category: 'static' },
   { name: 'M1 first-user onboarding audit smoke', command: 'node', args: ['scripts/m1-first-user-onboarding-audit-smoke.mjs'], category: 'smoke' },
+  { name: 'community feedback contract audit', command: 'node', args: ['scripts/community-feedback-audit.mjs', '--required'], category: 'static' },
+  { name: 'community response SLA smoke', command: 'node', args: ['scripts/community-response-sla-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 soak audit smoke', command: 'node', args: ['scripts/product-1.0-soak-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release audit smoke', command: 'node', args: ['scripts/real-provider-release-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release runner smoke', command: 'node', args: ['scripts/real-provider-release-runner-smoke.mjs'], category: 'smoke' },

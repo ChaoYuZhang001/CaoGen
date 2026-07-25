@@ -14,7 +14,7 @@
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
-[下载](https://github.com/ChaoYuZhang001/CaoGen/releases) · [快速开始](#quick-start) · [贡献](#贡献-caogen) · [路线图](#roadmap--长期愿景建设中)
+[下载](https://github.com/ChaoYuZhang001/CaoGen/releases) · [快速开始](#quick-start) · [讨论](https://github.com/ChaoYuZhang001/CaoGen/discussions) · [贡献](#贡献-caogen) · [路线图](#roadmap--长期愿景建设中)
 
 ![CaoGen 主界面](./docs/screenshot-app.jpg)
 
@@ -78,6 +78,7 @@ CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、Wor
 
 - 阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，了解开发环境、六环架构链路和 PR 流程。
 - 从 [good first issue 草稿](./docs/good-first-issues.md) 或 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) 开始。
+- 在 [GitHub Discussions](https://github.com/ChaoYuZhang001/CaoGen/discussions) 分享使用反馈、提问或讨论改进建议；入口选择和 48 小时首次回应承诺见 [SUPPORT.md](./SUPPORT.md)。
 - 提交 [Bug](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=bug_report.yml)、[功能建议](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=feature_request.yml) 或 Pull Request。
 
 安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。CaoGen 采用 [AGPL-3.0-only](./LICENSE) 开源许可，并提供独立的 [商业授权](./COMMERCIAL-LICENSE.md)。

@@ -14,7 +14,7 @@
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
-[Download](https://github.com/ChaoYuZhang001/CaoGen/releases) · [Quick Start](#quick-start) · [Contribute](#contribute-to-caogen) · [Roadmap](#roadmap--long-term-vision-under-construction)
+[Download](https://github.com/ChaoYuZhang001/CaoGen/releases) · [Quick Start](#quick-start) · [Discussions](https://github.com/ChaoYuZhang001/CaoGen/discussions) · [Contribute](#contribute-to-caogen) · [Roadmap](#roadmap--long-term-vision-under-construction)
 
 ![CaoGen main workspace](./docs/screenshot-app.jpg)
 
@@ -78,6 +78,7 @@ CaoGen's long-term direction is a vendor-neutral Agent Work OS built around pers
 
 - Read [CONTRIBUTING.md](./CONTRIBUTING.md) for local setup, the six-link architecture path, and the pull request workflow.
 - Start with the [good-first-issue drafts](./docs/good-first-issues.md) or the live GitHub [good first issues](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22).
+- Use [GitHub Discussions](https://github.com/ChaoYuZhang001/CaoGen/discussions) for experience reports, questions, and improvement ideas. See [SUPPORT.md](./SUPPORT.md) for routing and the 48-hour initial-response commitment.
 - Open a [bug report](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=bug_report.yml), [feature request](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=feature_request.yml), or pull request.
 
 Report security issues privately through [SECURITY.md](./SECURITY.md). CaoGen is licensed under [AGPL-3.0-only](./LICENSE), with a separate [commercial license](./COMMERCIAL-LICENSE.md) available.

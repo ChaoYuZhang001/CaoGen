@@ -126,6 +126,8 @@ function createReport(sourceBuildBinding) {
       stop: 'target mode, visible panel, and enabled mode-local control committed through the next animation frame',
       cold: 'first Studio mount in a fresh Electron renderer process and fresh userData directory',
       warm: 'subsequent Assistant/Studio switches after Studio has mounted',
+      foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
+      frameHealthPrecondition: 'each measured interaction starts only after four consecutive foreground frames at or below 50ms; inability to establish that condition within 5s fails the required gate',
       networkIsolation: 'one local Responses request remains deliberately open and emits no data during all measurements',
       continuity: 'session/runtime IDs, canonical Run ID/count, transcript counts, init events, and request count are compared before and after switching'
     },
@@ -256,7 +258,13 @@ function createPhase(viewport) {
 }
 
 function launchElectron(remotePort, userDataDir) {
-  return spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+  return spawn(electronBin, [
+    `--remote-debugging-port=${remotePort}`,
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    mainEntry
+  ], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: {
@@ -451,24 +459,44 @@ async function installSessionEventProbe(page, sessionId) {
 }
 
 async function measureModeSwitch(page, mode, temperature, ordinal) {
+  const frameHealth = await waitForFrameHealth(page)
   const measurement = await page.evaluate(async ({ expectedMode, sampleTemperature, timeoutMs }) => {
     const button = document.querySelector(`[data-experience-mode-option="${expectedMode}"]`)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`mode button missing: ${expectedMode}`)
-    await new Promise((resolve) => requestAnimationFrame(() => resolve()))
     const startedAt = performance.now()
     if (sampleTemperature === 'cold') window.__assistantStudioPerformanceColdStartedAt = startedAt
     button.click()
     return new Promise((resolve, reject) => {
       const deadline = startedAt + timeoutMs
+      let frameCount = 0
+      let lastFrameAt = startedAt
+      let maxFrameGapMs = 0
+      let lastNotReadyReason = 'first-frame-pending'
+      const recordFrame = () => {
+        const now = performance.now()
+        frameCount += 1
+        maxFrameGapMs = Math.max(maxFrameGapMs, now - lastFrameAt)
+        lastFrameAt = now
+        return now
+      }
       const poll = () => {
-        if (modeReady(expectedMode)) {
-          requestAnimationFrame(() => resolve({
-            durationMs: performance.now() - startedAt,
-            visibilityState: document.visibilityState
-          }))
+        const now = recordFrame()
+        const readiness = modeReadiness(expectedMode)
+        lastNotReadyReason = readiness.reason
+        if (readiness.ready) {
+          requestAnimationFrame(() => {
+            recordFrame()
+            resolve({
+              durationMs: performance.now() - startedAt,
+              frameCount,
+              maxFrameGapMs,
+              lastNotReadyReason,
+              visibilityState: document.visibilityState
+            })
+          })
           return
         }
-        if (performance.now() >= deadline) {
+        if (now >= deadline) {
           reject(new Error(`mode ${expectedMode} did not become interactive within ${timeoutMs}ms`))
           return
         }
@@ -477,26 +505,32 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
       requestAnimationFrame(poll)
     })
 
-    function modeReady(targetMode) {
+    function modeReadiness(targetMode) {
       const pressed = Array.from(document.querySelectorAll('[data-experience-mode-option]'))
         .filter((item) => item.getAttribute('aria-pressed') === 'true')
       const pane = document.querySelector('[data-experience-mode]')
-      if (pressed.length !== 1 || pressed[0].getAttribute('data-experience-mode-option') !== targetMode) return false
-      if (pane?.getAttribute('data-experience-mode') !== targetMode) return false
+      if (pressed.length !== 1 || pressed[0].getAttribute('data-experience-mode-option') !== targetMode) {
+        return { ready: false, reason: 'mode-button-not-committed' }
+      }
+      if (pane?.getAttribute('data-experience-mode') !== targetMode) {
+        return { ready: false, reason: 'mode-pane-not-committed' }
+      }
       if (targetMode === 'studio') {
         const control = document.querySelector('.studio-section-switcher button')
-        return visible('#studio-projection-panel-workspace') &&
-          visible('[data-studio-view]') &&
-          visible('.studio-section-switcher') &&
-          control instanceof HTMLButtonElement &&
-          !control.disabled &&
-          focusableAndUnblocked(control)
+        if (!visible('#studio-projection-panel-workspace')) return { ready: false, reason: 'studio-panel-not-visible' }
+        if (!visible('[data-studio-view]')) return { ready: false, reason: 'studio-view-not-visible' }
+        if (!visible('.studio-section-switcher')) return { ready: false, reason: 'studio-switcher-not-visible' }
+        if (!(control instanceof HTMLButtonElement)) return { ready: false, reason: 'studio-control-missing' }
+        if (control.disabled) return { ready: false, reason: 'studio-control-disabled' }
+        if (!focusableAndUnblocked(control)) return { ready: false, reason: 'studio-control-blocked' }
+        return { ready: true, reason: 'ready' }
       }
       const composer = document.querySelector('.composer-input')
-      return visible('#studio-projection-panel-session') &&
-        composer instanceof HTMLElement &&
-        visible('.composer-input') &&
-        focusableAndUnblocked(composer)
+      if (!visible('#studio-projection-panel-session')) return { ready: false, reason: 'assistant-panel-not-visible' }
+      if (!(composer instanceof HTMLElement)) return { ready: false, reason: 'assistant-composer-missing' }
+      if (!visible('.composer-input')) return { ready: false, reason: 'assistant-composer-not-visible' }
+      if (!focusableAndUnblocked(composer)) return { ready: false, reason: 'assistant-composer-blocked' }
+      return { ready: true, reason: 'ready' }
     }
 
     function visible(selector) {
@@ -514,9 +548,56 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
       return hit === element || (hit !== null && element.contains(hit))
     }
+
   }, { expectedMode: mode, sampleTemperature: temperature, timeoutMs: 5_000 })
   assert(measurement.visibilityState === 'visible', `renderer was ${measurement.visibilityState} during measurement`)
-  return { mode, temperature, ordinal, durationMs: roundMs(measurement.durationMs) }
+  return {
+    mode,
+    temperature,
+    ordinal,
+    durationMs: roundMs(measurement.durationMs),
+    frameCount: measurement.frameCount,
+    maxFrameGapMs: roundMs(measurement.maxFrameGapMs),
+    lastNotReadyReason: measurement.lastNotReadyReason,
+    frameHealth
+  }
+}
+
+async function waitForFrameHealth(page) {
+  const result = await page.evaluate(() => new Promise((resolve, reject) => {
+    const startedAt = performance.now()
+    const deadline = startedAt + 5_000
+    let consecutive = 0
+    let lastFrameAt = startedAt
+    let maxObservedGapMs = 0
+    let resetCount = 0
+    const sample = () => {
+      const now = performance.now()
+      const gap = now - lastFrameAt
+      lastFrameAt = now
+      maxObservedGapMs = Math.max(maxObservedGapMs, gap)
+      if (gap <= 50) consecutive += 1
+      else {
+        consecutive = 0
+        resetCount += 1
+      }
+      if (consecutive >= 4) {
+        resolve({ waitedMs: now - startedAt, maxObservedGapMs, resetCount })
+        return
+      }
+      if (now >= deadline) {
+        reject(new Error(`foreground frame health unavailable: max gap ${maxObservedGapMs.toFixed(1)}ms`))
+        return
+      }
+      requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }))
+  return {
+    waitedMs: roundMs(result.waitedMs),
+    maxObservedGapMs: roundMs(result.maxObservedGapMs),
+    resetCount: result.resetCount
+  }
 }
 
 async function verifyStudioShellInteraction(page) {
