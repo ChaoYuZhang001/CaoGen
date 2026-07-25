@@ -10,6 +10,7 @@ import {
   artifactReportChecks,
   candidateIdentityChecks,
   macUpdateMetadataChecks,
+  macosX64UpdateMetadataChecks,
   renderMacUpdateMetadata
 } from './lib/release-matrix-evidence.mjs'
 
@@ -114,6 +115,10 @@ assert.match(
 const x64UploadStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Upload x64 assets and evidence')
 assert(x64UploadStep, 'the x64 distributable upload step must exist')
 assert(
+  String(x64UploadStep.with?.path || '').includes('dist/latest-mac.yml'),
+  'the Intel evidence artifact must include the signed update metadata'
+)
+assert(
   !String(x64UploadStep.with?.path || '').includes('app.asar'),
   'the Intel evidence artifact must not duplicate app.asar beside DMG and ZIP'
 )
@@ -171,6 +176,27 @@ try {
   })
   const metadataChecks = macUpdateMetadataChecks(metadata, { version: '0.1.7', distDir: tempRoot })
   assert(Object.values(metadataChecks).every(Boolean), 'generated dual-architecture update metadata must verify')
+
+  const x64Names = ['CaoGen-0.1.7-mac.zip', 'CaoGen-0.1.7.dmg']
+  const x64Files = x64Names.map((name) => {
+    const bytes = readFileSync(path.join(tempRoot, name))
+    return {
+      url: name,
+      sha512: createHash('sha512').update(bytes).digest('base64'),
+      size: bytes.length
+    }
+  })
+  const x64Metadata = yaml.dump({
+    version: '0.1.7',
+    files: x64Files,
+    path: x64Names[0],
+    sha512: x64Files[0].sha512,
+    releaseDate: '2026-07-23T00:00:00.000Z'
+  })
+  assert(
+    Object.values(macosX64UpdateMetadataChecks(x64Metadata, { version: '0.1.7', distDir: tempRoot })).every(Boolean),
+    'generated Intel-only update metadata must verify'
+  )
 
   const artifactName = 'CaoGen-0.1.7.dmg'
   const artifactPath = path.join(tempRoot, artifactName)

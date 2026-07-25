@@ -175,6 +175,7 @@ jobs:
             dist/CaoGen-${{ inputs.version }}.dmg.blockmap
             dist/CaoGen-${{ inputs.version }}-mac.zip
             dist/CaoGen-${{ inputs.version }}-mac.zip.blockmap
+            dist/latest-mac.yml
             test-results/macos-release-audit/latest-x64.json
             test-results/macos-release-audit/*/report.json
             test-results/packaged-app-smoke/latest-macos-x64.json
