@@ -114,7 +114,7 @@
     "scripts/deep-test.mjs": {
       "profile": "automation",
       "lines": 612,
-      "contentHash": "6226a045850fba847f1ed8136542c15a9e3aadce364cddacb1dc92aa1bf72af4",
+      "contentHash": "153ac6a68a365adae6742146e0825ddbb9deac8ac8f9c9431efa279b89dd451a",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -1624,7 +1624,7 @@
     "src/renderer/src/components/SettingsModal.tsx": {
       "profile": "product",
       "lines": 1366,
-      "contentHash": "ce03cc53ec2dacaa87fa022ca3138d6d807873d349db05fbf3cdda772c1f1d6e",
+      "contentHash": "cab69f58892b7083af1cabef672d41e8083edbff223e38026cca1783621b0002",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 1272,
       "complexFunctionCount": 1,
@@ -1685,19 +1685,19 @@
     },
     "src/renderer/src/components/WelcomeView.tsx": {
       "profile": "product",
-      "lines": 337,
-      "contentHash": "03869c3c991bda28bdeb4691af459b14fb13a588336be7848601ab0255c3b6e9",
+      "lines": 349,
+      "contentHash": "f15647931411dd1aa15e621d3349593655abc727ccf36b672084e431bd6f6b09",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 296,
       "complexFunctionCount": 1,
-      "maxComplexity": 20,
+      "maxComplexity": 18,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "WelcomeView#1": {
           "lines": 296,
-          "complexity": 20
+          "complexity": 18
         }
       }
     },
@@ -2301,10 +2301,10 @@
     },
     "src/renderer/src/store.ts": {
       "profile": "product",
-      "lines": 4012,
-      "contentHash": "605c77d1ff5ee983fbfd0eb946534ca40f6da2f1044bcdbd8a90903e8863a2b6",
+      "lines": 4007,
+      "contentHash": "b1fd43b60074192c1f48bfbb962ffc518347bd323d4f9de718dd076adc97131f",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2913,
+      "maxFunctionLines": 2909,
       "complexFunctionCount": 1,
       "maxComplexity": 57,
       "forbiddenSuppressionCount": 0,
@@ -2316,7 +2316,7 @@
           "complexity": 57
         },
         "create callback#1": {
-          "lines": 2913,
+          "lines": 2909,
           "complexity": 1
         }
       }

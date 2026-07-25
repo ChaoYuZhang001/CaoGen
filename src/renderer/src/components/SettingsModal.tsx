@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
+import type { SettingsTab } from '../store/settings-navigation'
 import { useT } from '../i18n'
 import { AUTO_MODEL } from '../../../shared/types'
 import type {
@@ -25,7 +26,6 @@ import ControlCenter from './ControlCenterWithWorkflow'
 import ProviderList from './settings/ProviderList'
 import ProjectSettings from '../pages/ProjectSettings'
 
-type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -105,7 +105,7 @@ export default function SettingsPage(): React.JSX.Element {
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
 
-  const [tab, setTab] = useState<Tab>('control')
+  const [tab, setTab] = useState<SettingsTab>(() => useStore.getState().settingsTab)
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
@@ -349,7 +349,7 @@ export default function SettingsPage(): React.JSX.Element {
     }
   }
 
-  const TABS: Array<{ id: Tab; label: string }> = [
+  const TABS: Array<{ id: SettingsTab; label: string }> = [
     { id: 'control', label: t('tabControlCenter') },
     { id: 'general', label: t('tabGeneral') },
     { id: 'permissions', label: t('tabPermissions') },

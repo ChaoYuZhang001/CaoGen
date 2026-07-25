@@ -119,7 +119,9 @@ README、官网、STATUS 三处必须一致:
 **目标:10 个非熟人用户完成一次真实任务,且至少 3 个下周还回来。**
 
 - [ ] M2-T1 N1 真人实测:3 名 Codex/Claude Code 真实用户 30 分钟迁移计时,记录卡点；M1 单人只读 Quick Start 结果只提供 onboarding 基线，不替代本项 3 人完整迁移证据
-- [ ] M2-T2  onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
+- [ ] M2-T2 onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
+  - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；配置动作直达 Providers 页，真实 Electron E2E `9/9` 覆盖提示词精确注入、零误建会话、设置深链、刷新恢复与真实 Router/流式响应
+  - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
 - [ ] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
 - [ ] M2-T4 每周发布一个 patch 版本,只修真实用户撞到的问题,不加新功能
 - [ ] M2-T5 官网增加 30 秒演示视频(配 key → 下任务 → failover → Diff 审查)

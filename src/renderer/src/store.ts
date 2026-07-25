@@ -69,6 +69,7 @@ import type {
 } from '../../shared/types'
 import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
+import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -732,7 +733,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
+interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -750,7 +751,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
   rewindPanel: RewindPanelState
   showNewSession: boolean
   newSessionProjectId: string | null
-  showSettings: boolean
   showCommandPalette: boolean
   showTaskRecovery: boolean
   sidebarQuery: string
@@ -895,7 +895,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
   archiveProject(id: string, archived: boolean): Promise<void>
   deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean, projectId?: string): void
-  setShowSettings(v: boolean): void
   setShowCommandPalette(v: boolean): void
   setShowTaskRecovery(v: boolean): void
 }
@@ -1030,6 +1029,7 @@ export const useStore = create<AppStore>((set, get) => {
   taskSnapshotsLoading: false,
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
+  ...createSettingsNavigationSlice((update) => set(update)),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -1082,7 +1082,6 @@ export const useStore = create<AppStore>((set, get) => {
   rewindPanel: { open: false },
   showNewSession: false,
   newSessionProjectId: null,
-  showSettings: false,
   showCommandPalette: false,
   showTaskRecovery: true,
 
@@ -3798,10 +3797,6 @@ export const useStore = create<AppStore>((set, get) => {
       showTaskRecovery: v ? false : s.showTaskRecovery,
       view: v ? 'list' : s.view
     }))
-  },
-
-  setShowSettings(v) {
-    set({ showSettings: v })
   },
 
   setShowCommandPalette(v) {
