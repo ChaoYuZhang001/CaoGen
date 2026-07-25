@@ -51,6 +51,7 @@ assert.match(
 assert.match(source, /release-candidate-preflight\.mjs --commit/, 'candidate identity preflight is required')
 assert.match(source, /npm run test:deep/, 'the exact candidate must run Deep')
 assert.match(source, /npm run test:p2-release-scope:required/, 'the exact candidate must run release-scope P2')
+assert.match(source, /npm run test:package-size-policy/, 'candidate source gates must enforce package size policy')
 assert.match(source, /test-results\/p2-release-scope\/latest\.json/, 'the candidate must carry release-scope P2 evidence')
 assert.match(source, /npm run release:matrix:assemble/, 'cross-runner evidence must be independently assembled')
 assert.match(source, /npm run test:release-packaging-audit:required/, 'the final 12-asset audit is required')
@@ -108,6 +109,28 @@ assert.match(
   deepFailureDiagnosticsStep?.with?.path ?? '',
   /test-results\/caogen-deep\/\*\*/,
   'x64 Deep diagnostics must retain page reports and screenshots'
+)
+const x64UploadStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Upload x64 assets and evidence')
+assert(x64UploadStep, 'the x64 distributable upload step must exist')
+assert(
+  !String(x64UploadStep.with?.path || '').includes('app.asar'),
+  'the Intel evidence artifact must not duplicate app.asar beside DMG and ZIP'
+)
+const x64AggregateArchiveStep = workflow.jobs['macos-x64'].steps.find(
+  (step) => step.name === 'Upload x64 archive for complete-matrix assembly'
+)
+assert.equal(x64AggregateArchiveStep?.if, "${{ inputs.platform_scope == 'all' }}")
+assert.equal(x64AggregateArchiveStep?.with?.path, 'dist/mac/CaoGen.app/Contents/Resources/app.asar')
+const aggregateArchiveDownloadStep = workflow.jobs.aggregate.steps.find(
+  (step) => step.name === 'Download macOS x64 archive for assembly'
+)
+assert.equal(
+  aggregateArchiveDownloadStep?.with?.name,
+  'caogen-release-macos-x64-aggregate-${{ needs.candidate.outputs.commit }}'
+)
+assert.equal(
+  aggregateArchiveDownloadStep?.with?.path,
+  'test-results/release-matrix-input/macos-x64/dist/mac/CaoGen.app/Contents/Resources'
 )
 
 const validIdentity = candidateIdentityChecks({

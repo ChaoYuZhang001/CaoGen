@@ -242,11 +242,14 @@
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
     "test:release-packaging-policy": "node scripts/release-packaging-policy-smoke.mjs",
     "test:release-workflow-contract": "node scripts/release-workflow-contract-smoke.mjs",
+    "test:package-size-policy": "node scripts/package-size-policy-smoke.mjs",
     "release:candidate:preflight": "node scripts/release-candidate-preflight.mjs",
     "release:matrix:assemble": "node scripts/release-matrix-assemble.mjs",
     "test:macos-release-config": "node scripts/macos-release-preflight.mjs --config-only",
     "test:macos-release-audit": "node scripts/macos-release-audit.mjs",
     "test:macos-release-audit:required": "node scripts/macos-release-audit.mjs --required",
+    "test:macos-package-size": "node scripts/macos-package-size-audit.mjs",
+    "test:macos-package-size:required": "node scripts/macos-package-size-audit.mjs --required",
     "test:windows-release-config": "node scripts/windows-release-audit.mjs --config-only",
     "test:windows-release-audit": "node scripts/windows-release-audit.mjs",
     "test:windows-release-audit:required": "node scripts/windows-release-audit.mjs --required",
@@ -292,8 +295,8 @@
     "dist:mac:unsigned:x64": "npm run dist:mac:x64",
     "release:mac:preflight:x64": "node scripts/macos-release-preflight.mjs --arch x64",
     "release:mac:preflight:arm64": "node scripts/macos-release-preflight.mjs --arch arm64",
-    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --x64 --publish never && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
-    "dist:mac:release:arm64": "npm run release:mac:preflight:arm64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --arm64 && npm run test:macos-release-audit:required -- --arch arm64 && npm run test:packaged-app:mac:arm64",
+    "dist:mac:release:x64": "npm run release:mac:preflight:x64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --x64 --publish never && npm run test:macos-package-size:required -- --arch x64 && npm run test:macos-release-audit:required -- --arch x64 && npm run test:packaged-app:mac:x64",
+    "dist:mac:release:arm64": "npm run release:mac:preflight:arm64 && npm run build && npm run prepare:native-build && npm run prepare:mac-binaries && electron-builder --config electron-builder.release.cjs --mac --arm64 && npm run test:macos-package-size:required -- --arch arm64 && npm run test:macos-release-audit:required -- --arch arm64 && npm run test:packaged-app:mac:arm64",
     "dist:win:release:x64": "npm run test:windows-release-config && npm run build && npm run prepare:native-build && electron-builder --config electron-builder.release.cjs --win --x64 && npm run test:windows-release-audit:required -- --arch x64 && npm run test:packaged-app:win:x64",
     "dist:dir": "npm run build && npm run prepare:native-build && electron-builder --dir",
     "prepare:native-build": "node scripts/prepare-native-build.cjs",
@@ -302,13 +305,28 @@
   "build": {
     "appId": "com.caogen.app",
     "productName": "CaoGen",
+    "electronLanguages": [
+      "en",
+      "zh_CN",
+      "zh_TW"
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "resources"
     },
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/tree-sitter{,-*}/binding.gyp",
+      "!node_modules/tree-sitter{,-*}/**/parser.c",
+      "!node_modules/tree-sitter{,-*}/**/scanner.c",
+      "!node_modules/tree-sitter{,-*}/**/scanner.cc",
+      "!node_modules/node-pty/binding.gyp",
+      "!node_modules/node-pty/deps/**",
+      "!node_modules/node-pty/scripts/**",
+      "!node_modules/node-pty/src/**",
+      "!node_modules/node-pty/third_party/**",
+      "!node_modules/node-pty/typings/**"
     ],
     "extraResources": [
       {
@@ -349,6 +367,24 @@
       "icon": "resources/icon.icns",
       "identity": null,
       "minimumSystemVersion": "14.0",
+      "files": [
+        "out/**/*",
+        "package.json",
+        "!node_modules/tree-sitter{,-*}/binding.gyp",
+        "!node_modules/tree-sitter{,-*}/**/parser.c",
+        "!node_modules/tree-sitter{,-*}/**/scanner.c",
+        "!node_modules/tree-sitter{,-*}/**/scanner.cc",
+        "!node_modules/node-pty/binding.gyp",
+        "!node_modules/node-pty/deps/**",
+        "!node_modules/node-pty/scripts/**",
+        "!node_modules/node-pty/src/**",
+        "!node_modules/node-pty/third_party/**",
+        "!node_modules/node-pty/typings/**",
+        "!node_modules/@anthropic-ai/claude-agent-sdk-darwin-!(${arch})/**",
+        "!node_modules/**/prebuilds/!(darwin-${arch})/**",
+        "!node_modules/@nut-tree-fork/libnut-linux/**",
+        "!node_modules/@nut-tree-fork/libnut-win32/**"
+      ],
       "extendInfo": {
         "NSAppleEventsUsageDescription": "CaoGen uses automation only for user-approved desktop actions."
       },
@@ -394,48 +430,48 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.0",
-    "@react-three/drei": "^9.122.0",
-    "@react-three/fiber": "^8.18.0",
-    "@react-three/postprocessing": "^2.19.1",
-    "@types/sql.js": "^1.4.11",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
-    "highlight.js": "^11.11.1",
     "node-cron": "^4.6.0",
     "node-gyp-build": "^4.8.4",
     "node-pty": "^1.1.0",
-    "postprocessing": "^6.39.2",
     "puppeteer-core": "^25.3.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-markdown": "^9.1.0",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1",
     "sql.js": "^1.14.1",
-    "three": "^0.169.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-go": "^0.21.2",
     "tree-sitter-java": "^0.21.0",
     "tree-sitter-javascript": "^0.21.4",
     "tree-sitter-python": "^0.21.0",
     "tree-sitter-rust": "^0.21.0",
-    "tree-sitter-typescript": "^0.21.2",
-    "zustand": "^5.0.2"
+    "tree-sitter-typescript": "^0.21.2"
   },
   "optionalDependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "@react-three/postprocessing": "^2.19.1",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "40.10.2",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.0.0",
+    "highlight.js": "^11.11.1",
     "js-yaml": "^4.3.0",
+    "postprocessing": "^6.39.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "three": "^0.169.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "zustand": "^5.0.2"
   }
 }

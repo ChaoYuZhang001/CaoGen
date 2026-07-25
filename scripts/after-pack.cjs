@@ -1,7 +1,6 @@
 /**
- * electron-builder afterPack:剔除与目标架构不符的 claude SDK 平台二进制。
- * 双架构构建时两个平台包都在 node_modules,若不剔除,每个安装包白带
- * 另一架构 ~50MB 的 claude 可执行文件。
+ * electron-builder afterPack:验证平台过滤发生在 ASAR 创建之前。
+ * 这里不再删除文件,避免 app.asar 头继续引用已经被移除的 unpacked 条目。
  */
 const fs = require('node:fs')
 const path = require('node:path')
@@ -12,14 +11,18 @@ module.exports = async function afterPack(context) {
   const arch = ARCH_NAME[context.arch]
   if (!arch) return
   const wrong = arch === 'x64' ? 'arm64' : 'x64'
-  const unpacked = path.join(
+  const anthropicRoot = path.join(
     context.appOutDir,
     `${context.packager.appInfo.productFilename}.app`,
-    'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai',
-    `claude-agent-sdk-darwin-${wrong}`
+    'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', '@anthropic-ai'
   )
-  if (fs.existsSync(unpacked)) {
-    fs.rmSync(unpacked, { recursive: true, force: true })
-    console.log(`  • afterPack 剔除异架构二进制  ${path.basename(unpacked)} (target=${arch})`)
+  const expected = path.join(anthropicRoot, `claude-agent-sdk-darwin-${arch}`, 'claude')
+  const forbidden = path.join(anthropicRoot, `claude-agent-sdk-darwin-${wrong}`)
+  if (!fs.existsSync(expected)) {
+    throw new Error(`afterPack: missing target Claude CLI: ${expected}`)
   }
+  if (fs.existsSync(forbidden)) {
+    throw new Error(`afterPack: wrong-architecture Claude SDK survived packaging: ${forbidden}`)
+  }
+  console.log(`  • afterPack 架构过滤已验证  claude-agent-sdk-darwin-${arch}`)
 }
