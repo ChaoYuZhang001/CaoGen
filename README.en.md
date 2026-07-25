@@ -8,7 +8,7 @@
 
 ## A multi-vendor AI work desktop. Bring your own keys, run the models you choose, and fail over by policy when a service becomes unavailable.
 
-<img src="https://img.shields.io/badge/version-v0.1.6-blue" alt="version">
+<img src="https://img.shields.io/badge/version-v0.1.7-blue" alt="version">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
@@ -33,13 +33,13 @@ It gives users one reviewable local workspace for multiple models, projects, fil
 | Providers and models | Multiple providers, BYOK, and custom compatible services | Only configured, protocol-compatible targets are in scope |
 | Failure recovery | Controlled failover across backup keys and configured providers | External accounts, networks, and quota can still block requests |
 | Local workflow | Local projects, Git worktrees, Diff, terminal, and file tools | High-risk actions remain subject to permission and acceptance gates |
-| Openness | AGPL-3.0-only with separate commercial licensing | Public installers are not yet formally signed or notarized |
+| Openness | AGPL-3.0-only with separate commercial licensing | The v0.1.7 macOS Intel x64 installer is Developer ID signed and Apple-notarized |
 
 This table describes the current product structure. It does not claim that every model, provider, or external network condition has been validated; see [STATUS.md](./STATUS.md) for exact boundaries.
 
 ## Current progress
 
-As of 2026-07-25, the PRD has 64 P0s: 21 verified, 18 partially complete, 24 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; `0.1.7` remains a signed-wedge candidate, not 1.0 stable.
+As of 2026-07-25, the PRD has 64 P0s: 21 verified, 18 partially complete, 24 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; the published `v0.1.7` is a signed wedge release, not 1.0 stable.
 
 ## Core capabilities available today
 
@@ -53,11 +53,11 @@ As of 2026-07-25, the PRD has 64 P0s: 21 verified, 18 partially complete, 24 pro
 
 ## Quick Start
 
-1. **Download**: choose an asset for your platform and architecture from [GitHub Releases](https://github.com/ChaoYuZhang001/CaoGen/releases). Public assets currently center on macOS x64 v0.1.6, Windows x64 v0.1.5, and an older macOS arm64 build; Linux currently means running from source or building locally.
+1. **Download**: for macOS Intel x64, use the signed and notarized [v0.1.7 release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7). Windows x64 remains on v0.1.5. There are no current macOS Apple Silicon arm64 or Linux release assets.
 2. **Add a provider and key**: open Settings, select a provider template or enter the base URL of a compatible service, then add your own API key. Keys are never committed to this repository.
 3. **Run your first task**: create a session, select a local project directory or use an unassigned session, then try: `Read this project and tell me how it starts, which files matter most, and the three highest-value issues. Do not change anything yet.`
 
-> Current public installers are not formally signed or notarized. macOS and Windows may show operating-system security warnings on first launch; download only from this repository's Releases and verify the corresponding release notes. Formal 1.0 acceptance and release readiness are tracked in [STATUS.md](./STATUS.md).
+> The v0.1.7 macOS Intel x64 installer is Developer ID signed, Apple-notarized, and Gatekeeper-verified. Windows x64 v0.1.5 is a retained older release; download only from this repository's Releases and verify the corresponding release notes. Formal 1.0 acceptance and release readiness are tracked in [STATUS.md](./STATUS.md).
 
 Run from source:
 
