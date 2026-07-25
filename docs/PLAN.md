@@ -102,7 +102,7 @@ README、官网、STATUS 三处必须一致:
   - [x] 新增只读、fail-closed 的发布交接预检，绑定候选证据、精确五资产、Release Notes、publication-only 后继提交、远端 `main` 及 tag/Release 不存在状态；仅在全绿后输出需明确授权的手工命令，不产生发布副作用
   - [x] 公开 GitHub Release 资产审计升级为逐文件名称、大小与 SHA-256 digest 对本地候选资产精确绑定，并以回归测试覆盖篡改、缺失 digest 和额外文件
   - [x] 发布自动化源码变化使 run `30150795350` 只保留为历史证据；`bd26eaa3` 的 run `30159248949` 暴露 ModelAttempt crash E2E 测试夹具竞态后，worker keepalive 修复本地 targeted 连续 `20/20` 通过。修复提交 `cfce9372` 的 run `30160236851` 已通过 exact-commit Deep、Intel 签名/公证/安装与 renderer 主链
-  - [ ] run `30160236851` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；在 clean、已推送的 publication-only 后继提交上运行 fail-closed 发布交接预检
+  - [x] run `30160236851` 的候选五资产和四类报告已下载并独立核验，Release Notes 已更新为新 SHA-256；clean、已推送的 publication-only 后继提交通过 fail-closed 发布交接预检，全部检查为 true、无 failure，决定为 `ready_for_owner_decision`
   - [ ] 获得明确发布授权后创建 tag/GitHub Release、上传五项资产、完成公开资产审计并同步官网；本轮不执行
 
 **完成判据**:陌生人从官网下载 macOS Intel x64 安装包,无安全拦截地完成安装,

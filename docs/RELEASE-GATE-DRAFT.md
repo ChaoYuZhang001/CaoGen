@@ -16,7 +16,7 @@ CaoGen remains a multi-vendor AI work desktop. This gate permits only capabiliti
 | Candidate workflow | [`30160236851`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30160236851), read-only `macos-x64` evidence run |
 | Exact-commit Deep | `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | macOS distribution | `120/120` required audit; Developer ID signing, notarization, staple, Gatekeeper, isolated install, clean detach, and renderer launch passed |
-| Final notes | Updated to bind the exact five Intel assets and four candidate report families from run `30160236851`; clean publication preflight pending |
+| Final notes | Exact five Intel assets and four candidate report families from run `30160236851` are bound; clean publication preflight passed |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for an honest 0.1.x wedge release |
 | Publication | No tag or GitHub Release has been created; owner publication decision remains separate |
 
@@ -35,7 +35,7 @@ The repository retains the complete three-platform contract for any future relea
 | Release scope | P2-002, P2-003, and P2-005 on the candidate | Passed; P2-001/P2-004 remain outside this Intel release claim |
 | Exact Deep | Required checks pass on the candidate; optional skips remain explicit | Passed: `157/157` required; 2 optional external checks skipped |
 | Signed Intel distribution | DMG/ZIP/update metadata bound to clean provenance and signed installed app | Passed: `120/120`, artifact set `e37365c3d1e2aaca1a26c382fc8439e0975e7e40e83fd6886e045c60a0978d1a` |
-| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Notes updated for run `30160236851`; clean fail-closed preflight pending |
+| Final release notes | `release:publication:preflight:macos-x64` on a clean approved descendant using downloaded candidate reports | Passed; all checks true, zero failures, `ready_for_owner_decision` |
 | Owner decision | Explicit authorization to create tag and GitHub Release | Pending; this gate document does not authorize publication |
 | Public upload audit | Tag target, five uploaded assets, hashes, metadata, and public download parity | Pending until publication |
 | Website sync | Intel-only version, download, signing state, and truth boundary match the published Release | Pending until publication |
