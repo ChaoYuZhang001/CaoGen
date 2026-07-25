@@ -26,11 +26,11 @@ The `latest*.yml` metadata and the four installer/update files above are the onl
 
 | Asset | SHA256 |
 |---|---|
-| `CaoGen-0.1.7.dmg` | `24bb2e4d6d98987955495b51fa4d6a8feda9634b923a3fa9e5f66f9fd60f0d9b` |
-| `CaoGen-0.1.7.dmg.blockmap` | `d54ad1b15934d0f3d1a464d4d8500ac41ddf54266911656ad83b0182508e3c8a` |
-| `CaoGen-0.1.7-mac.zip` | `1e668a18dfb758b20dcadadf23b6a95433d6c4c8197a753738a54ba33722af45` |
-| `CaoGen-0.1.7-mac.zip.blockmap` | `8e319a8507769031abb06a8b348a605b4510a7944bd17c9486063e81a043772a` |
-| `latest-mac.yml` | `dbe298b83aa9e5c8a546129698d4d0915e1ddecfa1428412a21531a68dc0cf5c` |
+| `CaoGen-0.1.7.dmg` | `486494a8cbbbacfbdc415a71246449424668093d2b7a71f6fe5228ea39f672de` |
+| `CaoGen-0.1.7.dmg.blockmap` | `c0d715cc848a7125cbe3707f22d093cd547c86e31d2c434f8a5ca4aa579e8e2e` |
+| `CaoGen-0.1.7-mac.zip` | `d620ee285d960bba984dcb460a45c4b38ca709c6c3035e2cba975839189a5228` |
+| `CaoGen-0.1.7-mac.zip.blockmap` | `cdf96ba3ccd551ca314da9ebd305bda4979311650bdb0bab653b930b05aeaa25` |
+| `latest-mac.yml` | `fb1fb017787c15f58861d7d43e9c5eb37702f7782ad20be93e5f9fa496babca0` |
 
 ## Truth Boundary
 
@@ -61,9 +61,9 @@ Open `CaoGen-0.1.7.dmg`, drag CaoGen to Applications, and launch it normally. Th
 
 ## Verification
 
-- Candidate commit: `e8f617f822be458065dabe7f2440d1f5a33ee2b3` on `main`.
-- GitHub candidate run: `30150795350`, scoped to macOS Intel x64; Apple Silicon and Windows jobs were skipped rather than counted as passes.
-- Exact-commit Deep: `157 total / 155 required pass / 2 optional skip / 0 blocked / 0 fail`.
+- Candidate commit: `cfce93725972167aad0811d381c710e7cd510b26` on `main`.
+- GitHub candidate run: `30160236851`, scoped to macOS Intel x64; Apple Silicon and Windows jobs were skipped rather than counted as passes.
+- Exact-commit Deep: `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`.
 - macOS x64 release audit: `120/120` required checks, including package/update metadata, x86_64 architecture, clean provenance, signing, notarization, staple, Gatekeeper, package integrity, and exclusion of external SDK/CLI files.
 - Packaged-app smoke: isolated DMG install, clean detach, and real renderer startup passed.
 - P2 release scope: P2-002, P2-003, and P2-005 passed; Windows GUI and China external-network evidence remain outside this release scope.
