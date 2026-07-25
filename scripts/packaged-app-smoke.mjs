@@ -404,7 +404,7 @@ $Signature = Get-AuthenticodeSignature -LiteralPath ${powerShellLiteral(filePath
   Timestamped = $null -ne $Signature.TimeStamperCertificate
 } | ConvertTo-Json -Compress
 `
-  const result = spawnSync('powershell.exe', [
+  const result = spawnSync(powerShellExecutable(), [
     '-NoLogo',
     '-NoProfile',
     '-NonInteractive',
@@ -435,6 +435,14 @@ $Signature = Get-AuthenticodeSignature -LiteralPath ${powerShellLiteral(filePath
 
 function powerShellLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`
+}
+
+function powerShellExecutable() {
+  const probe = spawnSync('where.exe', ['pwsh.exe'], {
+    stdio: 'ignore',
+    windowsHide: true
+  })
+  return probe.status === 0 ? 'pwsh.exe' : 'powershell.exe'
 }
 
 function platformLabel(platform) {
