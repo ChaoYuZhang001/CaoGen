@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 609,
-      "contentHash": "5bc5ef996c08a12577f7299996641bdd51b91fe58f6a19cfca772105ab8b987f",
+      "lines": 611,
+      "contentHash": "077c6c5603833e95111a3cccc0db06f91489354f6ead876a4159be1e8152a48e",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -197,8 +197,8 @@
     },
     "scripts/github-release-audit.mjs": {
       "profile": "automation",
-      "lines": 305,
-      "contentHash": "7f43807214578be082c093e3e70d5a825af4eecea7cdb16988375495166207ab",
+      "lines": 346,
+      "contentHash": "96194fd4aef96f12f7e77c3871be29845f8917f01164c3140188156bdd0fc4ed",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,

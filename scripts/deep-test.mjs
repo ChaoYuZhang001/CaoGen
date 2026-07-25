@@ -35,6 +35,8 @@ const commandDefinitions = [
   { name: 'release packaging policy smoke', command: 'node', args: ['scripts/release-packaging-policy-smoke.mjs'], category: 'smoke' },
   { name: 'release workflow contract smoke', command: 'node', args: ['scripts/release-workflow-contract-smoke.mjs'], category: 'static' },
   { name: 'macOS x64 release evidence smoke', command: 'node', args: ['scripts/macos-x64-release-evidence-smoke.mjs'], category: 'smoke' },
+  { name: 'release publication preflight smoke', command: 'node', args: ['scripts/release-publication-preflight-smoke.mjs'], category: 'smoke' },
+  { name: 'GitHub release asset digest smoke', command: 'node', args: ['scripts/github-release-audit-smoke.mjs'], category: 'smoke' },
   { name: 'macOS DMG detach smoke', command: 'node', args: ['scripts/macos-dmg-detach-smoke.mjs'], category: 'smoke' },
   { name: 'Windows release config audit', command: 'node', args: ['scripts/windows-release-audit.mjs', '--config-only'], category: 'static' },
   { name: 'CaoGen Drive smoke', command: 'node', args: ['scripts/drive-smoke.mjs'], category: 'smoke' },
