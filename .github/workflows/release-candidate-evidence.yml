@@ -66,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:release-workflow-contract
+          npm run test:package-size-policy
           npm run test:product-positioning:required
           npm run typecheck
           npm run build
@@ -173,7 +174,6 @@ jobs:
             dist/CaoGen-${{ inputs.version }}.dmg.blockmap
             dist/CaoGen-${{ inputs.version }}-mac.zip
             dist/CaoGen-${{ inputs.version }}-mac.zip.blockmap
-            dist/mac/CaoGen.app/Contents/Resources/app.asar
             test-results/macos-release-audit/latest-x64.json
             test-results/macos-release-audit/*/report.json
             test-results/packaged-app-smoke/latest-macos-x64.json
@@ -183,6 +183,15 @@ jobs:
             test-results/caogen-deep/*/deep-test-report.md
             test-results/p2-release-scope/latest.json
             test-results/p2-release-scope/*/report.json
+      - name: Upload x64 archive for complete-matrix assembly
+        if: "${{ inputs.platform_scope == 'all' }}"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caogen-release-macos-x64-aggregate-${{ needs.candidate.outputs.commit }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: dist/mac/CaoGen.app/Contents/Resources/app.asar
       - name: Remove temporary macOS credentials
         if: always()
         shell: bash
@@ -355,6 +364,11 @@ jobs:
         with:
           name: caogen-release-macos-x64-${{ needs.candidate.outputs.commit }}
           path: test-results/release-matrix-input/macos-x64
+      - name: Download macOS x64 archive for assembly
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: caogen-release-macos-x64-aggregate-${{ needs.candidate.outputs.commit }}
+          path: test-results/release-matrix-input/macos-x64/dist/mac/CaoGen.app/Contents/Resources
       - name: Download macOS arm64 evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

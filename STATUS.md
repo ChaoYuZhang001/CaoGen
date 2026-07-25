@@ -1,8 +1,8 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-24· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-25· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ⚠️ **未达完整发布标准**。当前 `main` 的候选预检通过，但精确提交的四态 Deep 尚未全绿；Intel x64 已完成本地 Developer ID 签名基线，但最终候选公证、Apple Silicon 真机启动、Windows 签名、指定真实 Provider/中国网络证据仍取决于外部账号、机器或额度。Docker 已从产品模式删除；Claude 是可选引擎，不登录也不阻塞默认 OpenAI-compatible 路径、本地启动或发布门禁。
+> ⚠️ **未达完整发布标准**。`main@7a0a4babb9fae90b68c8deef63e185bd44527b5c` 的 Intel-only 候选已通过精确提交四态 Deep、Developer ID 签名、公证、staple、Gatekeeper、DMG 安装和真实 renderer 启动；Apple Silicon 与 Windows 按创始人决定暂停，不能写成已完成，完整三平台 Release Doctor 因此仍为 `not_ready`。当前未创建 tag/GitHub Release。Docker 已从产品模式删除；Claude 是可选引擎，不登录也不阻塞默认 OpenAI-compatible 路径、本地启动或 Intel 发布门禁。
 > 当前源码版本为 `0.1.7` 发布候选，不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 17 个部分完成 + 25 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.7 只按已验证楔子能力发布，不把路线图能力写成已完成。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
@@ -16,9 +16,10 @@
 - **[v0.1.6 macOS x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.6)**(2026-07-14)——发布 5 个 DMG、zip、blockmap 和更新元数据资产;macOS Intel 主二进制为 `x86_64`;包内运行时和真实 renderer 启动均纳入发布门禁;仍未签名/公证
 - v0.1.5 Windows x64 安装包继续保留;v0.1.6 不发布 Windows、macOS arm64 或 Linux 资产。
 - v0.1.5 新增整页设置与 Provider 编辑、项目级会话收纳、未关联项目会话收纳、三种显式调度范围，以及调研/策划/开发/测试/文档的默认与自定义模型调度。
-- M1 文档、x64 签名基线与跨平台矩阵门禁已进入 `main@61e895dc`；`package.json` 与 lock 根版本均为 `0.1.7`，该提交的 candidate preflight 已通过。最后一份完整 clean Deep 仍绑定 `4a3f6359`：`158 total / 155 required pass / 3 optional skip / 0 blocked / 0 fail`，报告为 `test-results/caogen-deep/2026-07-23T12-53-59-079Z/deep-test-report.md`。`61e895dc` 的 clean Deep 在参考 Intel Mac 处于电池 24% 且 Low Power Mode 开启时，于 Assistant/Studio required performance gate 失败并提前停止，报告为 `test-results/caogen-deep/2026-07-23T16-10-00-840Z/deep-test-report.md`，结果为 `159 total / 82 pass / 1 fail / 76 blocked`；开始和结束均 clean 且 Git 状态不变，但这不是完整通过证据，必须在正常供电性能环境下对最终提交全量重跑。
-- 发布门禁现要求完整三平台矩阵，而不是把 Intel 单平台样本当作 0.1.7 完成：macOS x64、macOS arm64、Windows x64 均需独立 required distribution audit、包内 clean-commit provenance、目标平台原生安装和真实 renderer 启动；最终 packaging audit 同时要求 4 个 x64 macOS 资产、4 个 arm64 macOS 资产、3 个 Windows x64 资产和共享 `latest-mac.yml`。macOS audit 按架构保存报告且 digest 不再绑定会被另一架构覆盖的共享 metadata；Windows audit 校验 PE x64、NSIS、应用与安装器 Authenticode/时间戳。Release Doctor 已消费该矩阵并保持 `not_ready`：当前 arm64/Windows 资产和三平台正式安装证据仍未完成。macOS 签名钩子仅对 Apple TSA 瞬时错误做最多 5 次有界重试；完整重试探针因 Electron 下载网络停滞未进入签名阶段，不能计为通过。
-- `.github/workflows/release-candidate-evidence.yml` 已把 M1-T3 固化为只读、手动、不可发布的候选证据管线：输入必须是已在 `main` 的完整 40 位 SHA 与精确版本；`macos-15-intel`、`macos-15-arm64`、`windows-2025` 原生 lane 缺任一签名/公证 secret 即失败，成功后由 Linux 汇总端重新核对每个下载资产、各平台审计/安装报告、clean Deep、完整 12 资产摘要和双架构更新元数据。该 workflow 尚未在真实 secrets 上执行，也不创建 tag/GitHub Release，因此不能把“管线已实现”写成“平台证据已完成”。
+- `main@7a0a4babb9fae90b68c8deef63e185bd44527b5c` 的 Intel-only GitHub 候选 run [`30130085556`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30130085556) 已成功：exact-commit Deep 与 release-scope P2 gate 通过，x64 完成 Developer ID 签名、公证、staple、Gatekeeper、required release audit、DMG 隔离安装和真实 renderer 启动。该 run 的 Apple Silicon、Windows 与完整矩阵汇总 job 均按输入范围跳过，因此只证明 Intel，不证明完整三平台。
+- 仓库保留完整三平台矩阵门禁，只有选择完整矩阵范围或宣称三平台发布时才要求 macOS x64、macOS arm64、Windows x64 全部通过 required distribution audit、包内 clean-commit provenance、目标平台原生安装和真实 renderer 启动。创始人已把当前 0.1.7 M1 收窄为 Intel-only；该范围使用 x64 lane 的独立签名/公证/安装审计，不把跳过的 arm64/Windows 算成 pass。完整矩阵 Release Doctor 继续保持 `not_ready`，准确表达未完成的未来三平台能力。
+- `.github/workflows/release-candidate-evidence.yml` 已把 M1-T3 固化为只读、手动、不可发布的候选证据管线：输入必须是已在 `main` 的完整 40 位 SHA 与精确版本；可选择 `macos-x64` 或完整三平台范围。run `30130085556` 已证明仓库中的 Intel 签名/公证 secrets 可用；这不证明 Apple Silicon/Windows secrets 或资产。workflow 不创建 tag/GitHub Release。
+- 上述签名候选的 DMG/ZIP 分别为 `248,354,931 B / 248,725,828 B`，安装后 `.app` 约 `759 MB`。其 GitHub artifact 为 `693,330,905 B`，因为同时归档 DMG、ZIP、`app.asar` 和报告，不能把 693 MB 当成用户安装包。当前无功能损失瘦身的本地 unsigned Intel 实测为 DMG `197,518,789 B`、ZIP `197,966,775 B`、`.app` 逻辑体积 `555,506,427 B`、`app.asar` `61,742,511 B`；包内 Claude CLI `240,192,080 B` 仍保留，renderer、Tree-sitter、node-pty、CLI `--version` 和完整 ASAR 解包均通过。最终签名后体积以新 GitHub 候选为准。
 - M1-T4 的公开进度口径与首页边界已对齐：中英文 README、STATUS 与官网统一为 `64 = 21 已验证 + 17 部分完成 + 25 立项目标 + 1 仅达到基础`；官网首页只保留当前能力、真实截图、上手/下载和精简状态入口，Assistant/Studio、24 项终极能力、10 阶段目标工作流、完整状态边界与 3D 愿景已迁到独立 `/vision/`、`/en/vision/`。官网配置强制四类总和等于 P0 总数，生成物门禁同时拒绝未来态完整章节回流首页；源码已推送至 `CaoGen-Website@03ffe61`，`caogen.dev` 已返回新生产构建 `main-D31Vg2We.js`，1440px 与 390px 视觉检查无横向溢出、图片或控制台错误。该文档闭环不改变 Release Doctor 的 `not_ready` 状态，也不替代签名、公证或目标平台证据。
 - 正式运行时现有默认 OpenAI-compatible API、可选 Claude Agent SDK，以及已注册到 Provider/SessionManager/UI 的原生 Anthropic Messages 三条执行路径。最后一份完整 clean Deep 的 3 个 optional skip 分别保留真实 Claude、China real-network、China tool-call parity 的外部条件，不计入 pass，也不阻塞默认发布档位；`61e895dc` 的失败运行未执行到这些检查。即使 clean Deep 全绿，也不能替代签名、公证、目标平台安装和最终资产绑定。
 - Agent 恢复内核已升级为稳定事件身份 + 恢复游标 + 持久 Effect Ledger。`write_file`、`search_replace`、OpenAI/Claude 文件编辑、Git commit/merge/push、Renderer 文件与 Git Index 操作、文本 hunk 丢弃、managed-worktree create/remove/patch 和 GitHub/GitLab PR/MR 已接入专用只读对账；Operation Gateway、lease/fencing、强杀恢复、DAG autoMerge durable finalizer/receipt 已由 required E2E 覆盖。该边界不等于外部系统事务级 exactly-once，writer 仍可能在强杀/断电/ENOSPC 时留下半写文件。
@@ -56,7 +57,7 @@
 
 # Current Focus
 
-**当前唯一焦点是 M1：发布已签名、可安装、诚实标注边界的 v0.1.7 楔子版。** M1-T1/T2/T4/T5、0.1.7+ 三平台 packaging fail-closed 门禁和手动候选 workflow 已关闭；精确候选 Deep 因低电量性能环境失败，Intel x64 本地签名基线仍只是非公证负向样本。下一顺序是在正常供电环境对最终 clean `main` 全量重跑 Deep，并补齐仓库当前缺失的签名/公证 secrets，再由候选 workflow 并行取得 Intel、Apple Silicon、Windows 三条真实证据；之后完成 Release Notes final、required Doctor 与公开资产审计。workflow 失败或 Doctor `not_ready` 时不建 tag/Release。M1-M3 期间冻结新的 1.0 愿景功能；64 个 P0 仍为 21 已验证、43 开放，不因发布 0.1.7 而改变。
+**当前唯一焦点是 M1：发布已签名、可安装、诚实标注边界的 Intel x64 v0.1.7 楔子版。** Intel 签名/公证/安装主链已在 `30130085556` 闭环；当前工作是把无功能损失瘦身提交到 `main`，再在该精确提交重跑 Intel-only 候选并核对真实签名体积。Apple Silicon 与 Windows 按创始人决定暂停，不计入当前 M1 阻塞项，也不得写成完成。未通过新候选审计前不建 tag/Release。M1-M3 期间冻结新的 1.0 愿景功能；64 个 P0 仍为 21 已验证、43 开放，不因发布 0.1.7 而改变。
 
 # Goal
 
@@ -68,7 +69,7 @@
 
 1. 最终候选提交 worktree clean，`package.json` 与 lock 根版本均为 `0.1.7`
 2. `test:deep` 在该精确提交上 required 全绿；optional skip 保持显式，不算 pass
-3. macOS x64/arm64 与 Windows x64 候选资产完成目标平台签名；macOS 完成 notarize、staple、Gatekeeper 和 packaged-app 启动审计
+3. macOS Intel x64 候选完成签名、notarize、staple、Gatekeeper 和 packaged-app 启动审计；Apple Silicon/Windows 继续显式标记暂停
 4. Release Notes 只写当前已验证能力，`test:release-notes-audit:final` 绑定实际上传资产通过
 5. GitHub Release 与官网只提供已审计资产；不创建 1.0 stable、N1、真实 Provider 或中国外部网络未验证声明
 
@@ -76,7 +77,7 @@
 
 **P0**
 - 用户反馈快修循环(常设)
-- v0.1.7 签名楔子版:在最终 clean commit 上完成 Deep、macOS x64/arm64 与 Windows x64 打包签名、macOS 公证/staple/启动审计和 Release Notes final gate
+- v0.1.7 Intel 签名楔子版:在最终 clean commit 上完成 Deep、macOS x64 打包签名、公证/staple/启动审计、安装包体积门禁和 Release Notes final gate；Apple Silicon/Windows 暂停
 - ~~arm64 / universal 打包~~ ✅ 已发布至 v0.1.1
 - P0-1B:~~接入 `search_replace`、OpenAI `edit_file` 与 Claude `Edit` 的 queryable file Effect~~ ✅;~~E2A 接入 Renderer worktree patch、独立 push→PR 与 Agent `git_create_pr`~~ ✅;~~E2B-1 接入 Renderer 文件保存/commit并阻止复合 Code Forge commit/pr~~ ✅;~~E2B-2 接入 Renderer stage/stageAll/unstage/accept hunk 的精确 Index CAS~~ ✅;~~E2B-3 接入 discard hunk 独立文件 Target 与强杀对账~~ ✅;~~DAG autoMerge patch Effects 与 completion/finalizer durable outbox/receipt 接入并确认~~ ✅;~~managed-worktree create/remove 生命周期 Effect~~ ✅;继续补齐 Issue、消息、可查询 MCP 与 Code Forge patch
 - P0-1C:TaskRun Effect evidence v6 foundation、v8 Workflow Ledger、canonical recovery sessions、`legacy / compare / canonical` 恢复读源和可逆 migration/continuity 门禁已完成 targeted smoke；Goal/WorkItem/Artifact/Acceptance 基础和有限 IPC/UI/cursor 查询已落地，未显式配置时仍默认 legacy；下一步是全入口接入、完整 Artifact Graph/blob/sourceRef 生命周期、Canonical Conversation Ledger、保留/导出/修复和生产补偿计划/审批/执行
@@ -117,8 +118,8 @@
 | ~~最新 dist:mac 卡 Electron 下载~~ | Medium | ✅ 已修:.npmrc 配 npmmirror;双架构 DMG 完整产出 |
 | ~~Claude auth 误判~~ | High | ✅ 已修:auth 检测只认真实凭据;无凭据干净跳过/明确提示 |
 | ~~窄屏响应式布局未过人眼复核~~ | Medium | ✅ 已修:同日 responsive smoke 覆盖桌面/窄屏暗色与浅色主题及水平溢出;证据:`test-results/caogen-responsive/2026-07-06T10-08-05-301Z/responsive-light-smoke.json` |
-| 最终候选 Deep | High | `61e895dc` clean run 在低电量模式下性能门禁失败，82 pass / 1 fail / 76 blocked；需正常供电后对最终提交全量重跑 |
-| arm64 包真机启动 | — | 需真实 Apple Silicon 机器(Intel 不可替代) |
+| 最终候选 Deep | High | `7a0a4bab` 的 Intel-only run 已通过；瘦身后的新提交仍需精确提交重跑 |
+| arm64 包真机启动 | — | 创始人决定暂停；若恢复，仍需真实 Apple Silicon 机器，Intel 不可替代 |
 | Docker | — | 不需要；产品运行模式、资源和分支已删除 |
 | Claude 登录 | — | 不需要；只影响用户显式选择的 Claude 专项 |
 
@@ -126,9 +127,9 @@
 
 | 阻碍 | 等什么 |
 |---|---|
-| Apple Developer / 签名材料 | Developer ID 已在本机完成 x64 本地签名；当前进程未配置公证凭据，需注入完整 API key、Apple ID 或 Keychain Profile 后在最终 clean candidate 执行 notarize、staple 与审计 |
-| GitHub Actions 发布 secrets | 仓库当前 secrets/variables 均为 0；需配置 macOS P12、Apple API key/issuer、Windows P12 及对应密码后才可运行三平台候选证据 workflow |
-| Apple Silicon 真机 | 只有要宣称 arm64 真机启动时需要；Intel 机器不能替代 |
+| Apple Developer / 签名材料 | GitHub Intel lane 已用已配置 secrets 完成 Developer ID、公证和 staple；本地 shell 不持有这些材料 |
+| GitHub Actions 发布 secrets | Intel lane 已验证可用；Apple Silicon/Windows 凭据与 lane 未验证且当前暂停 |
+| Apple Silicon 真机 | 暂停；只有恢复并宣称 arm64 真机启动时需要，Intel 机器不能替代 |
 | 指定 Provider key / 额度 | 6 Provider tool-call parity 已 72/72；formal 1.0 仍需在最终 clean candidate 上生成真实默认 OpenAI-compatible release record，覆盖 send/tool/artifact/recovery/usage/billing |
 | 凭据轮换 | 曾暴露或疑似外发的 token 必须由凭据持有人在对应平台撤销/重建 |
 | N1 30 分钟计时 | formal 1.0 stable 硬门禁；需真人按秒表跑并留证 |
