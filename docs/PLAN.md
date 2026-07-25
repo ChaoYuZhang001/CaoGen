@@ -90,11 +90,15 @@ README、官网、STATUS 三处必须一致:
   - [x] 运行时收口为 OpenAI-compatible + 原生 Anthropic Messages，删除 Claude Agent SDK、Claude CLI、SDK 专属会话/检查点/Hook/UI 与打包规则；基础发行包必须审计为不含 SDK/CLI
   - [x] 删除 Claude Runtime 后的本地 unsigned Intel x64 实测：DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` `311,931,918 B`、`app.asar` `61,630,882 B`；package audit 证明 SDK/CLI 不在 ASAR 或 unpacked files，预算收紧为 `160 MB / 160 MB / 400 MB / 80 MB`
   - [x] `main@ee13fffe5ca0e8576ea448fd3253e7cd9cfa9fb8` 的 Intel-only 候选在 GitHub run `30148489031` 完成 clean exact-commit Deep（`154/154` required，2 optional skip）、Developer ID 签名、公证/staple、Gatekeeper、`106/106` required audit、DMG 隔离安装/干净 detach、真实 renderer 与最终资产绑定；签名 DMG `127,703,488 B`，ZIP `127,016,797 B`
+  - [x] `main@e8f617f822be458065dabe7f2440d1f5a33ee2b3` 的 Intel-only 最终候选 run `30150795350` 成功：Deep `155/155` required、2 optional skip，`120/120` required macOS audit，五资产 `latest-mac.yml` 元数据、签名/公证/安装/renderer 与 clean provenance 全部绑定；资产集 `0fc626d9ccc3038ca5b3e574b87692f5ec7778c0670b2a6a4139fd804dba216d`
   - [ ] Apple Silicon arm64 原生证据(暂停,不计入当前 M1 完成判据)
   - [ ] Windows x64 签名/安装证据(暂停,不计入当前 M1 完成判据)
 - [x] M1-T4 三处口径对齐:README、官网、STATUS.md 的完成度数字与措辞一致
 - [x] M1-T5 文档收敛:旧规划文档移入 docs/archive/,README 增加对比表与可见 Roadmap
 - [ ] M1-T6 发布 v0.1.7,Release Notes 只写当前真实能力,不写路线图功能
+  - [x] Intel-only final gate 已支持精确五资产与四类候选报告绑定，不再错误要求暂停的 Apple Silicon/Windows 证据
+  - [x] run `30150795350` 的最终候选五资产与四类报告已下载并独立核验；Release Notes 已按实算 SHA256 定稿，并在 clean 后继提交上通过 scoped final audit（全候选绑定检查 true，0 warning / 0 failure）
+  - [ ] 获得明确发布授权后创建 tag/GitHub Release、上传五项资产、完成公开资产审计并同步官网；本轮不执行
 
 **完成判据**:陌生人从官网下载 macOS Intel x64 安装包,无安全拦截地完成安装,
 按 Quick Start 三步跑通第一个只读任务。
