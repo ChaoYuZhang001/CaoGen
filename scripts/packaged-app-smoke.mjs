@@ -16,6 +16,7 @@ const reportDir = path.join(reportRoot, runId)
 const requestedPlatform = argValue('--platform') || process.platform
 const targetPlatform = requestedPlatform === 'macos' ? 'darwin' : requestedPlatform === 'windows' ? 'win32' : requestedPlatform
 const targetArch = argValue('--arch') || process.arch
+const unsignedBuild = process.argv.includes('--unsigned')
 const sourceArtifact = releaseArtifactPath(targetPlatform, targetArch, packageJson.version)
 const releaseAudit = readReleaseAudit(targetPlatform, targetArch)
 const userDataDir = mkdtempSync(path.join(tmpdir(), 'caogen-packaged-app-smoke-'))
@@ -24,6 +25,7 @@ const git = readGitState()
 let appRoot
 let appExecutable
 let buildProvenance = null
+let signing = null
 let mountedDmg
 let child
 let stderr = ''
@@ -45,12 +47,19 @@ try {
     throw new Error(`packaged app smoke for ${targetPlatform} must run on ${targetPlatform}, got ${process.platform}`)
   }
   if (targetArch !== 'x64' && targetArch !== 'arm64') throw new Error(`unsupported packaged app architecture: ${targetArch}`)
+  if (unsignedBuild && targetPlatform !== 'win32') throw new Error('unsigned packaged app smoke is Windows-only')
   if (process.arch !== targetArch) {
     throw new Error(`native packaged app smoke for ${targetArch} must run on ${targetArch}, got ${process.arch}`)
   }
-  assertReleaseAuditBinding(releaseAudit)
+  if (!unsignedBuild) assertReleaseAuditBinding(releaseAudit)
   if (!existsSync(sourceArtifact)) {
     throw new Error(`release installer is missing: ${path.relative(repoRoot, sourceArtifact)}`)
+  }
+  if (unsignedBuild) {
+    signing = { installer: inspectAuthenticode(sourceArtifact), app: null }
+    if (signing.installer.status !== 'NotSigned') {
+      throw new Error(`unsigned installer has unexpected Authenticode status: ${signing.installer.status}`)
+    }
   }
   const installed = installCandidate()
   appRoot = installed.appRoot
@@ -58,15 +67,22 @@ try {
   appExecutable = packagedExecutable(appRoot, targetPlatform)
   if (!existsSync(appExecutable)) throw new Error('installed application executable is missing')
   installation.status = 'passed'
-  const inspectedProvenance = readPackagedReleaseProvenanceFromAsar(packagedAsarPath(appRoot, targetPlatform))
-  buildProvenance = inspectedProvenance.value
-  if (inspectedProvenance.error) throw new Error(`packaged release provenance is unreadable: ${inspectedProvenance.error}`)
-  const provenanceFailures = Object.entries(releaseProvenanceChecks(buildProvenance, {
-    gitCommit: git.commit,
-    packageVersion: packageJson.version
-  })).filter(([, passed]) => !passed)
-  if (provenanceFailures.length > 0) {
-    throw new Error(`packaged release provenance failed: ${provenanceFailures.map(([name]) => name).join(', ')}`)
+  if (unsignedBuild) {
+    signing.app = inspectAuthenticode(appExecutable)
+    if (signing.app.status !== 'NotSigned') {
+      throw new Error(`unsigned application has unexpected Authenticode status: ${signing.app.status}`)
+    }
+  } else {
+    const inspectedProvenance = readPackagedReleaseProvenanceFromAsar(packagedAsarPath(appRoot, targetPlatform))
+    buildProvenance = inspectedProvenance.value
+    if (inspectedProvenance.error) throw new Error(`packaged release provenance is unreadable: ${inspectedProvenance.error}`)
+    const provenanceFailures = Object.entries(releaseProvenanceChecks(buildProvenance, {
+      gitCommit: git.commit,
+      packageVersion: packageJson.version
+    })).filter(([, passed]) => !passed)
+    if (provenanceFailures.length > 0) {
+      throw new Error(`packaged release provenance failed: ${provenanceFailures.map(([name]) => name).join(', ')}`)
+    }
   }
   const port = await availablePort()
   child = spawn(appExecutable, [`--remote-debugging-port=${port}`, '--enable-logging=stderr'], {
@@ -83,7 +99,7 @@ try {
   })
 
   target = await waitForRenderer(child, port, 30_000)
-  if (/Uncaught Exception|Cannot find module/i.test(stderr)) {
+  if (/Uncaught Exception|Cannot find module|NODE_MODULE_VERSION/i.test(stderr)) {
     throw new Error('packaged app emitted a main-process module loading error')
   }
 } catch (error) {
@@ -114,6 +130,7 @@ if (!failure && cleanupFailure) failure = `temporary user-data cleanup failed: $
 
 const report = {
   status: failure ? 'failed' : 'passed',
+  mode: unsignedBuild ? 'unsigned' : 'signed-release',
   runId,
   reportDir,
   packageVersion: packageJson.version,
@@ -121,12 +138,13 @@ const report = {
   targetArch,
   appExecutable: appExecutable ? 'isolated-install/CaoGen' : null,
   git,
-  artifactSetSha256: releaseAudit.data?.artifactSetSha256 || null,
+  artifactSetSha256: unsignedBuild ? null : releaseAudit.data?.artifactSetSha256 || null,
   releaseAudit: {
     path: releaseAudit.relativePath,
-    status: releaseAudit.data?.status || (releaseAudit.error ? 'invalid_json' : 'missing')
+    status: unsignedBuild ? 'not-required' : releaseAudit.data?.status || (releaseAudit.error ? 'invalid_json' : 'missing')
   },
   buildProvenance,
+  signing,
   installation,
   target,
   failure,
@@ -138,7 +156,10 @@ const report = {
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-writeFileSync(path.join(reportRoot, `latest-${platformLabel(targetPlatform)}-${targetArch}.json`), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+const reportName = unsignedBuild
+  ? `latest-${platformLabel(targetPlatform)}-unsigned-${targetArch}.json`
+  : `latest-${platformLabel(targetPlatform)}-${targetArch}.json`
+writeFileSync(path.join(reportRoot, reportName), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 
 console.log(JSON.stringify(report, null, 2))
 if (failure) process.exitCode = 1
@@ -371,6 +392,49 @@ function assertReleaseAuditBinding(audit) {
   if (audit.data.git?.worktreeClean !== true || !git.worktreeClean) failures.push('cleanGit')
   if (!/^[0-9a-f]{64}$/i.test(audit.data.artifactSetSha256 || '')) failures.push('artifactSetSha256')
   if (failures.length > 0) throw new Error(`release audit binding failed: ${failures.join(', ')}`)
+}
+
+function inspectAuthenticode(filePath) {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$Signature = Get-AuthenticodeSignature -LiteralPath ${powerShellLiteral(filePath)}
+@{
+  Status = [string]$Signature.Status
+  HasCertificate = $null -ne $Signature.SignerCertificate
+  Timestamped = $null -ne $Signature.TimeStamperCertificate
+} | ConvertTo-Json -Compress
+`
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')
+  ], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  })
+  if (result.status !== 0) {
+    throw new Error(`Authenticode inspection failed: ${commandFailure(result)}`)
+  }
+  try {
+    const data = JSON.parse(String(result.stdout || '').trim())
+    return {
+      status: typeof data.Status === 'string' ? data.Status : 'Unknown',
+      hasCertificate: data.HasCertificate === true,
+      timestamped: data.Timestamped === true
+    }
+  } catch (error) {
+    throw new Error(`Authenticode inspection returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function powerShellLiteral(value) {
+  return `'${String(value).replaceAll("'", "''")}'`
 }
 
 function platformLabel(platform) {
