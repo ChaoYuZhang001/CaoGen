@@ -238,7 +238,8 @@
     "test:release-packaging-audit": "node scripts/release-packaging-audit.mjs",
     "test:release-packaging-audit:required": "node scripts/release-packaging-audit.mjs --required",
     "test:release-packaging-policy": "node scripts/release-packaging-policy-smoke.mjs",
-    "test:release-workflow-contract": "node scripts/release-workflow-contract-smoke.mjs",
+    "test:release-workflow-contract": "node scripts/release-workflow-contract-smoke.mjs && node scripts/windows-unsigned-workflow-contract-smoke.mjs",
+    "test:windows-unsigned-workflow-contract": "node scripts/windows-unsigned-workflow-contract-smoke.mjs",
     "test:macos-x64-release-evidence": "node scripts/macos-x64-release-evidence-smoke.mjs",
     "test:macos-x64-release-evidence:required": "npm run test:macos-x64-release-evidence",
     "test:release-publication-preflight": "node scripts/release-publication-preflight-smoke.mjs",
@@ -261,6 +262,7 @@
     "test:packaged-app:mac:x64": "node scripts/packaged-app-smoke.mjs --platform macos --arch x64",
     "test:packaged-app:mac:arm64": "node scripts/packaged-app-smoke.mjs --platform macos --arch arm64",
     "test:packaged-app:win:x64": "node scripts/packaged-app-smoke.mjs --platform windows --arch x64",
+    "test:packaged-app:win:x64:unsigned": "node scripts/packaged-app-smoke.mjs --platform windows --arch x64 --unsigned",
     "test:release-notes-audit": "node scripts/release-notes-audit.mjs",
     "test:release-notes-audit:required": "node scripts/release-notes-audit.mjs --required",
     "test:release-notes-audit:final": "node scripts/release-notes-audit.mjs --required --final",
@@ -421,6 +423,10 @@
       "target": [
         "nsis"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     },
     "linux": {
       "icon": "resources/icon.png",

@@ -88,6 +88,8 @@ function inspectReleaseConfig() {
     loaded: false,
     forceCodeSigning: false,
     nsisTarget: false,
+    assistedInstaller: false,
+    customInstallDirectory: false,
     releaseProvenance: null
   }
   check('config', 'package version is stable semver', /^\d+\.\d+\.\d+$/.test(version))
@@ -103,12 +105,17 @@ function inspectReleaseConfig() {
     const releaseConfig = require(configPath)
     result.loaded = isRecord(releaseConfig)
     const win = isRecord(releaseConfig?.win) ? releaseConfig.win : {}
+    const nsis = isRecord(releaseConfig?.nsis) ? releaseConfig.nsis : {}
     result.forceCodeSigning = win.forceCodeSigning === true
     result.nsisTarget = hasTarget(win.target, 'nsis')
+    result.assistedInstaller = nsis.oneClick === false
+    result.customInstallDirectory = nsis.allowToChangeInstallationDirectory === true
     result.releaseProvenance = releaseConfig.extraMetadata?.caogenReleaseProvenance || null
     check('config', 'electron-builder.release.cjs exports an object', result.loaded)
     check('config', 'Windows release requires code signing', result.forceCodeSigning)
     check('config', 'Windows release includes the NSIS target', result.nsisTarget)
+    check('config', 'Windows release uses the assisted installer', result.assistedInstaller)
+    check('config', 'Windows release allows a custom installation directory', result.customInstallDirectory)
     check('config', 'Windows release provenance schema is supported', result.releaseProvenance?.schemaVersion === 1)
     check('config', 'Windows release provenance commit is resolved', /^[0-9a-f]{40}$/i.test(result.releaseProvenance?.gitCommit || ''))
     check('config', 'Windows release provenance version matches package.json', result.releaseProvenance?.packageVersion === version)
@@ -190,7 +197,7 @@ $Signature = Get-AuthenticodeSignature -LiteralPath ${powerShellLiteral(filePath
   Timestamped = $null -ne $Signature.TimeStamperCertificate
 } | ConvertTo-Json -Compress
 `
-  const result = spawnSync('powershell.exe', [
+  const result = spawnSync(powerShellExecutable(), [
     '-NoLogo',
     '-NoProfile',
     '-NonInteractive',
@@ -311,6 +318,14 @@ function reportPath(value) {
 
 function powerShellLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`
+}
+
+function powerShellExecutable() {
+  const probe = spawnSync('where.exe', ['pwsh.exe'], {
+    stdio: 'ignore',
+    windowsHide: true
+  })
+  return probe.status === 0 ? 'pwsh.exe' : 'powershell.exe'
 }
 
 function redact(value) {
