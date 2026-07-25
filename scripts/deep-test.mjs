@@ -29,6 +29,7 @@ const commandDefinitions = [
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map smoke', command: 'node', args: ['scripts/product-1.0-acceptance-map-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map structure', command: 'node', args: ['scripts/product-1.0-acceptance-map.mjs'], category: 'static' },
+  { name: 'M1 first-user onboarding audit smoke', command: 'node', args: ['scripts/m1-first-user-onboarding-audit-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 soak audit smoke', command: 'node', args: ['scripts/product-1.0-soak-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release audit smoke', command: 'node', args: ['scripts/real-provider-release-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release runner smoke', command: 'node', args: ['scripts/real-provider-release-runner-smoke.mjs'], category: 'smoke' },

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "gateId": "m1_first_user_onboarding",
+  "testerId": "private-anonymized-id",
+  "projectContributor": false,
+  "previousCaoGenUser": false,
+  "releaseTag": "v0.1.7",
+  "releaseUrl": "https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7",
+  "websiteUrl": "https://caogen.dev/",
+  "platform": "macos-x64",
+  "architecture": "x86_64",
+  "installedVersion": "0.1.7",
+  "installedCandidateCommit": "bbec526554aea9785291edf4d8164084145347ae",
+  "installerAssetName": "CaoGen-0.1.7.dmg",
+  "installerPath": "/private/evidence/CaoGen-0.1.7.dmg",
+  "providerProtocol": "openai-compatible",
+  "startedAt": "2026-07-26T09:00:00+08:00",
+  "finishedAt": "2026-07-26T09:00:00+08:00",
+  "totalMinutes": 0,
+  "result": "pass",
+  "documentationUsed": "quick_start_only",
+  "securityBypassUsed": false,
+  "operatorHelpUsed": false,
+  "steps": [
+    { "id": 1, "name": "open_website", "completed": false, "minutes": 0 },
+    { "id": 2, "name": "download_intel_dmg", "completed": false, "minutes": 0 },
+    { "id": 3, "name": "install_and_launch", "completed": false, "minutes": 0 },
+    { "id": 4, "name": "configure_provider", "completed": false, "minutes": 0 },
+    { "id": 5, "name": "complete_read_only_task", "completed": false, "minutes": 0 }
+  ],
+  "readOnlyTask": {
+    "promptId": "quick_start_project_read_only_v1",
+    "completed": false,
+    "responseUseful": false,
+    "mutationCount": 0,
+    "projectPathRedacted": true
+  },
+  "evidenceFiles": [
+    { "role": "screen_recording", "path": "/private/evidence/screen-recording.mov" },
+    { "role": "system_architecture", "path": "/private/evidence/system-architecture.txt" },
+    { "role": "installed_app_identity", "path": "/private/evidence/installed-app-identity.json" },
+    { "role": "read_only_task", "path": "/private/evidence/read-only-task.png" }
+  ],
+  "blockers": [],
+  "roughEdges": []
+}
