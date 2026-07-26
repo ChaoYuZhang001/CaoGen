@@ -62,7 +62,6 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
   const isEdit = provider !== null
   const savedKeys = provider?.apiKeys ?? []
-
   const currentModelSourceKey = useMemo(
     () => providerModelSourceKey(provider?.id, baseUrl, openaiProtocol),
     [provider?.id, baseUrl, openaiProtocol]
@@ -116,16 +115,17 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   }
 
   const save = async (): Promise<void> => {
-    if (!name.trim()) {
-      setError(t('errNameRequired'))
-      return
-    }
     const models = modelsText
       .split('\n')
       .map((m) => m.trim())
       .filter(Boolean)
-    const budget = Number(budgetUsd)
     const additionalTokens = parseAdditionalKeys(additionalKeysText)
+    const validationKey = providerEditorValidationKey(name, provider, token, additionalTokens, models)
+    if (validationKey) {
+      setError(t(validationKey))
+      return
+    }
+    const budget = Number(budgetUsd)
     const keyUpdates = buildKeyUpdates(savedKeys, keyDrafts)
     const removeKeyIds = savedKeys
       .filter((key) => keyDrafts[key.id]?.remove)
@@ -363,7 +363,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           onChange={(e) => setBudgetUsd(e.target.value)}
         />
 
-        {error && <div className="notice notice-error">{error}</div>}
+        {error && <div className="notice notice-error" data-provider-editor-error>{error}</div>}
 
         <div className="provider-editor-actions">
           <button className="btn btn-ghost" data-provider-editor-action="cancel" onClick={() => onClose({ reason: 'cancelled' })}>
@@ -375,6 +375,21 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         </div>
     </section>
   )
+}
+
+function providerEditorValidationKey(
+  name: string,
+  provider: ProviderView | null,
+  token: string,
+  additionalTokens: ProviderApiKeyInput[],
+  models: string[]
+): string | null {
+  if (!name.trim()) return 'errNameRequired'
+  if (useStore.getState().settingsContext !== 'welcome-provider-recovery') return null
+  if (!provider?.hasToken && !token.trim() && additionalTokens.length === 0) {
+    return 'errProviderKeyRequired'
+  }
+  return models.length === 0 ? 'errProviderModelRequired' : null
 }
 
 function providerCredentialNotice(

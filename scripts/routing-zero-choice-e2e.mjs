@@ -164,7 +164,25 @@ try {
 
     await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
     await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForSelector('[data-provider-editor-error]', { visible: true, timeout: 5_000 })
+    let validationError = await page.$eval('[data-provider-editor-error]', (node) => node.textContent || '')
+    assert(/API|密钥/i.test(validationError), `missing-key recovery error drifted: ${validationError}`)
+    let providersAfterInvalidSave = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providersAfterInvalidSave.length === 0, 'missing-key recovery save created a Provider')
+
     await setValue(page, '[data-provider-field="api-key"]', 'test-only')
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForFunction(
+      () => /model|模型/i.test(document.querySelector('[data-provider-editor-error]')?.textContent || ''),
+      { timeout: 5_000 }
+    )
+    validationError = await page.$eval('[data-provider-editor-error]', (node) => node.textContent || '')
+    assert(/model|模型/i.test(validationError), `missing-model recovery error drifted: ${validationError}`)
+    providersAfterInvalidSave = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providersAfterInvalidSave.length === 0, 'missing-model recovery save created a Provider')
+    await screenshot(page, '02-expert-provider-validation')
+
     await setValue(page, '[data-provider-field="models"]', 'zero-choice-responses')
     const protocol = await page.$eval('[data-provider-field="openai-protocol"]', (select) => select.value)
     assert(protocol === 'responses', `unexpected Provider protocol: ${protocol}`)

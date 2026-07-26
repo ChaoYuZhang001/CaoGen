@@ -774,6 +774,8 @@ const DICT: Dict = {
   },
   noteOptional: { zh: '备注(可选)', en: 'Note (optional)' },
   errNameRequired: { zh: '请填写名称', en: 'Please enter a name' },
+  errProviderKeyRequired: { zh: '要继续首个任务，请填写至少一个 API 密钥', en: 'Add at least one API key to continue your first task' },
+  errProviderModelRequired: { zh: '要继续首个任务，请填写至少一个模型', en: 'Add at least one model to continue your first task' },
   saving: { zh: '保存中…', en: 'Saving…' }
 }
 
