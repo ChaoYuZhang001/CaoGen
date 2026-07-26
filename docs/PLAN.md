@@ -127,7 +127,7 @@ README、官网、STATUS 三处必须一致:
 
 - [ ] M2-T1 N1 真人实测:3 名 Codex/Claude Code 真实用户 30 分钟迁移计时,记录卡点；M1 单人只读 Quick Start 结果只提供 onboarding 基线，不替代本项 3 人完整迁移证据
 - [ ] M2-T2 onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
-  - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；配置动作直达 Providers 页，真实 Electron E2E `9/9` 覆盖提示词精确注入、零误建会话、设置深链、刷新恢复与真实 Router/流式响应
+  - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；恢复入口在无可用 Provider 时直接打开真实新增/修复表单，只有密钥与模型齐全的保存结果才自动回到首任务。提示词、目录、Drive、权限、固定/Provider/全局路由和 Studio 子页跨设置保留，保存前后均不误建会话；真实 Electron E2E `2026-07-26T14-25-32-923Z` 为 `9/9`，通过 UI 填写并保存本地 Responses Provider 后再走真实 Router/流式响应，不再绕过 UI 调用 IPC 创建 Provider
   - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
 - [x] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
   - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`

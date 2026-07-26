@@ -218,7 +218,8 @@ try {
     "| 'project'",
     "| 'providers'",
     "| 'migrate'",
-    'setShowSettings(value: boolean, tab?: SettingsTab): void'
+    "export type SettingsContext = 'welcome-provider-recovery'",
+    'setShowSettings(value: boolean, tab?: SettingsTab, context?: SettingsContext): void'
   ])
 
   console.log('context-loader smoke ok')
