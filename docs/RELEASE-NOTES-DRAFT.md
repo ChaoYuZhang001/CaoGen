@@ -35,6 +35,10 @@ final notes binding, publication preflight, and explicit owner authorization rem
 - Restore the complete first-task draft after a renderer reload or app restart, while
   excluding API keys, Provider Base URLs, and model responses from the local draft
   record. Clear the record after the first task starts successfully.
+- Preserve saved Project and Provider bindings while their catalogs are still loading.
+  After loading completes, fail closed for deleted or unusable Providers without
+  silently switching vendors, and keep the remaining draft intact while the user
+  recreates the Provider through the real editor.
 - Retain the shipped OpenAI-compatible HTTP and native Anthropic Messages HTTP
   runtimes without embedding or requiring an external Agent SDK or CLI runtime.
 
@@ -69,9 +73,10 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 - The same run passed the `120/120` required macOS release audit, signed/notarized
   installation and real renderer launch. Apple Silicon, Windows, and complete-matrix
   jobs were skipped by scope.
-- The later first-task restart recovery fix is not present in `837f8f90`. Its targeted
-  real Electron report passed `10/10` and page operations passed `22/22`, but the final
-  signed candidate must be rerun on a clean descendant before publication.
+- The later first-task restart and asynchronous catalog hydration fixes are not present
+  in `837f8f90`. The current targeted real Electron report passed `11/11` with 8
+  screenshots and page operations passed `22/22`, but the final signed candidate must
+  be rerun on a clean descendant before publication.
 - The two optional skips are external-network checks and are not passes.
 - No non-project participant has completed the private M1 first-user drill. Automated
   tests do not prove first-time installation, Provider setup, copy clarity, or task

@@ -117,6 +117,7 @@ README、官网、STATUS 三处必须一致:
   - [x] clean `main@d424d6c2be8ce4b0c0b3237d7255a9740495a3c1` 完整 Deep 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，开始/结束均为 clean 且 Git 状态未变；两个 M1 smoke 均在 required 集合中
   - [x] 社区 SLA 修复与证据治理合并后的 clean `main@0874f5a71f890403c008100889c5eb339eb57f98` 完整 Deep 仍为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`；报告 `2026-07-26T06-11-06-988Z` 起止均绑定该提交、clean 且 Git 状态未变，远端 `discussion_comment` Actions run `30190540484` 同时通过
   - [x] 等待测试者期间修复新会话草稿的失效项目绑定：项目被删除或归档后立即切到“未关联项目”，输入原目录不会静默重建已删项目。clean 功能候选 `7ed1b5fb4e7d414587734f8c660aca8b8c40bad9` 的完整 Deep 报告 `2026-07-26T15-42-01-402Z` 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、clean 且 Git 状态未变；其中 page operations 为 `22/22`。该工程修复不替代陌生用户真人结果或公开 Release 完整性恢复
+  - [x] 等待测试者期间修复首任务持久草稿的异步目录 hydration：Project/Provider 尚未加载时保留绑定，加载完成后才判断删除、归档、无密钥、无模型或固定模型失效；失效 Provider fail-closed 解绑且不静默切换，用户通过真实 Provider 编辑器重建配置时其余草稿保持。真实 Electron `2026-07-26T18-41-31-736Z` 为 `11/11`、8 张截图，页面操作 `2026-07-26T18-42-00-814Z` 为 `22/22`；当前仍需 clean Deep 和后继 Intel 候选，不能替代真人 M1 或 v0.1.7 Release 完整性恢复
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
 
@@ -132,7 +133,7 @@ README、官网、STATUS 三处必须一致:
 - [ ] M2-T1 N1 真人实测:3 名 Codex/Claude Code 真实用户 30 分钟迁移计时,记录卡点；M1 单人只读 Quick Start 结果只提供 onboarding 基线，不替代本项 3 人完整迁移证据
 - [ ] M2-T2 onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
   - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；恢复入口在无可用 Provider 时直接打开真实新增/修复表单，缺 API Key 或缺模型会保留表单、显示双语明确错误且不创建半成品 Provider，只有密钥与模型齐全的保存结果才自动回到首任务。提示词、目录、Drive、权限、固定/Provider/全局路由和 Studio 子页跨设置保留，保存前后均不误建会话；真实 Electron E2E `2026-07-26T14-44-18-900Z` 为 `9/9`、6 张截图，通过 UI 验证缺 Key、缺模型、有效保存并走真实 Router/流式响应，不再绕过 UI 调用 IPC 创建 Provider
-  - [x] 首任务草稿增加版本化本地持久化：renderer reload / 应用重启后恢复提示词、项目、目录、Drive、权限、路由、Provider 与模型，成功发送后自动清除；不保存 API Key、Base URL 或响应内容，损坏/超限记录 fail-safe 丢弃。真实 Electron `2026-07-26T18-24-01-671Z` 为 `10/10`、7 张截图，页面操作 `2026-07-26T18-20-01-333Z` 为 `22/22`
+  - [x] 首任务草稿增加版本化本地持久化：renderer reload / 应用重启后恢复提示词、项目、目录、Drive、权限、路由、Provider 与模型，成功发送后自动清除；不保存 API Key、Base URL 或响应内容，损坏/超限记录 fail-safe 丢弃。异步资源目录未加载时保留已有绑定，加载后对删除、无密钥、无模型或失效固定模型严格解绑，不静默替换 Provider，并支持从真实编辑器恢复而不丢其他字段。真实 Electron `2026-07-26T18-41-31-736Z` 为 `11/11`、8 张截图，页面操作 `2026-07-26T18-42-00-814Z` 为 `22/22`
   - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
 - [x] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
   - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`

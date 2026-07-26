@@ -19,7 +19,7 @@ package is not considered delivered to users.
 | Candidate workflow | [`30212121353`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30212121353), successful read-only `macos-x64` evidence run |
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/stapled/installed/launched x64 app, packaged-app smoke, artifact set `48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1` |
-| Candidate freshness | Historical only: later first-task restart recovery code is not present in `837f8f90`; rerun on the final clean descendant before publication |
+| Candidate freshness | Historical only: later first-task restart recovery and asynchronous Project/Provider catalog hydration fixes are not present in `837f8f90`; current targeted Electron is `11/11` and page operations `22/22`, but the candidate must be rerun on the final clean descendant before publication |
 | Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
 
 The manual candidate workflow remains read-only with `contents: read`, accepts only
@@ -27,8 +27,9 @@ an exact commit already on `main`, defaults to package version `0.1.8` and
 `macos-x64`, and cannot create a tag or Release. Run `30212121353` created candidate
 evidence only. It did not close the first-user M1 gate and did not authorize
 publication. Its Apple Silicon, Windows, and complete-matrix jobs were skipped.
-The candidate remains valid evidence for exact commit `837f8f90`, but a later user-facing
-welcome-draft persistence fix means it no longer represents the latest 0.1.8 source.
+The candidate remains valid evidence for exact commit `837f8f90`, but later user-facing
+welcome-draft persistence and asynchronous catalog hydration fixes mean it no longer
+represents the latest 0.1.8 source.
 
 Before any 0.1.8 publication decision, the candidate artifact must be regenerated from
 the final clean descendant and independently checked. The exact five assets and report

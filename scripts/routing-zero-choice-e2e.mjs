@@ -18,6 +18,7 @@ const runDir = path.join(outputRoot, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-routing-zero-choice-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
+const projectId = 'routing-zero-choice-project'
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
@@ -34,6 +35,9 @@ mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Routing zero-choice real Electron E2E\n', 'utf8')
+writeFileSync(path.join(userDataDir, 'projects.json'), JSON.stringify([
+  { id: projectId, name: 'Routing Zero Choice Project', path: projectDir, lastUsedAt: Date.now() }
+], null, 2), 'utf8')
 copyBuiltApp()
 
 const report = {
@@ -101,6 +105,11 @@ try {
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page)
+  await page.waitForFunction(
+    (expectedProjectId) => document.querySelector('.welcome-project-select')?.value === expectedProjectId,
+    { timeout: 10_000 },
+    projectId
+  )
 
   const quickStartPrompt = '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。'
   const prompt = `zero choice assistant ${runId}`
@@ -117,7 +126,8 @@ try {
   await check('Assistant starts with no technical routing controls', async () => {
     await assertMode(page, 'assistant')
     await assertAssistantProjection(page)
-    await setValue(page, '.welcome-project-path', projectDir)
+    const selectedProject = await page.$eval('.welcome-project-select', (select) => select.value)
+    assert(selectedProject === projectId, `saved project was not selected: ${selectedProject}`)
     await setValue(page, '.welcome-composer-input', prompt)
     const computeState = await page.$eval('[data-assistant-compute-state]', (node) => ({
       available: node.getAttribute('data-compute-available'),
@@ -137,6 +147,7 @@ try {
   })
 
   let expertDraftBeforeRecovery
+  let providerId = ''
   await check('Expert recovery opens the real Provider form and saves through the UI', async () => {
     await clickMode(page, 'studio')
     await page.click('[data-studio-projection-tab="session"]')
@@ -204,6 +215,7 @@ try {
     assert(expertDraftAfterRecovery.model === 'zero-choice-responses', `saved model was not selected: ${expertDraftAfterRecovery.model}`)
     const providers = await page.evaluate(() => window.agentDesk.listProviders())
     assert(providers.length === 1, `expected one UI-created Provider, got ${providers.length}`)
+    providerId = providers[0].id
     assert(providers[0].hasToken, 'UI-created Provider did not persist its API key')
     assert(JSON.stringify(providers[0].models) === JSON.stringify(['zero-choice-responses']), `UI-created Provider models drifted: ${JSON.stringify(providers[0].models)}`)
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
@@ -237,6 +249,49 @@ try {
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 0, `renderer reload created ${sessions.length} session(s)`)
     await screenshot(page, '02-expert-provider-reload')
+  })
+
+  await check('deleted persisted Provider fails closed and remains recoverable after reload', async () => {
+    assert(providerId, 'Provider id missing before deletion recovery check')
+    const beforeDeletion = await readWelcomeDraft(page)
+    await page.evaluate((id) => window.agentDesk.deleteProvider(id), providerId)
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await waitForApp(page)
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForFunction(
+      () => document.querySelector('[data-welcome-routing-control="provider"]')?.value === '',
+      { timeout: 10_000 }
+    )
+    const afterDeletion = await readWelcomeDraft(page)
+    for (const field of ['prompt', 'cwd', 'projectChoice', 'driveMode', 'permissionMode', 'routingMode']) {
+      assert(afterDeletion[field] === beforeDeletion[field], `Provider deletion changed ${field}: ${afterDeletion[field]}`)
+    }
+    assert(afterDeletion.providerId === '', `deleted Provider remained selected: ${afterDeletion.providerId}`)
+    assert(afterDeletion.modelValue === '', `deleted Provider model remained selected: ${afterDeletion.modelValue}`)
+    await page.click('.welcome-send')
+    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+    let sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `stale Provider recovery created ${sessions.length} session(s)`)
+
+    await page.click('[data-welcome-recovery-action="configure"]')
+    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
+    await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
+    await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
+    await setValue(page, '[data-provider-field="api-key"]', 'test-only')
+    await setValue(page, '[data-provider-field="models"]', 'zero-choice-responses')
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForSelector('.settings-page', { hidden: true, timeout: 10_000 })
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    const recovered = await readWelcomeDraft(page)
+    assert(recovered.prompt === beforeDeletion.prompt, 'Provider recreation lost the first-task prompt')
+    assert(recovered.projectChoice === projectId, `Provider recreation changed project: ${recovered.projectChoice}`)
+    assert(recovered.provider === 'Zero Choice Local Service', `Provider recreation did not bind the replacement: ${recovered.provider}`)
+    assert(recovered.model === 'zero-choice-responses', `Provider recreation did not bind the model: ${recovered.model}`)
+    sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Provider recreation created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-recreated')
 
     await clickMode(page, 'assistant')
     await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
@@ -465,12 +520,16 @@ async function readWelcomeDraft(targetPage) {
     }
     return {
       prompt: document.querySelector('.welcome-composer-input')?.value || '',
-      cwd: document.querySelector('.welcome-project-path')?.value || '',
+      cwd: document.querySelector('.welcome-project-path')?.value
+        || document.querySelector('.welcome-project-current')?.getAttribute('title')
+        || '',
       projectChoice: document.querySelector('.welcome-project-select')?.value || '',
       routingMode: document.querySelector('[data-welcome-routing-mode].active')?.getAttribute('data-welcome-routing-mode') || '',
       driveMode: document.querySelector('[data-welcome-routing-control="drive"]')?.value || '',
       permissionMode: document.querySelector('[data-welcome-routing-control="permission"]')?.value || '',
+      providerId: document.querySelector('[data-welcome-routing-control="provider"]')?.value || '',
       provider: selectedText('[data-welcome-routing-control="provider"]'),
+      modelValue: document.querySelector('[data-welcome-routing-control="model"]')?.value || '',
       model: selectedText('[data-welcome-routing-control="model"]')
     }
   })

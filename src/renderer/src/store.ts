@@ -36,8 +36,6 @@ import type {
   PreparedPreview,
   PreviewAnnotation,
   PreviewAnnotationLocator,
-  Project,
-  ProviderInput,
   ProviderView,
   QuickbarDispatchOptions,
   QuickbarDispatchResult,
@@ -71,6 +69,7 @@ import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/tas
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
+import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -733,7 +732,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice {
+interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -741,8 +740,6 @@ interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRec
   activeId: string | null
   history: HistoryEntry[]
   settings: AppSettings
-  providers: ProviderView[]
-  projects: Project[]
   taskSnapshots: TaskSnapshotRecord[]
   taskSnapshotsLoading: boolean
   taskSnapshotsError?: string
@@ -887,13 +884,6 @@ interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRec
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
-  refreshProviders(): Promise<void>
-  createProvider(input: ProviderInput): Promise<ProviderView>
-  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
-  deleteProvider(id: string): Promise<void>
-  refreshProjects(): Promise<void>
-  archiveProject(id: string, archived: boolean): Promise<void>
-  deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean, projectId?: string): void
   setShowCommandPalette(v: boolean): void
   setShowTaskRecovery(v: boolean): void
@@ -1023,14 +1013,13 @@ export const useStore = create<AppStore>((set, get) => {
       chatDensity: 'comfortable'
     }
   },
-  providers: [],
-  projects: [],
   taskSnapshots: [],
   taskSnapshotsLoading: false,
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
   ...createSettingsNavigationSlice((update) => set(update)),
   ...createWelcomeDraftSlice((update) => set(update)),
+  ...createResourceCatalogSlice((update) => set(update), get),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -1151,8 +1140,8 @@ export const useStore = create<AppStore>((set, get) => {
     const secondaryLabels = ['history', 'providers', 'projects', 'task recovery']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
-      window.agentDesk.listProviders().then((providers) => set({ providers })),
-      window.agentDesk.listProjects().then((projects) => set({ projects })),
+      get().refreshProviders(),
+      get().refreshProjects(),
       get().hydrateTaskRecoveryCandidates()
     ])
     secondaryResults.forEach((result, index) => {
@@ -3742,51 +3731,6 @@ export const useStore = create<AppStore>((set, get) => {
   closeRewindPanel() {
     set({ rewindPanel: { open: false } })
   },
-  async refreshProviders() {
-    const providers = await window.agentDesk.listProviders()
-    set({ providers })
-  },
-  async createProvider(input) {
-    const provider = await window.agentDesk.createProvider(input)
-    await get().refreshProviders()
-    return provider
-  },
-  async updateProvider(id, patch) {
-    const provider = await window.agentDesk.updateProvider(id, patch)
-    await get().refreshProviders()
-    return provider
-  },
-  async deleteProvider(id) {
-    await window.agentDesk.deleteProvider(id)
-    await get().refreshProviders()
-    // 若 Provider 偏好被删,清空偏好;新建会话必须显式再选。
-    if (get().settings.defaultProviderId === id) {
-      await get().updateSettings({ defaultProviderId: '' })
-    }
-  },
-  async refreshProjects() {
-    const projects = await window.agentDesk.listProjects()
-    set({ projects })
-  },
-
-  async archiveProject(id, archived) {
-    await window.agentDesk.updateProject(id, { archived })
-    const projects = await window.agentDesk.listProjects()
-    set((s) => ({
-      projects,
-      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
-    }))
-  },
-
-  async deleteProject(id) {
-    await window.agentDesk.deleteProject(id)
-    const projects = await window.agentDesk.listProjects()
-    set((s) => ({
-      projects,
-      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
-    }))
-  },
-
   setShowNewSession(v, projectId) {
     set((s) => ({
       showNewSession: v,

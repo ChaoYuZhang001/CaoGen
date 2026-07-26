@@ -2301,10 +2301,10 @@
     },
     "src/renderer/src/store.ts": {
       "profile": "product",
-      "lines": 4006,
-      "contentHash": "f649e6bf1b050d276c965de58846e022776fd14a8d385161315ddb8ddf502703",
+      "lines": 3950,
+      "contentHash": "403261889096fd91e209b3b7facdc0d4b00795679ac1806ca682975c7b7dafd3",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2908,
+      "maxFunctionLines": 2862,
       "complexFunctionCount": 1,
       "maxComplexity": 57,
       "forbiddenSuppressionCount": 0,
@@ -2316,7 +2316,7 @@
           "complexity": 57
         },
         "create callback#1": {
-          "lines": 2908,
+          "lines": 2862,
           "complexity": 1
         }
       }
