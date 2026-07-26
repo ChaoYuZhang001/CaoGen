@@ -106,9 +106,13 @@ export function useWelcomeDraftController({
     })
   }
   const setDriveMode = (nextDriveMode: CaoGenDriveMode): void => {
+    const selectedProvider = providers.find((provider) => provider.id === providerId)
+    const nextModel = stored.routingMode === 'fixed'
+      ? selectedProvider?.models.includes(model) ? model : ''
+      : providerId ? AUTO_MODEL : ''
     update({
       driveMode: nextDriveMode,
-      model: providerId ? AUTO_MODEL : '',
+      model: nextModel,
       permissionMode: caogenDrivePolicyView(nextDriveMode).defaultPermissionMode
     })
   }
