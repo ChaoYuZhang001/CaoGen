@@ -197,8 +197,8 @@
     },
     "scripts/github-release-audit.mjs": {
       "profile": "automation",
-      "lines": 346,
-      "contentHash": "96194fd4aef96f12f7e77c3871be29845f8917f01164c3140188156bdd0fc4ed",
+      "lines": 510,
+      "contentHash": "5f0351a586feb4e3ce8f0b0fe1ac517090fdd94b58504ec57bae015fddab3c55",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,

@@ -2,7 +2,7 @@
 
 > 更新:2026-07-26· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
-> ✅ **v0.1.7 已正式发布**。[GitHub Release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) 于 2026-07-25 发布，annotated tag 指向 `d8e883a21b64133b4ec18d20d0c77fd33c054718`；五项 Intel x64 资产的公开名称、大小与 SHA-256 digest 审计全部通过，`caogen.dev` 中英文首页与文档入口已同步。候选 `main@bbec526554aea9785291edf4d8164084145347ae` 的 run `30162696430` 已通过精确提交 Deep、Developer ID 签名、公证、staple、Gatekeeper、DMG 隔离安装、真实 renderer 启动和五资产更新元数据绑定。Apple Silicon 与 Windows 按创始人决定暂停，不能写成已完成，完整三平台 Release Doctor 因此仍为 `not_ready`。Docker 已从产品模式删除；正式运行时只保留 OpenAI-compatible 与原生 Anthropic Messages，不需要 Claude Code 登录、SDK 或 CLI。
+> ⚠️ **v0.1.7 已发布，但当前公开 Release 完整性失败。** [GitHub Release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) 于 2026-07-25 首次发布时，annotated tag 指向 `d8e883a21b64133b4ec18d20d0c77fd33c054718`，批准的五项 Intel x64 资产名称、大小与 SHA-256 digest 审计全部通过，`caogen.dev` 中英文首页与文档入口已同步。2026-07-26 远端随后增加 `CaoGen-Setup-0.1.7.exe`、其 blockmap 与 `latest.yml`，正文也从仓库内 macOS Intel 五资产合同改成八资产/Windows unsigned 声明；当前 Release 因此不再匹配 `docs/RELEASE-NOTES-FINAL.md`，不能继续宣称公开资产审计为通过。原五项 macOS digest 未变，候选 `main@bbec526554aea9785291edf4d8164084145347ae` 的签名、公证、staple、Gatekeeper、DMG 隔离安装与真实 renderer 证据仍有效。Apple Silicon 与 Windows 仍不属于批准的当前 M1 发布范围；正式运行时只保留 OpenAI-compatible 与原生 Anthropic Messages，不需要 Claude Code 登录、SDK 或 CLI。
 > 当前源码仍在 `0.1.7` 发布线上，但 v0.1.7 不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.7 只发布已验证楔子能力，不把路线图能力写成已完成。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
@@ -13,7 +13,8 @@
 
 # Current Status
 
-- **[v0.1.7 macOS Intel x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7)**(2026-07-25)——五项 DMG、ZIP、blockmap 和更新元数据资产已公开；主二进制为 `x86_64`，完成 Developer ID 签名、Apple 公证/staple、Gatekeeper、隔离安装和真实 renderer 启动验证。公开 digest 审计 `5/5` 通过，0 warning / 0 failure。
+- **[v0.1.7 macOS Intel x64 已发布](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7)**(2026-07-25)——首次发布时五项 DMG、ZIP、blockmap 和更新元数据资产公开且 digest 审计 `5/5` 通过；主二进制为 `x86_64`，完成 Developer ID 签名、Apple 公证/staple、Gatekeeper、隔离安装和真实 renderer 启动验证。该历史通过状态已被 2026-07-26 的远端资产/正文追加回归打破，当前公开 Release 审计为失败。
+- Release 完整性回归的实时证据：Windows Actions run [`30192957144`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30192957144) 只有 `contents: read`，仅上传 Actions artifact，并未修改 Release；正式 Release 的 3 个 Windows 资产在该 run 完成后单独由仓库账号上传。新增 Notes 驱动审计会精确比较仓库最终正文、资产名称集合和每项 GitHub SHA-256 digest；当前失败包括正文不匹配、资产数 `8 != 5` 及两个未批准 Windows 文件名。删除资产或恢复远端正文属于外部发布变更，需创始人明确授权后执行。
 - v0.1.5 Windows x64 安装包继续保留；v0.1.7 不发布 Windows、macOS arm64 或 Linux 资产。
 - v0.1.5 新增整页设置与 Provider 编辑、项目级会话收纳、未关联项目会话收纳、三种显式调度范围，以及调研/策划/开发/测试/文档的默认与自定义模型调度。
 - `main@bbec526554aea9785291edf4d8164084145347ae` 的 Intel-only GitHub 最终候选 run [`30162696430`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30162696430) 已成功：release-scope P2 gate 通过，exact-commit Deep 为 `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`，x64 完成 Developer ID 签名、公证、staple、Gatekeeper、`120/120` required release audit、DMG 隔离安装、干净 detach、真实 renderer 启动，以及 `latest-mac.yml` 对 x64 DMG/ZIP 的名称、版本、大小和 SHA-512 绑定。该 run 的 Apple Silicon、Windows 与完整矩阵汇总 job 均按输入范围跳过，因此只证明 Intel，不证明完整三平台。
@@ -22,7 +23,7 @@
 - 移除 Claude Code Runtime 前的本地 unsigned Intel 基线为 DMG `197,518,789 B`、ZIP `197,966,775 B`、`.app` 逻辑体积 `555,506,427 B`、`app.asar` `61,742,511 B`，其中 Claude CLI 为 `240,192,080 B`。移除后的本地 unsigned Intel 实测为 DMG `125,638,991 B`、ZIP `125,002,021 B`、`.app` 逻辑体积 `311,931,918 B`、`app.asar` `61,630,882 B`，分别减少 `36.39% / 36.86% / 43.85% / 0.18%`。当前 clean candidate 的签名公证资产为 DMG `127,702,230 B`（SHA-256 `a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b`）与 ZIP `127,016,670 B`（SHA-256 `5f3695fa24117145cd47ecf731660ea3423911ad7bc2de9108c3f786aa78f5e0`）；包含两项 blockmap 与 `latest-mac.yml` 的五文件资产集绑定 `7553d1ef33ec44d69e7b95c74aee8fcb7500a68daf008ed343e66ae3345a036c`。required audit 证明 SDK/CLI 在包内不存在，且 app、DMG、ZIP 的 `0.1.7`、clean worktree 与完整提交 provenance 一致。
 - M1-T4 的仓库公开进度口径已更新为 `64 = 21 已验证 + 18 部分完成 + 24 立项目标 + 1 仅达到基础`。官网生产构建已同步 v0.1.7 下载、Intel-only、签名公证和运行时边界；该文档口径不改变 Release Doctor 的 `not_ready` 状态，也不替代暂停平台、真实 Provider、N1 或完整 1.0 验收证据。
 - 正式运行时只有 OpenAI-compatible（Responses / Chat Completions）与原生 Anthropic Messages（`/v1/messages`）两条执行路径，均已注册到 Provider/SessionManager/UI。Claude Code Agent Runtime、Claude Agent SDK 与 Claude CLI 已从依赖、主进程、IPC/UI、测试宿主和打包规则删除；旧 `engine: claude` Provider/会话只迁移为 `anthropic`，不恢复 SDK 隐藏上下文。当前 Intel 候选 Deep 报告 `2026-07-25T15-06-42-357Z` 为 `159 total / 157 required pass / 2 optional skip / 0 blocked / 0 fail`，开始和结束均绑定 clean `bbec5265`；它只证明该精确提交的 Intel 候选和仓库 required gates，不替代暂停平台、真实 Provider、N1 或完整 1.0 验收证据。
-- M1-T6 已完成：只读、fail-closed 的 Intel 发布交接预检在 publication-only 后继提交 `d8e883a2` 上通过后，创始人授权创建 `v0.1.7` Tag/Release 并上传精确五项资产。发布后公开资产审计 `test-results/github-release-audit/latest.json` 为 `passed`，资产数 `5`，每项名称、大小与 GitHub SHA-256 digest 均匹配候选文件，0 warning / 0 failure；官网生产页也已同步。该结果只关闭发布动作，不关闭陌生用户 Quick Start、N1、真实 Provider 或 1.0 验收。
+- M1-T6 的原始发布动作已完成：只读、fail-closed 的 Intel 发布交接预检在 publication-only 后继提交 `d8e883a2` 上通过后，创始人授权创建 `v0.1.7` Tag/Release 并上传精确五项资产；当时公开资产审计为 `passed`。2026-07-26 的远端追加已使该发布后断言失效；仓库现增加每 6 小时及手动运行的只读 Release 完整性审计，并把 Windows unsigned 构建输出改成显式 `unsigned-preview` Actions artifact、排除 `latest.yml`、要求手动确认 preview-only。当前还需获得明确授权后恢复远端五资产/正文合同；该回归不关闭陌生用户 Quick Start、N1、真实 Provider 或 1.0 验收。
 - M1 首位陌生用户验收工具链已就绪：`docs/M1-FIRST-USER-DRILL.md` 固定官网→Intel DMG→无安全绕过安装→Provider 配置→只读任务五步；私有结果 schema v2 和 `test:m1-first-user-onboarding:required` 绑定 `v0.1.7`、候选提交、公开 DMG SHA-256、Intel 架构、30 分钟、零修改及四份独立证据，并强制录屏前明确同意、唯一证据用途、最长 30 天保留、`deleteBy`、脱敏复核和真实删除状态。文件仍存在或审计未完成时不得声称已删除。失败演练可用 `--observation` 留下 `observed_failed`，但不会成为通过；负向 smoke 已覆盖原有发布/通过条件以及无同意、未复核、超期保留和虚假删除。当前仍没有非项目参与者真人结果，M1 整体完成判据保持开放。
 - M1 招募已公开：`npm run prepare:m1-first-user-drill` 会在仓库外创建权限收紧的私有目录、记录模板和主持人清单，不下载 DMG、不创建假证据；中英文 README、[Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 和 `CaoGen-Website@f8e8c50` 生产下载区只征集 Intel 机型、时区和可参与时间，并明确禁止公开 Key、Provider URL、项目路径、录屏或证据。Discussion 已增加证据生命周期与候补名单规则，并从 General 原地移到 Announcements；GitHub 仓库 About 的空 homepage 字段已补为 `https://caogen.dev`，不修改或覆盖 v0.1.7 Release。首条外部评论是验收设计建议，不是报名；它暴露的 SLA 漏算已在 `main@b98acd11` 修复，live audit 现将其作为独立线程并记录 `1 responded_on_time / 0 pending / 0 overdue / 0 late`，维护者首次回复耗时 51 分钟。2026-07-26 调整入口时公开 DMG 下载计数为 1；当前合格参与者和真人记录仍为 0，不能关闭 M1。
 - M1 招募增量已在 clean `main@d424d6c2be8ce4b0c0b3237d7255a9740495a3c1` 完成全量 Deep：时间戳报告 `test-results/caogen-deep/2026-07-26T03-24-20-655Z/deep-test-report.json` 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，开始和结束都绑定该提交、clean 且 Git 状态未变；新增私有准备 smoke 与原有首位用户审计 smoke 均为 required pass。该结果证明仓库回归稳定，不是陌生用户安装、Provider 配置或任务完成证据。
@@ -67,7 +68,7 @@
 
 # Current Focus
 
-**当前唯一焦点是执行 M1 首位陌生用户验收，并为 M2/N1 onboarding 建立真实基线。** v0.1.7 Intel x64 的候选、签名公证、发布、五资产公开 digest 审计、官网同步和 fail-closed 真人验收工具链已经完成；[Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 已公开征集一名非项目参与者，下一步是确认合格 Intel Mac 测试者并按 `docs/M1-FIRST-USER-DRILL.md` 完成私有演练。测试者必须从 `caogen.dev` 下载、无安全绕过安装启动，按 Quick Start 配置 Provider 并完成第一个只读任务；失败必须保留为 `observed_failed` 并转成 onboarding 修复，不能由主持人帮助后改写成通过。Apple Silicon 与 Windows 继续暂停，不计入当前 M1 阻塞项，也不得写成完成。M1-M3 期间冻结新的 1.0 愿景功能；64 个 P0 仍为 21 已验证、43 开放，不因发布 0.1.7 而改变。
+**当前焦点是等待并执行 M1 首位陌生用户验收，同时修复现有用户流程与发布完整性缺陷。** [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 已公开征集一名非项目参与者；等待期间不暂停工程工作，但只做 onboarding、恢复、稳定性、安全与发布保护，不扩张新的 1.0 愿景功能。测试者仍须按 `docs/M1-FIRST-USER-DRILL.md` 使用精确 Intel DMG digest 完成私有演练，失败保留为 `observed_failed`；由于当前 GitHub Release 正文/资产已偏离批准的五资产合同，M1 可以收集观察记录，但在 Release 完整性恢复前不得关闭。Apple Silicon 与 Windows 继续暂停，不计入当前 M1 完成项；64 个 P0 仍为 21 已验证、43 开放。
 
 # Goal
 
@@ -87,6 +88,7 @@
 
 **P0**
 - 用户反馈快修循环(常设)
+- 恢复 v0.1.7 公开 Release 到批准的 Intel 五资产与仓库最终正文；当前自动审计 fail-closed，删除 3 个 Windows 资产及改回正文等待创始人明确授权
 - ~~v0.1.7 Intel 签名楔子版发布:clean candidate、Deep、macOS x64 签名公证/安装/启动审计、Release Notes、公开资产审计和官网同步~~ ✅；Apple Silicon/Windows 暂停
 - M1 首位陌生用户 Quick Start 验收；随后按 M2-T1 扩展到 3 名真实同类工具用户的 N1 30 分钟迁移计时
 - ~~arm64 / universal 打包~~ ✅ 已发布至 v0.1.1
@@ -130,6 +132,7 @@
 | ~~可选 Claude Runtime auth 误判~~ | High | ✅ 已删除该 Runtime 与登录检测 |
 | ~~窄屏响应式布局未过人眼复核~~ | Medium | ✅ 已修:同日 responsive smoke 覆盖桌面/窄屏暗色与浅色主题及水平溢出;证据:`test-results/caogen-responsive/2026-07-06T10-08-05-301Z/responsive-light-smoke.json` |
 | ~~新最终候选 Deep~~ | High | ✅ run `30162696430` 在 clean `bbec5265` 上通过 `157/157` required、2 optional skip，并完成 Intel 签名/公证/安装/renderer 与五资产证据；optional skip 未计作 pass |
+| v0.1.7 公开 Release 完整性 | High | ❌ 远端现为 8 资产且正文包含未批准 Windows 发布声明；仓库五资产 Notes 合同审计失败，等待明确授权恢复远端状态 |
 | arm64 包真机启动 | — | 创始人决定暂停；若恢复，仍需真实 Apple Silicon 机器，Intel 不可替代 |
 | Docker | — | 不需要；产品运行模式、资源和分支已删除 |
 | Claude Code 登录 | — | 已不需要；原生 Anthropic Messages 使用 Provider API Key |
@@ -173,7 +176,7 @@
 # Risks
 
 1. **零外部用户数据**:所有"可用"结论出自 E2E 与自测,N1 从未真人验证 —— 最大未知
-2. **分发摩擦**:v0.1.7 Intel x64 已完成 provenance、Developer ID、notarize、staple、Gatekeeper、DMG 隔离安装、真实 renderer、Release/官网交付与公开资产审计；仍缺陌生用户机器上的下载、安装和 Quick Start 证据。Apple Silicon arm64 与 Windows x64 按当前决定暂停，不得由 Intel 证据替代
+2. **分发摩擦与发布漂移**:v0.1.7 Intel x64 的 provenance、Developer ID、notarize、staple、Gatekeeper、DMG 隔离安装和真实 renderer 证据仍有效，但公开 Release 已偏离批准的五资产/正文合同；在远端恢复并重新通过自动审计前，不得继续宣称公开资产审计通过。陌生用户机器上的下载、安装和 Quick Start 证据仍缺；Apple Silicon arm64 与 Windows x64 按当前决定暂停，不得由 Intel 或未批准 Windows artifact 替代
 3. **外部凭据轮换状态不可由仓库验证**:疑似外泄 token 必须由持有人在对应平台撤销/重建;仓库只保留占位符、环境变量名和脱敏状态
 4. **长会话膨胀**:~~chat 历史无压缩~~ 已加自动摘要压缩(超 48k token);OpenAI 引擎工具声明每请求固定开销仍在
 
