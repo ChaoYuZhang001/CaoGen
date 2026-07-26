@@ -1,4 +1,5 @@
 import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+import { loadWelcomeDraft, persistWelcomeDraft } from './welcome-draft-persistence'
 
 export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
 
@@ -39,10 +40,19 @@ export function createWelcomeDraftSlice(
     update: WelcomeDraftStoreState | ((state: WelcomeDraftStoreState) => WelcomeDraftStoreState)
   ) => void
 ): WelcomeDraftSlice {
+  const initialDraft = loadWelcomeDraft(emptyWelcomeDraft())
   return {
-    welcomeDraft: emptyWelcomeDraft(),
+    welcomeDraft: initialDraft,
     updateWelcomeDraft: (patch) =>
-      set((state) => ({ welcomeDraft: { ...state.welcomeDraft, ...patch } })),
-    clearWelcomeDraft: () => set({ welcomeDraft: emptyWelcomeDraft() })
+      set((state) => {
+        const welcomeDraft = { ...state.welcomeDraft, ...patch }
+        persistWelcomeDraft(welcomeDraft)
+        return { welcomeDraft }
+      }),
+    clearWelcomeDraft: () => {
+      const welcomeDraft = emptyWelcomeDraft()
+      persistWelcomeDraft(welcomeDraft)
+      set({ welcomeDraft })
+    }
   }
 }

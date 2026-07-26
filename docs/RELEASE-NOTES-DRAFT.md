@@ -32,6 +32,9 @@ final notes binding, publication preflight, and explicit owner authorization rem
   the task, then continue through the normal Router and streaming path.
 - Detach a new-session draft when its project is deleted or archived so the next
   send cannot silently recreate the removed project.
+- Restore the complete first-task draft after a renderer reload or app restart, while
+  excluding API keys, Provider Base URLs, and model responses from the local draft
+  record. Clear the record after the first task starts successfully.
 - Retain the shipped OpenAI-compatible HTTP and native Anthropic Messages HTTP
   runtimes without embedding or requiring an external Agent SDK or CLI runtime.
 
@@ -66,6 +69,9 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 - The same run passed the `120/120` required macOS release audit, signed/notarized
   installation and real renderer launch. Apple Silicon, Windows, and complete-matrix
   jobs were skipped by scope.
+- The later first-task restart recovery fix is not present in `837f8f90`. Its targeted
+  real Electron report passed `10/10` and page operations passed `22/22`, but the final
+  signed candidate must be rerun on a clean descendant before publication.
 - The two optional skips are external-network checks and are not passes.
 - No non-project participant has completed the private M1 first-user drill. Automated
   tests do not prove first-time installation, Provider setup, copy clarity, or task
@@ -84,6 +90,8 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 
 - `release_identity`: the exact candidate exists, but no v0.1.8 tag or publication-only
   release identity exists.
+- `candidate_freshness`: run `30212121353` predates the first-task restart recovery
+  fix and cannot be used to publish the latest 0.1.8 source.
 - `deep_test`, `dag_finalization`, `p2_required`, and `packaging_release`: the complete
   three-platform/formal 1.0 Release Doctor still lists these domains as open. The
   narrower Intel candidate equivalents passed in run `30212121353`; that scoped pass

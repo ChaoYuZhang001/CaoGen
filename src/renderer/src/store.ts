@@ -70,7 +70,7 @@ import type {
 import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
-import { createWelcomeDraftSlice, emptyWelcomeDraft, type WelcomeDraftSlice } from './store/welcome-draft'
+import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -3794,8 +3794,7 @@ export const useStore = create<AppStore>((set, get) => {
       showSettings: v ? false : s.showSettings,
       settingsContext: v ? null : s.settingsContext,
       showTaskRecovery: v ? false : s.showTaskRecovery,
-      view: v ? 'list' : s.view,
-      welcomeDraft: v ? emptyWelcomeDraft() : s.welcomeDraft
+      view: v ? 'list' : s.view
     }))
   },
 
