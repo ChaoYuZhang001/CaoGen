@@ -108,6 +108,7 @@ README、官网、STATUS 三处必须一致:
   - [x] 固化独立于 N1 迁移的五步演练指南、私有结果模板和 fail-closed 机器审计；绑定 `v0.1.7`、候选提交、公开 DMG SHA-256、Intel 架构、30 分钟、零修改与四份独立证据
   - [x] 失败演练支持 `--observation` 保存 `observed_failed`，不冒充通过；负向 smoke 覆盖超时/卡点、required 拒绝、错误哈希、安全绕过、arm64、敏感字段和重复/符号链接证据
   - [x] 私有证据准备命令已创建 `0700` 目录和 `0600` 模板/清单，拒绝仓库内路径、符号链接、非空目录与覆盖；中英文 README、[Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 与 `CaoGen-Website@f8e8c50` 生产下载区均已公开招募入口
+  - [x] 私有结果 schema v2 与机器审计已强制绑定录屏前明确同意、唯一证据用途、最长 30 天保留、`deleteBy`、脱敏复核和真实删除状态；文件仍存在或审计未完成时不得声称已删除，招募帖同时接受不含敏感信息的候补名单
   - [x] clean `main@d424d6c2be8ce4b0c0b3237d7255a9740495a3c1` 完整 Deep 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，开始/结束均为 clean 且 Git 状态未变；两个 M1 smoke 均在 required 集合中
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
 
@@ -124,9 +125,9 @@ README、官网、STATUS 三处必须一致:
 - [ ] M2-T2 onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
   - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；配置动作直达 Providers 页，真实 Electron E2E `9/9` 覆盖提示词精确注入、零误建会话、设置深链、刷新恢复与真实 Router/流式响应
   - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
-- [ ] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
+- [x] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
   - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`
-  - [ ] 用真实外部反馈验证入口可理解、首次维护者回应不超过 48 小时；逾期项必须处理并保留审计告警，不能只以空渠道自证完成
+  - [x] [Discussion #9 首条外部评论](https://github.com/ChaoYuZhang001/CaoGen/discussions/9#discussioncomment-17784426) 暴露“维护者发帖下的外部评论被漏算”缺陷；`main@b98acd11` 已把外部顶层评论作为独立 SLA 线程并覆盖 pending/on-time/overdue，维护者在 51 分钟内回复后 live audit 为 `1 responded_on_time / 0 pending / 0 overdue / 0 late`。该评论是设计建议，不是 M1 报名或真人结果
 - [ ] M2-T4 每周发布一个 patch 版本,只修真实用户撞到的问题,不加新功能
 - [x] M2-T5 官网增加 30 秒演示视频(配 key → 下任务 → failover → Diff 审查)
   - [x] `CaoGen-Website@e5be292` 已推送 `main`；中文/英文首页均包含原生 MP4 播放器、poster、下载入口与移动端单列布局，官网 `npm run check` 全部通过
