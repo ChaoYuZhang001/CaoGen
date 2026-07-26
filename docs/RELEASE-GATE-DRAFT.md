@@ -19,7 +19,7 @@ package is not considered delivered to users.
 | Candidate workflow | [`30215660873`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30215660873), successful read-only `macos-x64` evidence run |
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/stapled/installed/launched x64 app, packaged-app smoke, artifact set `b5e03719796ea3236fab617c8e1493a238e3a07e48552daa1dc74b04f7d27252` |
-| Candidate freshness | Passed for `9591c20b`: first-task restart recovery and asynchronous Project/Provider catalog hydration fixes are present; targeted Electron is `11/11`, page operations `22/22`, and the exact clean commit passed the complete candidate workflow |
+| Candidate freshness | Historical only: first-task restart recovery and asynchronous Project/Provider catalog hydration fixes are present, but the later fixed-model/Drive correction is not in `9591c20b`; targeted Electron for the later fix is `12/12` and page operations `22/22`, so the candidate must be rerun before publication |
 | Independent download | Passed: five assets and four report families downloaded outside the repository; sizes, SHA256 values, and artifact-set digest match the candidate reports |
 | Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
 
@@ -29,15 +29,15 @@ an exact commit already on `main`, defaults to package version `0.1.8` and
 evidence only. It did not close the first-user M1 gate and did not authorize
 publication. Its Apple Silicon, Windows, and complete-matrix jobs were skipped.
 The candidate includes the user-facing welcome-draft persistence and asynchronous
-catalog hydration fixes. Any later user-visible source change would require a new
-exact-commit candidate before publication.
+catalog hydration fixes. The current source now also contains a later fixed-model/Drive
+correction, so this candidate is historical and cannot publish the latest source.
 
-Before any 0.1.8 publication decision, the independently checked exact five assets and
-four report families must be bound into final notes, and a clean publication-only
-descendant must pass the scoped notes and handoff preflight. The final notes must
-describe only the post-v0.1.7 fixes present in this candidate. Windows and Apple
-Silicon remain skipped, not passed. Publication still requires a new explicit owner
-authorization.
+Before any 0.1.8 publication decision, a new exact clean candidate must include the
+fixed-model/Drive correction and pass the scoped Intel workflow. Its five assets and
+four report families must be independently checked and bound into final notes, and a
+clean publication-only descendant must pass the scoped notes and handoff preflight.
+Windows and Apple Silicon remain skipped, not passed. Publication still requires a new
+explicit owner authorization.
 
 ### 0.1.8 Candidate Asset Record
 

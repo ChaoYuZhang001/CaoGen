@@ -19,7 +19,9 @@ gates, exact-commit Deep, Developer ID signing, notarization, stapling, Gatekeep
 isolated installation, real renderer launch, package-size policy, and five-asset
 verification in read-only workflow run `30215660873`. The five candidate assets and
 four report families were independently downloaded and checked. Final notes binding,
-publication preflight, and explicit owner authorization remain.
+publication preflight, and explicit owner authorization remain. The current source now
+also contains a later fixed-model/Drive correction, so this exact candidate is historical
+and must be regenerated before the latest source can be published.
 
 ## Candidate Highlights
 
@@ -58,9 +60,9 @@ produced the following private candidate set:
 
 The candidate artifact-set SHA256 is
 `b5e03719796ea3236fab617c8e1493a238e3a07e48552daa1dc74b04f7d27252`.
-A final macOS Intel release, if separately authorized after all remaining gates pass,
-must contain exactly these five audited files. Local `test-results`, build output, and
-the Actions candidate evidence archive are not public Release assets.
+These five audited files bind only exact commit `9591c20b`; they cannot be reused to
+publish the later source. Local `test-results`, build output, and the Actions candidate
+evidence archive are not public Release assets.
 
 GitHub Actions artifact `8636056669`, named
 `caogen-release-macos-x64-9591c20bde2330a6f57951e7381b5e7e9d642091`, contains
@@ -84,6 +86,9 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
   candidate. Their targeted real Electron report passed `11/11` with 8 screenshots and
   page operations passed `22/22`; the exact candidate then passed the complete Deep and
   signed distribution workflow.
+- The later fixed-model/Drive correction is not present in `9591c20b`. Its targeted
+  real Electron report passed `12/12` with 9 screenshots and page operations passed
+  `22/22`, but those checks do not bind a signed candidate.
 - The two optional skips are external-network checks and are not passes.
 - No non-project participant has completed the private M1 first-user drill. Automated
   tests do not prove first-time installation, Provider setup, copy clarity, or task
@@ -102,6 +107,8 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 
 - `release_identity`: the exact candidate exists, but no v0.1.8 tag or publication-only
   release identity exists.
+- `candidate_freshness`: run `30215660873` predates the fixed-model/Drive correction
+  and cannot publish the latest 0.1.8 source.
 - `deep_test`, `dag_finalization`, `p2_required`, and `packaging_release`: the complete
   three-platform/formal 1.0 Release Doctor still lists these domains as open. The
   narrower Intel candidate equivalents passed in run `30215660873`; that scoped pass

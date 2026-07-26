@@ -223,6 +223,29 @@ try {
     await screenshot(page, '02-expert-provider-return')
   })
 
+  await check('fixed model survives Drive changes when the selected model remains valid', async () => {
+    const beforeDriveChange = await readWelcomeDraft(page)
+    const alternateDrive = beforeDriveChange.driveMode === 'forge' ? 'core' : 'forge'
+    await page.select('[data-welcome-routing-control="drive"]', alternateDrive)
+    await page.waitForFunction(
+      (expectedModel) => document.querySelector('[data-welcome-routing-control="model"]')?.value === expectedModel,
+      {},
+      beforeDriveChange.modelValue
+    )
+    let afterDriveChange = await readWelcomeDraft(page)
+    assert(afterDriveChange.modelValue === beforeDriveChange.modelValue, `Drive change cleared fixed model: ${afterDriveChange.modelValue}`)
+
+    await page.select('[data-welcome-routing-control="drive"]', beforeDriveChange.driveMode)
+    await page.waitForFunction(
+      (expectedModel) => document.querySelector('[data-welcome-routing-control="model"]')?.value === expectedModel,
+      {},
+      beforeDriveChange.modelValue
+    )
+    afterDriveChange = await readWelcomeDraft(page)
+    assert(afterDriveChange.modelValue === beforeDriveChange.modelValue, `Drive restore cleared fixed model: ${afterDriveChange.modelValue}`)
+    await screenshot(page, '02-expert-fixed-model-after-drive')
+  })
+
   await check('renderer reload restores the complete first-task draft without credential data', async () => {
     const beforeReload = await readWelcomeDraft(page)
     const persisted = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
