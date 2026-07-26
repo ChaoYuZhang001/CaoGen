@@ -23,11 +23,19 @@
 
 ## 主持人准备
 
-1. 新建私有证据目录，复制 [结果模板](./M1-FIRST-USER-RESULT.template.json)。
+1. 在仓库外选择一个全新的绝对路径，运行下方准备命令；生成目录权限为 `0700`，记录和清单权限为 `0600`。
 2. 确认录屏不会包含 API Key、通知、真实私库名或可访问的私有 URL。
 3. 让测试者准备一个允许只读分析的本地项目；不要使用 CaoGen 仓库。
 4. 不预装 CaoGen，不提前展示界面，不口头讲解按钮位置。
 5. 录制“关于本机”或等价系统信息，证明机器为 Intel；开始计时前打开浏览器空白页。
+
+```bash
+npm run prepare:m1-first-user-drill -- \
+  --evidence-dir /absolute/private/path/CaoGen-M1-Evidence
+```
+
+准备命令拒绝相对路径、仓库内路径、符号链接、非空目录和覆盖写入。它只生成私有 JSON 模板与
+`HOST-CHECKLIST.txt`，不会提前下载 DMG、创建占位证据或替测试者完成任何计时步骤。
 
 ## 计时流程
 
@@ -67,17 +75,14 @@ Quick Start 提示词 ID 为 `quick_start_project_read_only_v1`，正文保持�
 
 ## 审计命令
 
-先复制模板并填写：
-
-```bash
-cp docs/M1-FIRST-USER-RESULT.template.json /private/evidence/m1-first-user.json
-```
+按私有目录中的 `HOST-CHECKLIST.txt` 收齐真实文件并填写 `m1-first-user.json`。下方路径仅为示例，
+必须替换成准备命令实际输出的仓库外绝对路径。
 
 通过记录使用 fail-closed 门禁：
 
 ```bash
 npm run test:m1-first-user-onboarding:required -- \
-  --record /private/evidence/m1-first-user.json \
+  --record /absolute/private/path/CaoGen-M1-Evidence/m1-first-user.json \
   --expected-release-tag v0.1.7 \
   --expected-candidate-commit bbec526554aea9785291edf4d8164084145347ae \
   --expected-asset-sha256 a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b
@@ -88,7 +93,7 @@ npm run test:m1-first-user-onboarding:required -- \
 ```bash
 npm run test:m1-first-user-onboarding -- \
   --observation \
-  --record /private/evidence/m1-first-user.json \
+  --record /absolute/private/path/CaoGen-M1-Evidence/m1-first-user.json \
   --expected-release-tag v0.1.7 \
   --expected-candidate-commit bbec526554aea9785291edf4d8164084145347ae \
   --expected-asset-sha256 a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b

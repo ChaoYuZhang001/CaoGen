@@ -30,6 +30,7 @@ const commandDefinitions = [
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map smoke', command: 'node', args: ['scripts/product-1.0-acceptance-map-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map structure', command: 'node', args: ['scripts/product-1.0-acceptance-map.mjs'], category: 'static' },
+  { name: 'M1 first-user drill preparation smoke', command: 'node', args: ['scripts/prepare-m1-first-user-drill-smoke.mjs'], category: 'smoke' },
   { name: 'M1 first-user onboarding audit smoke', command: 'node', args: ['scripts/m1-first-user-onboarding-audit-smoke.mjs'], category: 'smoke' },
   { name: 'community feedback contract audit', command: 'node', args: ['scripts/community-feedback-audit.mjs', '--required'], category: 'static' },
   { name: 'community response SLA smoke', command: 'node', args: ['scripts/community-response-sla-smoke.mjs'], category: 'smoke' },

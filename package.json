@@ -229,6 +229,8 @@
     "test:p2-ide-build-and-vscode:required": "npm run test:ide-plugins:required && npm run test:vscode-extension-host:required",
     "test:p2-ide:required": "npm run test:p2-ide-build-and-vscode:required && npm run test:jetbrains-ide-interaction:required",
     "test:openai-p2-tools": "node scripts/openai-p2-tools-smoke.mjs",
+    "prepare:m1-first-user-drill": "node scripts/prepare-m1-first-user-drill.mjs",
+    "test:m1-first-user-drill-prep:smoke": "node scripts/prepare-m1-first-user-drill-smoke.mjs",
     "test:m1-first-user-onboarding": "node scripts/m1-first-user-onboarding-audit.mjs",
     "test:m1-first-user-onboarding:required": "node scripts/m1-first-user-onboarding-audit.mjs --required",
     "test:m1-first-user-onboarding:smoke": "node scripts/m1-first-user-onboarding-audit-smoke.mjs",
