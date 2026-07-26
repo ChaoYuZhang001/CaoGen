@@ -13,6 +13,7 @@ const tag = `v${version}`
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-github-release-audit-'))
 const distDir = path.join(tempRoot, 'dist')
 const fixturePath = path.join(tempRoot, 'releases.json')
+const notesPath = path.join(tempRoot, 'RELEASE-NOTES-FINAL.md')
 const expectedAssets = expectedMacosX64ReleaseAssets(version)
 
 try {
@@ -53,13 +54,57 @@ try {
   const unexpected = runAudit()
   assert.notEqual(unexpected.status, 0)
   assert(unexpected.report.failures.some((failure) => failure.includes('unapproved file: .env')))
+  rmSync(path.join(distDir, '.env'))
+
+  const notesBody = renderReleaseNotes()
+  writeFileSync(notesPath, notesBody, 'utf8')
+  writeJson(fixturePath, releaseFixture(notesBody))
+  const notesValid = runNotesAudit()
+  assert.equal(notesValid.status, 0, notesValid.stderr || notesValid.stdout)
+  assert.equal(notesValid.report.tagFilter, tag)
+  assert.equal(notesValid.report.releaseNotesContract.assetCount, 5)
+  assert.equal(notesValid.report.checkedReleases[0].releaseNotesBodyMatches, true)
+
+  const extraAssetFixture = releaseFixture(notesBody)
+  extraAssetFixture[0].assets.push({
+    name: 'latest.yml',
+    size: 32,
+    state: 'uploaded',
+    content_type: 'text/yaml',
+    digest: `sha256:${'f'.repeat(64)}`,
+    textContent: `version: ${version}\n`,
+    url: '',
+    browser_download_url: ''
+  })
+  writeJson(fixturePath, extraAssetFixture)
+  const extraAsset = runNotesAudit()
+  assert.notEqual(extraAsset.status, 0)
+  assert(extraAsset.report.failures.some((failure) => failure.includes('must exactly match release notes contract')))
+
+  writeJson(fixturePath, releaseFixture(`${notesBody}\nRemote-only edit.\n`))
+  const changedBody = runNotesAudit()
+  assert.notEqual(changedBody.status, 0)
+  assert(changedBody.report.failures.some((failure) => failure.includes('release notes body does not match')))
+
+  const changedDigestFixture = releaseFixture(notesBody)
+  changedDigestFixture[0].assets[0].digest = `sha256:${'e'.repeat(64)}`
+  writeJson(fixturePath, changedDigestFixture)
+  const changedDigest = runNotesAudit()
+  assert.notEqual(changedDigest.status, 0)
+  assert(changedDigest.report.failures.some((failure) => failure.includes('public digest')))
+
+  writeFileSync(notesPath, notesBody.replace(/\| `latest-mac\.yml` \|.*\n/, ''), 'utf8')
+  writeJson(fixturePath, releaseFixture(notesBody))
+  const incompleteNotes = runNotesAudit()
+  assert.notEqual(incompleteNotes.status, 0)
+  assert(incompleteNotes.report.failures.some((failure) => failure.includes('must contain the same names')))
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
 console.log('GitHub release audit smoke: passed')
 
-function releaseFixture() {
+function releaseFixture(body = 'Synthetic release audit fixture.') {
   return [{
     tag_name: tag,
     name: `CaoGen ${tag}`,
@@ -67,7 +112,7 @@ function releaseFixture() {
     draft: false,
     prerelease: false,
     published_at: '2026-07-25T00:00:00.000Z',
-    body: 'Synthetic release audit fixture.',
+    body,
     assets: expectedAssets.map((name) => {
       const filePath = path.join(distDir, name)
       return {
@@ -84,6 +129,31 @@ function releaseFixture() {
   }]
 }
 
+function renderReleaseNotes() {
+  const assetLines = expectedAssets.map((name) => `- \`${name}\``).join('\n')
+  const digestLines = expectedAssets.map((name) => `| \`${name}\` | \`${sha256(path.join(distDir, name))}\` |`).join('\n')
+  return `# CaoGen ${tag} Release Notes
+
+## Release Decision
+
+Synthetic fixture for the approved release contract.
+
+## Uploaded Assets
+
+${assetLines}
+
+### SHA256
+
+| Asset | SHA256 |
+|---|---|
+${digestLines}
+
+## Truth Boundary
+
+Synthetic fixture only.
+`
+}
+
 function runAudit() {
   const result = spawnSync(process.execPath, [
     path.join(repoRoot, 'scripts', 'github-release-audit.mjs'),
@@ -93,6 +163,23 @@ function runAudit() {
     '--tag', tag,
     '--json', fixturePath,
     '--expected-assets-dir', distDir
+  ], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    report: JSON.parse(result.stdout)
+  }
+}
+
+function runNotesAudit() {
+  const result = spawnSync(process.execPath, [
+    path.join(repoRoot, 'scripts', 'github-release-audit.mjs'),
+    '--required',
+    '--read-text-assets',
+    '--repo', 'ChaoYuZhang001/CaoGen',
+    '--json', fixturePath,
+    '--expected-assets-from-notes', notesPath
   ], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   return {
     status: result.status,
