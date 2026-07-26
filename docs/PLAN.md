@@ -107,7 +107,7 @@ README、官网、STATUS 三处必须一致:
 - [ ] M1 退出验收:首位陌生用户从官网下载、无安全绕过安装并按 Quick Start 完成第一个只读任务
   - [x] 固化独立于 N1 迁移的五步演练指南、私有结果模板和 fail-closed 机器审计；绑定 `v0.1.7`、候选提交、公开 DMG SHA-256、Intel 架构、30 分钟、零修改与四份独立证据
   - [x] 失败演练支持 `--observation` 保存 `observed_failed`，不冒充通过；负向 smoke 覆盖超时/卡点、required 拒绝、错误哈希、安全绕过、arm64、敏感字段和重复/符号链接证据
-  - [x] 私有证据准备命令已创建 `0700` 目录和 `0600` 模板/清单，拒绝仓库内路径、符号链接、非空目录与覆盖；中英文 README、[Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 与 `CaoGen-Website@f8e8c50` 生产下载区均已公开招募入口
+  - [x] 私有证据准备命令已创建 `0700` 目录和 `0600` 模板/清单，拒绝仓库内路径、符号链接、非空目录与覆盖；中英文 README、[Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 与 `CaoGen-Website@f8e8c50` 生产下载区均已公开招募入口；GitHub About 已补官网链接，原招募帖已从 General 原地移到 Announcements，未新建重复渠道
   - [x] 私有结果 schema v2 与机器审计已强制绑定录屏前明确同意、唯一证据用途、最长 30 天保留、`deleteBy`、脱敏复核和真实删除状态；文件仍存在或审计未完成时不得声称已删除，招募帖同时接受不含敏感信息的候补名单
   - [x] clean `main@d424d6c2be8ce4b0c0b3237d7255a9740495a3c1` 完整 Deep 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，开始/结束均为 clean 且 Git 状态未变；两个 M1 smoke 均在 required 集合中
   - [x] 社区 SLA 修复与证据治理合并后的 clean `main@0874f5a71f890403c008100889c5eb339eb57f98` 完整 Deep 仍为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`；报告 `2026-07-26T06-11-06-988Z` 起止均绑定该提交、clean 且 Git 状态未变，远端 `discussion_comment` Actions run `30190540484` 同时通过
