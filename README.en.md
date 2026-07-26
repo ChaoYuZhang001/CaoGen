@@ -41,6 +41,8 @@ This table describes the current product structure. It does not claim that every
 
 As of 2026-07-25, the PRD has 64 P0s: 21 verified, 18 partially complete, 24 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; the published `v0.1.7` is a signed wedge release, not 1.0 stable.
 
+> **Seeking one first-time Intel Mac user** for a private, 30-minute v0.1.7 install, Provider setup, and read-only task drill. Eligibility, privacy boundaries, and the volunteer format are in [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9). Never post keys, Provider URLs, or project paths.
+
 ## Core capabilities available today
 
 - **Connect multiple providers with BYOK**: configure multiple providers and API keys, custom base URLs, gateways, or local OpenAI-compatible services for common compatible model sources such as DeepSeek, Kimi, and GLM.
