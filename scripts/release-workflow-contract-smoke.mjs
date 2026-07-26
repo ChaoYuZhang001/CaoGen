@@ -27,13 +27,18 @@ assert.deepEqual(Object.keys(triggers), ['workflow_dispatch'], 'release workflow
 assert.deepEqual(workflow.permissions, { contents: 'read' }, 'workflow permissions must be read-only')
 assert.equal(workflow.concurrency['cancel-in-progress'], false, 'an in-flight signing run must not be cancelled')
 assert.match(workflow.concurrency.group, /inputs\.commit/, 'concurrency must be scoped to the candidate commit')
+assert.equal(
+  triggers.workflow_dispatch.inputs.version.default,
+  packageJson.version,
+  'the manual candidate workflow must default to the current package version'
+)
 assert.deepEqual(triggers.workflow_dispatch.inputs.platform_scope, {
-  description: 'Run macOS Intel only, both macOS lanes, or the complete macOS and Windows matrix',
+  description: 'Run the current macOS Intel patch scope, both macOS lanes, or the complete macOS and Windows matrix',
   required: true,
-  default: 'all',
+  default: 'macos-x64',
   type: 'choice',
   options: ['all', 'macos', 'macos-x64']
-}, 'platform scope must preserve the complete matrix as the default')
+}, 'the paused-platform release policy must default candidate runs to macOS Intel only')
 assert.deepEqual(Object.keys(workflow.jobs).sort(), ['aggregate', 'candidate', 'macos-arm64', 'macos-x64', 'windows-x64'])
 assert.equal(workflow.jobs['macos-x64']['runs-on'], 'macos-15-intel')
 assert.equal(workflow.jobs['macos-arm64']['runs-on'], 'macos-15-arm64')

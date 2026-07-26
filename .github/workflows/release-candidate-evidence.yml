@@ -10,12 +10,12 @@ on:
       version:
         description: Exact stable package version to validate
         required: true
-        default: 0.1.7
+        default: 0.1.8
         type: string
       platform_scope:
-        description: Run macOS Intel only, both macOS lanes, or the complete macOS and Windows matrix
+        description: Run the current macOS Intel patch scope, both macOS lanes, or the complete macOS and Windows matrix
         required: true
-        default: all
+        default: macos-x64
         type: choice
         options:
           - all

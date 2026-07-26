@@ -1,93 +1,85 @@
-# CaoGen 0.1.7 Release Candidate Draft
+# CaoGen 0.1.8 macOS Intel Patch Candidate Draft
 
-> Status: Do not publish this draft. v0.1.6 is still the latest public release on
-> GitHub Releases. No new release assets uploaded yet.
+> Status: Do not publish this draft. v0.1.7 is the latest public release on
+> GitHub Releases. No new 0.1.8 release assets uploaded yet.
 
 ## Release Decision
 
-The package and lockfile version is `0.1.7`. CaoGen remains a multi-vendor AI work desktop.
-The last complete clean Deep report is bound to `4a3f6359`, with
-`158 total / 155 required pass / 3 optional skip / 0 blocked / 0 fail`. A clean
-rerun on current `main@61e895dc` passed candidate preflight but stopped at the
-required Assistant/Studio performance check while the reference Intel Mac was on
-battery with Low Power Mode enabled; it recorded `82 pass / 1 fail / 76 blocked`.
-The exact current candidate therefore has no complete green Deep evidence and must
-be rerun under a valid performance environment. This is a 0.1.x wedge release, not
-CaoGen 1.0 stable and not proof that all Agent Work OS requirements are complete.
+The package and lockfile version is `0.1.8`. CaoGen remains a multi-vendor AI work desktop.
+This patch candidate exists because user-facing fixes merged after the
+v0.1.7 tag and are not present in the package that users can currently download.
+The candidate scope is macOS Intel x64 only. Apple Silicon, Windows, Linux, and the
+formal three-platform matrix remain outside this patch candidate.
 
-One Developer ID Application identity is available on the current Intel Mac. The
-release configuration, Hardened Runtime, entitlements, DMG/ZIP targets, and minimum
-macOS version pass config audit. The current process does not have notarization
-credentials configured. A local x64 Developer ID-signed baseline exists, but it was
-explicitly built without notarization and without build-commit provenance, so it is
-not a release candidate. No 0.1.7 artifact is notarized or uploaded, and a native
-arm64 release requires Apple Silicon hardware.
-
-The release gate now requires a complete macOS x64, macOS arm64, and Windows x64
-matrix. Each platform must provide an independent distribution audit, clean-commit
-build provenance, native installation, and real renderer launch. Windows additionally
-requires PE x64, NSIS, and timestamped Authenticode evidence for both the unpacked app
-and installer. A manual, read-only candidate workflow now orchestrates those three
-native lanes and independently revalidates the downloaded 12-asset set; it does not
-publish. These gates are implemented; the workflow has not run with real release
-credentials and their final platform evidence is not complete.
+Preparation of this candidate does not authorize a tag or a public Release. The
+exact candidate commit must first pass clean source gates, exact-commit Deep,
+Developer ID signing, notarization, stapling, Gatekeeper, isolated installation,
+real renderer launch, package-size policy, and final five-asset verification in the
+read-only `macos-x64` evidence workflow.
 
 ## Candidate Highlights
 
-- Run local projects with multiple configured providers, BYOK credentials, routing,
-  backup-key handling, and controlled provider failover.
-- Review task changes through isolated Git worktrees, Diff, terminal, file, browser,
-  preview, and Git tools in one desktop workspace.
-- Use Assistant and Studio as two projections over the same canonical project and run
-  state; required Electron gates cover switching, continuity, and responsive controls.
-- Inspect real session, routing, approval, cost, subtask, worktree, and Git signals in
-  the current robot-based 3D office.
-- Recover persisted task, Effect, ModelAttempt, workflow, and DAG-finalization state
-  through locally verified crash and reconciliation paths.
+- Preserve the Quick Start prompt, project, directory, Drive mode, permission,
+  routing, Provider, model, and Studio subpage while the user opens Settings to
+  recover from a missing or unusable Provider.
+- Open the real Provider editor from first-run recovery and keep incomplete entries
+  in the editor with explicit errors. Only a Provider with a stored key and at least
+  one model may return the user to the pending first task.
+- Keep first-run failure recovery at zero sessions until the user explicitly starts
+  the task, then continue through the normal Router and streaming path.
+- Detach a new-session draft when its project is deleted or archived so the next
+  send cannot silently recreate the removed project.
+- Retain the shipped OpenAI-compatible HTTP and native Anthropic Messages HTTP
+  runtimes without embedding or requiring an external Agent SDK or CLI runtime.
 
 ## Uploaded Assets
 
-No new 0.1.7 assets uploaded yet. Final notes must list only files actually uploaded
-to GitHub Releases and must include one SHA256 row for every uploaded file.
+No new 0.1.8 assets uploaded yet. A final macOS Intel release, if separately
+authorized after all gates pass, must contain exactly the audited DMG, DMG blockmap,
+ZIP, ZIP blockmap, and `latest-mac.yml`. Final notes must list each uploaded file and
+its exact SHA256 digest. Local `test-results`, build output, and candidate evidence
+archives are not public Release assets.
 
-Public update metadata such as `latest*.yml` must match the exact installer set. Test
-reports, local evidence, and intermediate build directories are never release assets.
+Public update metadata such as `latest*.yml` must match the exact installer set and
+must not advertise Apple Silicon or Windows artifacts that are outside this scope.
 
 ## Truth Boundary
 
-- Formal 1.0 acceptance remains open: 21 of 64 P0 requirements are currently verified
-  and 43 remain partial, foundation-only, or planned.
-- The last complete clean Deep has three explicit optional skips: real
-  external-network parity for two China conditions and one optional real-engine E2E.
-  They are not passes and are not claimed by this release. The current candidate run
-  stopped before reaching those checks.
+- The latest complete clean local Deep report before this version-only candidate
+  change is bound to `7ed1b5fb4e7d414587734f8c660aca8b8c40bad9`: `163 total / 161
+  required pass / 2 optional skip / 0 blocked / 0 fail`. It proves regression
+  stability of that exact clean commit, not the future 0.1.8 package or public release.
+- The two optional skips are external-network checks and are not passes.
+- No non-project participant has completed the private M1 first-user drill. Automated
+  tests do not prove first-time installation, Provider setup, copy clarity, or task
+  completion on another person's machine.
 - Provider availability depends on user-supplied real keys, account access, network,
   compatible protocols, and quota.
-- The current 3D office uses robot assets. Richer character art remains roadmap work.
-- Genesis remains a planning surface; this release does not claim automatic external
-  agent execution, merge, push, or publication.
-- No N1 30-minute migration, seven-day soak, Apple Silicon runtime, Windows signed
-  package, or public 0.1.7 installation evidence is claimed yet.
+- Genesis remains a planning surface; this patch does not claim autonomous external
+  child-agent execution, merge, push, or publication.
+- Formal 1.0 acceptance remains open at 21 of 64 P0 requirements verified. This is a
+  0.1.x patch candidate, not CaoGen 1.0 stable.
+- The current public v0.1.7 Release has eight assets and Windows text that do not match
+  the repository's approved five-asset Intel contract. This candidate does not edit,
+  delete, or retroactively approve those remote assets.
 
 ## Known Blockers
 
-- `p2_required`: release-scope P2 evidence is not yet fully proved on the exact
-  candidate commit.
-- `deep_test`: the clean current-commit run stopped at the required performance gate;
-  rerun the full gate under normal power on the final candidate commit.
-- `dag_finalization`: the failed Deep run stopped before the required durable DAG
-  finalization crash E2E executed.
-- `packaging_release`: no complete provenance-bound 12-asset matrix exists. The current
-  process lacks notarization configuration, native arm64 evidence requires Apple
-  Silicon, and signed Windows x64 distribution/install evidence requires a Windows
-  signing lane.
-- `product_positioning`: the required public-positioning audit is not yet bound to
+- `release_identity`: the final 0.1.8 candidate commit and tag do not exist.
+- `deep_test`: no clean Deep report is bound to the final 0.1.8 candidate commit yet.
+- `p2_required` and `dag_finalization`: the final candidate evidence workflow has not
+  rerun these required gates for 0.1.8.
+- `packaging_release`: no provenance-bound, signed, notarized, stapled, installed, and
+  launched 0.1.8 Intel five-asset set exists.
+- `product_positioning`: required public-positioning validation is not yet bound to
   the final candidate evidence set.
-- `release_notes`: this is a draft. Exact asset names, SHA256 values, platform support,
-  signing state, final Doctor binding, and post-upload audit are still missing.
-- `github_release_assets`: no public 0.1.7 asset set exists for the required post-upload
-  text and asset audit.
-- Do not publish while Release Doctor is `not_ready`.
+- `release_notes`: this is a draft; exact assets, hashes, evidence reports, and final
+  wording are still missing.
+- `github_release_assets`: no public 0.1.8 asset set exists, and no publication has
+  been authorized.
+- Apple Silicon and Windows are paused. Skipped jobs must remain skips, not passes.
+- Do not publish while any required scoped gate fails or the owner has not explicitly
+  authorized the exact tag and GitHub Release operation.
 
 ## Security Statement
 
@@ -100,26 +92,26 @@ sufficient; revoke or rotate it at the provider as well.
 
 ## macOS First Open
 
-The latest public macOS package remains unsigned. Until a signed, notarized, stapled,
-and Gatekeeper-audited 0.1.7 package is uploaded, users may still need Finder's
-right-click **Open** flow. Final notes must replace this paragraph with the exact
-verified signing and first-open behavior of the uploaded artifact.
+No 0.1.8 package is available yet. If the scoped candidate and final publication gates
+later pass, users will open the signed and notarized Intel DMG from GitHub Releases,
+drag CaoGen to Applications, and launch it normally without bypass commands. Until
+then, v0.1.7 remains the latest public release and no 0.1.8 first-open behavior is
+claimed.
 
 ## Final Required Checks
 
-- `npm run test:deep`
+- `npm run test:release-workflow-contract`
+- `npm run test:package-size-policy`
+- `npm run test:macos-dmg-detach:required`
+- `npm run test:product-positioning:required`
+- `npm run typecheck`
+- `npm run build`
+- `npm run test:coding-standards:required`
 - `npm run secret:scan:history`
-- `npm run release:mac:preflight:x64`
+- `npm run test:p2-release-scope:required`
+- `npm run test:deep`
+- read-only GitHub candidate workflow with version `0.1.8` and scope `macos-x64`
 - `npm run dist:mac:release:x64`
 - `npm run test:macos-release-audit:required -- --arch x64`
 - `npm run test:packaged-app:mac:x64`
-- native arm64 build and audit on Apple Silicon before uploading an arm64 asset
-- `npm run test:packaged-app:mac:arm64` on native Apple Silicon
-- `npm run dist:win:release:x64` with a valid Authenticode identity on native Windows x64
-- `npm run test:windows-release-audit:required -- --arch x64`
-- `npm run test:packaged-app:win:x64`
-- `npm run test:release-packaging-audit:required`
-- `npm run test:product-positioning:required`
-- `npm run workos:release-doctor -- --required --refresh --version 0.1.7`
-- `npm run test:release-notes-audit:final -- --version 0.1.7`
-- `npm run test:github-release-audit:read-text:required -- --tag v0.1.7 --expected-assets-from-dist`
+- final scoped notes and public asset audits after a separate publication decision

@@ -1,9 +1,9 @@
 # CaoGen 项目状态
 
-> 更新:2026-07-26· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
+> 更新:2026-07-27· 实测口径,非文档自评。此文件为活文档,Current Focus 随日更新。
 >
 > ⚠️ **v0.1.7 已发布，但当前公开 Release 完整性失败。** [GitHub Release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) 于 2026-07-25 首次发布时，annotated tag 指向 `d8e883a21b64133b4ec18d20d0c77fd33c054718`，批准的五项 Intel x64 资产名称、大小与 SHA-256 digest 审计全部通过，`caogen.dev` 中英文首页与文档入口已同步。2026-07-26 远端随后增加 `CaoGen-Setup-0.1.7.exe`、其 blockmap 与 `latest.yml`，正文也从仓库内 macOS Intel 五资产合同改成八资产/Windows unsigned 声明；当前 Release 因此不再匹配 `docs/RELEASE-NOTES-FINAL.md`，不能继续宣称公开资产审计为通过。原五项 macOS digest 未变，候选 `main@bbec526554aea9785291edf4d8164084145347ae` 的签名、公证、staple、Gatekeeper、DMG 隔离安装与真实 renderer 证据仍有效。Apple Silicon 与 Windows 仍不属于批准的当前 M1 发布范围；正式运行时只保留 OpenAI-compatible 与原生 Anthropic Messages，不需要 Claude Code 登录、SDK 或 CLI。
-> 当前源码仍在 `0.1.7` 发布线上，但 v0.1.7 不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.7 只发布已验证楔子能力，不把路线图能力写成已完成。
+> 当前源码已按 `docs/PLAN.md` 的用户问题 patch 规则进入 `0.1.8` Intel-only 候选线，但尚未创建候选包、tag 或 Release。v0.1.7 仍是最新公开版，也不是正式 1.0 stable：PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。执行边界见 `docs/1.0-ACCEPTANCE-MATRIX.md`；0.1.8 只允许交付已验证补丁，不把路线图能力写成已完成。
 >
 > **状态纪律**(修正第 2 次犯的"未复现即声称"):凡真对话/可用性类结论必须写明**成立条件与复现环境**,不写环境无关的绝对断言。
 
@@ -30,6 +30,7 @@
 - 社区 SLA 修复与 M1 schema v2 证据治理合并后，clean `main@0874f5a71f890403c008100889c5eb339eb57f98` 的完整 Deep 报告 `test-results/caogen-deep/2026-07-26T06-11-06-988Z/deep-test-report.json` 仍为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`；起止均绑定该提交、clean 且 Git 状态未变。两项 M1 smoke、社区契约与 SLA smoke、typecheck、build、编码标准及共享 Electron/恢复链均为 required pass；两项中国真实外部检查继续是 optional skip，未计作通过。远端由维护者回复触发的 SLA Actions run [`30190540484`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30190540484) 也在含修复的 `b98acd11` 上成功。该工程证据不替代陌生用户真人结果。
 - M2-T2 onboarding 应用内基础已在 v0.1.7 后续源码继续收口：欢迎页首张卡精确注入公开 `quick_start_project_read_only_v1` 只读提示词；Assistant 无执行资源与 Expert 无 Provider 都提供可操作恢复。恢复动作现在携带首任务来源，无可用 Provider 时直接进入新增/修复 Provider 表单；恢复场景缺 API Key 或缺模型时会留在表单内给出双语明确错误，且不会创建半成品 Provider，普通设置场景仍可分步配置。只有保存出“已配置密钥且至少一个模型”的 Provider 才自动返回首任务，取消或不可用保存不会误关闭设置。首任务提示词、目录、Drive、权限、路由模式、Provider/模型和 Studio 子页均跨设置往返保留，恢复成功后旧错误自动消失且发送前仍为零会话。真实 Electron `routing-zero-choice` E2E `2026-07-26T14-44-18-900Z` 为 `9/9`、6 张截图，已通过真实 UI 验证缺 Key、缺模型、有效保存三段路径，不再用 IPC 直接创建 Provider；随后仍走真实 Router/流式响应及模式切换一致性。编码标准 ratchet 把 `WelcomeView` 从 296 行/复杂度 18 降到 222 行/复杂度 11，未新增硬债务。此前脏工作树完整 Deep `2026-07-25T18-20-19-937Z` 为 `160 total / 158 required pass / 2 optional skip / 0 blocked / 0 fail`；该结果和本次 targeted E2E 都不代表 clean release 绑定、M1 真人验收或 M2-T2 完成，仍需用首位陌生用户和三人 N1 记录验证配置成功率、文案理解与恢复时长。
 - 首轮 clean Deep `2026-07-26T14-56-32-490Z` 在 required page operations 尾段真实发现：关闭最后会话并删除项目后，Welcome 草稿未固化推导出的项目选择，项目消失时会退回“新项目目录”，下一次发送会静默重建已删项目。功能候选 `7ed1b5fb4e7d414587734f8c660aca8b8c40bad9` 已把首个项目选择写入草稿，并在项目删除或归档后同步投影为“未关联项目”；最终 targeted page report `2026-07-26T15-39-17-535Z` 与完整 Deep 子报告 `2026-07-26T16-11-50-301Z` 均为 `22/22`。完整 Deep 报告 `test-results/caogen-deep/2026-07-26T15-42-01-402Z/deep-test-report.json` 为 `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均精确绑定该 SHA、clean 且 Git 状态未变。该结果证明现有 onboarding/恢复链回归稳定，不关闭真人 M1、公开 Release 完整性或 formal 1.0 门禁。
+- v0.1.7 tag 后已有用户可见修复进入 `main`，但公开安装包不包含它们；因此按 `docs/PLAN.md` 的 patch 规则启动 `0.1.8` macOS Intel-only 候选准备。当前只更新版本与候选合同，手动证据 workflow 默认锁到 `macos-x64` 且保持 `contents: read`；Apple Silicon/Windows 不恢复，v0.1.7 远端正文与 3 个 Windows 资产不修改。必须在最终 clean 提交上重新通过 source gates、Deep、签名/公证/安装/renderer 和五资产绑定后，才可请求新的明确发布授权。
 - Assistant/Studio 性能门禁在 M2-T3 集成时连续三次真实失败，失败点分别为 mobile warm `307ms`、tablet cold `393.4ms`、mobile warm `433.2ms`，均按失败保留。诊断确认 Studio chunk 首次点击才加载、已挂载的隐藏 Project/DigitalWorker 子树会随模式切换重复渲染，且宿主偶发 animation-frame 调度空洞会污染 wall-clock；现在使用可重试模块 Promise 后台预载、memoize 无模式 Context 依赖的 Studio 根节点，并要求每个正式样本前先建立 4 个连续 `<=50ms` 健康帧，5 秒内无法建立则 required 失败。完整脏工作树 Deep `2026-07-25T21-09-18-544Z` 为 `162 total / 160 required pass / 2 optional skip / 0 blocked / 0 fail`，同一 `3 cold + 60 warm`、原 `<300ms` 门禁 cold P95 `32.90ms`、warm P95 `32.60ms`；帧健康前置真实捕获到最长 `1908ms` 宿主调度空洞，正式样本最大值 `33.80ms`。live-switch `5/5`、canonical consistency `5/5`、required UI `9/9` 和 page operations 同时通过；该结果来自 dirty worktree，不冒充 clean release 绑定。
 - Studio 新会话状态已按投影语义收口：`showNewSession` 会把 Studio 切到自己的会话面板，侧栏/菜单新建保留用户当前模式，3D Office 新建离开 Office 后显示可编辑 Composer，不再留下隐藏 Welcome DOM。macOS Tray 也从每 5 秒无条件重建菜单改为订阅 Session 事件，并只在 running 数量变化时更新；完整 Deep 内 page operations、Assistant/Studio required UI 和 macOS Tray icon smoke 均通过。
 - M2-T3 反馈通道已完成首个真实闭环：公开 GitHub Discussions 保留 General、Ideas、Q&A 分类，仓库提供双语分类表单、Issue/README/SUPPORT 导流和 48 小时维护者首次回应口径；只读工作流每 6 小时及新评论事件扫描公开 Issue、PR、Discussion。SLA 审计现在把维护者 Discussion 下的外部顶层评论作为独立反馈线程，OWNER/MEMBER/COLLABORATOR 的直接回复才计数，自动回复不计数，当前逾期阻断、历史迟复告警。Discussion #9 的外部建议从修复前错误隐藏，变为修复后的 `pending`，并在维护者 51 分钟内回复后成为 `responded_on_time`；当前 `0 pending / 0 overdue / 0 late`。这证明反馈入口与首次响应闭环，不证明该评论者是产品测试者或 M1 已通过。
@@ -69,7 +70,7 @@
 
 # Current Focus
 
-**当前焦点是等待并执行 M1 首位陌生用户验收，同时修复现有用户流程与发布完整性缺陷。** [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 已公开征集一名非项目参与者；等待期间不暂停工程工作，但只做 onboarding、恢复、稳定性、安全与发布保护，不扩张新的 1.0 愿景功能。测试者仍须按 `docs/M1-FIRST-USER-DRILL.md` 使用精确 Intel DMG digest 完成私有演练，失败保留为 `observed_failed`；由于当前 GitHub Release 正文/资产已偏离批准的五资产合同，M1 可以收集观察记录，但在 Release 完整性恢复前不得关闭。Apple Silicon 与 Windows 继续暂停，不计入当前 M1 完成项；64 个 P0 仍为 21 已验证、43 开放。
+**当前焦点是等待并执行 M1 首位陌生用户验收，同时把已修复的 onboarding/恢复问题交付为可验证的 v0.1.8 Intel 补丁候选。** [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9) 已公开征集一名非项目参与者；等待期间不暂停工程工作，但只做 onboarding、恢复、稳定性、安全与发布保护，不扩张新的 1.0 愿景功能。测试者在新版本尚未发布时仍只能按 `docs/M1-FIRST-USER-DRILL.md` 使用公开 v0.1.7 的精确 Intel DMG digest 并留下观察记录；0.1.8 只有经过最终候选证据和单独发布授权后才能替换演练绑定。Apple Silicon 与 Windows 继续暂停，不计入当前 M1 完成项；64 个 P0 仍为 21 已验证、43 开放。
 
 # Goal
 
@@ -89,6 +90,7 @@
 
 **P0**
 - 用户反馈快修循环(常设)
+- v0.1.8 Intel-only 补丁候选：绑定 v0.1.7 后的首用引导/Provider 恢复/删除项目草稿修复，完成 clean Deep、签名公证、安装启动和精确五资产证据；本项只准备候选，不含 tag/Release 发布权限
 - 恢复 v0.1.7 公开 Release 到批准的 Intel 五资产与仓库最终正文；当前自动审计 fail-closed，删除 3 个 Windows 资产及改回正文等待创始人明确授权
 - ~~v0.1.7 Intel 签名楔子版发布:clean candidate、Deep、macOS x64 签名公证/安装/启动审计、Release Notes、公开资产审计和官网同步~~ ✅；Apple Silicon/Windows 暂停
 - M1 首位陌生用户 Quick Start 验收；随后按 M2-T1 扩展到 3 名真实同类工具用户的 N1 30 分钟迁移计时
@@ -134,6 +136,7 @@
 | ~~窄屏响应式布局未过人眼复核~~ | Medium | ✅ 已修:同日 responsive smoke 覆盖桌面/窄屏暗色与浅色主题及水平溢出;证据:`test-results/caogen-responsive/2026-07-06T10-08-05-301Z/responsive-light-smoke.json` |
 | ~~新最终候选 Deep~~ | High | ✅ run `30162696430` 在 clean `bbec5265` 上通过 `157/157` required、2 optional skip，并完成 Intel 签名/公证/安装/renderer 与五资产证据；optional skip 未计作 pass |
 | v0.1.7 公开 Release 完整性 | High | ❌ 远端现为 8 资产且正文包含未批准 Windows 发布声明；仓库五资产 Notes 合同审计失败，等待明确授权恢复远端状态 |
+| v0.1.8 Intel 补丁候选 | High | 进行中：版本/候选合同已进入 0.1.8；最终 clean Deep、签名公证、安装启动及五资产证据尚未生成，不得发布 |
 | arm64 包真机启动 | — | 创始人决定暂停；若恢复，仍需真实 Apple Silicon 机器，Intel 不可替代 |
 | Docker | — | 不需要；产品运行模式、资源和分支已删除 |
 | Claude Code 登录 | — | 已不需要；原生 Anthropic Messages 使用 Provider API Key |

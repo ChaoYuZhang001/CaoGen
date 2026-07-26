@@ -1,7 +1,38 @@
-# CaoGen 0.1.7 Intel Release Gate
+# CaoGen Intel Patch Release Gate
 
-> Updated: 2026-07-25 Asia/Shanghai. v0.1.7 is the latest public release.
-> Package version 0.1.7 is an Intel-only signed release, not 1.0 stable.
+> Updated: 2026-07-27 Asia/Shanghai. v0.1.7 is the latest public release.
+> Package version 0.1.8 is an unpublished macOS Intel-only patch candidate, not 1.0 stable.
+
+## Current 0.1.8 Candidate Decision
+
+CaoGen remains a multi-vendor AI work desktop. The current package line moves to
+`0.1.8` because the first-user onboarding recovery and deleted-project draft fixes
+landed after the public v0.1.7 tag. A source fix that is absent from the downloadable
+package is not considered delivered to users.
+
+| Item | Current state |
+|---|---|
+| Latest public GitHub Release | v0.1.7; its current eight-asset remote state still fails the repository's approved historical five-asset contract |
+| Package and lockfile | `0.1.8` |
+| Allowed candidate scope | `macos-x64` only; Apple Silicon and Windows remain paused |
+| Local regression evidence | Clean `7ed1b5fb` Deep: `163 total / 161 required pass / 2 optional skip / 0 fail`; predates this version-contract change |
+| 0.1.8 signed distribution evidence | Open; no signed/notarized/stapled/installed 0.1.8 asset set exists |
+| Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
+
+The manual candidate workflow remains read-only with `contents: read`, accepts only
+an exact commit already on `main`, defaults to package version `0.1.8` and
+`macos-x64`, and cannot create a tag or Release. A successful run would create
+candidate evidence only. It would not close the first-user M1 gate and would not
+authorize publication.
+
+Before any 0.1.8 publication decision, the exact clean commit must pass source gates,
+P2 release scope, Deep, Developer ID signing, notarization, staple, Gatekeeper,
+isolated install, real renderer launch, package-size policy, exact five-asset binding,
+final notes audit, and secret-history scan. The final notes must describe only the
+post-v0.1.7 fixes present in that candidate. Windows and Apple Silicon jobs must be
+recorded as skipped, not passed.
+
+## Historical v0.1.7 Publication Record
 
 ## Current Decision
 
