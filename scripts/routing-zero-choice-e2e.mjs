@@ -199,6 +199,7 @@ try {
     assert(expertDraftAfterRecovery.driveMode === expertDraftBeforeRecovery.driveMode, 'Provider setup changed Drive mode')
     assert(expertDraftAfterRecovery.permissionMode === expertDraftBeforeRecovery.permissionMode, 'Provider setup changed permission mode')
     assert(expertDraftAfterRecovery.routingMode === expertDraftBeforeRecovery.routingMode, 'Provider setup changed routing mode')
+    assert(expertDraftAfterRecovery.projectChoice === expertDraftBeforeRecovery.projectChoice, 'Provider setup changed project choice')
     assert(expertDraftAfterRecovery.provider === 'Zero Choice Local Service', `saved Provider was not selected: ${expertDraftAfterRecovery.provider}`)
     assert(expertDraftAfterRecovery.model === 'zero-choice-responses', `saved model was not selected: ${expertDraftAfterRecovery.model}`)
     const providers = await page.evaluate(() => window.agentDesk.listProviders())
@@ -208,6 +209,34 @@ try {
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 0, `Provider setup created ${sessions.length} session(s)`)
     await screenshot(page, '02-expert-provider-return')
+  })
+
+  await check('renderer reload restores the complete first-task draft without credential data', async () => {
+    const beforeReload = await readWelcomeDraft(page)
+    const persisted = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
+    assert(persisted, 'welcome draft was not persisted before reload')
+    const payload = JSON.parse(persisted)
+    assert(payload.schemaVersion === 1, `unexpected welcome draft schema: ${payload.schemaVersion}`)
+    assert(!persisted.includes('test-only'), 'welcome draft storage leaked the Provider API key')
+    assert(!persisted.includes(mock.baseUrl), 'welcome draft storage leaked the Provider Base URL')
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await waitForApp(page)
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[data-welcome-routing-control="provider"] option'))
+        .some((option) => option.textContent?.includes('Zero Choice Local Service')),
+      { timeout: 10_000 }
+    )
+    const afterReload = await readWelcomeDraft(page)
+    for (const field of ['prompt', 'cwd', 'projectChoice', 'driveMode', 'permissionMode', 'routingMode', 'provider', 'model']) {
+      assert(afterReload[field] === beforeReload[field], `renderer reload changed ${field}: ${afterReload[field]}`)
+    }
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `renderer reload created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-reload')
 
     await clickMode(page, 'assistant')
     await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
@@ -232,6 +261,8 @@ try {
     assert(mock.requests.length === 1, `expected one model request, got ${mock.requests.length}`)
     assert(mock.requests[0].body?.model === 'zero-choice-responses', `wrong routed model: ${JSON.stringify(mock.requests[0].body)}`)
     assert(JSON.stringify(mock.requests[0].body).includes(prompt), 'prompt missing from routed request')
+    const persistedDraft = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
+    assert(persistedDraft === null, 'successful first-task start did not clear the persisted welcome draft')
     stableSnapshot = await readSessionSnapshot(page, sessionId)
     report.requests = mock.requests.map(({ authorization: _authorization, ...request }) => request)
     await assertAssistantProjection(page)
@@ -435,6 +466,7 @@ async function readWelcomeDraft(targetPage) {
     return {
       prompt: document.querySelector('.welcome-composer-input')?.value || '',
       cwd: document.querySelector('.welcome-project-path')?.value || '',
+      projectChoice: document.querySelector('.welcome-project-select')?.value || '',
       routingMode: document.querySelector('[data-welcome-routing-mode].active')?.getAttribute('data-welcome-routing-mode') || '',
       driveMode: document.querySelector('[data-welcome-routing-control="drive"]')?.value || '',
       permissionMode: document.querySelector('[data-welcome-routing-control="permission"]')?.value || '',
