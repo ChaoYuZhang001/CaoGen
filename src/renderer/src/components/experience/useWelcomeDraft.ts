@@ -19,6 +19,23 @@ interface WelcomeDraftControllerOptions {
   settings: AppSettings
 }
 
+function resolveProjectDraft(
+  availableProjects: Project[],
+  storedProjectChoice: string | null,
+  storedCwd: string | null,
+  initialProject: Project | undefined
+): { projectChoice: string; cwd: string } {
+  const storedProjectMissing = storedProjectChoice !== null
+    && storedProjectChoice !== NEW_PROJECT
+    && storedProjectChoice !== UNASSIGNED
+    && !availableProjects.some((project) => project.id === storedProjectChoice)
+  if (storedProjectMissing) return { projectChoice: UNASSIGNED, cwd: '' }
+  return {
+    projectChoice: storedProjectChoice ?? initialProject?.id ?? NEW_PROJECT,
+    cwd: storedCwd ?? initialProject?.path ?? ''
+  }
+}
+
 export function useWelcomeDraftController({
   projects,
   providers,
@@ -37,8 +54,12 @@ export function useWelcomeDraftController({
   const initialProvider = providers.find(
     (provider) => provider.id === settings.defaultProviderId && provider.hasToken
   )
-  const projectChoice = stored.projectChoice ?? initialProject?.id ?? NEW_PROJECT
-  const cwd = stored.cwd ?? initialProject?.path ?? ''
+  const { projectChoice, cwd } = resolveProjectDraft(
+    availableProjects,
+    stored.projectChoice,
+    stored.cwd,
+    initialProject
+  )
   const driveMode = stored.driveMode ?? settings.driveMode
   const providerId = stored.providerId ?? initialProvider?.id ?? ''
   const model = stored.model ?? initialProviderModel(initialProvider, settings.defaultModel)
@@ -46,9 +67,9 @@ export function useWelcomeDraftController({
     ?? caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
 
   useEffect(() => {
-    if (projectChoice !== NEW_PROJECT || cwd || availableProjects.length === 0) return
-    update({ projectChoice: availableProjects[0].id, cwd: availableProjects[0].path })
-  }, [availableProjects, cwd, projectChoice, update])
+    if (stored.projectChoice !== null || stored.cwd || !initialProject) return
+    update({ projectChoice: initialProject.id, cwd: initialProject.path })
+  }, [initialProject, stored.cwd, stored.projectChoice, update])
 
   useEffect(() => {
     if (!requestedProjectId) return
@@ -57,11 +78,12 @@ export function useWelcomeDraftController({
   }, [availableProjects, requestedProjectId, update])
 
   useEffect(() => {
-    if (projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED) return
-    if (!availableProjects.some((project) => project.id === projectChoice)) {
+    const storedProjectChoice = stored.projectChoice
+    if (storedProjectChoice === null || storedProjectChoice === NEW_PROJECT || storedProjectChoice === UNASSIGNED) return
+    if (!availableProjects.some((project) => project.id === storedProjectChoice)) {
       update({ projectChoice: UNASSIGNED, cwd: '' })
     }
-  }, [availableProjects, projectChoice, update])
+  }, [availableProjects, stored.projectChoice, update])
 
   useEffect(() => {
     if (providerId) return
