@@ -41,6 +41,8 @@ CaoGen 面向需要完成真实任务的用户，把多模型、多项目、多�
 
 截至 2026-07-25，PRD 64 个 P0 = 21 个已验证 + 18 个部分完成 + 24 个立项目标 + 1 个仅达到基础。这个口径来自 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)，不是版本完成率；已发布的 `v0.1.7` 是签名楔子版，不是 1.0 stable。
 
+> **正在招募 1 位 Intel Mac 首次用户**：用不超过 30 分钟从官网安装 v0.1.7、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
+
 ## 当前核心能力
 
 - **连接多种 Provider 并 BYOK**：配置多个 Provider、多个 API Key、自定义 Base URL、中转站或本地 OpenAI-compatible 服务，覆盖 DeepSeek、Kimi、GLM 等常见兼容模型来源。
