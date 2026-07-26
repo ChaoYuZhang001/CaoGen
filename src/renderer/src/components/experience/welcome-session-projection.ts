@@ -8,8 +8,9 @@ import {
   type ProviderView
 } from '../../../../shared/types'
 import type { ExperienceMode } from '../../store/experience-mode'
+import type { WelcomeRoutingMode } from '../../store/welcome-draft'
 
-export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
+export type { WelcomeRoutingMode } from '../../store/welcome-draft'
 
 export interface WelcomeSessionDraft {
   cwd: string

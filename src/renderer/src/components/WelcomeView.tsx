@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 import AssistantStartNotice from './experience/AssistantStartNotice'
 import WelcomeRoutingControls, {
@@ -17,9 +16,11 @@ import {
   welcomeValidationKey,
   type WelcomeRoutingMode
 } from './experience/welcome-session-projection'
-
-const NEW_PROJECT = '__new_project__'
-const UNASSIGNED = '__unassigned__'
+import {
+  NEW_PROJECT,
+  UNASSIGNED,
+  useWelcomeDraftController
+} from './experience/useWelcomeDraft'
 
 interface WelcomeTool {
   key: string
@@ -61,66 +62,16 @@ export default function WelcomeView(): React.JSX.Element {
   const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
-
-  const availableProjects = useMemo(() => projects.filter((project) => !project.archived), [projects])
-  const initialProject = availableProjects.find((project) => project.id === requestedProjectId) ?? availableProjects[0]
-  const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.hasToken)
-  const [text, setText] = useState('')
-  const [projectChoice, setProjectChoice] = useState(initialProject?.id ?? NEW_PROJECT)
-  const [cwd, setCwd] = useState(initialProject?.path ?? '')
-  const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [routingMode, setRoutingMode] = useState<WelcomeRoutingMode>('global')
-  const [providerId, setProviderId] = useState(initialProvider?.id ?? '')
-  const [model, setModel] = useState(
-    initialProvider
-      ? settings.defaultModel && initialProvider.models.includes(settings.defaultModel)
-        ? settings.defaultModel
-        : AUTO_MODEL
-      : ''
-  )
-  const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
-    caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
-  )
+  const welcome = useWelcomeDraftController({ projects, providers, requestedProjectId, settings })
+  const {
+    availableProjects, cwd, driveMode, model, permissionMode, projectChoice,
+    providerId, routingMode, text
+  } = welcome
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [recoveryKind, setRecoveryKind] = useState<WelcomeRecoveryKind | null>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const computeAvailable = hasAvailableCompute(providers)
-
-  useEffect(() => {
-    if (projectChoice !== NEW_PROJECT || cwd || availableProjects.length === 0) return
-    setProjectChoice(availableProjects[0].id)
-    setCwd(availableProjects[0].path)
-  }, [availableProjects, cwd, projectChoice])
-
-  useEffect(() => {
-    if (!requestedProjectId) return
-    const requested = availableProjects.find((project) => project.id === requestedProjectId)
-    if (!requested) return
-    setProjectChoice(requested.id)
-    setCwd(requested.path)
-  }, [availableProjects, requestedProjectId])
-
-  useEffect(() => {
-    if (projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED) return
-    if (availableProjects.some((project) => project.id === projectChoice)) return
-    setProjectChoice(UNASSIGNED)
-    setCwd('')
-  }, [availableProjects, projectChoice])
-
-  useEffect(() => {
-    if (providerId) return
-    const preferred = providers.find(
-      (provider) => provider.id === settings.defaultProviderId && provider.hasToken
-    )
-    if (!preferred) return
-    setProviderId(preferred.id)
-    setModel(
-      settings.defaultModel && preferred.models.includes(settings.defaultModel)
-        ? settings.defaultModel
-        : AUTO_MODEL
-    )
-  }, [providerId, providers, settings.defaultModel, settings.defaultProviderId])
 
   const routingStrategy = driveMode === 'core'
     ? settings.schedulerStrategy
@@ -147,38 +98,13 @@ export default function WelcomeView(): React.JSX.Element {
   const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
 
   const onRoutingModeChange = (mode: WelcomeRoutingMode): void => {
-    setRoutingMode(mode)
-    if (mode === 'fixed') {
-      setModel(fixedModelOptions[0]?.value ?? '')
-      return
-    }
-    setModel(AUTO_MODEL)
-  }
-
-  const onProviderChange = (id: string): void => {
-    setProviderId(id)
-    const provider = providers.find((item) => item.id === id)
-    setModel(routingMode === 'fixed' ? provider?.models[0] ?? '' : AUTO_MODEL)
-  }
-
-  const onDriveChange = (mode: CaoGenDriveMode): void => {
-    const policy = caogenDrivePolicyView(mode)
-    setDriveMode(mode)
-    setModel(providerId ? AUTO_MODEL : '')
-    setPermissionMode(policy.defaultPermissionMode)
-  }
-
-  const onProjectChange = (choice: string): void => {
-    setProjectChoice(choice)
-    const project = projects.find((item) => item.id === choice)
-    setCwd(project?.path ?? '')
+    welcome.setRoutingMode(mode, fixedModelOptions[0]?.value ?? '')
   }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (dir) {
-      setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT)
-      setCwd(dir)
+      welcome.setPickedDirectory(dir)
       setError('')
       setRecoveryKind(null)
     }
@@ -208,6 +134,7 @@ export default function WelcomeView(): React.JSX.Element {
     setRecoveryKind(null)
     try {
       await startSessionWithPrompt(welcomeSessionOptions(projection, draft, prompt), prompt)
+      welcome.clear()
     } catch (err) {
       const safeKey = assistantSafeStartError(projection, err)
       setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
@@ -252,7 +179,7 @@ export default function WelcomeView(): React.JSX.Element {
                 className="welcome-suggestion"
                 data-welcome-suggestion={tool.key}
                 onClick={() => {
-                  setText(t(tool.promptKey))
+                  welcome.update({ text: t(tool.promptKey) })
                   requestAnimationFrame(() => taRef.current?.focus())
                 }}
               >
@@ -270,7 +197,7 @@ export default function WelcomeView(): React.JSX.Element {
               aria-label={t('project')}
               title={cwd || t('welcomePickProject')}
               value={projectChoice}
-              onChange={(e) => onProjectChange(e.target.value)}
+              onChange={(e) => welcome.setProject(e.target.value)}
             >
               {availableProjects.map((project) => (
                 <option key={project.id} value={project.id}>
@@ -287,7 +214,7 @@ export default function WelcomeView(): React.JSX.Element {
                   value={cwd}
                   placeholder="/path/to/project"
                   aria-label={t('projectDir')}
-                  onChange={(event) => setCwd(event.target.value)}
+                  onChange={(event) => welcome.update({ cwd: event.target.value })}
                 />
                 <button className="welcome-project-browse" onClick={() => void browse()}>
                   {t('browse')}
@@ -306,7 +233,7 @@ export default function WelcomeView(): React.JSX.Element {
               placeholder={t('welcomeInputPlaceholder')}
               value={text}
               rows={2}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => welcome.update({ text: e.target.value })}
               onKeyDown={onKeyDown}
               autoFocus
             />
@@ -323,10 +250,10 @@ export default function WelcomeView(): React.JSX.Element {
                   providers={providers}
                   routingMode={routingMode}
                   routingStrategyLabel={routingStrategyLabel}
-                  onDriveChange={onDriveChange}
-                  onModelChange={setModel}
-                  onPermissionChange={setPermissionMode}
-                  onProviderChange={onProviderChange}
+                  onDriveChange={welcome.setDriveMode}
+                  onModelChange={(nextModel) => welcome.update({ model: nextModel })}
+                  onPermissionChange={(nextPermissionMode) => welcome.update({ permissionMode: nextPermissionMode })}
+                  onProviderChange={welcome.setProvider}
                   onRoutingModeChange={onRoutingModeChange}
                 />
               )}
@@ -339,7 +266,7 @@ export default function WelcomeView(): React.JSX.Element {
             busy={busy}
             error={error}
             recoveryKind={recoveryKind}
-            onOpenSettings={() => setShowSettings(true, 'providers')}
+            onOpenSettings={() => setShowSettings(true, 'providers', 'welcome-provider-recovery')}
             onRetry={() => void retryCompute()}
           />
         </div>

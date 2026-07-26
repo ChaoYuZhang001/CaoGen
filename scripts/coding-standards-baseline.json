@@ -1543,8 +1543,8 @@
     },
     "src/renderer/src/components/ProviderEditor.tsx": {
       "profile": "product",
-      "lines": 472,
-      "contentHash": "7551ad5f4921eb385c9db816db24aa469d3e0b8016470fa1ece0835750e5206b",
+      "lines": 477,
+      "contentHash": "b5d4b99558da2223c52fa3ac7fea6d3dc207108187ce669a69962a2573c84acb",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 353,
       "complexFunctionCount": 2,
@@ -1558,7 +1558,7 @@
           "complexity": 29
         },
         "save#1": {
-          "lines": 60,
+          "lines": 61,
           "complexity": 18
         }
       }
@@ -1624,9 +1624,9 @@
     "src/renderer/src/components/SettingsModal.tsx": {
       "profile": "product",
       "lines": 1366,
-      "contentHash": "cab69f58892b7083af1cabef672d41e8083edbff223e38026cca1783621b0002",
+      "contentHash": "2bf2c8389bfd163036d324bb3fcd496fb044790615a65f9694dc274cc6cefddd",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 1272,
+      "maxFunctionLines": 1271,
       "complexFunctionCount": 1,
       "maxComplexity": 30,
       "forbiddenSuppressionCount": 0,
@@ -1634,7 +1634,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "SettingsPage#1": {
-          "lines": 1272,
+          "lines": 1271,
           "complexity": 30
         },
         "(draft.modelRoutingRules ?? []).map callback#1": {
@@ -1685,19 +1685,19 @@
     },
     "src/renderer/src/components/WelcomeView.tsx": {
       "profile": "product",
-      "lines": 349,
-      "contentHash": "f15647931411dd1aa15e621d3349593655abc727ccf36b672084e431bd6f6b09",
+      "lines": 276,
+      "contentHash": "fb4ca330cd1925df698c494e2cc816b6103468c27502f952d92fc574e90d0bda",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 296,
-      "complexFunctionCount": 1,
-      "maxComplexity": 18,
+      "maxFunctionLines": 222,
+      "complexFunctionCount": 0,
+      "maxComplexity": 11,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "WelcomeView#1": {
-          "lines": 296,
-          "complexity": 18
+          "lines": 222,
+          "complexity": 11
         }
       }
     },
@@ -2302,7 +2302,7 @@
     "src/renderer/src/store.ts": {
       "profile": "product",
       "lines": 4007,
-      "contentHash": "b1fd43b60074192c1f48bfbb962ffc518347bd323d4f9de718dd076adc97131f",
+      "contentHash": "64528bf62a5b9d9a9f9b441d4010faab6e586c11e0f31ac393150d73bf2612fe",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 2909,
       "complexFunctionCount": 1,

@@ -136,47 +136,61 @@ try {
     await screenshot(page, '01-assistant-compute-unavailable')
   })
 
-  await check('Expert missing Provider recovery deep-links to Provider settings', async () => {
+  let expertDraftBeforeRecovery
+  await check('Expert recovery opens the real Provider form and saves through the UI', async () => {
     await clickMode(page, 'studio')
     await page.click('[data-studio-projection-tab="session"]')
     await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    await page.click('[data-welcome-routing-mode="fixed"]')
     await page.click('.welcome-send')
     await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
     const actions = await page.$$eval('[data-welcome-recovery-action]', (nodes) =>
       nodes.map((node) => node.getAttribute('data-welcome-recovery-action')).sort()
     )
     assert(JSON.stringify(actions) === JSON.stringify(['configure', 'retry']), `unexpected Provider recovery actions: ${JSON.stringify(actions)}`)
+    expertDraftBeforeRecovery = await readWelcomeDraft(page)
+    assert(expertDraftBeforeRecovery.prompt === prompt, `unexpected pre-recovery prompt: ${expertDraftBeforeRecovery.prompt}`)
+    assert(expertDraftBeforeRecovery.cwd === projectDir, `unexpected pre-recovery cwd: ${expertDraftBeforeRecovery.cwd}`)
+    assert(expertDraftBeforeRecovery.routingMode === 'fixed', `unexpected pre-recovery routing mode: ${expertDraftBeforeRecovery.routingMode}`)
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 0, `Expert failed start created ${sessions.length} session(s)`)
 
     await page.click('[data-welcome-recovery-action="configure"]')
     await page.waitForSelector('.settings-page', { visible: true, timeout: 5_000 })
+    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
     const currentTab = await page.$eval('[data-settings-tab="providers"]', (node) => node.getAttribute('aria-current'))
     assert(currentTab === 'page', `Provider recovery opened the wrong Settings tab: ${currentTab}`)
-    await screenshot(page, '02-expert-provider-settings')
+    await screenshot(page, '02-expert-provider-editor')
 
-    await page.click('.settings-page-back')
-    await page.waitForSelector('[data-studio-projection-tab="session"]', { visible: true, timeout: 5_000 })
-    await page.click('[data-studio-projection-tab="session"]')
-    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
-    await setValue(page, '.welcome-project-path', projectDir)
-    await setValue(page, '.welcome-composer-input', prompt)
-    await page.click('.welcome-send')
-    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+    await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
+    await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
+    await setValue(page, '[data-provider-field="api-key"]', 'test-only')
+    await setValue(page, '[data-provider-field="models"]', 'zero-choice-responses')
+    const protocol = await page.$eval('[data-provider-field="openai-protocol"]', (select) => select.value)
+    assert(protocol === 'responses', `unexpected Provider protocol: ${protocol}`)
+    await page.click('[data-provider-editor-action="save"]')
   })
 
-  await check('Provider retry discovers a real local Responses provider and clears recovery', async () => {
-    await page.evaluate(async ({ baseUrl }) => {
-      await window.agentDesk.createProvider({
-        name: 'Zero Choice Local Service',
-        baseUrl,
-        token: 'test-only',
-        models: ['zero-choice-responses'],
-        openaiProtocol: 'responses'
-      })
-    }, { baseUrl: mock.baseUrl })
-    await page.click('[data-welcome-recovery-action="retry"]')
+  await check('usable Provider save returns to the intact first task with no session side effect', async () => {
+    await page.waitForSelector('.settings-page', { hidden: true, timeout: 10_000 })
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
     await page.waitForSelector('[data-assistant-start-state]', { hidden: true, timeout: 5_000 })
+    const expertDraftAfterRecovery = await readWelcomeDraft(page)
+    assert(expertDraftAfterRecovery.prompt === expertDraftBeforeRecovery.prompt, 'Provider setup lost the first-task prompt')
+    assert(expertDraftAfterRecovery.cwd === expertDraftBeforeRecovery.cwd, 'Provider setup lost the first-task directory')
+    assert(expertDraftAfterRecovery.driveMode === expertDraftBeforeRecovery.driveMode, 'Provider setup changed Drive mode')
+    assert(expertDraftAfterRecovery.permissionMode === expertDraftBeforeRecovery.permissionMode, 'Provider setup changed permission mode')
+    assert(expertDraftAfterRecovery.routingMode === expertDraftBeforeRecovery.routingMode, 'Provider setup changed routing mode')
+    assert(expertDraftAfterRecovery.provider === 'Zero Choice Local Service', `saved Provider was not selected: ${expertDraftAfterRecovery.provider}`)
+    assert(expertDraftAfterRecovery.model === 'zero-choice-responses', `saved model was not selected: ${expertDraftAfterRecovery.model}`)
+    const providers = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providers.length === 1, `expected one UI-created Provider, got ${providers.length}`)
+    assert(providers[0].hasToken, 'UI-created Provider did not persist its API key')
+    assert(JSON.stringify(providers[0].models) === JSON.stringify(['zero-choice-responses']), `UI-created Provider models drifted: ${JSON.stringify(providers[0].models)}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Provider setup created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-return')
+
     await clickMode(page, 'assistant')
     await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
     await assertAssistantProjection(page)
@@ -382,12 +396,34 @@ function assertSameSnapshot(before, after, label) {
 }
 
 async function setValue(targetPage, selector, value) {
-  await targetPage.click(selector)
-  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await targetPage.keyboard.down(modifier)
-  await targetPage.keyboard.press('a')
-  await targetPage.keyboard.up(modifier)
-  await targetPage.keyboard.type(value)
+  await targetPage.$eval(selector, (element, nextValue) => {
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!setter) throw new Error(`value setter unavailable for ${element.tagName}`)
+    setter.call(element, nextValue)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }, value)
+}
+
+async function readWelcomeDraft(targetPage) {
+  return targetPage.evaluate(() => {
+    const selectedText = (selector) => {
+      const select = document.querySelector(selector)
+      return select?.selectedOptions?.[0]?.textContent?.trim() || ''
+    }
+    return {
+      prompt: document.querySelector('.welcome-composer-input')?.value || '',
+      cwd: document.querySelector('.welcome-project-path')?.value || '',
+      routingMode: document.querySelector('[data-welcome-routing-mode].active')?.getAttribute('data-welcome-routing-mode') || '',
+      driveMode: document.querySelector('[data-welcome-routing-control="drive"]')?.value || '',
+      permissionMode: document.querySelector('[data-welcome-routing-control="permission"]')?.value || '',
+      provider: selectedText('[data-welcome-routing-control="provider"]'),
+      model: selectedText('[data-welcome-routing-control="model"]')
+    }
+  })
 }
 
 async function openCommandPalette(targetPage) {

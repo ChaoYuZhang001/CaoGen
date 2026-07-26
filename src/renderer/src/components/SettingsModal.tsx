@@ -24,6 +24,7 @@ import type {
 import ProviderEditor from './ProviderEditor'
 import ControlCenter from './ControlCenterWithWorkflow'
 import ProviderList from './settings/ProviderList'
+import { useProviderRecoverySettings } from './settings/useProviderRecoverySettings'
 import ProjectSettings from '../pages/ProjectSettings'
 
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
@@ -104,12 +105,11 @@ export default function SettingsPage(): React.JSX.Element {
   const deleteProvider = useStore((s) => s.deleteProvider)
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
-
+  const { closeEditor, editing, setEditing } = useProviderRecoverySettings(providers)
   const [tab, setTab] = useState<SettingsTab>(() => useStore.getState().settingsTab)
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
-  const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
   const [checkingProviderId, setCheckingProviderId] = useState('')
   const [providerProbe, setProviderProbe] = useState<{ providerId: string; ok: boolean; message: string } | null>(null)
@@ -400,7 +400,7 @@ export default function SettingsPage(): React.JSX.Element {
             {editing ? (
               <ProviderEditor
                 provider={editing === 'new' ? null : editing}
-                onClose={() => setEditing(null)}
+                onClose={closeEditor}
               />
             ) : (
               <>

@@ -70,12 +70,12 @@ import type {
 import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
+import { createWelcomeDraftSlice, emptyWelcomeDraft, type WelcomeDraftSlice } from './store/welcome-draft'
 
 let seq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
-
 function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
   const kindLabel =
     item.kind === 'plugin'
@@ -733,7 +733,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions {
+interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -888,8 +888,8 @@ interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRec
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
   refreshProviders(): Promise<void>
-  createProvider(input: ProviderInput): Promise<void>
-  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
+  createProvider(input: ProviderInput): Promise<ProviderView>
+  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
   deleteProvider(id: string): Promise<void>
   refreshProjects(): Promise<void>
   archiveProject(id: string, archived: boolean): Promise<void>
@@ -1030,6 +1030,7 @@ export const useStore = create<AppStore>((set, get) => {
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
   ...createSettingsNavigationSlice((update) => set(update)),
+  ...createWelcomeDraftSlice((update) => set(update)),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -3741,22 +3742,20 @@ export const useStore = create<AppStore>((set, get) => {
   closeRewindPanel() {
     set({ rewindPanel: { open: false } })
   },
-
   async refreshProviders() {
     const providers = await window.agentDesk.listProviders()
     set({ providers })
   },
-
   async createProvider(input) {
-    await window.agentDesk.createProvider(input)
+    const provider = await window.agentDesk.createProvider(input)
     await get().refreshProviders()
+    return provider
   },
-
   async updateProvider(id, patch) {
-    await window.agentDesk.updateProvider(id, patch)
+    const provider = await window.agentDesk.updateProvider(id, patch)
     await get().refreshProviders()
+    return provider
   },
-
   async deleteProvider(id) {
     await window.agentDesk.deleteProvider(id)
     await get().refreshProviders()
@@ -3765,7 +3764,6 @@ export const useStore = create<AppStore>((set, get) => {
       await get().updateSettings({ defaultProviderId: '' })
     }
   },
-
   async refreshProjects() {
     const projects = await window.agentDesk.listProjects()
     set({ projects })
@@ -3794,8 +3792,10 @@ export const useStore = create<AppStore>((set, get) => {
       showNewSession: v,
       newSessionProjectId: v ? projectId ?? null : null,
       showSettings: v ? false : s.showSettings,
+      settingsContext: v ? null : s.settingsContext,
       showTaskRecovery: v ? false : s.showTaskRecovery,
-      view: v ? 'list' : s.view
+      view: v ? 'list' : s.view,
+      welcomeDraft: v ? emptyWelcomeDraft() : s.welcomeDraft
     }))
   },
 

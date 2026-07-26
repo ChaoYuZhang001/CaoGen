@@ -16,8 +16,13 @@ import type { ProviderKeyDraft } from './settings/ProviderSavedKeys'
 interface Props {
   /** null = 新建;否则编辑该 Provider */
   provider: ProviderView | null
-  onClose: () => void
+  onClose: (result: ProviderEditorCloseResult) => void
 }
+
+export type ProviderEditorCloseResult =
+  | { reason: 'cancelled' }
+  | { reason: 'saved'; provider: ProviderView }
+
 export default function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
   const t = useT()
   const createProvider = useStore((s) => s.createProvider)
@@ -131,7 +136,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     setError('')
     try {
       if (isEdit) {
-        await updateProvider(provider.id, {
+        const savedProvider = await updateProvider(provider.id, {
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           models,
@@ -148,8 +153,9 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           ...(removeKeyIds.length > 0 ? { removeKeyIds } : {}),
           ...(requestedActiveKeyId ? { activeKeyId: requestedActiveKeyId } : {})
         })
+        onClose({ reason: 'saved', provider: savedProvider })
       } else {
-        await createProvider({
+        const savedProvider = await createProvider({
           name: name.trim(),
           baseUrl: baseUrl.trim(),
           models,
@@ -163,23 +169,22 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           tokenLabel: tokenLabelPatch,
           ...(additionalTokens.length > 0 ? { additionalTokens } : {})
         })
+        onClose({ reason: 'saved', provider: savedProvider })
       }
-      onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
     }
   }
-
   return (
-    <section className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')}>
+    <section className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')} data-provider-editor="form">
         <header className="provider-editor-header">
           <button
             type="button"
-            className="provider-editor-back"
+            className="provider-editor-back" data-provider-editor-action="back"
             aria-label={t('backToProviders')}
             title={t('backToProviders')}
-            onClick={onClose}
+            onClick={() => onClose({ reason: 'cancelled' })}
           >
             ←
           </button>
@@ -212,7 +217,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         <label className="field-label">{t('nameLabel')}</label>
         <input
-          className="input input-block"
+          className="input input-block" data-provider-field="name"
           value={name}
           placeholder={t('namePlaceholder')}
           onChange={(e) => setName(e.target.value)}
@@ -220,7 +225,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         <label className="field-label">{t('baseUrlLabel')}</label>
         <input
-          className="input input-block"
+          className="input input-block" data-provider-field="base-url"
           value={baseUrl}
           placeholder="https://your-gateway.example.com"
           onChange={(e) => setBaseUrl(e.target.value)}
@@ -228,7 +233,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         <label className="field-label">{t('providerEngineLabel')}</label>
         <select
-          className="select select-block"
+          className="select select-block" data-provider-field="engine"
           value={engine}
           onChange={(e) => setEngine(e.target.value as EngineKind)}
         >
@@ -245,7 +250,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           )}
         </label>
         <input
-          className="input input-block"
+          className="input input-block" data-provider-field="api-key"
           type="password"
           value={token}
           placeholder={isEdit && provider.hasToken ? t('tokenPlaceholderSaved') : '<your-api-key>'}
@@ -274,7 +279,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 
         <label className="field-label">{t('additionalApiKeysLabel')}</label>
         <textarea
-          className="input input-block textarea"
+          className="input input-block textarea" data-provider-field="additional-api-keys"
           value={additionalKeysText}
           rows={3}
           placeholder={t('additionalApiKeysPlaceholder')}
@@ -294,7 +299,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           </button>
         </div>
         <textarea
-          className="input input-block textarea"
+          className="input input-block textarea" data-provider-field="models"
           value={modelsText}
           rows={4}
           placeholder={'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro'}
@@ -332,7 +337,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           {t('openaiProtocolLabel')} <span className="field-hint">{t('openaiProtocolHint')}</span>
         </label>
         <select
-          className="select select-block"
+          className="select select-block" data-provider-field="openai-protocol"
           value={openaiProtocol}
           onChange={(e) => setOpenaiProtocol(e.target.value as OpenAIProtocol)}
         >
@@ -361,10 +366,10 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         {error && <div className="notice notice-error">{error}</div>}
 
         <div className="provider-editor-actions">
-          <button className="btn btn-ghost" onClick={onClose}>
+          <button className="btn btn-ghost" data-provider-editor-action="cancel" onClick={() => onClose({ reason: 'cancelled' })}>
             {t('cancel')}
           </button>
-          <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+          <button className="btn btn-primary" data-provider-editor-action="save" disabled={busy} onClick={() => void save()}>
             {busy ? t('saving') : t('save')}
           </button>
         </div>

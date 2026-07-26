@@ -9,13 +9,19 @@ export type SettingsTab =
   | 'plugins'
   | 'migrate'
 
+export type SettingsContext = 'welcome-provider-recovery'
+
 export interface SettingsNavigationSlice {
   showSettings: boolean
   settingsTab: SettingsTab
-  setShowSettings(value: boolean, tab?: SettingsTab): void
+  settingsContext: SettingsContext | null
+  setShowSettings(value: boolean, tab?: SettingsTab, context?: SettingsContext): void
 }
 
-type SettingsNavigationState = Pick<SettingsNavigationSlice, 'settingsTab' | 'showSettings'>
+type SettingsNavigationState = Pick<
+  SettingsNavigationSlice,
+  'settingsContext' | 'settingsTab' | 'showSettings'
+>
 
 export function createSettingsNavigationSlice(
   set: (update: SettingsNavigationState) => void
@@ -23,6 +29,12 @@ export function createSettingsNavigationSlice(
   return {
     showSettings: false,
     settingsTab: 'control',
-    setShowSettings: (showSettings, settingsTab = 'control') => set({ showSettings, settingsTab })
+    settingsContext: null,
+    setShowSettings: (showSettings, settingsTab = 'control', settingsContext) =>
+      set({
+        showSettings,
+        settingsTab,
+        settingsContext: showSettings ? settingsContext ?? null : null
+      })
   }
 }

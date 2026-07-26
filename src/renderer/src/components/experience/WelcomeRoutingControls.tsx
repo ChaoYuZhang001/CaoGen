@@ -6,7 +6,7 @@ import type {
 import { DRIVE_MODE_OPTIONS, PERMISSION_OPTIONS } from '../../store'
 import type { ModelOption } from '../../commands'
 import { useT } from '../../i18n'
-import type { WelcomeRoutingMode } from './welcome-session-projection'
+import type { WelcomeRoutingMode } from '../../store/welcome-draft'
 
 interface WelcomeRoutingControlsProps {
   driveMode: CaoGenDriveMode
@@ -48,6 +48,7 @@ export default function WelcomeRoutingControls({
             key={mode}
             type="button"
             className={routingMode === mode ? 'active' : ''}
+            data-welcome-routing-mode={mode}
             onClick={() => onRoutingModeChange(mode)}
           >
             {t(routingModeLabel(mode))}
@@ -55,7 +56,12 @@ export default function WelcomeRoutingControls({
         ))}
       </div>
       {routingMode !== 'global' && (
-        <select className="welcome-mini-select" value={providerId} onChange={(event) => onProviderChange(event.target.value)}>
+        <select
+          className="welcome-mini-select"
+          data-welcome-routing-control="provider"
+          value={providerId}
+          onChange={(event) => onProviderChange(event.target.value)}
+        >
           <option value="" disabled>{t('selectProviderPlaceholder')}</option>
           {providers.map((provider) => (
             <option key={provider.id} value={provider.id} disabled={!provider.hasToken}>
@@ -64,11 +70,21 @@ export default function WelcomeRoutingControls({
           ))}
         </select>
       )}
-      <select className="welcome-mini-select" value={driveMode} onChange={(event) => onDriveChange(event.target.value as CaoGenDriveMode)}>
+      <select
+        className="welcome-mini-select"
+        data-welcome-routing-control="drive"
+        value={driveMode}
+        onChange={(event) => onDriveChange(event.target.value as CaoGenDriveMode)}
+      >
         {DRIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
       {routingMode === 'fixed' ? (
-        <select className="welcome-mini-select" value={model} onChange={(event) => onModelChange(event.target.value)}>
+        <select
+          className="welcome-mini-select"
+          data-welcome-routing-control="model"
+          value={model}
+          onChange={(event) => onModelChange(event.target.value)}
+        >
           <option value="" disabled>{t('selectModelPlaceholder')}</option>
           {fixedModelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
@@ -78,7 +94,12 @@ export default function WelcomeRoutingControls({
           {' · '}{routingStrategyLabel}
         </span>
       )}
-      <select className="welcome-mini-select" value={permissionMode} onChange={(event) => onPermissionChange(event.target.value as PermissionModeId)}>
+      <select
+        className="welcome-mini-select"
+        data-welcome-routing-control="permission"
+        value={permissionMode}
+        onChange={(event) => onPermissionChange(event.target.value as PermissionModeId)}
+      >
         {PERMISSION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
     </div>
