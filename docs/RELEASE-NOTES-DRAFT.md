@@ -14,11 +14,12 @@ The candidate scope is macOS Intel x64 only. Apple Silicon, Windows, Linux, and 
 formal three-platform matrix remain outside this patch candidate.
 
 Preparation and validation of this candidate do not authorize a tag or a public
-Release. Exact `main@837f8f90945d558c44b2d05cbc09a24e93d1202f` passed clean source
+Release. Exact `main@9591c20bde2330a6f57951e7381b5e7e9d642091` passed clean source
 gates, exact-commit Deep, Developer ID signing, notarization, stapling, Gatekeeper,
 isolated installation, real renderer launch, package-size policy, and five-asset
-verification in read-only workflow run `30212121353`. Independent artifact download,
-final notes binding, publication preflight, and explicit owner authorization remain.
+verification in read-only workflow run `30215660873`. The five candidate assets and
+four report families were independently downloaded and checked. Final notes binding,
+publication preflight, and explicit owner authorization remain.
 
 ## Candidate Highlights
 
@@ -44,39 +45,45 @@ final notes binding, publication preflight, and explicit owner authorization rem
 
 ## Uploaded Assets
 
-No public 0.1.8 assets have been uploaded. Read-only workflow run `30212121353`
+No public 0.1.8 assets have been uploaded. Read-only workflow run `30215660873`
 produced the following private candidate set:
 
 | Candidate file | Size | SHA256 |
 |---|---:|---|
-| `CaoGen-0.1.8.dmg` | 127,702,969 B | `bb79e9abf1a8e1e245c87feca352db109f275bc96af1d35469b8e6b82e9224c3` |
-| `CaoGen-0.1.8.dmg.blockmap` | 134,481 B | `aa0b1924d8db3df620abbb82f76e66c2c2592b0b2491617e050527fe040618f5` |
-| `CaoGen-0.1.8-mac.zip` | 127,017,842 B | `3befafbfda324062d1514607d2e9629798e0a501479e045ef4240edb823f39b8` |
-| `CaoGen-0.1.8-mac.zip.blockmap` | 132,978 B | `435f0587ba2324742b152b9ad83b647e5fdc9e830c65fa0e7f1e03ed7c0bd3b6` |
-| `latest-mac.yml` | 484 B | `8d76dcc865c48e2a18e2ebea6658509a65ca9e62c4e38929320f24338d101dc5` |
+| `CaoGen-0.1.8.dmg` | 127,700,399 B | `6ef85b3e612b3c008c07b8db61794e991eaed4d68d88f266e6b79370c00346c7` |
+| `CaoGen-0.1.8.dmg.blockmap` | 132,560 B | `7f8106b550893455490a0a1201ead9e35a9a0cd24dc226abb11a1ff6ac12216e` |
+| `CaoGen-0.1.8-mac.zip` | 127,018,880 B | `3229d52d18722b54824638ff0a81e248b5c646b7153dfa840d73aa18144bca18` |
+| `CaoGen-0.1.8-mac.zip.blockmap` | 133,809 B | `50f473753f275540990883532205261de39dc696b04fd81f92251eece08f0158` |
+| `latest-mac.yml` | 484 B | `613dca4e5568c01486b57055e2251ddc6129c7a4cebd8a9f6f573c91fabd9872` |
 
 The candidate artifact-set SHA256 is
-`48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1`.
+`b5e03719796ea3236fab617c8e1493a238e3a07e48552daa1dc74b04f7d27252`.
 A final macOS Intel release, if separately authorized after all remaining gates pass,
 must contain exactly these five audited files. Local `test-results`, build output, and
 the Actions candidate evidence archive are not public Release assets.
+
+GitHub Actions artifact `8636056669`, named
+`caogen-release-macos-x64-9591c20bde2330a6f57951e7381b5e7e9d642091`, contains
+the candidate assets and evidence reports and expires on 2026-08-09. The independent
+download matched the release audit and packaged-app report for every file size and
+SHA256 digest.
 
 Public update metadata such as `latest*.yml` must match the exact installer set and
 must not advertise Apple Silicon or Windows artifacts that are outside this scope.
 
 ## Truth Boundary
 
-- The exact candidate commit `837f8f90945d558c44b2d05cbc09a24e93d1202f` passed clean Deep in
-  run `30212121353`: `163 total / 161 required pass / 2 optional skip / 0 blocked /
+- The exact candidate commit `9591c20bde2330a6f57951e7381b5e7e9d642091` passed clean Deep in
+  run `30215660873`: `163 total / 161 required pass / 2 optional skip / 0 blocked /
   0 fail`. It proves regression stability of that exact candidate, not publication or
   first-user success.
 - The same run passed the `120/120` required macOS release audit, signed/notarized
   installation and real renderer launch. Apple Silicon, Windows, and complete-matrix
   jobs were skipped by scope.
-- The later first-task restart and asynchronous catalog hydration fixes are not present
-  in `837f8f90`. The current targeted real Electron report passed `11/11` with 8
-  screenshots and page operations passed `22/22`, but the final signed candidate must
-  be rerun on a clean descendant before publication.
+- The first-task restart and asynchronous catalog hydration fixes are present in this
+  candidate. Their targeted real Electron report passed `11/11` with 8 screenshots and
+  page operations passed `22/22`; the exact candidate then passed the complete Deep and
+  signed distribution workflow.
 - The two optional skips are external-network checks and are not passes.
 - No non-project participant has completed the private M1 first-user drill. Automated
   tests do not prove first-time installation, Provider setup, copy clarity, or task
@@ -95,15 +102,13 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 
 - `release_identity`: the exact candidate exists, but no v0.1.8 tag or publication-only
   release identity exists.
-- `candidate_freshness`: run `30212121353` predates the first-task restart recovery
-  fix and cannot be used to publish the latest 0.1.8 source.
 - `deep_test`, `dag_finalization`, `p2_required`, and `packaging_release`: the complete
   three-platform/formal 1.0 Release Doctor still lists these domains as open. The
-  narrower Intel candidate equivalents passed in run `30212121353`; that scoped pass
+  narrower Intel candidate equivalents passed in run `30215660873`; that scoped pass
   does not make the complete Doctor ready.
-- `release_notes`: this remains a draft; the Actions artifact must be independently
-  downloaded and its four candidate report families and five exact files must be bound
-  into final notes on a clean publication-only descendant.
+- `release_notes`: this remains a draft; the independently checked four candidate report
+  families and five exact files must still be bound into final notes on a clean
+  publication-only descendant.
 - `github_release_assets`: no public 0.1.8 asset set exists, and no publication has
   been authorized.
 - Apple Silicon and Windows are paused. Skipped jobs must remain skips, not passes.
