@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import {
@@ -20,6 +21,7 @@ const require = createRequire(import.meta.url)
 const { releaseProvenanceChecks } = require('./lib/release-provenance.cjs')
 const timestampRetry = require('./macos-sign-with-retry.cjs')
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
+const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
 
 assert.equal(requiresTrustedMacDistribution('0.1.6'), false)
 assert.equal(requiresTrustedMacDistribution('0.1.7'), true)
@@ -30,7 +32,7 @@ assert.equal(requiresReleasePlatformMatrix('0.1.6'), false)
 assert.equal(requiresReleasePlatformMatrix('0.1.7'), true)
 
 const artifactSetSha256 = 'a'.repeat(64)
-const releaseVersion = '0.1.7'
+const releaseVersion = packageJson.version
 const gitState = { commit, worktreeClean: true }
 const buildProvenance = {
   schemaVersion: 1,
