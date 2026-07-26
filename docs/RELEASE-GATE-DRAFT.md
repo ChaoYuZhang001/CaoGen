@@ -15,22 +15,41 @@ package is not considered delivered to users.
 | Latest public GitHub Release | v0.1.7; its current eight-asset remote state still fails the repository's approved historical five-asset contract |
 | Package and lockfile | `0.1.8` |
 | Allowed candidate scope | `macos-x64` only; Apple Silicon and Windows remain paused |
-| Local regression evidence | Clean `7ed1b5fb` Deep: `163 total / 161 required pass / 2 optional skip / 0 fail`; predates this version-contract change |
-| 0.1.8 signed distribution evidence | Open; no signed/notarized/stapled/installed 0.1.8 asset set exists |
+| Candidate identity | `main@837f8f90945d558c44b2d05cbc09a24e93d1202f` |
+| Candidate workflow | [`30212121353`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30212121353), successful read-only `macos-x64` evidence run |
+| Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
+| 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/stapled/installed/launched x64 app, packaged-app smoke, artifact set `48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1` |
 | Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
 
 The manual candidate workflow remains read-only with `contents: read`, accepts only
 an exact commit already on `main`, defaults to package version `0.1.8` and
-`macos-x64`, and cannot create a tag or Release. A successful run would create
-candidate evidence only. It would not close the first-user M1 gate and would not
-authorize publication.
+`macos-x64`, and cannot create a tag or Release. Run `30212121353` created candidate
+evidence only. It did not close the first-user M1 gate and did not authorize
+publication. Its Apple Silicon, Windows, and complete-matrix jobs were skipped.
 
-Before any 0.1.8 publication decision, the exact clean commit must pass source gates,
-P2 release scope, Deep, Developer ID signing, notarization, staple, Gatekeeper,
-isolated install, real renderer launch, package-size policy, exact five-asset binding,
-final notes audit, and secret-history scan. The final notes must describe only the
-post-v0.1.7 fixes present in that candidate. Windows and Apple Silicon jobs must be
-recorded as skipped, not passed.
+Before any 0.1.8 publication decision, the downloaded candidate artifact must be
+independently checked against run `30212121353`, the exact five assets and report
+families must be bound into final notes, and a clean publication-only descendant must
+pass the scoped notes and handoff preflight. The final notes must describe only the
+post-v0.1.7 fixes present in that candidate. Windows and Apple Silicon remain skipped,
+not passed. Publication still requires a new explicit owner authorization.
+
+### 0.1.8 Candidate Asset Record
+
+| Candidate file | Size | SHA256 |
+|---|---:|---|
+| `CaoGen-0.1.8.dmg` | 127,702,969 B | `bb79e9abf1a8e1e245c87feca352db109f275bc96af1d35469b8e6b82e9224c3` |
+| `CaoGen-0.1.8.dmg.blockmap` | 134,481 B | `aa0b1924d8db3df620abbb82f76e66c2c2592b0b2491617e050527fe040618f5` |
+| `CaoGen-0.1.8-mac.zip` | 127,017,842 B | `3befafbfda324062d1514607d2e9629798e0a501479e045ef4240edb823f39b8` |
+| `CaoGen-0.1.8-mac.zip.blockmap` | 132,978 B | `435f0587ba2324742b152b9ad83b647e5fdc9e830c65fa0e7f1e03ed7c0bd3b6` |
+| `latest-mac.yml` | 484 B | `8d76dcc865c48e2a18e2ebea6658509a65ca9e62c4e38929320f24338d101dc5` |
+
+The five-file artifact-set SHA256 is
+`48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1`.
+GitHub Actions artifact `8635086153`, named
+`caogen-release-macos-x64-837f8f90945d558c44b2d05cbc09a24e93d1202f`,
+contains the candidate assets and evidence reports and expires on 2026-08-09. It is
+not a public Release asset.
 
 ## Historical v0.1.7 Publication Record
 

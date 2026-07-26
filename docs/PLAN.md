@@ -107,7 +107,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 发布完整性门禁补强：`docs/RELEASE-NOTES-FINAL.md` 现在作为远端正文、精确资产名称集合和 SHA-256 digest 的版本控制合同；GitHub Actions 每 6 小时及手动执行只读审计。Windows unsigned 工作流只上传显式 `unsigned-preview` Actions artifact，不再携带 `latest.yml`，手动运行必须确认 preview-only
   - [ ] 修复 2026-07-26 远端发布回归：v0.1.7 在原五资产发布后被追加 3 个 Windows 资产，Release 正文也改为八资产/Windows unsigned；当前 Notes 合同审计按设计失败。Windows build run `30192957144` 只有只读权限并未发布，3 个资产是在 run 完成后单独上传。删除资产与恢复正文等待创始人明确授权，未恢复前不得重新标记公开发布审计通过
     - [x] 关闭与当前暂停 Windows 范围冲突的旧 [PR #6](https://github.com/ChaoYuZhang001/CaoGen/pull/6)；该 PR 试图把 v0.1.6 Windows 八资产文档合入 `main`，现保留分支但不会误合并
-  - [ ] 按用户问题 patch 规则准备 v0.1.8 macOS Intel-only 候选：包含 v0.1.7 tag 后的首用引导、Provider 恢复和删除项目草稿解绑修复；package/lock/workflow/draft 已进入 0.1.8，Apple Silicon/Windows 继续暂停。必须重新绑定最终 clean Deep、签名公证、安装启动和五资产证据；本项不授权创建 tag/Release
+  - [x] 按用户问题 patch 规则准备 v0.1.8 macOS Intel-only 候选：`main@837f8f90945d558c44b2d05cbc09a24e93d1202f` 的只读 run `30212121353` 已对 v0.1.7 tag 后的首用引导、Provider 恢复和删除项目草稿解绑修复完成 exact-commit Deep `163 total / 161 required pass / 2 optional skip / 0 fail`、`120/120` macOS audit、签名、公证、安装、renderer、packaged-app 与五资产绑定；资产集 digest `48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1`。Apple Silicon/Windows 继续暂停；本项只关闭候选准备，不授权创建 tag/Release
+  - [ ] 完成 v0.1.8 发布前独立候选下载核验、精确五资产 Final Notes 与 publication-only 后继预检；获得创始人针对 v0.1.8 的新授权后才可创建 tag/Release
 - [ ] M1 退出验收:首位陌生用户从官网下载、无安全绕过安装并按 Quick Start 完成第一个只读任务
   - [x] 固化独立于 N1 迁移的五步演练指南、私有结果模板和 fail-closed 机器审计；绑定 `v0.1.7`、候选提交、公开 DMG SHA-256、Intel 架构、30 分钟、零修改与四份独立证据
   - [x] 失败演练支持 `--observation` 保存 `observed_failed`，不冒充通过；负向 smoke 覆盖超时/卡点、required 拒绝、错误哈希、安全绕过、arm64、敏感字段和重复/符号链接证据

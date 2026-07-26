@@ -1,7 +1,9 @@
 # CaoGen 0.1.8 macOS Intel Patch Candidate Draft
 
 > Status: Do not publish this draft. v0.1.7 is the latest public release on
-> GitHub Releases. No new 0.1.8 release assets uploaded yet.
+> GitHub Releases. The signed 0.1.8 candidate exists only as a private Actions
+> artifact. No new release assets uploaded yet; specifically, no 0.1.8 public
+> Release assets have been uploaded.
 
 ## Release Decision
 
@@ -11,11 +13,12 @@ v0.1.7 tag and are not present in the package that users can currently download.
 The candidate scope is macOS Intel x64 only. Apple Silicon, Windows, Linux, and the
 formal three-platform matrix remain outside this patch candidate.
 
-Preparation of this candidate does not authorize a tag or a public Release. The
-exact candidate commit must first pass clean source gates, exact-commit Deep,
-Developer ID signing, notarization, stapling, Gatekeeper, isolated installation,
-real renderer launch, package-size policy, and final five-asset verification in the
-read-only `macos-x64` evidence workflow.
+Preparation and validation of this candidate do not authorize a tag or a public
+Release. Exact `main@837f8f90945d558c44b2d05cbc09a24e93d1202f` passed clean source
+gates, exact-commit Deep, Developer ID signing, notarization, stapling, Gatekeeper,
+isolated installation, real renderer launch, package-size policy, and five-asset
+verification in read-only workflow run `30212121353`. Independent artifact download,
+final notes binding, publication preflight, and explicit owner authorization remain.
 
 ## Candidate Highlights
 
@@ -34,21 +37,35 @@ read-only `macos-x64` evidence workflow.
 
 ## Uploaded Assets
 
-No new 0.1.8 assets uploaded yet. A final macOS Intel release, if separately
-authorized after all gates pass, must contain exactly the audited DMG, DMG blockmap,
-ZIP, ZIP blockmap, and `latest-mac.yml`. Final notes must list each uploaded file and
-its exact SHA256 digest. Local `test-results`, build output, and candidate evidence
-archives are not public Release assets.
+No public 0.1.8 assets have been uploaded. Read-only workflow run `30212121353`
+produced the following private candidate set:
+
+| Candidate file | Size | SHA256 |
+|---|---:|---|
+| `CaoGen-0.1.8.dmg` | 127,702,969 B | `bb79e9abf1a8e1e245c87feca352db109f275bc96af1d35469b8e6b82e9224c3` |
+| `CaoGen-0.1.8.dmg.blockmap` | 134,481 B | `aa0b1924d8db3df620abbb82f76e66c2c2592b0b2491617e050527fe040618f5` |
+| `CaoGen-0.1.8-mac.zip` | 127,017,842 B | `3befafbfda324062d1514607d2e9629798e0a501479e045ef4240edb823f39b8` |
+| `CaoGen-0.1.8-mac.zip.blockmap` | 132,978 B | `435f0587ba2324742b152b9ad83b647e5fdc9e830c65fa0e7f1e03ed7c0bd3b6` |
+| `latest-mac.yml` | 484 B | `8d76dcc865c48e2a18e2ebea6658509a65ca9e62c4e38929320f24338d101dc5` |
+
+The candidate artifact-set SHA256 is
+`48667aeb2f5bb2e16187e88c53a5db96d448d9cfa94e8c3afcfcaf561d510ed1`.
+A final macOS Intel release, if separately authorized after all remaining gates pass,
+must contain exactly these five audited files. Local `test-results`, build output, and
+the Actions candidate evidence archive are not public Release assets.
 
 Public update metadata such as `latest*.yml` must match the exact installer set and
 must not advertise Apple Silicon or Windows artifacts that are outside this scope.
 
 ## Truth Boundary
 
-- The latest complete clean local Deep report before this version-only candidate
-  change is bound to `7ed1b5fb4e7d414587734f8c660aca8b8c40bad9`: `163 total / 161
-  required pass / 2 optional skip / 0 blocked / 0 fail`. It proves regression
-  stability of that exact clean commit, not the future 0.1.8 package or public release.
+- The exact candidate commit `837f8f90945d558c44b2d05cbc09a24e93d1202f` passed clean Deep in
+  run `30212121353`: `163 total / 161 required pass / 2 optional skip / 0 blocked /
+  0 fail`. It proves regression stability of that exact candidate, not publication or
+  first-user success.
+- The same run passed the `120/120` required macOS release audit, signed/notarized
+  installation and real renderer launch. Apple Silicon, Windows, and complete-matrix
+  jobs were skipped by scope.
 - The two optional skips are external-network checks and are not passes.
 - No non-project participant has completed the private M1 first-user drill. Automated
   tests do not prove first-time installation, Provider setup, copy clarity, or task
@@ -65,16 +82,15 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 
 ## Known Blockers
 
-- `release_identity`: the final 0.1.8 candidate commit and tag do not exist.
-- `deep_test`: no clean Deep report is bound to the final 0.1.8 candidate commit yet.
-- `p2_required` and `dag_finalization`: the final candidate evidence workflow has not
-  rerun these required gates for 0.1.8.
-- `packaging_release`: no provenance-bound, signed, notarized, stapled, installed, and
-  launched 0.1.8 Intel five-asset set exists.
-- `product_positioning`: required public-positioning validation is not yet bound to
-  the final candidate evidence set.
-- `release_notes`: this is a draft; exact assets, hashes, evidence reports, and final
-  wording are still missing.
+- `release_identity`: the exact candidate exists, but no v0.1.8 tag or publication-only
+  release identity exists.
+- `deep_test`, `dag_finalization`, `p2_required`, and `packaging_release`: the complete
+  three-platform/formal 1.0 Release Doctor still lists these domains as open. The
+  narrower Intel candidate equivalents passed in run `30212121353`; that scoped pass
+  does not make the complete Doctor ready.
+- `release_notes`: this remains a draft; the Actions artifact must be independently
+  downloaded and its four candidate report families and five exact files must be bound
+  into final notes on a clean publication-only descendant.
 - `github_release_assets`: no public 0.1.8 asset set exists, and no publication has
   been authorized.
 - Apple Silicon and Windows are paused. Skipped jobs must remain skips, not passes.
@@ -92,8 +108,9 @@ sufficient; revoke or rotate it at the provider as well.
 
 ## macOS First Open
 
-No 0.1.8 package is available yet. If the scoped candidate and final publication gates
-later pass, users will open the signed and notarized Intel DMG from GitHub Releases,
+No public 0.1.8 package is available yet. If the remaining scoped publication gates
+later pass and the owner authorizes publication, users will open the signed and
+notarized Intel DMG from GitHub Releases,
 drag CaoGen to Applications, and launch it normally without bypass commands. Until
 then, v0.1.7 remains the latest public release and no 0.1.8 first-open behavior is
 claimed.
