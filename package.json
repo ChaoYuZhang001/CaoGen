@@ -99,6 +99,7 @@
     "test:session-model-switch-policy": "node scripts/session-model-switch-policy-smoke.mjs",
     "test:assistant-studio-live-switch": "node scripts/assistant-studio-live-switch-e2e.mjs",
     "test:assistant-studio-live-switch:required": "npm run build && npm run test:session-model-switch-policy && npm run test:assistant-studio-live-switch",
+    "test:performance-sample-integrity": "node scripts/performance-sample-integrity-smoke.mjs",
     "test:assistant-studio-performance": "node scripts/assistant-studio-performance-e2e.mjs",
     "test:assistant-studio-performance:required": "npm run build && npm run test:assistant-studio-performance",
     "test:routing-zero-choice": "node scripts/routing-zero-choice-e2e.mjs",

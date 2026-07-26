@@ -15,6 +15,11 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import {
+  DEFAULT_PERFORMANCE_SAMPLE_INTEGRITY_POLICY,
+  classifyPerformanceSampleIntegrity,
+  performanceMetricDeltas
+} from './lib/performance-sample-integrity.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -32,6 +37,7 @@ const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const thresholdMs = 300
+const maxFreshRendererAttempts = 2
 const warmSwitchesPerViewport = 20
 const firstDelta = 'performance-held-stream '
 const finalDelta = 'performance-complete'
@@ -57,7 +63,7 @@ try {
   mock = await startControlledResponsesMock()
   for (const viewport of viewports) {
     await check(`${viewport.name} cold/warm mode switching`, async () => {
-      const phase = await runViewportPhase(viewport, mock)
+      const phase = await runViewportPhaseWithRetry(viewport, mock)
       report.phases.push(phase)
     })
   }
@@ -102,7 +108,7 @@ if (report.status !== 'pass') {
 
 function createReport(sourceBuildBinding) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
     runDir,
     startedAt: new Date().toISOString(),
@@ -128,6 +134,7 @@ function createReport(sourceBuildBinding) {
       warm: 'subsequent Assistant/Studio switches after Studio has mounted',
       foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
       frameHealthPrecondition: 'each measured interaction starts only after four consecutive foreground frames at or below 50ms; inability to establish that condition within 5s fails the required gate',
+      sampleIntegrity: 'a failed cold sample is retried once only when one frame gap dominates wall time while Chromium renderer TaskDuration proves the renderer was mostly idle; the retry always uses a fresh Electron renderer and userData directory',
       networkIsolation: 'one local Responses request remains deliberately open and emits no data during all measurements',
       continuity: 'session/runtime IDs, canonical Run ID/count, transcript counts, init events, and request count are compared before and after switching'
     },
@@ -141,9 +148,14 @@ function createReport(sourceBuildBinding) {
     },
     sourceBuildBinding: { status: sourceBuildBinding.status, initial: sourceBuildBinding },
     phases: [],
+    measurementAttempts: [],
     checks: [],
     screenshots: [],
     warnings: [],
+    sampleIntegrityPolicy: {
+      ...DEFAULT_PERFORMANCE_SAMPLE_INTEGRITY_POLICY,
+      maxFreshRendererAttempts
+    },
     metrics: null,
     coverage: {
       verified: [
@@ -161,8 +173,28 @@ function createReport(sourceBuildBinding) {
   }
 }
 
-async function runViewportPhase(viewport, controlledMock) {
-  const phaseRoot = path.join(tempRoot, viewport.name)
+async function runViewportPhaseWithRetry(viewport, controlledMock) {
+  for (let attempt = 1; attempt <= maxFreshRendererAttempts; attempt += 1) {
+    const phase = await runViewportPhase(viewport, controlledMock, attempt)
+    report.measurementAttempts.push(summarizeMeasurementAttempt(phase))
+    if (phase.status !== 'scheduler-contaminated') return phase
+    const sample = phase.samples[0]
+    report.warnings.push(
+      `${viewport.name} cold attempt ${attempt} discarded as scheduler-contaminated: ` +
+      `${sample.durationMs}ms wall, ${sample.maxFrameGapMs}ms max frame gap, ` +
+      `${sample.rendererTaskDurationMs}ms renderer TaskDuration`
+    )
+    if (attempt === maxFreshRendererAttempts) {
+      throw new Error(
+        `${viewport.name} cold sample was scheduler-contaminated in ${maxFreshRendererAttempts} fresh renderer attempts`
+      )
+    }
+  }
+  throw new Error(`${viewport.name}: fresh renderer retry policy exhausted`)
+}
+
+async function runViewportPhase(viewport, controlledMock, attempt) {
+  const phaseRoot = path.join(tempRoot, `${viewport.name}-attempt-${attempt}`)
   const userDataDir = path.join(phaseRoot, 'userData')
   const projectDir = path.join(phaseRoot, 'project')
   mkdirSync(userDataDir, { recursive: true })
@@ -175,6 +207,8 @@ async function runViewportPhase(viewport, controlledMock) {
   let browser
   let page
   const phase = createPhase(viewport)
+  phase.attempt = attempt
+  phase.electronProcessId = electron.pid ?? null
 
   try {
     await waitForDebugPort(remotePort, 20_000)
@@ -201,7 +235,14 @@ async function runViewportPhase(viewport, controlledMock) {
     await controlledMock.waitForRequest(requestOrdinal)
     phase.before = await waitForRunningBaseline(page, fixture, requestOrdinal, controlledMock)
 
-    phase.samples.push(await measureModeSwitch(page, 'studio', 'cold', 1))
+    const coldSample = await measureModeSwitch(page, 'studio', 'cold', 1)
+    phase.samples.push(coldSample)
+    phase.coldSampleIntegrity = classifyPerformanceSampleIntegrity(coldSample, { thresholdMs })
+    if (phase.coldSampleIntegrity.status === 'scheduler-contaminated') {
+      phase.status = 'scheduler-contaminated'
+      await captureScreenshot(page, phase, `${viewport.name}-cold-scheduler-contaminated`)
+      return phase
+    }
     phase.studioShellInteraction = await verifyStudioShellInteraction(page)
     phase.studioDataReady = await measureStudioDataReady(page)
     await captureScreenshot(page, phase, `${viewport.name}-cold-studio`)
@@ -243,6 +284,8 @@ function createPhase(viewport) {
     name: viewport.name,
     viewport,
     status: 'running',
+    attempt: 0,
+    electronProcessId: null,
     sessionId: '',
     samples: [],
     screenshots: [],
@@ -250,6 +293,7 @@ function createPhase(viewport) {
     afterSwitches: null,
     completed: null,
     metrics: null,
+    coldSampleIntegrity: null,
     studioShellInteraction: null,
     studioDataReady: null,
     browserRuntime: null,
@@ -460,6 +504,7 @@ async function installSessionEventProbe(page, sessionId) {
 
 async function measureModeSwitch(page, mode, temperature, ordinal) {
   const frameHealth = await waitForFrameHealth(page)
+  const rendererMetricsBefore = temperature === 'cold' ? await page.metrics() : null
   const measurement = await page.evaluate(async ({ expectedMode, sampleTemperature, timeoutMs }) => {
     const button = document.querySelector(`[data-experience-mode-option="${expectedMode}"]`)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`mode button missing: ${expectedMode}`)
@@ -550,6 +595,8 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
     }
 
   }, { expectedMode: mode, sampleTemperature: temperature, timeoutMs: 5_000 })
+  const rendererMetricsAfter = temperature === 'cold' ? await page.metrics() : null
+  const rendererMetrics = performanceMetricDeltas(rendererMetricsBefore, rendererMetricsAfter)
   assert(measurement.visibilityState === 'visible', `renderer was ${measurement.visibilityState} during measurement`)
   return {
     mode,
@@ -558,8 +605,25 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
     durationMs: roundMs(measurement.durationMs),
     frameCount: measurement.frameCount,
     maxFrameGapMs: roundMs(measurement.maxFrameGapMs),
+    rendererTaskDurationMs: rendererMetrics.taskDurationMs,
+    rendererScriptDurationMs: rendererMetrics.scriptDurationMs,
+    rendererLayoutDurationMs: rendererMetrics.layoutDurationMs,
+    rendererStyleDurationMs: rendererMetrics.styleDurationMs,
     lastNotReadyReason: measurement.lastNotReadyReason,
     frameHealth
+  }
+}
+
+function summarizeMeasurementAttempt(phase) {
+  return {
+    viewport: phase.name,
+    attempt: phase.attempt,
+    electronProcessId: phase.electronProcessId,
+    freshRenderer: true,
+    status: phase.status,
+    coldSample: phase.samples.find((sample) => sample.temperature === 'cold') ?? null,
+    coldSampleIntegrity: phase.coldSampleIntegrity,
+    processExited: phase.process?.exited ?? null
   }
 }
 
@@ -1069,6 +1133,17 @@ function renderMarkdown(value) {
     lines.push(`| aggregate | ${value.metrics.cold.count} | ${formatMs(value.metrics.cold.p95Ms)} | ${value.metrics.warm.count} | ${formatMs(value.metrics.warm.p95Ms)} | ${formatMs(value.metrics.all.p95Ms)} | diagnostic only |`)
   }
   lines.push('', 'Switches ran while one local Provider response was held open. Each viewport retained exactly one session, one canonical Run, one user message, and one model request.')
+  const discardedAttempts = value.measurementAttempts.filter((attempt) => attempt.status === 'scheduler-contaminated')
+  if (discardedAttempts.length > 0) {
+    lines.push('', '## Sample integrity retries', '')
+    for (const attempt of discardedAttempts) {
+      lines.push(
+        `- ${attempt.viewport} attempt ${attempt.attempt}: ${formatMs(attempt.coldSample.durationMs)} wall, ` +
+        `${formatMs(attempt.coldSample.maxFrameGapMs)} max frame gap, ` +
+        `${formatMs(attempt.coldSample.rendererTaskDurationMs)} renderer TaskDuration; retried in a fresh renderer.`
+      )
+    }
+  }
   if (value.error) lines.push('', '## Error', '', '```text', value.error, '```')
   return `${lines.join('\n')}\n`
 }
