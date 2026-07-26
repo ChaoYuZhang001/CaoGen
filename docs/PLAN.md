@@ -106,6 +106,7 @@ README、官网、STATUS 三处必须一致:
   - [x] 创建 annotated tag `v0.1.7` 和正式 GitHub Release，上传精确五项 Intel 资产；公开资产审计 `5/5`、0 warning / 0 failure，官网中英文首页与文档入口已同步
   - [x] 发布完整性门禁补强：`docs/RELEASE-NOTES-FINAL.md` 现在作为远端正文、精确资产名称集合和 SHA-256 digest 的版本控制合同；GitHub Actions 每 6 小时及手动执行只读审计。Windows unsigned 工作流只上传显式 `unsigned-preview` Actions artifact，不再携带 `latest.yml`，手动运行必须确认 preview-only
   - [ ] 修复 2026-07-26 远端发布回归：v0.1.7 在原五资产发布后被追加 3 个 Windows 资产，Release 正文也改为八资产/Windows unsigned；当前 Notes 合同审计按设计失败。Windows build run `30192957144` 只有只读权限并未发布，3 个资产是在 run 完成后单独上传。删除资产与恢复正文等待创始人明确授权，未恢复前不得重新标记公开发布审计通过
+    - [x] 关闭与当前暂停 Windows 范围冲突的旧 [PR #6](https://github.com/ChaoYuZhang001/CaoGen/pull/6)；该 PR 试图把 v0.1.6 Windows 八资产文档合入 `main`，现保留分支但不会误合并
 - [ ] M1 退出验收:首位陌生用户从官网下载、无安全绕过安装并按 Quick Start 完成第一个只读任务
   - [x] 固化独立于 N1 迁移的五步演练指南、私有结果模板和 fail-closed 机器审计；绑定 `v0.1.7`、候选提交、公开 DMG SHA-256、Intel 架构、30 分钟、零修改与四份独立证据
   - [x] 失败演练支持 `--observation` 保存 `observed_failed`，不冒充通过；负向 smoke 覆盖超时/卡点、required 拒绝、错误哈希、安全绕过、arm64、敏感字段和重复/符号链接证据
@@ -127,7 +128,7 @@ README、官网、STATUS 三处必须一致:
 
 - [ ] M2-T1 N1 真人实测:3 名 Codex/Claude Code 真实用户 30 分钟迁移计时,记录卡点；M1 单人只读 Quick Start 结果只提供 onboarding 基线，不替代本项 3 人完整迁移证据
 - [ ] M2-T2 onboarding 打磨:首个任务模板、Provider 配置向导、失败时的引导文案
-  - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；恢复入口在无可用 Provider 时直接打开真实新增/修复表单，只有密钥与模型齐全的保存结果才自动回到首任务。提示词、目录、Drive、权限、固定/Provider/全局路由和 Studio 子页跨设置保留，保存前后均不误建会话；真实 Electron E2E `2026-07-26T14-25-32-923Z` 为 `9/9`，通过 UI 填写并保存本地 Responses Provider 后再走真实 Router/流式响应，不再绕过 UI 调用 IPC 创建 Provider
+  - [x] v0.1.7 后续源码已把公开 Quick Start 只读提示词放入欢迎页，并为 Assistant/Expert 的无可用 Provider 状态提供配置/重试恢复；恢复入口在无可用 Provider 时直接打开真实新增/修复表单，缺 API Key 或缺模型会保留表单、显示双语明确错误且不创建半成品 Provider，只有密钥与模型齐全的保存结果才自动回到首任务。提示词、目录、Drive、权限、固定/Provider/全局路由和 Studio 子页跨设置保留，保存前后均不误建会话；真实 Electron E2E `2026-07-26T14-44-18-900Z` 为 `9/9`、6 张截图，通过 UI 验证缺 Key、缺模型、有效保存并走真实 Router/流式响应，不再绕过 UI 调用 IPC 创建 Provider
   - [ ] 用 M1 首位陌生用户和 M2-T1 三人 N1 记录验证文案可理解性、Provider 配置成功率及失败恢复时长，再按真实卡点继续打磨
 - [x] M2-T3 建立反馈通道(GitHub Discussions 或微信群),每个反馈 48 小时内回应
   - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`

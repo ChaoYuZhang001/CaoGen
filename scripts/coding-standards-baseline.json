@@ -1543,8 +1543,8 @@
     },
     "src/renderer/src/components/ProviderEditor.tsx": {
       "profile": "product",
-      "lines": 477,
-      "contentHash": "b5d4b99558da2223c52fa3ac7fea6d3dc207108187ce669a69962a2573c84acb",
+      "lines": 492,
+      "contentHash": "784ae335ab251863baa6a98adef2bf70d246e637c5129687cb3130cb158f755d",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 353,
       "complexFunctionCount": 2,
@@ -1558,7 +1558,7 @@
           "complexity": 29
         },
         "save#1": {
-          "lines": 61,
+          "lines": 62,
           "complexity": 18
         }
       }
