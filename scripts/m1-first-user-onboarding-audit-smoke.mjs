@@ -27,13 +27,15 @@ try {
   assert.equal(valid.report.summary.completedStepCount, 5)
   assert.equal(valid.report.summary.evidenceFiles.length, 4)
   assert.equal(valid.report.summary.installer.sha256, installerSha256)
+  assert.equal(valid.report.summary.evidenceGovernance.maximumRetentionDays, 30)
+  assert.equal(valid.report.summary.evidenceGovernance.redactionReviewCompleted, true)
   assert.equal(JSON.stringify(valid.report).includes(validRecord.testerId), false)
   assert.equal(JSON.stringify(valid.report).includes(installerPath), false)
 
   const failedObservationRecord = makeRecord()
   failedObservationRecord.result = 'fail'
   failedObservationRecord.totalMinutes = 37
-  failedObservationRecord.finishedAt = '2026-07-26T09:37:00+08:00'
+  setFinishedAt(failedObservationRecord, 37)
   failedObservationRecord.steps[4].completed = false
   failedObservationRecord.readOnlyTask.completed = false
   failedObservationRecord.readOnlyTask.responseUseful = false
@@ -97,6 +99,34 @@ try {
   assert.equal(duplicateEvidence.exitCode, 1)
   assert.match(duplicateEvidence.report.schemaFailures.join('\n'), /distinct file/)
 
+  const noConsentRecord = makeRecord()
+  noConsentRecord.evidenceGovernance.screenRecordingConsent = false
+  const noConsent = runAudit('missing-consent', noConsentRecord, ['--required', ...baseArgs])
+  assert.equal(noConsent.exitCode, 1)
+  assert.match(noConsent.report.gateFailures.join('\n'), /explicit screen-recording consent/)
+
+  const unreviewedRecord = makeRecord()
+  unreviewedRecord.evidenceGovernance.redactionReviewCompleted = false
+  const unreviewed = runAudit('unreviewed-evidence', unreviewedRecord, ['--required', ...baseArgs])
+  assert.equal(unreviewed.exitCode, 1)
+  assert.match(unreviewed.report.gateFailures.join('\n'), /redaction review/)
+
+  const excessiveRetentionRecord = makeRecord()
+  excessiveRetentionRecord.evidenceGovernance.deleteBy = new Date(
+    Date.parse(excessiveRetentionRecord.finishedAt) + 31 * 24 * 60 * 60 * 1000
+  ).toISOString()
+  const excessiveRetention = runAudit('excessive-retention', excessiveRetentionRecord, ['--required', ...baseArgs])
+  assert.equal(excessiveRetention.exitCode, 1)
+  assert.match(excessiveRetention.report.gateFailures.join('\n'), /exceeds the declared maximum/)
+
+  const falseDeletionRecord = makeRecord()
+  falseDeletionRecord.evidenceGovernance.deletionStatus = 'deleted'
+  falseDeletionRecord.evidenceGovernance.deletedAt = new Date().toISOString()
+  const falseDeletion = runAudit('false-deletion', falseDeletionRecord, ['--required', ...baseArgs])
+  assert.equal(falseDeletion.exitCode, 1)
+  assert.match(falseDeletion.report.gateFailures.join('\n'), /must remain scheduled/)
+  assert.match(falseDeletion.report.gateFailures.join('\n'), /must remain null/)
+
   const missing = runWithoutRecord(['--report-root', path.join(tempRoot, 'missing-report')])
   assert.equal(missing.exitCode, 0)
   assert.equal(missing.report.status, 'skipped')
@@ -111,8 +141,10 @@ try {
 }
 
 function makeRecord() {
+  const startedAt = Date.now() - 60 * 60 * 1000
+  const finishedAt = startedAt + 12 * 60 * 1000
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     gateId: 'm1_first_user_onboarding',
     testerId: 'private-tester-001',
     projectContributor: false,
@@ -127,8 +159,8 @@ function makeRecord() {
     installerAssetName: 'CaoGen-0.1.7.dmg',
     installerPath,
     providerProtocol: 'openai-compatible',
-    startedAt: '2026-07-26T09:00:00+08:00',
-    finishedAt: '2026-07-26T09:12:00+08:00',
+    startedAt: new Date(startedAt).toISOString(),
+    finishedAt: new Date(finishedAt).toISOString(),
     totalMinutes: 12,
     result: 'pass',
     documentationUsed: 'quick_start_only',
@@ -148,6 +180,17 @@ function makeRecord() {
       mutationCount: 0,
       projectPathRedacted: true
     },
+    evidenceGovernance: {
+      screenRecordingConsent: true,
+      consentRecordedAt: new Date(startedAt - 5 * 60 * 1000).toISOString(),
+      purpose: 'm1_onboarding_acceptance_and_friction_review',
+      maximumRetentionDays: 30,
+      deleteBy: new Date(finishedAt + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      redactionReviewCompleted: true,
+      redactionReviewedAt: new Date(finishedAt + 60 * 1000).toISOString(),
+      deletionStatus: 'scheduled',
+      deletedAt: null
+    },
     evidenceFiles: [
       { role: 'screen_recording', path: writeFixture('screen-recording.txt', 'private-screen-recording') },
       { role: 'system_architecture', path: writeFixture('system-architecture.txt', 'x86_64') },
@@ -157,6 +200,13 @@ function makeRecord() {
     blockers: [],
     roughEdges: []
   }
+}
+
+function setFinishedAt(record, totalMinutes) {
+  const finishedAt = Date.parse(record.startedAt) + totalMinutes * 60 * 1000
+  record.finishedAt = new Date(finishedAt).toISOString()
+  record.evidenceGovernance.redactionReviewedAt = new Date(finishedAt + 60 * 1000).toISOString()
+  record.evidenceGovernance.deleteBy = new Date(finishedAt + 30 * 24 * 60 * 60 * 1000).toISOString()
 }
 
 function runAudit(name, record, args) {

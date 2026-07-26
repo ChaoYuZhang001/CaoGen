@@ -13,6 +13,35 @@ export function isMaintainerAssociation(value) {
   return MAINTAINER_ASSOCIATIONS.has(String(value || '').toUpperCase())
 }
 
+export function expandDiscussionFeedback(node) {
+  const comments = node.comments?.nodes || []
+  const discussion = {
+    kind: 'discussion',
+    number: node.number,
+    title: node.title,
+    url: node.url,
+    createdAt: node.createdAt,
+    authorAssociation: node.authorAssociation,
+    responses: comments.flatMap((comment) => [comment, ...(comment.replies?.nodes || [])])
+  }
+
+  if (!isMaintainerAssociation(node.authorAssociation)) return [discussion]
+
+  const externalCommentThreads = comments
+    .filter((comment) => !isMaintainerAssociation(comment.authorAssociation))
+    .map((comment) => ({
+      kind: 'discussion_comment',
+      number: node.number,
+      title: `External comment on: ${node.title}`,
+      url: comment.url || node.url,
+      createdAt: comment.createdAt,
+      authorAssociation: comment.authorAssociation,
+      responses: comment.replies?.nodes || []
+    }))
+
+  return [discussion, ...externalCommentThreads]
+}
+
 export function classifyCommunityFeedback(item, options = {}) {
   const nowMs = parseTimestamp(options.now ?? Date.now(), 'now')
   const slaHours = options.slaHours ?? COMMUNITY_RESPONSE_SLA_HOURS

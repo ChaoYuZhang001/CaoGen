@@ -4,6 +4,8 @@ import { createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, write
 import path from 'node:path'
 
 const repoRoot = process.cwd()
+const EVIDENCE_PURPOSE = 'm1_onboarding_acceptance_and_friction_review'
+const MAX_RETENTION_DAYS = 30
 const required = process.argv.includes('--required')
 const observation = process.argv.includes('--observation')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
@@ -66,7 +68,7 @@ if (status === 'failed') process.exitCode = 1
 
 function validateSchema(value) {
   if (!isRecord(value)) return schemaFailures.push('record must be a JSON object')
-  if (value.schemaVersion !== 1) schemaFailures.push('schemaVersion must be 1')
+  if (value.schemaVersion !== 2) schemaFailures.push('schemaVersion must be 2')
   if (value.gateId !== 'm1_first_user_onboarding') schemaFailures.push('gateId must be m1_first_user_onboarding')
   for (const key of ['testerId', 'releaseTag', 'releaseUrl', 'websiteUrl', 'platform', 'architecture', 'installedVersion', 'installedCandidateCommit', 'installerAssetName', 'installerPath', 'providerProtocol', 'startedAt', 'finishedAt', 'result']) {
     requireString(value, key)
@@ -80,6 +82,7 @@ function validateSchema(value) {
   if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) schemaFailures.push('totalMinutes must be greater than 0')
   validateSteps(value.steps)
   validateReadOnlyTask(value.readOnlyTask)
+  validateEvidenceGovernanceSchema(value.evidenceGovernance)
   validateStringArray(value.blockers, 'blockers')
   validateStringArray(value.roughEdges, 'roughEdges')
   validateEvidenceSchema(value.evidenceFiles)
@@ -135,11 +138,28 @@ function validateEvidenceSchema(files) {
   if (new Set(resolvedPaths).size !== resolvedPaths.length) schemaFailures.push('each evidenceFiles role must use a distinct file')
 }
 
+function validateEvidenceGovernanceSchema(governance) {
+  if (!isRecord(governance)) return schemaFailures.push('evidenceGovernance must be an object')
+  requireBoolean(governance, 'screenRecordingConsent', 'evidenceGovernance')
+  requireBoolean(governance, 'redactionReviewCompleted', 'evidenceGovernance')
+  for (const key of ['consentRecordedAt', 'purpose', 'deleteBy', 'redactionReviewedAt', 'deletionStatus']) {
+    requireString(governance, key, 'evidenceGovernance')
+  }
+  const retentionDays = numberField(governance, 'maximumRetentionDays')
+  if (!Number.isInteger(retentionDays) || retentionDays <= 0 || retentionDays > MAX_RETENTION_DAYS) {
+    schemaFailures.push(`evidenceGovernance.maximumRetentionDays must be an integer from 1 to ${MAX_RETENTION_DAYS}`)
+  }
+  if (governance.deletedAt !== null && !stringField(governance, 'deletedAt')) {
+    schemaFailures.push('evidenceGovernance.deletedAt must be null or a non-empty timestamp')
+  }
+}
+
 function validateGate(value, installer, binding) {
   validateExpectedBinding(binding)
   validateReleaseBinding(value, installer, binding)
   validateDistributionBinding(value, binding)
   validateParticipantAndTiming(value)
+  validateEvidenceGovernance(value)
   validatePassOutcome(value)
 }
 
@@ -177,11 +197,55 @@ function validateParticipantAndTiming(value) {
   const finish = Date.parse(value.finishedAt)
   if (!Number.isFinite(start) || !Number.isFinite(finish) || finish <= start) gateFailures.push('startedAt and finishedAt must define a positive interval')
   const measuredMinutes = (finish - start) / 60000
+  if (Number.isFinite(finish) && finish > Date.now() + 60 * 1000) gateFailures.push('finishedAt cannot be in the future')
   const totalMinutes = numberField(value, 'totalMinutes')
   if (Number.isFinite(measuredMinutes) && Math.abs(measuredMinutes - totalMinutes) > 0.25) gateFailures.push('totalMinutes must match the timestamp interval within 15 seconds')
   if (totalMinutes > 30) gateFailures.push(`totalMinutes must be <= 30, got ${totalMinutes}`)
   const stepMinutes = Array.isArray(value.steps) ? value.steps.reduce((sum, step) => sum + numberField(step, 'minutes'), 0) : 0
   if (stepMinutes > totalMinutes + 0.25) gateFailures.push('sum of step minutes must not exceed totalMinutes')
+}
+
+function validateEvidenceGovernance(value) {
+  const governance = value.evidenceGovernance
+  if (!isRecord(governance)) return
+
+  validateEvidenceGovernanceStatus(governance)
+  validateEvidenceGovernanceTimeline(governance, value)
+}
+
+function validateEvidenceGovernanceStatus(governance) {
+  if (governance.screenRecordingConsent !== true) gateFailures.push('explicit screen-recording consent must be recorded before capture')
+  if (governance.purpose !== EVIDENCE_PURPOSE) gateFailures.push(`evidenceGovernance.purpose must be ${EVIDENCE_PURPOSE}`)
+  if (governance.redactionReviewCompleted !== true) gateFailures.push('private evidence must pass redaction review before audit')
+  if (governance.deletionStatus !== 'scheduled') gateFailures.push('evidenceGovernance.deletionStatus must remain scheduled while evidence is present and under audit')
+  if (governance.deletedAt !== null) gateFailures.push('evidenceGovernance.deletedAt must remain null until private evidence has actually been deleted')
+}
+
+function validateEvidenceGovernanceTimeline(governance, value) {
+  const consentAt = Date.parse(governance.consentRecordedAt)
+  const startedAt = Date.parse(value.startedAt)
+  const finishedAt = Date.parse(value.finishedAt)
+  const redactionReviewedAt = Date.parse(governance.redactionReviewedAt)
+  const deleteBy = Date.parse(governance.deleteBy)
+  const retentionDays = numberField(governance, 'maximumRetentionDays')
+  if (!Number.isFinite(consentAt) || !Number.isFinite(startedAt) || consentAt > startedAt) {
+    gateFailures.push('consentRecordedAt must be a valid timestamp no later than startedAt')
+  }
+  if (!Number.isFinite(redactionReviewedAt) || !Number.isFinite(finishedAt) || redactionReviewedAt < finishedAt) {
+    gateFailures.push('redactionReviewedAt must be a valid timestamp no earlier than finishedAt')
+  }
+  if (Number.isFinite(redactionReviewedAt) && redactionReviewedAt > Date.now() + 60 * 1000) {
+    gateFailures.push('redactionReviewedAt cannot be in the future')
+  }
+  if (!Number.isFinite(deleteBy) || !Number.isFinite(finishedAt) || deleteBy <= finishedAt) {
+    gateFailures.push('deleteBy must be a valid timestamp after finishedAt')
+  } else {
+    const retentionMilliseconds = retentionDays * 24 * 60 * 60 * 1000
+    if (Number.isFinite(retentionMilliseconds) && deleteBy - finishedAt > retentionMilliseconds) {
+      gateFailures.push('deleteBy exceeds the declared maximum evidence-retention period')
+    }
+    if (deleteBy <= Date.now()) gateFailures.push('deleteBy has passed while private evidence is still present')
+  }
 }
 
 function validatePassOutcome(value) {
@@ -231,6 +295,12 @@ function summarize(value, installer, evidenceFiles) {
     completedStepCount: Array.isArray(value.steps) ? value.steps.filter((step) => step?.completed === true).length : 0,
     securityBypassUsed: value.securityBypassUsed === true,
     operatorHelpUsed: value.operatorHelpUsed === true,
+    evidenceGovernance: isRecord(value.evidenceGovernance) ? {
+      purpose: stringField(value.evidenceGovernance, 'purpose'),
+      maximumRetentionDays: numberField(value.evidenceGovernance, 'maximumRetentionDays'),
+      redactionReviewCompleted: value.evidenceGovernance.redactionReviewCompleted === true,
+      deletionStatus: stringField(value.evidenceGovernance, 'deletionStatus')
+    } : undefined,
     installer: installer ? { name: stringField(value, 'installerAssetName'), ...installer } : undefined,
     evidenceFiles
   }
@@ -277,8 +347,8 @@ function sha256File(filePath) {
   })
 }
 
-function requireString(value, key) {
-  if (!stringField(value, key)) schemaFailures.push(`${key} must be a non-empty string`)
+function requireString(value, key, prefix = '') {
+  if (!stringField(value, key)) schemaFailures.push(`${prefix ? `${prefix}.` : ''}${key} must be a non-empty string`)
 }
 
 function requireBoolean(value, key, prefix = '') {

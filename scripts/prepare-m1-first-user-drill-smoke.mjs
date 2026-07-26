@@ -37,6 +37,12 @@ try {
 
   const record = JSON.parse(readFileSync(output.recordPath, 'utf8'))
   assert.equal(record.result, 'not_run')
+  assert.equal(record.schemaVersion, 2)
+  assert.equal(record.evidenceGovernance.screenRecordingConsent, false)
+  assert.equal(record.evidenceGovernance.maximumRetentionDays, 30)
+  assert.equal(record.evidenceGovernance.redactionReviewCompleted, false)
+  assert.equal(record.evidenceGovernance.deletionStatus, 'scheduled')
+  assert.equal(record.evidenceGovernance.deletedAt, null)
   assert.equal(record.installerPath, path.join(evidenceDir, 'CaoGen-0.1.7.dmg'))
   assert.equal(record.evidenceFiles.length, 4)
   assert.equal(new Set(record.evidenceFiles.map((item) => item.path)).size, 4)
@@ -46,6 +52,9 @@ try {
   const checklist = readFileSync(output.checklistPath, 'utf8')
   assert.match(checklist, /tester must download the DMG through https:\/\/caogen\.dev\//)
   assert.match(checklist, /Do not commit, upload, or paste this directory/)
+  assert.match(checklist, /record explicit consent/)
+  assert.match(checklist, /Delete sooner after the audit/)
+  assert.match(checklist, /Never claim deletion before/)
   assert.match(checklist, /test:m1-first-user-onboarding:required/)
 
   const rerun = run(['--evidence-dir', evidenceDir])

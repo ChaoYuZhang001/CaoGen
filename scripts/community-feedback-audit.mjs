@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { summarizeCommunityFeedback } from './lib/community-response-sla.mjs'
+import { expandDiscussionFeedback, summarizeCommunityFeedback } from './lib/community-response-sla.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -73,6 +73,7 @@ function validateStaticContract() {
   requireSnippets('.github/workflows/community-response-sla.yml', [
     'schedule:',
     "cron: '23 */6 * * *'",
+    'discussion_comment:',
     'discussions: read',
     'issues: read',
     'pull-requests: read',
@@ -106,8 +107,8 @@ async function auditLiveCommunity() {
 
   const issues = await loadIssues(token, owner, name)
   const pullRequests = await loadPullRequests(token, owner, name)
-  const discussions = await loadDiscussions(token, owner, name)
-  const summary = summarizeCommunityFeedback([...issues, ...pullRequests, ...discussions])
+  const discussionFeedback = await loadDiscussions(token, owner, name)
+  const summary = summarizeCommunityFeedback([...issues, ...pullRequests, ...discussionFeedback.items])
   recordResponseResults(summary)
 
   return {
@@ -118,7 +119,8 @@ async function auditLiveCommunity() {
     scanned: {
       issues: issues.length,
       pullRequests: pullRequests.length,
-      discussions: discussions.length
+      discussions: discussionFeedback.discussionCount,
+      discussionCommentThreads: discussionFeedback.commentThreadCount
     },
     ...summary
   }
@@ -165,10 +167,13 @@ async function loadPullRequests(token, owner, name) {
 }
 
 async function loadDiscussions(token, owner, name) {
-  return loadConnection(token, discussionQuery(), 'discussions', { owner, name }, (node) => {
-    const responses = node.comments.nodes.flatMap((comment) => [comment, ...comment.replies.nodes])
-    return { kind: 'discussion', ...commonItem(node), responses }
-  })
+  const discussions = await loadConnection(token, discussionQuery(), 'discussions', { owner, name }, (node) => node)
+  const items = discussions.flatMap(expandDiscussionFeedback)
+  return {
+    items,
+    discussionCount: discussions.length,
+    commentThreadCount: items.filter((item) => item.kind === 'discussion_comment').length
+  }
 }
 
 async function loadConnection(token, query, connectionName, variables, mapNode) {
@@ -313,7 +318,7 @@ function discussionQuery() {
             number title url createdAt authorAssociation
             comments(first: 50) {
               nodes {
-                createdAt authorAssociation
+                url createdAt authorAssociation
                 replies(first: 20) { nodes { createdAt authorAssociation } }
               }
             }

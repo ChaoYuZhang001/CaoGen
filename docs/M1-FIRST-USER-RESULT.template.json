@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "gateId": "m1_first_user_onboarding",
   "testerId": "private-anonymized-id",
   "projectContributor": false,
@@ -17,7 +17,7 @@
   "startedAt": "2026-07-26T09:00:00+08:00",
   "finishedAt": "2026-07-26T09:00:00+08:00",
   "totalMinutes": 0,
-  "result": "pass",
+  "result": "not_run",
   "documentationUsed": "quick_start_only",
   "securityBypassUsed": false,
   "operatorHelpUsed": false,
@@ -34,6 +34,17 @@
     "responseUseful": false,
     "mutationCount": 0,
     "projectPathRedacted": true
+  },
+  "evidenceGovernance": {
+    "screenRecordingConsent": false,
+    "consentRecordedAt": "replace-with-ISO-8601-consent-time",
+    "purpose": "m1_onboarding_acceptance_and_friction_review",
+    "maximumRetentionDays": 30,
+    "deleteBy": "replace-with-ISO-8601-delete-deadline",
+    "redactionReviewCompleted": false,
+    "redactionReviewedAt": "replace-with-ISO-8601-review-time",
+    "deletionStatus": "scheduled",
+    "deletedAt": null
   },
   "evidenceFiles": [
     { "role": "screen_recording", "path": "/private/evidence/screen-recording.mov" },

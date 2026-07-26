@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   COMMUNITY_RESPONSE_SLA_HOURS,
   classifyCommunityFeedback,
+  expandDiscussionFeedback,
   isMaintainerAssociation,
   summarizeCommunityFeedback
 } from './lib/community-response-sla.mjs'
@@ -50,6 +51,42 @@ assert.equal(
   classifyCommunityFeedback(item({ authorAssociation: 'OWNER' }), { now }).status,
   'maintainer_authored'
 )
+
+const maintainerDiscussion = (commentOverrides = {}) => ({
+  number: 9,
+  title: 'First-user recruitment',
+  url: 'https://github.com/example/repo/discussions/9',
+  createdAt: '2026-07-24T09:00:00.000Z',
+  authorAssociation: 'OWNER',
+  comments: {
+    nodes: [{
+      url: 'https://github.com/example/repo/discussions/9#discussioncomment-1',
+      createdAt: '2026-07-24T13:00:00.000Z',
+      authorAssociation: 'NONE',
+      replies: { nodes: [] },
+      ...commentOverrides
+    }]
+  }
+})
+
+const pendingCommentItems = expandDiscussionFeedback(maintainerDiscussion())
+assert.equal(pendingCommentItems.length, 2)
+assert.equal(classifyCommunityFeedback(pendingCommentItems[0], { now }).status, 'maintainer_authored')
+assert.equal(classifyCommunityFeedback(pendingCommentItems[1], { now }).status, 'pending')
+assert.equal(pendingCommentItems[1].kind, 'discussion_comment')
+assert.equal(pendingCommentItems[1].url.endsWith('#discussioncomment-1'), true)
+
+const respondedComment = expandDiscussionFeedback(maintainerDiscussion({
+  replies: {
+    nodes: [{ createdAt: '2026-07-25T12:00:00.000Z', authorAssociation: 'OWNER' }]
+  }
+}))[1]
+assert.equal(classifyCommunityFeedback(respondedComment, { now }).status, 'responded_on_time')
+
+const overdueComment = expandDiscussionFeedback(maintainerDiscussion({
+  createdAt: '2026-07-24T11:00:00.000Z'
+}))[1]
+assert.equal(classifyCommunityFeedback(overdueComment, { now }).status, 'overdue')
 
 const summary = summarizeCommunityFeedback([
   item(),
