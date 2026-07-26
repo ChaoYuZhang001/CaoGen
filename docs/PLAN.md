@@ -126,7 +126,9 @@ README、官网、STATUS 三处必须一致:
   - [x] GitHub Discussions 已启用，General/Ideas/Q&A 双语表单、Issue/README 导流和 `SUPPORT.md` 已建立；只读 GitHub Actions 每 6 小时审计公开 Issue、PR 与 Discussion 的 48 小时首次回应 SLA，两项 required gate 已纳入 `test:deep`，最新完整运行 `162 total / 160 required pass / 2 optional skip / 0 fail`
   - [ ] 用真实外部反馈验证入口可理解、首次维护者回应不超过 48 小时；逾期项必须处理并保留审计告警，不能只以空渠道自证完成
 - [ ] M2-T4 每周发布一个 patch 版本,只修真实用户撞到的问题,不加新功能
-- [ ] M2-T5 官网增加 30 秒演示视频(配 key → 下任务 → failover → Diff 审查)
+- [x] M2-T5 官网增加 30 秒演示视频(配 key → 下任务 → failover → Diff 审查)
+  - [x] `CaoGen-Website@e5be292` 已推送 `main`；中文/英文首页均包含原生 MP4 播放器、poster、下载入口与移动端单列布局，官网 `npm run check` 全部通过
+  - [x] 生产 `https://caogen.dev/`、`https://caogen.dev/en/` 已出现 `#demo`；`https://caogen.dev/demo/caogen-website-demo.mp4` 返回 `200 video/mp4`，3,369,296 B，SHA-256 `bdb93198b35db545a6af0fd5530b0eb598eb4c5680085f48e3b88810711a553f`
 
 **完成判据**:10 个真实用户完成 ≥1 次真实任务;周留存 ≥3 人;
 产出一份《前 10 个用户学到了什么》公开复盘。
