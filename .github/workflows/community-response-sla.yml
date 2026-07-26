@@ -8,6 +8,8 @@ on:
     types: [opened]
   discussion:
     types: [created]
+  discussion_comment:
+    types: [created]
 
 permissions:
   contents: read

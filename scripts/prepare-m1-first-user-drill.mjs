@@ -114,6 +114,16 @@ function buildRecord(evidenceDir) {
     mutationCount: 0,
     projectPathRedacted: true
   }
+  record.evidenceGovernance = {
+    ...record.evidenceGovernance,
+    screenRecordingConsent: false,
+    consentRecordedAt: 'replace-with-ISO-8601-consent-time',
+    deleteBy: 'replace-with-ISO-8601-delete-deadline',
+    redactionReviewCompleted: false,
+    redactionReviewedAt: 'replace-with-ISO-8601-review-time',
+    deletionStatus: 'scheduled',
+    deletedAt: null
+  }
   const evidenceNames = {
     screen_recording: 'screen-recording.mov',
     system_architecture: 'system-architecture.txt',
@@ -137,6 +147,13 @@ KEEP PRIVATE
 - Never record or copy the tester's API Key, Provider URL, project path, or private repository URL.
 - The tester must download the DMG through https://caogen.dev/ during the timed drill.
 - Do not pre-download the DMG or create placeholder evidence on the tester's behalf.
+
+CONSENT AND EVIDENCE LIFECYCLE
+- Before recording, explain that the private evidence is used only for M1 onboarding acceptance and friction review, then record explicit consent and consentRecordedAt.
+- Set deleteBy no later than 30 calendar days after finishedAt. Delete sooner after the audit and issue extraction are complete.
+- Review the recording and every evidence file for keys, Provider URLs, private paths, notifications, and unrelated desktop content before setting redactionReviewCompleted to true.
+- Keep deletionStatus as scheduled and deletedAt as null while files still exist or the audit is pending. Never claim deletion before the files are actually removed.
+- After the audit and issue extraction, delete the DMG, recording, and evidence files by deleteBy. Do not keep backup copies.
 
 EXPECTED RELEASE
 - Tag: ${releaseBinding.releaseTag}
