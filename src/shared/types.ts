@@ -2241,7 +2241,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   ): Promise<ImageAttachmentResult>
   /** OCR 附件图片(Vision/tesseract 降级;无引擎时 ok=false 如实报告) */
   ocrImageAttachment(sessionId: string, imagePath: string): Promise<ImageOcrResult>
-  sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<void>
+  sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<boolean>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>
   respondPermission(

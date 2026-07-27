@@ -65,7 +65,7 @@ export interface IdeBridgeSendPayload {
 }
 
 export interface IdeBridgeSendResult {
-  ok: true
+  ok: boolean
   sessionId: string
 }
 
@@ -103,7 +103,7 @@ export interface IdeBridgeErrorPayload {
 export interface IdeBridgeSessionPort {
   listSessions(): SessionMeta[]
   createSession(options: CreateSessionOptions): SessionMeta | Promise<SessionMeta>
-  sendMessage(sessionId: string, message: string | SendMessagePayload): void
+  sendMessage(sessionId: string, message: string | SendMessagePayload): boolean | Promise<boolean>
   syncDocument?(payload: IdeBridgeDocumentSyncPayload): void
   subscribeSessionEvents?(listener: (event: SessionEventPayload) => void): () => void
 }
@@ -351,8 +351,8 @@ class LocalIdeBridge implements IdeBridgeServer {
 
     if (envelope.type === 'sessions.send') {
       const payload = requireSendPayload(envelope.payload)
-      this.sessionPort.sendMessage(payload.sessionId, payload.message)
-      const result: IdeBridgeSendResult = { ok: true, sessionId: payload.sessionId }
+      const accepted = await this.sessionPort.sendMessage(payload.sessionId, payload.message)
+      const result: IdeBridgeSendResult = { ok: accepted, sessionId: payload.sessionId }
       this.send(connection, { id: envelope.id, type: 'sessions.send.result', payload: result })
       return
     }

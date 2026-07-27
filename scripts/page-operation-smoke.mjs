@@ -1166,17 +1166,7 @@ async function clickOfficeUnitAction(cdp, action) {
 }
 
 async function clickPreviewSendCurrentUnit(cdp) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const button = document.querySelector('[data-preview-send-current-unit="1"]');
-      if (!button || button.disabled) return { ok: false, disabled: Boolean(button?.disabled) };
-      button.click();
-      return { ok: true };
-    })()`
-  )
-  assert(result?.ok, `preview current-unit send button unavailable: ${JSON.stringify(result)}`)
-  await sleep(250)
+  await clickEnabledPreviewButton(cdp, '[data-preview-send-current-unit="1"]', 'preview current-unit send')
 }
 
 async function savePreviewNote(cdp, note) {
@@ -1311,27 +1301,35 @@ async function waitForPreviewFailure(cdp, needles, timeout = 5000) {
 }
 
 async function clickPreviewSendToAgent(cdp) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const header = document.querySelector('.preview-panel > .workspace-diff-top');
-      const button = [...(header?.querySelectorAll('button') ?? [])].find((candidate) =>
-        (candidate.innerText || candidate.textContent || '').includes('发给 Agent') && !candidate.disabled
-      );
-      if (!button) {
-        return {
+  await clickEnabledPreviewButton(cdp, '[data-preview-send-document="1"]', 'preview document send')
+}
+
+async function clickEnabledPreviewButton(cdp, selector, label, timeout = 10_000) {
+  const start = Date.now()
+  let last = null
+  while (Date.now() - start < timeout) {
+    last = await evalValue(
+      cdp,
+      `(() => {
+        const panel = document.querySelector('.preview-panel');
+        const button = panel?.querySelector(${JSON.stringify(selector)});
+        if (!button || button.disabled) return {
           ok: false,
-          state: document.querySelector('.preview-panel')?.getAttribute('data-preview-send-state') || '',
-          text: document.body.innerText.slice(0, 2000)
+          busy: panel?.getAttribute('data-preview-agent-busy') || '',
+          state: panel?.getAttribute('data-preview-send-state') || ''
         };
-      }
-      button.scrollIntoView({ block: 'center', inline: 'center' });
-      button.click();
-      return { ok: true };
-    })()`
-  )
-  assert(result?.ok, `preview send button not found or disabled: ${JSON.stringify(result)}`)
-  await sleep(250)
+        button.scrollIntoView({ block: 'center', inline: 'center' });
+        button.click();
+        return { ok: true };
+      })()`
+    )
+    if (last?.ok) {
+      await sleep(250)
+      return
+    }
+    await sleep(150)
+  }
+  throw new Error(`${label} button unavailable: ${JSON.stringify(last)}`)
 }
 
 async function clickProviderEditorSave(cdp) {

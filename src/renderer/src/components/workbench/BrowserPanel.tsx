@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
+import { isSessionBusy } from './session-send-availability'
 
 function annotationLabel(note: string): string {
   const clean = note.replace(/\s+/g, ' ').trim()
@@ -36,6 +37,13 @@ function annotationPrompt(item: {
     .join('\n')
 }
 
+function sendAnnotation(
+  sendMessage: (input: string) => Promise<void>,
+  item: Parameters<typeof annotationPrompt>[0]
+): void {
+  void sendMessage(annotationPrompt(item)).catch(() => undefined)
+}
+
 export default function BrowserPanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
@@ -47,6 +55,7 @@ export default function BrowserPanel(): React.JSX.Element {
     browserState,
     browserUrlDraft
   } = useStore((s) => s.workbench)
+  const sessionStatus = useStore((s) => activeId ? s.sessions[activeId]?.meta.status : undefined)
   const openBrowser = useStore((s) => s.openBrowserPanel)
   const closeBrowser = useStore((s) => s.closeBrowserPanel)
   const navigate = useStore((s) => s.navigateBrowser)
@@ -62,16 +71,14 @@ export default function BrowserPanel(): React.JSX.Element {
   const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://caobao.chat/official')
   const [note, setNote] = useState('')
   const [manualTakeover, setManualTakeover] = useState(false)
+  const sessionBusy = isSessionBusy(sessionStatus)
   const viewportRef = useRef<HTMLDivElement>(null)
-
   useEffect(() => {
     if (browserUrlDraft) setUrlDraft(browserUrlDraft)
   }, [browserUrlDraft])
-
   useEffect(() => {
     if (activeId && !browserState) void openBrowser()
   }, [activeId, browserState, openBrowser])
-
   useEffect(() => {
     const el = viewportRef.current
     if (!el || !activeId) return
@@ -207,7 +214,8 @@ export default function BrowserPanel(): React.JSX.Element {
                   <div className="browser-annotation-url">{item.title || item.url}</div>
                   <button
                     className="btn btn-ghost btn-sm browser-annotation-send"
-                    onClick={() => void sendMessage(annotationPrompt(item))}
+                    disabled={sessionBusy}
+                    onClick={() => sendAnnotation(sendMessage, item)}
                   >
                     {t('sendToAgent')}
                   </button>

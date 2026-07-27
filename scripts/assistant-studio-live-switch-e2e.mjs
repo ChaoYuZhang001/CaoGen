@@ -27,6 +27,7 @@ const electronBin = process.platform === 'win32'
 const firstDelta = 'live-switch-alpha '
 const finalDelta = 'live-switch-omega'
 const duplicateSendError = '上一轮仍在运行,请等待完成或中断后再发送。'
+const runningComposerDraft = 'keep this draft while the current task is running'
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
@@ -64,6 +65,7 @@ const report = {
       'running Responses stream survives repeated Assistant/Studio projection switches',
       'session/runtime/provider/model identity remains stable',
       'projection switches do not restart the session or resend the model request',
+      'running Composer keeps its local draft and does not claim rejected messages are queued',
       'duplicate sends remain nonfatal and cannot open a model-switch policy bypass',
       'running sessions reject model changes through the sessions:setModel IPC policy',
       'running model selector is disabled in Studio',
@@ -169,10 +171,11 @@ try {
   await installSessionEventProbe(page, sessionId)
 
   await check('running stream begins once with a stable runtime identity', async () => {
-    await page.evaluate((id) => window.agentDesk.sendMessage(id, {
+    const accepted = await page.evaluate((id) => window.agentDesk.sendMessage(id, {
       text: 'keep this request running while projections switch',
       messageId: 'live-switch-message'
     }), sessionId)
+    assert(accepted === true, 'initial running request was not acknowledged as accepted')
     await mock.started
     baseline = await waitForValue(
       () => readRuntimeSnapshot(page, sessionId),
@@ -189,12 +192,42 @@ try {
     await screenshot(page, '01-running-assistant')
   })
 
+  await check('running Composer preserves its draft and blocks false queueing', async () => {
+    await page.waitForFunction(() => {
+      const input = document.querySelector('.composer-input')
+      const send = document.querySelector('.composer-send')
+      return input && send?.disabled === true && input.placeholder.includes('完成后再发送')
+    }, { timeout: 10_000 })
+    await page.click('.composer-input')
+    await page.type('.composer-input', runningComposerDraft)
+    const before = await readRuntimeSnapshot(page, sessionId)
+    await page.keyboard.press('Enter')
+    await sleep(150)
+    const composer = await page.$eval('.composer-input', (input) => ({
+      value: input.value,
+      placeholder: input.placeholder
+    }))
+    assert(composer.value === runningComposerDraft, `running Composer lost its draft: ${composer.value}`)
+    assert(composer.placeholder.includes('完成后再发送'), `running placeholder still claims queueing: ${composer.placeholder}`)
+    const after = await readRuntimeSnapshot(page, sessionId)
+    assertRuntimeSnapshotStable(before, after, 'running Composer send guard')
+    assert(after.liveEventCount === before.liveEventCount, 'running Composer emitted a rejected send event')
+    assert(mock.requests.length === 1, `running Composer created ${mock.requests.length} model requests`)
+    report.runningComposerDraft = {
+      preserved: true,
+      sendDisabled: true,
+      requestCount: mock.requests.length
+    }
+    baseline = after
+  })
+
   await check('duplicate send stays nonfatal and model change remains rejected', async () => {
     const before = await readRuntimeSnapshot(page, sessionId)
-    await page.evaluate((id) => window.agentDesk.sendMessage(id, {
+    const duplicateAccepted = await page.evaluate((id) => window.agentDesk.sendMessage(id, {
       text: 'this duplicate request must be rejected without replacing the active turn',
       messageId: 'live-switch-duplicate-message'
     }), sessionId)
+    assert(duplicateAccepted === false, 'duplicate preload send was falsely acknowledged as accepted')
     const duplicate = await waitForValue(
       () => readRuntimeSnapshot(page, sessionId),
       (snapshot) => snapshot.duplicateSendRejectionCount === before.duplicateSendRejectionCount + 1,
@@ -281,6 +314,8 @@ try {
     await clickStudioSurface(page, 'session')
     await screenshot(page, '02-running-studio-session')
     await clickMode(page, 'assistant')
+    const draft = await page.$eval('.composer-input', (input) => input.value)
+    assert(draft === runningComposerDraft, `projection roundtrips lost the running Composer draft: ${draft}`)
   })
 
   await check('completion preserves exact stream order and single request identity', async () => {
@@ -305,6 +340,9 @@ try {
     assert(completed.initCount === baseline.initCount, `session restarted during switching: initCount=${completed.initCount}`)
     assert(mock.requests.length === 1, `projection switching resent the request ${mock.requests.length} times`)
     assert(mock.requests[0].body?.model === baseline.meta.model, 'request model changed during switching')
+    await page.waitForFunction(() => document.querySelector('.composer-send')?.disabled === false, { timeout: 10_000 })
+    const draft = await page.$eval('.composer-input', (input) => input.value)
+    assert(draft === runningComposerDraft, `task completion cleared the unsent Composer draft: ${draft}`)
     await screenshot(page, '03-completed-assistant')
   })
 } catch (error) {
