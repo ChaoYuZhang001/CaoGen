@@ -21,6 +21,7 @@ package is not considered delivered to users.
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
 | Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, and start-suggestion delivery fixes not present in `03c3fee2` |
+| Current source successor | `main@3229c7af0ed05fd99f82c79ce5e7fd81f04e3506`; clean Deep passed `165 total / 163 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
 | Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
 | Scoped publication preflight | Historical pass only: later product changes and this gate update invalidate it for current `main`; a refreshed candidate and preflight are required |
 | Publication authority | Not granted; current `main` has no publishable v0.1.8 candidate, and no tag, GitHub Release, remote body edit, or asset mutation is permitted |
@@ -36,11 +37,11 @@ Browser/Preview availability and error-feedback fixes.
 
 These exact five assets and four report families remain valid evidence for `03c3fee2`
 only. The current source successor is not represented by those assets, and the earlier
-scoped notes/handoff preflight is now historical. Before any publication decision, the
-successor must pass clean Deep, a refreshed Intel-only signed candidate, independent
-asset verification, and the same fail-closed publication preflight. Windows and Apple
-Silicon remain skipped, not passed. Publication still requires new explicit owner
-authorization after those gates pass.
+scoped notes/handoff preflight is now historical. The successor has passed clean Deep,
+but before any publication decision it still needs a refreshed Intel-only signed
+candidate, independent asset verification, and the same fail-closed publication
+preflight. Windows and Apple Silicon remain skipped, not passed. Publication still
+requires new explicit owner authorization after those gates pass.
 
 ### 0.1.8 Candidate Asset Record
 
