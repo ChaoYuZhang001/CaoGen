@@ -127,6 +127,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 为快照顺序恢复后继完成 clean Deep：`main@3fb95befa8566bfd90890a51abe279350b3225f7` 的 `2026-07-27T14-37-45-555Z` 报告为 `166 total / 164 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均为该提交、工作树 clean 且 Git 状态未变；新增快照回放 smoke 为 required pass
   - [x] 等待测试者期间修复自由子代理编排静默拒绝：child 首条任务被拒绝时立即记为失败并发出结果/hook，不再永久 pending；父汇总只有 `send()` 明确接受后才释放状态，忙碌时等待、拒绝时保留并在后续恢复事件重试，不重复已接受消息。专项负向 smoke 已加入 `test:task-run` 与 Deep，真实 Electron 编排 E2E 通过；`sessionManager.ts` 同时由 1851 行降到 1798 行
   - [x] 为自由编排可靠性后继完成 clean Deep：`main@b2f967d6b642c79877bd5a3ce1ac83b402608368` 的 `2026-07-27T15-51-27-833Z` 报告为 `167 total / 165 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均为该提交、工作树 clean 且 Git 状态未变；新增编排可靠性 smoke 为 required pass
+  - [x] 等待测试者期间修复模型交叉验证静默拒绝：第二模型复核/第三模型仲裁的首条指令只有在 `send()` 明确接受后才报告启动；拒绝或同步异常会清理 child 关联并向父会话发出带原因的 hook，避免假启动与永久 pending。专项 smoke 覆盖接受、拒绝和同步异常，完整 P2、build、typecheck 与编码标准 required 通过
+  - [x] 为模型交叉验证可靠性后继完成 clean Deep：`main@85daf906a917cf1ab44a5f2ce5586e63c4072763` 的 `2026-07-27T16-31-50-392Z` 报告为 `167 total / 165 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均为该提交、工作树 clean 且 Git 状态未变；`modelCrossValidation` smoke 为 required pass
   - [ ] 仅在继续准备 v0.1.8 发布时刷新 macOS Intel-only 签名候选、独立资产核验与 scoped publication preflight；Apple Silicon/Windows 继续暂停，且没有新的明确发布授权
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
