@@ -535,7 +535,7 @@ try {
     await clickByText(cdp, '发给 Agent')
     await waitForSendState(cdp, 'sent', 5_000, '.browser-panel', 'data-browser-send-state')
     await waitForText(cdp, '请基于这个 CaoGen 网页批注定位并修复问题。', 10_000)
-    await waitForText(cdp, 'CTA spacing needs a fix', 10_000)
+    await waitForSendState(cdp, '1', 30_000, '.browser-panel', 'data-browser-agent-sendable')
     await screenshot(cdp, '06-browser-annotation-send')
     await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
