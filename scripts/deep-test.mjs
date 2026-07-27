@@ -119,6 +119,7 @@ const commandDefinitions = [
   { name: 'event cursor crash smoke', command: 'node', args: ['scripts/event-cursor-crash-smoke.mjs'], category: 'system' },
   { name: 'effect reconciliation smoke', command: 'node', args: ['scripts/effect-reconciliation-smoke.mjs'], category: 'smoke' },
   { name: 'operation effect gateway smoke', command: 'node', args: ['scripts/operation-effect-gateway-smoke.mjs'], category: 'smoke' },
+  { name: 'effect entry inventory required', command: 'node', args: ['scripts/effect-entry-inventory-smoke.mjs', '--required'], category: 'smoke' },
   { name: 'operation effect gateway e2e', command: 'node', args: ['scripts/operation-effect-gateway-e2e.mjs'], category: 'system' },
   { name: 'managed worktree effect smoke', command: 'node', args: ['scripts/managed-worktree-effect-smoke.mjs'], category: 'smoke' },
   { name: 'managed worktree effect crash e2e', command: 'node', args: ['scripts/managed-worktree-effect-crash-e2e.mjs'], category: 'system' },
