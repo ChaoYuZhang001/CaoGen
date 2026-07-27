@@ -27,7 +27,7 @@
     }
   },
   "repository": {
-    "ipcHandlerCount": 106,
+    "ipcHandlerCount": 105,
     "ipcHandlerTotal": 156,
     "preloadInvokeCount": 122,
     "preloadInvokeTotal": 153,
@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 621,
-      "contentHash": "5325994b0474901b38d455c98b3a697e9debf4848da1fd79082170ea3af6468e",
+      "lines": 622,
+      "contentHash": "8017b6eee3b275dd50d7edde63cc60efaa1a5e993c625e9b3ab0b868a13c68d9",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -913,10 +913,10 @@
     },
     "src/main/ipc.ts": {
       "profile": "product",
-      "lines": 1060,
-      "contentHash": "5c0d09c9dd45f6946ba7a9fa0b6a84f8ceb9ac8510486973afcecf75cb8eaa7d",
+      "lines": 1057,
+      "contentHash": "81f51eb6103f42b8ac7967fe2deefc8a3f1658c01e289cfc953a8c9e4bb37302",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 742,
+      "maxFunctionLines": 739,
       "complexFunctionCount": 0,
       "maxComplexity": 12,
       "forbiddenSuppressionCount": 0,
@@ -924,7 +924,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "registerIpc#1": {
-          "lines": 742,
+          "lines": 739,
           "complexity": 4
         }
       }
@@ -2283,8 +2283,8 @@
     },
     "src/renderer/src/pages/ProjectSettings.tsx": {
       "profile": "product",
-      "lines": 244,
-      "contentHash": "d9b3135a3a9350b3f399cfb746b16d7a4ba0d4357353999849d4dabec525b762",
+      "lines": 255,
+      "contentHash": "170870f469f196abf0b24c4689c4ddedb558759308b9721506b97d2dfb837bdb",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 217,
       "complexFunctionCount": 0,
@@ -2324,7 +2324,7 @@
     "src/shared/types.ts": {
       "profile": "product",
       "lines": 2385,
-      "contentHash": "924ea19b5d23332b01cd15f5a0da104b211551f5965ec51cf6a0ed2a401e0198",
+      "contentHash": "14e059b28b8df8b1cedf12d32721ec5dedc5b5a503333785fbcf9b7968aeb944",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 5,
       "complexFunctionCount": 0,

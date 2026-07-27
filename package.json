@@ -133,7 +133,7 @@
     "test:git-tools": "node scripts/git-tools-smoke.mjs",
     "test:effect-reconciliation": "node scripts/effect-reconciliation-smoke.mjs",
     "test:git-index-effect": "node scripts/git-index-effect-e2e.mjs && node scripts/git-index-effect-crash-e2e.mjs",
-    "test:operation-effect": "npm run test:effect-entry-inventory:required && node scripts/operation-effect-gateway-smoke.mjs && node scripts/operation-effect-gateway-e2e.mjs && node scripts/attachment-effect-crash-e2e.mjs && node scripts/managed-worktree-effect-smoke.mjs && node scripts/managed-worktree-effect-crash-e2e.mjs && npm run test:git-index-effect",
+    "test:operation-effect": "npm run test:effect-entry-inventory:required && node scripts/operation-effect-gateway-smoke.mjs && node scripts/operation-effect-gateway-e2e.mjs && node scripts/attachment-effect-crash-e2e.mjs && node scripts/project-context-effect-crash-e2e.mjs && node scripts/managed-worktree-effect-smoke.mjs && node scripts/managed-worktree-effect-crash-e2e.mjs && npm run test:git-index-effect",
     "test:effect-entry-inventory": "node scripts/effect-entry-inventory-smoke.mjs",
     "test:effect-entry-inventory:required": "node scripts/effect-entry-inventory-smoke.mjs --required",
     "test:effect-crash-recovery": "node scripts/effect-crash-recovery-e2e.mjs && node scripts/effect-close-race-smoke.mjs",

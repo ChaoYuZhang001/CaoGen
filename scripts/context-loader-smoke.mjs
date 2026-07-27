@@ -199,8 +199,12 @@ try {
   ])
   assertSourceContains('src/main/ipc.ts', [
     "projectContext:read",
-    "projectContext:write",
     "projectContext:template"
+  ])
+  assertSourceContains('src/main/ipc/project-context-mutation-ipc.ts', [
+    "projectContext:write",
+    'executeProjectContextWriteEffect',
+    'executeInteractiveOperationEffect'
   ])
   assertSourceContains('src/preload/index.ts', [
     'readProjectContext',

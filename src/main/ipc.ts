@@ -21,8 +21,7 @@ import { scanMigration, importAssets } from './migration'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
   generateProjectContextTemplate,
-  readProjectContext,
-  writeProjectContext
+  readProjectContext
 } from './agent/context-loader'
 import { registerProjectMemoryIpc } from './ipc/memory-handlers'
 import { readProjectMemory } from './memoryStore'
@@ -72,6 +71,7 @@ import {
   executeInteractiveOperationEffectWriteFile
 } from './ipc/renderer-mutation-handlers'
 import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
+import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
@@ -319,6 +319,7 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 export function registerIpc(): void {
   for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
   registerAttachmentMutationIpc(attachmentRoot)
+  registerProjectContextMutationIpc()
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -1003,10 +1004,6 @@ export function registerIpc(): void {
   ipcMain.handle('projectContext:read', (_e, projectPath: string) => {
     if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
     return readProjectContext(projectPath)
-  })
-  ipcMain.handle('projectContext:write', (_e, projectPath: string, content: string) => {
-    if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
-    return writeProjectContext(projectPath, typeof content === 'string' ? content : '')
   })
   ipcMain.handle('projectContext:template', (_e, projectPath: string) => {
     if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
