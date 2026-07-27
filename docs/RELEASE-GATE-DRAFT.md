@@ -20,8 +20,8 @@ package is not considered delivered to users.
 | Candidate workflow | [`30243108279`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30243108279), successful read-only `macos-x64` evidence run |
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
-| Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, start-suggestion, and sequential task-snapshot replay fixes not present in `03c3fee2` |
-| Current source successor | `main@3fb95befa8566bfd90890a51abe279350b3225f7`; clean Deep passed `166 total / 164 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
+| Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, start-suggestion, sequential task-snapshot replay, Provider preset, and free-form subagent orchestration reliability fixes not present in `03c3fee2` |
+| Current source successor | `main@b2f967d6b642c79877bd5a3ce1ac83b402608368`; clean Deep passed `167 total / 165 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
 | Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
 | Scoped publication preflight | Historical pass only: later product changes and this gate update invalidate it for current `main`; a refreshed candidate and preflight are required |
 | Publication authority | Not granted; current `main` has no publishable v0.1.8 candidate, and no tag, GitHub Release, remote body edit, or asset mutation is permitted |
