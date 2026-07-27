@@ -9,7 +9,7 @@ const providers = readFileSync(path.join(repoRoot, 'src/main/providers.ts'), 'ut
 const relayPreset = extractPreset(store, 'caogen-relay')
 
 assert(relayPreset, 'CaoGen relay preset is missing')
-assert(relayPreset.includes("baseUrl: 'https://gpt.zhangrui.xyz/dashboard'"), 'CaoGen relay preset must keep the configured Base URL')
+assert(relayPreset.includes("baseUrl: 'https://ciyuan2api.com'"), 'CaoGen relay preset must keep the configured Base URL')
 assert(relayPreset.includes("models: []"), 'CaoGen relay preset must not pretend to know live models before service/config is available')
 assert(relayPreset.includes("openaiProtocol: 'chat'"), 'CaoGen relay preset should use the generic OpenAI-compatible Chat protocol')
 assert(relayPreset.includes('请填写自己的 API Key'), 'CaoGen relay preset must tell users to configure their own API key')
