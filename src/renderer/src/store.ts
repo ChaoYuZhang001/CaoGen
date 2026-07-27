@@ -3786,7 +3786,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     key: 'caogen-relay',
     label: 'CaoGen 中转站模板(需配置 Key)',
-    baseUrl: 'https://gpt.zhangrui.xyz/dashboard',
+    baseUrl: 'https://ciyuan2api.com',
     models: [],
     engine: 'openai',
     hint: 'CaoGen 中转站预设入口。服务暂不作为默认可用 Provider;请填写自己的 API Key,再用“获取模型”确认可用模型。若控制台给出的 API 路径不同,按实际路径调整 Base URL。',

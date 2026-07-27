@@ -302,7 +302,7 @@ try {
     await screenshot(cdp, '02-provider-editor-filled')
     await clickProviderEditorSave(cdp)
     await waitForText(cdp, 'CaoGen Relay UI Smoke', 10_000)
-    await waitForText(cdp, 'https://gpt.zhangrui.xyz/dashboard', 10_000)
+    await waitForText(cdp, 'https://ciyuan2api.com', 10_000)
     await waitForText(cdp, '2 个模型', 10_000)
     await waitForText(cdp, '2 个可用密钥', 10_000)
     const providerListText = await evalValue(cdp, 'document.body.innerText')

@@ -93,7 +93,7 @@ Tasks:
 - Multi Provider configuration.
 - Multi API Key management.
 - Custom Base URL.
-- Built-in relay template for the CaoGen relay entry: `https://gpt.zhangrui.xyz/dashboard`; API Key is user-configured, and availability must remain "not live" until the service is actually online.
+- Built-in relay template for the CaoGen relay entry: `https://ciyuan2api.com`; API Key is user-configured, and availability must remain unverified until authenticated model discovery or connectivity checks pass.
 - Model list fetch.
 - Connectivity check.
 - Health, latency, failure, and availability display.
