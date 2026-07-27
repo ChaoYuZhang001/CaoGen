@@ -1180,7 +1180,7 @@ export interface ImageAttachmentView {
 
 export type ImageAttachmentResult =
   | ({ ok: true } & ImageAttachmentView)
-  | { ok: false; error: string }
+  | { ok: false; error: string; effectStatus?: EffectStatus; operationId?: string; snapshotId?: string }
 
 /** OCR 结果(引擎:macOS Vision 或 tesseract) */
 export interface ImageOcrResult {

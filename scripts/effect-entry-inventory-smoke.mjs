@@ -196,6 +196,12 @@ function validateIpcEvidence(registrations, policies) {
         `${registration.id} must cross executeInteractiveOperationEffect`
       )
     }
+    if (policy.effect === 'opaque') {
+      assert(
+        registration.body.includes('executeInteractiveOperationEffect'),
+        `${registration.id} opaque mutation must cross executeInteractiveOperationEffect`
+      )
+    }
     if (policy.effect === 'delegated') {
       assert(registration.body.includes(policy.evidence), `${registration.id} delegated boundary drifted: ${policy.evidence}`)
     }

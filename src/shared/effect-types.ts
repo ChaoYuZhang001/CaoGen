@@ -18,6 +18,7 @@ export type EffectEvidenceKind =
 
 export type InteractiveOperationKind =
   | 'file_write'
+  | 'attachment_write'
   | 'workspace_hunk_discard'
   | 'git_commit'
   | 'git_index_update'

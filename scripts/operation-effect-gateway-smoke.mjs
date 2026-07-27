@@ -4,7 +4,11 @@ import path from 'node:path'
 const repoRoot = process.cwd()
 
 const ipcSource = read('src/main/ipc.ts')
+const attachmentMutationIpcSource = read('src/main/ipc/attachment-mutation-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
+const attachmentEffectSource = read('src/main/attachmentEffect.ts')
+const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
 const sharedTypesSource = read('src/shared/types.ts')
 const reconcilerSource = read('src/main/task/effect-reconciler.ts')
@@ -30,6 +34,7 @@ const taskRunSource = read('src/main/task/task-run.ts')
 const effectRuntimeSource = read('src/main/task/effect-runtime.ts')
 const worktreeOperationSource = read('src/main/ipc/worktree-operation-handlers.ts')
 const electronSmokeSource = read('scripts/electron-smoke.cjs')
+const composerSource = read('src/renderer/src/components/Composer.tsx')
 
 assert(
   ipcSource.includes("from './task/operation-effect-gateway'"),
@@ -40,6 +45,8 @@ assertHandlerUsesGateway('worktrees:createPr')
 assertHandlerUsesGateway('files:write')
 assertHandlerUsesGateway('git:commit')
 assertHandlerUsesGateway('workspace:discardHunk')
+assertHandlerUsesGateway('attachments:copyImage')
+assertHandlerUsesGateway('attachments:saveImageBytes')
 assert(
   rendererMutationSource.includes("toolName: 'write_file'") &&
     rendererMutationSource.includes("toolName: 'git_commit'") &&
@@ -53,11 +60,35 @@ assert(
 )
 assert(
   effectTypesSource.includes("| 'file_write'") &&
+    effectTypesSource.includes("| 'attachment_write'") &&
     effectTypesSource.includes("| 'workspace_hunk_discard'") &&
     effectTypesSource.includes("| 'git_commit'") &&
     sharedTypesSource.includes('InteractiveOperationKind,') &&
     sharedTypesSource.includes("} from './effect-types'"),
   'Renderer file and commit operations need durable operation metadata kinds'
+)
+assert(
+  attachmentEffectSource.includes("toolName = source === 'user_file' ? 'attachment_copy_image' : 'attachment_save_image_bytes'") &&
+    attachmentEffectSource.includes("kind: 'attachment_write'") &&
+    attachmentEffectSource.includes("effect.target.kind !== 'unsupported'") &&
+    attachmentEffectSource.includes('contentSha256: prepared.hash') &&
+    !attachmentEffectSource.includes('toolInput: { data') &&
+    !attachmentEffectSource.includes('sourcePath'),
+  'attachment writes must use opaque Effects with digest-only persisted input'
+)
+assert(
+  rendererMutationSource.indexOf('prepareImageAttachmentFile(sourcePath)') <
+    rendererMutationSource.indexOf("'user_file',") &&
+    rendererMutationSource.indexOf('prepareImageAttachmentBytes(data, { mime })') <
+    rendererMutationSource.indexOf("'renderer_bytes',") &&
+    attachmentOpsSource.includes('sha256(buffer) !== prepared.hash') &&
+    attachmentOpsSource.includes('Buffer.from(new Uint8Array(input))'),
+  'attachment payloads must be frozen and digest-checked before the durable mutation callback'
+)
+assert(
+  composerSource.includes("result.effectStatus === 'waiting_reconciliation'") &&
+    composerSource.includes('await useStore.getState().refreshTaskSnapshots()'),
+  'opaque attachment outcomes must refresh the visible recovery surface'
 )
 assert(
   targetBuilderSource.includes("toolName === 'workspace_discard_hunk'") &&
@@ -160,14 +191,20 @@ assert(
 console.log('operation effect gateway smoke: PASS')
 
 function assertHandlerUsesGateway(channel) {
-  const start = ipcSource.indexOf(`ipcMain.handle('${channel}'`)
-  assert(start >= 0, `${channel} handler missing`)
-  const next = ipcSource.indexOf('\n  ipcMain.handle(', start + 1)
-  const handler = ipcSource.slice(start, next >= 0 ? next : undefined)
+  const handler = ipcSources.map((source) => handlerSource(source, channel)).find(Boolean)
+  assert(handler, `${channel} handler missing`)
   assert(
     handler.includes('executeInteractiveOperationEffect'),
     `${channel} must cross a durable effect barrier before its external mutation`
   )
+}
+
+function handlerSource(source, channel) {
+  const channelPosition = source.indexOf(`'${channel}'`)
+  const start = channelPosition >= 0 ? source.lastIndexOf('ipcMain.handle(', channelPosition) : -1
+  if (start < 0 || channelPosition <= start) return ''
+  const next = source.indexOf('\n  ipcMain.handle(', start + 1)
+  return source.slice(start, next >= 0 ? next : undefined)
 }
 
 function assertManagedSessionCreateBarrier() {
