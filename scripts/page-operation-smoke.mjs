@@ -533,13 +533,14 @@ try {
     await waitForText(cdp, '已保存网页批注', 10_000)
     await waitForText(cdp, '批注: CTA spacing needs a fix', 10_000)
     await clickByText(cdp, '发给 Agent')
+    await waitForSendState(cdp, 'sent', 5_000, '.browser-panel', 'data-browser-send-state')
     await waitForText(cdp, '请基于这个 CaoGen 网页批注定位并修复问题。', 10_000)
     await waitForText(cdp, 'CTA spacing needs a fix', 10_000)
+    await screenshot(cdp, '06-browser-annotation-send')
     await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 0, 10_000)
   })
-  await screenshot(cdp, '06-browser-switch')
 
   await check(cdp, 'image and PDF previews render from project files', async () => {
     await clickByAriaLabel(cdp, '▣ 文件')
@@ -571,7 +572,7 @@ try {
   await check(cdp, 'preview content can be sent to Agent from PDF text and Office files', async () => {
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'pdf', mode: 'asset' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '请基于这个 CaoGen 产物预览继续工作。',
       '文件: report.pdf',
@@ -586,7 +587,7 @@ try {
     await waitForText(cdp, 'Text Preview', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'text', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: notes.txt',
       '类型: text',
@@ -614,7 +615,7 @@ try {
     }
     await waitForText(cdp, 'Office preview works', 10_000)
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: brief.docx',
       '类型: office',
@@ -635,7 +636,7 @@ try {
     await waitForText(cdp, 'CaoGen', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: report.xlsx',
       '类型: office',
@@ -657,7 +658,7 @@ try {
     assert(storedAnnotation.locator?.quote?.includes('Preview Ready'), 'current sheet annotation should persist a quote')
     assert(storedAnnotation.locator?.selector?.includes('office:sheet:2:Details'), 'current sheet annotation should persist a selector')
     await clickPreviewSendCurrentUnit(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: report.xlsx',
       '发送范围: 当前结构单元',
@@ -683,7 +684,7 @@ try {
     await waitForText(cdp, 'Second slide', 10_000)
     await assertTextAbsent(cdp, 'Delivery plan')
     await clickPreviewSendCurrentUnit(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: slides.pptx',
       '发送范围: 当前结构单元',
@@ -693,7 +694,7 @@ try {
     ])
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: slides.pptx',
       '类型: office',
@@ -709,7 +710,7 @@ try {
     await waitForPreviewFailure(cdp, ['Office 文档无法解析', '不是有效的 Office Open XML ZIP 文件'])
     await assertPreviewAgentState(cdp, { sendable: '1', type: '', mode: '' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: broken.docx',
       '类型: (unknown)',
@@ -1370,18 +1371,15 @@ async function clickSettingsSave(cdp) {
   await sleep(400)
 }
 
-async function waitForPreviewSendState(cdp, state, timeout = 5000) {
+async function waitForSendState(cdp, state, timeout = 5000, selector = '.preview-panel', attribute = 'data-preview-send-state') {
   const start = Date.now()
   let last = ''
   while (Date.now() - start < timeout) {
-    last = await evalValue(
-      cdp,
-      `document.querySelector('.preview-panel')?.getAttribute('data-preview-send-state') || ''`
-    )
+    last = await evalValue(cdp, `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(attribute)}) || ''`)
     if (last === state) return
     await sleep(150)
   }
-  throw new Error(`preview send state did not become ${state}: ${last}`)
+  throw new Error(`${selector} send state did not become ${state}: ${last}`)
 }
 
 async function waitForLatestUserMessageIncludes(cdp, needles, timeout = 5000) {
