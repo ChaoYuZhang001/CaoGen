@@ -26,7 +26,7 @@ import ControlCenter from './ControlCenterWithWorkflow'
 import ProviderList from './settings/ProviderList'
 import { useProviderRecoverySettings } from './settings/useProviderRecoverySettings'
 import ProjectSettings from '../pages/ProjectSettings'
-
+import { requireMcpProbeResults } from '../store/task-recovery-actions'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -284,7 +284,7 @@ export default function SettingsPage(): React.JSX.Element {
     setControlMcpProbing(true)
     setControlError('')
     try {
-      const results = await window.agentDesk.probeMcpServers(items, activeId ?? undefined)
+      const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(items, activeId ?? undefined), () => useStore.getState().refreshTaskSnapshots())
       setMcpProbeResults((prev) => {
         const merged = { ...prev }
         for (const result of results) merged[result.id] = result

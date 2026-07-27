@@ -1,7 +1,7 @@
 ﻿import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { applySessionModelSwitch } from './ipc/session-model-switch-handler'
 import { getSettings, updateSettings } from './settings'
@@ -72,12 +72,12 @@ import {
 } from './ipc/renderer-mutation-handlers'
 import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
 import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
+import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { sessionImageAttachmentsRoot } from './attachmentOps'
 import { ocrImage } from './imageOcr'
-import { probeMcpServers } from './mcpProbe'
 import { installLocalPlugin, uninstallPlugin } from './pluginInstall'
 import {
   pluginRegistryItemKey,
@@ -283,6 +283,19 @@ function findScannedPluginRegistryItem(item: PluginRegistryItem, sessionId?: str
   return view.items.find((candidate) => pluginRegistryItemKey(candidate) === key)
 }
 
+function mcpProbeOperationContext(sessionId?: string): {
+  sourceSessionId: string
+  projectId?: string
+  cwd: string
+} {
+  const session = typeof sessionId === 'string' ? sessionManager.get(sessionId) : undefined
+  return {
+    sourceSessionId: session?.meta.id ?? 'mcp-probe:settings',
+    projectId: session?.meta.projectId,
+    cwd: session?.meta.cwd ?? homedir()
+  }
+}
+
 function isInsidePath(root: string, target: string): boolean {
   const rel = relative(root, target)
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
@@ -320,6 +333,10 @@ export function registerIpc(): void {
   for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
   registerAttachmentMutationIpc(attachmentRoot)
   registerProjectContextMutationIpc()
+  registerMcpProbeIpc({
+    findScannedItem: findScannedPluginRegistryItem,
+    operationContext: mcpProbeOperationContext
+  })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -788,31 +805,6 @@ export function registerIpc(): void {
   ipcMain.handle('plugins:uninstall', (_e, targetPath: string) => {
     if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '路径无效' }
     return uninstallPlugin(targetPath, caogenPluginsRoot())
-  })
-
-  // MCP 运行态:对选中的 mcp 条目做真实连接探测(stdio 握手 / http 可达)
-  ipcMain.handle('plugins:probeMcp', async (_e, items: unknown, sessionId?: string) => {
-    if (!Array.isArray(items) || items.length === 0) return []
-    const capped = items.filter(isPluginRegistryItem).filter((item) => item.kind === 'mcp').slice(0, 20)
-    const inputs: Array<{ id: string; config: Record<string, unknown> }> = []
-    for (const item of capped) {
-      // 安全:仅探测允许扫描范围内的条目;config 从其声明的配置文件按名重取
-      const scanned = findScannedPluginRegistryItem(item, sessionId)
-      if (!scanned) continue
-      try {
-        const raw = JSON.parse(readFileSync(scanned.path, 'utf8')) as Record<string, unknown>
-        const servers = raw.mcpServers
-        if (servers && typeof servers === 'object') {
-          const config = (servers as Record<string, unknown>)[scanned.name]
-          if (config && typeof config === 'object') {
-            inputs.push({ id: scanned.id, config: config as Record<string, unknown> })
-          }
-        }
-      } catch {
-        // 配置读不了就跳过该项,探测结果自然缺席
-      }
-    }
-    return probeMcpServers(inputs)
   })
 
   ipcMain.handle('plugins:reveal', (_e, targetPath: string, sessionId?: string) => {

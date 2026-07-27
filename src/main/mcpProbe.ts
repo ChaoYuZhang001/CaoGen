@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
+import type { McpProbeResult } from '../shared/types'
 import { buildMcpProcessEnv } from './mcp/mcp-client'
 import { mcpNetworkErrorMessage, requestMcpNetworkUrl } from './mcp/mcp-network-policy'
 
@@ -15,18 +16,6 @@ export interface McpProbeInput {
   id: string
   /** mcp 配置对象(command/args/env 或 url) */
   config: Record<string, unknown>
-}
-
-export interface McpProbeResult {
-  id: string
-  /** ok=真实握手/可达;error 附原因 */
-  ok: boolean
-  transport: 'stdio' | 'http' | 'unknown'
-  /** initialize 响应里的 serverInfo.name/version(stdio 才有) */
-  serverName?: string
-  serverVersion?: string
-  latencyMs?: number
-  error?: string
 }
 
 const PROBE_TIMEOUT_MS = 8_000

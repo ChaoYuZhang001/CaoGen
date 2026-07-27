@@ -6,10 +6,12 @@ const repoRoot = process.cwd()
 const ipcSource = read('src/main/ipc.ts')
 const attachmentMutationIpcSource = read('src/main/ipc/attachment-mutation-ipc.ts')
 const projectContextMutationIpcSource = read('src/main/ipc/project-context-mutation-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource]
+const mcpProbeIpcSource = read('src/main/ipc/mcp-probe-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
 const projectContextEffectSource = read('src/main/projectContextEffect.ts')
+const mcpProbeEffectSource = read('src/main/mcpProbeEffect.ts')
 const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
 const sharedTypesSource = read('src/shared/types.ts')
@@ -38,6 +40,8 @@ const worktreeOperationSource = read('src/main/ipc/worktree-operation-handlers.t
 const electronSmokeSource = read('scripts/electron-smoke.cjs')
 const composerSource = read('src/renderer/src/components/Composer.tsx')
 const projectSettingsSource = read('src/renderer/src/pages/ProjectSettings.tsx')
+const settingsModalSource = read('src/renderer/src/components/SettingsModal.tsx')
+const taskRecoveryActionsSource = read('src/renderer/src/store/task-recovery-actions.ts')
 
 assert(
   ipcSource.includes("from './task/operation-effect-gateway'"),
@@ -51,6 +55,7 @@ assertHandlerUsesGateway('workspace:discardHunk')
 assertHandlerUsesGateway('attachments:copyImage')
 assertHandlerUsesGateway('attachments:saveImageBytes')
 assertHandlerUsesGateway('projectContext:write')
+assertHandlerUsesGateway('plugins:probeMcp')
 assert(
   rendererMutationSource.includes("toolName: 'write_file'") &&
     rendererMutationSource.includes("toolName: 'git_commit'") &&
@@ -65,6 +70,7 @@ assert(
 assert(
   effectTypesSource.includes("| 'file_write'") &&
     effectTypesSource.includes("| 'attachment_write'") &&
+    effectTypesSource.includes("| 'mcp_probe'") &&
     effectTypesSource.includes("| 'workspace_hunk_discard'") &&
     effectTypesSource.includes("| 'git_commit'") &&
     sharedTypesSource.includes('InteractiveOperationKind,') &&
@@ -106,6 +112,28 @@ assert(
   projectSettingsSource.includes("result.effectStatus === 'waiting_reconciliation'") &&
     projectSettingsSource.includes('await useStore.getState().refreshTaskSnapshots()'),
   'unknown project context writes must refresh the visible recovery surface'
+)
+assert(
+  mcpProbeEffectSource.includes("toolName: 'mcp_runtime_probe'") &&
+    mcpProbeEffectSource.includes('configDigest: stableValueDigest(input.config)') &&
+    mcpProbeEffectSource.includes("effect.target.kind !== 'unsupported'") &&
+    !mcpProbeEffectSource.includes('toolInput: { inputs'),
+  'MCP runtime probes must persist only opaque target summaries'
+)
+assert(
+  electronSmokeSource.includes("invoke('plugins:probeMcp', [])") &&
+    electronSmokeSource.includes("probe?.ok === true") &&
+    electronSmokeSource.includes('probe.results.length === 0'),
+  'real Electron smoke must prove the MCP probe IPC is registered and returns the operation envelope'
+)
+assert(
+  taskRecoveryActionsSource.includes("outcome.effectStatus === 'waiting_reconciliation'") &&
+    taskRecoveryActionsSource.includes('await refreshRecovery()') &&
+    rendererStoreSource.includes('requireMcpProbeResults(await window.agentDesk.probeMcpServers') &&
+    rendererStoreSource.includes('get().refreshTaskSnapshots') &&
+    settingsModalSource.includes('requireMcpProbeResults(await window.agentDesk.probeMcpServers') &&
+    settingsModalSource.includes('useStore.getState().refreshTaskSnapshots()'),
+  'unknown MCP probe outcomes must refresh both visible recovery surfaces'
 )
 assert(
   targetBuilderSource.includes("toolName === 'workspace_discard_hunk'") &&

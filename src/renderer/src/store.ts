@@ -65,7 +65,7 @@ import type {
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../../shared/types'
-import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
+import { createTaskRecoveryActions, requireMcpProbeResults, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
@@ -2958,7 +2958,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (mcpItems.length === 0) return
     set((s) => ({ workbench: { ...s.workbench, mcpProbing: true, pluginRegistryError: undefined } }))
     try {
-      const results = await window.agentDesk.probeMcpServers(mcpItems, id)
+      const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(mcpItems, id), get().refreshTaskSnapshots)
       set((s) => {
         const merged = { ...s.workbench.mcpProbeResults }
         for (const result of results) merged[result.id] = result
