@@ -678,7 +678,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
-    if (!payload) return
+    if (!payload || !sessionManager.send(id, payload)) return false
     if (payload.text && shouldProposeMemory(payload.text) && shouldEmitMemorySuggestion(id, payload.text)) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
@@ -697,7 +697,7 @@ export function registerIpc(): void {
         console.error('[caogen] memory draft auto-extract failed:', error)
       })
     }
-    sessionManager.send(id, payload)
+    return true
   })
 
   ipcMain.handle('sessions:interrupt', async (_e, id: string) => {

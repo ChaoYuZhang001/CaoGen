@@ -70,6 +70,7 @@ import { createExperienceModeSlice, type ExperienceModeSlice } from './store/exp
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
 import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
+import { sendActiveSessionMessage } from './store/session-send'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -732,7 +733,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice {
+export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -1508,45 +1509,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async sendMessage(input) {
-    const id = get().activeId
-    if (!id) return
-    const payload: SendMessagePayload =
-      typeof input === 'string'
-        ? { text: input.trim() }
-        : {
-            text: input.text.trim(),
-            images: input.images
-          }
-    const displayText =
-      payload.text || (payload.images && payload.images.length > 0 ? `图片输入 (${payload.images.length} 张)` : '')
-    if (!displayText && (!payload.images || payload.images.length === 0)) return
-    set((s) => {
-      const session = s.sessions[id]
-      if (!session) return s
-      return {
-        sessions: {
-          ...s.sessions,
-          [id]: {
-            ...session,
-            items: [
-              ...session.items,
-              {
-                id: genId(),
-                kind: 'user',
-                text: displayText,
-                attachments: payload.images?.map((image) => ({
-                  id: image.id,
-                  mime: image.mime,
-                  bytes: image.bytes
-                }))
-              }
-            ],
-            meta: { ...session.meta, status: 'running' }
-          }
-        }
-      }
-    })
-    await window.agentDesk.sendMessage(id, payload)
+    await sendActiveSessionMessage({ getState: get, setState: set, nextId: genId }, input)
   },
 
   async sendQuickbarClipboard(options) {

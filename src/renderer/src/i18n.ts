@@ -160,9 +160,9 @@ const DICT: Dict = {
     en: '{provider} key {from} failed ({reason}), switched → {to}, retrying automatically'
   },
   // 输入区
-  composerQueuedPlaceholder: {
-    zh: '继续输入,消息将排队处理…',
-    en: 'Keep typing — messages will queue…'
+  composerRunningPlaceholder: {
+    zh: '当前任务运行中,可继续输入;完成后再发送',
+    en: 'Current task is running. Keep drafting; send when it finishes.'
   },
   composerPlaceholder: {
     zh: '让 Agent 做点什么…(Enter 发送,Shift+Enter 换行)',

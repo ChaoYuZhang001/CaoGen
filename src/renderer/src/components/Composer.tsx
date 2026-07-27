@@ -12,6 +12,7 @@ import {
   projectedComposerCommands,
   shouldLoadProjectedPluginRegistry
 } from './experience/projectedComposerCommands'
+import { useComposerSubmission } from './composer/useComposerSubmission'
 
 interface Mention {
   start: number
@@ -185,6 +186,24 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     setAttachments([])
   }
 
+  const { attachmentsDisabled, sendDisabled, submit } = useComposerSubmission({
+    attachments,
+    running,
+    uploadingAttachment,
+    text,
+    slashCommands,
+    runSlashCommand,
+    sendMessage,
+    onAccepted: () => {
+      setText('')
+      setMention(null)
+      setSuggestions([])
+      clearAttachments()
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    },
+    onError: (message) => setAttachmentError(message || null)
+  })
+
   const addImageFiles = async (files: Iterable<File>): Promise<void> => {
     if (!activeId) {
       setAttachmentError('请先创建或选择一个会话')
@@ -260,24 +279,6 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     }
   }
 
-  const submit = (): void => {
-    const trimmed = text.trim()
-    if (!trimmed && attachments.length === 0) return
-    const normalizedTrimmed = trimmed.toLowerCase()
-    const exactSlash = slashCommands.find((cmd) => cmd.title.toLowerCase() === normalizedTrimmed)
-    if (exactSlash && attachments.length === 0) {
-      runSlashCommand(exactSlash)
-      return
-    }
-    const images = attachments.map<ImageAttachmentView>(({ name: _name, previewUrl: _previewUrl, ...image }) => image)
-    setText('')
-    setMention(null)
-    clearAttachments()
-    void sendMessage({ text: trimmed, images })
-    const el = textareaRef.current
-    if (el) el.style.height = 'auto'
-  }
-
   const applySuggestion = (path: string): void => {
     if (!mention) return
     const el = textareaRef.current
@@ -346,7 +347,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      submit()
+      void submit()
     }
   }
 
@@ -422,7 +423,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
           thumbnailUrl: attachment.previewUrl,
           mimeType: attachment.mime
         }))}
-        disabled={uploadingAttachment}
+        disabled={attachmentsDisabled}
         ocrBusyId={ocrBusyId}
         onOcr={(id) => void runOcr(id)}
         onRemove={(id) =>
@@ -438,7 +439,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         <textarea
           ref={textareaRef}
           className="composer-input"
-          placeholder={running ? t('composerQueuedPlaceholder') : t('composerPlaceholder')}
+          placeholder={running ? t('composerRunningPlaceholder') : t('composerPlaceholder')}
           value={text}
           rows={1}
           onChange={(e) => {
@@ -453,8 +454,8 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         />
         <button
           className="btn btn-primary composer-send"
-          onClick={submit}
-          disabled={uploadingAttachment || (!text.trim() && attachments.length === 0)}
+          onClick={() => void submit()}
+          disabled={sendDisabled}
         >
           {uploadingAttachment ? '添加中' : t('send')}
         </button>

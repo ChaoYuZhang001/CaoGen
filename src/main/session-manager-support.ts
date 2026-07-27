@@ -12,6 +12,7 @@ import type {
   TranscriptEntry
 } from '../shared/types'
 import { settingsForCaoGenDrive } from './model/drive'
+import type { Engine } from './engine'
 import { getProvider } from './providers'
 import { getSettings } from './settings'
 import {
@@ -36,6 +37,13 @@ export interface SessionNotificationState {
 }
 
 export interface ManagedSessionCreationOptions { retainJournal?: boolean }
+
+export function sendableSession(session: Engine | undefined): Engine | null {
+  if (!session) return null
+  if (session.meta.status !== 'running' && session.meta.status !== 'starting') return session
+  session.rejectSend('上一轮仍在运行,请等待完成或中断后再发送。')
+  return null
+}
 
 export interface OrchestrationState {
   parentSessionId: string

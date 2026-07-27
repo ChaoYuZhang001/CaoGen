@@ -31,7 +31,7 @@ import {
 import { restoreActiveSessionRegistry, updateActiveSessionRegistryWorktreeState, writeActiveSessionRegistry } from './session-active-registry'
 import {
   buildTaskSnapshotReplayPrompts, canTrackCost, cleanOneLine, effectiveBudgetUsd, estimateTurnCostUsd,
-  mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, requireDagPromptAccepted, shouldDispatchChildResult,
+  mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
   type ManagedSessionCreationOptions, type OrchestrationState, type SessionNotificationState
@@ -376,6 +376,7 @@ class SessionManager {
       session.rejectSend(budgetError)
       return false
     }
+    if (!sendableSession(session)) return false
     if (!currentRun || isTaskRunTerminal(currentRun.status)) {
       this.taskRuns.set(
         id,
@@ -389,7 +390,6 @@ class SessionManager {
     this.modelAttemptRecoveryGate.acceptedSend(id, modelAttemptDecision)
     return true
   }
-
   async controlSupervisorRun(
     store: SupervisorStateStore,
     request: SupervisorSessionControlRequest

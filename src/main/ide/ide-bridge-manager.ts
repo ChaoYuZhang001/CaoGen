@@ -43,9 +43,7 @@ export async function syncIdeBridgeFromSettings(): Promise<IdeBridgeStatus> {
     sessionPort: {
       listSessions: () => sessionManager.list(),
       createSession: (options) => sessionManager.createManaged(options),
-      sendMessage: (sessionId, message) => {
-        sessionManager.send(sessionId, message)
-      },
+      sendMessage: (sessionId, message) => sessionManager.send(sessionId, message),
       syncDocument: (payload) => syncIdeDocumentContext(payload),
       subscribeSessionEvents: (listener: (event: SessionEventPayload) => void) =>
         sessionManager.subscribe(listener)
