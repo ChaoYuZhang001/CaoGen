@@ -2353,7 +2353,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>
   deleteProject(id: string): Promise<void>
   readProjectContext(projectPath: string): Promise<ProjectContextReadResult>
-  writeProjectContext(projectPath: string, content: string): Promise<ProjectContextReadResult>
+  writeProjectContext(projectPath: string, content: string): Promise<import('./project-context-types').ProjectContextOperationResult<ProjectContextReadResult>>
   generateProjectContextTemplate(projectPath: string): Promise<string>
   readProjectMemory(sessionId: string): Promise<ReadProjectMemoryResult>
   proposeMemoryDraft(sessionId: string, input: ProjectMemoryDraftInput): Promise<ProjectMemoryDraft>

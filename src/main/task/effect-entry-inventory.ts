@@ -39,7 +39,7 @@ const DIRECT_USER: EffectEntryPolicy = {
   impact: 'external', effect: 'direct_user', replay: 'never'
 }
 
-export const EFFECT_ENTRY_INVENTORY_VERSION = 2
+export const EFFECT_ENTRY_INVENTORY_VERSION = 3
 
 export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
@@ -106,6 +106,7 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
     'files:write',
     'git:commit', 'git:stage', 'git:stageAll', 'git:unstage',
+    'projectContext:write',
     'workspace:applyHunk', 'workspace:discardHunk',
     'worktrees:applyPatch', 'worktrees:createPr', 'worktrees:remove'
   ], QUERYABLE),
@@ -118,7 +119,6 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'dialog:pickDirectory',
     'migration:import',
     'plugins:installLocal', 'plugins:probeMcp', 'plugins:reveal', 'plugins:uninstall',
-    'projectContext:write',
     'quickbar:captureScreenshot', 'quickbar:pickFiles', 'quickbar:prepareFiles',
     'sessions:restoreCheckpoint', 'sessions:rewindFiles',
     'terminals:close', 'terminals:resize', 'terminals:start', 'terminals:write'

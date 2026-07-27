@@ -62,6 +62,8 @@ try {
   assert(projectSettings.includes('mergeProjectRuleDraft'), 'ProjectSettings should merge structured rules into caogen.md content')
   assert(projectSettings.includes('parseProjectRuleDraft'), 'ProjectSettings should parse caogen.md into structured fields')
   assert(projectSettings.includes('同步并保存'), 'ProjectSettings should expose a structured save action')
+  assert(projectSettings.includes("result.effectStatus === 'waiting_reconciliation'"), 'ProjectSettings should detect unknown write outcomes')
+  assert(projectSettings.includes('await useStore.getState().refreshTaskSnapshots()'), 'ProjectSettings should expose unknown writes in recovery UI')
 
   console.log('project rules ui smoke ok')
 } finally {

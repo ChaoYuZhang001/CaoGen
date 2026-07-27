@@ -5,9 +5,11 @@ const repoRoot = process.cwd()
 
 const ipcSource = read('src/main/ipc.ts')
 const attachmentMutationIpcSource = read('src/main/ipc/attachment-mutation-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource]
+const projectContextMutationIpcSource = read('src/main/ipc/project-context-mutation-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
+const projectContextEffectSource = read('src/main/projectContextEffect.ts')
 const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
 const sharedTypesSource = read('src/shared/types.ts')
@@ -35,6 +37,7 @@ const effectRuntimeSource = read('src/main/task/effect-runtime.ts')
 const worktreeOperationSource = read('src/main/ipc/worktree-operation-handlers.ts')
 const electronSmokeSource = read('scripts/electron-smoke.cjs')
 const composerSource = read('src/renderer/src/components/Composer.tsx')
+const projectSettingsSource = read('src/renderer/src/pages/ProjectSettings.tsx')
 
 assert(
   ipcSource.includes("from './task/operation-effect-gateway'"),
@@ -47,6 +50,7 @@ assertHandlerUsesGateway('git:commit')
 assertHandlerUsesGateway('workspace:discardHunk')
 assertHandlerUsesGateway('attachments:copyImage')
 assertHandlerUsesGateway('attachments:saveImageBytes')
+assertHandlerUsesGateway('projectContext:write')
 assert(
   rendererMutationSource.includes("toolName: 'write_file'") &&
     rendererMutationSource.includes("toolName: 'git_commit'") &&
@@ -89,6 +93,19 @@ assert(
   composerSource.includes("result.effectStatus === 'waiting_reconciliation'") &&
     composerSource.includes('await useStore.getState().refreshTaskSnapshots()'),
   'opaque attachment outcomes must refresh the visible recovery surface'
+)
+assert(
+  projectContextEffectSource.includes("toolName: 'write_file'") &&
+    projectContextEffectSource.includes("toolInput: { path: 'caogen.md', content: safeContent }") &&
+    projectContextEffectSource.includes("effect.target.relativePath !== 'caogen.md'") &&
+    projectContextEffectSource.includes("writeTextFile(projectRoot, 'caogen.md', safeContent)") &&
+    !projectContextEffectSource.includes('writeProjectContext('),
+  'project context writes must reuse the atomic queryable file Effect target'
+)
+assert(
+  projectSettingsSource.includes("result.effectStatus === 'waiting_reconciliation'") &&
+    projectSettingsSource.includes('await useStore.getState().refreshTaskSnapshots()'),
+  'unknown project context writes must refresh the visible recovery surface'
 )
 assert(
   targetBuilderSource.includes("toolName === 'workspace_discard_hunk'") &&
