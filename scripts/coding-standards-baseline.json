@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 617,
-      "contentHash": "93349568c90e0422026e7b11e70f6c682043288450c3b301e95cfa38b9c95b20",
+      "lines": 618,
+      "contentHash": "49d40538fdd4b89a7883e0bd5b8872235d364eb484dd4e4f10611c01b0d80bea",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -1204,7 +1204,7 @@
     "src/main/sessionManager.ts": {
       "profile": "product",
       "lines": 1851,
-      "contentHash": "1c59f34f27669f72d2710ad2e465d4e4ed06fb2efee724fd929ae71f1de92077",
+      "contentHash": "42e5c74e1f071bef306a3ed1b512e4854b344c6c3945f8dc5032ceb628fecdf4",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 64,
       "complexFunctionCount": 2,

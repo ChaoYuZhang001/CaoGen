@@ -45,6 +45,20 @@ export function sendableSession(session: Engine | undefined): Engine | null {
   return null
 }
 
+export function rejectSessionSend(session: Engine, message: string): false {
+  session.rejectSend(message)
+  return false
+}
+
+export function managedSessionSendGateError(
+  snapshotReplayPending: boolean,
+  supervisorBlocked: boolean
+): string | undefined {
+  if (snapshotReplayPending) return '快照恢复仍在按顺序续跑未完成步骤；请等待恢复完成或先中断。'
+  if (supervisorBlocked) return 'Supervisor 已暂停或仅授权重试；必须通过受信控制路径恢复后才能继续执行。'
+  return undefined
+}
+
 export interface OrchestrationState {
   parentSessionId: string
   /** dispatchSubagents 仍在创建 child 时不触发最终汇总,避免极快 child 让编排过早收口。 */

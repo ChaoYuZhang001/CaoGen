@@ -127,11 +127,12 @@ export class ModelAttemptRecoveryGate {
     return ids.size
   }
 
-  refreshAfterEvent(sessionId: string, event: AgentEvent): void {
+  refreshAfterEvent(sessionId: string, event: AgentEvent): Promise<boolean> {
     if (event.kind !== 'status' && event.kind !== 'routing' && event.kind !== 'failover' &&
-        event.kind !== 'turn-result') return
-    void this.refresh(sessionId).catch((error) => {
+        event.kind !== 'turn-result') return Promise.resolve(true)
+    return this.refresh(sessionId).then(() => true).catch((error) => {
       console.error('[caogen] refresh ModelAttempt recovery gate failed:', error)
+      return false
     })
   }
 
