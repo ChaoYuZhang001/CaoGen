@@ -530,7 +530,7 @@
     "scripts/page-operation-smoke.mjs": {
       "profile": "automation",
       "lines": 2167,
-      "contentHash": "74ac37c4bd149ad9be9ceb717fe3c32139c026d1065561d8ca430a2b9e848b67",
+      "contentHash": "986d8dabebc61f82d491085b7d9a079189fdcaf3de7a8cd74c775917bf6a8be4",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 1,
