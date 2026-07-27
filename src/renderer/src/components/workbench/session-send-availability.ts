@@ -7,5 +7,5 @@ export function isSessionBusy(status: SessionStatus): boolean {
 }
 
 export function canSendToSession(activeId: string | null, status: SessionStatus, hasPayload: boolean): boolean {
-  return Boolean(activeId && hasPayload && !isSessionBusy(status))
+  return Boolean(activeId && hasPayload && (status === 'idle' || status === 'error'))
 }

@@ -529,8 +529,8 @@
     },
     "scripts/page-operation-smoke.mjs": {
       "profile": "automation",
-      "lines": 2169,
-      "contentHash": "5aa989d9dee85b248186b9ed732d2858ddf61e82f52bfcd5c8dfce5bde607da7",
+      "lines": 2167,
+      "contentHash": "74ac37c4bd149ad9be9ceb717fe3c32139c026d1065561d8ca430a2b9e848b67",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 1,
@@ -2007,19 +2007,19 @@
     },
     "src/renderer/src/components/workbench/BrowserPanel.tsx": {
       "profile": "product",
-      "lines": 230,
-      "contentHash": "d78573d69fc21c3419cf197c46b4f4566f4bac8266eb5e947312bb36e15070eb",
+      "lines": 292,
+      "contentHash": "a687cb5c75a738a3e35286bb130790d58c7c16a86999089a5b51e3dd43e86708",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 184,
+      "maxFunctionLines": 170,
       "complexFunctionCount": 0,
-      "maxComplexity": 15,
+      "maxComplexity": 11,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "BrowserPanel#1": {
-          "lines": 184,
-          "complexity": 15
+          "lines": 170,
+          "complexity": 11
         }
       }
     },
