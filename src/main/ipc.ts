@@ -71,10 +71,11 @@ import {
   executeInteractiveOperationEffectGitIndex,
   executeInteractiveOperationEffectWriteFile
 } from './ipc/renderer-mutation-handlers'
+import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
-import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
+import { sessionImageAttachmentsRoot } from './attachmentOps'
 import { ocrImage } from './imageOcr'
 import { probeMcpServers } from './mcpProbe'
 import { installLocalPlugin, uninstallPlugin } from './pluginInstall'
@@ -107,7 +108,6 @@ import type {
   PluginRegistryScanOptions,
   ProviderInput,
   ProviderModelFetchInput,
-  SaveImageAttachmentBytesInput,
   SendMessagePayload,
   TaskDagDispatchInput,
   TaskDecomposeInput,
@@ -137,7 +137,7 @@ function shouldEmitMemorySuggestion(sessionId: string, text: string, now = Date.
 }
 
 function attachmentRoot(sessionId: string): string {
-  return join(app.getPath('userData'), 'attachments', sessionId)
+  return sessionImageAttachmentsRoot(app.getPath('userData'), sessionId)
 }
 
 function normalizeSendPayload(sessionId: string, raw: unknown): SendMessagePayload | null {
@@ -318,6 +318,7 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 
 export function registerIpc(): void {
   for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
+  registerAttachmentMutationIpc(attachmentRoot)
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -644,28 +645,6 @@ export function registerIpc(): void {
     if (!input?.dag || !Array.isArray(input.dag.tasks)) throw new Error('必须提供 DAG 任务')
     return sessionManager.dispatchTaskDag(parentSessionId, input)
   })
-
-  ipcMain.handle('attachments:copyImage', async (_e, id: string, sourcePath: string) => {
-    if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
-    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
-      return { ok: false, error: '图片路径不能为空' }
-    }
-    return copyImageAttachment(sourcePath, attachmentRoot(id))
-  })
-
-  ipcMain.handle(
-    'attachments:saveImageBytes',
-    async (_e, id: string, input: SaveImageAttachmentBytesInput) => {
-      if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
-      const data = input?.data
-      if (typeof data !== 'string' && !(data instanceof ArrayBuffer)) {
-        return { ok: false, error: '图片内容不能为空' }
-      }
-      return saveImageAttachmentBytes(data, attachmentRoot(id), {
-        mime: typeof input.mime === 'string' ? input.mime : undefined
-      })
-    }
-  )
 
   // OCR:提取附件图片文字(Vision/tesseract 逐级降级;路径必须在会话附件区内)
   ipcMain.handle('attachments:ocr', async (_e, id: string, imagePath: string) => {

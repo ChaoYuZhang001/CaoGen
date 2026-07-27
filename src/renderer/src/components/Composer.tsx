@@ -227,10 +227,10 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
               data: await file.arrayBuffer(),
               mime: file.type || undefined
             })
-
         if (!result.ok) {
           revokePreview(previewUrl)
           setAttachmentError(result.error)
+          if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
           continue
         }
 

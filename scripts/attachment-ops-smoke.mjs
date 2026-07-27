@@ -57,6 +57,12 @@ try {
   const pngSource = path.join(inputDir, 'pixel.png')
   writeFileSync(pngSource, minPng)
 
+  const preparedFile = await attachmentOps.prepareImageAttachmentFile(pngSource)
+  assertEqual(preparedFile.hash, createHash('sha256').update(minPng).digest('hex'))
+  assertEqual(preparedFile.mime, 'image/png')
+  assertEqual(preparedFile.bytes, minPng.byteLength)
+  assert(preparedFile.data.equals(minPng), 'prepared file payload should freeze the validated bytes')
+
   const copied = await attachmentOps.copyImageAttachment(pngSource, attachmentsRoot)
   assertOk(copied, 'copyImageAttachment should copy a valid PNG')
 
@@ -113,6 +119,19 @@ try {
   assertOk(savedBytes, 'saveImageAttachmentBytes should save Uint8Array PNG bytes')
   assertImageAttachment(savedBytes, minPng, bytesAttachmentsRoot, 'png', 'image/png')
   assertImageContentBlock(await attachmentOps.imageToContentBlock(savedBytes.path), minPng, 'image/png')
+
+  const preparedBytes = attachmentOps.prepareImageAttachmentBytes(minPng.buffer.slice(
+    minPng.byteOffset,
+    minPng.byteOffset + minPng.byteLength
+  ), { mime: 'image/png' })
+  assertEqual(preparedBytes.hash, expectedHash)
+  assert(preparedBytes.data.equals(minPng), 'prepared ArrayBuffer payload should be copied and frozen')
+  const tamperedPrepared = { ...preparedBytes, data: Buffer.concat([preparedBytes.data, Buffer.from([0])]) }
+  const tamperedResult = await attachmentOps.persistPreparedImageAttachment(tamperedPrepared, attachmentsRoot)
+  assert(!tamperedResult.ok, 'prepared payload digest mismatches must fail closed')
+  const oversizedPrepared = { ...preparedBytes, bytes: attachmentOps.DEFAULT_MAX_IMAGE_BYTES + 1 }
+  const oversizedPreparedResult = await attachmentOps.persistPreparedImageAttachment(oversizedPrepared, attachmentsRoot)
+  assert(!oversizedPreparedResult.ok, 'prepared payloads over the durable write limit must fail closed')
 
   const savedRawBase64 = await attachmentOps.saveImageAttachmentBytes(minPng.toString('base64'), rawBase64AttachmentsRoot)
   assertOk(savedRawBase64, 'saveImageAttachmentBytes should save raw base64 PNG')
