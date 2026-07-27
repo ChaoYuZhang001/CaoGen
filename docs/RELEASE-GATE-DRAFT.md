@@ -21,6 +21,7 @@ package is not considered delivered to users.
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
 | Candidate freshness | Current product candidate: includes fixed-model/Drive, rejected-send, and Browser/Preview reliability fixes through `03c3fee2`; only publication evidence documents may follow before preflight |
 | Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
+| Scoped publication preflight | Passed on a clean, pushed publication-only descendant: all identity, evidence, asset, notes, remote-main, and absent tag/Release checks true; decision `ready_for_owner_decision`; side effects false |
 | Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
 
 The manual candidate workflow remains read-only with `contents: read`, accepts only
@@ -32,11 +33,11 @@ The candidate includes the user-facing welcome-draft persistence, asynchronous c
 hydration, fixed-model/Drive preservation, rejected-send draft preservation, and
 Browser/Preview availability and error-feedback fixes.
 
-Before any 0.1.8 publication decision, these exact five assets and four report families
-must be bound into final notes on a clean publication-only descendant, and that descendant
-must pass the scoped notes and handoff preflight without product changes. Windows and
-Apple Silicon remain skipped, not passed. Publication still requires a new explicit
-owner authorization.
+These exact five assets and four report families are now bound into final notes on a
+clean publication-only descendant, and the scoped notes and handoff preflight passed
+without product changes. Any later publication-document change must rerun the same
+fail-closed preflight. Windows and Apple Silicon remain skipped, not passed. Publication
+still requires a new explicit owner authorization.
 
 ### 0.1.8 Candidate Asset Record
 
