@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 618,
-      "contentHash": "49d40538fdd4b89a7883e0bd5b8872235d364eb484dd4e4f10611c01b0d80bea",
+      "lines": 619,
+      "contentHash": "5707c2ec1c7e62db460ed8d44d38223e7c2378f9bc2bd9c81024472bf18238df",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -530,7 +530,7 @@
     "scripts/page-operation-smoke.mjs": {
       "profile": "automation",
       "lines": 2167,
-      "contentHash": "8a93cc26ec2463e782d44f3f1d0d9db015b6cfe6ec8287e20d1c12f47724fbe8",
+      "contentHash": "80e8fdce579b280c97828ae5bdc40deed0dd60dc8a0bb4ba697f4d4c7e978e62",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 1,
@@ -1203,8 +1203,8 @@
     },
     "src/main/sessionManager.ts": {
       "profile": "product",
-      "lines": 1851,
-      "contentHash": "42e5c74e1f071bef306a3ed1b512e4854b344c6c3945f8dc5032ceb628fecdf4",
+      "lines": 1798,
+      "contentHash": "ad2fcbbedabb29a376c1f2a14a31a82afe3a1f86f975cba1b3f034eb3b5777e3",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 64,
       "complexFunctionCount": 2,
@@ -1214,8 +1214,8 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "dispatchSubagents#1": {
-          "lines": 64,
-          "complexity": 20
+          "lines": 54,
+          "complexity": 19
         },
         "handleNotification#1": {
           "lines": 58,
@@ -2302,7 +2302,7 @@
     "src/renderer/src/store.ts": {
       "profile": "product",
       "lines": 3913,
-      "contentHash": "9efe93a2c1ba00e96c62a343d4c540538497c79005cde4cdee3dfb67e5ec1676",
+      "contentHash": "c39188d77617c11a630388e39f26840046ce3eacffa51362ad2d72d5c466e07b",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 2823,
       "complexFunctionCount": 1,

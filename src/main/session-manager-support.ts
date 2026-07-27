@@ -59,26 +59,6 @@ export function managedSessionSendGateError(
   return undefined
 }
 
-export interface OrchestrationState {
-  parentSessionId: string
-  /** dispatchSubagents 仍在创建 child 时不触发最终汇总,避免极快 child 让编排过早收口。 */
-  acceptingChildren: boolean
-  /** 尚未完成首轮的 child session id */
-  pending: Set<string>
-  /** 已完成 child 的结果(按完成顺序) */
-  results: Array<{
-    taskId?: string
-    role?: string
-    sessionId: string
-    ok: boolean
-    resultText?: string
-    costUsd?: number
-    branch?: string
-    worktreePath?: string
-  }>
-  startedAt: number
-}
-
 interface Lookup<T> { get(key: string): T | undefined }
 type WorkflowSession = { meta: SessionMeta; getTranscript(): TranscriptEntry[] }
 interface SessionWorkflowRuntimeDependencies {

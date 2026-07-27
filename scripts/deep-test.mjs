@@ -67,6 +67,7 @@ const commandDefinitions = [
   { name: 'macOS tray icon smoke', command: 'node', args: ['scripts/macos-tray-icon-smoke.mjs'], category: 'smoke' },
   { name: 'task snapshot smoke', command: 'node', args: ['scripts/task-snapshot-smoke.mjs'], category: 'smoke' },
   { name: 'task snapshot replay smoke', command: 'node', args: ['scripts/task-snapshot-replay-smoke.mjs'], category: 'smoke' },
+  { name: 'subagent orchestration reliability smoke', command: 'node', args: ['scripts/subagent-orchestration-reliability-smoke.mjs'], category: 'smoke' },
   { name: 'task evidence ledger smoke', command: 'node', args: ['scripts/task-evidence-ledger-smoke.mjs'], category: 'smoke' },
   { name: 'workflow evidence ledger smoke', command: 'node', args: ['scripts/workflow-evidence-store-smoke.mjs'], category: 'smoke' },
   { name: 'workflow evidence link idempotency smoke', command: 'node', args: ['scripts/workflow-evidence-link-idempotency-smoke.mjs'], category: 'smoke' },
