@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 615,
-      "contentHash": "7d2d6a5ba0557fda8e50632b1865d94d1bfaa3b8786dceda7035348a582fb158",
+      "lines": 617,
+      "contentHash": "93349568c90e0422026e7b11e70f6c682043288450c3b301e95cfa38b9c95b20",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -877,10 +877,10 @@
     },
     "src/main/ide/ide-bridge.ts": {
       "profile": "product",
-      "lines": 662,
-      "contentHash": "0dcbaee11fe3eae0a2bf12bcaff1d6ab254a95bc4f322b8e3c450fcf025e4cc4",
+      "lines": 667,
+      "contentHash": "d32d126db32d6a1490c8290c3324c3608e94a523aef8e34d0faca645b2c9dfb0",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 56,
+      "maxFunctionLines": 61,
       "complexFunctionCount": 1,
       "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
@@ -2302,9 +2302,9 @@
     "src/renderer/src/store.ts": {
       "profile": "product",
       "lines": 3913,
-      "contentHash": "8e8a5d0fbf75f00953ee24073f61fee1b45d1414aa48ba69ef017f9a926ed514",
+      "contentHash": "9efe93a2c1ba00e96c62a343d4c540538497c79005cde4cdee3dfb67e5ec1676",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2824,
+      "maxFunctionLines": 2823,
       "complexFunctionCount": 1,
       "maxComplexity": 57,
       "forbiddenSuppressionCount": 0,
@@ -2316,7 +2316,7 @@
           "complexity": 57
         },
         "create callback#1": {
-          "lines": 2824,
+          "lines": 2823,
           "complexity": 1
         }
       }

@@ -189,7 +189,7 @@ const bridge = createIdeBridge({
     },
     sendMessage(sessionId, message) {
       sent.push({ sessionId, message })
-      return !(typeof message === 'object' && message.text === 'reject this bridge send')
+      return !(typeof message === 'object' && message.text.startsWith('reject this bridge'))
     },
     syncDocument(payload) {
       syncedDocuments.push(payload)
@@ -241,7 +241,20 @@ await client.send({
 const createdResponse = await client.read()
 assert.equal(createdResponse.type, 'sessions.create.result')
 assert.equal(createdResponse.payload.title, 'Smoke Session')
+assert.equal(createdResponse.payload.initialMessageAccepted, true)
 assert.equal(sent.length, 1, 'initialText should be delivered through sendMessage')
+
+await client.send({
+  id: 'create-rejected',
+  type: 'sessions.create',
+  payload: { cwd: root, title: 'Rejected Initial Message', initialText: 'reject this bridge create' }
+})
+const rejectedCreate = await client.read()
+assert.equal(rejectedCreate.type, 'sessions.create.result')
+assert.equal(rejectedCreate.payload.title, 'Rejected Initial Message')
+assert.equal(rejectedCreate.payload.initialMessageAccepted, false,
+  'IDE bridge must expose rejected initialText instead of reporting opaque success')
+assert.equal(sent.length, 2)
 
 await client.send({
   id: 'send-1',
@@ -251,7 +264,7 @@ await client.send({
 const acceptedSend = await client.read()
 assert.equal(acceptedSend.type, 'sessions.send.result')
 assert.equal(acceptedSend.payload.ok, true)
-assert.equal(sent.length, 2)
+assert.equal(sent.length, 3)
 
 await client.send({
   id: 'send-rejected',
@@ -261,7 +274,7 @@ await client.send({
 const rejectedSend = await client.read()
 assert.equal(rejectedSend.type, 'sessions.send.result')
 assert.equal(rejectedSend.payload.ok, false, 'IDE bridge must not report a rejected send as accepted')
-assert.equal(sent.length, 3)
+assert.equal(sent.length, 4)
 
 await client.send({
   id: 'sync-1',
@@ -286,7 +299,7 @@ await client.send({
 const syncResponse = await client.read()
 assert.equal(syncResponse.type, 'documents.sync.result')
 assert.equal(syncResponse.payload.uri, 'file:///tmp/smoke.ts')
-assert.equal(sent.length, 3, 'passive IDE document sync must not trigger a model turn')
+assert.equal(sent.length, 4, 'passive IDE document sync must not trigger a model turn')
 assert.equal(syncedDocuments.length, 1, 'passive IDE document sync must reach document context hook')
 assert.equal(listIdeDocumentContext(createdResponse.payload.id).length, 1, 'document context store must keep synced snapshot')
 const ideContextPrompt = buildIdeDocumentContextPrompt(createdResponse.payload.id)
@@ -319,7 +332,7 @@ await client.send({
 const badSyncUri = await client.read()
 assert.equal(badSyncUri.type, 'error')
 assert.equal(badSyncUri.payload.code, 'handler_failed')
-assert.equal(sent.length, 3, 'invalid passive IDE sync must not trigger a model turn')
+assert.equal(sent.length, 4, 'invalid passive IDE sync must not trigger a model turn')
 
 for (const listener of events) {
   listener({ sessionId: createdResponse.payload.id, type: 'assistant.delta', text: 'event back to IDE' })
