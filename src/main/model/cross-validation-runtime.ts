@@ -20,6 +20,7 @@ import {
   type CrossValidationReviewConclusion
 } from './cross-validation'
 import { planCrossValidationFailureIngress } from './cross-validation-failure'
+import { dispatchCrossValidationPrompt } from './cross-validation-dispatch'
 
 interface CrossValidationRuntimeDependencies {
   create(options: CreateSessionOptions): Promise<SessionMeta>
@@ -131,14 +132,23 @@ export class ModelCrossValidationRuntime {
       turnSeq: seq,
       parentRunId
     })
+    const reviewAccepted = dispatchCrossValidationPrompt(this.dependencies, {
+      parentSessionId: sessionId,
+      childSessionId: reviewMeta.id,
+      prompt: buildCrossValidationReviewPrompt({
+        parentMeta: { ...meta }, routePlan, resultText, transcript, turnSeq: seq
+      }),
+      stage: 'review'
+    })
+    if (!reviewAccepted) {
+      this.reviews.delete(reviewMeta.id)
+      return
+    }
     this.dependencies.dispatch(sessionId, {
       kind: 'hook-event',
       event: 'model-cross-validation',
       detail: `已启动第二模型复核: ${validator.providerName ?? validator.providerId}/${validator.model}`
     })
-    this.dependencies.send(reviewMeta.id, buildCrossValidationReviewPrompt({
-      parentMeta: { ...meta }, routePlan, resultText, transcript, turnSeq: seq
-    }))
   }
 
   private async finishReview(
@@ -178,19 +188,28 @@ export class ModelCrossValidationRuntime {
       verifier: `model-arbitration:${target.providerId}/${target.model}`,
       parentRunId: review.parentRunId
     })
+    const arbitrationAccepted = dispatchCrossValidationPrompt(this.dependencies, {
+      parentSessionId: review.parentSessionId,
+      childSessionId: arbitrationMeta.id,
+      prompt: buildCrossValidationArbitrationPrompt({
+        parentMeta: review.parentMeta,
+        routePlan: review.routePlan,
+        primaryResultText: review.primaryResultText,
+        reviewerResultText,
+        transcript: review.transcript,
+        turnSeq: identity.seq
+      }),
+      stage: 'arbitration'
+    })
+    if (!arbitrationAccepted) {
+      this.arbitrations.delete(arbitrationMeta.id)
+      return
+    }
     this.dependencies.dispatch(review.parentSessionId, {
       kind: 'hook-event',
       event: 'model-cross-validation-arbitration',
       detail: `第二模型复核存在分歧，已启动仲裁模型: ${target.providerName ?? target.providerId}/${target.model}`
     })
-    this.dependencies.send(arbitrationMeta.id, buildCrossValidationArbitrationPrompt({
-      parentMeta: review.parentMeta,
-      routePlan: review.routePlan,
-      primaryResultText: review.primaryResultText,
-      reviewerResultText,
-      transcript: review.transcript,
-      turnSeq: identity.seq
-    }))
   }
 
   private async finishArbitration(
