@@ -21,7 +21,7 @@ package is not considered delivered to users.
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
 | Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, start-suggestion, sequential task-snapshot replay, Provider preset, free-form subagent orchestration, model cross-validation reliability, versioned high-risk Effect-entry inventory, and opaque attachment-write Effect work not present in `03c3fee2` |
-| Current source successor | `main@b599aeefbb0fc5231781583d581251a381071f9c`; clean Deep passed `169 total / 167 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
+| Current source successor | `main@2dc74a4105f345a69d2599032e32da2dae8d1eb8`; clean Deep passed `170 total / 168 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
 | Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
 | Scoped publication preflight | Historical pass only: later product changes and this gate update invalidate it for current `main`; a refreshed candidate and preflight are required |
 | Publication authority | Not granted; current `main` has no publishable v0.1.8 candidate, and no tag, GitHub Release, remote body edit, or asset mutation is permitted |

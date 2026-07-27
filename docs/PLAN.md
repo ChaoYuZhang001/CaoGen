@@ -130,7 +130,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 等待测试者期间修复模型交叉验证静默拒绝：第二模型复核/第三模型仲裁的首条指令只有在 `send()` 明确接受后才报告启动；拒绝或同步异常会清理 child 关联并向父会话发出带原因的 hook，避免假启动与永久 pending。专项 smoke 覆盖接受、拒绝和同步异常，完整 P2、build、typecheck 与编码标准 required 通过
   - [x] 为模型交叉验证可靠性后继完成 clean Deep：`main@85daf906a917cf1ab44a5f2ce5586e63c4072763` 的 `2026-07-27T16-31-50-392Z` 报告为 `167 total / 165 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均为该提交、工作树 clean 且 Git 状态未变；`modelCrossValidation` smoke 为 required pass
   - [x] 将 `attachments:copyImage` 与 `attachments:saveImageBytes` 接入 opaque `attachment_write` Effect：图片在进入 Gateway 前冻结并校验，Effect 只记录 `contentSha256`、`bytes`、`mime`、`source`，不记录 Base64、二进制或源路径；落盘前再次校验摘要、大小、MIME 与 5 MiB 上限，未知结果进入 `waiting_reconciliation` 且禁止自动重放。强杀 E2E 覆盖 durable-before-write、成功、失败、SIGKILL、人工对账和 SQLite 敏感输入缺失
-  - [x] 为附件 Effect 后继完成 clean Deep：`main@b599aeefbb0fc5231781583d581251a381071f9c` 的 `2026-07-27T18-57-48-261Z` 报告为 `169 total / 167 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v2 仍锁定 156 IPC、52 Agent 工具、79 嵌套动作，并把 direct-user 外部 IPC 从 25 收敛到 23
+  - [x] 将 `projectContext:write` 接入 queryable `file_content` Effect：持久化屏障先于 `caogen.md` 原子写入，项目规则正文不进入任务数据库，符号链接目标 fail-closed；SIGKILL 后按精确摘要确认，用户后续改写时保持 `waiting_reconciliation`，确认/分歧恢复都不重放写回调
+  - [x] 为项目规则 Effect 后继完成 clean Deep：`main@2dc74a4105f345a69d2599032e32da2dae8d1eb8` 的 `2026-07-27T20-17-23-998Z` 报告为 `170 total / 168 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v3 仍锁定 156 IPC、52 Agent 工具、79 嵌套动作，并把 direct-user 外部 IPC 从 23 收敛到 22
   - [ ] 仅在继续准备 v0.1.8 发布时刷新 macOS Intel-only 签名候选、独立资产核验与 scoped publication preflight；Apple Silicon/Windows 继续暂停，且没有新的明确发布授权
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
@@ -280,7 +281,7 @@ NFR-PRIV-004、NFR-NEUTRAL-001/003、NFR-ENG-003。
 | ID | 内容 | 当前状态 |
 |---|---|---|
 | TRUST-005 | v8 Workflow Ledger 全入口闭环 | 部分完成 |
-| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v2 已锁 156 IPC、52 Agent 工具、79 嵌套动作，2 个附件写入 IPC 已进入 opaque Effect，其余 23 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
+| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v3 已锁 156 IPC、52 Agent 工具、79 嵌套动作，2 个附件写入 IPC 已进入 opaque Effect，`projectContext:write` 已进入 queryable file Effect，其余 22 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
 | TRUST-003 | PR/Issue/MCP 等入口专用对账 | 立项目标 |
 | TRUST-004 | 未知结果不自动重放,只读对账或人工确认 | 立项目标 |
 | TRUST-006 | 密钥 Broker 完整化(作用域、子进程最小环境) | 仅基础 |
