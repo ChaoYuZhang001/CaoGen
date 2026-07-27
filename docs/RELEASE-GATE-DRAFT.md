@@ -15,47 +15,47 @@ package is not considered delivered to users.
 | Latest public GitHub Release | v0.1.7; its current eight-asset remote state still fails the repository's approved historical five-asset contract |
 | Package and lockfile | `0.1.8` |
 | Allowed candidate scope | `macos-x64` only; Apple Silicon and Windows remain paused |
-| Candidate identity | `main@9591c20bde2330a6f57951e7381b5e7e9d642091` |
-| Candidate workflow | [`30215660873`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30215660873), successful read-only `macos-x64` evidence run |
+| Candidate identity | `main@03c3fee2837d120fce43f4b7d11bd25488be4d36` |
+| Candidate workflow | [`30243108279`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30243108279), successful read-only `macos-x64` evidence run |
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
-| 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/stapled/installed/launched x64 app, packaged-app smoke, artifact set `b5e03719796ea3236fab617c8e1493a238e3a07e48552daa1dc74b04f7d27252` |
-| Candidate freshness | Historical only: first-task restart recovery and asynchronous Project/Provider catalog hydration fixes are present, but the later fixed-model/Drive correction is not in `9591c20b`; targeted Electron for the later fix is `12/12` and page operations `22/22`, so the candidate must be rerun before publication |
-| Independent download | Passed: five assets and four report families downloaded outside the repository; sizes, SHA256 values, and artifact-set digest match the candidate reports |
+| 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
+| Candidate freshness | Current product candidate: includes fixed-model/Drive, rejected-send, and Browser/Preview reliability fixes through `03c3fee2`; only publication evidence documents may follow before preflight |
+| Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
 | Publication authority | Not granted; no tag, GitHub Release, remote body edit, or asset mutation is permitted |
 
 The manual candidate workflow remains read-only with `contents: read`, accepts only
 an exact commit already on `main`, defaults to package version `0.1.8` and
-`macos-x64`, and cannot create a tag or Release. Run `30215660873` created candidate
+`macos-x64`, and cannot create a tag or Release. Run `30243108279` created candidate
 evidence only. It did not close the first-user M1 gate and did not authorize
 publication. Its Apple Silicon, Windows, and complete-matrix jobs were skipped.
-The candidate includes the user-facing welcome-draft persistence and asynchronous
-catalog hydration fixes. The current source now also contains a later fixed-model/Drive
-correction, so this candidate is historical and cannot publish the latest source.
+The candidate includes the user-facing welcome-draft persistence, asynchronous catalog
+hydration, fixed-model/Drive preservation, rejected-send draft preservation, and
+Browser/Preview availability and error-feedback fixes.
 
-Before any 0.1.8 publication decision, a new exact clean candidate must include the
-fixed-model/Drive correction and pass the scoped Intel workflow. Its five assets and
-four report families must be independently checked and bound into final notes, and a
-clean publication-only descendant must pass the scoped notes and handoff preflight.
-Windows and Apple Silicon remain skipped, not passed. Publication still requires a new
-explicit owner authorization.
+Before any 0.1.8 publication decision, these exact five assets and four report families
+must be bound into final notes on a clean publication-only descendant, and that descendant
+must pass the scoped notes and handoff preflight without product changes. Windows and
+Apple Silicon remain skipped, not passed. Publication still requires a new explicit
+owner authorization.
 
 ### 0.1.8 Candidate Asset Record
 
 | Candidate file | Size | SHA256 |
 |---|---:|---|
-| `CaoGen-0.1.8.dmg` | 127,700,399 B | `6ef85b3e612b3c008c07b8db61794e991eaed4d68d88f266e6b79370c00346c7` |
-| `CaoGen-0.1.8.dmg.blockmap` | 132,560 B | `7f8106b550893455490a0a1201ead9e35a9a0cd24dc226abb11a1ff6ac12216e` |
-| `CaoGen-0.1.8-mac.zip` | 127,018,880 B | `3229d52d18722b54824638ff0a81e248b5c646b7153dfa840d73aa18144bca18` |
-| `CaoGen-0.1.8-mac.zip.blockmap` | 133,809 B | `50f473753f275540990883532205261de39dc696b04fd81f92251eece08f0158` |
-| `latest-mac.yml` | 484 B | `613dca4e5568c01486b57055e2251ddc6129c7a4cebd8a9f6f573c91fabd9872` |
+| `CaoGen-0.1.8.dmg` | 127,697,234 B | `95ca1ad3be1440149bd458cffbdd3063a4476018e059b19b4f4cbb3bdfac64c0` |
+| `CaoGen-0.1.8.dmg.blockmap` | 134,439 B | `9683ef7f292049fd7265da874b24f6d09bfe90c6e15c3026d14a620a57cf6fd5` |
+| `CaoGen-0.1.8-mac.zip` | 127,023,193 B | `73fb195147282274be360c32b735772164bc1b7c5d9c2fe3cd8b12f34bf03e51` |
+| `CaoGen-0.1.8-mac.zip.blockmap` | 133,810 B | `63a1768f5454dd0a96663f530d9155a8316041d1234351ae9f854274b19968ac` |
+| `latest-mac.yml` | 484 B | `a40b8cad8ba76e3f9608a0e20c7ce0f2ed9b98fc22cb64907409efed3ee342a6` |
 
 The five-file artifact-set SHA256 is
-`b5e03719796ea3236fab617c8e1493a238e3a07e48552daa1dc74b04f7d27252`.
-GitHub Actions artifact `8636056669`, named
-`caogen-release-macos-x64-9591c20bde2330a6f57951e7381b5e7e9d642091`,
-contains the candidate assets and evidence reports and expires on 2026-08-09. It is
-not a public Release asset. Independent download verification matched every listed
-size and SHA256 digest.
+`2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52`.
+GitHub Actions artifact `8644829708`, named
+`caogen-release-macos-x64-03c3fee2837d120fce43f4b7d11bd25488be4d36`,
+contains the candidate assets and evidence reports and expires on 2026-08-10. It is
+not a public Release asset. Its `255,552,267 B` ZIP matched GitHub SHA256
+`ec343fe823c5e3a3502c4b6176d23dd59b46dd3e15c2338b06eab98f7384c16a`; independent
+verification then matched every listed size and SHA256 digest plus update SHA512 data.
 
 ## Historical v0.1.7 Publication Record
 
