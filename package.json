@@ -135,7 +135,7 @@
     "test:git-index-effect": "node scripts/git-index-effect-e2e.mjs && node scripts/git-index-effect-crash-e2e.mjs",
     "test:operation-effect": "node scripts/operation-effect-gateway-smoke.mjs && node scripts/operation-effect-gateway-e2e.mjs && node scripts/managed-worktree-effect-smoke.mjs && node scripts/managed-worktree-effect-crash-e2e.mjs && npm run test:git-index-effect",
     "test:effect-crash-recovery": "node scripts/effect-crash-recovery-e2e.mjs && node scripts/effect-close-race-smoke.mjs",
-    "test:task-run": "node scripts/task-run-state-smoke.mjs && node scripts/task-snapshot-smoke.mjs && node scripts/event-cursor-crash-smoke.mjs && npm run test:effect-reconciliation && npm run test:operation-effect && npm run test:effect-crash-recovery",
+    "test:task-run": "node scripts/task-run-state-smoke.mjs && node scripts/task-snapshot-smoke.mjs && node scripts/task-snapshot-replay-smoke.mjs && node scripts/event-cursor-crash-smoke.mjs && npm run test:effect-reconciliation && npm run test:operation-effect && npm run test:effect-crash-recovery",
     "test:task-evidence": "node scripts/task-evidence-ledger-smoke.mjs",
     "test:workflow-evidence": "node scripts/workflow-evidence-store-smoke.mjs",
     "test:workflow-evidence-link-idempotency": "node scripts/workflow-evidence-link-idempotency-smoke.mjs",

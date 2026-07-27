@@ -31,7 +31,7 @@ import {
 import { restoreActiveSessionRegistry, updateActiveSessionRegistryWorktreeState, writeActiveSessionRegistry } from './session-active-registry'
 import {
   buildTaskSnapshotReplayPrompts, canTrackCost, cleanOneLine, effectiveBudgetUsd, estimateTurnCostUsd,
-  mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
+  managedSessionSendGateError, mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, rejectSessionSend, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
   type ManagedSessionCreationOptions, type OrchestrationState, type SessionNotificationState
@@ -51,6 +51,7 @@ import {
   flushTaskSnapshotMutations
 } from './task/task-snapshot'
 import { ModelAttemptRecoveryGate } from './task/model-attempt-recovery-gate'
+import { TaskSnapshotReplayCoordinator } from './task/task-snapshot-replay'
 import {
   createTaskRun,
   isTaskRunTerminal,
@@ -184,25 +185,22 @@ class SessionManager {
   private readonly blockedPendingDagSessions = new Map<string, SessionCreationDraft>()
   private readonly retainedSessionCreationJournals = new Set<string>()
   private readonly modelAttemptRecoveryGate = new ModelAttemptRecoveryGate()
+  private readonly taskSnapshotReplay = new TaskSnapshotReplayCoordinator({
+    send: (sessionId, prompt, options) => this.send(sessionId, prompt, options), emit: (sessionId, event) => this.dispatch(sessionId, event, 0) })
   private readonly supervisor = new SessionSupervisorRuntime(
     () => app.getPath('userData'), this.sessions, this.taskRuns,
-    (id, input, options) => this.send(id, input, options),
+    (sessionId, prompts, options) => this.taskSnapshotReplay.start(sessionId, prompts, options),
     (id) => this.interrupt(id), (id) => this.workflow.flush(id),
-    (sessionId, reason, seq, eventKind, eventId, strict) =>
-      this.writeTaskSnapshot(sessionId, reason, seq, eventKind, eventId, strict)
+    (sessionId, reason, seq, eventKind, eventId, strict) => this.writeTaskSnapshot(sessionId, reason, seq, eventKind, eventId, strict)
   )
 
   constructor() {
     configureDigitalWorkerActionPolicyRoot(app.getPath('userData'))
   }
 
-  list(): SessionMeta[] {
-    return [...this.sessions.values()].map((s) => ({ ...s.meta }))
-  }
+  list(): SessionMeta[] { return [...this.sessions.values()].map((s) => ({ ...s.meta })) }
 
-  get(id: string): Engine | undefined {
-    return this.sessions.get(id)
-  }
+  get(id: string): Engine | undefined { return this.sessions.get(id) }
 
   subscribe(listener: (payload: SessionEventPayload) => void): () => void {
     this.sessionEventListeners.add(listener)
@@ -342,10 +340,10 @@ class SessionManager {
     const session = this.sessions.get(id)
     if (!session) return false
     const currentRun = this.taskRuns.get(id)
-    if (this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true)) {
-      session.rejectSend('Supervisor 已暂停或仅授权重试；必须通过受信控制路径恢复后才能继续执行。')
-      return false
-    }
+    const sendGateError = managedSessionSendGateError(
+      this.taskSnapshotReplay.blocksOrdinarySend(id, options),
+      this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true))
+    if (sendGateError) return rejectSessionSend(session, sendGateError)
     const workerPolicyError = digitalWorkerSendPolicyError({
       rootDir: app.getPath('userData'),
       meta: session.meta,
@@ -797,6 +795,7 @@ class SessionManager {
     this.persistActiveSessions()
     this.notificationStates.delete(id)
     clearIdeDocumentContext(id)
+    this.taskSnapshotReplay.clearSession(id)
     this.modelAttemptRecoveryGate.clearSession(id)
     this.acknowledgeSessionCreation(id)
   }
@@ -814,6 +813,7 @@ class SessionManager {
 
   async disposeAll(): Promise<void> {
     this.persistActiveSessions()
+    this.taskSnapshotReplay.clear()
     // dispose 后 provider 仍可能异步发出尾事件。关机期间保持保护，避免晚到的
     // turn-result/status 把刚写好的恢复快照删掉。
     this.preservingSnapshotsOnDispose = true
@@ -1141,7 +1141,7 @@ class SessionManager {
           },
           0
         )
-        for (const prompt of replayPrompts) this.send(snapshot.sessionId, prompt, { modelAttemptRecoveryReplay: true })
+        this.taskSnapshotReplay.start(snapshot.sessionId, replayPrompts, { modelAttemptRecoveryReplay: true })
       })
       .catch((err) => {
         console.error('[caogen] 恢复任务快照启动失败:', err)
@@ -1323,7 +1323,6 @@ class SessionManager {
       preserveClosedRun: this.preservingSnapshotsOnDispose ||
         this.effectRecoveryPreservedSessions.has(sessionId)
     })
-    this.modelAttemptRecoveryGate.refreshAfterEvent(sessionId, event)
     const payload: SessionEventPayload = { sessionId, ...identity, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
@@ -1352,6 +1351,7 @@ class SessionManager {
         console.error('[caogen] resume DAG finalization after parent event failed:', error)
       })
     }
+    this.taskSnapshotReplay.handleEvent(sessionId, event, this.modelAttemptRecoveryGate.refreshAfterEvent(sessionId, event))
   }
 
   private dispatchChildResult(sessionId: string, session: Engine | undefined, event: AgentEvent): void {

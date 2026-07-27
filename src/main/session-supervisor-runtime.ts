@@ -14,20 +14,15 @@ import { SupervisorStateError, SupervisorStateStore } from './task/supervisor-st
 import { buildTaskSnapshotReplayPrompts } from './session-manager-support'
 import type {
   AgentEvent,
-  SendMessagePayload,
   TaskRunRecord,
   TaskSnapshotReason,
   TaskSnapshotRecord
 } from '../shared/types'
+import type { TaskSnapshotReplaySendOptions } from './task/task-snapshot-replay'
 
 interface TaskRunRegistry {
   get(sessionId: string): TaskRunRecord | undefined
   set(sessionId: string, run: TaskRunRecord): void
-}
-
-type SendOptions = {
-  modelAttemptRecoveryReplay?: boolean
-  supervisorControlReplay?: boolean
 }
 
 type SnapshotWriter = (
@@ -50,7 +45,11 @@ export class SessionSupervisorRuntime {
     private readonly rootDir: () => string,
     private readonly sessions: ReadonlyMap<string, Engine>,
     private readonly taskRuns: TaskRunRegistry,
-    private readonly sendMessage: (id: string, input: string | SendMessagePayload, options?: SendOptions) => boolean,
+    private readonly replaySnapshot: (
+      sessionId: string,
+      prompts: readonly string[],
+      options: TaskSnapshotReplaySendOptions
+    ) => boolean,
     private readonly interruptSession: (id: string) => Promise<void>,
     private readonly flushWorkflow: (id: string) => Promise<void>,
     private readonly writeSnapshot: SnapshotWriter
@@ -240,7 +239,7 @@ export class SessionSupervisorRuntime {
     if (prompts.length === 0) {
       throw new SupervisorStateError('invalid_transition', `run ${taskRun.id} has no durable replay request`)
     }
-    const accepted = this.sendMessage(taskRun.sessionId, prompts[0], {
+    const accepted = this.replaySnapshot(taskRun.sessionId, prompts, {
       modelAttemptRecoveryReplay: true,
       supervisorControlReplay: true
     })
