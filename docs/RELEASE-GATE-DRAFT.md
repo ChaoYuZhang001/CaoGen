@@ -1,6 +1,6 @@
 # CaoGen Intel Patch Release Gate
 
-> Updated: 2026-07-27 Asia/Shanghai. v0.1.7 is the latest public release.
+> Updated: 2026-07-28 Asia/Shanghai. v0.1.7 is the latest public release.
 > Package version 0.1.8 has historical macOS Intel-only candidate evidence, but the
 > current source successor has no publishable candidate and is not 1.0 stable.
 
@@ -20,8 +20,8 @@ package is not considered delivered to users.
 | Candidate workflow | [`30243108279`](https://github.com/ChaoYuZhang001/CaoGen/actions/runs/30243108279), successful read-only `macos-x64` evidence run |
 | Exact-commit Deep | `163 total / 161 required pass / 2 optional skip / 0 blocked / 0 fail` |
 | 0.1.8 signed distribution evidence | Passed: `120/120` required audit, signed/notarized/application-stapled/installed/launched x64 app, packaged-app smoke, artifact set `2abe8622e3b37873e69abdd5deb1f16c8739336181688eeb2e665c601792ff52` |
-| Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, start-suggestion, sequential task-snapshot replay, Provider preset, free-form subagent orchestration, and model cross-validation reliability fixes not present in `03c3fee2` |
-| Current source successor | `main@85daf906a917cf1ab44a5f2ce5586e63c4072763`; clean Deep passed `167 total / 165 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
+| Candidate freshness | Historical product candidate: current source continues with IDE initial-message, Routine, start-suggestion, sequential task-snapshot replay, Provider preset, free-form subagent orchestration, model cross-validation reliability, and versioned high-risk Effect-entry inventory work not present in `03c3fee2` |
+| Current source successor | `main@88713fb9ad9cbe00e3a3c7c74fef70e4249af1b3`; clean Deep passed `168 total / 166 required pass / 2 optional skip / 0 blocked / 0 fail`, but no signed assets exist for this commit |
 | Independent download | Passed: artifact ZIP length/SHA256/CRC, five assets, four report families, update SHA512, x86_64, provenance, codesign, Gatekeeper, application tickets, and removed external SDK/CLI absence independently match |
 | Scoped publication preflight | Historical pass only: later product changes and this gate update invalidate it for current `main`; a refreshed candidate and preflight are required |
 | Publication authority | Not granted; current `main` has no publishable v0.1.8 candidate, and no tag, GitHub Release, remote body edit, or asset mutation is permitted |
