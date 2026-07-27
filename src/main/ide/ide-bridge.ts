@@ -342,10 +342,15 @@ class LocalIdeBridge implements IdeBridgeServer {
       const payload = requireCreateSessionPayload(envelope.payload)
       const { initialText, ...options } = payload
       const meta = await this.sessionPort.createSession(options)
-      if (typeof initialText === 'string' && initialText.trim()) {
-        this.sessionPort.sendMessage(meta.id, { text: initialText.trim() })
-      }
-      this.send(connection, { id: envelope.id, type: 'sessions.create.result', payload: meta })
+      const normalizedInitialText = initialText?.trim()
+      const initialMessageAccepted = normalizedInitialText
+        ? await this.sessionPort.sendMessage(meta.id, { text: normalizedInitialText })
+        : undefined
+      this.send(connection, {
+        id: envelope.id,
+        type: 'sessions.create.result',
+        payload: { ...meta, initialMessageAccepted }
+      })
       return
     }
 

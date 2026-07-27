@@ -71,6 +71,7 @@ import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './s
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
 import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
 import { sendActiveSessionMessage } from './store/session-send'
+import { sendStartSuggestionMessage } from './store/start-suggestion-send'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -3535,8 +3536,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async sendStartSuggestion(suggestion) {
-    await get().sendMessage(suggestion.prompt)
-    get().ignoreStartSuggestion(suggestion.id)
+    await sendStartSuggestionMessage({ getState: get, setState: set }, suggestion)
   },
 
   ignoreStartSuggestion(id) {
