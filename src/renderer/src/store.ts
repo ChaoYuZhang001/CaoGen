@@ -72,6 +72,7 @@ import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome
 import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
 import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
+import { createTerminalActions } from './store/terminal-actions'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -2249,74 +2250,7 @@ export const useStore = create<AppStore>((set, get) => {
     return result
   },
 
-  async openTerminalPanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: true,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false
-      }
-    }))
-    await get().startTerminal()
-  },
-
-  closeTerminalPanel() {
-    set((s) => ({ workbench: { ...s.workbench, terminalOpen: false } }))
-  },
-
-  async startTerminal() {
-    const id = get().activeId
-    if (!id) return
-    set((s) => ({ workbench: { ...s.workbench, terminalLoading: true, terminalError: undefined } }))
-    try {
-      const terminal = await window.agentDesk.startTerminal(id, { cols: 100, rows: 28, reuse: true })
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          terminal,
-          terminalLoading: false,
-          terminalBuffer: s.workbench.terminal?.id === terminal.id ? s.workbench.terminalBuffer : ''
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          terminalLoading: false,
-          terminalError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async sendTerminalInput(text) {
-    const terminal = get().workbench.terminal
-    if (!terminal || terminal.exit) return
-    await window.agentDesk.writeTerminal(terminal.id, text)
-  },
-
-  async closeTerminal() {
-    const terminal = get().workbench.terminal
-    if (!terminal) return
-    await window.agentDesk.closeTerminal(terminal.id)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        terminal: undefined,
-        terminalBuffer: '',
-        terminalError: undefined
-      }
-    }))
-  },
+  ...createTerminalActions(set, get, closeNativeBrowserView),
 
   async openFilesPanel() {
     closeNativeBrowserView(get().activeId)

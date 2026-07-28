@@ -12,6 +12,7 @@ import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
 import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
+import type { TerminalEffectApi } from './terminal-operation-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
@@ -19,6 +20,7 @@ export type * from './digital-worker-types'
 export type * from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
+export type * from './terminal-operation-types'
 export type {
   EffectEvidenceKind,
   EffectEvidenceRecord,
@@ -2019,33 +2021,6 @@ export interface PreviewAnnotationInput {
   createdAt?: string
 }
 
-export type TerminalBackend = 'pty' | 'pipe'
-export interface TerminalExitInfo {
-  exitCode: number | null
-  signal?: number | string
-  reason?: string
-  at: number
-}
-export interface TerminalInfo {
-  id: string
-  sessionId?: string
-  cwd: string
-  shell: string
-  pid?: number
-  backend: TerminalBackend
-  cols: number
-  rows: number
-  startedAt: number
-  fallbackReason?: string
-  exit?: TerminalExitInfo
-}
-
-export type TerminalEvent =
-  | { kind: 'started'; terminal: TerminalInfo }
-  | { kind: 'output'; id: string; data: string }
-  | { kind: 'exit'; id: string; exit: TerminalExitInfo }
-  | { kind: 'error'; id?: string; message: string; fatal: boolean }
-
 export interface BrowserBounds {
   x: number
   y: number
@@ -2185,7 +2160,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, TerminalEffectApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2328,12 +2303,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   ): Promise<BrowserAnnotation>
   observeBrowser(sessionId: string): Promise<BrowserObservation>
   onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
-  listTerminals(): Promise<TerminalInfo[]>
-  startTerminal(sessionId: string, opts?: { cols?: number; rows?: number; reuse?: boolean }): Promise<TerminalInfo>
-  writeTerminal(id: string, data: string): Promise<void>
-  resizeTerminal(id: string, cols: number, rows: number): Promise<void>
-  closeTerminal(id: string): Promise<void>
-  onTerminalEvent(cb: (event: TerminalEvent) => void): () => void
   scanMigration(cwd: string): Promise<MigrationScan>
   importMigrationAssets(cwd: string, paths: string[]): Promise<string>
   listProjects(): Promise<Project[]>
