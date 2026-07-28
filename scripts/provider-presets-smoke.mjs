@@ -3,6 +3,7 @@ import path from 'node:path'
 
 const repoRoot = process.cwd()
 const store = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
+const providerEditor = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ProviderEditor.tsx'), 'utf8')
 const settings = readFileSync(path.join(repoRoot, 'src/main/settings.ts'), 'utf8')
 const providers = readFileSync(path.join(repoRoot, 'src/main/providers.ts'), 'utf8')
 
@@ -10,6 +11,11 @@ const relayPreset = extractPreset(store, 'caogen-relay')
 
 assert(relayPreset, 'CaoGen relay preset is missing')
 assert(relayPreset.includes("baseUrl: 'https://ciyuan2api.com'"), 'CaoGen relay preset must keep the configured Base URL')
+assert(
+  providerEditor.includes("const DEFAULT_PROVIDER_BASE_URL = PROVIDER_PRESETS.find((preset) => preset.key === 'caogen-relay')?.baseUrl ?? ''") &&
+    providerEditor.includes('provider?.baseUrl ?? DEFAULT_PROVIDER_BASE_URL'),
+  'new Provider editor must prefill the default Base URL without replacing an existing Provider value'
+)
 assert(relayPreset.includes("models: []"), 'CaoGen relay preset must not pretend to know live models before service/config is available')
 assert(relayPreset.includes("openaiProtocol: 'chat'"), 'CaoGen relay preset should use the generic OpenAI-compatible Chat protocol')
 assert(relayPreset.includes('请填写自己的 API Key'), 'CaoGen relay preset must tell users to configure their own API key')

@@ -283,11 +283,11 @@ try {
       cdp,
       `({
         editorCount: document.querySelectorAll('.provider-editor').length,
-        nestedBackdropCount: document.querySelectorAll('.modal-backdrop-nested').length,
+        defaultBaseUrl: document.querySelector('[data-provider-field="base-url"]')?.value, nestedBackdropCount: document.querySelectorAll('.modal-backdrop-nested').length,
         globalSettingsActionsCount: document.querySelectorAll('.settings-page-actions').length
       })`
     )
-    assert(providerEditorSurface?.editorCount === 1, `inline provider editor missing: ${JSON.stringify(providerEditorSurface)}`)
+    assert(providerEditorSurface?.editorCount === 1 && providerEditorSurface?.defaultBaseUrl === 'https://ciyuan2api.com', `inline provider editor or default Base URL incorrect: ${JSON.stringify(providerEditorSurface)}`)
     assert(providerEditorSurface?.nestedBackdropCount === 0, `provider editor still uses a modal backdrop: ${JSON.stringify(providerEditorSurface)}`)
     assert(providerEditorSurface?.globalSettingsActionsCount === 0, `global settings actions should hide while editing a provider: ${JSON.stringify(providerEditorSurface)}`)
     await screenshot(cdp, '02-provider-editor-page')

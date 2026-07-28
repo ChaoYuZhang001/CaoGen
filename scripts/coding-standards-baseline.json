@@ -530,7 +530,7 @@
     "scripts/page-operation-smoke.mjs": {
       "profile": "automation",
       "lines": 2167,
-      "contentHash": "80e8fdce579b280c97828ae5bdc40deed0dd60dc8a0bb4ba697f4d4c7e978e62",
+      "contentHash": "0abbb94ee20b1c5a1635fcbeabab6058bbc82e901c618783466ca088e6e2559a",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 1,
@@ -1543,8 +1543,8 @@
     },
     "src/renderer/src/components/ProviderEditor.tsx": {
       "profile": "product",
-      "lines": 492,
-      "contentHash": "784ae335ab251863baa6a98adef2bf70d246e637c5129687cb3130cb158f755d",
+      "lines": 494,
+      "contentHash": "617a45f06830dc6d49d61f2da4897115879051dd2a38e03eae2d15d231e4188f",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 353,
       "complexFunctionCount": 2,
