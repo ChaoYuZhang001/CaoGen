@@ -134,6 +134,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 为项目规则 Effect 后继完成 clean Deep：`main@2dc74a4105f345a69d2599032e32da2dae8d1eb8` 的 `2026-07-27T20-17-23-998Z` 报告为 `170 total / 168 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v3 仍锁定 156 IPC、52 Agent 工具、79 嵌套动作，并把 direct-user 外部 IPC 从 23 收敛到 22
   - [x] 将 `plugins:probeMcp` 接入 opaque `mcp_probe` Effect：持久化屏障先于 stdio 子进程或 HTTP 探测，Effect 只保存 `idDigest`、`configDigest` 和 transport，不保存 URL、命令、参数、环境变量、Header、凭据或服务错误正文；服务不可达仍作为已完成探测结果，未知结果进入 `waiting_reconciliation`，禁止自动重放，两个 Renderer 入口都会刷新恢复面板
   - [x] 为 MCP 探测 Effect 后继完成 clean Deep：`main@04e1d29a1abd1e23c917a64d5eae8225736391e7` 的 `2026-07-27T21-34-21-748Z` 报告为 `171 total / 169 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v4 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 11 queryable、3 opaque、21 direct-user、6 delegated
+  - [x] 将 `plugins:installLocal` 与 `plugins:uninstall` 接入 queryable managed-plugin Effect：执行前冻结插件名、根/锚点身份、源/旧版本 SHA-256、文件数、字节数和同根 staging/trash 相对路径，Ledger 不保存源路径、源内容或原始错误；安装经 staging 摘要复核后原子切换，覆盖/卸载把旧版本原子移入冻结回收站。递归源、符号链接、特殊文件、超过 50,000 条目或 200 MiB fail-closed，且插件根聚合体积不误套单插件限制；完整强杀结果只读确认、不重放，部分 checkpoint 保持 `waiting_reconciliation`
+  - [x] 为本地插件 Effect 后继完成 clean Deep：`main@6e48c974f7b0b7c3f2223b4cd1d359a3a107e97a` 的 `2026-07-28T00-47-46-977Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；插件强杀与真实 Electron IPC E2E 均为 required pass，inventory v5 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、3 opaque、19 direct-user、6 delegated
   - [ ] 仅在继续准备 v0.1.8 发布时刷新 macOS Intel-only 签名候选、独立资产核验与 scoped publication preflight；Apple Silicon/Windows 继续暂停，且没有新的明确发布授权
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
@@ -283,7 +285,7 @@ NFR-PRIV-004、NFR-NEUTRAL-001/003、NFR-ENG-003。
 | ID | 内容 | 当前状态 |
 |---|---|---|
 | TRUST-005 | v8 Workflow Ledger 全入口闭环 | 部分完成 |
-| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v4 已锁 156 IPC、52 Agent 工具、79 嵌套动作，2 个附件写入 IPC 与 `plugins:probeMcp` 已进入 opaque Effect，`projectContext:write` 已进入 queryable file Effect，其余 21 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
+| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v5 已锁 156 IPC、52 Agent 工具、79 嵌套动作，2 个附件写入 IPC 与 `plugins:probeMcp` 已进入 opaque Effect，`projectContext:write` 与本地插件安装/卸载已进入 queryable Effect，其余 19 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
 | TRUST-003 | PR/Issue/MCP 等入口专用对账 | 立项目标 |
 | TRUST-004 | 未知结果不自动重放,只读对账或人工确认 | 立项目标 |
 | TRUST-006 | 密钥 Broker 完整化(作用域、子进程最小环境) | 仅基础 |

@@ -74,7 +74,7 @@
 | GUI 自动化 | **条件可用** | 默认关闭，启用后属于高风险；临时授权当前为 5 分钟窗口，尚未绑定完整 app/window/action/path/postcondition |
 | Browser WebContentsView | **当前已验证** | 独立 sandboxed WebContentsView 和会话分区；网页内容、Cookies 和页面脚本仍不可信 |
 | MCP 运行态探测 | **当前已验证** | stdio 探测会启动本地命令，HTTP 探测会访问配置 URL；能力声明目前未经运行时强制验证 |
-| 本地插件安装/卸载 | **当前已验证** | 仅本地目录复制，路径牢笼和 200MB 上限；没有插件市场、签名、digest 固定或恶意 fixture 隔离 |
+| 本地插件安装/卸载 | **当前已验证** | queryable managed-plugin Effect 冻结目标、内容摘要与计数，经同根 staging/trash 原子切换并支持强杀对账；仍没有插件市场、签名来源、运行时 Capability Manifest 或受管隔离执行 |
 | 项目、会话、子会话、DAG | **当前已验证（含 R-25 当前范围）** | 具备任务执行、恢复和 autoMerge patch Effect；completion/finalizer 使用 durable finalizer store、terminal snapshot barrier、summary receipt/attempt barrier，并有 crash/restart required E2E。该范围不等于所有外部系统 exactly-once |
 | 数字员工岗位与委派治理 | **立项目标** | 必须建立岗位权限、凭据作用域、审批责任、任务归属和可撤销委派后才能启用 |
 | 轻量通用项目管理 | **立项目标** | 当前只有项目/会话/任务底座，尚无完整项目角色策略、数据保留/删除和连接器安全策略；多人组织治理属于后续规划 |
@@ -204,7 +204,8 @@ flowchart LR
 ### 7.4 MCP 与插件流
 
 - Registry 扫描项目、用户和兼容目录中的 Plugin、Skill、Agent 和 MCP 声明。
-- 本地插件安装会复制目录到托管根；MCP stdio 探测会真实启动配置命令并发送 `initialize`。
+- 本地插件安装/卸载通过 queryable managed-plugin Effect 修改托管根；执行前冻结插件名、根/锚点身份、内容摘要、文件/字节计数和同根 staging/trash 相对路径，Ledger 不保存源路径、源内容或原始错误。安装先验证 staging 副本再原子切换，覆盖/卸载把旧版本原子移入冻结回收站；完整强杀结果只读确认且不重放，部分 checkpoint 保持 `waiting_reconciliation`。
+- MCP stdio 探测会真实启动配置命令并发送 `initialize`。
 - 当前权限字段主要是声明信息，并不等于运行时强制 Capability Manifest。
 - 当前 stdio/probe 已改用最小环境，模型入口拒绝 `env/headers/configPath`，配置导入结果会脱敏；但声明环境、网络、文件和凭据仍未由 digest-bound Capability Manifest 与 scoped broker 统一约束。
 
@@ -414,14 +415,14 @@ Effect Ledger 已持有独立 intent/effect/resource key、generation/revision�
 ### 13.1 当前已验证
 
 - Registry 有文件数、深度和读取大小限制，并忽略 `.git` 和 `node_modules` 等目录。
-- 本地插件安装只接受形似插件的目录，安装名清洗、目标路径牢笼和单插件 200MB 上限已实现。
-- 覆盖安装前先把旧版本移入 `.trash`；卸载也采用可恢复移动，而非直接删除。
+- 本地插件安装只接受形似插件的目录，安装名清洗、目标路径牢笼、50,000 条目和单插件 200 MiB 上限已实现；递归托管根源、符号链接和特殊文件 fail-closed，读取内容前先检查文件大小，托管根聚合体积不误套单插件上限。
+- 安装使用同根 staging 摘要复核和原子切换；覆盖安装与卸载把旧版本移入冻结 trash 路径。queryable Effect 的 durable target 固定根/锚点身份、源或旧版本摘要、计数和相对路径，完整强杀结果可只读确认，部分 checkpoint 等待人工对账且不自动重放。
 - MCP stdio 探测执行真实 `initialize` 握手，HTTP 探测只判断可达性；单项 8 秒超时、并发上限 4。
 
 ### 13.2 当前限制
 
 - Manifest/frontmatter 中的 permissions 当前主要是声明，未经完整运行时强制验证。
-- 没有固定版本 digest、签名、来源证明、SBOM、隔离安装或恶意 fixture 发布门禁。
+- 执行时冻结的内容 digest 只用于本次变更与恢复对账，不等于固定发布版本、签名来源证明或受信任 provenance；当前仍没有 SBOM、运行时 Capability Manifest、受管隔离执行或恶意 fixture 发布门禁。
 - stdio MCP 本质上是本机子进程，可以读取当前 OS 用户可访问的数据。
 - HTTP `401/403` 在探测中只表示服务在线，不代表凭据正确或工具安全。
 - Skill 和 Agent Markdown 也可能包含 Prompt injection，即使不直接包含可执行代码。
