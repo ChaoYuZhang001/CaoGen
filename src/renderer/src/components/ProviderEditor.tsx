@@ -13,6 +13,8 @@ import type {
 import ProviderSavedKeys from './settings/ProviderSavedKeys'
 import type { ProviderKeyDraft } from './settings/ProviderSavedKeys'
 
+const DEFAULT_PROVIDER_BASE_URL = PROVIDER_PRESETS.find((preset) => preset.key === 'caogen-relay')?.baseUrl ?? ''
+
 interface Props {
   /** null = 新建;否则编辑该 Provider */
   provider: ProviderView | null
@@ -28,7 +30,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const createProvider = useStore((s) => s.createProvider)
   const updateProvider = useStore((s) => s.updateProvider)
   const [name, setName] = useState(provider?.name ?? '')
-  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '')
+  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? DEFAULT_PROVIDER_BASE_URL)
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
   const [engine, setEngine] = useState<EngineKind>(provider?.engine ?? 'openai')
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
