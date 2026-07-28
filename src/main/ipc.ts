@@ -74,6 +74,7 @@ import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
 import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
 import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
 import { registerPluginInstallIpc } from './ipc/plugin-install-ipc'
+import { registerTerminalMutationIpc } from './ipc/terminal-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
@@ -338,6 +339,10 @@ export function registerIpc(): void {
     operationContext: mcpProbeOperationContext
   })
   registerPluginInstallIpc({ pluginsRoot: caogenPluginsRoot })
+  registerTerminalMutationIpc({
+    getSessionMeta: (id) => sessionManager.get(id)?.meta,
+    manager: terminalManager
+  })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -600,33 +605,6 @@ export function registerIpc(): void {
   }
 
   ipcMain.handle('terminals:list', () => terminalManager.list())
-
-  ipcMain.handle(
-    'terminals:start',
-    (_e, id: string, opts?: { cols?: number; rows?: number; reuse?: boolean }) => {
-      const session = sessionManager.get(id)
-      if (!session) throw new Error('会话不存在')
-      return terminalManager.start({
-        cwd: session.meta.cwd,
-        sessionId: id,
-        cols: opts?.cols,
-        rows: opts?.rows,
-        reuse: opts?.reuse
-      })
-    }
-  )
-
-  ipcMain.handle('terminals:write', (_e, id: string, data: string) => {
-    terminalManager.write(id, typeof data === 'string' ? data : '')
-  })
-
-  ipcMain.handle('terminals:resize', (_e, id: string, cols: number, rows: number) => {
-    terminalManager.resize(id, cols, rows)
-  })
-
-  ipcMain.handle('terminals:close', (_e, id: string) => {
-    terminalManager.close(id)
-  })
 
   ipcMain.handle('sessions:create', async (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string') {

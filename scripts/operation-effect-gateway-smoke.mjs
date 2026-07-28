@@ -8,12 +8,14 @@ const attachmentMutationIpcSource = read('src/main/ipc/attachment-mutation-ipc.t
 const projectContextMutationIpcSource = read('src/main/ipc/project-context-mutation-ipc.ts')
 const mcpProbeIpcSource = read('src/main/ipc/mcp-probe-ipc.ts')
 const pluginInstallIpcSource = read('src/main/ipc/plugin-install-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource]
+const terminalMutationIpcSource = read('src/main/ipc/terminal-mutation-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource, terminalMutationIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
 const projectContextEffectSource = read('src/main/projectContextEffect.ts')
 const mcpProbeEffectSource = read('src/main/mcpProbeEffect.ts')
 const pluginInstallEffectSource = read('src/main/pluginInstallEffect.ts')
+const terminalEffectSource = read('src/main/terminalEffect.ts')
 const pluginTargetValidationSource = read('src/main/plugin/plugin-effect-target-validation.ts')
 const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
@@ -37,6 +39,7 @@ const ideBridgeManagerSource = read('src/main/ide/ide-bridge-manager.ts')
 const routineExecutorSource = read('src/main/routines/routine-executor.ts')
 const openaiToolsSource = read('src/main/openaiTools.ts')
 const rendererStoreSource = read('src/renderer/src/store.ts')
+const terminalActionsSource = read('src/renderer/src/store/terminal-actions.ts')
 const operationGatewaySource = read('src/main/task/operation-effect-gateway.ts')
 const taskRunSource = read('src/main/task/task-run.ts')
 const effectRuntimeSource = read('src/main/task/effect-runtime.ts')
@@ -60,6 +63,10 @@ assertHandlerUsesGateway('attachments:copyImage')
 assertHandlerUsesGateway('attachments:saveImageBytes')
 assertHandlerUsesGateway('projectContext:write')
 assertHandlerUsesGateway('plugins:probeMcp')
+assertHandlerUsesGateway('terminals:start')
+assertHandlerUsesGateway('terminals:write')
+assertHandlerUsesGateway('terminals:resize')
+assertHandlerUsesGateway('terminals:close')
 assertHandlerUsesBoundary('plugins:installLocal', 'installLocalPluginWithEffect')
 assertHandlerUsesBoundary('plugins:uninstall', 'uninstallPluginWithEffect')
 assert(
@@ -77,6 +84,7 @@ assert(
   effectTypesSource.includes("| 'file_write'") &&
     effectTypesSource.includes("| 'attachment_write'") &&
     effectTypesSource.includes("| 'mcp_probe'") &&
+    effectTypesSource.includes("| 'terminal_action'") &&
     effectTypesSource.includes("| 'plugin_install'") &&
     effectTypesSource.includes("| 'plugin_uninstall'") &&
     effectTypesSource.includes("| 'workspace_hunk_discard'") &&
@@ -84,6 +92,23 @@ assert(
     sharedTypesSource.includes('InteractiveOperationKind,') &&
     sharedTypesSource.includes("} from './effect-types'"),
   'Renderer file and commit operations need durable operation metadata kinds'
+)
+assert(
+  terminalEffectSource.includes("start: 'terminal_start'") &&
+    terminalEffectSource.includes("write: 'terminal_write'") &&
+    terminalEffectSource.includes("resize: 'terminal_resize'") &&
+    terminalEffectSource.includes("close: 'terminal_close'") &&
+    terminalEffectSource.includes("dataSha256: createHash('sha256').update(data, 'utf8').digest('hex')") &&
+    terminalEffectSource.includes("bytes: Buffer.byteLength(data, 'utf8')") &&
+    terminalEffectSource.includes("effect.target.kind !== 'unsupported'") &&
+    !terminalEffectSource.includes('toolInput: { data'),
+  'terminal mutations must use opaque Effects with digest-only persisted command input'
+)
+assert(
+  terminalActionsSource.includes("result.effectStatus === 'waiting_reconciliation'") &&
+    terminalActionsSource.includes('window.agentDesk.writeTerminal') &&
+    terminalActionsSource.includes('window.agentDesk.closeTerminal'),
+  'unknown terminal outcomes must refresh the visible recovery surface'
 )
 assert(
   effectTypesSource.includes("kind: 'managed_plugin_install'") &&
@@ -251,6 +276,7 @@ assert(
     taskRunSource.includes("'managed_worktree_remove'") &&
     taskRunSource.includes("'plugin_install'") &&
     taskRunSource.includes("'plugin_uninstall'") &&
+    taskRunSource.includes("'terminal_action'") &&
     taskRunSource.includes("record.source === 'dag'") &&
     taskRunSource.includes("record.source === 'session_lifecycle'") &&
     effectRuntimeSource.includes('usesPreExecutionNativeToolGate(engine) || run.operation !== undefined') &&
