@@ -164,6 +164,8 @@ const commandDefinitions = [
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptSearch smoke', command: 'node', args: ['scripts/transcript-search-smoke.mjs'], category: 'smoke' },
   { name: 'pluginInstall smoke', command: 'node', args: ['scripts/plugin-install-smoke.mjs'], category: 'smoke' },
+  { name: 'plugin install effect crash e2e', command: 'node', args: ['scripts/plugin-install-effect-crash-e2e.mjs'], category: 'system' },
+  { name: 'plugin install IPC electron e2e', command: 'node', args: ['scripts/plugin-install-ipc-e2e.mjs'], category: 'ui' },
   { name: 'providerPresets smoke', command: 'node', args: ['scripts/provider-presets-smoke.mjs'], category: 'smoke' },
   { name: 'providerKeys smoke', command: 'node', args: ['scripts/provider-keys-smoke.mjs'], category: 'smoke' },
   { name: 'provider credential target binding smoke', command: 'node', args: ['scripts/provider-credential-target-binding-smoke.mjs'], category: 'smoke' },

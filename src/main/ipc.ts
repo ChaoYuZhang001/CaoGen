@@ -73,12 +73,12 @@ import {
 import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
 import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
 import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
+import { registerPluginInstallIpc } from './ipc/plugin-install-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { sessionImageAttachmentsRoot } from './attachmentOps'
 import { ocrImage } from './imageOcr'
-import { installLocalPlugin, uninstallPlugin } from './pluginInstall'
 import {
   pluginRegistryItemKey,
   readPluginRegistryState,
@@ -337,6 +337,7 @@ export function registerIpc(): void {
     findScannedItem: findScannedPluginRegistryItem,
     operationContext: mcpProbeOperationContext
   })
+  registerPluginInstallIpc({ pluginsRoot: caogenPluginsRoot })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -785,27 +786,6 @@ export function registerIpc(): void {
         readPluginRegistryState(pluginRegistryStateFile())
       )
   )
-
-  // 本地安装:目录选择器 → 校验形似插件 → 复制入 ~/.claude/plugins(路径牢笼)
-  ipcMain.handle('plugins:installLocal', async (e, sourcePath?: string, overwrite?: boolean) => {
-    let dir = typeof sourcePath === 'string' && sourcePath.trim() ? sourcePath : ''
-    if (!dir) {
-      const win = BrowserWindow.fromWebContents(e.sender)
-      const picked = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
-        title: '选择插件目录(需含 plugin.json / SKILL.md / agent .md)',
-        properties: ['openDirectory']
-      })
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: false, error: 'canceled' }
-      dir = picked.filePaths[0]
-    }
-    return installLocalPlugin(dir, caogenPluginsRoot(), { overwrite: overwrite === true })
-  })
-
-  // 卸载:仅限托管目录内,移入回收站(可恢复),绝不 rm -rf
-  ipcMain.handle('plugins:uninstall', (_e, targetPath: string) => {
-    if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '路径无效' }
-    return uninstallPlugin(targetPath, caogenPluginsRoot())
-  })
 
   ipcMain.handle('plugins:reveal', (_e, targetPath: string, sessionId?: string) => {
     if (!canRevealPluginPath(targetPath, sessionId)) {
