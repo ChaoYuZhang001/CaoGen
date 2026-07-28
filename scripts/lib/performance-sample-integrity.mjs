@@ -46,6 +46,35 @@ export function classifyPerformanceSampleIntegrity(sample, overrides = {}) {
   }
 }
 
+export function classifyPerformanceAttemptDisposition(phase, overrides = {}) {
+  const thresholdMs = finiteNumber(overrides.thresholdMs) ?? DEFAULT_PERFORMANCE_SAMPLE_INTEGRITY_POLICY.thresholdMs
+  const attempt = Math.max(1, Math.trunc(finiteNumber(overrides.attempt) ?? finiteNumber(phase?.attempt) ?? 1))
+  const maxAttempts = Math.max(attempt, Math.trunc(finiteNumber(overrides.maxAttempts) ?? 1))
+  const coldSample = phase?.samples?.find((sample) => sample.temperature === 'cold') ?? null
+  const coldDurationMs = finiteNumber(coldSample?.durationMs)
+  const retryReason = retryableAttemptReason(phase, coldDurationMs, thresholdMs)
+
+  if (!retryReason && phase?.status === 'pass') {
+    return { action: 'accept', reason: 'attempt-passed', retryable: false, attemptsRemaining: maxAttempts - attempt }
+  }
+  if (!retryReason) {
+    return { action: 'fail', reason: 'non-retryable-failure', retryable: false, attemptsRemaining: maxAttempts - attempt }
+  }
+  if (attempt < maxAttempts) {
+    return { action: 'retry', reason: retryReason, retryable: true, attemptsRemaining: maxAttempts - attempt }
+  }
+  return { action: 'fail', reason: `repeated-${retryReason}`, retryable: true, attemptsRemaining: 0 }
+}
+
+export function recordPerformancePhaseAttempt(report, phase, overrides = {}) {
+  const disposition = classifyPerformanceAttemptDisposition(phase, overrides)
+  phase.retryDecision = disposition
+  phase.accepted = disposition.action === 'accept'
+  report.phases.push(phase)
+  if (phase.accepted) report.acceptedPhaseAttempts[phase.name] = phase.attempt
+  return disposition
+}
+
 export function performanceMetricDeltas(before, after) {
   return {
     taskDurationMs: metricDeltaMs(before, after, 'TaskDuration'),
@@ -60,6 +89,19 @@ function metricDeltaMs(before, after, name) {
   const current = finiteNumber(after?.[name])
   if (previous === null || current === null || current < previous) return null
   return roundedMs((current - previous) * 1_000)
+}
+
+function retryableAttemptReason(phase, coldDurationMs, thresholdMs) {
+  if (phase?.status === 'scheduler-contaminated' || phase?.coldSampleIntegrity?.status === 'scheduler-contaminated') {
+    return 'scheduler-contaminated'
+  }
+  if (phase?.status === 'studio-data-readiness-timeout' || phase?.failureCode === 'studio-data-readiness-timeout') {
+    return 'studio-data-readiness-timeout'
+  }
+  if (phase?.status === 'cold-threshold-exceeded' || (coldDurationMs !== null && coldDurationMs >= thresholdMs)) {
+    return 'cold-threshold-exceeded'
+  }
+  return null
 }
 
 function finiteNumber(value) {

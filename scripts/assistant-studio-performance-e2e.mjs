@@ -18,8 +18,13 @@ import { createRequire } from 'node:module'
 import {
   DEFAULT_PERFORMANCE_SAMPLE_INTEGRITY_POLICY,
   classifyPerformanceSampleIntegrity,
-  performanceMetricDeltas
+  performanceMetricDeltas,
+  recordPerformancePhaseAttempt
 } from './lib/performance-sample-integrity.mjs'
+import {
+  measureStudioDataReady,
+  renderAssistantStudioPerformanceMarkdown
+} from './lib/assistant-studio-performance-support.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -63,16 +68,16 @@ try {
   mock = await startControlledResponsesMock()
   for (const viewport of viewports) {
     await check(`${viewport.name} cold/warm mode switching`, async () => {
-      const phase = await runViewportPhaseWithRetry(viewport, mock)
-      report.phases.push(phase)
+      await runViewportPhaseWithRetry(viewport, mock)
     })
   }
-  report.metrics = summarizeMetrics(report.phases)
+  const acceptedPhases = report.phases.filter((phase) => phase.accepted)
+  report.metrics = summarizeMetrics(acceptedPhases)
   await check('cold and warm P95 remain below 300ms in every viewport', async () => {
     assertPerformanceThresholds(report.metrics)
   })
   await check('all switches preserve one canonical Run and one runtime request', async () => {
-    for (const phase of report.phases) assertPhaseContinuity(phase)
+    for (const phase of acceptedPhases) assertPhaseContinuity(phase)
   })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
@@ -108,7 +113,7 @@ if (report.status !== 'pass') {
 
 function createReport(sourceBuildBinding) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId,
     runDir,
     startedAt: new Date().toISOString(),
@@ -124,7 +129,8 @@ function createReport(sourceBuildBinding) {
       coldSamplesPerViewport: 1,
       warmSamplesPerViewport: warmSwitchesPerViewport,
       totalColdSamples: viewports.length,
-      totalWarmSamples: viewports.length * warmSwitchesPerViewport
+      totalWarmSamples: viewports.length * warmSwitchesPerViewport,
+      maximumFreshRendererAttemptsPerViewport: maxFreshRendererAttempts
     },
     measurementProtocol: {
       clock: 'renderer window.performance.now()',
@@ -134,7 +140,7 @@ function createReport(sourceBuildBinding) {
       warm: 'subsequent Assistant/Studio switches after Studio has mounted',
       foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
       frameHealthPrecondition: 'each measured interaction starts only after four consecutive foreground frames at or below 50ms; inability to establish that condition within 5s fails the required gate',
-      sampleIntegrity: 'a failed cold sample is retried once only when one frame gap dominates wall time while Chromium renderer TaskDuration proves the renderer was mostly idle; the retry always uses a fresh Electron renderer and userData directory',
+      sampleIntegrity: 'one retry in a fresh Electron renderer and userData directory is allowed only after scheduler contamination, Studio data-readiness timeout, or a valid cold sample at/above 300ms; the failed attempt remains in phases and the second failure blocks the gate',
       networkIsolation: 'one local Responses request remains deliberately open and emits no data during all measurements',
       continuity: 'session/runtime IDs, canonical Run ID/count, transcript counts, init events, and request count are compared before and after switching'
     },
@@ -149,6 +155,7 @@ function createReport(sourceBuildBinding) {
     sourceBuildBinding: { status: sourceBuildBinding.status, initial: sourceBuildBinding },
     phases: [],
     measurementAttempts: [],
+    acceptedPhaseAttempts: {},
     checks: [],
     screenshots: [],
     warnings: [],
@@ -176,19 +183,17 @@ function createReport(sourceBuildBinding) {
 async function runViewportPhaseWithRetry(viewport, controlledMock) {
   for (let attempt = 1; attempt <= maxFreshRendererAttempts; attempt += 1) {
     const phase = await runViewportPhase(viewport, controlledMock, attempt)
+    const disposition = recordPerformancePhaseAttempt(report, phase, {
+      thresholdMs,
+      attempt,
+      maxAttempts: maxFreshRendererAttempts
+    })
     report.measurementAttempts.push(summarizeMeasurementAttempt(phase))
-    if (phase.status !== 'scheduler-contaminated') return phase
-    const sample = phase.samples[0]
-    report.warnings.push(
-      `${viewport.name} cold attempt ${attempt} discarded as scheduler-contaminated: ` +
-      `${sample.durationMs}ms wall, ${sample.maxFrameGapMs}ms max frame gap, ` +
-      `${sample.rendererTaskDurationMs}ms renderer TaskDuration`
-    )
-    if (attempt === maxFreshRendererAttempts) {
-      throw new Error(
-        `${viewport.name} cold sample was scheduler-contaminated in ${maxFreshRendererAttempts} fresh renderer attempts`
-      )
+    if (disposition.action === 'accept') {
+      return phase
     }
+    if (disposition.action === 'fail') throw new Error(formatAttemptFailure(phase, disposition))
+    report.warnings.push(formatAttemptRetry(phase, disposition))
   }
   throw new Error(`${viewport.name}: fresh renderer retry policy exhausted`)
 }
@@ -244,7 +249,7 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
       return phase
     }
     phase.studioShellInteraction = await verifyStudioShellInteraction(page)
-    phase.studioDataReady = await measureStudioDataReady(page)
+    phase.studioDataReady = await measureStudioDataReady(page, fixture, phase)
     await captureScreenshot(page, phase, `${viewport.name}-cold-studio`)
     for (let index = 0; index < warmSwitchesPerViewport; index += 1) {
       const mode = index % 2 === 0 ? 'assistant' : 'studio'
@@ -262,13 +267,25 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     assertCompletionStable(phase.before, phase.completed, `${viewport.name} completion`)
     phase.metrics = summarizePhaseMetrics(phase.samples)
     phase.browserRuntime = await readBrowserRuntime(page)
+    if (phase.metrics.cold.p95Ms >= thresholdMs) {
+      phase.status = 'cold-threshold-exceeded'
+      phase.failureCode = 'cold-threshold-exceeded'
+      phase.error = `${viewport.name} cold P95 ${phase.metrics.cold.p95Ms}ms is not <${thresholdMs}ms`
+      return phase
+    }
     phase.status = 'pass'
     return phase
   } catch (error) {
-    phase.status = 'fail'
+    phase.failureCode = performanceFailureCode(error)
+    phase.status = phase.failureCode === 'studio-data-readiness-timeout'
+      ? 'studio-data-readiness-timeout'
+      : 'fail'
     phase.error = error instanceof Error ? error.stack || error.message : String(error)
+    if (error && typeof error === 'object' && 'diagnostics' in error) {
+      phase.studioDataReadyDiagnostics = error.diagnostics
+    }
     if (page) await captureScreenshot(page, phase, `${viewport.name}-failure`).catch(() => undefined)
-    throw error
+    return phase
   } finally {
     clearTimeout(watchdog)
     controlledMock.abort()
@@ -296,8 +313,13 @@ function createPhase(viewport) {
     coldSampleIntegrity: null,
     studioShellInteraction: null,
     studioDataReady: null,
+    studioDataReadyDiagnostics: null,
     browserRuntime: null,
-    warnings: []
+    warnings: [],
+    failureCode: null,
+    error: null,
+    accepted: false,
+    retryDecision: null
   }
 }
 
@@ -621,10 +643,51 @@ function summarizeMeasurementAttempt(phase) {
     electronProcessId: phase.electronProcessId,
     freshRenderer: true,
     status: phase.status,
+    accepted: phase.accepted,
+    retryDecision: phase.retryDecision,
+    failureCode: phase.failureCode,
+    error: phase.error,
     coldSample: phase.samples.find((sample) => sample.temperature === 'cold') ?? null,
     coldSampleIntegrity: phase.coldSampleIntegrity,
+    studioDataReady: phase.studioDataReady,
+    studioDataReadyDiagnostics: phase.studioDataReadyDiagnostics,
     processExited: phase.process?.exited ?? null
   }
+}
+
+function formatAttemptRetry(phase, disposition) {
+  const coldSample = phase.samples.find((sample) => sample.temperature === 'cold')
+  const details = []
+  if (coldSample) {
+    details.push(`${coldSample.durationMs}ms wall`)
+    details.push(`${coldSample.maxFrameGapMs}ms max frame gap`)
+    details.push(`${coldSample.rendererTaskDurationMs ?? 'unavailable'}ms renderer TaskDuration`)
+  }
+  const diagnostics = phase.studioDataReadyDiagnostics
+  if (diagnostics) {
+    details.push(`aria-busy=${diagnostics.dom.ariaBusy ?? 'missing'}`)
+    details.push(`selectedProjectId=${diagnostics.dom.selectedProjectId || 'none'}`)
+  }
+  const suffix = details.length > 0 ? ` (${details.join(', ')})` : ''
+  return `${phase.name} attempt ${phase.attempt} retained as ${disposition.reason}${suffix}; retrying once in a fresh renderer`
+}
+
+function formatAttemptFailure(phase, disposition) {
+  const detail = phase.error ? `: ${firstLine(phase.error)}` : ''
+  if (disposition.retryable) {
+    return `${phase.name} failed in ${phase.attempt} consecutive fresh renderer attempts (${disposition.reason})${detail}`
+  }
+  return `${phase.name} attempt ${phase.attempt} failed without an allowed retry (${disposition.reason})${detail}`
+}
+
+function performanceFailureCode(error) {
+  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : 'unexpected-phase-failure'
+}
+
+function firstLine(value) {
+  return String(value).split(/\r?\n/, 1)[0]
 }
 
 async function waitForFrameHealth(page) {
@@ -699,34 +762,6 @@ async function verifyStudioShellInteraction(page) {
         requestAnimationFrame(poll)
       })
     }
-  })
-}
-
-async function measureStudioDataReady(page) {
-  return page.evaluate(async () => {
-    const startedAt = performance.now()
-    const coldStartedAt = window.__assistantStudioPerformanceColdStartedAt
-    if (!Number.isFinite(coldStartedAt)) throw new Error('cold switch timestamp is unavailable')
-    return new Promise((resolve, reject) => {
-      const poll = () => {
-        const root = document.querySelector('[data-project-workspace-studio]')
-        const refresh = document.querySelector('[data-studio-action="refresh"]')
-        if (root?.getAttribute('aria-busy') === 'false' && refresh && !refresh.disabled) {
-          const finishedAt = performance.now()
-          resolve({
-            afterShellInteractiveMs: Math.round((finishedAt - startedAt) * 100) / 100,
-            fromColdSwitchStartMs: Math.round((finishedAt - coldStartedAt) * 100) / 100
-          })
-          return
-        }
-        if (performance.now() - startedAt >= 10_000) {
-          reject(new Error('Studio project data did not become ready within 10000ms'))
-          return
-        }
-        requestAnimationFrame(poll)
-      }
-      requestAnimationFrame(poll)
-    })
   })
 }
 
@@ -1109,43 +1144,7 @@ function writeReport() {
   const json = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(path.join(runDir, 'report.json'), json)
   writeFileSync(path.join(outputRoot, 'latest.json'), json)
-  writeFileSync(path.join(runDir, 'report.md'), renderMarkdown(report))
-}
-
-function renderMarkdown(value) {
-  const lines = [
-    '# Assistant/Studio Performance',
-    '',
-    `Status: ${value.status}`,
-    `Requirement: NFR-PERF-001`,
-    `Threshold: P95 < ${thresholdMs}ms`,
-    `Reference hardware: ${value.hardware.modelIdentifier}; ${value.hardware.cpuModel}; ${formatBytes(value.hardware.memoryBytes)}`,
-    `Runtime: ${value.runtime.platform}/${value.runtime.arch}; macOS ${value.hardware.osVersion}; Electron ${value.runtime.electronVersion}; Node ${value.runtime.nodeVersion}`,
-    '',
-    '| Viewport | Cold samples | Cold P95 | Warm samples | Warm P95 | Overall P95 | Data ready after cold |',
-    '|---|---:|---:|---:|---:|---:|---:|'
-  ]
-  for (const phase of value.phases) {
-    const metrics = phase.metrics
-    lines.push(`| ${phase.name} ${phase.viewport.width}x${phase.viewport.height} | ${metrics.cold.count} | ${formatMs(metrics.cold.p95Ms)} | ${metrics.warm.count} | ${formatMs(metrics.warm.p95Ms)} | ${formatMs(metrics.all.p95Ms)} | ${formatMs(phase.studioDataReady.fromColdSwitchStartMs)} |`)
-  }
-  if (value.metrics) {
-    lines.push(`| aggregate | ${value.metrics.cold.count} | ${formatMs(value.metrics.cold.p95Ms)} | ${value.metrics.warm.count} | ${formatMs(value.metrics.warm.p95Ms)} | ${formatMs(value.metrics.all.p95Ms)} | diagnostic only |`)
-  }
-  lines.push('', 'Switches ran while one local Provider response was held open. Each viewport retained exactly one session, one canonical Run, one user message, and one model request.')
-  const discardedAttempts = value.measurementAttempts.filter((attempt) => attempt.status === 'scheduler-contaminated')
-  if (discardedAttempts.length > 0) {
-    lines.push('', '## Sample integrity retries', '')
-    for (const attempt of discardedAttempts) {
-      lines.push(
-        `- ${attempt.viewport} attempt ${attempt.attempt}: ${formatMs(attempt.coldSample.durationMs)} wall, ` +
-        `${formatMs(attempt.coldSample.maxFrameGapMs)} max frame gap, ` +
-        `${formatMs(attempt.coldSample.rendererTaskDurationMs)} renderer TaskDuration; retried in a fresh renderer.`
-      )
-    }
-  }
-  if (value.error) lines.push('', '## Error', '', '```text', value.error, '```')
-  return `${lines.join('\n')}\n`
+  writeFileSync(path.join(runDir, 'report.md'), renderAssistantStudioPerformanceMarkdown(report, thresholdMs))
 }
 
 function cleanupTempRoot(root) {
@@ -1177,11 +1176,9 @@ function roundMs(value) {
 }
 
 function formatMs(value) {
-  return `${Number(value).toFixed(2)}ms`
-}
-
-function formatBytes(value) {
-  return `${(Number(value) / 1024 / 1024 / 1024).toFixed(1)} GiB`
+  return value === null || value === undefined || !Number.isFinite(Number(value))
+    ? 'n/a'
+    : `${Number(value).toFixed(2)}ms`
 }
 
 function sleep(ms) {
