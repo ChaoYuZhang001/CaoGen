@@ -122,8 +122,7 @@ try {
 
   await check('pointer switching is bidirectional with one pressed option', async () => {
     await assertMode(page, 'assistant')
-    await page.click('.welcome-composer-input')
-    await page.type('.welcome-composer-input', 'welcome draft survives projection changes')
+    await enterText(page, '.welcome-composer-input', 'welcome draft survives projection changes', 'Welcome draft')
     await clickMode(page, 'studio')
     await clickMode(page, 'assistant')
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
@@ -198,7 +197,7 @@ try {
     await assertMode(page, 'studio')
     await focusSidebarSearch(page)
     await assertMode(page, 'studio')
-    await page.type('.sidebar-search', 'stable transcript')
+    await enterText(page, '.sidebar-search', 'stable transcript', 'Sidebar search')
     await clearFocusedInput(page)
     await page.waitForSelector('.session-card.active', { visible: true, timeout: 5_000 })
     await page.click('.sidebar-office')
@@ -217,8 +216,7 @@ try {
   await check('Composer draft survives Assistant/Studio projection changes', async () => {
     await clickMode(page, 'assistant')
     await page.waitForSelector('.composer-input', { visible: true, timeout: 30_000 })
-    await page.click('.composer-input')
-    await page.type('.composer-input', 'composer draft stays local')
+    await enterText(page, '.composer-input', 'composer draft stays local', 'Composer draft')
     const before = await readSessionSnapshot(page, session.id)
     await clickMode(page, 'studio')
     await clickMode(page, 'assistant')
@@ -327,6 +325,27 @@ async function check(name, fn) {
 async function clickMode(targetPage, mode) {
   await targetPage.click(`[data-experience-mode-option="${mode}"]`)
   await assertMode(targetPage, mode)
+}
+
+async function enterText(targetPage, selector, text, label) {
+  const initial = await targetPage.$eval(selector, (input) => {
+    input.focus()
+    return {
+      focused: document.activeElement === input,
+      value: input.value
+    }
+  })
+  assert(initial.focused, `${label} did not receive focus`)
+  assert(initial.value === '', `${label} started with unexpected text: ${initial.value}`)
+
+  // One CDP insertion still exercises the browser input event while avoiding host-keyboard bleed.
+  await targetPage.keyboard.sendCharacter(text)
+  await waitForValue(
+    () => targetPage.$eval(selector, (input) => input.value),
+    (value) => value === text,
+    5_000,
+    `waiting for ${label} input`
+  )
 }
 
 async function focusMode(targetPage, mode) {
