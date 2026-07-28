@@ -75,6 +75,7 @@ import { registerProjectContextMutationIpc } from './ipc/project-context-mutatio
 import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
 import { registerPluginInstallIpc } from './ipc/plugin-install-ipc'
 import { registerTerminalMutationIpc } from './ipc/terminal-mutation-ipc'
+import { registerBrowserMutationIpc } from './ipc/browser-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
@@ -343,6 +344,10 @@ export function registerIpc(): void {
     getSessionMeta: (id) => sessionManager.get(id)?.meta,
     manager: terminalManager
   })
+  registerBrowserMutationIpc({
+    getSessionMeta: (id) => sessionManager.get(id)?.meta,
+    manager: browserViewManager
+  })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -549,31 +554,6 @@ export function registerIpc(): void {
       }
     })
   }
-
-  ipcMain.handle('browser:open', async (e, id: string, url?: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) throw new Error('浏览器宿主窗口不存在')
-    if (!sessionManager.get(id)) throw new Error('会话不存在')
-    return browserViewManager.open(win, id, typeof url === 'string' ? url : undefined)
-  })
-
-  ipcMain.handle('browser:navigate', (_e, id: string, url: string) =>
-    browserViewManager.navigate(id, typeof url === 'string' ? url : '')
-  )
-
-  ipcMain.handle('browser:bounds', (_e, id: string, bounds: BrowserBounds) => {
-    browserViewManager.setBounds(id, bounds)
-  })
-
-  ipcMain.handle('browser:back', (_e, id: string) => browserViewManager.goBack(id))
-
-  ipcMain.handle('browser:forward', (_e, id: string) => browserViewManager.goForward(id))
-
-  ipcMain.handle('browser:reload', (_e, id: string) => browserViewManager.reload(id))
-
-  ipcMain.handle('browser:close', (_e, id: string) => {
-    browserViewManager.close(id)
-  })
 
   ipcMain.handle('browser:captureAnnotation', (_e, id: string, note: string) =>
     browserViewManager.captureAnnotation(id, typeof note === 'string' ? note : '')

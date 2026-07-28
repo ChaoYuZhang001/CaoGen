@@ -9,13 +9,15 @@ const projectContextMutationIpcSource = read('src/main/ipc/project-context-mutat
 const mcpProbeIpcSource = read('src/main/ipc/mcp-probe-ipc.ts')
 const pluginInstallIpcSource = read('src/main/ipc/plugin-install-ipc.ts')
 const terminalMutationIpcSource = read('src/main/ipc/terminal-mutation-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource, terminalMutationIpcSource]
+const browserMutationIpcSource = read('src/main/ipc/browser-mutation-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource, terminalMutationIpcSource, browserMutationIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
 const projectContextEffectSource = read('src/main/projectContextEffect.ts')
 const mcpProbeEffectSource = read('src/main/mcpProbeEffect.ts')
 const pluginInstallEffectSource = read('src/main/pluginInstallEffect.ts')
 const terminalEffectSource = read('src/main/terminalEffect.ts')
+const browserEffectSource = read('src/main/browserEffect.ts')
 const pluginTargetValidationSource = read('src/main/plugin/plugin-effect-target-validation.ts')
 const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
@@ -40,6 +42,7 @@ const routineExecutorSource = read('src/main/routines/routine-executor.ts')
 const openaiToolsSource = read('src/main/openaiTools.ts')
 const rendererStoreSource = read('src/renderer/src/store.ts')
 const terminalActionsSource = read('src/renderer/src/store/terminal-actions.ts')
+const browserActionsSource = read('src/renderer/src/store/browser-actions.ts')
 const operationGatewaySource = read('src/main/task/operation-effect-gateway.ts')
 const taskRunSource = read('src/main/task/task-run.ts')
 const effectRuntimeSource = read('src/main/task/effect-runtime.ts')
@@ -67,6 +70,11 @@ assertHandlerUsesGateway('terminals:start')
 assertHandlerUsesGateway('terminals:write')
 assertHandlerUsesGateway('terminals:resize')
 assertHandlerUsesGateway('terminals:close')
+assertHandlerUsesGateway('browser:open')
+assertHandlerUsesGateway('browser:navigate')
+assertHandlerUsesGateway('browser:back')
+assertHandlerUsesGateway('browser:forward')
+assertHandlerUsesGateway('browser:reload')
 assertHandlerUsesBoundary('plugins:installLocal', 'installLocalPluginWithEffect')
 assertHandlerUsesBoundary('plugins:uninstall', 'uninstallPluginWithEffect')
 assert(
@@ -85,6 +93,7 @@ assert(
     effectTypesSource.includes("| 'attachment_write'") &&
     effectTypesSource.includes("| 'mcp_probe'") &&
     effectTypesSource.includes("| 'terminal_action'") &&
+    effectTypesSource.includes("| 'browser_navigation'") &&
     effectTypesSource.includes("| 'plugin_install'") &&
     effectTypesSource.includes("| 'plugin_uninstall'") &&
     effectTypesSource.includes("| 'workspace_hunk_discard'") &&
@@ -109,6 +118,27 @@ assert(
     terminalActionsSource.includes('window.agentDesk.writeTerminal') &&
     terminalActionsSource.includes('window.agentDesk.closeTerminal'),
   'unknown terminal outcomes must refresh the visible recovery surface'
+)
+assert(
+  browserEffectSource.includes("open: 'browser_view_open'") &&
+    browserEffectSource.includes("navigate: 'browser_view_navigate'") &&
+    browserEffectSource.includes("back: 'browser_view_back'") &&
+    browserEffectSource.includes("forward: 'browser_view_forward'") &&
+    browserEffectSource.includes("reload: 'browser_view_reload'") &&
+    browserEffectSource.includes('targetDigest: sha256(url)') &&
+    browserEffectSource.includes('hostDigest: parsed.host ? sha256(parsed.host) : undefined') &&
+    browserEffectSource.includes("effect.target.kind !== 'unsupported'") &&
+    !browserEffectSource.includes('toolInput: { url'),
+  'browser page mutations must use opaque Effects with digest-only persisted URL evidence'
+)
+assert(
+  browserActionsSource.includes('window.agentDesk.openBrowser') &&
+    browserActionsSource.includes('window.agentDesk.navigateBrowser') &&
+    browserActionsSource.includes('window.agentDesk.browserGoBack') &&
+    browserActionsSource.includes('window.agentDesk.browserGoForward') &&
+    browserActionsSource.includes('window.agentDesk.reloadBrowser') &&
+    browserActionsSource.includes("result.effectStatus === 'waiting_reconciliation'"),
+  'unknown browser navigation outcomes must refresh the visible recovery surface'
 )
 assert(
   effectTypesSource.includes("kind: 'managed_plugin_install'") &&
@@ -277,6 +307,7 @@ assert(
     taskRunSource.includes("'plugin_install'") &&
     taskRunSource.includes("'plugin_uninstall'") &&
     taskRunSource.includes("'terminal_action'") &&
+    taskRunSource.includes("'browser_navigation'") &&
     taskRunSource.includes("record.source === 'dag'") &&
     taskRunSource.includes("record.source === 'session_lifecycle'") &&
     effectRuntimeSource.includes('usesPreExecutionNativeToolGate(engine) || run.operation !== undefined') &&

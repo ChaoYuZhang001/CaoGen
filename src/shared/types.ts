@@ -13,6 +13,7 @@ import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
 import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 import type { TerminalEffectApi } from './terminal-operation-types'
+import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
@@ -21,6 +22,7 @@ export type * from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
 export type * from './terminal-operation-types'
+export type * from './browser-operation-types'
 export type {
   EffectEvidenceKind,
   EffectEvidenceRecord,
@@ -2055,15 +2057,6 @@ export interface BrowserAnnotation {
   createdAt: string
 }
 
-export interface BrowserViewState {
-  sessionId: string
-  url: string
-  title: string
-  loading: boolean
-  canGoBack: boolean
-  canGoForward: boolean
-}
-
 export type BrowserEvent =
   | { kind: 'state'; sessionId: string; state: BrowserViewState }
   | { kind: 'annotation'; sessionId: string; annotation: BrowserAnnotation }
@@ -2160,7 +2153,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, TerminalEffectApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, TerminalEffectApi, BrowserNavigationEffectApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2286,12 +2279,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   preparePreviewVisual(sessionId: string, path: string): Promise<OfficeVisualPreview>
   savePreviewAnnotation(sessionId: string, input: PreviewAnnotationInput): Promise<PreviewAnnotation>
   listPreviewAnnotations(sessionId: string, path?: string): Promise<PreviewAnnotation[]>
-  openBrowser(sessionId: string, url?: string): Promise<BrowserViewState>
-  navigateBrowser(sessionId: string, url: string): Promise<BrowserViewState>
   setBrowserBounds(sessionId: string, bounds: BrowserBounds): Promise<void>
-  browserGoBack(sessionId: string): Promise<BrowserViewState>
-  browserGoForward(sessionId: string): Promise<BrowserViewState>
-  reloadBrowser(sessionId: string): Promise<BrowserViewState>
   closeBrowser(sessionId: string): Promise<void>
   captureBrowserAnnotation(sessionId: string, note: string): Promise<BrowserAnnotation>
   listBrowserAnnotations(sessionId: string): Promise<BrowserAnnotation[]>

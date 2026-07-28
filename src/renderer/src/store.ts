@@ -73,6 +73,7 @@ import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/r
 import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
 import { createTerminalActions } from './store/terminal-actions'
+import { createBrowserActions } from './store/browser-actions'
 
 let seq = 0
 let previewRequestSeq = 0
@@ -2602,117 +2603,7 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, previewAnnotations: annotations } }))
   },
 
-  async openBrowserPanel(url) {
-    const id = get().activeId
-    if (!id) return
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        previewOpen: false,
-        browserOpen: true,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false,
-        browserLoading: true,
-        browserError: undefined,
-        browserMessage: undefined
-      }
-    }))
-    try {
-      const state = await window.agentDesk.openBrowser(id, url)
-      const annotations = await window.agentDesk.listBrowserAnnotations(id).catch(() => [])
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserOpen: true,
-          browserLoading: state.loading,
-          browserState: state,
-          browserUrlDraft: state.url,
-          browserAnnotations: annotations,
-          browserError: undefined
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserLoading: false,
-          browserError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async closeBrowserPanel() {
-    const id = get().activeId
-    if (id) await window.agentDesk.closeBrowser(id).catch(() => undefined)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        browserOpen: false,
-        browserLoading: false,
-        browserError: undefined
-      }
-    }))
-  },
-
-  async navigateBrowser(url) {
-    const id = get().activeId
-    const target = url.trim()
-    if (!id || !target) return
-    set((s) => ({ workbench: { ...s.workbench, browserLoading: true, browserError: undefined } }))
-    try {
-      const state = await window.agentDesk.navigateBrowser(id, target)
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserState: state,
-          browserUrlDraft: state.url,
-          browserLoading: state.loading
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserLoading: false,
-          browserError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async browserGoBack() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.browserGoBack(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserUrlDraft: state.url } }))
-  },
-
-  async browserGoForward() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.browserGoForward(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserUrlDraft: state.url } }))
-  },
-
-  async reloadBrowser() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.reloadBrowser(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserLoading: state.loading } }))
-  },
-
-  async setBrowserBounds(bounds) {
-    const id = get().activeId
-    if (!id || !get().workbench.browserOpen) return
-    await window.agentDesk.setBrowserBounds(id, bounds)
-  },
+  ...createBrowserActions(set, get),
 
   async captureBrowserAnnotation(note) {
     const id = get().activeId
