@@ -140,6 +140,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 为终端 Effect 与 Assistant/Studio 输入门禁后继完成 clean Deep：`3d5de20ca9e73545e488f3155bdb3ba9af16f594` 的 `2026-07-28T03-21-03-602Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v6 仍锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、7 opaque、15 direct-user、6 delegated。1.0 acceptance map 结构通过但 strict closure 仍失败：P0 21/64 verified、43 open，130 项 closure failure，critical recovery 1/11
   - [x] 将 `browser:open`、`browser:navigate`、`browser:back`、`browser:forward` 与 `browser:reload` 接入 opaque `browser_navigation` Effect：页面动作前必须先持久化 `executing`；durable target 只保存协议、host/target SHA-256 和 query/fragment 存在位，不保存完整 URL、查询、片段、页面标题或原始网络错误。失败与 SIGKILL 未知结果进入 `waiting_reconciliation`，Renderer 刷新恢复面板且重启后禁止自动导航；`browser:bounds` 与 `browser:close` 保持本地无 Effect
   - [x] 为 Browser Effect 与性能门禁后继完成 clean Deep：`1675eb506eff99b55699bc3a2f5f88b99b5d5ff4` 的 `2026-07-28T05-20-06-681Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定同一 SHA、工作树 clean 且 Git 状态未变；inventory v7 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、12 opaque、8 direct-user、6 delegated。同一 clean SHA 的 Browser crash targeted E2E 通过；Deep 内性能报告 `2026-07-28T05-20-41-787Z` 为 cold P95 `31.4ms`、warm P95 `32.4ms`，保持 `<300ms`，且 fresh-renderer 重试只允许首个调度污染、Studio 数据就绪超时或有效 cold 超阈值，失败 phase 必须保留、连续失败仍阻断。acceptance map 仍为 P0 21/64 verified、43 open、130 项 closure failure、critical recovery 1/11
+  - [x] 将 `migration:import` 接入 opaque `migration_import` Effect：导入回调只能在 durable `executing` 屏障后运行；Ledger 仅保存资产数量、类型计数和选择 SHA-256，不保存源资产路径、源内容或原始错误。失败与 SIGKILL 未知结果进入 `waiting_reconciliation`，Renderer 刷新恢复面板且禁止自动重放；专项 E2E 覆盖成功、失败隐私、同资源 lease、强杀恢复、SQLite canary 缺失和人工确认未应用后的收敛
+  - [x] 为 Migration Import Effect 后继完成 clean Deep：`c9e9c2a2a001ad0a6aac7f1c202d48aa0992f501` 的 `2026-07-28T07-08-00-218Z` 报告为 `174 total / 172 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定同一 SHA、工作树 clean 且 Git 状态未变；inventory v8 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、13 opaque、7 direct-user、6 delegated。acceptance map 结构仍为 102/102，114 个声明命令中 85 个已实现，但 P0 仍有 43 个开放、130 项 closure failure、critical recovery 仅 1/11。完整迁移预检、备份、跨文件原子回滚、幂等重跑和统一 `test:all-migrations:required` 仍属于开放的 `NFR-REC-005`，不能把本增量写成完整迁移闭环
   - [ ] 仅在继续准备 v0.1.8 发布时刷新 macOS Intel-only 签名候选、独立资产核验与 scoped publication preflight；Apple Silicon/Windows 继续暂停，且没有新的明确发布授权
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
@@ -289,7 +291,7 @@ NFR-PRIV-004、NFR-NEUTRAL-001/003、NFR-ENG-003。
 | ID | 内容 | 当前状态 |
 |---|---|---|
 | TRUST-005 | v8 Workflow Ledger 全入口闭环 | 部分完成 |
-| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v7 已锁 156 IPC、52 Agent 工具、79 嵌套动作，附件写入、MCP probe、终端动作与 Browser open/navigate/back/forward/reload 已进入 opaque Effect，`projectContext:write` 与本地插件安装/卸载已进入 queryable Effect，其余 8 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
+| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v8 已锁 156 IPC、52 Agent 工具、79 嵌套动作，附件写入、MCP probe、迁移导入、终端动作与 Browser open/navigate/back/forward/reload 已进入 opaque Effect，`projectContext:write` 与本地插件安装/卸载已进入 queryable Effect，其余 7 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
 | TRUST-003 | PR/Issue/MCP 等入口专用对账 | 立项目标 |
 | TRUST-004 | 未知结果不自动重放,只读对账或人工确认 | 立项目标 |
 | TRUST-006 | 密钥 Broker 完整化(作用域、子进程最小环境) | 仅基础 |
