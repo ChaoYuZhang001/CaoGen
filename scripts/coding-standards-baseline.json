@@ -27,7 +27,7 @@
     }
   },
   "repository": {
-    "ipcHandlerCount": 98,
+    "ipcHandlerCount": 91,
     "ipcHandlerTotal": 156,
     "preloadInvokeCount": 122,
     "preloadInvokeTotal": 153,
@@ -913,10 +913,10 @@
     },
     "src/main/ipc.ts": {
       "profile": "product",
-      "lines": 1007,
-      "contentHash": "288767f12da1c81a7cd20506bf38da6234e94bc52c3eb39ad24de0c34af3f1ab",
+      "lines": 987,
+      "contentHash": "6fc3d0e92e9f4a9ad12fef5ce1e49312f80df77a40c0e95c30835d896f100d30",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 675,
+      "maxFunctionLines": 654,
       "complexFunctionCount": 0,
       "maxComplexity": 12,
       "forbiddenSuppressionCount": 0,
@@ -924,7 +924,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "registerIpc#1": {
-          "lines": 675,
+          "lines": 654,
           "complexity": 4
         }
       }
@@ -1321,8 +1321,8 @@
     },
     "src/main/task/task-run.ts": {
       "profile": "product",
-      "lines": 616,
-      "contentHash": "895f2a6c654108847cc1f4cfb8f50ee2b5d0d6c3f1508084880dd4f80bf624d3",
+      "lines": 617,
+      "contentHash": "2b5a713fc6595f64b28780d4b5ab84764e405c95e82f063167cd84a2ab7278f2",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 82,
       "complexFunctionCount": 4,
@@ -2301,10 +2301,10 @@
     },
     "src/renderer/src/store.ts": {
       "profile": "product",
-      "lines": 3845,
-      "contentHash": "da6fa2db77adb1c83a4e85cfa57e9e9b569fb9552834a413e90531bb774c5865",
+      "lines": 3736,
+      "contentHash": "97c202da6f92fe7b4a2e9ba38f97ad6b5abb8ed3944dea324a9c74e1c9ee58b0",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2754,
+      "maxFunctionLines": 2644,
       "complexFunctionCount": 1,
       "maxComplexity": 57,
       "forbiddenSuppressionCount": 0,
@@ -2316,15 +2316,15 @@
           "complexity": 57
         },
         "create callback#1": {
-          "lines": 2754,
+          "lines": 2644,
           "complexity": 1
         }
       }
     },
     "src/shared/types.ts": {
       "profile": "product",
-      "lines": 2341,
-      "contentHash": "e122f71a06b76993bbc7bddea6142d3f426bf0cdd59d7ea268ae32c86c212b53",
+      "lines": 2329,
+      "contentHash": "6973e73ccaf7af7d1f8f3e7096eafee9c42bc91d13dd3ab14d5c4c1f03608c8e",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 5,
       "complexFunctionCount": 0,

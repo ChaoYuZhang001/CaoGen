@@ -101,16 +101,17 @@ function verifyBrowserSourceContracts() {
     'browser tools must route through src/main/browser/browser-manager.ts'
   )
   const browserView = readFileSync(path.join(repoRoot, 'src/main/browserView.ts'), 'utf8')
+  const browserNavigation = readFileSync(path.join(repoRoot, 'src/main/browserNavigation.ts'), 'utf8')
   assert(
-    browserView.includes("const DEFAULT_URL = 'https://caobao.chat/official'"),
+    browserNavigation.includes("export const DEFAULT_BROWSER_URL = 'https://caobao.chat/official'"),
     'BrowserView default URL must open the CaoBao official page'
   )
   assert(
-    browserView.includes('async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_URL)'),
+    browserView.includes('async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_BROWSER_URL)'),
     'BrowserView.open must use the official page when no URL is supplied'
   )
   assert(
-    browserView.includes('loadURL(DEFAULT_URL)'),
+    browserView.includes('loadURL(DEFAULT_BROWSER_URL)'),
     'BrowserView.open must load the default official page for a fresh browser panel'
   )
   const browserPanel = readFileSync(path.join(repoRoot, 'src/renderer/src/components/workbench/BrowserPanel.tsx'), 'utf8')
