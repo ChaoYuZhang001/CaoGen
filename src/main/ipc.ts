@@ -17,7 +17,8 @@ import {
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
-import { scanMigration, importAssets } from './migration'
+import { scanMigration } from './migration'
+import { executeMigrationImportEffect } from './migrationEffect'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
   generateProjectContextTemplate,
@@ -916,8 +917,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('migration:import', (_e, cwd: string, paths: string[]) => {
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
-    if (!Array.isArray(paths)) return '未选择任何资产'
-    return importAssets(cwd, paths.filter((p): p is string => typeof p === 'string'))
+    return executeMigrationImportEffect(cwd, paths, executeInteractiveOperationEffect)
   })
 
   ipcMain.handle('projects:list', () => listProjects())

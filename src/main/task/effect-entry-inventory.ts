@@ -39,7 +39,7 @@ const DIRECT_USER: EffectEntryPolicy = {
   impact: 'external', effect: 'direct_user', replay: 'never'
 }
 
-export const EFFECT_ENTRY_INVENTORY_VERSION = 7
+export const EFFECT_ENTRY_INVENTORY_VERSION = 8
 
 export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
@@ -119,13 +119,13 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
     'attachments:copyImage', 'attachments:saveImageBytes',
     'browser:back', 'browser:forward', 'browser:navigate', 'browser:open', 'browser:reload',
+    'migration:import',
     'plugins:probeMcp',
     'terminals:close', 'terminals:resize', 'terminals:start', 'terminals:write'
   ], OPAQUE),
   policyGroup(['browser:bounds', 'browser:close'], LOCAL),
   policyGroup([
     'dialog:pickDirectory',
-    'migration:import',
     'plugins:reveal',
     'quickbar:captureScreenshot', 'quickbar:pickFiles', 'quickbar:prepareFiles',
     'sessions:restoreCheckpoint', 'sessions:rewindFiles'
