@@ -138,6 +138,8 @@ README、官网、STATUS 三处必须一致:
   - [x] 为本地插件 Effect 后继完成 clean Deep：`main@6e48c974f7b0b7c3f2223b4cd1d359a3a107e97a` 的 `2026-07-28T00-47-46-977Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；插件强杀与真实 Electron IPC E2E 均为 required pass，inventory v5 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、3 opaque、19 direct-user、6 delegated
   - [x] 将 `terminals:start`、`terminals:write`、`terminals:resize` 与 `terminals:close` 接入 opaque `terminal_action` Effect：每次动作先越过 durable barrier；Terminal/Session/CWD 只保存摘要，write 只保存输入 SHA-256 与字节数，不持久化命令文本；未知结果进入 `waiting_reconciliation`、刷新 Renderer 恢复面板且进程重启后禁止自动重放。强杀 E2E 已覆盖 durable-before-execute、成功、失败、SIGKILL、人工对账及 SQLite 中敏感输入缺失
   - [x] 为终端 Effect 与 Assistant/Studio 输入门禁后继完成 clean Deep：`3d5de20ca9e73545e488f3155bdb3ba9af16f594` 的 `2026-07-28T03-21-03-602Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定该提交、工作树 clean 且 Git 状态未变；inventory v6 仍锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、7 opaque、15 direct-user、6 delegated。1.0 acceptance map 结构通过但 strict closure 仍失败：P0 21/64 verified、43 open，130 项 closure failure，critical recovery 1/11
+  - [x] 将 `browser:open`、`browser:navigate`、`browser:back`、`browser:forward` 与 `browser:reload` 接入 opaque `browser_navigation` Effect：页面动作前必须先持久化 `executing`；durable target 只保存协议、host/target SHA-256 和 query/fragment 存在位，不保存完整 URL、查询、片段、页面标题或原始网络错误。失败与 SIGKILL 未知结果进入 `waiting_reconciliation`，Renderer 刷新恢复面板且重启后禁止自动导航；`browser:bounds` 与 `browser:close` 保持本地无 Effect
+  - [x] 为 Browser Effect 与性能门禁后继完成 clean Deep：`1675eb506eff99b55699bc3a2f5f88b99b5d5ff4` 的 `2026-07-28T05-20-06-681Z` 报告为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`，起止均绑定同一 SHA、工作树 clean 且 Git 状态未变；inventory v7 锁定 156 IPC、52 Agent 工具、79 嵌套动作，IPC policy 为 13 queryable、12 opaque、8 direct-user、6 delegated。同一 clean SHA 的 Browser crash targeted E2E 通过；Deep 内性能报告 `2026-07-28T05-20-41-787Z` 为 cold P95 `31.4ms`、warm P95 `32.4ms`，保持 `<300ms`，且 fresh-renderer 重试只允许首个调度污染、Studio 数据就绪超时或有效 cold 超阈值，失败 phase 必须保留、连续失败仍阻断。acceptance map 仍为 P0 21/64 verified、43 open、130 项 closure failure、critical recovery 1/11
   - [ ] 仅在继续准备 v0.1.8 发布时刷新 macOS Intel-only 签名候选、独立资产核验与 scoped publication preflight；Apple Silicon/Windows 继续暂停，且没有新的明确发布授权
   - [ ] 获得 1 名合格非项目参与者，在真实 Intel Mac 上完成私有实测；只有 `test:m1-first-user-onboarding:required` 输出 `passed` 才关闭 M1
   - [ ] v0.1.7 公开 Release 恢复为批准的 Intel 五资产与仓库最终正文，并由定时完整性审计重新输出 `passed`；恢复前可收集 `observed_failed`/观察记录，但不得关闭 M1
@@ -287,7 +289,7 @@ NFR-PRIV-004、NFR-NEUTRAL-001/003、NFR-ENG-003。
 | ID | 内容 | 当前状态 |
 |---|---|---|
 | TRUST-005 | v8 Workflow Ledger 全入口闭环 | 部分完成 |
-| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v6 已锁 156 IPC、52 Agent 工具、79 嵌套动作，附件写入、MCP probe 与终端 start/write/resize/close 已进入 opaque Effect，`projectContext:write` 与本地插件安装/卸载已进入 queryable Effect，其余 15 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
+| TRUST-002 | 所有高风险入口注册 Effect 或 fail-closed；inventory v7 已锁 156 IPC、52 Agent 工具、79 嵌套动作，附件写入、MCP probe、终端动作与 Browser open/navigate/back/forward/reload 已进入 opaque Effect，`projectContext:write` 与本地插件安装/卸载已进入 queryable Effect，其余 8 个 direct-user 外部 IPC 尚未进入 Effect Ledger | 部分完成 |
 | TRUST-003 | PR/Issue/MCP 等入口专用对账 | 立项目标 |
 | TRUST-004 | 未知结果不自动重放,只读对账或人工确认 | 立项目标 |
 | TRUST-006 | 密钥 Broker 完整化(作用域、子进程最小环境) | 仅基础 |
