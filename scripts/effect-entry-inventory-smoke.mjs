@@ -192,7 +192,8 @@ function validateIpcEvidence(registrations, policies) {
     const policy = policies[registration.id]
     if (policy.effect === 'queryable') {
       assert(
-        registration.body.includes('executeInteractiveOperationEffect'),
+        registration.body.includes('executeInteractiveOperationEffect') ||
+          (policy.evidence && registration.body.includes(policy.evidence)),
         `${registration.id} must cross executeInteractiveOperationEffect`
       )
     }
@@ -213,6 +214,8 @@ function validateRuntimeBoundary(inventory) {
   const nativeRuntime = read('src/main/native-tool-runtime.ts')
   const targetBuilder = read('src/main/task/effect-target-builder.ts')
   const reconciler = read('src/main/task/effect-reconciler.ts')
+  const localReconciler = read('src/main/task/effect-reconciler-local-targets.ts')
+  const pluginEffect = read('src/main/pluginInstallEffect.ts')
   assert(idempotency.includes('EFFECT_FREE_AGENT_TOOL_NAMES'), 'runtime effect-free set must consume the inventory')
   assert(nativeRuntime.indexOf('prepareToolEffect(effectInput)') < nativeRuntime.indexOf('executeCodingTool(name'),
     'native tool runtime must prepare the Effect before execution')
@@ -229,6 +232,9 @@ function validateRuntimeBoundary(inventory) {
     'edit_file queryable target builder missing'
   )
   assert(targetBuilder.includes('isGitIndexEffectToolName(toolName)'), 'Git index queryable target builder missing')
+  assert(targetBuilder.includes('isManagedPluginEffectToolName(toolName)'), 'plugin queryable target builder missing')
+  assert(localReconciler.includes('reconcileManagedPluginEffectTarget(target)'), 'plugin queryable reconciler missing')
+  assert(pluginEffect.includes('executeInteractiveOperationEffect'), 'plugin IPC wrapper must cross the Effect gateway')
 }
 
 function assertExactInventory(label, discovered, policies) {

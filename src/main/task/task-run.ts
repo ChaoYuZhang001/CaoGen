@@ -588,6 +588,8 @@ const interactiveOperationKinds = new Set<InteractiveOperationKind>([
   'file_write',
   'attachment_write',
   'mcp_probe',
+  'plugin_install',
+  'plugin_uninstall',
   'workspace_hunk_discard',
   'git_commit',
   'git_index_update',

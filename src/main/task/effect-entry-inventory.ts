@@ -39,7 +39,7 @@ const DIRECT_USER: EffectEntryPolicy = {
   impact: 'external', effect: 'direct_user', replay: 'never'
 }
 
-export const EFFECT_ENTRY_INVENTORY_VERSION = 4
+export const EFFECT_ENTRY_INVENTORY_VERSION = 5
 
 export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
@@ -110,6 +110,12 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'workspace:applyHunk', 'workspace:discardHunk',
     'worktrees:applyPatch', 'worktrees:createPr', 'worktrees:remove'
   ], QUERYABLE),
+  policyGroup(['plugins:installLocal'], {
+    ...QUERYABLE, evidence: 'installLocalPluginWithEffect'
+  }),
+  policyGroup(['plugins:uninstall'], {
+    ...QUERYABLE, evidence: 'uninstallPluginWithEffect'
+  }),
   policyGroup([
     'attachments:copyImage', 'attachments:saveImageBytes',
     'plugins:probeMcp',
@@ -119,7 +125,7 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'browser:navigate', 'browser:open', 'browser:reload',
     'dialog:pickDirectory',
     'migration:import',
-    'plugins:installLocal', 'plugins:reveal', 'plugins:uninstall',
+    'plugins:reveal',
     'quickbar:captureScreenshot', 'quickbar:pickFiles', 'quickbar:prepareFiles',
     'sessions:restoreCheckpoint', 'sessions:rewindFiles',
     'terminals:close', 'terminals:resize', 'terminals:start', 'terminals:write'

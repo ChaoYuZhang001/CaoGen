@@ -11,7 +11,9 @@ import type { ProjectWorkspaceApi } from './project-workspace-types'
 import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
+import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type { UserMessageAttachmentView } from './attachment-types'
+export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
 export type * from './digital-worker-types'
 export type * from './project-workspace-types'
@@ -1584,21 +1586,6 @@ export interface PluginRegistryRevealResult {
 export interface PluginRegistrySetEnabledResult {
   ok: boolean
   item?: PluginRegistryItem
-  error?: string
-}
-
-/** 本地插件安装结果 */
-export interface PluginInstallResult {
-  ok: boolean
-  installedPath?: string
-  name?: string
-  error?: string
-}
-
-/** 插件卸载结果(回收站式) */
-export interface PluginUninstallResult {
-  ok: boolean
-  trashedTo?: string
   error?: string
 }
 

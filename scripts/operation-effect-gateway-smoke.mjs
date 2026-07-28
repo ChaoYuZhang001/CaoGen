@@ -7,15 +7,19 @@ const ipcSource = read('src/main/ipc.ts')
 const attachmentMutationIpcSource = read('src/main/ipc/attachment-mutation-ipc.ts')
 const projectContextMutationIpcSource = read('src/main/ipc/project-context-mutation-ipc.ts')
 const mcpProbeIpcSource = read('src/main/ipc/mcp-probe-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource]
+const pluginInstallIpcSource = read('src/main/ipc/plugin-install-ipc.ts')
+const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
 const projectContextEffectSource = read('src/main/projectContextEffect.ts')
 const mcpProbeEffectSource = read('src/main/mcpProbeEffect.ts')
+const pluginInstallEffectSource = read('src/main/pluginInstallEffect.ts')
+const pluginTargetValidationSource = read('src/main/plugin/plugin-effect-target-validation.ts')
 const attachmentOpsSource = read('src/main/attachmentOps.ts')
 const effectTypesSource = read('src/shared/effect-types.ts')
 const sharedTypesSource = read('src/shared/types.ts')
 const reconcilerSource = read('src/main/task/effect-reconciler.ts')
+const localReconcilerSource = read('src/main/task/effect-reconciler-local-targets.ts')
 const targetBuilderSource = read('src/main/task/effect-target-builder.ts')
 const gitToolsSource = read('src/main/agent/tools/git-tools.ts')
 const gitDiffSource = read('src/main/gitDiff.ts')
@@ -56,6 +60,8 @@ assertHandlerUsesGateway('attachments:copyImage')
 assertHandlerUsesGateway('attachments:saveImageBytes')
 assertHandlerUsesGateway('projectContext:write')
 assertHandlerUsesGateway('plugins:probeMcp')
+assertHandlerUsesBoundary('plugins:installLocal', 'installLocalPluginWithEffect')
+assertHandlerUsesBoundary('plugins:uninstall', 'uninstallPluginWithEffect')
 assert(
   rendererMutationSource.includes("toolName: 'write_file'") &&
     rendererMutationSource.includes("toolName: 'git_commit'") &&
@@ -71,11 +77,34 @@ assert(
   effectTypesSource.includes("| 'file_write'") &&
     effectTypesSource.includes("| 'attachment_write'") &&
     effectTypesSource.includes("| 'mcp_probe'") &&
+    effectTypesSource.includes("| 'plugin_install'") &&
+    effectTypesSource.includes("| 'plugin_uninstall'") &&
     effectTypesSource.includes("| 'workspace_hunk_discard'") &&
     effectTypesSource.includes("| 'git_commit'") &&
     sharedTypesSource.includes('InteractiveOperationKind,') &&
     sharedTypesSource.includes("} from './effect-types'"),
   'Renderer file and commit operations need durable operation metadata kinds'
+)
+assert(
+  effectTypesSource.includes("kind: 'managed_plugin_install'") &&
+    effectTypesSource.includes("kind: 'managed_plugin_uninstall'") &&
+    targetBuilderSource.includes('isManagedPluginEffectToolName(toolName)') &&
+    localReconcilerSource.includes('reconcileManagedPluginEffectTarget(target)') &&
+    pluginTargetValidationSource.includes('isManagedPluginEffectTarget'),
+  'plugin install and uninstall need strict queryable Effect targets'
+)
+assert(
+  pluginInstallEffectSource.includes("toolName: 'managed_plugin_install'") &&
+    pluginInstallEffectSource.includes("toolName: 'managed_plugin_uninstall'") &&
+    pluginInstallEffectSource.includes('executeInteractiveOperationEffect') &&
+    pluginInstallEffectSource.includes('pluginInstallToolInput(prepared)') &&
+    pluginInstallEffectSource.includes('prepared.sourcePath'),
+  'plugin IPC wrappers must persist frozen summaries and keep source paths execution-only'
+)
+assert(
+  rendererStoreSource.match(/result\.effectStatus === 'waiting_reconciliation'/g)?.length >= 2 &&
+    rendererStoreSource.includes('await get().refreshTaskSnapshots()'),
+  'unknown plugin mutations must refresh the visible recovery surface'
 )
 assert(
   attachmentEffectSource.includes("toolName = source === 'user_file' ? 'attachment_copy_image' : 'attachment_save_image_bytes'") &&
@@ -220,6 +249,8 @@ assert(
 assert(
   taskRunSource.includes("'managed_worktree_create'") &&
     taskRunSource.includes("'managed_worktree_remove'") &&
+    taskRunSource.includes("'plugin_install'") &&
+    taskRunSource.includes("'plugin_uninstall'") &&
     taskRunSource.includes("record.source === 'dag'") &&
     taskRunSource.includes("record.source === 'session_lifecycle'") &&
     effectRuntimeSource.includes('usesPreExecutionNativeToolGate(engine) || run.operation !== undefined') &&
@@ -242,6 +273,12 @@ function assertHandlerUsesGateway(channel) {
     handler.includes('executeInteractiveOperationEffect'),
     `${channel} must cross a durable effect barrier before its external mutation`
   )
+}
+
+function assertHandlerUsesBoundary(channel, boundary) {
+  const handler = ipcSources.map((source) => handlerSource(source, channel)).find(Boolean)
+  assert(handler, `${channel} handler missing`)
+  assert(handler.includes(boundary), `${channel} must cross ${boundary}`)
 }
 
 function handlerSource(source, channel) {

@@ -20,6 +20,8 @@ export type InteractiveOperationKind =
   | 'file_write'
   | 'attachment_write'
   | 'mcp_probe'
+  | 'plugin_install'
+  | 'plugin_uninstall'
   | 'workspace_hunk_discard'
   | 'git_commit'
   | 'git_index_update'
@@ -289,6 +291,38 @@ export type EffectTarget =
       titleDigest: string
       bodyDigest: string
       marker: string
+    }
+  | {
+      kind: 'managed_plugin_install'
+      rootPath: string
+      rootAnchorPath: string
+      rootAnchorIdentity: FileSystemIdentity
+      rootPreState: 'absent' | 'directory'
+      rootIdentity?: FileSystemIdentity
+      pluginName: string
+      targetPreState: 'absent' | 'directory'
+      targetPreIdentity?: FileSystemIdentity
+      targetPreDigest?: string
+      targetPreFiles?: number
+      targetPreBytes?: number
+      expectedDigest: string
+      expectedFiles: number
+      expectedBytes: number
+      stagingRelativePath: string
+      trashRelativePath?: string
+    }
+  | {
+      kind: 'managed_plugin_uninstall'
+      rootPath: string
+      rootAnchorPath: string
+      rootAnchorIdentity: FileSystemIdentity
+      rootIdentity: FileSystemIdentity
+      pluginName: string
+      targetPreIdentity: FileSystemIdentity
+      targetPreDigest: string
+      targetPreFiles: number
+      targetPreBytes: number
+      trashRelativePath: string
     }
   | {
       kind: 'unsupported'

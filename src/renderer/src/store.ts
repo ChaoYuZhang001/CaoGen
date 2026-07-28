@@ -2987,6 +2987,7 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
     try {
       const result = await window.agentDesk.installLocalPlugin()
+      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
       if (!result.ok) {
         // 用户取消不算错误
         if (result.error !== 'canceled') {
@@ -2994,9 +2995,7 @@ export const useStore = create<AppStore>((set, get) => {
         }
         return
       }
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` }
-      }))
+      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` } }))
       await get().refreshPluginRegistryPanel()
     } catch (err) {
       set((s) => ({
@@ -3009,13 +3008,12 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
     try {
       const result = await window.agentDesk.uninstallPlugin(item.path)
+      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
       if (!result.ok) {
         set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
         return
       }
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` }
-      }))
+      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` } }))
       await get().refreshPluginRegistryPanel()
     } catch (err) {
       set((s) => ({

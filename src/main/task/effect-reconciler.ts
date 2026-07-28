@@ -5,9 +5,6 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { EffectRecord, EffectTarget, FileSystemIdentity } from '../../shared/types'
-import { reconcileCodeForgePatchEffectTarget } from '../code-forge/patch-effect'
-import { reconcileGitIndexEffectTarget } from '../git/git-index-effect'
-import { reconcileManagedWorktreeLifecycleTarget } from '../git/managed-worktree-effect'
 import {
   gitAlternateObjectDirectories,
   isolatedLocalGitEnv,
@@ -41,6 +38,7 @@ import {
   type FileContentObservation
 } from './file-effect-reconciliation'
 import { effectRecordIntegrityMatches } from './effect-record-integrity'
+import { reconcileLocalEffectTarget } from './effect-reconciler-local-targets'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
 const GIT_LOCAL_TIMEOUT_MS = 15_000
 const GIT_SCAN_TIMEOUT_MS = 30_000
@@ -127,14 +125,13 @@ export async function reconcileEffect(
     }
     if (effect.target.kind === 'file_content') return await reconcileFileContent(effect.target, observationOptions)
     if (effect.target.kind === 'git_commit') return await reconcileGitCommit(effect.target)
-    if (effect.target.kind === 'git_index_update') return reconcileGitIndexEffectTarget(effect.target)
     if (effect.target.kind === 'git_merge') return await reconcileGitMerge(effect.target)
     if (effect.target.kind === 'git_push') return await reconcileGitPush(effect.target)
     if (effect.target.kind === 'worktree_patch_apply') {
       return await reconcileWorktreePatchApply(effect.target, operationEffectReconcilerContext)
     }
-    if (effect.target.kind === 'code_forge_patch') return reconcileCodeForgePatchEffectTarget(effect.target)
-    if (effect.target.kind === 'git_worktree_create' || effect.target.kind === 'git_worktree_remove') return reconcileManagedWorktreeLifecycleTarget(effect.target)
+    const localResult = reconcileLocalEffectTarget(effect.target)
+    if (localResult) return localResult
     if (effect.target.kind === 'pull_request_create') {
       return await reconcilePullRequestCreate(effect.target, operationEffectReconcilerContext)
     }
