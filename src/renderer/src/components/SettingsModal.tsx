@@ -182,10 +182,10 @@ export default function SettingsPage(): React.JSX.Element {
     if (!scan || picked.size === 0) return
     setMigrateBusy(true)
     try {
-      const summary = await window.agentDesk.importMigrationAssets(scan.cwd, [...picked])
-      setMigrateResult(summary)
-      await runScan(scan.cwd) // 重扫,已导入项在下次导入时自动跳过
-      setMigrateResult(summary)
+      const result = await window.agentDesk.importMigrationAssets(scan.cwd, [...picked])
+      if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
+      if (result.ok) await runScan(scan.cwd) // 重扫,已导入项在下次导入时自动跳过
+      setMigrateResult(result.ok ? (result.summary ?? '导入完成') : (result.error ?? '导入失败'))
     } catch (err) {
       setMigrateResult(err instanceof Error ? err.message : String(err))
     } finally {

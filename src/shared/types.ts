@@ -2,7 +2,7 @@
  * 主进程 / 预加载 / 渲染进程共享的类型定义。
  * 仅包含类型(编译期擦除),两侧 tsconfig 都会引入本目录。
  */
-import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, TaskRunOperationMetadata } from './effect-types'
+import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, MigrationImportOperationResult, TaskRunOperationMetadata } from './effect-types'
 import type { TaskDagAutoMergeView, TaskDagFinalizationRecord, TaskDagFinalizationResolution, TaskDagFinalizationView } from './task-dag-finalization-types'
 import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-types'
 import type { ModelAttemptRecoveryApi } from './model-attempt-types'
@@ -33,7 +33,7 @@ export type {
   FileSystemIdentity,
   InteractiveOperationKind,
   InteractiveOperationSource,
-  TaskRunOperationMetadata,
+  MigrationImportOperationResult, TaskRunOperationMetadata,
   ManagedWorktreeProjectionRecord
 } from './effect-types'
 export type {
@@ -2292,7 +2292,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   observeBrowser(sessionId: string): Promise<BrowserObservation>
   onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
   scanMigration(cwd: string): Promise<MigrationScan>
-  importMigrationAssets(cwd: string, paths: string[]): Promise<string>
+  importMigrationAssets(cwd: string, paths: string[]): Promise<MigrationImportOperationResult>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>
   deleteProject(id: string): Promise<void>

@@ -20,6 +20,7 @@ export type InteractiveOperationKind =
   | 'file_write'
   | 'attachment_write'
   | 'mcp_probe'
+  | 'migration_import'
   | 'terminal_action'
   | 'browser_navigation'
   | 'plugin_install'
@@ -34,6 +35,15 @@ export type InteractiveOperationKind =
   | 'pull_request_create'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
+
+export interface MigrationImportOperationResult {
+  ok: boolean
+  summary?: string
+  error?: string
+  effectStatus?: EffectStatus
+  operationId?: string
+  snapshotId?: string
+}
 
 export interface TaskRunOperationMetadata {
   schemaVersion: 1

@@ -113,8 +113,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 625,
-      "contentHash": "4c1e661b857735ac8d45edba746c12f828371de94581c9d4715d191d4fff2d96",
+      "lines": 626,
+      "contentHash": "8c635a3b3a27d293f566ef2a9e777ec8fcbda0dafebc8779fac7bdf4ed0a2471",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -914,9 +914,9 @@
     "src/main/ipc.ts": {
       "profile": "product",
       "lines": 987,
-      "contentHash": "6fc3d0e92e9f4a9ad12fef5ce1e49312f80df77a40c0e95c30835d896f100d30",
+      "contentHash": "a81b83649662bb01112a4f9673d47c1d333d7c1bed3c1a852688957d7b4bebea",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 654,
+      "maxFunctionLines": 653,
       "complexFunctionCount": 0,
       "maxComplexity": 12,
       "forbiddenSuppressionCount": 0,
@@ -924,7 +924,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "registerIpc#1": {
-          "lines": 654,
+          "lines": 653,
           "complexity": 4
         }
       }
@@ -1321,8 +1321,8 @@
     },
     "src/main/task/task-run.ts": {
       "profile": "product",
-      "lines": 617,
-      "contentHash": "2b5a713fc6595f64b28780d4b5ab84764e405c95e82f063167cd84a2ab7278f2",
+      "lines": 618,
+      "contentHash": "dfaec26ccda4a06b7460b59f30f4b6d6d4ee1f6fe5e2e16c4506ad59d8508ea2",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 82,
       "complexFunctionCount": 4,
@@ -1624,7 +1624,7 @@
     "src/renderer/src/components/SettingsModal.tsx": {
       "profile": "product",
       "lines": 1366,
-      "contentHash": "94f2d68b0abeb1fc73c6b560be232b58027cf62d0151e9eb4d0f50cb3f83bada",
+      "contentHash": "5baf77312f7c9ff2911cc38401e09ebb3ed4ae2f31dd1f83f91b12fa881db299",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 1271,
       "complexFunctionCount": 1,
@@ -2324,7 +2324,7 @@
     "src/shared/types.ts": {
       "profile": "product",
       "lines": 2329,
-      "contentHash": "6973e73ccaf7af7d1f8f3e7096eafee9c42bc91d13dd3ab14d5c4c1f03608c8e",
+      "contentHash": "63af924ababc0af7052e6c5d23cde479cab24267945b0b695ad62e289e2e6228",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 5,
       "complexFunctionCount": 0,
