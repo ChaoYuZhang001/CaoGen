@@ -2,6 +2,9 @@ import { useStore } from './store'
 import type { AppLanguage } from '../../shared/types'
 import { PROVIDER_CREDENTIAL_TRANSLATIONS } from './i18n/providerCredentialTranslations'
 import { ASSISTANT_PROJECTION_TRANSLATIONS } from './i18n/assistantProjectionTranslations'
+import { SIDEBAR_TRANSLATIONS } from './i18n/sidebarTranslations'
+import { PROVIDER_PROFILE_TRANSLATIONS } from './i18n/providerProfileTranslations'
+import { TASK_PLAN_TRANSLATIONS } from './i18n/taskPlanTranslations'
 
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
@@ -11,34 +14,7 @@ type Dict = Record<string, { zh: string; en: string }>
 
 const DICT: Dict = {
   // 导航 / 通用
-  newSession: { zh: '+ 新建会话', en: '+ New Session' },
-  office3d: { zh: 'Agent 控制室', en: 'Agent Control Room' },
-  settings: { zh: '⚙ 设置', en: '⚙ Settings' },
-  listView: { zh: '列表视图', en: 'List View' },
-  ongoing: { zh: '进行中', en: 'Active' },
-  projects: { zh: '项目', en: 'Projects' },
-  archivedProjects: { zh: '已归档项目', en: 'Archived projects' },
-  newSessionHere: { zh: '在此项目新建会话', en: 'New session here' },
-  projectActions: { zh: '项目操作: {name}', en: 'Project actions: {name}' },
-  archiveProject: { zh: '归档项目', en: 'Archive project' },
-  unarchiveProject: { zh: '恢复项目', en: 'Restore project' },
-  deleteProject: { zh: '删除项目', en: 'Delete project' },
-  deleteProjectConfirm: {
-    zh: '删除项目「{name}」? 项目目录和会话不会被删除，相关会话将移入「未关联项目」。',
-    en: 'Delete project "{name}"? Its directory and sessions will be kept; related sessions will move to "No project".'
-  },
-  unassignedSessions: { zh: '未关联项目', en: 'No project' },
-  recent: { zh: '最近会话', en: 'Recent' },
-  pinned: { zh: '置顶', en: 'Pinned' },
-  archived: { zh: '归档', en: 'Archived' },
-  sidebarSearchPlaceholder: { zh: '搜索标题、项目或路径', en: 'Search title, project or path' },
-  openSidebar: { zh: '打开侧栏', en: 'Open sidebar' },
-  collapseSidebar: { zh: '收回侧栏', en: 'Collapse sidebar' },
-  expandSidebar: { zh: '展开侧栏', en: 'Expand sidebar' },
-  resizeSidebar: { zh: '拖拽调整侧栏宽度', en: 'Drag to resize sidebar' },
-  noRecentSessions: { zh: '暂无最近会话', en: 'No recent sessions' },
-  noArchivedSessions: { zh: '暂无归档会话', en: 'No archived sessions' },
-  noMatchingSessions: { zh: '没有匹配的会话', en: 'No matching sessions' },
+  ...SIDEBAR_TRANSLATIONS,
   contentSearchSection: { zh: '消息内容', en: 'Message content' },
   contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
   recoverableTasks: { zh: '可恢复任务', en: 'Recoverable tasks' },
@@ -78,6 +54,7 @@ const DICT: Dict = {
   // 聊天视图
   switchModel: { zh: '切换模型', en: 'Switch model' },
   permissionMode: { zh: '权限模式', en: 'Permission mode' },
+  ...TASK_PLAN_TRANSLATIONS,
   stop: { zh: '⏹ 停止', en: '⏹ Stop' },
   closeSession: { zh: '关闭会话', en: 'Close session' },
   chatLayoutControls: { zh: '聊天布局控制', en: 'Chat layout controls' },
@@ -88,7 +65,7 @@ const DICT: Dict = {
   resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
   collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
   deskRailLabel: { zh: '工作区控制条', en: 'Workspace controls' },
-  toggleDeskSummary: { zh: '切换项目摘要', en: 'Toggle project summary' },
+  toggleDeskSummary: { zh: '切换结果', en: 'Toggle results' },
   openDeskTools: { zh: '打开工具抽屉', en: 'Open tool drawer' },
   deskToolDrawer: { zh: '工作区工具', en: 'Workspace tools' },
   showDeskPanel: { zh: '显示工具区', en: 'Show tool panel' },
@@ -178,14 +155,27 @@ const DICT: Dict = {
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
   welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
   welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
-  welcomeExploreCode: { zh: '探索并理解代码', en: 'Explore and understand code' },
-  welcomeExploreCodePrompt: { zh: '请帮我探索这个项目并说明核心架构。', en: 'Explore this project and explain its core architecture.' },
-  welcomeBuildFeature: { zh: '构建新功能或工具', en: 'Build a feature or tool' },
-  welcomeBuildFeaturePrompt: { zh: '请根据现有项目结构实现一个新功能。', en: 'Build a new feature that fits the existing project.' },
-  welcomeReviewCode: { zh: '审查代码并提出修改建议', en: 'Review code and suggest changes' },
-  welcomeReviewCodePrompt: { zh: '请审查当前改动，优先找出缺陷、回归风险和缺失测试。', en: 'Review the current changes for bugs, regressions, and missing tests.' },
-  welcomeFixIssue: { zh: '修复问题和失败', en: 'Fix issues and failures' },
-  welcomeFixIssuePrompt: { zh: '请诊断当前问题，实现修复并完成验证。', en: 'Diagnose the current issue, implement a fix, and verify it.' },
+  welcomePresetStartsNow: { zh: '点击即开始', en: 'Click to start' },
+  welcomeUnderstandProject: { zh: '读懂这个项目', en: 'Understand this project' },
+  welcomeUnderstandProjectPrompt: {
+    zh: '阅读当前工作区可访问的代码和文档，不要修改文件。输出项目用途、目录与核心模块、关键入口和数据流、运行与测试方式、主要风险和建议的下一步。引用具体文件；如果没有可分析内容，请明确提示我选择目录或添加文件，不要臆测。',
+    en: 'Read the code and documents available in the current workspace without modifying files. Explain the purpose, structure and core modules, key entry points and data flow, run and test commands, major risks, and recommended next steps. Cite concrete files. If there is nothing to inspect, ask me to choose a folder or add files instead of guessing.'
+  },
+  welcomeReviewChanges: { zh: '审查当前改动', en: 'Review current changes' },
+  welcomeReviewChangesPrompt: {
+    zh: '审查当前工作区的改动，不要修改文件。优先报告可复现的缺陷、行为回归、安全或隐私风险和缺失测试；按严重度排序，并给出文件与行号。若没有发现问题，请明确说明，并列出仍未覆盖的测试或残余风险。',
+    en: 'Review the current workspace changes without modifying files. Prioritize reproducible bugs, behavioral regressions, security or privacy risks, and missing tests. Order findings by severity and cite files and lines. If no issue is found, say so clearly and list remaining test gaps or residual risks.'
+  },
+  welcomeOrganizeReport: { zh: '整理文件成报告', en: 'Organize files into a report' },
+  welcomeOrganizeReportPrompt: {
+    zh: '整理当前工作区或会话中可访问的文件，保留原文件不变，并生成结构化 Markdown 报告 CaoGen-report.md。报告必须包含摘要、按主题归类的要点、来源文件引用、关键数据或结论、风险和待确认事项；若同名报告已存在，先读取后增量更新。若没有可用文件，请提示我选择目录或添加文件，不要虚构内容。',
+    en: 'Organize the files available in the current workspace or conversation without changing the source files, then create a structured Markdown report named CaoGen-report.md. Include an executive summary, findings grouped by topic, source file references, key data or conclusions, risks, and open questions. If the report already exists, read it before updating it. If no files are available, ask me to choose a folder or add files instead of fabricating content.'
+  },
+  welcomePlanTask: { zh: '规划复杂任务', en: 'Plan a complex task' },
+  welcomePlanTaskPrompt: {
+    zh: '基于当前工作区和已有上下文，为目标生成一份可审查的执行计划。先识别缺失信息，再列出依赖、步骤与并行关系、预计产物、数据外发、成本与风险、验证方式和 Acceptance 条件。在我明确批准前不要执行、修改文件或派发子任务。',
+    en: 'Use the current workspace and conversation context to produce a reviewable execution plan. Identify missing information first, then list dependencies, steps and parallelism, expected artifacts, data egress, cost and risk, verification, and Acceptance criteria. Do not execute, modify files, or dispatch subtasks until I explicitly approve the plan.'
+  },
   welcomeToolRequiresSession: { zh: '先发起会话后即可打开该工具。', en: 'Start a session to open this tool.' },
   welcomePickProject: { zh: '选择项目', en: 'Choose project' },
   welcomeNeedProject: { zh: '请先选择项目目录', en: 'Pick a project folder first' },
@@ -223,6 +213,7 @@ const DICT: Dict = {
   // 新建会话
   newSessionTitle: { zh: '新建会话', en: 'New Session' },
   project: { zh: '项目', en: 'Project' },
+  directStartNoProject: { zh: '直接开始（无需项目）', en: 'Start without a project' },
   newProjectDirectory: { zh: '新项目目录…', en: 'New project directory…' },
   recentProjects: { zh: '最近项目', en: 'Recent projects' },
   projectDir: { zh: '项目目录', en: 'Project directory' },
@@ -521,9 +512,14 @@ const DICT: Dict = {
   },
   migrateScan: { zh: '扫描', en: 'Scan' },
   migrateScanning: { zh: '扫描中…', en: 'Scanning…' },
+  migrateProjectDirOptional: { zh: '项目目录(可选)', en: 'Project folder (optional)' },
+  migrateConversationPlaceholder: { zh: '留空则迁移到对话级', en: 'Leave blank for conversation-level migration' },
+  migrateScopeProject: { zh: '项目级迁移', en: 'Project migration' },
+  migrateScopeConversation: { zh: '对话级迁移', en: 'Conversation migration' },
+  migrateFound: { zh: '发现 {n} 项', en: '{n} found' },
   migrateClaudeNative: {
-    zh: '检测到本项目已有原生规则资产,CaoGen 直接继承,无需导入',
-    en: 'Native project rule assets detected; CaoGen inherits them directly, no import needed'
+    zh: 'Claude 原生资产已直接可用',
+    en: 'Claude native assets are already available'
   },
   migrateNothing: {
     zh: '未检测到可导入的历史配置资产。',
@@ -531,14 +527,25 @@ const DICT: Dict = {
   },
   migrateKindRules: { zh: '规则', en: 'rules' },
   migrateKindConfig: { zh: '配置', en: 'config' },
+  migrateRiskLow: { zh: '低风险', en: 'Low risk' },
+  migrateRiskReview: { zh: '需确认', en: 'Review' },
+  migrateRiskBlocked: { zh: '不导入', en: 'Not imported' },
+  migrateTarget: { zh: '目标', en: 'Target' },
+  migrateConflict: { zh: '冲突', en: 'Conflict' },
+  migrateIgnoredFields: { zh: '忽略 {n} 个敏感/未知字段', en: '{n} sensitive or unknown fields ignored' },
   migrateImport: { zh: '导入所选({n} 项)', en: 'Import selected ({n})' },
   migrateImporting: { zh: '导入中…', en: 'Importing…' },
+  migrateRollback: { zh: '撤销本次导入', en: 'Undo this import' },
   language: { zh: '界面语言', en: 'Language' },
   theme: { zh: '主题', en: 'Theme' },
   themeLight: { zh: '白天(主白副黑)', en: 'Light' },
   themeDark: { zh: '夜晚(主黑副白)', en: 'Dark' },
   themeSystem: { zh: '跟随系统', en: 'System' },
   driveMode: { zh: 'CaoGen Drive 档位', en: 'CaoGen Drive mode' },
+  driveModeOrthogonalHint: {
+    zh: '驱动档位控制模型、预算和验证深度;任务策略(查看/规划/执行)在会话中单独选择。',
+    en: 'Drive mode controls model, budget and validation depth; task strategy (view/plan/execute) is selected separately in the session.'
+  },
   defaultProvider: { zh: 'Provider 偏好', en: 'Provider preference' },
   defaultModel: { zh: '模型偏好', en: 'Model preference' },
   modelRolesSection: { zh: '模型角色偏好', en: 'Model role preferences' },
@@ -690,6 +697,7 @@ const DICT: Dict = {
     zh: '连通性异常 · {message}',
     en: 'Connection failed · {message}'
   },
+  ...PROVIDER_PROFILE_TRANSLATIONS,
   healthOkTip: { zh: '健康 · 成功 {s} 失败 {f} · 最近延迟 {latencyMs}ms', en: 'Healthy · {s} succeeded, {f} failed · latest latency {latencyMs}ms' },
   healthBadTip: { zh: '异常 · 连续失败 {n} · {error}', en: 'Unhealthy · {n} consecutive failures · {error}' },
   officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
@@ -697,6 +705,20 @@ const DICT: Dict = {
   // Provider 编辑器
   providerEditTitle: { zh: '编辑 Provider', en: 'Edit Provider' },
   providerAddTitle: { zh: '添加 Provider', en: 'Add Provider' },
+  providerQuickTitle: { zh: '快速开始', en: 'Quick start' },
+  providerQuickRecommended: { zh: '推荐', en: 'Recommended' },
+  providerQuickName: { zh: 'CaoGen 快速服务', en: 'CaoGen Quick Service' },
+  providerQuickKeyLabel: { zh: '主账号', en: 'Primary' },
+  providerQuickKeyPlaceholder: { zh: '粘贴 API Key', en: 'Paste API key' },
+  providerQuickGetKey: { zh: '获取 API Key', en: 'Get an API key' },
+  providerQuickAdvanced: { zh: '自定义服务', en: 'Custom service' },
+  providerQuickConnect: { zh: '连接并使用', en: 'Connect and use' },
+  providerQuickConnecting: { zh: '正在验证…', en: 'Checking…' },
+  providerQuickKeyRequired: { zh: '请先粘贴 API Key', en: 'Paste an API key first' },
+  providerQuickUnavailable: { zh: '当前服务不可用，请稍后重试或使用自定义服务', en: 'The service is unavailable. Try again later or use a custom service.' },
+  providerQuickUseLocal: { zh: '使用本机模型', en: 'Use a local model' },
+  providerQuickOrKey: { zh: '或使用 API Key', en: 'or use an API key' },
+  providerQuickLocalUnavailable: { zh: '未发现已启动且安装了模型的 Ollama、LM Studio 或 vLLM。', en: 'No running Ollama, LM Studio, or vLLM service with an installed model was found.' },
   providerEngineLabel: { zh: '执行引擎', en: 'Execution engine' },
   providerEngineOpenAI: { zh: 'OpenAI-compatible', en: 'OpenAI-compatible' },
   providerEngineAnthropic: { zh: 'Anthropic Messages API', en: 'Anthropic Messages API' },
@@ -749,6 +771,12 @@ const DICT: Dict = {
   },
   fetching: { zh: '获取中…', en: 'Fetching…' },
   fetchWithKey: { zh: '⤓ 用密钥获取', en: '⤓ Fetch with key' },
+  fetchModelsNoKey: { zh: '⤓ 获取模型', en: '⤓ Fetch models' },
+  providerAuthModeLabel: { zh: '鉴权方式', en: 'Authentication' },
+  providerAuthModeApiKey: { zh: 'API Key', en: 'API key' },
+  providerAuthModeNone: { zh: '本机服务无需密钥', en: 'No key for local service' },
+  providerAuthModeNoneHint: { zh: '仅允许本机回环地址，不会保存或发送 API Key。', en: 'Only loopback addresses are allowed. No API key is stored or sent.' },
+  providerLocalNoKey: { zh: '本机 · 无需密钥', en: 'Local · no key required' },
   fetchedModels: { zh: '已获取 {n} 个模型', en: 'Fetched {n} models' },
   fetchedModelsFrom: {
     zh: '已从 {baseUrl} 获取 {n} 个模型 · {latencyMs}ms',

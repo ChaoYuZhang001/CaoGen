@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { modelOptionsForProvider, PERMISSION_OPTIONS, useStore } from '../store'
+import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import MessageItem from './MessageItem'
@@ -7,10 +7,11 @@ import PermissionBar from './PermissionBar'
 import Composer from './Composer'
 import RewindPanel from './RewindPanel'
 import StartSuggestionsPanel from './StartSuggestionsPanel'
-import type { PermissionModeId } from '../../../shared/types'
+import type { ProviderView } from '../../../shared/types'
 import type { ChatItem, ToolResultInfo } from '../store'
-import { useExperienceProjection } from './experience/ExperienceProjection'
 import ChatStatusBar from './experience/ChatStatusBar'
+import ChatTaskStrategyControl from './experience/ChatTaskStrategyControl'
+import TaskPlanWorkbench from './experience/TaskPlanWorkbench'
 
 const VIRTUAL_MESSAGE_THRESHOLD = 100
 const VIRTUAL_MESSAGE_ESTIMATED_HEIGHT = 116
@@ -29,15 +30,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Number(value.toFixed(2))))
 }
 
+function providerDisplayName(
+  providerId: string,
+  providers: ProviderView[],
+  t: ReturnType<typeof useT>
+): string {
+  return providerId
+    ? providers.find((provider) => provider.id === providerId)?.name ?? t('unknownProvider')
+    : t('providerOfficial')
+}
+
 export default function ChatView(): React.JSX.Element | null {
   const t = useT()
-  const projection = useExperienceProjection()
   const activeId = useStore((s) => s.activeId)
   const session = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const providers = useStore((s) => s.providers)
   const closeSession = useStore((s) => s.closeSession)
   const interrupt = useStore((s) => s.interrupt)
-  const setPermissionMode = useStore((s) => s.setPermissionMode)
   const setModel = useStore((s) => s.setModel)
   const openLatestRewindPanel = useStore((s) => s.openLatestRewindPanel)
   const openBrowserPanel = useStore((s) => s.openBrowserPanel)
@@ -175,9 +184,7 @@ export default function ChatView(): React.JSX.Element | null {
   const { meta } = session
   const running = meta.status === 'running' || meta.status === 'starting'
   const modelOptions = modelOptionsForProvider(providers, meta.providerId, t('autoRoute'), meta.model)
-  const providerName = meta.providerId
-    ? providers.find((p) => p.id === meta.providerId)?.name ?? t('unknownProvider')
-    : t('providerOfficial')
+  const providerName = providerDisplayName(meta.providerId, providers, t)
   const activeMemorySuggestion = memorySuggestion?.sessionId === activeId ? memorySuggestion : undefined
 
   const onScroll = (): void => {
@@ -190,7 +197,6 @@ export default function ChatView(): React.JSX.Element | null {
   return (
     <div
       className={`chat chat-density-${layout.chatDensity}`}
-      data-experience-projection={projection}
       style={{ '--chat-scale': layout.chatScale } as React.CSSProperties}
     >
       <header className="chat-header drag-region">
@@ -203,6 +209,7 @@ export default function ChatView(): React.JSX.Element | null {
           </div>
         </div>
         <div className="chat-controls no-drag">
+          <ChatTaskStrategyControl value={meta.taskStrategy} disabled={running} />
           <SessionModelSelect
             disabled={running}
             label={t('switchModel')}
@@ -211,19 +218,6 @@ export default function ChatView(): React.JSX.Element | null {
             options={modelOptions}
             sessionId={meta.id}
           />
-          <select
-            className="select"
-            data-expert-control="true"
-            value={meta.permissionMode}
-            onChange={(e) => void setPermissionMode(e.target.value as PermissionModeId)}
-            title={t('permissionMode')}
-          >
-            {PERMISSION_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
           <div className="chat-layout-controls" aria-label={t('chatLayoutControls')}>
             <button
               type="button"
@@ -371,6 +365,7 @@ export default function ChatView(): React.JSX.Element | null {
           </button>
         </div>
       </header>
+      <TaskPlanWorkbench sessionId={activeId} strategy={meta.taskStrategy} running={running} />
 
       <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         <div className="chat-inner">

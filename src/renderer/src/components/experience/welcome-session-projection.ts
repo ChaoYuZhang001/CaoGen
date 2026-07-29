@@ -1,13 +1,14 @@
 import {
   AUTO_MODEL,
   AUTO_PROVIDER_ID,
-  caogenDrivePolicyView,
   type CaoGenDriveMode,
   type CreateSessionOptions,
-  type PermissionModeId,
-  type ProviderView
+  type ProviderView,
+  type TaskStrategy
 } from '../../../../shared/types'
 import type { ExperienceMode } from '../../store/experience-mode'
+
+export const NEW_PROJECT_SESSION_CHOICE = '__new_project__'
 
 export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
 
@@ -15,7 +16,7 @@ export interface WelcomeSessionDraft {
   cwd: string
   driveMode: CaoGenDriveMode
   model: string
-  permissionMode: PermissionModeId
+  taskStrategy: TaskStrategy
   projectId?: string
   providerId: string
   routingMode: WelcomeRoutingMode
@@ -23,9 +24,9 @@ export interface WelcomeSessionDraft {
 }
 
 export function hasAvailableCompute(
-  providers: Array<Pick<ProviderView, 'hasToken' | 'models'>>
+  providers: Array<Pick<ProviderView, 'ready' | 'models'>>
 ): boolean {
-  return providers.some((provider) => provider.hasToken && provider.models.length > 0)
+  return providers.some((provider) => provider.ready && provider.models.length > 0)
 }
 
 export function welcomeValidationKey(
@@ -33,7 +34,7 @@ export function welcomeValidationKey(
   draft: WelcomeSessionDraft,
   computeAvailable: boolean
 ): string | null {
-  if (!draft.cwd.trim()) return 'errNeedProjectDir'
+  if (!draft.unassigned && !draft.cwd.trim()) return 'errNeedProjectDir'
   if (projection === 'assistant') return computeAvailable ? null : 'assistantComputeUnavailable'
   if (draft.routingMode === 'global' && !computeAvailable) return 'explicitProviderRequired'
   if (draft.routingMode !== 'global' && !draft.providerId) return 'explicitProviderRequired'
@@ -61,7 +62,7 @@ export function welcomeSessionOptions(
       model: AUTO_MODEL,
       providerId: AUTO_PROVIDER_ID,
       routingScope: 'global',
-      permissionMode: caogenDrivePolicyView('core').defaultPermissionMode
+      taskStrategy: draft.taskStrategy
     }
   }
   return {
@@ -70,7 +71,7 @@ export function welcomeSessionOptions(
     model: draft.routingMode === 'fixed' ? draft.model : AUTO_MODEL,
     providerId: draft.routingMode === 'global' ? AUTO_PROVIDER_ID : draft.providerId,
     routingScope: draft.routingMode,
-    permissionMode: draft.permissionMode
+    taskStrategy: draft.taskStrategy
   }
 }
 

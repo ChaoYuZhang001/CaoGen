@@ -34,7 +34,7 @@ import {
 import { latestUserTextUuid } from './checkpoints'
 import { resolveClaudeAutoRoute } from './model/claude-auto-route'
 import { canRotateProviderKey } from './providerKeyRouting'
-import { writeAuditLog } from './permission/audit-log'
+import { writeSessionAuditLog } from './permission/audit-log'
 import { evaluateToolPermission } from './permission/tool-permission'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { ClaudeModelAttemptTracker } from './task/claude-model-attempt-runtime'
@@ -50,6 +50,8 @@ import {
 } from './task/effect-runtime'
 import type { EffectExecutionHandle } from './task/effect-ledger'
 import { isSideEffectingToolCall } from './task/tool-idempotency'
+import { taskStrategySystemAppend, updateTaskStrategyMeta, derivePermissionModeFromStrategy } from './task/task-strategy'
+import { claudePermissionPreflightDenial } from './permission/claude-task-preflight'
 import { digitalWorkerToolPermissionDecision } from './digital-worker/tool-action-policy'
 import { assertDigitalWorkerProviderDispatchAllowed } from './digital-worker/session-action-policy'
 import {
@@ -58,6 +60,7 @@ import {
   grantTemporaryGuiAutomation
 } from './permission/permission-manager'
 import { classifyFailure, pickFailoverTarget } from './scheduler'
+import { errorText as errText } from './utils/error-text'
 import type { FailoverCandidate } from './scheduler'
 import { getSettings } from './settings'
 import { settingsForCaoGenDrive } from './model/drive'
@@ -73,8 +76,8 @@ import type {
   PermissionRequestInfo,
   RewindResult,
   SdkAgentInfo,
-  SendMessagePayload,
-  SessionMeta
+    SendMessagePayload,
+    SessionMeta
 } from '../shared/types'
 
 export { newSessionMeta } from './session-meta'
@@ -90,10 +93,6 @@ const CLAUDE_READ_TOOLS = new Set(['Read', 'LS', 'Glob', 'Grep', 'WebFetch'])
 const CLAUDE_EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const LOCAL_EXECUTION_DISABLED_MESSAGE =
   'Agent 本地执行能力已禁用:旧严格 Docker 设置不会自动降级为宿主机执行。当前仅保留最小项目检查能力，请先在设置 > 权限中确认启用。'
-
-function errText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 /**
  * 一个桌面会话 = 一个持续存活的 Agent SDK query(流式输入模式)。
@@ -270,7 +269,7 @@ export class AgentSession implements Engine {
                     input: policyInput,
                     cwd: this.meta.cwd
                   })
-                  writeAuditLog(this.meta.cwd, {
+                  writeSessionAuditLog(this.meta, {
                     action: 'deny',
                     source: 'policy',
                     toolName: policyToolName,
@@ -422,7 +421,8 @@ export class AgentSession implements Engine {
       } catch (err) {
         console.error('[caogen] 读取项目记忆失败:', err)
       }
-      const append = [projectContextAppend, persona, memoryAppend].filter((s) => s && s.trim()).join('\n\n')
+      const append = taskStrategySystemAppend(
+        this.meta.taskStrategy, projectContextAppend, persona, memoryAppend)
       const sdkAgents = settings.sdkAgentsEnabled
         ? loadSdkAgentDefinitions(this.meta.sourceCwd ?? this.meta.cwd)
         : undefined
@@ -722,7 +722,7 @@ export class AgentSession implements Engine {
     const pending = this.pending.get(requestId)
     if (!pending) return
     this.pending.delete(requestId)
-    writeAuditLog(this.meta.cwd, {
+    writeSessionAuditLog(this.meta, {
       action: allow ? 'allow' : 'deny',
       source: 'user',
       toolName: normalizeClaudeToolName(pending.info.toolName),
@@ -1179,10 +1179,21 @@ export class AgentSession implements Engine {
     }
   }
 
+  /**
+   * 内部 API，仅供 Routine executor 调用。
+   * 会话内 permissionMode 由 taskStrategy 派生，不接受外部直接设置。
+   */
   async setPermissionMode(mode: PermissionModeId): Promise<void> {
     await this.query?.setPermissionMode(mode)
     this.meta.permissionMode = mode
     this.emit({ kind: 'meta', meta: { ...this.meta } })
+  }
+
+  async setTaskStrategy(strategy: SessionMeta['taskStrategy']): Promise<void> {
+    await this.invalidatePermissionSettlements('任务策略已切换，原审批已作废')
+    // P0 收编: 策略切换时同步派生 permissionMode（单一来源）
+    this.meta.permissionMode = derivePermissionModeFromStrategy(strategy)
+    updateTaskStrategyMeta(this.meta, strategy, (meta) => this.emit({ kind: 'meta', meta }))
   }
 
   async setModel(model: string): Promise<void> {
@@ -1652,10 +1663,10 @@ export class AgentSession implements Engine {
     const policy = digitalWorkerToolPermissionDecision(this.meta, policyToolName, policyInput, app.getPath('userData'), () => evaluateToolPermission(settings, { toolName: policyToolName, input: policyInput, cwd: this.meta.cwd }))
     const audit = (
       action: 'allow' | 'deny' | 'ask',
-      source: 'policy' | 'permission-mode' | 'idempotency',
+      source: 'policy' | 'permission-mode' | 'task-strategy' | 'idempotency',
       message: string
     ): void => {
-      writeAuditLog(this.meta.cwd, {
+      writeSessionAuditLog(this.meta, {
         action,
         source,
         toolName: policyToolName,
@@ -1667,7 +1678,7 @@ export class AgentSession implements Engine {
     }
     const askUser = (
       reason: string,
-      source: 'policy' | 'permission-mode' | 'idempotency',
+      source: 'policy' | 'permission-mode' | 'task-strategy' | 'idempotency',
       duplicateExecutionId?: string
     ): Promise<PermissionResult> => {
       const requestId = randomUUID()
@@ -1691,7 +1702,7 @@ export class AgentSession implements Engine {
         this.pending.set(requestId, pending)
         const abort = (): void => {
           if (this.pending.delete(requestId)) {
-            writeAuditLog(this.meta.cwd, {
+            writeSessionAuditLog(this.meta, {
               action: 'deny',
               source: 'user',
               toolName: policyToolName,
@@ -1731,23 +1742,17 @@ export class AgentSession implements Engine {
       return result
     })())
 
-    if (policy.kind === 'deny') {
-      audit('deny', 'policy', policy.reason)
-      return Promise.resolve({ behavior: 'deny', message: policy.reason })
-    }
-    if (settings.sandboxMode === 'disabled' && !CLAUDE_READ_TOOLS.has(toolName)) {
-      audit('deny', 'policy', LOCAL_EXECUTION_DISABLED_MESSAGE)
-      return Promise.resolve({ behavior: 'deny', message: LOCAL_EXECUTION_DISABLED_MESSAGE })
-    }
     const guiDecision = decideGuiPermission(policyToolName, settings)
-    if (guiDecision.kind === 'deny') {
-      audit('deny', 'policy', guiDecision.reason)
-      return Promise.resolve({ behavior: 'deny', message: guiDecision.reason })
-    }
-    if (this.meta.permissionMode === 'plan' && !CLAUDE_READ_TOOLS.has(toolName)) {
-      const message = '规划模式:只允许只读工具,不执行写入或命令。'
-      audit('deny', 'permission-mode', message)
-      return Promise.resolve({ behavior: 'deny', message })
+    const preflightDenial = claudePermissionPreflightDenial({
+      strategy: this.meta.taskStrategy, toolName: policyToolName, toolInput: policyInput,
+      policyKind: policy.kind, policyReason: policy.reason,
+      sandboxDisabled: settings.sandboxMode === 'disabled', readOnlyTool: CLAUDE_READ_TOOLS.has(toolName),
+      localExecutionDisabledMessage: LOCAL_EXECUTION_DISABLED_MESSAGE,
+      guiKind: guiDecision.kind, guiReason: 'reason' in guiDecision ? guiDecision.reason : undefined
+    })
+    if (preflightDenial) {
+      audit('deny', preflightDenial.source, preflightDenial.message)
+      return Promise.resolve({ behavior: 'deny', message: preflightDenial.message })
     }
     const idempotency = taskRuntimeRegistry.evaluateTool({
       sessionId: this.meta.id,

@@ -37,7 +37,6 @@ import type {
   PreviewAnnotation,
   PreviewAnnotationLocator,
   Project,
-  ProviderInput,
   ProviderView,
   QuickbarDispatchOptions,
   QuickbarDispatchResult,
@@ -67,9 +66,14 @@ import type {
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../../shared/types'
+import { createProviderProfileStoreActions, type ProviderProfileStoreActions } from './store/provider-profile-actions'
 import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
-
+import { createTaskPlanSlice, type TaskPlanSlice } from './store/task-plan-slice'
+import {
+  createProjectWorkspaceStoreSlice,
+  type ProjectWorkspaceStoreSlice
+} from './store/project-workspace-actions'
 let seq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
@@ -732,7 +736,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
+interface AppStore extends ExperienceModeSlice, TaskRecoveryActions, ProviderProfileStoreActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -887,10 +891,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions {
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
-  refreshProviders(): Promise<void>
-  createProvider(input: ProviderInput): Promise<void>
-  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<void>
-  deleteProvider(id: string): Promise<void>
   refreshProjects(): Promise<void>
   archiveProject(id: string, archived: boolean): Promise<void>
   deleteProject(id: string): Promise<void>
@@ -967,6 +967,7 @@ export const useStore = create<AppStore>((set, get) => {
   settings: {
     driveMode: 'core',
     defaultModel: '',
+    /** DriveMode 风险偏好描述,不再作为会话 permissionMode 默认值;会话 permissionMode 由 taskStrategy 派生。 */
     defaultPermissionMode: 'default',
     defaultProviderId: '',
     fallbackProviderId: '',
@@ -1033,6 +1034,8 @@ export const useStore = create<AppStore>((set, get) => {
   taskSnapshotsLoading: false,
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
+  ...createTaskPlanSlice((update) => set(update), () => get()),
+  ...createProjectWorkspaceStoreSlice(set, get),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -1151,11 +1154,12 @@ export const useStore = create<AppStore>((set, get) => {
         })
       })
     )
-    const secondaryLabels = ['history', 'providers', 'projects', 'task recovery']
+    const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
       window.agentDesk.listProviders().then((providers) => set({ providers })),
       window.agentDesk.listProjects().then((projects) => set({ projects })),
+      get().refreshProjectWorkspaces(),
       get().hydrateTaskRecoveryCandidates()
     ])
     secondaryResults.forEach((result, index) => {
@@ -1493,7 +1497,7 @@ export const useStore = create<AppStore>((set, get) => {
       providerId: entry.providerId,
       routingScope: entry.routingScope,
       engine: entry.engine,
-      permissionMode: entry.permissionMode,
+      taskStrategy: entry.taskStrategy,
       resumeSdkSessionId: entry.sdkSessionId,
       resumeSessionAt: entry.resumeSessionAt,
       title: entry.title
@@ -1712,8 +1716,10 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async setPermissionMode(mode) {
-    const id = get().activeId
-    if (id) await window.agentDesk.setPermissionMode(id, mode)
+    // P0 收编: setPermissionMode 已废弃,会话 permissionMode 由 taskStrategy 派生。
+    // 保留为空操作 + console.warn 以防外部插件/扩展调用时报错。
+    console.warn('[deprecated] setPermissionMode is no-op, use setTaskStrategy instead')
+    void mode
   },
 
   async setModel(model) {
@@ -2351,7 +2357,16 @@ export const useStore = create<AppStore>((set, get) => {
   async sendTerminalInput(text) {
     const terminal = get().workbench.terminal
     if (!terminal || terminal.exit) return
-    await window.agentDesk.writeTerminal(terminal.id, text)
+    try {
+      await window.agentDesk.writeTerminal(terminal.id, text)
+    } catch (error) {
+      set((state) => ({
+        workbench: {
+          ...state.workbench,
+          terminalError: error instanceof Error ? error.message : String(error)
+        }
+      }))
+    }
   },
 
   async closeTerminal() {
@@ -3746,30 +3761,7 @@ export const useStore = create<AppStore>((set, get) => {
     set({ rewindPanel: { open: false } })
   },
 
-  async refreshProviders() {
-    const providers = await window.agentDesk.listProviders()
-    set({ providers })
-  },
-
-  async createProvider(input) {
-    await window.agentDesk.createProvider(input)
-    await get().refreshProviders()
-  },
-
-  async updateProvider(id, patch) {
-    await window.agentDesk.updateProvider(id, patch)
-    await get().refreshProviders()
-  },
-
-  async deleteProvider(id) {
-    await window.agentDesk.deleteProvider(id)
-    await get().refreshProviders()
-    // 若 Provider 偏好被删,清空偏好;新建会话必须显式再选。
-    if (get().settings.defaultProviderId === id) {
-      await get().updateSettings({ defaultProviderId: '' })
-    }
-  },
-
+  ...createProviderProfileStoreActions(set, get),
   async refreshProjects() {
     const projects = await window.agentDesk.listProjects()
     set({ projects })
@@ -3862,6 +3854,7 @@ export const STRATEGY_OPTIONS: Array<{ value: SchedulerStrategy; label: string }
   { value: 'cost', label: '成本优先' }
 ]
 
+/** 仅供 RoutineEditor 使用,会话控制面不再引用。收编后会话 permissionMode 由 taskStrategy 派生。 */
 export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string }> = [
   { value: 'default', label: '默认(询问)' },
   { value: 'acceptEdits', label: '自动接受编辑' },
@@ -3889,7 +3882,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     key: 'caogen-relay',
     label: 'CaoGen 中转站模板(需配置 Key)',
-    baseUrl: 'https://gpt.zhangrui.xyz/dashboard',
+    baseUrl: 'https://ciyuan2api.com',
     models: [],
     engine: 'openai',
     hint: 'CaoGen 中转站预设入口。服务暂不作为默认可用 Provider;请填写自己的 API Key,再用“获取模型”确认可用模型。若控制台给出的 API 路径不同,按实际路径调整 Base URL。',

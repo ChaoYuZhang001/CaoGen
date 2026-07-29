@@ -1,7 +1,4 @@
-/**
- * 主进程 / 预加载 / 渲染进程共享的类型定义。
- * 仅包含类型(编译期擦除),两侧 tsconfig 都会引入本目录。
- */
+/** 主进程、预加载与渲染进程共享的编译期类型。 */
 import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, TaskRunOperationMetadata } from './effect-types'
 import type { TaskDagAutoMergeView, TaskDagFinalizationRecord, TaskDagFinalizationResolution, TaskDagFinalizationView } from './task-dag-finalization-types'
 import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-types'
@@ -11,7 +8,18 @@ import type { ProjectWorkspaceApi } from './project-workspace-types'
 import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
+import type { ProviderProfileApi } from './provider-profile-types'
+import type { TaskPlanApi, TaskStrategy } from './task-plan-types'
+import type { MigrationApi } from './migration-types'
+import type { StudioResultApi } from './studio-result-types'
+import type { ProjectDataLifecycleApi } from './data-lifecycle-types'
 export type { UserMessageAttachmentView } from './attachment-types'
+export type * from './provider-profile-types'
+export type * from './task-plan-types'
+export type * from './migration-types'
+export type * from './studio-result-types'
+export type * from './data-lifecycle-types'
+export type * from './project-aggregate-types'
 export type * from './workflow-types'
 export type * from './digital-worker-types'
 export type * from './project-workspace-types'
@@ -49,6 +57,7 @@ export type {
   TaskDagFinalizationView
 } from './task-dag-finalization-types'
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+/** 用户可理解的任务合同；与 Experience、Drive、Provider 和 permissionMode 正交。 */
 /** 本地执行策略。disabled 仅用于旧严格容器设置的 fail-closed 迁移。 */
 export type SandboxMode = 'disabled' | 'restrictedLocal' | 'loose'
 /** Native command lifecycle outcome; exitCode is meaningful only for exited. */ export type CommandTermination = 'exited' | 'timed_out' | 'aborted' | 'output_limit' | 'spawn_error' | 'not_started'
@@ -67,9 +76,7 @@ export type ModelRoutingTaskKind =
   | 'planning'
   | 'testing'
   | 'documentation'
-
 export type ModelRoutingRiskLevel = 'low' | 'medium' | 'high'
-
 export type ModelRoutingKeywordMode = 'any' | 'all'
 
 export interface ModelRoutingRule {
@@ -103,6 +110,10 @@ export interface CaoGenDrivePolicyView {
   summary: string
   schedulerStrategy: SchedulerStrategy
   defaultModel: string
+  /**
+   * 风险偏好描述，不再设置会话 permissionMode。
+   * 收编后会话 permissionMode 由 taskStrategy 派生；此字段仅供设置页展示和 Routine 创建时参考。
+   */
   defaultPermissionMode: PermissionModeId
   sessionBudgetUsd: number
   validationDepth: CaoGenDriveValidationDepth
@@ -342,6 +353,16 @@ export interface SessionMeta {
   resumeSessionAt?: string
   /** Agent 引擎;由会话 Provider 配置自动决定。 */
   engine?: EngineKind
+  /** 查看/规划/执行；决定任务是否可以产生外部或工作区副作用。 */
+  taskStrategy: TaskStrategy
+  /**
+   * 权限模式（派生只读）。
+   * 收编后此字段由 derivePermissionModeFromStrategy(taskStrategy) 派生，
+   * 不再接受用户或模型直接设置。旧值仅用于老会话迁移检测。
+   * 值域不变:'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+   *   - 'plan':保留用于向后兼容，不再被派生给任何 TaskStrategy
+   *   - 'bypassPermissions':仅 Routine 可用，会话内不出现
+   */
   permissionMode: PermissionModeId
   status: SessionStatus
   sdkSessionId?: string
@@ -384,6 +405,8 @@ export interface HistoryEntry {
   providerId: string
   routingScope?: SessionRoutingScope
   engine?: EngineKind
+  /** 旧历史缺失时迁移为 execute。 */
+  taskStrategy?: TaskStrategy
   permissionMode: PermissionModeId
   sdkSessionId: string
   createdAt: number
@@ -421,6 +444,12 @@ export interface CreateSessionOptions {
   resumeSessionAt?: string
   /** 兼容旧调用;新会话会忽略此值并从 Provider 解析引擎。 */
   engine?: EngineKind
+  taskStrategy?: TaskStrategy
+  /**
+   * @deprecated 收编后此字段被后端忽略。
+   * permissionMode 由 taskStrategy 派生，不接受外部设置。
+   * 保留字段仅为向后兼容旧调用方(IDE bridge、resumeFromHistory 等)。
+   */
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
@@ -438,7 +467,12 @@ export interface DispatchSubagentTaskInput {
   model?: string
   providerId?: string
   engine?: EngineKind
+  /**
+   * @deprecated 收编后子会话 permissionMode 由 taskStrategy 派生，此字段被忽略。
+   */
   permissionMode?: PermissionModeId
+  /** 新增:子任务策略。未指定时继承父会话 taskStrategy。 */
+  taskStrategy?: TaskStrategy
 }
 
 export interface DispatchSubagentsInput {
@@ -1102,6 +1136,8 @@ export interface Provider {
   activeKeyId?: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
+  /** 鉴权方式。旧数据缺省为 api-key；none 只允许本机回环 OpenAI 兼容服务。 */
+  authMode?: ProviderAuthMode
   /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
   engine?: EngineKind
   /**
@@ -1162,12 +1198,18 @@ export interface ProviderApiKeyView {
 /** OpenAI 引擎可用的 API 协议 */
 export type OpenAIProtocol = 'responses' | 'chat'
 
+/** Provider 鉴权方式；none 仅用于无需密钥的本机回环服务。 */
+export type ProviderAuthMode = 'api-key' | 'none'
+
 /** 渲染进程可见的 Provider:不含密钥,只标记是否已配置 token */
 export interface ProviderView {
   id: string
   name: string
   baseUrl: string
   models: string[]
+  authMode: ProviderAuthMode
+  /** 已具备可路由条件：无需鉴权，或至少有一把当前可用密钥。 */
+  ready: boolean
   engine: EngineKind
   customHeaders?: string
   credentialHeaderNames?: string[]
@@ -1320,6 +1362,7 @@ export interface ProviderInput {
   name: string
   baseUrl: string
   models: string[]
+  authMode?: ProviderAuthMode
   engine?: EngineKind
   customHeaders?: string
   /** 额外受管鉴权头名称;头值始终取 Broker 中的 Provider token。 */
@@ -1357,6 +1400,7 @@ export interface ProviderModelFetchInput {
   customHeaders?: string
   credentialHeaderNames?: string[]
   openaiProtocol?: OpenAIProtocol
+  authMode?: ProviderAuthMode
 }
 
 export interface ProviderModelFetchError {
@@ -2145,24 +2189,6 @@ export interface BrowserObservation {
   networkFailures: string[]
 }
 
-/** D11 迁移向导:检测到的他家 Agent 资产 */
-export interface MigrationAsset {
-  /** 来源 Agent 名(Cursor / Codex / Cline …) */
-  agent: string
-  /** rules = 规则/记忆文件;mcp = MCP 配置;config = 其他配置 */
-  kind: 'rules' | 'mcp' | 'config'
-  path: string
-  name: string
-  preview: string
-}
-
-export interface MigrationScan {
-  cwd: string
-  assets: MigrationAsset[]
-  /** 本机/本项目已有 Claude Code 原生资产(CaoGen 直接继承,无需导入) */
-  claudeNative: boolean
-}
-
 export interface SessionEventPayload {
   sessionId: string
   /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
@@ -2213,7 +2239,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2278,13 +2304,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   deleteHistory(id: string): Promise<void>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
-  listProviders(): Promise<ProviderView[]>
-  createProvider(provider: ProviderInput): Promise<ProviderView>
-  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
-  deleteProvider(id: string): Promise<void>
-  fetchProviderModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult>
-  listProviderHealth(): Promise<ProviderHealthView[]>
-  listEngines(): Promise<EngineInfo[]>
   scanPluginRegistry(
     sessionId?: string,
     options?: PluginRegistryScanOptions
@@ -2363,8 +2382,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   resizeTerminal(id: string, cols: number, rows: number): Promise<void>
   closeTerminal(id: string): Promise<void>
   onTerminalEvent(cb: (event: TerminalEvent) => void): () => void
-  scanMigration(cwd: string): Promise<MigrationScan>
-  importMigrationAssets(cwd: string, paths: string[]): Promise<string>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>
   deleteProject(id: string): Promise<void>

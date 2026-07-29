@@ -34,7 +34,7 @@ import {
   mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, requireDagPromptAccepted, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
-  type ManagedSessionCreationOptions, type OrchestrationState, type SessionNotificationState
+  type ManagedSessionCreationOptions, type OrchestrationState
 } from './session-manager-support'
 import { SessionSupervisorRuntime } from './session-supervisor-runtime'
 import {
@@ -43,6 +43,7 @@ import {
   shouldCleanupTaskSnapshot,
   taskSnapshotReason
 } from './session-task-run-events'
+import { SessionNotificationCoordinator } from './notification/session-notification-coordinator'
 import { showDesktopNotification } from './desktopNotify'
 import { scheduleAutoSkillReview } from './skill/auto-skill-review'
 import { clearIdeDocumentContext } from './ide/ide-document-context'
@@ -77,6 +78,8 @@ import { decomposeTask } from './agent/task-decomposer'
 import { createModelDagDecomposer } from './agent/model-dag-decomposer'
 import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
 import { TaskDagFinalizationCoordinator } from './task/dag-finalization-coordinator'
+import { requirePlanningTaskStrategy } from './task/task-strategy'
+import { TaskPlanSessionCoordinator } from './task/task-plan-session-coordinator'
 import { ModelCrossValidationRuntime } from './model/cross-validation-runtime'
 import type {
   AgentEvent,
@@ -100,33 +103,25 @@ import type {
   TaskSnapshotRecord,
   TaskSnapshotReason,
   TaskSnapshotSubtaskState,
+  TaskPlanApprovalInput,
+  TaskPlanDraftInput,
+  TaskPlanStateView,
   TaskRunRecord,
   TranscriptEntry
 } from '../shared/types'
 import type { ModelAttemptReconciliationResolution } from '../shared/model-attempt-types'
+import { resumeProjectDeletions } from './data-lifecycle/project-deletion-coordinator'
 
 const TASK_SNAPSHOT_RECONCILIATION_CONCURRENCY = 4
 
-function trimForNotification(text: string, max = 120): string {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
-}
-
-function formatDuration(ms: number | undefined): string | undefined {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const seconds = Math.round(ms / 1000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
-}
-
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly taskPlans = new TaskPlanSessionCoordinator(
+    (id) => this.sessions.get(id), () => app.getPath('userData'))
   private readonly taskRuns = taskRuntimeRegistry
   private readonly sessionEventListeners = new Set<(payload: SessionEventPayload) => void>()
-  private readonly notificationStates = new Map<string, SessionNotificationState>()
+  private readonly notifications = new SessionNotificationCoordinator(
+    (id) => this.sessions.get(id)?.meta)
   /** 真编排事件总线:orchestrationId → 状态;全部 child 首轮完成后回灌父 Agent */
   private readonly orchestrations = new Map<string, OrchestrationState>()
   /** DAG 编排:executionId → 调度器;按依赖层释放 child sessions。 */
@@ -203,6 +198,34 @@ class SessionManager {
 
   get(id: string): Engine | undefined {
     return this.sessions.get(id)
+  }
+
+  async setTaskStrategy(id: string, value: unknown): Promise<void> {
+    await this.taskPlans.setStrategy(id, value)
+  }
+
+  getTaskPlan(id: string): TaskPlanStateView {
+    return this.taskPlans.get(id)
+  }
+
+  createTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+    return this.taskPlans.createManualVersion(id, draft)
+  }
+
+  createAgentTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+    return this.taskPlans.createAgentVersion(id, draft)
+  }
+
+  approveTaskPlan(id: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView> {
+    return this.taskPlans.approve(id, input)
+  }
+
+  revokeTaskPlanApproval(id: string, input: TaskPlanApprovalInput): TaskPlanStateView {
+    return this.taskPlans.revoke(id, input)
+  }
+
+  assertInteractiveExecutionAuthorized(id: string, action: string): void {
+    this.taskPlans.assertInteractiveExecution(id, action)
   }
 
   subscribe(listener: (payload: SessionEventPayload) => void): () => void {
@@ -342,6 +365,7 @@ class SessionManager {
   ): boolean {
     const session = this.sessions.get(id)
     if (!session) return false
+    if (!this.taskPlans.authorizeSend(session)) return false
     const currentRun = this.taskRuns.get(id)
     if (this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true)) {
       session.rejectSend('Supervisor 已暂停或仅授权重试；必须通过受信控制路径恢复后才能继续执行。')
@@ -437,6 +461,7 @@ class SessionManager {
   ): Promise<SubagentDispatchResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    this.taskPlans.assertExecution(parent.meta, '派发子 Agent')
     const tasks = Array.isArray(input?.tasks) ? input.tasks : []
     if (tasks.length === 0) throw new Error('至少需要一个子代理任务')
     if (tasks.length > 33) throw new Error('一次最多派发 33 个子代理')
@@ -473,7 +498,7 @@ class SessionManager {
           model: task.model ?? input.model ?? parent.meta.model,
           providerId: task.providerId ?? input.providerId ?? parent.meta.providerId,
           engine: task.engine ?? input.engine ?? parent.meta.engine,
-          permissionMode: task.permissionMode ?? input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: task.taskStrategy ?? parent.meta.taskStrategy,
           title,
           parentSessionId,
           orchestrationId,
@@ -516,6 +541,7 @@ class SessionManager {
   async decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    requirePlanningTaskStrategy(parent.meta, '拆解任务 DAG')
     const request: TaskDecomposeInput = {
       ...input,
       cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -542,9 +568,11 @@ class SessionManager {
   ): Promise<TaskDagDispatchResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    this.taskPlans.assertExecution(parent.meta, '执行任务 DAG')
     const children: SubagentDispatchResult['children'] = []
     const scheduler = new TaskDagScheduler(parentSessionId, input, {
       runTask: async (task, context) => {
+        this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
         const prompt = buildDagTaskPrompt(task, context)
         const meta = await this.createManaged({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -553,7 +581,7 @@ class SessionManager {
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
-          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: parent.meta.taskStrategy,
           title: `${task.title}${context.attempt > 1 ? ` · 重试 ${context.attempt - 1}` : ''}`,
           parentSessionId,
           orchestrationId: input.dag.id,
@@ -603,6 +631,7 @@ class SessionManager {
       runTask: async (task, context) => {
         const parent = this.sessions.get(parentSessionId)
         if (!parent) throw new Error('Parent session no longer exists for recovered DAG')
+        this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
         const prompt = buildDagTaskPrompt(task, context)
         const meta = await this.createManaged({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -611,7 +640,7 @@ class SessionManager {
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
-          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: parent.meta.taskStrategy,
           title: `${task.title}${context.attempt > 1 ? ` retry ${context.attempt - 1}` : ''}`,
           parentSessionId,
           orchestrationId: input.dag.id,
@@ -802,7 +831,7 @@ class SessionManager {
     this.snapshotCounts.delete(id)
     this.recentEventIds.delete(id)
     this.persistActiveSessions()
-    this.notificationStates.delete(id)
+    this.notifications.delete(id)
     clearIdeDocumentContext(id)
     this.modelAttemptRecoveryGate.clearSession(id)
     this.acknowledgeSessionCreation(id)
@@ -841,7 +870,7 @@ class SessionManager {
       this.workflow.persistShutdownSnapshot(id, this.workflow.captureSnapshot(id, 'shutdown', 0, 'status'))))
     await flushTaskSnapshotMutations()
     this.sessions.clear()
-    this.notificationStates.clear()
+    this.notifications.clear()
     this.taskRuns.clear()
     this.recentEventIds.clear()
     this.modelAttemptRecoveryGate.clear()
@@ -1162,6 +1191,7 @@ class SessionManager {
     configureModelStatsDir(app.getPath('userData'))
     configureProviderHealthDir(app.getPath('userData'))
     registerBuiltinEngines()
+    await resumeProjectDeletions(app.getPath('userData'))
     await this.modelAttemptRecoveryGate.initialize(app.getPath('userData'))
     await this.dagFinalizationCoordinator.load()
     const persistedTaskRuns = await listPersistedTaskRuns()
@@ -1338,7 +1368,7 @@ class SessionManager {
     this.emitToSubscribers(payload)
     this.dispatchChildResult(sessionId, session, event)
     this.handleEnginePowerBlocker(sessionId, event)
-    this.handleNotification(sessionId, event)
+    this.notifications.handle(sessionId, event)
     this.handleAutoSkillReview(sessionId, event)
     this.workflow.handleEvent(sessionId, event, identity)
     void this.modelCrossValidation.handleEvent(sessionId, event, identity).catch((error) => {
@@ -1702,90 +1732,6 @@ class SessionManager {
     return { ...event, costUsd: nextCost }
   }
 
-  private notificationState(sessionId: string): SessionNotificationState {
-    let state = this.notificationStates.get(sessionId)
-    if (!state) {
-      state = {
-        turnActive: false,
-        permissionNotified: false,
-        terminalNotified: false
-      }
-      this.notificationStates.set(sessionId, state)
-    }
-    return state
-  }
-
-  private sessionNotificationLabel(meta: SessionMeta | undefined): string {
-    if (!meta) return '未知会话'
-    if (meta.title && meta.title !== '新会话') return trimForNotification(meta.title, 80)
-    return trimForNotification(meta.cwd, 100)
-  }
-
-  private notify(sessionId: string, title: string, body: string): void {
-    // 读取当前设置(而非缓存),用户随时可关闭桌面通知
-    if (!getSettings().notificationsEnabled) return
-    showDesktopNotification({ title, body, sessionId })
-  }
-
-  private handleNotification(sessionId: string, event: AgentEvent): void {
-    if (!this.sessions.has(sessionId) && !this.notificationStates.has(sessionId)) return
-    const state = this.notificationState(sessionId)
-    const meta = this.sessions.get(sessionId)?.meta
-    const label = this.sessionNotificationLabel(meta)
-
-    if (event.kind === 'user-message') {
-      state.turnActive = true
-      state.permissionNotified = false
-      state.terminalNotified = false
-      return
-    }
-
-    if (event.kind === 'status') {
-      if (event.status === 'running' && !state.turnActive) {
-        state.turnActive = true
-        state.permissionNotified = false
-        state.terminalNotified = false
-      } else if (event.status === 'error') {
-        if (!state.terminalNotified) {
-          const error = event.error || meta?.lastError || '未知错误'
-          this.notify(sessionId, 'CaoGen: 任务失败', `${label} · ${trimForNotification(error)}`)
-          state.terminalNotified = true
-        }
-        state.turnActive = false
-      } else if (event.status === 'idle' || event.status === 'closed') {
-        state.turnActive = false
-        if (event.status === 'closed') this.notificationStates.delete(sessionId)
-      }
-      return
-    }
-
-    if (event.kind === 'permission-request') {
-      if (!state.permissionNotified) {
-        const tool = trimForNotification(event.request.toolName, 60)
-        this.notify(sessionId, 'CaoGen: 等待权限', `${label} · ${tool}`)
-        state.permissionNotified = true
-      }
-      return
-    }
-
-    if (event.kind === 'turn-result') {
-      if (!state.terminalNotified) {
-        const bits = [label]
-        const duration = formatDuration(event.durationMs)
-        if (duration) bits.push(duration)
-        if (typeof event.costUsd === 'number' && Number.isFinite(event.costUsd)) {
-          bits.push(`$${event.costUsd.toFixed(4)}`)
-        }
-        if (event.isError && event.resultText) {
-          bits.push(trimForNotification(event.resultText))
-        }
-        this.notify(sessionId, event.isError ? 'CaoGen: 任务失败' : 'CaoGen: 任务完成', bits.join(' · '))
-        state.terminalNotified = true
-      }
-      state.turnActive = false
-    }
-  }
-
   private persist(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1817,6 +1763,7 @@ class SessionManager {
       providerId: meta.providerId,
       routingScope: meta.routingScope,
       engine: meta.engine,
+      taskStrategy: meta.taskStrategy,
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
       createdAt: meta.createdAt,
