@@ -27,10 +27,9 @@ import { clipToolOutput } from './agent/tool-output'
 import type { CodeForgeWorktreeContext } from './code-forge/delivery'
 import {
   GENESIS_ORCHESTRATE_TOOL_NAME,
-  buildGenesisOrchestration,
-  formatGenesisOrchestrationReport,
   type GenesisOrchestrationInput
 } from './genesis/orchestrator'
+import { buildGenesisPlanContract } from './task/genesis-plan-contract'
 import { resolveExistingProjectPathSync, resolveWritableProjectPathSync } from './utils/safe-project-path'
 import { OPENAI_PERMISSION_READ_ONLY_TOOLS } from './task/tool-idempotency'
 import { SkillManager } from './skill/skill-manager'
@@ -350,7 +349,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           model: { type: 'string', description: '可选:子 Agent 模型' },
           providerId: { type: 'string', description: '可选:子 Agent Provider' },
           engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
-          permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
+          permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'], description: '(deprecated) 收编后子会话 permissionMode 由 taskStrategy 派生，此参数被忽略。' },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
           autoMerge: { type: 'boolean', description: '是否在 DAG 成功后自动合并 worktree;默认 false' },
@@ -376,7 +375,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           model: { type: 'string', description: '可选:拆解和子 Agent 模型' },
           providerId: { type: 'string', description: '可选:拆解和子 Agent Provider' },
           engine: { type: 'string', enum: ['claude', 'anthropic', 'openai'] },
-          permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'] },
+          permissionMode: { type: 'string', enum: ['default', 'acceptEdits', 'plan', 'bypassPermissions'], description: '(deprecated) 收编后子会话 permissionMode 由 taskStrategy 派生，此参数被忽略。' },
           maxRetries: { type: 'number', description: '每个子任务失败后的最大重试次数,默认 2,最大 5' },
           taskTimeoutMs: { type: 'number', description: '单个子任务运行超时毫秒数;默认 20 分钟,<=0 关闭超时' },
           autoMerge: { type: 'boolean', description: '是否在 DAG 成功后自动合并 worktree;默认 false' },
@@ -680,8 +679,10 @@ function dagDispatchInputArgs(args: Record<string, unknown>, dag: TaskDag, cwd: 
   if (providerId) input.providerId = providerId
   const engine = engineArg(args.engine)
   if (engine) input.engine = engine
-  const permissionMode = permissionModeArg(args.permissionMode)
-  if (permissionMode) input.permissionMode = permissionMode
+  // P0 收编: 忽略模型传入的 permissionMode, 子会话 permissionMode 由 taskStrategy 派生。
+  // permissionModeArg(args.permissionMode) 的结果不再写入 input。
+  void args.permissionMode
+  void permissionModeArg
   const maxRetries = numberArg(args.maxRetries)
   if (maxRetries !== undefined) input.maxRetries = maxRetries
   const taskTimeoutMs = numberArg(args.taskTimeoutMs)
@@ -870,10 +871,9 @@ export async function executeCodingTool(
         const result = await manager.decomposeTask(parentSessionId, decomposeInputArgs(args, cwd))
         return { ok: true, output: clip(JSON.stringify(result, null, 2)) }
       }
-      case GENESIS_ORCHESTRATE_TOOL_NAME: {
-        const result = await buildGenesisOrchestration(genesisInputArgs(args, cwd))
-        return { ok: true, output: clip(formatGenesisOrchestrationReport(result)) }
-      }
+      case GENESIS_ORCHESTRATE_TOOL_NAME:
+        return { ok: true, output: clip(JSON.stringify(await buildGenesisPlanContract(
+          sessionIdArg(options), genesisInputArgs(args, cwd)), null, 2)) }
       case 'task_dispatch_dag': {
         const parentSessionId = sessionIdArg(options)
         const manager = await loadSessionManager()

@@ -8,10 +8,11 @@ import {
   grantTemporaryGuiAutomation,
   type GuiPermissionDecision
 } from './permission/permission-manager'
-import { writeAuditLog } from './permission/audit-log'
+import { writeSessionAuditLog } from './permission/audit-log'
 import { evaluateToolPermission, type ToolPermissionDecision } from './permission/tool-permission'
 import { taskRuntimeRegistry, type ToolIdempotencyDecision } from './task/task-runtime-registry'
 import { isDisabledModeInspectionToolCall, isReadOnlyToolCall } from './task/tool-idempotency'
+import { decideTaskStrategyTool } from './task/task-strategy'
 import { digitalWorkerToolPolicyError } from './digital-worker/tool-action-policy'
 import {
   cancelEffectExecution,
@@ -65,7 +66,7 @@ export class NativeToolRuntime {
     if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && pending.info.toolName.startsWith('gui_')) {
       grantTemporaryGuiAutomation()
     }
-    writeAuditLog(this.meta.cwd, {
+    writeSessionAuditLog(this.meta, {
       action: allow ? 'allow' : 'deny',
       source: 'user',
       toolName: pending.info.toolName,
@@ -130,7 +131,7 @@ export class NativeToolRuntime {
       return this.requestToolPermission(name, input, toolUseId, guiDecision.reason)
     }
     if (policy.kind === 'allow') {
-      writeAuditLog(this.meta.cwd, {
+      writeSessionAuditLog(this.meta, {
         action: 'allow',
         source: 'policy',
         toolName: name,
@@ -201,7 +202,7 @@ export class NativeToolRuntime {
     const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
     if (policy.kind === 'deny') {
-      writeAuditLog(this.meta.cwd, {
+      writeSessionAuditLog(this.meta, {
         action: 'deny',
         source: 'policy',
         toolName: name,
@@ -214,6 +215,19 @@ export class NativeToolRuntime {
     }
 
     const readOnlyCall = isReadOnlyToolCall(name, input)
+    const strategyDecision = decideTaskStrategyTool(this.meta.taskStrategy, name, input)
+    if (!strategyDecision.allow) {
+      this.auditGateDecision(
+        'deny',
+        'task-strategy',
+        name,
+        input,
+        strategyDecision.message ?? '任务策略拒绝执行',
+        policy.risk.level,
+        policy.risk.reasons
+      )
+      return { allow: false, message: strategyDecision.message ?? '任务策略拒绝执行' }
+    }
     const disabledModeInspectionCall = isDisabledModeInspectionToolCall(name)
     if (settings.sandboxMode === 'disabled' && !disabledModeInspectionCall) {
       this.auditGateDecision(
@@ -234,20 +248,6 @@ export class NativeToolRuntime {
         policy.risk.reasons
       )
       return { allow: false, message: guiDecision.reason }
-    }
-    const mode = this.meta.permissionMode
-    if (mode === 'plan' && !readOnlyCall) {
-      const message = '规划模式:只允许只读工具和 search_replace dry_run 预览，不执行写入或命令'
-      this.auditGateDecision(
-        'deny',
-        'permission-mode',
-        name,
-        input,
-        message,
-        policy.risk.level,
-        policy.risk.reasons
-      )
-      return { allow: false, message }
     }
     const idempotency = taskRuntimeRegistry.evaluateTool({
       sessionId: this.meta.id,
@@ -380,14 +380,14 @@ export class NativeToolRuntime {
 
   private auditGateDecision(
     action: 'allow' | 'deny' | 'ask',
-    source: 'policy' | 'permission-mode' | 'idempotency',
+    source: 'policy' | 'permission-mode' | 'task-strategy' | 'idempotency',
     toolName: string,
     input: Record<string, unknown>,
     message: string,
     riskLevel: ToolRiskLevel,
     riskReasons: string[]
   ): void {
-    writeAuditLog(this.meta.cwd, { action, source, toolName, input, message, riskLevel, riskReasons })
+    writeSessionAuditLog(this.meta, { action, source, toolName, input, message, riskLevel, riskReasons })
   }
 
   private requestToolPermission(
@@ -467,7 +467,7 @@ export class NativeToolRuntime {
       input,
       cwd: this.meta.cwd
     })
-    writeAuditLog(this.meta.cwd, {
+    writeSessionAuditLog(this.meta, {
       action: 'execute',
       source: 'local-execution',
       toolName: name,

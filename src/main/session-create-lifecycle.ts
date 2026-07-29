@@ -6,10 +6,11 @@ import { resolveSessionModelRoute } from './model/session-routing'
 import { getProject, touchProject } from './projects'
 import { getSettings } from './settings'
 import { listHistory } from './history'
-import { decryptProviderToken, getProvider, listProviders, resolveProviderEngine } from './providers'
+import { getProvider, listProviders, providerIsReady, resolveProviderEngine } from './providers'
 import { executeManagedWorktreeCreateEffect } from './ipc/worktree-operation-handlers'
 import { openProjectWorkspaceStore, type ProjectWorkspaceStore } from './project-workspace/store'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
+import { normalizeTaskStrategy, derivePermissionModeFromStrategy, migrateLegacyPermissionMode } from './task/task-strategy'
 import {
   inspectManagedWorktreeIdentity,
   inspectManagedWorktreeRegistryRecord,
@@ -56,12 +57,15 @@ export function prepareSessionCreationDraft(
   const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode)
   const provider = explicitSessionProvider(selectedProviderId, selectedModel)
   const unassigned = sessionUnassigned(opts, resumeHistory, parentMeta)
-  const projectId = sessionProjectId(opts, resumeHistory, parentMeta, unassigned)
   const domainOwnership = resolveSessionDomainOwnership(opts, resumeHistory, parentMeta, unassigned)
+  const projectId = sessionProjectId(
+    opts, resumeHistory, parentMeta, unassigned, Boolean(domainOwnership.workspaceId)
+  )
   const baseMeta = createSessionDraftMeta({
     opts, resumeHistory, resumeWorktreeRecord, driveMode, routingScope, projectId,
     ...domainOwnership, unassigned,
     selectedModel, selectedProviderId, engine: resolveProviderEngine(provider),
+    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta),
     defaultPermissionMode: drivePolicy.defaultPermissionMode
   })
   if (resumeHistory && resumeWorktreeRecord) {
@@ -85,11 +89,31 @@ interface SessionDraftMetaInput {
   selectedModel: string
   selectedProviderId: string
   engine: NonNullable<SessionMeta['engine']>
+  taskStrategy: SessionMeta['taskStrategy']
   defaultPermissionMode: SessionMeta['permissionMode']
 }
 
 function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
   const { opts, resumeHistory, resumeWorktreeRecord } = input
+  // P0 收编: permissionMode 由 taskStrategy 派生，不再接受外部直接设置。
+  // 恢复会话时检测旧 bypassPermissions/plan 值并记录迁移标记(P0 仅 console.warn, P1-3 再实现 banner)。
+  const migration = resumeHistory
+    ? migrateLegacyPermissionMode(resumeHistory.permissionMode, input.taskStrategy)
+    : null
+  const derivedPermissionMode = migration
+    ? migration.mode
+    : derivePermissionModeFromStrategy(input.taskStrategy)
+  if (migration?.downgradedFromBypass) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='bypassPermissions' 已降级为派生值 '${derivedPermissionMode}'(taskStrategy=${input.taskStrategy})。` +
+      `如需跳过权限请在 Routine 中配置。`
+    )
+  }
+  if (migration?.migratedFromPlan) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='plan' 已被派生值 '${derivedPermissionMode}' 覆盖(taskStrategy=${input.taskStrategy})。`
+    )
+  }
   const meta = newSessionMeta({
     ...sessionOwnership(opts, resumeHistory),
     ...sessionWorktreeIdentity(resumeHistory, resumeWorktreeRecord),
@@ -103,7 +127,8 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     budgetUsd: positiveNumber(opts.budgetUsd),
     resumeSessionAt: opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt,
     engine: input.engine,
-    permissionMode: opts.permissionMode ?? resumeHistory?.permissionMode ?? input.defaultPermissionMode,
+    taskStrategy: input.taskStrategy,
+    permissionMode: derivedPermissionMode,
     title: opts.title ?? resumeHistory?.title
   })
   return {
@@ -416,7 +441,19 @@ export function sessionMetaForPlacement(
 
 export function sessionMetaForRecovery(meta: SessionMeta): SessionMeta {
   const ownership = assertSessionDomainOwnership(meta)
-  return applySessionPlacement({ ...meta, ...ownership }, recoverySessionPlacement(meta))
+  return applySessionPlacement({
+    ...meta,
+    ...ownership,
+    taskStrategy: normalizeTaskStrategy(meta.taskStrategy)
+  }, recoverySessionPlacement(meta))
+}
+
+function sessionTaskStrategy(
+  opts: CreateSessionOptions,
+  history?: HistoryEntry,
+  parentMeta?: SessionMeta
+): SessionMeta['taskStrategy'] {
+  return normalizeTaskStrategy(history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy)
 }
 
 export function assertTaskSnapshotWorktreeProjection(
@@ -634,10 +671,10 @@ function initialProviderId(
 function explicitSessionProvider(providerIdInput: string, model: string) {
   if (!model) throw new Error('请选择模型或显式选择自动调度')
   const providerId = providerIdInput.trim()
-  if (!providerId) throw new Error('请选择已配置 API key 的 Provider')
+  if (!providerId) throw new Error('请选择可用 Provider')
   const provider = getProvider(providerId)
   if (!provider) throw new Error(`Provider 不存在:${providerId}`)
-  if (!decryptProviderToken(provider)) throw new Error(`请先在设置里为 ${provider.name} 填写 API key`)
+  if (!providerIsReady(provider)) throw new Error(`请先在设置里完成 ${provider.name} 的鉴权配置`)
   return provider
 }
 
@@ -645,11 +682,12 @@ function sessionProjectId(
   opts: CreateSessionOptions,
   resumeHistory: HistoryEntry | undefined,
   parentMeta: SessionMeta | undefined,
-  unassigned: boolean
+  unassigned: boolean,
+  canonicalWorkspaceOwned = false
 ): string | undefined {
   const projectId = resumeHistory?.projectId ?? opts.projectId ?? parentMeta?.projectId
   if (projectId && !getProject(projectId)) throw new Error('关联项目不存在，请重新选择项目')
-  if (projectId || unassigned) return projectId
+  if (projectId || unassigned || canonicalWorkspaceOwned) return projectId
   return touchProject(opts.cwd).id
 }
 

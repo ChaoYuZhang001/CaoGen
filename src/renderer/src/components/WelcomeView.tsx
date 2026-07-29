@@ -4,35 +4,77 @@ import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+import type { CaoGenDriveMode, Project, TaskStrategy } from '../../../shared/types'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 import AssistantStartNotice from './experience/AssistantStartNotice'
+import TaskStrategyControl from './experience/TaskStrategyControl'
 import WelcomeRoutingControls, {
   AssistantComputeIndicator
 } from './experience/WelcomeRoutingControls'
 import {
   assistantSafeStartError,
   hasAvailableCompute,
+  NEW_PROJECT_SESSION_CHOICE,
   welcomeSessionOptions,
   welcomeValidationKey,
   type WelcomeRoutingMode
 } from './experience/welcome-session-projection'
 
-const NEW_PROJECT = '__new_project__'
 const UNASSIGNED = '__unassigned__'
+
+function initialModel(defaultModel: string, provider?: { models: string[] }): string {
+  if (!provider) return ''
+  return defaultModel && provider.models.includes(defaultModel) ? defaultModel : AUTO_MODEL
+}
+
+function requestedProjectSelection(
+  requestedProjectId: string | null,
+  projects: Project[]
+): { choice: string; cwd: string } | undefined {
+  if (requestedProjectId === NEW_PROJECT_SESSION_CHOICE) {
+    return { choice: NEW_PROJECT_SESSION_CHOICE, cwd: '' }
+  }
+  const project = projects.find((item) => item.id === requestedProjectId)
+  return project ? { choice: project.id, cwd: project.path } : undefined
+}
 
 interface WelcomeTool {
   key: string
   labelKey: string
   promptKey: string
   icon: HeaderIconName
+  taskStrategy: TaskStrategy
 }
 
 const WELCOME_TOOLS: WelcomeTool[] = [
-  { key: 'explore', labelKey: 'welcomeExploreCode', promptKey: 'welcomeExploreCodePrompt', icon: 'files' },
-  { key: 'build', labelKey: 'welcomeBuildFeature', promptKey: 'welcomeBuildFeaturePrompt', icon: 'terminal' },
-  { key: 'review', labelKey: 'welcomeReviewCode', promptKey: 'welcomeReviewCodePrompt', icon: 'review' },
-  { key: 'fix', labelKey: 'welcomeFixIssue', promptKey: 'welcomeFixIssuePrompt', icon: 'subagents' }
+  {
+    key: 'understand',
+    labelKey: 'welcomeUnderstandProject',
+    promptKey: 'welcomeUnderstandProjectPrompt',
+    icon: 'summary',
+    taskStrategy: 'view'
+  },
+  {
+    key: 'review',
+    labelKey: 'welcomeReviewChanges',
+    promptKey: 'welcomeReviewChangesPrompt',
+    icon: 'review',
+    taskStrategy: 'view'
+  },
+  {
+    key: 'report',
+    labelKey: 'welcomeOrganizeReport',
+    promptKey: 'welcomeOrganizeReportPrompt',
+    icon: 'files',
+    taskStrategy: 'execute'
+  },
+  {
+    key: 'plan',
+    labelKey: 'welcomePlanTask',
+    promptKey: 'welcomePlanTaskPrompt',
+    icon: 'subagents',
+    taskStrategy: 'plan'
+  }
 ]
 
 /**
@@ -48,49 +90,70 @@ export default function WelcomeView(): React.JSX.Element {
   const requestedProjectId = useStore((s) => s.newSessionProjectId)
   const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
   const refreshProviders = useStore((s) => s.refreshProviders)
+  const activateLocalCompute = useStore((s) => s.activateLocalCompute)
   const setShowSettings = useStore((s) => s.setShowSettings)
 
   const availableProjects = useMemo(() => projects.filter((project) => !project.archived), [projects])
-  const initialProject = availableProjects.find((project) => project.id === requestedProjectId) ?? availableProjects[0]
-  const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.hasToken)
+  const initialProject = requestedProjectSelection(requestedProjectId, availableProjects)
+  const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.ready)
   const [text, setText] = useState('')
-  const [projectChoice, setProjectChoice] = useState(initialProject?.id ?? NEW_PROJECT)
-  const [cwd, setCwd] = useState(initialProject?.path ?? '')
+  const [projectChoice, setProjectChoice] = useState(initialProject?.choice ?? UNASSIGNED)
+  const [cwd, setCwd] = useState(initialProject?.cwd ?? '')
   const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
   const [routingMode, setRoutingMode] = useState<WelcomeRoutingMode>('global')
   const [providerId, setProviderId] = useState(initialProvider?.id ?? '')
-  const [model, setModel] = useState(
-    initialProvider
-      ? settings.defaultModel && initialProvider.models.includes(settings.defaultModel)
-        ? settings.defaultModel
-        : AUTO_MODEL
-      : ''
-  )
-  const [permissionMode, setPermissionMode] = useState<PermissionModeId>(
-    caogenDrivePolicyView(settings.driveMode).defaultPermissionMode
-  )
+  const [model, setModel] = useState(initialModel(settings.defaultModel, initialProvider))
+  const [taskStrategy, setTaskStrategy] = useState<TaskStrategy>('execute')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [computeRecovery, setComputeRecovery] = useState(false)
+  const [localComputeStatus, setLocalComputeStatus] = useState<'idle' | 'checking' | 'ready' | 'unavailable'>('idle')
+  const localComputeActivation = useRef<Promise<boolean> | null>(null)
+  const submitPending = useRef(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const computeAvailable = hasAvailableCompute(providers)
 
+  const ensureLocalCompute = async (): Promise<boolean> => {
+    if (hasAvailableCompute(useStore.getState().providers)) return true
+    if (localComputeActivation.current) return localComputeActivation.current
+    setLocalComputeStatus('checking')
+    const pending = activateLocalCompute()
+      .then((result) => {
+        if (result.status !== 'activated' || !result.provider) {
+          setLocalComputeStatus('unavailable')
+          return false
+        }
+        setProviderId(result.provider.id)
+        setModel(AUTO_MODEL)
+        setLocalComputeStatus('ready')
+        return true
+      })
+      .catch(() => {
+        setLocalComputeStatus('unavailable')
+        return false
+      })
+      .finally(() => {
+        localComputeActivation.current = null
+      })
+    localComputeActivation.current = pending
+    return pending
+  }
+
   useEffect(() => {
-    if (projectChoice !== NEW_PROJECT || cwd || availableProjects.length === 0) return
-    setProjectChoice(availableProjects[0].id)
-    setCwd(availableProjects[0].path)
-  }, [availableProjects, cwd, projectChoice])
+    if (projection !== 'assistant' || computeAvailable || localComputeStatus !== 'idle') return
+    void ensureLocalCompute()
+  }, [computeAvailable, localComputeStatus, projection])
 
   useEffect(() => {
     if (!requestedProjectId) return
-    const requested = availableProjects.find((project) => project.id === requestedProjectId)
+    const requested = requestedProjectSelection(requestedProjectId, availableProjects)
     if (!requested) return
-    setProjectChoice(requested.id)
-    setCwd(requested.path)
+    setProjectChoice(requested.choice)
+    setCwd(requested.cwd)
   }, [availableProjects, requestedProjectId])
 
   useEffect(() => {
-    if (projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED) return
+    if (projectChoice === NEW_PROJECT_SESSION_CHOICE || projectChoice === UNASSIGNED) return
     if (availableProjects.some((project) => project.id === projectChoice)) return
     setProjectChoice(UNASSIGNED)
     setCwd('')
@@ -99,7 +162,7 @@ export default function WelcomeView(): React.JSX.Element {
   useEffect(() => {
     if (providerId) return
     const preferred = providers.find(
-      (provider) => provider.id === settings.defaultProviderId && provider.hasToken
+      (provider) => provider.id === settings.defaultProviderId && provider.ready
     )
     if (!preferred) return
     setProviderId(preferred.id)
@@ -150,10 +213,8 @@ export default function WelcomeView(): React.JSX.Element {
   }
 
   const onDriveChange = (mode: CaoGenDriveMode): void => {
-    const policy = caogenDrivePolicyView(mode)
     setDriveMode(mode)
     setModel(providerId ? AUTO_MODEL : '')
-    setPermissionMode(policy.defaultPermissionMode)
   }
 
   const onProjectChange = (choice: string): void => {
@@ -165,51 +226,71 @@ export default function WelcomeView(): React.JSX.Element {
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (dir) {
-      setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT)
+      setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT_SESSION_CHOICE)
       setCwd(dir)
       setError('')
       setComputeRecovery(false)
     }
   }
 
-  const submit = async (): Promise<void> => {
-    const prompt = text.trim()
-    if (!prompt || busy) return
+  const submit = async (
+    promptInput = text,
+    selectedStrategy = taskStrategy,
+    title?: string
+  ): Promise<void> => {
+    const prompt = promptInput.trim()
+    if (!prompt || busy || submitPending.current) return
+    submitPending.current = true
+    setBusy(true)
     const draft = {
       cwd,
       driveMode,
       model,
-      permissionMode,
+      taskStrategy: selectedStrategy,
       projectId: availableProjects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
       providerId,
       routingMode,
       unassigned: projectChoice === UNASSIGNED
     }
-    const validationKey = welcomeValidationKey(projection, draft, computeAvailable)
-    if (validationKey) {
-      setError(t(validationKey))
-      setComputeRecovery(projection === 'assistant' && validationKey === 'assistantComputeUnavailable')
-      return
-    }
-    setBusy(true)
-    setError('')
-    setComputeRecovery(false)
     try {
-      await startSessionWithPrompt(welcomeSessionOptions(projection, draft, prompt), prompt)
+      let available = computeAvailable
+      if (projection === 'assistant' && !available) available = await ensureLocalCompute()
+      const validationKey = welcomeValidationKey(projection, draft, available)
+      if (validationKey) {
+        setError(t(validationKey))
+        setComputeRecovery(projection === 'assistant' && validationKey === 'assistantComputeUnavailable')
+        return
+      }
+      setError('')
+      setComputeRecovery(false)
+      const options = welcomeSessionOptions(projection, draft, prompt)
+      await startSessionWithPrompt(title ? { ...options, title } : options, prompt)
     } catch (err) {
       const safeKey = assistantSafeStartError(projection, err)
       setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
       setComputeRecovery(Boolean(safeKey))
+    } finally {
+      submitPending.current = false
       setBusy(false)
     }
+  }
+
+  const startPreset = (tool: WelcomeTool): void => {
+    const prompt = t(tool.promptKey)
+    const title = t(tool.labelKey)
+    setText(prompt)
+    setTaskStrategy(tool.taskStrategy)
+    void submit(prompt, tool.taskStrategy, title)
   }
 
   const retryCompute = async (): Promise<void> => {
     setBusy(true)
     try {
-      await refreshProviders()
-      setError('')
-      setComputeRecovery(false)
+      const activated = await ensureLocalCompute()
+      if (!activated) await refreshProviders()
+      const available = hasAvailableCompute(useStore.getState().providers)
+      setError(available ? '' : t('assistantComputeUnavailable'))
+      setComputeRecovery(!available)
     } catch {
       setError(t('assistantComputeCheckFailed'))
       setComputeRecovery(true)
@@ -237,10 +318,11 @@ export default function WelcomeView(): React.JSX.Element {
                 key={tool.key}
                 type="button"
                 className="welcome-suggestion"
-                onClick={() => {
-                  setText(t(tool.promptKey))
-                  requestAnimationFrame(() => taRef.current?.focus())
-                }}
+                data-welcome-preset={tool.key}
+                data-preset-strategy={tool.taskStrategy}
+                disabled={busy}
+                title={t('welcomePresetStartsNow')}
+                onClick={() => startPreset(tool)}
               >
                 <HeaderIcon name={tool.icon} />
                 <span>{t(tool.labelKey)}</span>
@@ -258,15 +340,15 @@ export default function WelcomeView(): React.JSX.Element {
               value={projectChoice}
               onChange={(e) => onProjectChange(e.target.value)}
             >
+              <option value={UNASSIGNED}>{t('directStartNoProject')}</option>
               {availableProjects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name}
                 </option>
               ))}
-              <option value={NEW_PROJECT}>{t('newProjectDirectory')}</option>
-              <option value={UNASSIGNED}>{t('unassignedSessions')}</option>
+              <option value={NEW_PROJECT_SESSION_CHOICE}>{t('newProjectDirectory')}</option>
             </select>
-            {projectChoice === NEW_PROJECT || projectChoice === UNASSIGNED ? (
+            {projectChoice === NEW_PROJECT_SESSION_CHOICE ? (
               <>
                 <input
                   className="welcome-project-path"
@@ -279,11 +361,11 @@ export default function WelcomeView(): React.JSX.Element {
                   {t('browse')}
                 </button>
               </>
-            ) : (
+            ) : projectChoice !== UNASSIGNED ? (
               <span className="welcome-project-current" title={cwd}>
                 {cwd}
               </span>
-            )}
+            ) : null}
           </div>
           <div className="welcome-composer">
             <textarea
@@ -297,21 +379,23 @@ export default function WelcomeView(): React.JSX.Element {
               autoFocus
             />
             <div className="welcome-composer-bar">
+              <TaskStrategyControl value={taskStrategy} onChange={setTaskStrategy} compact />
               {projection === 'assistant' ? (
-                <AssistantComputeIndicator available={computeAvailable} />
+                <AssistantComputeIndicator
+                  available={computeAvailable || localComputeStatus === 'ready'}
+                  checking={localComputeStatus === 'checking'}
+                />
               ) : (
                 <WelcomeRoutingControls
                   driveMode={driveMode}
                   fixedModelOptions={fixedModelOptions}
                   model={model}
-                  permissionMode={permissionMode}
                   providerId={providerId}
                   providers={providers}
                   routingMode={routingMode}
                   routingStrategyLabel={routingStrategyLabel}
                   onDriveChange={onDriveChange}
                   onModelChange={setModel}
-                  onPermissionChange={setPermissionMode}
                   onProviderChange={onProviderChange}
                   onRoutingModeChange={onRoutingModeChange}
                 />
