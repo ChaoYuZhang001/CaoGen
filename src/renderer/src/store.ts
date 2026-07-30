@@ -1,5 +1,9 @@
 import { create } from 'zustand'
 import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
+
+// ART-005: store 层派生交付判定(纯函数,唯一真相源;不新增状态字段,不改既有 API)
+export { deriveDeliveryVerdict, canMarkGoalComplete } from './store/delivery-verdict'
+export type { DeliveryVerdict, DeliveryVerdictDetail } from './store/delivery-verdict'
 import type {
   AgentEvent,
   AppSettings,
