@@ -26,6 +26,7 @@ export type InteractiveOperationKind =
   | 'worktree_patch_apply'
   | 'git_push'
   | 'pull_request_create'
+  | 'issue_create'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
 
@@ -287,6 +288,70 @@ export type EffectTarget =
       titleDigest: string
       bodyDigest: string
       marker: string
+    }
+  | {
+      kind: 'issue_create'
+      provider: 'github' | 'gitlab'
+      repoRoot: string
+      repoRootIdentity: FileSystemIdentity
+      remote: string
+      remoteUrlDigest: string
+      host: string
+      projectPath: string
+      repositoryDigest: string
+      titleDigest: string
+      bodyDigest: string
+      labels: string[]
+      labelsDigest: string
+      markerToken: string
+      marker: string
+    }
+  | {
+      kind: 'mcp_tool_call'
+      transport: 'stdio' | 'http' | 'sse'
+      command?: string
+      commandArgs?: string[]
+      url?: string
+      serverIdentityDigest: string
+      discoveryDigest: string
+      toolName: string
+      toolArgumentsDigest: string
+      queryToolName: string
+      queryArguments: Record<string, unknown>
+      queryArgumentsDigest: string
+      jsonPointer: string
+      expectedValueDigest: string
+    }
+  | {
+      kind: 'webhook_message_send'
+      connectorId: string
+      connectorRevision: number
+      channel: 'feishu' | 'dingtalk' | 'wecom'
+      webhookDigest: string
+      payloadDigest: string
+      titleDigest: string
+      textDigest: string
+      linkUrlDigest?: string
+    }
+  | {
+      kind: 'office_artifact'
+      /** 对应 canonical Artifact 的 kind，非 artifact 自身 kind 字段。 */
+      artifactKind: 'document' | 'spreadsheet'
+      /** 审批时冻结的 Project 根及文件系统身份，防止路径在执行前被替换。 */
+      rootPath: string
+      rootIdentity: FileSystemIdentity
+      relativePath: string
+      /** Project 工作区内绝对路径（与 ArtifactLifecycleRegistrationInput.content.sourceRef 一致） */
+      workspacePath: string
+      /** 结构化输入摘要；生成前不伪造尚未知的二进制摘要。 */
+      specDigest: string
+      /** OOXML media type：
+       *  document → application/vnd.openxmlformats-officedocument.wordprocessingml.document
+       *  spreadsheet → application/vnd.openxmlformats-officedocument.spreadsheetml.sheet */
+      mediaType: string
+      /** 来源材料引用（输入文档/数据表的 workspace 路径或 sourceRef），用于可追溯 */
+      sourceRefs: string[]
+      title: string
     }
   | {
       kind: 'unsupported'
