@@ -12,7 +12,25 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
   if (value.kind === 'git_worktree_create') return isGitWorktreeCreateTarget(value)
   if (value.kind === 'git_worktree_remove') return isGitWorktreeRemoveTarget(value)
   if (value.kind === 'pull_request_create') return isPullRequestTarget(value)
+  if (value.kind === 'issue_create') return isIssueTarget(value)
+  if (value.kind === 'mcp_tool_call') return isMcpToolCallTarget(value)
+  if (value.kind === 'webhook_message_send') return isWebhookMessageTarget(value)
+  if (value.kind === 'office_artifact') return isOfficeArtifactTarget(value)
   return value.kind === 'unsupported' && isString(value.toolName)
+}
+
+function isOfficeArtifactTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.artifactKind === 'document' || record.artifactKind === 'spreadsheet',
+    isString(record.rootPath),
+    isFileSystemIdentity(record.rootIdentity),
+    isString(record.relativePath),
+    isString(record.workspacePath),
+    isString(record.specDigest),
+    isString(record.mediaType),
+    isStringArray(record.sourceRefs),
+    isString(record.title)
+  ].every(Boolean)
 }
 
 function isGitIndexUpdateTarget(record: Record<string, unknown>): boolean {
@@ -263,6 +281,59 @@ function isPullRequestTarget(record: Record<string, unknown>): boolean {
     isString(record.titleDigest),
     isString(record.bodyDigest),
     isString(record.marker)
+  ].every(Boolean)
+}
+
+function isIssueTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.provider === 'github' || record.provider === 'gitlab',
+    isString(record.repoRoot),
+    isFileSystemIdentity(record.repoRootIdentity),
+    isString(record.remote),
+    isString(record.remoteUrlDigest),
+    isString(record.host),
+    isString(record.projectPath),
+    isString(record.repositoryDigest),
+    isString(record.titleDigest),
+    isString(record.bodyDigest),
+    isStringArray(record.labels),
+    isString(record.labelsDigest),
+    isString(record.markerToken),
+    isString(record.marker)
+  ].every(Boolean)
+}
+
+function isMcpToolCallTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.transport === 'stdio' || record.transport === 'http' || record.transport === 'sse',
+    isOptionalString(record.command),
+    record.commandArgs === undefined || isStringArray(record.commandArgs),
+    isOptionalString(record.url),
+    isString(record.serverIdentityDigest),
+    isString(record.discoveryDigest),
+    isString(record.toolName),
+    isString(record.toolArgumentsDigest),
+    isString(record.queryToolName),
+    isRecord(record.queryArguments),
+    isString(record.queryArgumentsDigest),
+    isString(record.jsonPointer),
+    isString(record.expectedValueDigest),
+    record.transport === 'stdio'
+      ? isString(record.command) && record.url === undefined
+      : isString(record.url) && record.command === undefined && record.commandArgs === undefined
+  ].every(Boolean)
+}
+
+function isWebhookMessageTarget(record: Record<string, unknown>): boolean {
+  return [
+    isString(record.connectorId),
+    isNonNegativeInteger(record.connectorRevision),
+    record.channel === 'feishu' || record.channel === 'dingtalk' || record.channel === 'wecom',
+    isString(record.webhookDigest),
+    isString(record.payloadDigest),
+    isString(record.titleDigest),
+    isString(record.textDigest),
+    isOptionalString(record.linkUrlDigest)
   ].every(Boolean)
 }
 
