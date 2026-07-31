@@ -42,8 +42,8 @@ try {
 
   enginesModule.registerBuiltinEngines()
   const adapters = engineModule.listNativeRuntimeAdapters()
-  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['claude', 'anthropic', 'openai'])
-  checks.push('three-builtin-adapter-identities')
+  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'openai'])
+  checks.push('two-builtin-adapter-identities')
 
   assert.equal(contractModule.isNativeRuntimeFrozen(), true)
   assert.equal(Object.isFrozen(contractModule.NATIVE_RUNTIME_CONTRACT), true)
@@ -100,14 +100,14 @@ try {
     snapshots.push(snapshot)
     serialized.push(engine.serializeNativeRuntime())
   }
-  checks.push('three-real-engine-contract-execution')
+  checks.push('two-real-engine-contract-execution')
   checks.push('session-run-context-tool-permission-state')
   checks.push('usage-error-checkpoint-hook-state')
   checks.push('runtime-event-identity-and-order')
-  assert.deepEqual(snapshots.map(normalizeSnapshot), [normalizeSnapshot(snapshots[0]), normalizeSnapshot(snapshots[0]), normalizeSnapshot(snapshots[0])])
-  checks.push('three-engine-runtime-state-parity')
+  assert.deepEqual(snapshots.map(normalizeSnapshot), [normalizeSnapshot(snapshots[0]), normalizeSnapshot(snapshots[0])])
+  checks.push('two-engine-runtime-state-parity')
 
-  verifyRestartSequence(guardModule, adapters[0], sessionMeta('claude'), serialized[0])
+  verifyRestartSequence(guardModule, adapters[0], sessionMeta('anthropic'), serialized[0])
   checks.push('restart-serialization-stability')
   checks.push('restart-stream-and-sequence-boundary')
 
@@ -121,7 +121,7 @@ try {
   checks.push('missing-event-field-fails-closed')
   checks.push('mid-run-stream-switch-fails-closed')
 
-  verifySnapshotFailures(guardModule, adapters[0], sessionMeta('claude'), serialized[0])
+  verifySnapshotFailures(guardModule, adapters[0], sessionMeta('anthropic'), serialized[0])
   checks.push('missing-snapshot-field-fails-closed')
   checks.push('snapshot-adapter-tamper-fails-closed')
 
@@ -211,7 +211,7 @@ function verifyAdapterFailures(contractModule, adapters) {
 }
 
 function verifyRuntimeFailures(guardModule, adapter) {
-  const meta = sessionMeta('claude', 'negative-session')
+  const meta = sessionMeta('anthropic', 'negative-session')
   const missingIdentity = new guardModule.NativeRuntimeGuard({ adapter, meta })
   rejectsCode(() => missingIdentity.accept({ kind: 'status', status: 'idle' }, 1), 'event_identity')
 

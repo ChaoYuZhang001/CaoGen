@@ -36,14 +36,14 @@ const EXAMPLE_TASKS = [
 const DAG_EXAMPLE_REQUEST = '实现完整登录功能，含前端表单、后端认证接口、会话状态和全流程测试'
 
 const ULTIMATE_TASKS = [
-  'm12-sdk-agents: 接入 supportedAgents()/agents,让主 Agent 能按 SDK 能力派发专职子 Agent',
+  'm12-agent-roles: 用 CaoGen 角色模板和任务契约派发专职子 Agent',
   'm12-taskgraph: 设计 TaskGraph 数据模型,覆盖依赖、owner、预算、验收命令、产物和状态',
   'm12-events: 建立 child session 事件回传总线,把子 Agent 进度汇总回父会话时间线',
   'm12-merge-queue: 设计子 Agent diff 汇总、冲突检测、合并队列和逐块验收流程',
   'm12-permissions: 为子 Agent 增加预算、权限模式、最大运行时和失败策略闸门',
   'm5-realistic-3d: 把写实 3D 办公区改为消费真实 child session/task/worktree 状态',
   'm5-rendering: 提升 3D 材质、光影、相机、动效和成本/卡点可读性',
-  'm9-checkpoint-sdk: 研究并实现 Claude SDK 上下文级回溯或等价重建方案',
+  'm9-checkpoint-runtime: 为双原生引擎实现统一上下文回溯或等价重建方案',
   'm9-checkpoint-index: 建立 message、checkpoint、tool diff、worktree 路径的可索引链路',
   'm9-rewind-ux: 回退前展示代码 diff、聊天范围、风险和可恢复项',
   'm9-worktree-merge: 接通合并回主工作区、PR 创建、冲突三栏和合并后 checkpoint 验收',

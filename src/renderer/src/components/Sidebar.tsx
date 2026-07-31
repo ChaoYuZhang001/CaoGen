@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
@@ -107,7 +107,7 @@ interface SidebarProps {
   onMobileClose?: () => void
 }
 
-export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
+export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
@@ -877,4 +877,4 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
       )}
     </aside>
   )
-}
+})

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
+import { EFFECT_FREE_AGENT_TOOL_NAMES } from './effect-entry-inventory'
 
 export const OPENAI_PERMISSION_READ_ONLY_TOOLS = new Set([
   'read_file',
@@ -37,13 +38,9 @@ export const OPENAI_DISABLED_MODE_INSPECTION_TOOLS = new Set([
 ])
 
 const EFFECT_FREE_TOOLS = new Set([
-  ...OPENAI_PERMISSION_READ_ONLY_TOOLS,
+  ...EFFECT_FREE_AGENT_TOOL_NAMES,
   'web_fetch',
-  'web_search',
-  'browser_wait_for',
-  'browser_screenshot',
-  'gui_list_windows',
-  'gui_screenshot'
+  'web_search'
 ])
 
 const DUPLICATE_CONFIRMATION_TOOLS = new Set([

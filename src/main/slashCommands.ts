@@ -1,16 +1,13 @@
-import type { SlashCommand } from '@anthropic-ai/claude-agent-sdk'
-
 /**
  * 斜杠命令后端(纯逻辑,不碰热点文件)。
  *
  * 两件事:
- *  1. listSlashCommands —— 供命令面板补全:内置命令 + SDK 会话动态命令(skills 等)。
- *  2. expandSlashCommand —— 发送时判定一条输入是不是斜杠命令、该本地处理还是转交 SDK。
+ *  1. builtinSlashCommands —— 供命令面板补全 CaoGen 内置命令。
+ *  2. expandSlashCommand —— 发送时判定一条输入是不是本地斜杠命令。
  *
  * 设计取舍:
  *  - 内置命令由 CaoGen 自己实现(清空/压缩/切模型/diff/回溯/帮助),不发给 Agent。
- *  - SDK 动态命令(supportedCommands 返回的 skills 等)按原文作为 prompt 发给 Agent,
- *    由 SDK 侧解析,渲染端不需要理解其语义。
+ *  - 未识别的斜杠输入按普通 prompt 发给当前原生引擎。
  */
 
 /** 命令面板里展示 / 补全用的一条命令。 */
@@ -52,59 +49,11 @@ const BUILTIN_COMMANDS: readonly SlashCommandInfo[] = [
 
 const BUILTIN_NAMES = new Set<string>(BUILTIN_COMMANDS.map((c) => c.name))
 
-/** 结构化最小接口:任何暴露 supportedCommands() 的对象即可,避免与具体 SDK Query 类型强耦合。 */
-export interface SupportsSlashCommands {
-  supportedCommands?: () => Promise<SlashCommand[]>
-}
-
-/**
- * 列出与 query 前缀/子串匹配的斜杠命令。
- * 内置命令始终参与;若传入的会话 query 暴露 supportedCommands(),则合并其动态命令(如 skills)。
- * 合并策略:内置优先,动态命令中与内置重名者跳过;supportedCommands() 抛错则静默忽略(仅回内置)。
- *
- * @param query 用户在 "/" 后输入的过滤词(可含前导斜杠,会被剥离);空串返回全部。
- * @param sessionQuery 可选的当前会话 SDK query,用于取动态命令。
- */
-export async function listSlashCommands(
-  query: string,
-  sessionQuery?: SupportsSlashCommands | null
-): Promise<SlashCommandInfo[]> {
-  const merged: SlashCommandInfo[] = [...BUILTIN_COMMANDS]
-
-  if (sessionQuery?.supportedCommands) {
-    try {
-      const dynamic = await sessionQuery.supportedCommands()
-      for (const cmd of dynamic ?? []) {
-        if (!cmd?.name || BUILTIN_NAMES.has(cmd.name)) continue
-        merged.push({
-          name: cmd.name,
-          description: cmd.description ?? '',
-          argHint: cmd.argumentHint ? cmd.argumentHint : undefined,
-          builtin: false
-        })
-      }
-    } catch {
-      // 会话未就绪 / SDK 不支持:仅返回内置命令
-    }
-  }
-
-  const q = normalizeQuery(query)
-  const filtered = q ? merged.filter((c) => matches(c.name, q)) : merged
-  // 前缀命中优先,其次按名字长度(更短更接近),同名再按字典序稳定
-  return filtered.sort((a, b) => {
-    const ap = a.name.startsWith(q) ? 0 : 1
-    const bp = b.name.startsWith(q) ? 0 : 1
-    if (ap !== bp) return ap - bp
-    if (a.name.length !== b.name.length) return a.name.length - b.name.length
-    return a.name.localeCompare(b.name)
-  })
-}
-
 /**
  * 判定一条发送输入如何处理。
  *  - 不以 "/" 开头 → 普通消息(kind:"prompt")。
  *  - "/<builtin> [args]" → 本地内置处理(kind:"builtin")。
- *  - 其他以 "/" 开头(未识别的斜杠命令,如 skill)→ 原文转交 SDK(kind:"prompt")。
+ *  - 其他以 "/" 开头→ 原文作为普通 prompt(kind:"prompt")。
  * 注意:仅裁决路由,不执行命令;内置命令的实际动作由调用方(主控接线)完成。
  */
 export function expandSlashCommand(input: string): SlashCommandExpansion {
@@ -121,19 +70,8 @@ export function expandSlashCommand(input: string): SlashCommandExpansion {
   if (name && BUILTIN_NAMES.has(name)) {
     return { kind: 'builtin', name: name as BuiltinCommandName, args }
   }
-  // 未识别的斜杠命令:交给 SDK 解析,保留原文(含斜杠与参数)
+  // 未识别的斜杠输入保留原文,由当前原生引擎处理。
   return { kind: 'prompt', text }
-}
-
-/** 剥离前导斜杠并归一化为小写去空白,供过滤匹配。 */
-function normalizeQuery(query: string): string {
-  return (query ?? '').trim().replace(/^\/+/, '').toLowerCase()
-}
-
-/** 前缀或子串命中即可 */
-function matches(name: string, q: string): boolean {
-  const n = name.toLowerCase()
-  return n.startsWith(q) || n.includes(q)
 }
 
 /** 只读的内置命令列表(供需要静态展示的调用方复用)。 */

@@ -421,7 +421,7 @@ function normalizeSupervisorRecord(value: unknown): SupervisorPolicyRecord {
 }
 
 function canTrackCost(engine: SessionMeta['engine']): boolean {
-  return engine === 'claude' || engine === 'openai'
+  return engine === 'openai'
 }
 
 function normalizeFailureCount(value: number | undefined): number {

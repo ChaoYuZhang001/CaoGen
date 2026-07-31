@@ -62,7 +62,7 @@ CaoGen 是：
 
 | 能力域 | 状态 | 当前事实 |
 |---|---|---|
-| 多厂商配置 | 当前已验证 | 多 Provider、多 Key、自定义 Base URL、OpenAI-compatible 路径和可选 Claude Agent SDK。 |
+| 多厂商配置 | 当前已验证 | 多 Provider、多 Key、自定义 Base URL、OpenAI-compatible 与原生 Anthropic Messages。 |
 | 原生 Anthropic Messages | 部分完成（本地 targeted 验证） | 已注册生产 Engine 并覆盖工具循环、权限/Effect、Key/同协议 Provider failover 和图片重启恢复；真实 Provider、统一 Run/Context 契约与 clean release-bound parity 仍开放。 |
 | 模型路由 | 当前已验证 | 支持任务类型、项目规则、用户规则、健康、预算、成本、质量、速度和 failover。 |
 | 项目与会话 | 当前已验证 | 目录型项目、未关联项目会话、项目规则、归档/恢复/删除和项目记忆。 |
@@ -71,7 +71,7 @@ CaoGen 是：
 | Trust Kernel | 当前已验证 | Task Run、Effect Ledger、lease/fencing、部分文件/Git Reconciler 和强杀恢复。 |
 | Routines | 当前已验证 | 本地定时、运行记录、通知、防休眠和开工建议。 |
 | 3D 办公区 | 当前已验证 | 使用真实会话、任务、Provider、成本、审批、工具、worktree 和 Git 状态。 |
-| Claude 专项 | 条件可用 | 需要有效 Anthropic 凭据、兼容网关或本机登录态；不是默认路径。 |
+| Claude 模型 | 条件可用 | 通过 Anthropic Messages Provider API Key 接入；不需要 Claude Code 登录或 CLI。 |
 | PR/MR 和远端交付 | 条件可用 | 依赖远端账号、权限及 `gh`/`glab` 等外部条件。 |
 | GUI 自动化 | 条件可用 | 默认关闭，需要显式权限，平台与应用覆盖不完整。 |
 | Office 高保真 | 条件可用 | 支持结构提取和系统预览，不等价于原应用完整编辑与像素级一致。 |
@@ -358,7 +358,7 @@ completed, failed, cancelled
 
 ### 7.9 ModelAttempt
 
-**部分完成**：canonical ModelAttempt v1 已记录 Run/WorkItem 归属、逻辑 request/step、Provider/model/protocol、可读 route reason、usage、结果和不可变事件链；OpenAI-compatible 请求、模型 DAG 调用、Claude Agent SDK turn 与原生 Anthropic Messages 每次底层 HTTP 请求已接入，未知结果在重启后进入显式 retry/cancel 对账，密钥只保留安全标签或摘要。
+**部分完成**：canonical ModelAttempt v1 已记录 Run/WorkItem 归属、逻辑 request/step、Provider/model/protocol、可读 route reason、usage、结果和不可变事件链；OpenAI-compatible 请求、模型 DAG 调用与原生 Anthropic Messages 每次底层 HTTP 请求已接入，未知结果在重启后进入显式 retry/cancel 对账，密钥只保留安全标签或摘要。
 
 **仍待完成**：真实 Provider 和 clean release-bound 证据、完整跨协议恢复阶梯，以及“每个正式运行时的每次底层 Provider 请求”与统一 Run/Context 契约的完整覆盖。
 
@@ -504,7 +504,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ROUTE-001 | P0 | 当前已验证 | 基于任务、规则、健康、预算、成本、质量和速度进行模型选择。 |
 | ROUTE-002 | P0 | 当前已验证 | 同 Provider 多 Key failover 和跨 Provider failover。 |
 | ROUTE-003 | P0 | 当前已验证 | Assistant 首次启动不显示 Provider/model/engine 选择；无计算资源时提供非技术可恢复状态，重试可零选择发现本地 Responses Provider，经真实 Router/stream path 完成发送，并无损切换 Studio 后返回同一 canonical session 与 draft。 |
-| ROUTE-004 | P0 | 部分完成（Anthropic production-path local closure） | 每次路由形成 ModelAttempt 和可读 route reason；原生 Anthropic Messages 已接入可选 Engine/UI、每个 HTTP 请求独立 durable Attempt、NativeToolRuntime 工具循环、同 Provider Key/同协议 Provider failover 和图片重启恢复。真实 Provider、完整恢复阶梯、统一 Run/Context 契约与 clean release-bound 证据仍开放。 |
+| ROUTE-004 | P0 | 部分完成（two-native-engine local closure） | 每次路由形成 ModelAttempt 和可读 route reason；原生 Anthropic Messages 已接入可选 Engine/UI、每个 HTTP 请求独立 durable Attempt、NativeToolRuntime 工具循环、同 Provider Key/同协议 Provider failover 和图片重启恢复。真实 Provider、完整恢复阶梯、统一 Run/Context 契约与 clean release-bound 证据仍开放。 |
 | ROUTE-005 | P0 | 立项目标 | Provider 切换保持 Goal、WorkItem、DigitalWorker、Run、上下文和 Artifact 连续。 |
 | ROUTE-006 | P0 | 立项目标 | 预算、权限、隐私和能力要求高于成本/速度偏好，禁止不满足硬条件的候选。 |
 | ROUTE-010 | P0 | 立项目标 | 故障恢复按“瞬时重试 → 同 Provider 换 Key → 同 Provider 换兼容模型 → 同协议健康 Provider → 跨协议 Adapter → 降级或人工处理”执行；每次请求形成可追踪 ModelAttempt，重放前检查未决 Effect。 |
@@ -516,22 +516,22 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| RUN-001 | P0 | 当前已验证 | CaoGen 以冻结、Provider-neutral 的 `caogen.native-runtime.v1` 统一持有 Session、Run、Context、Tool、Permission、usage、error、checkpoint、hook 和 recovery；三内置引擎生产创建路径均强制套 runtime guard，TaskRun/事件/序列/stream/snapshot 身份与重启恢复 fail-closed。 |
-| RUN-002 | P0 | 部分完成（adapter factories + boundary guards） | 三条生产 engine factory 已绑定独立协议 Adapter，请求/事件边界、resume sequence、runtime identity、Anthropic 请求/流/tool/usage/error normalization 与畸形 tool input fail-closed 已通过 required gate；原始 provider stream parsing 和 fragmented tool-call assembly 仍位于 `agentSession.ts`、`anthropicEngine.ts`、`openaiEngine.ts`，尚未达到纯协议 Adapter 隔离。 |
+| RUN-001 | P0 | 当前已验证 | CaoGen 以冻结、Provider-neutral 的 `caogen.native-runtime.v1` 统一持有 Session、Run、Context、Tool、Permission、usage、error、checkpoint、hook 和 recovery；Anthropic/OpenAI 两内置引擎生产创建路径均强制套 runtime guard。 |
+| RUN-002 | P0 | 部分完成（adapter factories + boundary guards） | 两条生产 engine factory 已绑定 `anthropic.messages` 与 `openai.compatible` Adapter；原始 stream parsing 和 fragmented tool-call assembly 仍位于 `anthropicEngine.ts`、`openaiEngine.ts`，尚未达到纯协议 Adapter 隔离。 |
 | RUN-003 | P0 | 部分完成（Anthropic production-path local closure） | 原生 Anthropic Messages 已注册到生产 SessionManager，并由本地门禁覆盖请求/流/用量/错误/取消、`tool_use/tool_result`、NativeToolRuntime 权限与 Effect、历史/图片重启恢复和保守 failover；OpenAI Responses、Chat Completions 与 Anthropic Messages 的统一 Run/Context/Checkpoint/Hook 契约、真实 Provider 和 clean release-bound parity 仍未整体关闭。 |
 | RUN-004 | P0 | 部分完成（Supervisor foundation + identity/control bridge） | 本地 required gates 已覆盖持久 heartbeat、lease 过期接管、fencing、controls、approval/reconciliation、审计、重启读回、TaskRun→WorkItem/Supervisor 身份绑定，以及受控 SessionManager pause/cancel/resume/retry/reassign；canonical 控制强制 expected revision，lease 动作强制 lease ID/fencing token，retry 在状态提交前预检 durable snapshot，paused Run 在 SessionManager 重建后仍阻止普通发送/自动 replay，failed resume 转 blocked 并保持发送门禁。Studio UI、预算/并发 enforcement、自动编排、真实 Provider parity、跨文件事务补偿和跨域强杀恢复仍开放。 |
 | RUN-005 | P0 | 立项目标 | Desktop 重启后恢复所有非终态 Run，并区分可重试和待对账；Supervisor IPC 的重启读回不等于强杀后全域恢复，仍需逐状态 strong-kill 门禁。 |
-| RUN-006 | P0 | 立项目标 | 旧 Claude SDK 会话在迁移期可读、可导出、可从 CaoGen transcript fork，不伪称恢复隐藏上下文。 |
-| RUN-007 | P1 | 立项目标 | 完成 Claude Agent SDK 退出门禁评估：Anthropic Adapter 等价、旧数据可读/可 fork/可回滚、兼容 Plugin/Skill/MCP 资产迁入 CaoGen 自有 store、真实条件验证和收益量化，并产出 Go/No-Go 结论。 |
+| RUN-006 | P0 | 部分完成（legacy metadata migration） | 旧 `engine: claude` Provider/会话元数据迁移为 `anthropic`；CaoGen transcript 可读/可 fork，不伪称恢复 SDK 隐藏上下文。 |
+| RUN-007 | P1 | 部分完成（runtime removed） | Claude Agent SDK/CLI/AgentSession 已删除，本地 unsigned Intel 包体和真实 renderer 已复验；待完成精确提交 Deep、签名候选绑定和兼容资产边界审核。 |
 | RUN-008 | P2 | 后续规划 | 独立后台服务、远程 Runner 和 Desktop 关闭后继续执行。 |
-| RUN-009 | P2 | 后续规划 | 只有 RUN-007 给出 Go 且经过独立发布决策后，才分阶段移除 Claude Agent SDK；1.0 不预先承诺实际删除。 |
+| RUN-009 | P2 | 已取消 | 不再计划恢复 Claude Agent SDK 兼容运行时。 |
 
 ### 8.6 Trust、Effect 和审批
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | TRUST-001 | P0 | 当前已验证 | 主要文件编辑和 Git commit/merge/push 已有 Effect/Reconciler 基础。 |
-| TRUST-002 | P0 | 立项目标 | 所有高风险入口必须注册 Effect 或明确 fail-closed。 |
+| TRUST-002 | P0 | 部分完成（versioned entry inventory foundation） | inventory v8 与 AST required gate 已覆盖 156 个 Electron IPC、52 个 Agent 工具和 79 个 ProjectWorkspace/DigitalWorker/Supervisor 嵌套动作；新增、遗漏或重复入口会因 inventory drift 失败，自动化 Agent 外部工具必须归入 queryable、conditional 或 opaque，未知工具保持 opaque 并禁止自动重放。附件写入、MCP probe、迁移导入、终端 start/write/resize/close 和 Browser open/navigate/back/forward/reload 已进入 opaque Effect；项目规则与本地插件安装/卸载已进入 queryable Effect。`migration:import` 在导入前持久化 `executing`，Ledger 只记录资产数量、类型计数和选择摘要，不保存源资产路径、源内容或原始错误；失败/SIGKILL 未知结果进入 `waiting_reconciliation`、刷新恢复面板并禁止自动重放。完整迁移预检、备份、跨文件原子回滚和幂等重跑仍属于 `NFR-REC-005`。其余 7 个 direct-user 外部 IPC 仍只登记为 `replay: never` 且未进入 Effect Ledger，Issue、消息、可查询 MCP 与其余直达入口的专用对账继续开放。 |
 | TRUST-003 | P0 | 立项目标 | PR、Issue、消息、可查询 MCP、Code Forge 和 Renderer 直接入口具备专用对账策略。 |
 | TRUST-004 | P0 | 立项目标 | 未知结果不得自动重放；必须只读对账或等待人工确认。 |
 | TRUST-005 | P0 | 部分完成（v8 recovery + production canonical Goal/WorkItem read/write foundation） | `task-snapshots.db` v8 保留 TaskRun Effect evidence append-only hash-chain，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions、有限 API/IPC/UI、cursor 查询和 fail-closed 校验；生产 Goal/WorkItem list/get 已默认从 verified rich view 读取，生产命令已切为 Ledger-first、JSON 投影，并覆盖提交顺序、死进程锁回收与三个强杀恢复点。未配置时 Task Snapshot/Run 恢复仍默认 legacy；其他业务入口、完整 Artifact/blob/sourceRef 生命周期、Canonical Conversation Ledger、统一 retention/delete 和生产补偿计划/审批/执行仍待完成。 |
@@ -617,7 +617,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| NFR-PERF-001 | P1 | 当前已验证 | 参考设备上的真实 Electron required gate 覆盖 desktop/tablet/mobile 三种视口：3 个 fresh-process cold shell 样本 P95 `33.5ms`，60 个 warm 样本 P95 `34.1ms`。cold shell 必须首次可见、可聚焦、无遮挡且可真实操作；切换期间 Provider 响应保持挂起，Session/runtime/canonical Run/请求保持唯一且身份不变。Project/Goal/WorkItem 完整 hydration 仍为独立诊断 `1184.7–1478.6ms`，不属于 `<300ms` 声明；360px 项目操作区已由新截图确认无重叠。证据：`test-results/assistant-studio-performance/2026-07-22T14-12-03-432Z/report.json`。 |
+| NFR-PERF-001 | P1 | 当前已验证 | clean `1675eb50` 的真实 Electron required gate 覆盖 desktop/tablet/mobile：3 个 fresh-process cold shell 样本 P95 `31.4ms`，60 个 warm 样本 P95 `32.4ms`，阈值保持 `<300ms`。cold shell 必须首次可见、可聚焦、无遮挡且可真实操作；Provider 响应保持挂起，Session/runtime/canonical Run/请求保持唯一。Project/Goal/WorkItem hydration 为独立诊断 `1204.5–1516.9ms`，不属于切换延迟声明。每个 viewport 只允许首个调度污染、Studio 数据就绪超时或有效 cold 超阈值在全新 renderer/userData 中重试一次；失败 phase 与 DOM/IPC 诊断必须保留，连续失败仍阻断。证据：`test-results/assistant-studio-performance/2026-07-28T05-20-41-787Z/report.json`。 |
 | NFR-PERF-002 | P1 | 部分完成（1,000-item virtualization foundation） | 1,000 个 WorkItem 的 List/Board 已采用固定尺寸虚拟化并通过真实 Electron 有界 DOM 验证；参考设备上的初次可交互 P95 <1s 仍待独立测量。 |
 | NFR-PERF-003 | P1 | 立项目标 | 路由本地决策目标小于 500ms，不含 Provider 网络请求。 |
 | NFR-PERF-004 | P1 | 立项目标 | 3D 在定义的参考设备和 12 个可见员工场景保持可交互；不达标时自动降级 LOD 或列表。 |
@@ -786,8 +786,8 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 - 原 SessionMeta、HistoryEntry、TaskRun 和 Snapshot 保持可读。
 - 新 WorkItem/Run 关联可采用惰性迁移，不强迫一次性重写全部大文件。
-- 旧 `engine: claude` 会话在 Claude SDK 退出前继续按兼容策略处理。
-- SDK 被移除后，旧会话允许只读、导出和从 CaoGen transcript fork；不得伪称恢复 SDK 未记录的隐藏上下文。
+- 旧 `engine: claude` 会话元数据迁移为 `anthropic`。
+- 旧会话允许只读、导出和从 CaoGen transcript fork；不得伪称恢复 SDK 未记录的隐藏上下文。
 
 ### 12.7 视觉设置迁移
 
@@ -895,7 +895,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 - **明确不做**：通过隐藏模型差价或路由偏置锁定用户。
 - **明确不做**：没有 Evidence 的自动完成、没有用户操作的验收豁免。
 - **明确不做**：用随机动画、装饰消息或静态头像伪造数字员工工作。
-- **明确不做**：未经等价能力、数据迁移和恢复验证直接硬删 Claude Agent SDK。
+- **明确不做**：为了兼容 Claude Code 重新嵌入 SDK/CLI；旧数据必须显式迁移并保留诚实恢复边界。
 - **明确不做**：未验证前宣称 Office 像素级编辑、任意外部系统 exactly-once 或完全自治交付。
 
 ## 16. 追踪与派生文档

@@ -557,7 +557,17 @@ function resolveGradleCommand() {
   if (gradleCommand && existsSync(gradleCommand)) {
     return { command: gradleCommand, env, javaHome: env.JAVA_HOME, gradleHome }
   }
+  if (hasCommand('gradle', env)) {
+    return { command: 'gradle', env, javaHome: env.JAVA_HOME, gradleHome: undefined }
+  }
   return undefined
+}
+
+function hasCommand(command, env = process.env) {
+  const probe = process.platform === 'win32'
+    ? spawnSync('where.exe', [command], { stdio: 'ignore', env })
+    : spawnSync('which', [command], { stdio: 'ignore', env })
+  return probe.status === 0
 }
 
 function jetbrainsBuildEnv() {

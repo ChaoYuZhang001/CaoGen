@@ -101,16 +101,17 @@ function verifyBrowserSourceContracts() {
     'browser tools must route through src/main/browser/browser-manager.ts'
   )
   const browserView = readFileSync(path.join(repoRoot, 'src/main/browserView.ts'), 'utf8')
+  const browserNavigation = readFileSync(path.join(repoRoot, 'src/main/browserNavigation.ts'), 'utf8')
   assert(
-    browserView.includes("const DEFAULT_URL = 'https://caobao.chat/official'"),
+    browserNavigation.includes("export const DEFAULT_BROWSER_URL = 'https://caobao.chat/official'"),
     'BrowserView default URL must open the CaoBao official page'
   )
   assert(
-    browserView.includes('async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_URL)'),
+    browserView.includes('async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_BROWSER_URL)'),
     'BrowserView.open must use the official page when no URL is supplied'
   )
   assert(
-    browserView.includes('loadURL(DEFAULT_URL)'),
+    browserView.includes('loadURL(DEFAULT_BROWSER_URL)'),
     'BrowserView.open must load the default official page for a fresh browser panel'
   )
   const browserPanel = readFileSync(path.join(repoRoot, 'src/renderer/src/components/workbench/BrowserPanel.tsx'), 'utf8')
@@ -200,10 +201,10 @@ function verifyEngineSourceContracts() {
   const engineContract = readFileSync(path.join(repoRoot, 'src/main/engine.ts'), 'utf8')
   assert(engineContract.includes('emitSyntheticEvent?'), 'Engine must expose optional synthetic event persistence hook')
   assert(engineContract.includes('请选择 Agent 引擎'), 'Engine creation must require explicit engine selection')
-  assert(!engineContract.includes("factory = registry.get('claude')"), 'Engine creation must not silently fall back to Claude')
+  assert(!engineContract.includes('registry.values().next'), 'Engine creation must not silently fall back to another engine')
   const builtinEngines = readFileSync(path.join(repoRoot, 'src/main/engines.ts'), 'utf8')
   const sharedTypes = readFileSync(path.join(repoRoot, 'src/shared/types.ts'), 'utf8')
-  assert(builtinEngines.includes("kind: 'claude'"), 'Claude must remain a registered formal engine')
+  assert(!builtinEngines.includes("kind: 'claude'"), 'Claude Agent SDK must not remain registered')
   assert(
     builtinEngines.includes('...openAIEngineFactory') &&
       builtinEngines.includes('nativeRuntime: OPENAI_NATIVE_RUNTIME_ADAPTER') &&
@@ -217,6 +218,7 @@ function verifyEngineSourceContracts() {
   assert(sharedTypes.includes('lastAppliedEventSeq?: number'), 'TaskRun must persist its applied event cursor')
   assert(!existsSync(path.join(repoRoot, 'src/main/codexEngine.ts')), 'Codex CLI engine implementation must stay removed')
   assert(!existsSync(path.join(repoRoot, 'src/main/geminiEngine.ts')), 'Gemini CLI engine implementation must stay removed')
+  assert(!existsSync(path.join(repoRoot, 'src/main/agentSession.ts')), 'Claude Agent SDK engine implementation must stay removed')
 }
 
 function verifySessionRecoverySourceContracts() {
@@ -271,11 +273,9 @@ function verifyProviderAndRendererSourceContracts() {
   assert(!app.includes('<NewSessionModal'), 'new session must render as an inline workspace, not a modal')
   assert(providers.includes('resolveProviderEngine'), 'Provider configuration must own execution engine resolution')
 
-  const agentSession = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
-  const hiddenAnthropicName = '\u5b98\u65b9 Anthropic'
   assert(
-    !agentSession.includes(`{ id: '', name: '${hiddenAnthropicName}'`),
-    'Claude failover must not inject an empty-provider candidate'
+    providers.includes("if (engine === 'claude') return 'anthropic'"),
+    'legacy Claude Providers must migrate to native Anthropic Messages'
   )
 }
 
@@ -352,7 +352,7 @@ function verifyAnthropicRegistrationGateWiring(packageJson, deepTest) {
 
 function verifyAnthropicEngineTypeContract(builtinEngines, sharedTypes) {
   assert(builtinEngines.includes("kind: 'anthropic'"), 'Anthropic Messages must be a registered formal engine')
-  assertStringUnionMembers(sharedTypes, 'EngineKind', ['claude', 'anthropic', 'openai'])
+  assertStringUnionMembers(sharedTypes, 'EngineKind', ['anthropic', 'openai'])
 }
 
 function verifyProviderModelDiscoverySourceContracts(source) {

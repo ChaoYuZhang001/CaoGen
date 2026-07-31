@@ -16,6 +16,7 @@ import type {
   BrowserPickResult,
   BrowserViewState
 } from '../shared/types'
+import { DEFAULT_BROWSER_URL, normalizeBrowserNavigationUrl } from './browserNavigation'
 
 interface BrowserRecord {
   sessionId: string
@@ -38,7 +39,6 @@ interface SelectionPayload {
 
 type Listener = (event: BrowserEvent) => void
 
-const DEFAULT_URL = 'https://caobao.chat/official'
 const MAX_CONSOLE_ERRORS = 200
 
 class BrowserViewManager {
@@ -50,12 +50,19 @@ class BrowserViewManager {
     return () => this.listeners.delete(listener)
   }
 
-  async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_URL): Promise<BrowserViewState> {
+  getState(sessionId: string): BrowserViewState | undefined {
+    const record = this.records.get(sessionId)
+    if (!record || record.owner.isDestroyed() || record.view.webContents.isDestroyed()) return undefined
+    return { ...record.state }
+  }
+
+  async open(owner: BrowserWindow, sessionId: string, url = DEFAULT_BROWSER_URL): Promise<BrowserViewState> {
     const existing = this.records.get(sessionId)
-    if (existing && !existing.owner.isDestroyed()) {
-      if (url && url !== DEFAULT_URL) await this.navigate(sessionId, url)
+    if (existing && !existing.owner.isDestroyed() && !existing.view.webContents.isDestroyed()) {
+      if (url && url !== DEFAULT_BROWSER_URL) await this.navigate(sessionId, url)
       return { ...existing.state }
     }
+    if (existing) this.close(sessionId)
 
     const view = new WebContentsView({
       webPreferences: {
@@ -77,7 +84,7 @@ class BrowserViewManager {
       networkFailures: [],
       state: {
         sessionId,
-        url: DEFAULT_URL,
+        url: DEFAULT_BROWSER_URL,
         title: '',
         loading: false,
         canGoBack: false,
@@ -88,10 +95,10 @@ class BrowserViewManager {
     this.wireRecord(record)
     owner.once('closed', () => this.close(sessionId))
 
-    if (url && url !== DEFAULT_URL) {
+    if (url && url !== DEFAULT_BROWSER_URL) {
       await this.navigate(sessionId, url)
     } else {
-      await view.webContents.loadURL(DEFAULT_URL).catch(() => undefined)
+      await view.webContents.loadURL(DEFAULT_BROWSER_URL).catch(() => undefined)
       this.refreshState(record)
     }
     return { ...record.state }
@@ -99,7 +106,7 @@ class BrowserViewManager {
 
   async navigate(sessionId: string, rawUrl: string): Promise<BrowserViewState> {
     const record = this.requireRecord(sessionId)
-    const url = normalizeNavigationUrl(rawUrl)
+    const url = normalizeBrowserNavigationUrl(rawUrl)
     await record.view.webContents.loadURL(url)
     this.refreshState(record)
     return { ...record.state }
@@ -348,7 +355,7 @@ class BrowserViewManager {
     const wc = record.view.webContents
     record.state = {
       sessionId: record.sessionId,
-      url: wc.getURL() || DEFAULT_URL,
+      url: wc.getURL() || DEFAULT_BROWSER_URL,
       title: wc.getTitle(),
       loading: wc.isLoading(),
       canGoBack: wc.navigationHistory.canGoBack(),
@@ -424,17 +431,6 @@ async function captureAnnotationScreenshot(
 
 function safePartitionId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 80) || 'default'
-}
-
-function normalizeNavigationUrl(rawUrl: string): string {
-  const text = rawUrl.trim()
-  if (!text) throw new Error('URL 不能为空')
-  const withProtocol = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(text) ? text : `https://${text}`
-  const url = new URL(withProtocol)
-  if (!['http:', 'https:', 'file:', 'about:'].includes(url.protocol)) {
-    throw new Error('浏览器只允许 http、https、file 或 about URL')
-  }
-  return url.href
 }
 
 function normalizeBounds(bounds: BrowserBounds): BrowserBounds {

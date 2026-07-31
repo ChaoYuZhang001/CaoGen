@@ -53,7 +53,7 @@ const chatStatusBarSource = readFileSync(
   'utf8'
 )
 const storeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
-const agentSessionSource = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
+const openAiEngineSource = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
 check(
   'UI 状态栏显示 contextTokens',
   chatViewSource.includes('<ChatStatusBar') &&
@@ -69,10 +69,10 @@ check(
 )
 
 check(
-  'Claude AgentSession records context pressure warnings',
-  agentSessionSource.includes('evaluateContextUsage') &&
-    agentSessionSource.includes("event: 'context-warning'") &&
-    agentSessionSource.includes('contextRemainingTokens')
+  'OpenAI native engine records context pressure warnings',
+  openAiEngineSource.includes('evaluateContextUsage') &&
+    openAiEngineSource.includes("event: 'context-warning'") &&
+    openAiEngineSource.includes('contextRemainingTokens')
 )
 
 const warning = compressor.evaluateContextUsage({

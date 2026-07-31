@@ -24,6 +24,7 @@ try {
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/renderer/src/components/workbench/previewUtils.ts',
       'src/renderer/src/components/workbench/previewPrompt.ts',
+      'src/renderer/src/components/workbench/session-send-availability.ts',
       '--outDir',
       outDir,
       '--target',
@@ -40,6 +41,15 @@ try {
   )
 
   const prompt = await import(pathToFileURL(findCompiledModule(outDir, 'previewPrompt.js')).href)
+  const availability = await import(pathToFileURL(findCompiledModule(outDir, 'session-send-availability.js')).href)
+  for (const status of ['idle', 'error']) {
+    assert(availability.canSendToSession('session_1', status, true), `${status} session should accept a payload`)
+  }
+  for (const status of ['starting', 'running', 'closed', undefined]) {
+    assert(!availability.canSendToSession('session_1', status, true), `${String(status)} session must reject a payload`)
+  }
+  assert(!availability.canSendToSession(null, 'idle', true), 'missing active session must reject a payload')
+  assert(!availability.canSendToSession('session_1', 'idle', false), 'empty payload must be rejected')
 
   const officePrompt = prompt.buildPreviewAgentPrompt(
     'assets/brief.docx',

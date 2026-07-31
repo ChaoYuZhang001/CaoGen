@@ -1,0 +1,90 @@
+name: CaoGen Windows unsigned preview artifact
+
+run-name: Windows unsigned preview artifact only - ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_preview_only:
+        description: This produces an unsigned Actions artifact only and must not modify a GitHub Release
+        required: true
+        default: false
+        type: boolean
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/windows-unsigned-build.yml
+      - package.json
+      - package-lock.json
+      - scripts/packaged-app-smoke.mjs
+      - scripts/prepare-native-build.cjs
+      - scripts/windows-unsigned-workflow-contract-smoke.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: caogen-windows-unsigned-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    name: Windows x64 unsigned preview artifact
+    if: ${{ github.event_name == 'pull_request' || inputs.acknowledge_preview_only == true }}
+    runs-on: windows-2025
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Verify source and workflow contracts
+        run: |
+          npm run test:release-workflow-contract
+          npm run test:windows-release-config
+          npm run typecheck
+      - name: Build application
+        run: npm run build
+      - name: Prepare native modules
+        run: npm run prepare:native-build
+      - name: Build unsigned Windows installer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win --x64 --publish never
+      - name: Verify unsigned installer in a custom directory
+        run: npm run test:packaged-app:win:x64:unsigned
+      - name: Read package version
+        id: package
+        shell: pwsh
+        run: |
+          $Package = Get-Content -Raw package.json | ConvertFrom-Json
+          "version=$($Package.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Stage preview-only artifact names
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path preview-artifacts | Out-Null
+          Copy-Item -LiteralPath "dist/CaoGen Setup ${{ steps.package.outputs.version }}.exe" -Destination "preview-artifacts/CaoGen-${{ steps.package.outputs.version }}-windows-x64-unsigned-preview.exe"
+          Copy-Item -LiteralPath "dist/CaoGen Setup ${{ steps.package.outputs.version }}.exe.blockmap" -Destination "preview-artifacts/CaoGen-${{ steps.package.outputs.version }}-windows-x64-unsigned-preview.exe.blockmap"
+          "Unsigned preview for Actions-only testing. Do not upload these files or latest.yml to a formal GitHub Release." | Set-Content -Encoding utf8 preview-artifacts/UNSIGNED-PREVIEW-NOT-FOR-FORMAL-RELEASE.txt
+      - name: Upload unsigned preview and evidence as an Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caogen-windows-x64-unsigned-preview-artifact-only-${{ github.sha }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          path: |
+            preview-artifacts/CaoGen-${{ steps.package.outputs.version }}-windows-x64-unsigned-preview.exe
+            preview-artifacts/CaoGen-${{ steps.package.outputs.version }}-windows-x64-unsigned-preview.exe.blockmap
+            preview-artifacts/UNSIGNED-PREVIEW-NOT-FOR-FORMAL-RELEASE.txt
+            test-results/packaged-app-smoke/latest-windows-unsigned-x64.json

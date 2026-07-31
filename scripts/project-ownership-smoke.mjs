@@ -205,6 +205,7 @@ try {
     { kind: 'memory', id: alpha.memory.id }
   ])
   assertEqual(liveGrant.references.length, 5, 'production mutation boundary authorizes live Project references')
+  await proveLiveSnapshotStability(aggregateApi, roots, alpha.project.id)
 
   const firstExport = await service.exportProject(alpha.project.id)
   const secondExport = await service.exportProject(alpha.project.id)
@@ -270,6 +271,8 @@ try {
       'workflow-ledger-production-mutation-ingress',
       'memory-production-mutation-ingress',
       'live-aggregate-mutation-authorization',
+      'live-aggregate-transient-read-retry',
+      'live-aggregate-continuous-change-fail-closed',
       'restart-persistence',
       'missing-object-fail-closed',
       'ownership-tamper-fail-closed',
@@ -829,6 +832,32 @@ async function proveTornSnapshotFailsClosed(aggregateApi, workspaceApi, fixture,
     service.seals.readProject(fixture.project.id).aggregateRevision,
     aggregateRevision,
     'a torn snapshot does not advance the aggregate seal'
+  )
+}
+
+async function proveLiveSnapshotStability(aggregateApi, scenarioRoots, projectId) {
+  const retrying = new aggregateApi.ProjectAggregateService(scenarioRoots)
+  const collect = retrying.collectProject.bind(retrying)
+  let retryReads = 0
+  retrying.collectProject = async (...args) => {
+    const snapshot = await collect(...args)
+    retryReads += 1
+    return retryReads === 1 ? { ...snapshot, aggregateDigest: '0'.repeat(64) } : snapshot
+  }
+  await retrying.verifyLiveProject(projectId)
+  assertEqual(retryReads, 3, 'a transient live aggregate change is retried to two stable reads')
+
+  const unstable = new aggregateApi.ProjectAggregateService(scenarioRoots)
+  const unstableCollect = unstable.collectProject.bind(unstable)
+  let unstableReads = 0
+  unstable.collectProject = async (...args) => ({
+    ...await unstableCollect(...args),
+    aggregateDigest: (++unstableReads).toString(16).padStart(64, '0')
+  })
+  await assertRejects(
+    unstable.verifyLiveProject(projectId),
+    (error) => error?.code === 'REVISION_CONFLICT' && /stable read/i.test(String(error?.message)),
+    'continuous live aggregate changes must fail closed after bounded retries'
   )
 }
 

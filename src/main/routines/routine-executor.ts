@@ -17,11 +17,6 @@ export interface RoutineExecutionOptions {
   sendDelayMs?: number
 }
 
-interface RoutinePromptTarget {
-  sessionId: string
-  prompt: string
-}
-
 const routinePowerAdapter: PowerSaveBlockerAdapter = {
   start: (type) => powerSaveBlocker.start(type),
   stop: (id) => powerSaveBlocker.stop(id),
@@ -43,7 +38,6 @@ export async function executeRoutine(
     async () => {
       const nextRunAt = options.nextRunAt === undefined ? computeNextRun(routine.schedule, Date.now()) : options.nextRunAt
       const sendDelayMs = options.sendDelayMs ?? 1200
-      const promptTargets: RoutinePromptTarget[] = []
 
       const record = await runRoutineWithHistory(
         rootDir,
@@ -60,16 +54,18 @@ export async function executeRoutine(
             title: `Routine: ${current.name}`
           })
           // History is persisted before prompt delivery so UI events do not outrun run records.
-          promptTargets.push({ sessionId: meta.id, prompt: current.prompt })
+          if (sendDelayMs > 0) await delay(sendDelayMs)
+          const accepted = sessionManager.send(meta.id, current.prompt)
+          if (!accepted) {
+            await sessionManager.close(meta.id).catch((error) => {
+              console.error('[caogen] routine rejected-session cleanup failed:', error)
+            })
+            throw new Error(`Routine prompt was rejected before execution started: ${meta.id}`)
+          }
           return { sessionId: meta.id }
         },
         nextRunAt
       )
-
-      for (const target of promptTargets) {
-        if (sendDelayMs > 0) await delay(sendDelayMs)
-        sessionManager.send(target.sessionId, target.prompt)
-      }
 
       notifyRoutineResult(routine, record)
       return record

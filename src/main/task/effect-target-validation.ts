@@ -1,4 +1,5 @@
 import type { EffectTarget, FileSystemIdentity } from '../../shared/types'
+import { isManagedPluginEffectTarget } from '../plugin/plugin-effect-target-validation'
 
 export function isEffectTarget(value: unknown): value is EffectTarget {
   if (!isRecord(value)) return false
@@ -11,6 +12,9 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
   if (value.kind === 'code_forge_patch') return isCodeForgePatchTarget(value)
   if (value.kind === 'git_worktree_create') return isGitWorktreeCreateTarget(value)
   if (value.kind === 'git_worktree_remove') return isGitWorktreeRemoveTarget(value)
+  if (value.kind === 'managed_plugin_install' || value.kind === 'managed_plugin_uninstall') {
+    return isManagedPluginEffectTarget(value)
+  }
   if (value.kind === 'pull_request_create') return isPullRequestTarget(value)
   if (value.kind === 'issue_create') return isIssueTarget(value)
   if (value.kind === 'mcp_tool_call') return isMcpToolCallTarget(value)

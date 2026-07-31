@@ -40,7 +40,6 @@ import type {
   PreparedPreview,
   PreviewAnnotation,
   PreviewAnnotationLocator,
-  Project,
   ProviderView,
   QuickbarDispatchOptions,
   QuickbarDispatchResult,
@@ -71,7 +70,7 @@ import type {
   WorktreeSummary
 } from '../../shared/types'
 import { createProviderProfileStoreActions, type ProviderProfileStoreActions } from './store/provider-profile-actions'
-import { createTaskRecoveryActions, type TaskRecoveryActions } from './store/task-recovery-actions'
+import { createTaskRecoveryActions, requireMcpProbeResults, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createTaskPlanSlice, type TaskPlanSlice } from './store/task-plan-slice'
 import {
@@ -79,11 +78,17 @@ import {
   type ProjectWorkspaceStoreSlice
 } from './store/project-workspace-actions'
 import type { PanelId, PanelOpenContext } from './components/workbench/panels'
+import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
+import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
+import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
+import { sendActiveSessionMessage } from './store/session-send'
+import { sendStartSuggestionMessage } from './store/start-suggestion-send'
+import { createTerminalActions } from './store/terminal-actions'
+import { createBrowserActions } from './store/browser-actions'
 let seq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
-
 function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
   const kindLabel =
     item.kind === 'plugin'
@@ -735,7 +740,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-interface AppStore extends ExperienceModeSlice, TaskRecoveryActions, ProviderProfileStoreActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
+export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice, ProviderProfileStoreActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -743,8 +748,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions, ProviderPro
   activeId: string | null
   history: HistoryEntry[]
   settings: AppSettings
-  providers: ProviderView[]
-  projects: Project[]
   taskSnapshots: TaskSnapshotRecord[]
   taskSnapshotsLoading: boolean
   taskSnapshotsError?: string
@@ -753,7 +756,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions, ProviderPro
   rewindPanel: RewindPanelState
   showNewSession: boolean
   newSessionProjectId: string | null
-  showSettings: boolean
   showCommandPalette: boolean
   showTaskRecovery: boolean
   sidebarQuery: string
@@ -918,7 +920,6 @@ interface AppStore extends ExperienceModeSlice, TaskRecoveryActions, ProviderPro
   archiveProject(id: string, archived: boolean): Promise<void>
   deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean, projectId?: string): void
-  setShowSettings(v: boolean): void
   setShowCommandPalette(v: boolean): void
   setShowTaskRecovery(v: boolean): void
 }
@@ -1168,13 +1169,10 @@ export const useStore = create<AppStore>((set, get) => {
     guiAutomationTemporaryGrantUntil: 0,
     notificationsEnabled: true,
     preventDisplaySleep: true,
-    sdkAgentsEnabled: false,
     ideBridgeEnabled: false,
     ideBridgeHost: '127.0.0.1',
     ideBridgePort: 17365,
     ideBridgeToken: '',
-    hookPostEditCommand: '',
-    hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
     office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
     layout: {
@@ -1185,14 +1183,16 @@ export const useStore = create<AppStore>((set, get) => {
       chatDensity: 'comfortable'
     }
   },
-  providers: [],
-  projects: [],
   taskSnapshots: [],
   taskSnapshotsLoading: false,
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
+  ...createProviderProfileStoreActions(set, get),
   ...createTaskPlanSlice((update) => set(update), () => get()),
   ...createProjectWorkspaceStoreSlice(set, get),
+  ...createSettingsNavigationSlice((update) => set(update)),
+  ...createWelcomeDraftSlice((update) => set(update)),
+  ...createResourceCatalogSlice((update) => set(update), get),
   sidebarQuery: '',
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
@@ -1237,7 +1237,6 @@ export const useStore = create<AppStore>((set, get) => {
   rewindPanel: { open: false },
   showNewSession: false,
   newSessionProjectId: null,
-  showSettings: false,
   showCommandPalette: false,
   showTaskRecovery: true,
 
@@ -1306,8 +1305,8 @@ export const useStore = create<AppStore>((set, get) => {
     const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
-      window.agentDesk.listProviders().then((providers) => set({ providers })),
-      window.agentDesk.listProjects().then((projects) => set({ projects })),
+      get().refreshProviders(),
+      get().refreshProjects(),
       get().refreshProjectWorkspaces(),
       get().hydrateTaskRecoveryCandidates()
     ])
@@ -1675,45 +1674,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async sendMessage(input) {
-    const id = get().activeId
-    if (!id) return
-    const payload: SendMessagePayload =
-      typeof input === 'string'
-        ? { text: input.trim() }
-        : {
-            text: input.text.trim(),
-            images: input.images
-          }
-    const displayText =
-      payload.text || (payload.images && payload.images.length > 0 ? `图片输入 (${payload.images.length} 张)` : '')
-    if (!displayText && (!payload.images || payload.images.length === 0)) return
-    set((s) => {
-      const session = s.sessions[id]
-      if (!session) return s
-      return {
-        sessions: {
-          ...s.sessions,
-          [id]: {
-            ...session,
-            items: [
-              ...session.items,
-              {
-                id: genId(),
-                kind: 'user',
-                text: displayText,
-                attachments: payload.images?.map((image) => ({
-                  id: image.id,
-                  mime: image.mime,
-                  bytes: image.bytes
-                }))
-              }
-            ],
-            meta: { ...session.meta, status: 'running' }
-          }
-        }
-      }
-    })
-    await window.agentDesk.sendMessage(id, payload)
+    await sendActiveSessionMessage({ getState: get, setState: set, nextId: genId }, input)
   },
 
   async sendQuickbarClipboard(options) {
@@ -2450,67 +2411,7 @@ export const useStore = create<AppStore>((set, get) => {
     return result
   },
 
-  async openTerminalPanel() {
-    get().openPanel('terminal')
-  },
-
-  closeTerminalPanel() {
-    get().closePanel()
-  },
-
-  async startTerminal() {
-    const id = get().activeId
-    if (!id) return
-    set((s) => ({ workbench: { ...s.workbench, terminalLoading: true, terminalError: undefined } }))
-    try {
-      const terminal = await window.agentDesk.startTerminal(id, { cols: 100, rows: 28, reuse: true })
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          terminal,
-          terminalLoading: false,
-          terminalBuffer: s.workbench.terminal?.id === terminal.id ? s.workbench.terminalBuffer : ''
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          terminalLoading: false,
-          terminalError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async sendTerminalInput(text) {
-    const terminal = get().workbench.terminal
-    if (!terminal || terminal.exit) return
-    try {
-      await window.agentDesk.writeTerminal(terminal.id, text)
-    } catch (error) {
-      set((state) => ({
-        workbench: {
-          ...state.workbench,
-          terminalError: error instanceof Error ? error.message : String(error)
-        }
-      }))
-    }
-  },
-
-  async closeTerminal() {
-    const terminal = get().workbench.terminal
-    if (!terminal) return
-    await window.agentDesk.closeTerminal(terminal.id)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        terminal: undefined,
-        terminalBuffer: '',
-        terminalError: undefined
-      }
-    }))
-  },
+  ...createTerminalActions(set, get, closeNativeBrowserView),
 
   async openFilesPanel() {
     get().openPanel('files')
@@ -2811,73 +2712,7 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, previewAnnotations: annotations } }))
   },
 
-  async openBrowserPanel(url) {
-    get().openPanel('browser', url ? { url } : undefined)
-  },
-
-  async closeBrowserPanel() {
-    get().closePanel()
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        browserLoading: false,
-        browserError: undefined
-      }
-    }))
-  },
-
-  async navigateBrowser(url) {
-    const id = get().activeId
-    const target = url.trim()
-    if (!id || !target) return
-    set((s) => ({ workbench: { ...s.workbench, browserLoading: true, browserError: undefined } }))
-    try {
-      const state = await window.agentDesk.navigateBrowser(id, target)
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserState: state,
-          browserUrlDraft: state.url,
-          browserLoading: state.loading
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          browserLoading: false,
-          browserError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async browserGoBack() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.browserGoBack(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserUrlDraft: state.url } }))
-  },
-
-  async browserGoForward() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.browserGoForward(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserUrlDraft: state.url } }))
-  },
-
-  async reloadBrowser() {
-    const id = get().activeId
-    if (!id) return
-    const state = await window.agentDesk.reloadBrowser(id)
-    set((s) => ({ workbench: { ...s.workbench, browserState: state, browserLoading: state.loading } }))
-  },
-
-  async setBrowserBounds(bounds) {
-    const id = get().activeId
-    if (!id || get().workbench.activePanelId !== 'browser') return
-    await window.agentDesk.setBrowserBounds(id, bounds)
-  },
+  ...createBrowserActions(set, get),
 
   async captureBrowserAnnotation(note) {
     const id = get().activeId
@@ -3038,7 +2873,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (mcpItems.length === 0) return
     set((s) => ({ workbench: { ...s.workbench, mcpProbing: true, pluginRegistryError: undefined } }))
     try {
-      const results = await window.agentDesk.probeMcpServers(mcpItems, id)
+      const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(mcpItems, id), get().refreshTaskSnapshots)
       set((s) => {
         const merged = { ...s.workbench.mcpProbeResults }
         for (const result of results) merged[result.id] = result
@@ -3067,6 +2902,7 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
     try {
       const result = await window.agentDesk.installLocalPlugin()
+      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
       if (!result.ok) {
         // 用户取消不算错误
         if (result.error !== 'canceled') {
@@ -3074,9 +2910,7 @@ export const useStore = create<AppStore>((set, get) => {
         }
         return
       }
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` }
-      }))
+      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` } }))
       await get().refreshPluginRegistryPanel()
     } catch (err) {
       set((s) => ({
@@ -3089,13 +2923,12 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
     try {
       const result = await window.agentDesk.uninstallPlugin(item.path)
+      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
       if (!result.ok) {
         set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
         return
       }
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` }
-      }))
+      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` } }))
       await get().refreshPluginRegistryPanel()
     } catch (err) {
       set((s) => ({
@@ -3580,8 +3413,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async sendStartSuggestion(suggestion) {
-    await get().sendMessage(suggestion.prompt)
-    get().ignoreStartSuggestion(suggestion.id)
+    await sendStartSuggestionMessage({ getState: get, setState: set }, suggestion)
   },
 
   ignoreStartSuggestion(id) {
@@ -3716,43 +3548,15 @@ export const useStore = create<AppStore>((set, get) => {
   closeRewindPanel() {
     set({ rewindPanel: { open: false } })
   },
-
-  ...createProviderProfileStoreActions(set, get),
-  async refreshProjects() {
-    const projects = await window.agentDesk.listProjects()
-    set({ projects })
-  },
-
-  async archiveProject(id, archived) {
-    await window.agentDesk.updateProject(id, { archived })
-    const projects = await window.agentDesk.listProjects()
-    set((s) => ({
-      projects,
-      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
-    }))
-  },
-
-  async deleteProject(id) {
-    await window.agentDesk.deleteProject(id)
-    const projects = await window.agentDesk.listProjects()
-    set((s) => ({
-      projects,
-      newSessionProjectId: s.newSessionProjectId === id ? null : s.newSessionProjectId
-    }))
-  },
-
   setShowNewSession(v, projectId) {
     set((s) => ({
       showNewSession: v, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode, v),
       newSessionProjectId: v ? projectId ?? null : null,
       showSettings: v ? false : s.showSettings,
+      settingsContext: v ? null : s.settingsContext,
       showTaskRecovery: v ? false : s.showTaskRecovery,
       view: v ? 'list' : s.view
     }))
-  },
-
-  setShowSettings(v) {
-    set({ showSettings: v })
   },
 
   setShowCommandPalette(v) {
@@ -3819,8 +3623,7 @@ export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string 
 ]
 
 /**
- * Provider 预设模板。Anthropic 引擎使用原生 Messages API;Claude 引擎使用
- * Claude Agent SDK;OpenAI 引擎支持 Responses(OpenAI 原生)与 Chat Completions
+ * Provider 预设模板。Anthropic 引擎使用原生 Messages API;OpenAI 引擎支持 Responses(OpenAI 原生)与 Chat Completions
  * (通用)两种协议。模板预填 baseUrl 与常见模型名,降低配置成本。
  */
 export interface ProviderPreset {
@@ -3850,7 +3653,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.anthropic.com',
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     engine: 'anthropic',
-    hint: '直连 Anthropic 官方 Messages API,不经过 Claude Agent SDK;填入自己的 Anthropic API Key。'
+    hint: '直连 Anthropic 官方 Messages API;填入自己的 Anthropic API Key。'
   },
   {
     key: 'openai',
@@ -3858,14 +3661,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.openai.com',
     models: ['gpt-4.1', 'gpt-4o', 'o3', 'o4-mini'],
     engine: 'openai',
-    hint: '选择 OpenAI 引擎时原生直连(Responses 协议),填入 OpenAI API Key。Claude 引擎使用该 Provider 仍需要兼容网关。'
+    hint: '使用 OpenAI Responses 协议原生直连;填入 OpenAI API Key。'
   },
   {
     key: 'deepseek',
     label: 'DeepSeek(厂商直连)',
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: ['deepseek-chat', 'deepseek-reasoner'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'DeepSeek 厂商 Anthropic 兼容端点,无须网关。api.deepseek.com 申请 Key。'
   },
   {
@@ -3882,7 +3685,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Kimi / 月之暗面(厂商直连)',
     baseUrl: 'https://api.moonshot.cn/anthropic',
     models: ['kimi-k2-0711-preview', 'moonshot-v1-auto'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'Moonshot 厂商 Anthropic 兼容端点,无须网关。platform.moonshot.cn 申请 Key。'
   },
   {
@@ -3890,7 +3693,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '智谱 GLM(厂商直连)',
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: ['glm-4.5', 'glm-4.5-air'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: '智谱厂商 Anthropic 兼容端点,无须网关。open.bigmodel.cn 申请 Key。'
   },
   {
@@ -3899,7 +3702,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.x.ai',
     models: ['grok-4', 'grok-4-fast'],
     engine: 'openai',
-    hint: 'xAI 厂商端点同时提供 Anthropic 兼容(/v1/messages,配 Claude 引擎)与 Chat Completions(配 OpenAI 引擎 Chat 协议)。console.x.ai 申请 Key。',
+    hint: 'xAI 厂商端点提供 Chat Completions,配 OpenAI-compatible 引擎 Chat 协议。console.x.ai 申请 Key。',
     openaiProtocol: 'chat'
   },
   {
@@ -3943,7 +3746,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'one-api / new-api 网关',
     baseUrl: 'http://localhost:3000',
     models: ['gpt-4o', 'gpt-4o-mini', 'gemini-1.5-pro', 'deepseek-chat'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: '经 one-api/new-api 网关转译:请求走 Anthropic 协议,网关翻译到 OpenAI/Gemini 等后端。模型名需与网关映射一致。'
   },
   {
@@ -3951,7 +3754,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'LiteLLM 网关',
     baseUrl: 'http://localhost:4000',
     models: ['gpt-4o', 'claude-3-5-sonnet', 'gemini/gemini-1.5-pro'],
-    engine: 'claude',
+    engine: 'anthropic',
     hint: 'LiteLLM 以 /v1/messages 暴露 Anthropic 兼容端点,后端可接 OpenAI/Azure/Bedrock 等。'
   },
   {

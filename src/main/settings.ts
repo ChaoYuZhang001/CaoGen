@@ -77,13 +77,10 @@ const DEFAULTS: AppSettings = {
   guiAutomationTemporaryGrantUntil: 0,
   notificationsEnabled: true,
   preventDisplaySleep: true,
-  sdkAgentsEnabled: false,
   ideBridgeEnabled: false,
   ideBridgeHost: '127.0.0.1',
   ideBridgePort: 17365,
   ideBridgeToken: '',
-  hookPostEditCommand: '',
-  hookTurnEndCommand: '',
   autoSkillLearningEnabled: false,
   office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
   layout: {

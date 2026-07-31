@@ -99,12 +99,10 @@ try {
     assert(selected?.id === 'session-backup', `expected session backup key, got ${selected?.id}`)
   })
 
-  check('main engines switch keys before provider failover and expose labels only', () => {
+  check('native engines switch keys before provider failover and expose labels only', () => {
     const providers = read('src/main/providers.ts')
     const openai = read('src/main/openaiEngine.ts')
-    const sdk = read('src/main/agentSession.ts')
-    const sdkResult = read('src/main/task/claude-result-runtime.ts')
-    const sdkStreamFailure = read('src/main/task/claude-stream-failure-runtime.ts')
+    const anthropic = read('src/main/anthropicEngine.ts')
     const types = read('src/shared/types.ts')
     const store = read('src/renderer/src/store.ts')
     const message = read('src/renderer/src/components/MessageItem.tsx')
@@ -113,10 +111,9 @@ try {
     assert(providers.includes('export function rotateProviderKey'), 'provider storage must persist key rotation')
     assert(providers.includes('recordProviderKeySuccess'), 'successful keys must clear failure metadata')
     assert(openai.indexOf('tryProviderKeyFailover(text') < openai.indexOf('recordFailure(this.meta.providerId, text)'), 'OpenAI must rotate a key before marking the Provider failed')
-    assert(sdk.includes('providerTokenFingerprint(selection.token)'), 'SDK credential changes must rebuild even when key presence stays true')
-    assert(sdk.includes('tryProviderKeyFailover: (errorText) => this.tryProviderKeyFailover(errorText)'), 'SDK result runtime must receive the key failover callback')
-    assert(sdkResult.includes('await input.tryProviderKeyFailover(parsed.errorText)'), 'SDK result failures must try another key')
-    assert(sdkStreamFailure.includes('await input.tryProviderKeyFailover(message)'), 'SDK stream failures must try another key')
+    assert(anthropic.includes('const keyTarget = this.tryProviderKeyRecovery(current, failure)'), 'Anthropic must rotate a key before Provider failover')
+    assert(anthropic.includes('this.dependencies.rotateProviderKey({'), 'Anthropic key recovery must use Provider storage rotation')
+    assert(anthropic.includes(".filter((provider) => provider.engine === 'anthropic' && provider.hasToken)"), 'Anthropic Provider failover must remain protocol-scoped')
     assert(types.includes("kind: 'provider-key-failover'"), 'shared event contract must include key failover')
     assert(!types.match(/provider-key-failover[\s\S]{0,500}(token|encryptedToken):/), 'key failover event must not expose secret fields')
     assert(store.includes("case 'provider-key-failover'"), 'renderer store must preserve key failover')

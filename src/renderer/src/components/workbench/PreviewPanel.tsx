@@ -4,6 +4,7 @@ import { useStore } from '../../store'
 import PreviewRenderer from './PreviewRenderer'
 import type { OfficePreviewUnit } from './officePreviewUtils'
 import { buildPreviewAgentPrompt, getPreviewAgentPromptSource, previewAnnotationLabel } from './previewPrompt'
+import { canSendToSession, isSessionBusy } from './session-send-availability'
 
 export default function PreviewPanel(): React.JSX.Element {
   const t = useT()
@@ -18,6 +19,7 @@ export default function PreviewPanel(): React.JSX.Element {
     previewVisualError,
     previewVisualLoading
   } = useStore((s) => s.workbench)
+  const sessionStatus = useStore((s) => activeId ? s.sessions[activeId]?.meta.status : undefined)
   const refresh = useStore((s) => s.refreshPreviewPanel)
   const close = useStore((s) => s.closePreviewPanel)
   const sendMessage = useStore((s) => s.sendMessage)
@@ -28,22 +30,19 @@ export default function PreviewPanel(): React.JSX.Element {
   const [sendScope, setSendScope] = useState<'document' | 'unit'>('document')
   const [officeUnit, setOfficeUnit] = useState<OfficePreviewUnit | null>(null)
   const promptSource = getPreviewAgentPromptSource(previewPath, preview, previewError)
-  const canSendPreview = Boolean(activeId && promptSource)
+  const sessionBusy = isSessionBusy(sessionStatus)
+  const canSendPreview = canSendToSession(activeId, sessionStatus, Boolean(promptSource))
   const canSendCurrentUnit = Boolean(canSendPreview && preview?.type === 'office' && officeUnit)
-
   useEffect(() => {
     if (activeId && previewPath) void refresh()
   }, [activeId, previewPath, refresh])
-
   useEffect(() => {
     setSendState('idle')
     setSendError('')
   }, [previewPath, preview, previewError])
-
   useEffect(() => {
     setOfficeUnit(null)
   }, [previewPath])
-
   const saveNote = async (): Promise<void> => {
     const locator =
       preview?.type === 'office' && officeUnit
@@ -84,6 +83,7 @@ export default function PreviewPanel(): React.JSX.Element {
       data-preview-agent-sendable={canSendPreview ? 1 : 0}
       data-preview-agent-source-type={promptSource?.type ?? ''}
       data-preview-agent-source-mode={promptSource?.mode ?? ''}
+      data-preview-agent-busy={Number(sessionBusy)}
       data-preview-annotations={previewAnnotations.length}
       data-preview-current-unit={officeUnit?.position ?? ''}
       data-preview-current-unit-kind={officeUnit?.kind ?? ''}
@@ -103,6 +103,7 @@ export default function PreviewPanel(): React.JSX.Element {
           </button>
           <button
             className="btn btn-ghost btn-sm"
+            data-preview-send-document="1"
             disabled={!canSendPreview}
             onClick={() => void sendPreviewToAgent()}
           >

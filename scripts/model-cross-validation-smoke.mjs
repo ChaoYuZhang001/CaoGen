@@ -16,6 +16,7 @@ try {
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
       'src/main/model/cross-validation.ts',
       'src/main/model/cross-validation-failure.ts',
+      'src/main/model/cross-validation-dispatch.ts',
       '--outDir',
       buildDir,
       '--target',
@@ -46,6 +47,9 @@ try {
   } = await import(pathToFileURL(modulePath).href)
   const { planCrossValidationFailureIngress } = await import(
     pathToFileURL(findCompiled(buildDir, 'cross-validation-failure.js')).href
+  )
+  const { dispatchCrossValidationPrompt } = await import(
+    pathToFileURL(findCompiled(buildDir, 'cross-validation-dispatch.js')).href
   )
   const plan = {
     enabled: true,
@@ -128,6 +132,50 @@ try {
   assert.equal(crossValidationFailureVerdict('BLOCKED', 'PRIMARY_OK'), null)
   assert.equal(crossValidationFailureVerdict('BLOCKED', 'NEED_HUMAN'), null)
   assert.equal(crossValidationFailureVerdict(null, null), null)
+  const acceptedEvents = []
+  assert.equal(dispatchCrossValidationPrompt({
+    send: (sessionId, prompt) => sessionId === 'review-ok' && prompt === 'review prompt',
+    getMeta: () => undefined,
+    dispatch: (sessionId, event) => acceptedEvents.push({ sessionId, event })
+  }, {
+    parentSessionId: 'parent-ok',
+    childSessionId: 'review-ok',
+    prompt: 'review prompt',
+    stage: 'review'
+  }), true, 'accepted review prompt should report success')
+  assert.deepEqual(acceptedEvents, [], 'accepted review prompt should not emit a rejection event')
+
+  const rejectedEvents = []
+  assert.equal(dispatchCrossValidationPrompt({
+    send: () => false,
+    getMeta: () => ({ lastError: 'provider key missing\nretry after configuration' }),
+    dispatch: (sessionId, event) => rejectedEvents.push({ sessionId, event })
+  }, {
+    parentSessionId: 'parent-rejected',
+    childSessionId: 'review-rejected',
+    prompt: 'review prompt',
+    stage: 'review'
+  }), false, 'rejected review prompt should report failure')
+  assert.equal(rejectedEvents.length, 1, 'rejected review prompt should emit one parent event')
+  assert.equal(rejectedEvents[0].sessionId, 'parent-rejected')
+  assert.equal(rejectedEvents[0].event.event, 'model-cross-validation-review-rejected')
+  assert.match(rejectedEvents[0].event.detail, /provider key missing retry after configuration/)
+
+  const thrownEvents = []
+  assert.equal(dispatchCrossValidationPrompt({
+    send: () => { throw new Error('synchronous arbitration failure') },
+    getMeta: () => undefined,
+    dispatch: (sessionId, event) => thrownEvents.push({ sessionId, event })
+  }, {
+    parentSessionId: 'parent-thrown',
+    childSessionId: 'arbitration-thrown',
+    prompt: 'arbitration prompt',
+    stage: 'arbitration'
+  }), false, 'thrown arbitration prompt should report failure')
+  assert.equal(thrownEvents.length, 1, 'thrown arbitration prompt should emit one parent event')
+  assert.equal(thrownEvents[0].sessionId, 'parent-thrown')
+  assert.equal(thrownEvents[0].event.event, 'model-cross-validation-arbitration-rejected')
+  assert.match(thrownEvents[0].event.detail, /synchronous arbitration failure/)
   const ownedParent = {
     id: 'owned-parent',
     title: 'Release Fix',
@@ -256,15 +304,13 @@ try {
   assert(runtime.includes("permissionMode: 'plan'"), 'review child must be plan-only')
   assert(runtime.includes('buildCrossValidationReviewPrompt'), 'review child must receive validation prompt')
   assert(runtime.includes('buildCrossValidationArbitrationPrompt'), 'arbitration child must receive arbitration prompt')
+  assert(runtime.includes('if (!reviewAccepted)'), 'rejected review prompt must clear its runtime association')
+  assert(runtime.includes('if (!arbitrationAccepted)'), 'rejected arbitration prompt must clear its runtime association')
   assert(runtime.includes("event: 'model-cross-validation'"), 'timeline event missing')
   assert(runtime.includes("event: 'model-cross-validation-arbitration'"), 'arbitration event missing')
   assert(runtime.includes('ingestWorkflowAcceptanceFailure'), 'structured failure ingress missing')
   assert(failurePlanner.includes('workspaceId, goalId, workItemId'), 'canonical ownership guard missing')
   assert(runtime.includes('meta.parentSessionId || meta.childRole'), 'recursion guard missing')
-  assert(
-    read('scripts/integration-test.cjs').includes('T18 P2 cross-validation: routing event creates review and arbitration child sessions'),
-    'behavior-level cross-validation integration test missing'
-  )
   assert(read('src/main/model/session-routing.ts').includes('crossValidation: drive.crossValidation'), 'session route should use Drive cross-validation policy')
   assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'medium', maxValidators: 2 }"), 'Command Drive policy should keep backup validator for arbitration')
   assert(read('src/main/model/drive.ts').includes("crossValidation: { enabled: true, minRiskLevel: 'low', maxValidators: 2 }"), 'Genesis Drive policy should keep backup validator for arbitration')

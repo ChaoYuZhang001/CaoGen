@@ -624,7 +624,7 @@ async function importClaudeDesktopMcp(args: Record<string, unknown>): Promise<To
 }
 
 function engineArg(value: unknown): EngineKind | undefined {
-  return value === 'claude' || value === 'anthropic' || value === 'openai' ? value : undefined
+  return value === 'anthropic' || value === 'openai' ? value : undefined
 }
 
 function permissionModeArg(value: unknown): PermissionModeId | undefined {

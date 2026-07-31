@@ -29,7 +29,8 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
 let quitCleanupStarted = false
-let trayTimer: NodeJS.Timeout | null = null
+let trayRunningCount: number | null = null
+let unsubscribeTraySessionEvents: (() => void) | null = null
 
 process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
 configureLearningUserDataRoot(app.getPath('userData'))
@@ -115,6 +116,8 @@ function updateTray(): void {
   const runningCount = sessionManager
     .list()
     .filter((meta) => meta.status === 'starting' || meta.status === 'running').length
+  if (runningCount === trayRunningCount) return
+  trayRunningCount = runningCount
   tray.setToolTip(runningCount > 0 ? `CaoGen · ${runningCount} running` : 'CaoGen')
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -148,7 +151,7 @@ function installTray(): void {
   tray = new Tray(image)
   tray.on('click', showMainWindow)
   updateTray()
-  trayTimer = setInterval(updateTray, 5000)
+  unsubscribeTraySessionEvents = sessionManager.subscribe(() => updateTray())
 }
 
 function sendMenuCommand(channel: string, value?: unknown): void {
@@ -303,10 +306,8 @@ app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
   quitCleanupStarted = true
   event.preventDefault()
-  if (trayTimer) {
-    clearInterval(trayTimer)
-    trayTimer = null
-  }
+  unsubscribeTraySessionEvents?.()
+  unsubscribeTraySessionEvents = null
   stopRoutineScheduler()
   disposeOfficeVisualPreviews()
   // 退出前等待任务快照落盘,再释放项目索引 watcher/SQLite 句柄。

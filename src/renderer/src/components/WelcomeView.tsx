@@ -4,7 +4,7 @@ import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { CaoGenDriveMode, Project, TaskStrategy } from '../../../shared/types'
+import type { TaskStrategy } from '../../../shared/types'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 import AssistantStartNotice from './experience/AssistantStartNotice'
 import TaskStrategyControl from './experience/TaskStrategyControl'
@@ -19,24 +19,10 @@ import {
   welcomeValidationKey,
   type WelcomeRoutingMode
 } from './experience/welcome-session-projection'
-
-const UNASSIGNED = '__unassigned__'
-
-function initialModel(defaultModel: string, provider?: { models: string[] }): string {
-  if (!provider) return ''
-  return defaultModel && provider.models.includes(defaultModel) ? defaultModel : AUTO_MODEL
-}
-
-function requestedProjectSelection(
-  requestedProjectId: string | null,
-  projects: Project[]
-): { choice: string; cwd: string } | undefined {
-  if (requestedProjectId === NEW_PROJECT_SESSION_CHOICE) {
-    return { choice: NEW_PROJECT_SESSION_CHOICE, cwd: '' }
-  }
-  const project = projects.find((item) => item.id === requestedProjectId)
-  return project ? { choice: project.id, cwd: project.path } : undefined
-}
+import {
+  UNASSIGNED,
+  useWelcomeDraftController
+} from './experience/useWelcomeDraft'
 
 interface WelcomeTool {
   key: string
@@ -44,6 +30,13 @@ interface WelcomeTool {
   promptKey: string
   icon: HeaderIconName
   taskStrategy: TaskStrategy
+}
+
+type WelcomeRecoveryKind = 'compute' | 'provider'
+
+function welcomeRecoveryKind(validationKey: string): WelcomeRecoveryKind | null {
+  if (validationKey === 'assistantComputeUnavailable') return 'compute'
+  return validationKey === 'explicitProviderRequired' ? 'provider' : null
 }
 
 const WELCOME_TOOLS: WelcomeTool[] = [
@@ -92,21 +85,15 @@ export default function WelcomeView(): React.JSX.Element {
   const refreshProviders = useStore((s) => s.refreshProviders)
   const activateLocalCompute = useStore((s) => s.activateLocalCompute)
   const setShowSettings = useStore((s) => s.setShowSettings)
-
-  const availableProjects = useMemo(() => projects.filter((project) => !project.archived), [projects])
-  const initialProject = requestedProjectSelection(requestedProjectId, availableProjects)
-  const initialProvider = providers.find((provider) => provider.id === settings.defaultProviderId && provider.ready)
-  const [text, setText] = useState('')
-  const [projectChoice, setProjectChoice] = useState(initialProject?.choice ?? UNASSIGNED)
-  const [cwd, setCwd] = useState(initialProject?.cwd ?? '')
-  const [driveMode, setDriveMode] = useState<CaoGenDriveMode>(settings.driveMode)
-  const [routingMode, setRoutingMode] = useState<WelcomeRoutingMode>('global')
-  const [providerId, setProviderId] = useState(initialProvider?.id ?? '')
-  const [model, setModel] = useState(initialModel(settings.defaultModel, initialProvider))
+  const welcome = useWelcomeDraftController({ projects, providers, requestedProjectId, settings })
+  const {
+    availableProjects, cwd, driveMode, model, projectChoice,
+    providerId, routingMode, text
+  } = welcome
   const [taskStrategy, setTaskStrategy] = useState<TaskStrategy>('execute')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [computeRecovery, setComputeRecovery] = useState(false)
+  const [recoveryKind, setRecoveryKind] = useState<WelcomeRecoveryKind | null>(null)
   const [localComputeStatus, setLocalComputeStatus] = useState<'idle' | 'checking' | 'ready' | 'unavailable'>('idle')
   const localComputeActivation = useRef<Promise<boolean> | null>(null)
   const submitPending = useRef(false)
@@ -123,8 +110,7 @@ export default function WelcomeView(): React.JSX.Element {
           setLocalComputeStatus('unavailable')
           return false
         }
-        setProviderId(result.provider.id)
-        setModel(AUTO_MODEL)
+        welcome.update({ providerId: result.provider.id, model: AUTO_MODEL })
         setLocalComputeStatus('ready')
         return true
       })
@@ -143,35 +129,6 @@ export default function WelcomeView(): React.JSX.Element {
     if (projection !== 'assistant' || computeAvailable || localComputeStatus !== 'idle') return
     void ensureLocalCompute()
   }, [computeAvailable, localComputeStatus, projection])
-
-  useEffect(() => {
-    if (!requestedProjectId) return
-    const requested = requestedProjectSelection(requestedProjectId, availableProjects)
-    if (!requested) return
-    setProjectChoice(requested.choice)
-    setCwd(requested.cwd)
-  }, [availableProjects, requestedProjectId])
-
-  useEffect(() => {
-    if (projectChoice === NEW_PROJECT_SESSION_CHOICE || projectChoice === UNASSIGNED) return
-    if (availableProjects.some((project) => project.id === projectChoice)) return
-    setProjectChoice(UNASSIGNED)
-    setCwd('')
-  }, [availableProjects, projectChoice])
-
-  useEffect(() => {
-    if (providerId) return
-    const preferred = providers.find(
-      (provider) => provider.id === settings.defaultProviderId && provider.ready
-    )
-    if (!preferred) return
-    setProviderId(preferred.id)
-    setModel(
-      settings.defaultModel && preferred.models.includes(settings.defaultModel)
-        ? settings.defaultModel
-        : AUTO_MODEL
-    )
-  }, [providerId, providers, settings.defaultModel, settings.defaultProviderId])
 
   const routingStrategy = driveMode === 'core'
     ? settings.schedulerStrategy
@@ -198,38 +155,15 @@ export default function WelcomeView(): React.JSX.Element {
   const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
 
   const onRoutingModeChange = (mode: WelcomeRoutingMode): void => {
-    setRoutingMode(mode)
-    if (mode === 'fixed') {
-      setModel(fixedModelOptions[0]?.value ?? '')
-      return
-    }
-    setModel(AUTO_MODEL)
-  }
-
-  const onProviderChange = (id: string): void => {
-    setProviderId(id)
-    const provider = providers.find((item) => item.id === id)
-    setModel(routingMode === 'fixed' ? provider?.models[0] ?? '' : AUTO_MODEL)
-  }
-
-  const onDriveChange = (mode: CaoGenDriveMode): void => {
-    setDriveMode(mode)
-    setModel(providerId ? AUTO_MODEL : '')
-  }
-
-  const onProjectChange = (choice: string): void => {
-    setProjectChoice(choice)
-    const project = projects.find((item) => item.id === choice)
-    setCwd(project?.path ?? '')
+    welcome.setRoutingMode(mode, fixedModelOptions[0]?.value ?? '')
   }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (dir) {
-      setProjectChoice(projectChoice === UNASSIGNED ? UNASSIGNED : NEW_PROJECT_SESSION_CHOICE)
-      setCwd(dir)
+      welcome.setPickedDirectory(dir)
       setError('')
-      setComputeRecovery(false)
+      setRecoveryKind(null)
     }
   }
 
@@ -258,17 +192,18 @@ export default function WelcomeView(): React.JSX.Element {
       const validationKey = welcomeValidationKey(projection, draft, available)
       if (validationKey) {
         setError(t(validationKey))
-        setComputeRecovery(projection === 'assistant' && validationKey === 'assistantComputeUnavailable')
+        setRecoveryKind(welcomeRecoveryKind(validationKey))
         return
       }
       setError('')
-      setComputeRecovery(false)
+      setRecoveryKind(null)
       const options = welcomeSessionOptions(projection, draft, prompt)
       await startSessionWithPrompt(title ? { ...options, title } : options, prompt)
+      welcome.clear()
     } catch (err) {
       const safeKey = assistantSafeStartError(projection, err)
       setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
-      setComputeRecovery(Boolean(safeKey))
+      setRecoveryKind(safeKey ? 'compute' : null)
     } finally {
       submitPending.current = false
       setBusy(false)
@@ -278,7 +213,7 @@ export default function WelcomeView(): React.JSX.Element {
   const startPreset = (tool: WelcomeTool): void => {
     const prompt = t(tool.promptKey)
     const title = t(tool.labelKey)
-    setText(prompt)
+    welcome.update({ text: prompt })
     setTaskStrategy(tool.taskStrategy)
     void submit(prompt, tool.taskStrategy, title)
   }
@@ -286,14 +221,20 @@ export default function WelcomeView(): React.JSX.Element {
   const retryCompute = async (): Promise<void> => {
     setBusy(true)
     try {
-      const activated = await ensureLocalCompute()
-      if (!activated) await refreshProviders()
+      const nextRecovery = recoveryKind ?? (projection === 'assistant' ? 'compute' : 'provider')
+      if (nextRecovery === 'compute') {
+        const activated = await ensureLocalCompute()
+        if (!activated) await refreshProviders()
+      } else {
+        await refreshProviders()
+      }
       const available = hasAvailableCompute(useStore.getState().providers)
-      setError(available ? '' : t('assistantComputeUnavailable'))
-      setComputeRecovery(!available)
+      setError(available ? '' : t(nextRecovery === 'provider' ? 'explicitProviderRequired' : 'assistantComputeUnavailable'))
+      setRecoveryKind(available ? null : nextRecovery)
     } catch {
-      setError(t('assistantComputeCheckFailed'))
-      setComputeRecovery(true)
+      const nextRecovery = recoveryKind ?? (projection === 'assistant' ? 'compute' : 'provider')
+      setError(t(nextRecovery === 'provider' ? 'welcomeProviderRefreshFailed' : 'assistantComputeCheckFailed'))
+      setRecoveryKind(nextRecovery)
     } finally {
       setBusy(false)
     }
@@ -338,7 +279,7 @@ export default function WelcomeView(): React.JSX.Element {
               aria-label={t('project')}
               title={cwd || t('welcomePickProject')}
               value={projectChoice}
-              onChange={(e) => onProjectChange(e.target.value)}
+              onChange={(e) => welcome.setProject(e.target.value)}
             >
               <option value={UNASSIGNED}>{t('directStartNoProject')}</option>
               {availableProjects.map((project) => (
@@ -355,7 +296,7 @@ export default function WelcomeView(): React.JSX.Element {
                   value={cwd}
                   placeholder="/path/to/project"
                   aria-label={t('projectDir')}
-                  onChange={(event) => setCwd(event.target.value)}
+                  onChange={(event) => welcome.update({ cwd: event.target.value })}
                 />
                 <button className="welcome-project-browse" onClick={() => void browse()}>
                   {t('browse')}
@@ -374,7 +315,7 @@ export default function WelcomeView(): React.JSX.Element {
               placeholder={t('welcomeInputPlaceholder')}
               value={text}
               rows={2}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => welcome.update({ text: e.target.value })}
               onKeyDown={onKeyDown}
               autoFocus
             />
@@ -394,9 +335,9 @@ export default function WelcomeView(): React.JSX.Element {
                   providers={providers}
                   routingMode={routingMode}
                   routingStrategyLabel={routingStrategyLabel}
-                  onDriveChange={onDriveChange}
-                  onModelChange={setModel}
-                  onProviderChange={onProviderChange}
+                  onDriveChange={welcome.setDriveMode}
+                  onModelChange={(nextModel) => welcome.update({ model: nextModel })}
+                  onProviderChange={welcome.setProvider}
                   onRoutingModeChange={onRoutingModeChange}
                 />
               )}
@@ -405,15 +346,13 @@ export default function WelcomeView(): React.JSX.Element {
               </button>
             </div>
           </div>
-          {projection === 'assistant' ? (
-            <AssistantStartNotice
-              busy={busy}
-              error={error}
-              recoverable={computeRecovery}
-              onOpenSettings={() => setShowSettings(true)}
-              onRetry={() => void retryCompute()}
-            />
-          ) : error ? <div className="notice notice-error welcome-error">{error}</div> : null}
+          <AssistantStartNotice
+            busy={busy}
+            error={error}
+            recoveryKind={recoveryKind}
+            onOpenSettings={() => setShowSettings(true, 'providers', 'welcome-provider-recovery')}
+            onRetry={() => void retryCompute()}
+          />
         </div>
       </div>
     </div>

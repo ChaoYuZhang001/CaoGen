@@ -10,12 +10,16 @@ import {
   artifactReportChecks,
   candidateIdentityChecks,
   macUpdateMetadataChecks,
+  macosX64UpdateMetadataChecks,
   renderMacUpdateMetadata
 } from './lib/release-matrix-evidence.mjs'
 
 const repoRoot = process.cwd()
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'release-candidate-evidence.yml')
 const source = readFileSync(workflowPath, 'utf8')
+const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+const pageOperationSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'page-operation-smoke.mjs'), 'utf8')
+const assistantStudioUiSource = readFileSync(path.join(repoRoot, 'scripts', 'assistant-studio-ui-e2e.mjs'), 'utf8')
 const workflow = yaml.load(source)
 const triggers = workflow.on
 
@@ -23,15 +27,39 @@ assert.deepEqual(Object.keys(triggers), ['workflow_dispatch'], 'release workflow
 assert.deepEqual(workflow.permissions, { contents: 'read' }, 'workflow permissions must be read-only')
 assert.equal(workflow.concurrency['cancel-in-progress'], false, 'an in-flight signing run must not be cancelled')
 assert.match(workflow.concurrency.group, /inputs\.commit/, 'concurrency must be scoped to the candidate commit')
+assert.equal(
+  triggers.workflow_dispatch.inputs.version.default,
+  packageJson.version,
+  'the manual candidate workflow must default to the current package version'
+)
+assert.deepEqual(triggers.workflow_dispatch.inputs.platform_scope, {
+  description: 'Run the current macOS Intel patch scope, both macOS lanes, or the complete macOS and Windows matrix',
+  required: true,
+  default: 'macos-x64',
+  type: 'choice',
+  options: ['all', 'macos', 'macos-x64']
+}, 'the paused-platform release policy must default candidate runs to macOS Intel only')
 assert.deepEqual(Object.keys(workflow.jobs).sort(), ['aggregate', 'candidate', 'macos-arm64', 'macos-x64', 'windows-x64'])
 assert.equal(workflow.jobs['macos-x64']['runs-on'], 'macos-15-intel')
 assert.equal(workflow.jobs['macos-arm64']['runs-on'], 'macos-15-arm64')
+assert.equal(workflow.jobs['macos-arm64'].if, "${{ inputs.platform_scope != 'macos-x64' }}")
 assert.equal(workflow.jobs['windows-x64']['runs-on'], 'windows-2025')
+assert.equal(workflow.jobs['windows-x64'].if, "${{ inputs.platform_scope == 'all' }}")
+assert.equal(workflow.jobs.aggregate.if, "${{ inputs.platform_scope == 'all' }}")
 assert.deepEqual(workflow.jobs.aggregate.needs, ['candidate', 'macos-x64', 'macos-arm64', 'windows-x64'])
 assert(!/(^|\n)\s*(push|pull_request|schedule|release):/m.test(source), 'automatic or release triggers are forbidden')
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'workflow must not publish')
+assert.match(
+  packageJson.scripts?.['dist:mac:release:x64'] ?? '',
+  /electron-builder[^&]*--publish\s+never/,
+  'the x64 candidate build must disable electron-builder implicit publishing'
+)
 assert.match(source, /release-candidate-preflight\.mjs --commit/, 'candidate identity preflight is required')
 assert.match(source, /npm run test:deep/, 'the exact candidate must run Deep')
+assert.match(source, /npm run test:p2-release-scope:required/, 'the exact candidate must run release-scope P2')
+assert.match(source, /npm run test:package-size-policy/, 'candidate source gates must enforce package size policy')
+assert.match(source, /npm run test:macos-dmg-detach:required/, 'candidate source gates must verify DMG detach recovery')
+assert.match(source, /test-results\/p2-release-scope\/latest\.json/, 'the candidate must carry release-scope P2 evidence')
 assert.match(source, /npm run release:matrix:assemble/, 'cross-runner evidence must be independently assembled')
 assert.match(source, /npm run test:release-packaging-audit:required/, 'the final 12-asset audit is required')
 assert.match(source, /npm run test:product-positioning:required/, 'the candidate must revalidate public positioning')
@@ -56,6 +84,64 @@ const candidateStepNames = workflow.jobs.candidate.steps.map((step) => step.name
 assert(
   candidateStepNames.indexOf('Install exact dependencies') < candidateStepNames.indexOf('Verify candidate identity'),
   'the dependency-backed identity preflight must run after npm ci'
+)
+const p2Step = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run release-scope P2 gate')
+assert.deepEqual(p2Step?.env, {
+  CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000',
+  CAOGEN_P2_RELEASE_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '480000',
+  CAOGEN_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '360000',
+  CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script',
+  JAVA_TOOL_OPTIONS: '-Didea.is.internal=true -Didea.trust.all.projects=true -Didea.initially.ask.config=never -Djb.consents.confirmation.enabled=false -Djb.privacy.policy.text=<!--999.999-->'
+}, 'the x64 release lane must tolerate cold tool downloads and use the deterministic real-IDE starter')
+const deepStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run exact-commit Deep gate')
+assert.deepEqual(
+  deepStep?.env,
+  { CAOGEN_CI_SOFTWARE_WEBGL: '1' },
+  'the x64 Deep gate must request deterministic software WebGL'
+)
+for (const value of [
+  'CAOGEN_CI_SOFTWARE_WEBGL',
+  '--use-gl=angle',
+  '--use-angle=swiftshader',
+  '--enable-unsafe-swiftshader'
+]) {
+  assert(pageOperationSmokeSource.includes(value), `page operations must consume the software WebGL contract: ${value}`)
+  assert(assistantStudioUiSource.includes(value), `Assistant/Studio UI must consume the software WebGL contract: ${value}`)
+}
+const deepFailureDiagnosticsStep = workflow.jobs['macos-x64'].steps.find(
+  (step) => step.name === 'Upload x64 Deep failure diagnostics'
+)
+assert.equal(deepFailureDiagnosticsStep?.if, 'failure()', 'x64 Deep diagnostics must upload after a failed gate')
+assert.match(
+  deepFailureDiagnosticsStep?.with?.path ?? '',
+  /test-results\/caogen-deep\/\*\*/,
+  'x64 Deep diagnostics must retain page reports and screenshots'
+)
+const x64UploadStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Upload x64 assets and evidence')
+assert(x64UploadStep, 'the x64 distributable upload step must exist')
+assert(
+  String(x64UploadStep.with?.path || '').includes('dist/latest-mac.yml'),
+  'the Intel evidence artifact must include the signed update metadata'
+)
+assert(
+  !String(x64UploadStep.with?.path || '').includes('app.asar'),
+  'the Intel evidence artifact must not duplicate app.asar beside DMG and ZIP'
+)
+const x64AggregateArchiveStep = workflow.jobs['macos-x64'].steps.find(
+  (step) => step.name === 'Upload x64 archive for complete-matrix assembly'
+)
+assert.equal(x64AggregateArchiveStep?.if, "${{ inputs.platform_scope == 'all' }}")
+assert.equal(x64AggregateArchiveStep?.with?.path, 'dist/mac/CaoGen.app/Contents/Resources/app.asar')
+const aggregateArchiveDownloadStep = workflow.jobs.aggregate.steps.find(
+  (step) => step.name === 'Download macOS x64 archive for assembly'
+)
+assert.equal(
+  aggregateArchiveDownloadStep?.with?.name,
+  'caogen-release-macos-x64-aggregate-${{ needs.candidate.outputs.commit }}'
+)
+assert.equal(
+  aggregateArchiveDownloadStep?.with?.path,
+  'test-results/release-matrix-input/macos-x64/dist/mac/CaoGen.app/Contents/Resources'
 )
 
 const validIdentity = candidateIdentityChecks({
@@ -95,6 +181,27 @@ try {
   })
   const metadataChecks = macUpdateMetadataChecks(metadata, { version: '0.1.7', distDir: tempRoot })
   assert(Object.values(metadataChecks).every(Boolean), 'generated dual-architecture update metadata must verify')
+
+  const x64Names = ['CaoGen-0.1.7-mac.zip', 'CaoGen-0.1.7.dmg']
+  const x64Files = x64Names.map((name) => {
+    const bytes = readFileSync(path.join(tempRoot, name))
+    return {
+      url: name,
+      sha512: createHash('sha512').update(bytes).digest('base64'),
+      size: bytes.length
+    }
+  })
+  const x64Metadata = yaml.dump({
+    version: '0.1.7',
+    files: x64Files,
+    path: x64Names[0],
+    sha512: x64Files[0].sha512,
+    releaseDate: '2026-07-23T00:00:00.000Z'
+  })
+  assert(
+    Object.values(macosX64UpdateMetadataChecks(x64Metadata, { version: '0.1.7', distDir: tempRoot })).every(Boolean),
+    'generated Intel-only update metadata must verify'
+  )
 
   const artifactName = 'CaoGen-0.1.7.dmg'
   const artifactPath = path.join(tempRoot, artifactName)
@@ -226,6 +333,7 @@ function runMatrixAssemblyFixture(parentRoot) {
       required: { total: 1, counts: { pass: 1, skip: 0, blocked: 0, fail: 0 }, blocking: 0 }
     }
   })
+  writeP2ReleaseScopeFixture(inputRoot, commit)
 
   const result = spawnSync(process.execPath, [
     path.join(repoRoot, 'scripts', 'release-matrix-assemble.mjs'),
@@ -237,6 +345,29 @@ function runMatrixAssemblyFixture(parentRoot) {
   const report = JSON.parse(readFileSync(path.join(fixtureRoot, 'test-results', 'release-matrix-assemble', 'latest.json'), 'utf8'))
   assert.equal(report.status, 'passed')
   assert.equal(Object.keys(report.artifacts.files).length, 12)
+  verifyP2ReleaseScopeFixture(fixtureRoot, commit)
+}
+
+function writeP2ReleaseScopeFixture(inputRoot, commit) {
+  writeJson(path.join(inputRoot, 'macos-x64', 'test-results', 'p2-release-scope', 'latest.json'), {
+    status: 'passed',
+    required: true,
+    git: {
+      commit,
+      worktreeClean: true,
+      unchanged: true,
+      start: { commit, worktreeClean: true, statusEntryCount: 0 },
+      end: { commit, worktreeClean: true, statusEntryCount: 0 }
+    },
+    requirements: ['P2-002', 'P2-003', 'P2-005'].map((id) => ({ id, status: 'proved' }))
+  })
+}
+
+function verifyP2ReleaseScopeFixture(fixtureRoot, commit) {
+  const filePath = path.join(fixtureRoot, 'test-results', 'p2-release-scope', 'latest.json')
+  const p2ReleaseScope = JSON.parse(readFileSync(filePath, 'utf8'))
+  assert.equal(p2ReleaseScope.status, 'passed')
+  assert.equal(p2ReleaseScope.git.commit, commit)
 }
 
 function digestFile(filePath) {

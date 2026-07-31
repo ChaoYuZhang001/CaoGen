@@ -232,26 +232,8 @@ async function verifyAnthropicSuccessorRecheck(runtime) {
 function verifyProductionWiring() {
   const openai = source('src/main/openaiEngine.ts')
   const anthropic = source('src/main/anthropicEngine.ts')
-  const claude = source('src/main/agentSession.ts')
   assert.match(openai, /preflight:\s*\(\) => assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/)
   assert.match(anthropic, /preflight:\s*\(\) => assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/)
-
-  const start = claude.indexOf('private async pushUserMessage(')
-  const end = claude.indexOf('\n  async interrupt()', start)
-  assert(start >= 0 && end > start)
-  const dispatch = claude.slice(start, end)
-  assertOrder(
-    dispatch,
-    'assertDigitalWorkerProviderDispatchAllowed(',
-    'this.turns.attempts.beginTurn(',
-    'Claude policy recheck must precede Attempt persistence'
-  )
-  assertOrder(
-    dispatch,
-    'this.turns.attempts.beginTurn(',
-    'this.input.push(',
-    'Claude Attempt persistence must precede SDK dispatch'
-  )
 }
 
 function unscopedFixture(runtime, suffix) {

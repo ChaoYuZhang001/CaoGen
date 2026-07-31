@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import type { BrowserViewState } from '../../../../shared/types'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
+import { canSendToSession, isSessionBusy } from './session-send-availability'
 
 function annotationLabel(note: string): string {
   const clean = note.replace(/\s+/g, ' ').trim()
@@ -36,6 +38,88 @@ function annotationPrompt(item: {
     .join('\n')
 }
 
+type AnnotationItem = Parameters<typeof annotationPrompt>[0]
+type BrowserSendState = 'idle' | 'sending' | 'sent' | 'error'
+
+function useBrowserAnnotationSubmission(options: {
+  activeId: string | null
+  browserUrl?: string
+  sendMessage(input: string): Promise<void>
+  sessionStatus: Parameters<typeof isSessionBusy>[0]
+}) {
+  const [state, setState] = useState<BrowserSendState>('idle')
+  const [error, setError] = useState('')
+  const busy = isSessionBusy(options.sessionStatus)
+  const canSend = canSendToSession(options.activeId, options.sessionStatus, true) && state !== 'sending'
+  useEffect(() => {
+    setState('idle')
+    setError('')
+  }, [options.activeId, options.browserUrl])
+  const send = async (item: AnnotationItem): Promise<void> => {
+    if (!canSend) return
+    setState('sending')
+    setError('')
+    try {
+      await options.sendMessage(annotationPrompt(item))
+      setState('sent')
+    } catch (cause) {
+      setState('error')
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+  return { busy, canSend, error, send, state }
+}
+
+function BrowserSendNotice({ error, state }: { error: string; state: BrowserSendState }): React.JSX.Element | null {
+  const t = useT()
+  if (state === 'sent') {
+    return <div className="notice notice-info workspace-diff-notice">{t('browserAnnotationSentToAgent')}</div>
+  }
+  if (state !== 'error') return null
+  return (
+    <div className="notice notice-error workspace-diff-notice">
+      {t('browserAnnotationSendFailed')}
+      {error ? `: ${error}` : ''}
+    </div>
+  )
+}
+
+function BrowserPanelHeader(props: {
+  browserState?: BrowserViewState
+  manualTakeover: boolean
+  onToggleManualTakeover(): void
+}): React.JSX.Element {
+  const t = useT()
+  const closeBrowser = useStore((state) => state.closeBrowserPanel)
+  const goBack = useStore((state) => state.browserGoBack)
+  const goForward = useStore((state) => state.browserGoForward)
+  const reload = useStore((state) => state.reloadBrowser)
+  return (
+    <header className="workspace-diff-top">
+      <div>
+        <div className="workspace-diff-title">{t('browserPanelTitle')}</div>
+        <div className="workspace-diff-sub">{props.browserState?.title || props.browserState?.url || ''}</div>
+      </div>
+      <div className="workspace-diff-actions">
+        <button className="btn btn-ghost btn-sm" disabled={!props.browserState?.canGoBack} onClick={() => void goBack()}>
+          ←
+        </button>
+        <button className="btn btn-ghost btn-sm" disabled={!props.browserState?.canGoForward} onClick={() => void goForward()}>
+          →
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => void reload()}>{t('refresh')}</button>
+        <button
+          className={`btn ${props.manualTakeover ? 'btn-primary' : 'btn-ghost'} btn-sm`}
+          onClick={props.onToggleManualTakeover}
+        >
+          {props.manualTakeover ? '交还 Agent' : '人工接管'}
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => void closeBrowser()}>{t('close')}</button>
+      </div>
+    </header>
+  )
+}
+
 export default function BrowserPanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
@@ -47,12 +131,9 @@ export default function BrowserPanel(): React.JSX.Element {
     browserState,
     browserUrlDraft
   } = useStore((s) => s.workbench)
+  const sessionStatus = useStore((s) => activeId ? s.sessions[activeId]?.meta.status : undefined)
   const openBrowser = useStore((s) => s.openBrowserPanel)
-  const closeBrowser = useStore((s) => s.closeBrowserPanel)
   const navigate = useStore((s) => s.navigateBrowser)
-  const goBack = useStore((s) => s.browserGoBack)
-  const goForward = useStore((s) => s.browserGoForward)
-  const reload = useStore((s) => s.reloadBrowser)
   const setBounds = useStore((s) => s.setBrowserBounds)
   const capture = useStore((s) => s.captureBrowserAnnotation)
   const pickElement = useStore((s) => s.pickBrowserElementAnnotation)
@@ -62,16 +143,19 @@ export default function BrowserPanel(): React.JSX.Element {
   const [urlDraft, setUrlDraft] = useState(browserUrlDraft || 'https://caobao.chat/official')
   const [note, setNote] = useState('')
   const [manualTakeover, setManualTakeover] = useState(false)
+  const submission = useBrowserAnnotationSubmission({
+    activeId,
+    browserUrl: browserState?.url,
+    sendMessage,
+    sessionStatus
+  })
   const viewportRef = useRef<HTMLDivElement>(null)
-
   useEffect(() => {
     if (browserUrlDraft) setUrlDraft(browserUrlDraft)
   }, [browserUrlDraft])
-
   useEffect(() => {
     if (activeId && !browserState) void openBrowser()
   }, [activeId, browserState, openBrowser])
-
   useEffect(() => {
     const el = viewportRef.current
     if (!el || !activeId) return
@@ -105,33 +189,17 @@ export default function BrowserPanel(): React.JSX.Element {
   }
 
   return (
-    <div className="browser-panel">
-      <header className="workspace-diff-top">
-        <div>
-          <div className="workspace-diff-title">{t('browserPanelTitle')}</div>
-          <div className="workspace-diff-sub">{browserState?.title || browserState?.url || ''}</div>
-        </div>
-        <div className="workspace-diff-actions">
-          <button className="btn btn-ghost btn-sm" disabled={!browserState?.canGoBack} onClick={() => void goBack()}>
-            ←
-          </button>
-          <button className="btn btn-ghost btn-sm" disabled={!browserState?.canGoForward} onClick={() => void goForward()}>
-            →
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => void reload()}>
-            {t('refresh')}
-          </button>
-          <button
-            className={`btn ${manualTakeover ? 'btn-primary' : 'btn-ghost'} btn-sm`}
-            onClick={() => setManualTakeover((value) => !value)}
-          >
-            {manualTakeover ? '交还 Agent' : '人工接管'}
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => void closeBrowser()}>
-            {t('close')}
-          </button>
-        </div>
-      </header>
+    <div
+      className="browser-panel"
+      data-browser-agent-busy={Number(submission.busy)}
+      data-browser-agent-sendable={Number(submission.canSend)}
+      data-browser-send-state={submission.state}
+    >
+      <BrowserPanelHeader
+        browserState={browserState}
+        manualTakeover={manualTakeover}
+        onToggleManualTakeover={() => setManualTakeover((value) => !value)}
+      />
 
       <div className="browser-toolbar">
         <input
@@ -156,6 +224,7 @@ export default function BrowserPanel(): React.JSX.Element {
           {browserError || browserMessage}
         </div>
       )}
+      <BrowserSendNotice error={submission.error} state={submission.state} />
       {manualTakeover && (
         <div className="notice notice-info workspace-diff-notice browser-manual-takeover">
           人工接管中：你可以直接操作页面；需要 Agent 继续自动化时点击“交还 Agent”。
@@ -207,9 +276,10 @@ export default function BrowserPanel(): React.JSX.Element {
                   <div className="browser-annotation-url">{item.title || item.url}</div>
                   <button
                     className="btn btn-ghost btn-sm browser-annotation-send"
-                    onClick={() => void sendMessage(annotationPrompt(item))}
+                    disabled={!submission.canSend}
+                    onClick={() => void submission.send(item)}
                   >
-                    {t('sendToAgent')}
+                    {submission.state === 'sending' ? t('browserAnnotationSending') : t('sendToAgent')}
                   </button>
                 </div>
               ))

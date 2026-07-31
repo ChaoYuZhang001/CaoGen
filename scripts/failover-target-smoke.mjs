@@ -101,15 +101,16 @@ try {
     )
   })
 
-  check('SDK AgentSession failover updates fixed model and exposes the preference reason', () => {
-    const agentSession = readFileSync(path.join(repoRoot, 'src/main/agentSession.ts'), 'utf8')
+  check('Anthropic failover updates fixed model and exposes the preference reason', () => {
+    const anthropicEngine = readFileSync(path.join(repoRoot, 'src/main/anthropicEngine.ts'), 'utf8')
     assert(
-      agentSession.includes('if (this.meta.model !== AUTO_MODEL && target.model) this.meta.model = target.model'),
-      'AgentSession failover must update fixed meta.model when a target model is selected'
+      anthropicEngine.includes('if (this.meta.model !== AUTO_MODEL) this.meta.model = target.model'),
+      'Anthropic failover must update fixed meta.model when a target model is selected'
     )
     assert(
-      agentSession.includes("reason: [failure.label, target.preference].filter(Boolean).join(' · ')"),
-      'AgentSession failover event must include the user-visible preference reason'
+      anthropicEngine.includes("const routeReason = [failure.label, selected.preference].filter(Boolean).join(' · ')") &&
+        anthropicEngine.includes('reason: routeReason'),
+      'Anthropic failover event must include the user-visible preference reason'
     )
   })
 

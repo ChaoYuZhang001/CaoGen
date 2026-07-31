@@ -2,9 +2,9 @@
 
 > 文档状态：立项与发布安全基线
 >
-> 事实基线：`main@21051cab`，以 `STATUS.md`、当前源码和仓库内可复验门禁为准
+> 事实基线：产品源码 `3d5de20c`，以 `STATUS.md`、当前源码和仓库内可复验门禁为准
 >
-> 更新日期：2026-07-18
+> 更新日期：2026-07-28
 >
 > 配套文档：[`PROJECT-CHARTER.md`](./PROJECT-CHARTER.md) · [`PRODUCT-REQUIREMENTS.md`](./PRODUCT-REQUIREMENTS.md) · [`PRODUCT-TECHNICAL-REQUIREMENTS.md`](./PRODUCT-TECHNICAL-REQUIREMENTS.md) · [`HIGH-LEVEL-DESIGN.md`](./HIGH-LEVEL-DESIGN.md)
 >
@@ -41,7 +41,7 @@
 ### 2.2 范围内组件
 
 - Electron 主进程、preload 桥、React renderer 和 IPC。
-- 默认 OpenAI-compatible 运行时与可选 Claude Agent SDK 运行时。
+- OpenAI-compatible 与原生 Anthropic Messages 两个 HTTP 运行时；基础发行包不嵌入 Claude Code SDK/CLI。
 - Provider、API Key、模型目录、健康状态、预算、自动路由和故障切换。
 - 项目规则、会话、子会话、DAG、worktree、Git、终端、文件工具和 Effect Ledger。
 - Browser WebContentsView、GUI/Desktop Control、IDE Bridge、Quickbar、附件和文档预览。
@@ -74,7 +74,7 @@
 | GUI 自动化 | **条件可用** | 默认关闭，启用后属于高风险；临时授权当前为 5 分钟窗口，尚未绑定完整 app/window/action/path/postcondition |
 | Browser WebContentsView | **当前已验证** | 独立 sandboxed WebContentsView 和会话分区；网页内容、Cookies 和页面脚本仍不可信 |
 | MCP 运行态探测 | **当前已验证** | stdio 探测会启动本地命令，HTTP 探测会访问配置 URL；能力声明目前未经运行时强制验证 |
-| 本地插件安装/卸载 | **当前已验证** | 仅本地目录复制，路径牢笼和 200MB 上限；没有插件市场、签名、digest 固定或恶意 fixture 隔离 |
+| 本地插件安装/卸载 | **当前已验证** | queryable managed-plugin Effect 冻结目标、内容摘要与计数，经同根 staging/trash 原子切换并支持强杀对账；仍没有插件市场、签名来源、运行时 Capability Manifest 或受管隔离执行 |
 | 项目、会话、子会话、DAG | **当前已验证（含 R-25 当前范围）** | 具备任务执行、恢复和 autoMerge patch Effect；completion/finalizer 使用 durable finalizer store、terminal snapshot barrier、summary receipt/attempt barrier，并有 crash/restart required E2E。该范围不等于所有外部系统 exactly-once |
 | 数字员工岗位与委派治理 | **立项目标** | 必须建立岗位权限、凭据作用域、审批责任、任务归属和可撤销委派后才能启用 |
 | 轻量通用项目管理 | **立项目标** | 当前只有项目/会话/任务底座，尚无完整项目角色策略、数据保留/删除和连接器安全策略；多人组织治理属于后续规划 |
@@ -204,7 +204,8 @@ flowchart LR
 ### 7.4 MCP 与插件流
 
 - Registry 扫描项目、用户和兼容目录中的 Plugin、Skill、Agent 和 MCP 声明。
-- 本地插件安装会复制目录到托管根；MCP stdio 探测会真实启动配置命令并发送 `initialize`。
+- 本地插件安装/卸载通过 queryable managed-plugin Effect 修改托管根；执行前冻结插件名、根/锚点身份、内容摘要、文件/字节计数和同根 staging/trash 相对路径，Ledger 不保存源路径、源内容或原始错误。安装先验证 staging 副本再原子切换，覆盖/卸载把旧版本原子移入冻结回收站；完整强杀结果只读确认且不重放，部分 checkpoint 保持 `waiting_reconciliation`。
+- MCP stdio 探测会真实启动配置命令并发送 `initialize`。
 - 当前权限字段主要是声明信息，并不等于运行时强制 Capability Manifest。
 - 当前 stdio/probe 已改用最小环境，模型入口拒绝 `env/headers/configPath`，配置导入结果会脱敏；但声明环境、网络、文件和凭据仍未由 digest-bound Capability Manifest 与 scoped broker 统一约束。
 
@@ -337,6 +338,8 @@ MCP 最小环境 containment 已完成，但这不等于插件/MCP 获得了完�
 
 Effect Ledger 已持有独立 intent/effect/resource key、generation/revision、资源级 lease/fencing、状态和 evidence digest。相同资源存在未收敛 Effect 时会阻止第二个执行 lease；等待对账的任务会阻止继续发送。`task-snapshots.db` v8 保留 v6 `task_evidence` 的全局 `seq/prevDigest/recordDigest` hash chain，并包含 Workflow Ledger 状态表、workflow event chain、canonical `workflow_recovery_sessions` 和持久 `workflow_store_identity`；这些结构在归属、链、identity 或 continuity 异常时 fail-closed。Task Snapshot/TaskRun 恢复读取支持 `legacy / compare / canonical`：compare 校验 legacy/canonical parity，canonical 读取 Workflow Run/recovery session；mode 按数据库路径隔离，跨 mode 首次 open 共享同一路径 single-flight，运行时 mode flip 在 mutation queue 中强制 fresh revalidation 和两个恢复面实读后才提交，未配置时默认 legacy。legacy JSON/旧 SQLite 迁移以精确备份、SHA-256、durable journal/checkpoint、内存 candidate 校验、原子替换和可恢复回滚降低升级风险，future/corrupt source 在 journal 前阻断。committed journal 会拒绝目标删除、截断、版本回退、store identity 变化和历史高水位倒退。这是本地 tamper-evident 一致性与 recovery read-source cutover 基础，不是签名、外部不可变账本、全入口 canonical workflow 或 Canonical Conversation Ledger。
 
+高风险入口 inventory v6 与 TypeScript AST required gate 当前锁定 156 个 Electron IPC、52 个 Agent 工具和 79 个 ProjectWorkspace/DigitalWorker/Supervisor 嵌套动作。IPC policy 为 13 queryable、7 opaque、15 direct-user、6 delegated；新增、遗漏、重复或策略漂移会使 required gate 失败。`terminals:start/write/resize/close` 已从 direct-user 收敛为 opaque `terminal_action` Effect：Terminal/Session/CWD 仅持久化摘要，write 仅持久化输入 SHA-256 和字节数，不记录命令文本；未知结果进入 `waiting_reconciliation` 并禁止崩溃后自动重放。其余 15 个 direct-user 外部 IPC 尚未进入 Effect Ledger，因此不宣称全入口闭环。
+
 当前存在只读 Reconciler 的主要工具：
 
 | 工具/效果 | 当前对账状态 |
@@ -351,6 +354,7 @@ Effect Ledger 已持有独立 intent/effect/resource key、generation/revision�
 | Agent `git_stage` / `git_stage_all` 与 Renderer Git Index 操作 | Queryable，冻结 exact bytes/entries digest，并通过 HEAD/Index CAS 发布 |
 | GitHub/GitLab PR/MR | Queryable，绑定远端回读证据 |
 | Claude `MultiEdit` / `NotebookEdit` | Opaque，fail closed |
+| Renderer 终端 start/write/resize/close | Opaque；durable barrier 先于进程动作，敏感输入不落 Ledger，未知结果人工对账且不重放 |
 | Issue、消息、可查询 MCP、Code Forge patch | 尚未全部接入专用 Reconciler |
 
 ### 11.2 必须保留的诚实边界
@@ -374,7 +378,7 @@ Effect Ledger 已持有独立 intent/effect/resource key、generation/revision�
 
 ### 11.4 当前基础与立项目标
 
-- **当前基础**：`task-snapshots.db` v8 保留 Effect-only append-only hash-chain，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、eventId/causation/correlation、canonical recovery sessions、持久 `workflow_store_identity`、有限 API/IPC/UI、cursor 查询，以及 Artifact Graph edge/location、脱敏 export 和只读 diagnose/repair plan。`legacy / compare / canonical` 三态、数据库路径隔离、mode flip fresh revalidation、可逆 migration 和 committed identity/high-water continuity 已覆盖；最新 required smoke 已覆盖 migration、read-source/shadow consistency、Workflow Ledger、Artifact Graph、security 与 maintenance，但仍绑定 dirty worktree，不能作为 1.0 release-ready 证据。
+- **当前基础**：`task-snapshots.db` v8 保留 Effect-only append-only hash-chain，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、eventId/causation/correlation、canonical recovery sessions、持久 `workflow_store_identity`、有限 API/IPC/UI、cursor 查询，以及 Artifact Graph edge/location、脱敏 export 和只读 diagnose/repair plan。`legacy / compare / canonical` 三态、数据库路径隔离、mode flip fresh revalidation、可逆 migration 和 committed identity/high-water continuity 已覆盖；clean `3d5de20c` 的完整 Deep 已覆盖 migration、read-source/shadow consistency、Workflow Ledger、Artifact Graph、security、maintenance 和 terminal crash recovery。该证据证明当前产品源码回归稳定，不等于全入口 canonical 闭环、签名候选或 1.0 release-ready。
 - **仍是目标**：全部入口和外部事件接入 canonical command/event path、完整 Artifact Graph/blob/sourceRef/metadata 生命周期、跨记录完整性、Canonical Conversation Ledger、统一 retention/delete、用户可查询的完整审计时间线和生产补偿闭环；当前 canonical recovery read mode、edge/location export 与只读 repair plan 不代表全产品已默认 canonical、自动修复或完整审计系统。
 - Issue、消息、可查询 MCP 和 Code Forge patch 全部纳入 Reconciler。
 - 文件更新采用真正 crash-atomic 的临时文件、fsync、原子替换和目录同步策略。
@@ -414,14 +418,14 @@ Effect Ledger 已持有独立 intent/effect/resource key、generation/revision�
 ### 13.1 当前已验证
 
 - Registry 有文件数、深度和读取大小限制，并忽略 `.git` 和 `node_modules` 等目录。
-- 本地插件安装只接受形似插件的目录，安装名清洗、目标路径牢笼和单插件 200MB 上限已实现。
-- 覆盖安装前先把旧版本移入 `.trash`；卸载也采用可恢复移动，而非直接删除。
+- 本地插件安装只接受形似插件的目录，安装名清洗、目标路径牢笼、50,000 条目和单插件 200 MiB 上限已实现；递归托管根源、符号链接和特殊文件 fail-closed，读取内容前先检查文件大小，托管根聚合体积不误套单插件上限。
+- 安装使用同根 staging 摘要复核和原子切换；覆盖安装与卸载把旧版本移入冻结 trash 路径。queryable Effect 的 durable target 固定根/锚点身份、源或旧版本摘要、计数和相对路径，完整强杀结果可只读确认，部分 checkpoint 等待人工对账且不自动重放。
 - MCP stdio 探测执行真实 `initialize` 握手，HTTP 探测只判断可达性；单项 8 秒超时、并发上限 4。
 
 ### 13.2 当前限制
 
 - Manifest/frontmatter 中的 permissions 当前主要是声明，未经完整运行时强制验证。
-- 没有固定版本 digest、签名、来源证明、SBOM、隔离安装或恶意 fixture 发布门禁。
+- 执行时冻结的内容 digest 只用于本次变更与恢复对账，不等于固定发布版本、签名来源证明或受信任 provenance；当前仍没有 SBOM、运行时 Capability Manifest、受管隔离执行或恶意 fixture 发布门禁。
 - stdio MCP 本质上是本机子进程，可以读取当前 OS 用户可访问的数据。
 - HTTP `401/403` 在探测中只表示服务在线，不代表凭据正确或工具安全。
 - Skill 和 Agent Markdown 也可能包含 Prompt injection，即使不直接包含可执行代码。
@@ -727,7 +731,7 @@ Effect Ledger 已持有独立 intent/effect/resource key、generation/revision�
 
 ### 24.1 当前 Release 必须通过
 
-当前证据快照（2026-07-20）：dirty-worktree Deep 为 `123 total / 120 required pass / 3 optional skip / 0 blocked / 0 fail`（`test-results/caogen-deep/2026-07-20T14-04-52-427Z/deep-test-report.md`），其中 `workflow ledger canonical migration smoke`、`workflow ledger read source smoke`、`workflow shadow consistency smoke`、`workflow ledger smoke`、`artifact graph smoke`、`ModelAttempt crash reconciliation E2E`、`taskDag durable finalization crash e2e`、`task evidence ledger smoke` 与 `code forge contract smoke` required 通过。独立 Electron 页面流为 `22/22 pass`（`test-results/caogen-deep/2026-07-20T14-22-20-382Z/page-operation-smoke.json`）；Claude real e2e、China real-network 和 China tool-call parity 仍是 optional skip，不能算 pass。本轮 `npm run secret:scan` 已通过，但 `secret:scan:history` 仍需绑定到精确 release commit。本地 unsigned macOS x64 资产已通过 packaging audit 与真实 packaged-app 启动 smoke，但证据未绑定 clean release commit。Release Doctor 最新结果仍为 `not_ready`（`test-results/workos-release-doctor/2026-07-19T16-29-57-170Z/report.md`）。Doctor 当前开放的仅是 release identity、clean-commit Deep、packaging 和 release notes，DAG finalization 与 P2 release scope 已为 ready；R-25、evidence foundation 和 Workflow Ledger migration/read-source 有独立通过证据，但不得把 v8 canonical recovery mode、部分 ModelAttempt 覆盖或 Doctor 状态伪称为全入口 canonical workflow、Canonical Conversation Ledger 或整体 1.0 发布就绪。
+当前证据快照（2026-07-28）：clean 产品源码 `3d5de20ca9e73545e488f3155bdb3ba9af16f594` 的 Deep 为 `173 total / 171 required pass / 2 optional skip / 0 blocked / 0 fail`（`test-results/caogen-deep/2026-07-28T03-21-03-602Z/deep-test-report.md`），起止均为同一 SHA、工作树 clean 且 Git 状态未变。两项中国真实外部检查仍是 optional skip，未计作通过；Assistant/Studio、Workflow/Artifact、ModelAttempt、Effect/terminal crash recovery、DAG finalization 和页面操作均在 required 集合中通过。`node scripts/secret-scan.mjs --worktree --history` 已覆盖 tracked、staged、worktree、敏感文件名和 Git 历史并通过。Release Doctor `test-results/workos-release-doctor/2026-07-28T03-50-46-953Z/report.json` 仍为 `not_ready`：release identity 与 Deep 已 ready，但 P2、packaging、release notes 和公开 Release 资产开放；1.0 acceptance map 仍有 43 个 P0 open、130 项 closure failure、critical recovery 仅 1/11。不得把 clean Deep、v8 canonical recovery mode、部分 ModelAttempt/Effect 覆盖或 Doctor 的局部 ready 状态伪称为全入口 canonical workflow、签名候选或整体 1.0 发布就绪。
 
 - 精确 release commit、版本和干净工作树绑定。
 - `npm run typecheck` 与 `npm run build`。

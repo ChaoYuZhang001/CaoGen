@@ -19,7 +19,7 @@ const codeCommand = resolveCodeCommand(process.env.CAOGEN_VSCODE_CMD || defaultC
 const pluginDir = path.join(repoRoot, 'plugins', 'vscode')
 const testPath = path.join(pluginDir, 'out', 'test')
 const require = createRequire(import.meta.url)
-const { runTests } = require(path.join(pluginDir, 'node_modules', '@vscode', 'test-electron'))
+const { downloadAndUnzipVSCode, runTests } = require(path.join(pluginDir, 'node_modules', '@vscode', 'test-electron'))
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'vscode-extension-host', runId)
 const lockDir = path.join(repoRoot, 'test-results', 'vscode-extension-host', '.lock')
@@ -52,10 +52,14 @@ const launchArgs = [
 
 let statusCode
 let runError
+let vscodeExecutablePath = codeCommand
 try {
   closeExtensionDevelopmentHosts()
+  if (!vscodeExecutablePath) {
+    vscodeExecutablePath = await downloadAndUnzipVSCode({ extensionDevelopmentPath: pluginDir })
+  }
   const runPromise = runTests({
-    ...(codeCommand ? { vscodeExecutablePath: codeCommand } : {}),
+    vscodeExecutablePath,
     extensionDevelopmentPath: pluginDir,
     extensionTestsPath: testPath,
     extensionTestsEnv: {
@@ -106,7 +110,7 @@ const report = {
   status: markerPassed ? 'passed' : 'failed',
   required,
   reportDir,
-  codeCommand: codeCommand ?? 'downloaded-by-@vscode/test-electron',
+  codeCommand: vscodeExecutablePath ?? 'download-failed-before-resolution',
   launchArgs,
   statusCode,
   error: normalizedError,

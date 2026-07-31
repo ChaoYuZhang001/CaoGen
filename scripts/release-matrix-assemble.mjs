@@ -58,6 +58,7 @@ copyRequired(
   'macos-x64:app.asar'
 )
 copyEvidence('macos-x64', 'caogen-deep/latest.json')
+copyEvidence('macos-x64', 'p2-release-scope/latest.json')
 
 const releaseDate = new Date().toISOString()
 const updateMetadata = renderMacUpdateMetadata({ version, distDir, releaseDate })
@@ -71,6 +72,7 @@ const macosX64Launch = readCanonical('packaged-app-smoke/latest-macos-x64.json')
 const macosArm64Launch = readCanonical('packaged-app-smoke/latest-macos-arm64.json')
 const windowsX64Launch = readCanonical('packaged-app-smoke/latest-windows-x64.json')
 const deep = readCanonical('caogen-deep/latest.json')
+const p2ReleaseScope = readCanonical('p2-release-scope/latest.json')
 const gitState = { commit: expectedCommit, worktreeClean: checks.aggregateWorktreeClean }
 const platformArtifacts = Object.fromEntries(targets.map((target) => [
   target.id,
@@ -78,6 +80,13 @@ const platformArtifacts = Object.fromEntries(targets.map((target) => [
 ]))
 
 Object.assign(checks, prefix('deep', deepEvidenceChecks(deep, expectedCommit)))
+checks.p2ReleaseScopePassed = p2ReleaseScope?.status === 'passed'
+checks.p2ReleaseScopeCommitMatches = p2ReleaseScope?.git?.commit === expectedCommit
+checks.p2ReleaseScopeCleanEvidence =
+  p2ReleaseScope?.git?.worktreeClean === true && p2ReleaseScope?.git?.unchanged === true
+checks.p2ReleaseScopeRequirementsProved = ['P2-002', 'P2-003', 'P2-005'].every((id) =>
+  p2ReleaseScope?.requirements?.some((item) => item?.id === id && item?.status === 'proved')
+)
 Object.assign(checks, prefix('macosX64Artifacts', artifactReportChecks(
   macosX64Audit,
   releasePlatformArtifactNames(version, 'macos-x64'),
@@ -129,6 +138,7 @@ const report = {
     audit: `test-results/${target.audit}`,
     launch: `test-results/${target.launch}`
   }])),
+  p2ReleaseScope: 'test-results/p2-release-scope/latest.json',
   checks,
   failures
 }
