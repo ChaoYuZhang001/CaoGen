@@ -1,0 +1,61 @@
+title: "[Feedback]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share what you tried, what worked, and where CaoGen created friction. Do not include API keys, tokens, private repository content, personal information, or sensitive local paths.
+
+        请说明你尝试了什么、哪些地方有效、哪里遇到阻力。不要包含 API Key、Token、私有仓库内容、个人信息或敏感本机路径。
+
+  - type: dropdown
+    id: user_type
+    attributes:
+      label: User context / 使用背景
+      options:
+        - First-time CaoGen user / 第一次使用 CaoGen
+        - Returning CaoGen user / 再次使用 CaoGen
+        - Contributor evaluating the project / 正在评估项目的贡献者
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version and environment / 版本与环境
+      description: Release or commit, OS, and architecture / Release 或提交、操作系统和架构
+      placeholder: v0.1.7, macOS Intel x64
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow attempted / 尝试的工作流
+      description: What outcome were you trying to reach? / 你想完成什么结果？
+    validations:
+      required: true
+
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked / 哪些地方有效
+    validations:
+      required: true
+
+  - type: textarea
+    id: friction
+    attributes:
+      label: Friction or blocker / 卡点或阻塞
+      description: Include the visible symptom and recovery action, if any. / 请写明可见现象以及采取过的恢复动作。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public-post check / 公开内容确认
+      options:
+        - label: I removed credentials, private data, and sensitive local paths. / 我已移除凭据、私有数据和敏感本机路径。
+          required: true

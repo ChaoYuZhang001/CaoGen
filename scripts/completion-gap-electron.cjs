@@ -149,8 +149,9 @@ async function phaseWrite() {
     check('CG-WF-010A sessions.json contains marker', sessionsJsonText().includes(marker))
     check('CG-WF-010A active registry contains session', activeRegistryText().includes(meta.id))
 
-    const terminal = await invoke('terminals:start', meta.id, { cols: 80, rows: 24, reuse: true })
-    check('CG-WF-010B terminal IPC starts before restart', terminal && terminal.id)
+    const terminalResult = await invoke('terminals:start', meta.id, { cols: 80, rows: 24, reuse: true })
+    const terminal = terminalResult?.ok ? terminalResult.terminal : undefined
+    check('CG-WF-010B terminal IPC starts before restart', Boolean(terminal?.id), terminalResult?.error)
     if (terminal?.id) await invoke('terminals:close', terminal.id)
 
     writePhaseState({ sessionId: meta.id, sdkSessionId: initialized.sdkSessionId, providerId: provider.id })
@@ -177,8 +178,9 @@ async function phaseRestore() {
   check('CG-WF-010B file IPC reads after restart', readBack.ok && readBack.content.includes(marker))
   const writeBack = await invoke('files:write', state.sessionId, 'restored.txt', 'after restart')
   check('CG-WF-010B file IPC writes after restart', writeBack.ok && fs.existsSync(path.join(projectDir, 'restored.txt')))
-  const terminal = await invoke('terminals:start', state.sessionId, { cols: 80, rows: 24, reuse: true })
-  check('CG-WF-010B terminal IPC starts after restart', terminal && terminal.id)
+  const terminalResult = await invoke('terminals:start', state.sessionId, { cols: 80, rows: 24, reuse: true })
+  const terminal = terminalResult?.ok ? terminalResult.terminal : undefined
+  check('CG-WF-010B terminal IPC starts after restart', Boolean(terminal?.id), terminalResult?.error)
   if (terminal?.id) await invoke('terminals:close', terminal.id)
 }
 

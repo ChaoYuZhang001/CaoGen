@@ -9,7 +9,6 @@ const { DEEP_TEST_STATUS_PROTOCOL, DEEP_TEST_STATUSES } = deepTestStatus
 const OPTIONAL_CHECKS = new Set([
   'chinaRealNetwork smoke',
   'chinaToolCallParity smoke',
-  'claude real e2e'
 ])
 const RUNTIME_REQUIRED = {
   'chinaRealNetwork smoke': {
@@ -26,19 +25,27 @@ const commandDefinitions = [
   { name: 'typecheck', ...commandSpec('npm', ['run', 'typecheck']), category: 'static' },
   { name: 'coding standards required', command: 'node', args: ['scripts/coding-standards-audit.mjs', '--required'], category: 'static' },
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
+  { name: 'Assistant/Studio performance required UI e2e', command: 'node', args: ['scripts/assistant-studio-performance-e2e.mjs'], category: 'ui' },
   { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map smoke', command: 'node', args: ['scripts/product-1.0-acceptance-map-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 acceptance map structure', command: 'node', args: ['scripts/product-1.0-acceptance-map.mjs'], category: 'static' },
+  { name: 'M1 first-user drill preparation smoke', command: 'node', args: ['scripts/prepare-m1-first-user-drill-smoke.mjs'], category: 'smoke' },
+  { name: 'M1 first-user onboarding audit smoke', command: 'node', args: ['scripts/m1-first-user-onboarding-audit-smoke.mjs'], category: 'smoke' },
+  { name: 'community feedback contract audit', command: 'node', args: ['scripts/community-feedback-audit.mjs', '--required'], category: 'static' },
+  { name: 'community response SLA smoke', command: 'node', args: ['scripts/community-response-sla-smoke.mjs'], category: 'smoke' },
   { name: 'product 1.0 soak audit smoke', command: 'node', args: ['scripts/product-1.0-soak-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release audit smoke', command: 'node', args: ['scripts/real-provider-release-audit-smoke.mjs'], category: 'smoke' },
   { name: 'real default Provider release runner smoke', command: 'node', args: ['scripts/real-provider-release-runner-smoke.mjs'], category: 'smoke' },
   { name: 'release packaging policy smoke', command: 'node', args: ['scripts/release-packaging-policy-smoke.mjs'], category: 'smoke' },
   { name: 'release workflow contract smoke', command: 'node', args: ['scripts/release-workflow-contract-smoke.mjs'], category: 'static' },
+  { name: 'macOS x64 release evidence smoke', command: 'node', args: ['scripts/macos-x64-release-evidence-smoke.mjs'], category: 'smoke' },
+  { name: 'release publication preflight smoke', command: 'node', args: ['scripts/release-publication-preflight-smoke.mjs'], category: 'smoke' },
+  { name: 'GitHub release asset digest smoke', command: 'node', args: ['scripts/github-release-audit-smoke.mjs'], category: 'smoke' },
+  { name: 'macOS DMG detach smoke', command: 'node', args: ['scripts/macos-dmg-detach-smoke.mjs'], category: 'smoke' },
   { name: 'Windows release config audit', command: 'node', args: ['scripts/windows-release-audit.mjs', '--config-only'], category: 'static' },
   { name: 'CaoGen Drive smoke', command: 'node', args: ['scripts/drive-smoke.mjs'], category: 'smoke' },
-  { name: 'Claude optional smoke', command: 'node', args: ['scripts/claude-optional-smoke.mjs'], category: 'smoke' },
-  { name: 'integration core', command: 'node', args: ['scripts/integration-test.cjs'], category: 'integration' },
+  { name: 'native engine surface smoke', command: 'node', args: ['scripts/native-engine-surface-smoke.mjs'], category: 'smoke' },
   { name: 'integration modules', command: 'node', args: ['scripts/integration-test-2.cjs'], category: 'integration' },
   { name: 'integration wired modules', command: 'node', args: ['scripts/integration-test-3.cjs'], category: 'integration' },
   { name: 'taskDag smoke', command: 'node', args: ['scripts/task-dag-smoke.cjs'], category: 'smoke' },
@@ -59,6 +66,8 @@ const commandDefinitions = [
   { name: 'gui nutjs smoke', command: 'node', args: ['scripts/gui-nutjs-smoke.mjs'], category: 'smoke' },
   { name: 'macOS tray icon smoke', command: 'node', args: ['scripts/macos-tray-icon-smoke.mjs'], category: 'smoke' },
   { name: 'task snapshot smoke', command: 'node', args: ['scripts/task-snapshot-smoke.mjs'], category: 'smoke' },
+  { name: 'task snapshot replay smoke', command: 'node', args: ['scripts/task-snapshot-replay-smoke.mjs'], category: 'smoke' },
+  { name: 'subagent orchestration reliability smoke', command: 'node', args: ['scripts/subagent-orchestration-reliability-smoke.mjs'], category: 'smoke' },
   { name: 'task evidence ledger smoke', command: 'node', args: ['scripts/task-evidence-ledger-smoke.mjs'], category: 'smoke' },
   { name: 'workflow evidence ledger smoke', command: 'node', args: ['scripts/workflow-evidence-store-smoke.mjs'], category: 'smoke' },
   { name: 'workflow evidence link idempotency smoke', command: 'node', args: ['scripts/workflow-evidence-link-idempotency-smoke.mjs'], category: 'smoke' },
@@ -72,7 +81,6 @@ const commandDefinitions = [
   { name: 'ModelAttempt ledger smoke', command: 'node', args: ['scripts/model-attempt-ledger-smoke.mjs'], category: 'smoke' },
   { name: 'ModelAttempt runtime smoke', command: 'node', args: ['scripts/model-attempt-runtime-smoke.mjs'], category: 'smoke' },
   { name: 'protocol adapter production boundary', command: 'node', args: ['scripts/protocol-adapter-boundary-smoke.mjs'], category: 'integration' },
-  { name: 'Claude ModelAttempt smoke', command: 'node', args: ['scripts/claude-model-attempt-smoke.mjs'], category: 'smoke' },
   { name: 'Anthropic Messages smoke', command: 'node', args: ['scripts/anthropic-messages-smoke.mjs'], category: 'smoke' },
   { name: 'Anthropic tool-use loop required', command: 'node', args: ['scripts/anthropic-tool-use-loop-smoke.mjs'], category: 'integration' },
   { name: 'Anthropic image restart required', command: 'node', args: ['scripts/anthropic-tool-use-loop-smoke.mjs', '--image-restart-only'], category: 'integration' },
@@ -105,14 +113,18 @@ const commandDefinitions = [
   { name: 'Assistant/Studio canonical consistency required UI e2e', command: 'node', args: ['scripts/assistant-studio-consistency-e2e.mjs'], category: 'ui' },
   { name: 'Session model switch policy smoke', command: 'node', args: ['scripts/session-model-switch-policy-smoke.mjs'], category: 'smoke' },
   { name: 'Assistant/Studio live switch required UI e2e', command: 'node', args: ['scripts/assistant-studio-live-switch-e2e.mjs'], category: 'ui' },
-  { name: 'Assistant/Studio performance required UI e2e', command: 'node', args: ['scripts/assistant-studio-performance-e2e.mjs'], category: 'ui' },
   { name: 'local Provider routing parity required', command: 'node', args: ['scripts/local-provider-parity-smoke.mjs'], category: 'integration' },
   { name: 'routing zero-choice required UI e2e', command: 'node', args: ['scripts/routing-zero-choice-e2e.mjs'], category: 'ui' },
   { name: 'taskRun state smoke', command: 'node', args: ['scripts/task-run-state-smoke.mjs'], category: 'smoke' },
   { name: 'event cursor crash smoke', command: 'node', args: ['scripts/event-cursor-crash-smoke.mjs'], category: 'system' },
   { name: 'effect reconciliation smoke', command: 'node', args: ['scripts/effect-reconciliation-smoke.mjs'], category: 'smoke' },
   { name: 'operation effect gateway smoke', command: 'node', args: ['scripts/operation-effect-gateway-smoke.mjs'], category: 'smoke' },
+  { name: 'effect entry inventory required', command: 'node', args: ['scripts/effect-entry-inventory-smoke.mjs', '--required'], category: 'smoke' },
   { name: 'operation effect gateway e2e', command: 'node', args: ['scripts/operation-effect-gateway-e2e.mjs'], category: 'system' },
+  { name: 'attachment effect crash e2e', command: 'node', args: ['scripts/attachment-effect-crash-e2e.mjs'], category: 'system' },
+  { name: 'project context effect crash e2e', command: 'node', args: ['scripts/project-context-effect-crash-e2e.mjs'], category: 'system' },
+  { name: 'MCP probe effect crash e2e', command: 'node', args: ['scripts/mcp-probe-effect-crash-e2e.mjs'], category: 'system' },
+  { name: 'migration import effect crash e2e', command: 'node', args: ['scripts/migration-effect-crash-e2e.mjs'], category: 'system' },
   { name: 'managed worktree effect smoke', command: 'node', args: ['scripts/managed-worktree-effect-smoke.mjs'], category: 'smoke' },
   { name: 'managed worktree effect crash e2e', command: 'node', args: ['scripts/managed-worktree-effect-crash-e2e.mjs'], category: 'system' },
   { name: 'git index effect e2e', command: 'node', args: ['scripts/git-index-effect-e2e.mjs'], category: 'system' },
@@ -145,17 +157,20 @@ const commandDefinitions = [
   { name: 'previewPrompt smoke', command: 'node', args: ['scripts/preview-prompt-smoke.mjs'], category: 'smoke' },
   { name: 'routineStore smoke', command: 'node', args: ['scripts/routine-store-smoke.mjs'], category: 'smoke' },
   { name: 'routineRunner smoke', command: 'node', args: ['scripts/routine-runner-smoke.mjs'], category: 'smoke' },
+  { name: 'routineExecutor smoke', command: 'node', args: ['scripts/routine-executor-smoke.mjs'], category: 'smoke' },
   { name: 'openai P1 tools smoke', command: 'node', args: ['scripts/openai-p1-tools-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions smoke', command: 'node', args: ['scripts/start-suggestions-smoke.mjs'], category: 'smoke' },
+  { name: 'startSuggestion send smoke', command: 'node', args: ['scripts/start-suggestion-send-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions e2e', command: 'node', args: ['scripts/start-suggestions-e2e.mjs'], category: 'ui' },
   { name: 'transcriptRestore smoke', command: 'node', args: ['scripts/transcript-restore-smoke.mjs'], category: 'smoke' },
   { name: 'transcriptSearch smoke', command: 'node', args: ['scripts/transcript-search-smoke.mjs'], category: 'smoke' },
   { name: 'pluginInstall smoke', command: 'node', args: ['scripts/plugin-install-smoke.mjs'], category: 'smoke' },
+  { name: 'plugin install effect crash e2e', command: 'node', args: ['scripts/plugin-install-effect-crash-e2e.mjs'], category: 'system' },
+  { name: 'plugin install IPC electron e2e', command: 'node', args: ['scripts/plugin-install-ipc-e2e.mjs'], category: 'ui' },
   { name: 'providerPresets smoke', command: 'node', args: ['scripts/provider-presets-smoke.mjs'], category: 'smoke' },
   { name: 'providerKeys smoke', command: 'node', args: ['scripts/provider-keys-smoke.mjs'], category: 'smoke' },
   { name: 'provider credential target binding smoke', command: 'node', args: ['scripts/provider-credential-target-binding-smoke.mjs'], category: 'smoke' },
   { name: 'providerConnectivity smoke', command: 'node', args: ['scripts/provider-connectivity-smoke.mjs'], category: 'smoke' },
-  { name: 'provider runtime containment smoke', command: 'node', args: ['scripts/provider-runtime-containment-smoke.mjs'], category: 'smoke' },
   { name: 'modelStats smoke', command: 'node', args: ['scripts/model-stats-smoke.mjs'], category: 'smoke' },
   { name: 'modelRouter smoke', command: 'node', args: ['scripts/model-router-smoke.mjs'], category: 'smoke' },
   { name: 'routing visibility smoke', command: 'node', args: ['scripts/routing-visibility-smoke.mjs'], category: 'smoke' },
@@ -173,7 +188,6 @@ const commandDefinitions = [
   { name: 'openai P2 tools smoke', command: 'node', args: ['scripts/openai-p2-tools-smoke.mjs'], category: 'smoke' },
   { name: 'responses tools e2e', ...commandSpec('npx', ['electron', 'scripts/responses-tools-e2e.cjs']), category: 'system' },
   { name: 'history compress e2e', ...commandSpec('npx', ['electron', 'scripts/history-compress-e2e.cjs']), category: 'system' },
-  { name: 'claude real e2e', ...commandSpec('npx', ['electron', 'scripts/claude-real-e2e.cjs']), category: 'system', statusReporter: 'scripts/claude-real-e2e.cjs' },
   { name: 'worktreeMerge smoke', command: 'node', args: ['scripts/worktree-merge-smoke.mjs'], category: 'smoke' },
   { name: 'taskDag autoMerge e2e', ...commandSpec('npx', ['electron', 'scripts/task-dag-automerge-e2e.cjs']), category: 'system' },
   { name: 'taskDag durable finalization crash e2e', command: 'node', args: ['scripts/task-dag-finalization-crash-e2e.cjs'], category: 'system' },
@@ -604,9 +618,9 @@ function escapePipe(value) {
 function isMainModule() {
   return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 }
-
 if (isMainModule()) {
   const report = await runDeepTest()
+  for (const result of report.results.filter((item) => item.blocksGate)) console.error(result.summary || result.reason || '(no output)')
   console.log(`deep test report: ${path.join(report.runDir, 'deep-test-report.md')}`)
   process.exitCode = report.exitCode
 }

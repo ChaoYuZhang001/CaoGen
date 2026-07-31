@@ -49,6 +49,13 @@ export type SaveImageAttachmentBytesResult = ImageAttachmentSuccess | Attachment
 
 export type ImageAttachmentBytesInput = Buffer | Uint8Array | ArrayBuffer | string
 
+export interface PreparedImageAttachment {
+  data: Buffer
+  hash: string
+  mime: string
+  bytes: number
+}
+
 /**
  * Copies a user-selected image into the app attachment root using a content-hash filename.
  */
@@ -58,22 +65,8 @@ export async function copyImageAttachment(
   options: CopyImageAttachmentOptions = {}
 ): Promise<CopyImageAttachmentResult> {
   try {
-    const source = resolveSourcePath(sourcePath)
-    const extension = supportedExtension(source)
-    const maxBytes = positiveLimit(options.maxBytes, DEFAULT_MAX_IMAGE_BYTES)
-
-    const sourceInfo = await lstat(source)
-    if (sourceInfo.isDirectory()) return failure('附件源不能是目录')
-
-    const fileInfo = await stat(source)
-    if (!fileInfo.isFile()) return failure('附件源必须是图片文件')
-    if (fileInfo.size > maxBytes) return failure(`图片过大: ${fileInfo.size} bytes, 上限 ${maxBytes} bytes`)
-
-    const buffer = await readFile(source)
-    if (buffer.byteLength > maxBytes) return failure(`图片过大: ${buffer.byteLength} bytes, 上限 ${maxBytes} bytes`)
-    if (!matchesImageSignature(buffer, extension)) return failure('文件内容不是支持的图片格式')
-
-    return await persistImageAttachment(buffer, extension, attachmentsRoot)
+    const prepared = await prepareImageAttachmentFile(sourcePath, options)
+    return await persistPreparedImageAttachment(prepared, attachmentsRoot)
   } catch (err) {
     return failure(errorMessage(err))
   }
@@ -89,19 +82,74 @@ export async function saveImageAttachmentBytes(
   options: SaveImageAttachmentBytesOptions = {}
 ): Promise<SaveImageAttachmentBytesResult> {
   try {
-    const maxBytes = positiveLimit(options.maxBytes, DEFAULT_MAX_IMAGE_BYTES)
-    const payload = decodeImageBytesInput(input)
-    if (payload.buffer.byteLength > maxBytes) {
-      return failure(`图片过大: ${payload.buffer.byteLength} bytes, 上限 ${maxBytes} bytes`)
+    const prepared = prepareImageAttachmentBytes(input, options)
+    return await persistPreparedImageAttachment(prepared, attachmentsRoot)
+  } catch (err) {
+    return failure(errorMessage(err))
+  }
+}
+
+/** Reads and validates a user-selected image without persisting its source path. */
+export async function prepareImageAttachmentFile(
+  sourcePath: string,
+  options: CopyImageAttachmentOptions = {}
+): Promise<PreparedImageAttachment> {
+  const source = resolveSourcePath(sourcePath)
+  const extension = supportedExtension(source)
+  const maxBytes = positiveLimit(options.maxBytes, DEFAULT_MAX_IMAGE_BYTES)
+  const sourceInfo = await lstat(source)
+  if (sourceInfo.isDirectory()) throw new Error('附件源不能是目录')
+  const fileInfo = await stat(source)
+  if (!fileInfo.isFile()) throw new Error('附件源必须是图片文件')
+  if (fileInfo.size > maxBytes) throw new Error(`图片过大: ${fileInfo.size} bytes, 上限 ${maxBytes} bytes`)
+  const buffer = await readFile(source)
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(`图片过大: ${buffer.byteLength} bytes, 上限 ${maxBytes} bytes`)
+  }
+  if (!matchesImageSignature(buffer, extension)) throw new Error('文件内容不是支持的图片格式')
+  return preparedImageAttachment(buffer, extension)
+}
+
+/** Decodes and validates renderer bytes before they cross the durable mutation barrier. */
+export function prepareImageAttachmentBytes(
+  input: ImageAttachmentBytesInput,
+  options: SaveImageAttachmentBytesOptions = {}
+): PreparedImageAttachment {
+  const maxBytes = positiveLimit(options.maxBytes, DEFAULT_MAX_IMAGE_BYTES)
+  const payload = decodeImageBytesInput(input)
+  if (payload.buffer.byteLength > maxBytes) {
+    throw new Error(`图片过大: ${payload.buffer.byteLength} bytes, 上限 ${maxBytes} bytes`)
+  }
+  const requestedMime = normalizeMime(options.mime) ?? normalizeMime(payload.mime)
+  const requestedExtension = requestedMime ? extensionFromMime(requestedMime) : null
+  const detectedExtension = detectImageExtension(payload.buffer)
+  if (!detectedExtension) throw new Error('文件内容不是支持的图片格式')
+  if (requestedExtension && canonicalExtension(requestedExtension) !== canonicalExtension(detectedExtension)) {
+    throw new Error('图片 MIME 与内容不匹配')
+  }
+  return preparedImageAttachment(payload.buffer, detectedExtension)
+}
+
+/** Persists only a previously frozen payload and rechecks its declared digest. */
+export async function persistPreparedImageAttachment(
+  prepared: PreparedImageAttachment,
+  attachmentsRoot: string
+): Promise<SaveImageAttachmentBytesResult> {
+  try {
+    const buffer = Buffer.from(prepared.data)
+    if (
+      !Number.isSafeInteger(prepared.bytes) ||
+      prepared.bytes <= 0 ||
+      prepared.bytes > DEFAULT_MAX_IMAGE_BYTES
+    ) {
+      throw new Error(`附件写入大小无效或超过上限 ${DEFAULT_MAX_IMAGE_BYTES} bytes`)
     }
-
-    const requestedMime = normalizeMime(options.mime) ?? normalizeMime(payload.mime)
-    const requestedExtension = requestedMime ? extensionFromMime(requestedMime) : null
-    const detectedExtension = detectImageExtension(payload.buffer)
-    if (!detectedExtension) return failure('文件内容不是支持的图片格式')
-    if (requestedExtension && requestedExtension !== detectedExtension) return failure('图片 MIME 与内容不匹配')
-
-    return await persistImageAttachment(payload.buffer, detectedExtension, attachmentsRoot)
+    if (buffer.byteLength !== prepared.bytes || sha256(buffer) !== prepared.hash) {
+      throw new Error('附件写入内容与已冻结摘要不匹配')
+    }
+    const extension = extensionFromMime(prepared.mime)
+    if (!matchesImageSignature(buffer, extension)) throw new Error('附件写入 MIME 与内容不匹配')
+    return await persistImageAttachment(buffer, extension, attachmentsRoot)
   } catch (err) {
     return failure(errorMessage(err))
   }
@@ -333,7 +381,7 @@ function positiveLimit(value: number | undefined, fallback: number): number {
 
 function decodeImageBytesInput(input: ImageAttachmentBytesInput): { buffer: Buffer; mime?: string } {
   if (typeof input === 'string') return decodeBase64ImageInput(input)
-  if (input instanceof ArrayBuffer) return ensureNonEmptyBuffer(Buffer.from(input))
+  if (input instanceof ArrayBuffer) return ensureNonEmptyBuffer(Buffer.from(new Uint8Array(input)))
   if (input instanceof Uint8Array) return ensureNonEmptyBuffer(Buffer.from(input))
   throw new Error('图片内容必须是 bytes 或 base64 字符串')
 }
@@ -382,6 +430,19 @@ function isMissingPathError(error: unknown): boolean {
 
 function sha256(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
+}
+
+function preparedImageAttachment(
+  buffer: Buffer,
+  extension: SupportedImageExtension
+): PreparedImageAttachment {
+  const data = Buffer.from(buffer)
+  return {
+    data,
+    hash: sha256(data),
+    mime: IMAGE_MIME_BY_EXTENSION[extension],
+    bytes: data.byteLength
+  }
 }
 
 function createdAtIso(info: { birthtimeMs: number; ctimeMs: number }): string {

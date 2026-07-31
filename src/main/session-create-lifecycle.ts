@@ -441,11 +441,13 @@ export function sessionMetaForPlacement(
 
 export function sessionMetaForRecovery(meta: SessionMeta): SessionMeta {
   const ownership = assertSessionDomainOwnership(meta)
+  const legacyEngine = (meta as unknown as { engine?: string }).engine
+  const migratedMeta = legacyEngine === 'claude' ? { ...meta, engine: 'anthropic' as const } : meta
   return applySessionPlacement({
-    ...meta,
+    ...migratedMeta,
     ...ownership,
-    taskStrategy: normalizeTaskStrategy(meta.taskStrategy)
-  }, recoverySessionPlacement(meta))
+    taskStrategy: normalizeTaskStrategy(migratedMeta.taskStrategy)
+  }, recoverySessionPlacement(migratedMeta))
 }
 
 function sessionTaskStrategy(

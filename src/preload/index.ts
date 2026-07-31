@@ -58,7 +58,6 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('sessions:dispatchSubagents', parentSessionId, input),
   dispatchTaskDag: (parentSessionId: string, input: TaskDagDispatchInput) =>
     ipcRenderer.invoke('sessions:dispatchTaskDag', parentSessionId, input),
-  listSupportedAgents: (sessionId: string) => ipcRenderer.invoke('sessions:supportedAgents', sessionId),
   listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
   ...workflowLedgerApi,
   ...projectWorkspaceApi,

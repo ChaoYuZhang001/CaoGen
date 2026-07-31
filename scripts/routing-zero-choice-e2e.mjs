@@ -18,6 +18,7 @@ const runDir = path.join(outputRoot, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-routing-zero-choice-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
+const projectId = 'routing-zero-choice-project'
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
@@ -34,6 +35,9 @@ mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Routing zero-choice real Electron E2E\n', 'utf8')
+writeFileSync(path.join(userDataDir, 'projects.json'), JSON.stringify([
+  { id: projectId, name: 'Routing Zero Choice Project', path: projectDir, lastUsedAt: Date.now() }
+], null, 2), 'utf8')
 copyBuiltApp()
 
 const report = {
@@ -41,7 +45,7 @@ const report = {
   runId,
   runDir,
   requirement: 'required',
-  requirementIds: ['ROUTE-003', 'NFR-UX-001'],
+  requirementIds: ['ROUTE-003', 'NFR-UX-001', 'M2-T2'],
   packageVersion: packageJson.version,
   gitCommit: '',
   worktreeClean: false,
@@ -101,14 +105,29 @@ try {
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page)
+  await page.waitForFunction(
+    (expectedProjectId) => document.querySelector('.welcome-project-select')?.value === expectedProjectId,
+    { timeout: 10_000 },
+    projectId
+  )
 
+  const quickStartPrompt = '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。'
   const prompt = `zero choice assistant ${runId}`
   const expectedReply = `Zero-choice route completed: ${prompt}`
+
+  await check('published read-only Quick Start template fills the welcome composer exactly', async () => {
+    await page.click('[data-welcome-suggestion="quick_start_project_read_only_v1"]')
+    const value = await page.$eval('.welcome-composer-input', (input) => input.value)
+    assert(value === quickStartPrompt, `Quick Start prompt drifted: ${value}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, 'selecting the Quick Start template created a session')
+  })
 
   await check('Assistant starts with no technical routing controls', async () => {
     await assertMode(page, 'assistant')
     await assertAssistantProjection(page)
-    await setValue(page, '.welcome-project-path', projectDir)
+    const selectedProject = await page.$eval('.welcome-project-select', (select) => select.value)
+    assert(selectedProject === projectId, `saved project was not selected: ${selectedProject}`)
     await setValue(page, '.welcome-composer-input', prompt)
     const computeState = await page.$eval('[data-assistant-compute-state]', (node) => ({
       available: node.getAttribute('data-compute-available'),
@@ -127,19 +146,178 @@ try {
     await screenshot(page, '01-assistant-compute-unavailable')
   })
 
-  await check('retry discovers a real local Responses provider without UI choices', async () => {
-    await page.evaluate(async ({ baseUrl }) => {
-      await window.agentDesk.createProvider({
-        name: 'Zero Choice Local Service',
-        baseUrl,
-        token: 'test-only',
-        models: ['zero-choice-responses'],
-        openaiProtocol: 'responses'
-      })
-    }, { baseUrl: mock.baseUrl })
-    await page.click('[data-assistant-start-action="retry"]')
-    await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
+  let expertDraftBeforeRecovery
+  let providerId = ''
+  await check('Expert recovery opens the real Provider form and saves through the UI', async () => {
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    await page.click('[data-welcome-routing-mode="fixed"]')
+    await page.click('.welcome-send')
+    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+    const actions = await page.$$eval('[data-welcome-recovery-action]', (nodes) =>
+      nodes.map((node) => node.getAttribute('data-welcome-recovery-action')).sort()
+    )
+    assert(JSON.stringify(actions) === JSON.stringify(['configure', 'retry']), `unexpected Provider recovery actions: ${JSON.stringify(actions)}`)
+    expertDraftBeforeRecovery = await readWelcomeDraft(page)
+    assert(expertDraftBeforeRecovery.prompt === prompt, `unexpected pre-recovery prompt: ${expertDraftBeforeRecovery.prompt}`)
+    assert(expertDraftBeforeRecovery.cwd === projectDir, `unexpected pre-recovery cwd: ${expertDraftBeforeRecovery.cwd}`)
+    assert(expertDraftBeforeRecovery.routingMode === 'fixed', `unexpected pre-recovery routing mode: ${expertDraftBeforeRecovery.routingMode}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Expert failed start created ${sessions.length} session(s)`)
+
+    await page.click('[data-welcome-recovery-action="configure"]')
+    await page.waitForSelector('.settings-page', { visible: true, timeout: 5_000 })
+    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
+    const currentTab = await page.$eval('[data-settings-tab="providers"]', (node) => node.getAttribute('aria-current'))
+    assert(currentTab === 'page', `Provider recovery opened the wrong Settings tab: ${currentTab}`)
+    await screenshot(page, '02-expert-provider-editor')
+
+    await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
+    await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForSelector('[data-provider-editor-error]', { visible: true, timeout: 5_000 })
+    let validationError = await page.$eval('[data-provider-editor-error]', (node) => node.textContent || '')
+    assert(/API|密钥/i.test(validationError), `missing-key recovery error drifted: ${validationError}`)
+    let providersAfterInvalidSave = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providersAfterInvalidSave.length === 0, 'missing-key recovery save created a Provider')
+
+    await setValue(page, '[data-provider-field="api-key"]', 'test-only')
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForFunction(
+      () => /model|模型/i.test(document.querySelector('[data-provider-editor-error]')?.textContent || ''),
+      { timeout: 5_000 }
+    )
+    validationError = await page.$eval('[data-provider-editor-error]', (node) => node.textContent || '')
+    assert(/model|模型/i.test(validationError), `missing-model recovery error drifted: ${validationError}`)
+    providersAfterInvalidSave = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providersAfterInvalidSave.length === 0, 'missing-model recovery save created a Provider')
+    await screenshot(page, '02-expert-provider-validation')
+
+    await setValue(page, '[data-provider-field="models"]', 'zero-choice-responses')
+    const protocol = await page.$eval('[data-provider-field="openai-protocol"]', (select) => select.value)
+    assert(protocol === 'responses', `unexpected Provider protocol: ${protocol}`)
+    await page.click('[data-provider-editor-action="save"]')
+  })
+
+  await check('usable Provider save returns to the intact first task with no session side effect', async () => {
+    await page.waitForSelector('.settings-page', { hidden: true, timeout: 10_000 })
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
     await page.waitForSelector('[data-assistant-start-state]', { hidden: true, timeout: 5_000 })
+    const expertDraftAfterRecovery = await readWelcomeDraft(page)
+    assert(expertDraftAfterRecovery.prompt === expertDraftBeforeRecovery.prompt, 'Provider setup lost the first-task prompt')
+    assert(expertDraftAfterRecovery.cwd === expertDraftBeforeRecovery.cwd, 'Provider setup lost the first-task directory')
+    assert(expertDraftAfterRecovery.driveMode === expertDraftBeforeRecovery.driveMode, 'Provider setup changed Drive mode')
+    assert(expertDraftAfterRecovery.permissionMode === expertDraftBeforeRecovery.permissionMode, 'Provider setup changed permission mode')
+    assert(expertDraftAfterRecovery.routingMode === expertDraftBeforeRecovery.routingMode, 'Provider setup changed routing mode')
+    assert(expertDraftAfterRecovery.projectChoice === expertDraftBeforeRecovery.projectChoice, 'Provider setup changed project choice')
+    assert(expertDraftAfterRecovery.provider === 'Zero Choice Local Service', `saved Provider was not selected: ${expertDraftAfterRecovery.provider}`)
+    assert(expertDraftAfterRecovery.model === 'zero-choice-responses', `saved model was not selected: ${expertDraftAfterRecovery.model}`)
+    const providers = await page.evaluate(() => window.agentDesk.listProviders())
+    assert(providers.length === 1, `expected one UI-created Provider, got ${providers.length}`)
+    providerId = providers[0].id
+    assert(providers[0].hasToken, 'UI-created Provider did not persist its API key')
+    assert(JSON.stringify(providers[0].models) === JSON.stringify(['zero-choice-responses']), `UI-created Provider models drifted: ${JSON.stringify(providers[0].models)}`)
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Provider setup created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-return')
+  })
+
+  await check('fixed model survives Drive changes when the selected model remains valid', async () => {
+    const beforeDriveChange = await readWelcomeDraft(page)
+    const alternateDrive = beforeDriveChange.driveMode === 'forge' ? 'core' : 'forge'
+    await page.select('[data-welcome-routing-control="drive"]', alternateDrive)
+    await page.waitForFunction(
+      (expectedModel) => document.querySelector('[data-welcome-routing-control="model"]')?.value === expectedModel,
+      {},
+      beforeDriveChange.modelValue
+    )
+    let afterDriveChange = await readWelcomeDraft(page)
+    assert(afterDriveChange.modelValue === beforeDriveChange.modelValue, `Drive change cleared fixed model: ${afterDriveChange.modelValue}`)
+
+    await page.select('[data-welcome-routing-control="drive"]', beforeDriveChange.driveMode)
+    await page.waitForFunction(
+      (expectedModel) => document.querySelector('[data-welcome-routing-control="model"]')?.value === expectedModel,
+      {},
+      beforeDriveChange.modelValue
+    )
+    afterDriveChange = await readWelcomeDraft(page)
+    assert(afterDriveChange.modelValue === beforeDriveChange.modelValue, `Drive restore cleared fixed model: ${afterDriveChange.modelValue}`)
+    await screenshot(page, '02-expert-fixed-model-after-drive')
+  })
+
+  await check('renderer reload restores the complete first-task draft without credential data', async () => {
+    const beforeReload = await readWelcomeDraft(page)
+    const persisted = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
+    assert(persisted, 'welcome draft was not persisted before reload')
+    const payload = JSON.parse(persisted)
+    assert(payload.schemaVersion === 1, `unexpected welcome draft schema: ${payload.schemaVersion}`)
+    assert(!persisted.includes('test-only'), 'welcome draft storage leaked the Provider API key')
+    assert(!persisted.includes(mock.baseUrl), 'welcome draft storage leaked the Provider Base URL')
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await waitForApp(page)
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[data-welcome-routing-control="provider"] option'))
+        .some((option) => option.textContent?.includes('Zero Choice Local Service')),
+      { timeout: 10_000 }
+    )
+    const afterReload = await readWelcomeDraft(page)
+    for (const field of ['prompt', 'cwd', 'projectChoice', 'driveMode', 'permissionMode', 'routingMode', 'provider', 'model']) {
+      assert(afterReload[field] === beforeReload[field], `renderer reload changed ${field}: ${afterReload[field]}`)
+    }
+    const sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `renderer reload created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-reload')
+  })
+
+  await check('deleted persisted Provider fails closed and remains recoverable after reload', async () => {
+    assert(providerId, 'Provider id missing before deletion recovery check')
+    const beforeDeletion = await readWelcomeDraft(page)
+    await page.evaluate((id) => window.agentDesk.deleteProvider(id), providerId)
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+    await waitForApp(page)
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForFunction(
+      () => document.querySelector('[data-welcome-routing-control="provider"]')?.value === '',
+      { timeout: 10_000 }
+    )
+    const afterDeletion = await readWelcomeDraft(page)
+    for (const field of ['prompt', 'cwd', 'projectChoice', 'driveMode', 'permissionMode', 'routingMode']) {
+      assert(afterDeletion[field] === beforeDeletion[field], `Provider deletion changed ${field}: ${afterDeletion[field]}`)
+    }
+    assert(afterDeletion.providerId === '', `deleted Provider remained selected: ${afterDeletion.providerId}`)
+    assert(afterDeletion.modelValue === '', `deleted Provider model remained selected: ${afterDeletion.modelValue}`)
+    await page.click('.welcome-send')
+    await page.waitForSelector('[data-assistant-start-state="provider-unavailable"]', { visible: true, timeout: 5_000 })
+    let sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `stale Provider recovery created ${sessions.length} session(s)`)
+
+    await page.click('[data-welcome-recovery-action="configure"]')
+    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
+    await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
+    await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
+    await setValue(page, '[data-provider-field="api-key"]', 'test-only')
+    await setValue(page, '[data-provider-field="models"]', 'zero-choice-responses')
+    await page.click('[data-provider-editor-action="save"]')
+    await page.waitForSelector('.settings-page', { hidden: true, timeout: 10_000 })
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 5_000 })
+    const recovered = await readWelcomeDraft(page)
+    assert(recovered.prompt === beforeDeletion.prompt, 'Provider recreation lost the first-task prompt')
+    assert(recovered.projectChoice === projectId, `Provider recreation changed project: ${recovered.projectChoice}`)
+    assert(recovered.provider === 'Zero Choice Local Service', `Provider recreation did not bind the replacement: ${recovered.provider}`)
+    assert(recovered.model === 'zero-choice-responses', `Provider recreation did not bind the model: ${recovered.model}`)
+    sessions = await page.evaluate(() => window.agentDesk.listSessions())
+    assert(sessions.length === 0, `Provider recreation created ${sessions.length} session(s)`)
+    await screenshot(page, '02-expert-provider-recreated')
+
+    await clickMode(page, 'assistant')
+    await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
     await assertAssistantProjection(page)
   })
 
@@ -161,6 +339,8 @@ try {
     assert(mock.requests.length === 1, `expected one model request, got ${mock.requests.length}`)
     assert(mock.requests[0].body?.model === 'zero-choice-responses', `wrong routed model: ${JSON.stringify(mock.requests[0].body)}`)
     assert(JSON.stringify(mock.requests[0].body).includes(prompt), 'prompt missing from routed request')
+    const persistedDraft = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
+    assert(persistedDraft === null, 'successful first-task start did not clear the persisted welcome draft')
     stableSnapshot = await readSessionSnapshot(page, sessionId)
     report.requests = mock.requests.map(({ authorization: _authorization, ...request }) => request)
     await assertAssistantProjection(page)
@@ -174,7 +354,7 @@ try {
       assert(!text.includes(forbidden), `Assistant palette exposed ${forbidden}`)
     }
     await page.keyboard.press('Escape')
-    await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 5_000 })
+    await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 15_000 })
   })
 
   await check('Studio expert tab supports arrow keys and reveals the same session controls', async () => {
@@ -182,6 +362,7 @@ try {
     await page.type('.composer-input', 'projection draft remains local')
     const before = await readSessionSnapshot(page, sessionId)
     await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="workspace"]')
     await page.waitForSelector('[data-studio-projection-tab="workspace"][aria-selected="true"]', { visible: true })
     await page.focus('[data-studio-projection-tab="workspace"]')
     await page.keyboard.press('ArrowRight')
@@ -342,12 +523,39 @@ function assertSameSnapshot(before, after, label) {
 }
 
 async function setValue(targetPage, selector, value) {
-  await targetPage.click(selector)
-  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await targetPage.keyboard.down(modifier)
-  await targetPage.keyboard.press('a')
-  await targetPage.keyboard.up(modifier)
-  await targetPage.keyboard.type(value)
+  await targetPage.$eval(selector, (element, nextValue) => {
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!setter) throw new Error(`value setter unavailable for ${element.tagName}`)
+    setter.call(element, nextValue)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }, value)
+}
+
+async function readWelcomeDraft(targetPage) {
+  return targetPage.evaluate(() => {
+    const selectedText = (selector) => {
+      const select = document.querySelector(selector)
+      return select?.selectedOptions?.[0]?.textContent?.trim() || ''
+    }
+    return {
+      prompt: document.querySelector('.welcome-composer-input')?.value || '',
+      cwd: document.querySelector('.welcome-project-path')?.value
+        || document.querySelector('.welcome-project-current')?.getAttribute('title')
+        || '',
+      projectChoice: document.querySelector('.welcome-project-select')?.value || '',
+      routingMode: document.querySelector('[data-welcome-routing-mode].active')?.getAttribute('data-welcome-routing-mode') || '',
+      driveMode: document.querySelector('[data-welcome-routing-control="drive"]')?.value || '',
+      permissionMode: document.querySelector('[data-welcome-routing-control="permission"]')?.value || '',
+      providerId: document.querySelector('[data-welcome-routing-control="provider"]')?.value || '',
+      provider: selectedText('[data-welcome-routing-control="provider"]'),
+      modelValue: document.querySelector('[data-welcome-routing-control="model"]')?.value || '',
+      model: selectedText('[data-welcome-routing-control="model"]')
+    }
+  })
 }
 
 async function openCommandPalette(targetPage) {
@@ -355,7 +563,11 @@ async function openCommandPalette(targetPage) {
   await targetPage.keyboard.down(modifier)
   await targetPage.keyboard.press('k')
   await targetPage.keyboard.up(modifier)
-  await targetPage.waitForSelector('.command-palette-backdrop', { visible: true, timeout: 5_000 })
+  await targetPage.waitForSelector('.command-palette-backdrop', { visible: true, timeout: 15_000 })
+  await targetPage.waitForFunction(
+    () => document.activeElement?.classList.contains('command-palette-input'),
+    { timeout: 15_000 }
+  )
 }
 
 async function waitForApp(targetPage) {

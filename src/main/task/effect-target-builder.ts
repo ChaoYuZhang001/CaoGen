@@ -21,6 +21,10 @@ import {
   inspectManagedWorktreeIdentity,
   inspectManagedWorktreeRegistryRecord
 } from '../managed-worktree-lifecycle'
+import {
+  buildManagedPluginEffectTarget,
+  isManagedPluginEffectToolName
+} from '../plugin/plugin-directory-effect'
 import { normalizeToolName } from './tool-idempotency'
 
 export interface EffectTargetObservationOptions {
@@ -139,6 +143,9 @@ async function buildRepositoryEffectTarget(
   }
   if (toolName === 'managed_worktree_remove') {
     return buildManagedWorktreeRemoveTarget(input.cwd, input.toolInput)
+  }
+  if (isManagedPluginEffectToolName(toolName)) {
+    return buildManagedPluginEffectTarget(input.cwd, toolName, input.toolInput)
   }
   return { kind: 'unsupported', toolName }
 }

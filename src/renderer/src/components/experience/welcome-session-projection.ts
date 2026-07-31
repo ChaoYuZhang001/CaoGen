@@ -7,10 +7,11 @@ import {
   type TaskStrategy
 } from '../../../../shared/types'
 import type { ExperienceMode } from '../../store/experience-mode'
+import type { WelcomeRoutingMode } from '../../store/welcome-draft'
 
 export const NEW_PROJECT_SESSION_CHOICE = '__new_project__'
 
-export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
+export type { WelcomeRoutingMode } from '../../store/welcome-draft'
 
 export interface WelcomeSessionDraft {
   cwd: string

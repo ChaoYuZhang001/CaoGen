@@ -1,0 +1,60 @@
+title: "[Idea]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with a real user problem and the smallest useful outcome. CaoGen's Agent Work OS vision is under construction; do not describe roadmap work as already shipped.
+
+        请从真实用户问题和最小可用结果开始。CaoGen 的 Agent Work OS 愿景仍在建设中，不要把路线图写成已发布能力。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem / 用户问题
+      description: Who is blocked, in which workflow, and why? / 谁在什么流程中受阻，为什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior / 当前行为
+      description: What can CaoGen do today, and where does it stop? / CaoGen 今天能做到哪里，在哪里停止？
+    validations:
+      required: true
+
+  - type: textarea
+    id: smallest_change
+    attributes:
+      label: Smallest useful change / 最小可用改动
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / 验收标准
+      placeholder: |
+        - Given...
+        - When...
+        - Then...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution / 参与意愿
+      options:
+        - label: I can help validate or implement this after scope confirmation. / 范围确认后我可以协助验证或实现。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks / 提交确认
+      options:
+        - label: I searched existing discussions and issues. / 我已搜索现有 Discussion 和 Issue。
+          required: true
+        - label: I removed credentials and private data. / 我已移除凭据和私有数据。
+          required: true

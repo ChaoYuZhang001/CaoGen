@@ -82,24 +82,48 @@ export function renderMacUpdateMetadata({ version, distDir, releaseDate }) {
 }
 
 export function macUpdateMetadataChecks(text, { version, distDir }) {
+  return updateMetadataChecks(text, {
+    version,
+    distDir,
+    expectedNames: [
+      `CaoGen-${version}-mac.zip`,
+      `CaoGen-${version}.dmg`,
+      `CaoGen-${version}-arm64-mac.zip`,
+      `CaoGen-${version}-arm64.dmg`
+    ],
+    expectedFileCountLabel: 'updateMetadataHasFourFiles'
+  })
+}
+
+export function macosX64UpdateMetadataChecks(text, { version, distDir }) {
+  return updateMetadataChecks(text, {
+    version,
+    distDir,
+    expectedNames: [
+      `CaoGen-${version}-mac.zip`,
+      `CaoGen-${version}.dmg`
+    ],
+    expectedFileCountLabel: 'updateMetadataHasTwoFiles'
+  })
+}
+
+function updateMetadataChecks(text, { version, distDir, expectedNames, expectedFileCountLabel }) {
   let metadata
   try {
     metadata = yaml.load(text)
   } catch {
     return { updateMetadataParses: false }
   }
-  const expectedNames = [
-    `CaoGen-${version}-mac.zip`,
-    `CaoGen-${version}.dmg`,
-    `CaoGen-${version}-arm64-mac.zip`,
-    `CaoGen-${version}-arm64.dmg`
-  ]
   const files = Array.isArray(metadata?.files) ? metadata.files : []
   const byUrl = Object.fromEntries(files.map((item) => [item?.url, item]))
+  const actualNames = files.map((item) => item?.url)
   const checks = {
     updateMetadataParses: metadata && typeof metadata === 'object',
     updateMetadataVersionMatches: metadata?.version === version,
-    updateMetadataHasFourFiles: files.length === expectedNames.length,
+    [expectedFileCountLabel]: files.length === expectedNames.length,
+    updateMetadataHasExactFiles:
+      actualNames.length === new Set(actualNames).size &&
+      JSON.stringify([...actualNames].sort()) === JSON.stringify([...expectedNames].sort()),
     updateMetadataPathUsesX64Zip: metadata?.path === expectedNames[0],
     updateMetadataTopLevelDigestMatchesX64Zip: metadata?.sha512 === byUrl[expectedNames[0]]?.sha512,
     updateMetadataReleaseDateIsValid: Number.isFinite(Date.parse(metadata?.releaseDate || ''))

@@ -1,17 +1,22 @@
 export type ExperienceMode = 'assistant' | 'studio'
+export type StudioSurface = 'workspace' | 'session'
 
 export interface ExperienceModeSlice {
   experienceMode: ExperienceMode
+  studioSurface: StudioSurface
   setExperienceMode(mode: ExperienceMode): void
+  setStudioSurface(surface: StudioSurface): void
 }
 
-type ExperienceModeState = Pick<ExperienceModeSlice, 'experienceMode'>
+type ExperienceModeState = Pick<ExperienceModeSlice, 'experienceMode' | 'studioSurface'>
 
 export function createExperienceModeSlice(
-  set: (update: ExperienceModeState) => void
+  set: (update: Partial<ExperienceModeState>) => void
 ): ExperienceModeSlice {
   return {
     experienceMode: 'assistant',
-    setExperienceMode: (experienceMode) => set({ experienceMode })
+    studioSurface: 'workspace',
+    setExperienceMode: (experienceMode) => set({ experienceMode }),
+    setStudioSurface: (studioSurface) => set({ studioSurface })
   }
 }

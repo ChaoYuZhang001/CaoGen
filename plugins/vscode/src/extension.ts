@@ -35,6 +35,7 @@ interface BridgeSession {
   title: string
   cwd: string
   status: string
+  initialMessageAccepted?: boolean
 }
 
 interface BridgeSessionsListResult {
@@ -231,7 +232,11 @@ async function createSessionFromWorkspace(options?: CreateSessionCommandOptions)
   if (!isBridgeSession(session)) throw new Error('CaoGen sessions.create 响应格式无效')
   activeSessionId = session.id
   scheduleDocumentSync(editor?.document)
-  vscode.window.showInformationMessage(`CaoGen session ready: ${session.title || session.id}`)
+  if (initialText && session.initialMessageAccepted === false) {
+    vscode.window.showWarningMessage('CaoGen session created, but the initial request was rejected. Retry when the session is ready.')
+  } else {
+    vscode.window.showInformationMessage(`CaoGen session ready: ${session.title || session.id}`)
+  }
   return session
 }
 
@@ -250,6 +255,9 @@ async function createSession(initialText?: string): Promise<BridgeSession> {
   if (!isBridgeSession(session)) throw new Error('CaoGen sessions.create 响应格式无效')
   activeSessionId = session.id
   scheduleDocumentSync(vscode.window.activeTextEditor?.document)
+  if (initialText && session.initialMessageAccepted === false) {
+    throw new Error('CaoGen session was created, but the initial request was rejected. Retry when the session is ready.')
+  }
   return session
 }
 

@@ -24,6 +24,10 @@ const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const softwareWebglArgs = ciSoftwareWebgl
+  ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+  : []
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
@@ -48,6 +52,10 @@ const report = {
   arch: process.arch,
   nodeVersion: process.version,
   electronVersion: electronPackage.version,
+  softwareWebgl: {
+    enabled: ciSoftwareWebgl,
+    electronArgs: softwareWebglArgs
+  },
   checks: [],
   screenshots: [],
   viewports: [],
@@ -70,7 +78,7 @@ const report = {
 
 const mock = await startOpenAiMock()
 const remotePort = await findFreePort(9920)
-const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
   cwd: repoRoot,
   env: {
     ...process.env,
@@ -114,8 +122,7 @@ try {
 
   await check('pointer switching is bidirectional with one pressed option', async () => {
     await assertMode(page, 'assistant')
-    await page.click('.welcome-composer-input')
-    await page.type('.welcome-composer-input', 'welcome draft survives projection changes')
+    await enterText(page, '.welcome-composer-input', 'welcome draft survives projection changes', 'Welcome draft')
     await clickMode(page, 'studio')
     await clickMode(page, 'assistant')
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
@@ -190,13 +197,14 @@ try {
     await assertMode(page, 'studio')
     await focusSidebarSearch(page)
     await assertMode(page, 'studio')
-    await page.type('.sidebar-search', 'stable transcript')
+    await enterText(page, '.sidebar-search', 'stable transcript', 'Sidebar search')
     await clearFocusedInput(page)
     await page.waitForSelector('.session-card.active', { visible: true, timeout: 5_000 })
     await page.click('.sidebar-office')
     await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
     assert(await page.$('[data-experience-mode-switcher]') === null, 'mode switcher should not cover Office')
-    await page.click('.office-actions .btn-primary')
+    await page.waitForSelector('.office-actions .btn-primary', { visible: true, timeout: 30_000 })
+    await page.$eval('.office-actions .btn-primary', (button) => button.click())
     await page.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
     await assertMode(page, 'studio')
     await page.click('.session-card.active')
@@ -207,9 +215,8 @@ try {
 
   await check('Composer draft survives Assistant/Studio projection changes', async () => {
     await clickMode(page, 'assistant')
-    await page.waitForSelector('.composer-input', { visible: true, timeout: 10_000 })
-    await page.click('.composer-input')
-    await page.type('.composer-input', 'composer draft stays local')
+    await page.waitForSelector('.composer-input', { visible: true, timeout: 30_000 })
+    await enterText(page, '.composer-input', 'composer draft stays local', 'Composer draft')
     const before = await readSessionSnapshot(page, session.id)
     await clickMode(page, 'studio')
     await clickMode(page, 'assistant')
@@ -320,6 +327,27 @@ async function clickMode(targetPage, mode) {
   await assertMode(targetPage, mode)
 }
 
+async function enterText(targetPage, selector, text, label) {
+  const initial = await targetPage.$eval(selector, (input) => {
+    input.focus()
+    return {
+      focused: document.activeElement === input,
+      value: input.value
+    }
+  })
+  assert(initial.focused, `${label} did not receive focus`)
+  assert(initial.value === '', `${label} started with unexpected text: ${initial.value}`)
+
+  // One CDP insertion still exercises the browser input event while avoiding host-keyboard bleed.
+  await targetPage.keyboard.sendCharacter(text)
+  await waitForValue(
+    () => targetPage.$eval(selector, (input) => input.value),
+    (value) => value === text,
+    5_000,
+    `waiting for ${label} input`
+  )
+}
+
 async function focusMode(targetPage, mode) {
   await targetPage.focus(`[data-experience-mode-option="${mode}"]`)
   const focused = await targetPage.evaluate(() => document.activeElement?.getAttribute('data-experience-mode-option'))
@@ -344,7 +372,7 @@ async function assertMode(targetPage, expected, expectedFocus) {
     (value) => value.pressed.length === 1 && value.pressed[0] === expected &&
       value.visiblePanes.length === 1 && value.visiblePanes[0] === expected &&
       (expected !== 'studio' || value.studioReady),
-    10_000,
+    30_000,
     `waiting for ${expected} mode`
   )
   if (expectedFocus) assert(state.focused === expectedFocus, `mode focus moved to ${state.focused}`)

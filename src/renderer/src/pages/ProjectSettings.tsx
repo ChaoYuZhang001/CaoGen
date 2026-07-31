@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import type { ProjectContextReadResult } from '../../../shared/types'
+import type { ProjectContextOperationResult } from '../../../shared/project-context-types'
 import {
   PROJECT_RULE_SECTIONS,
   emptyProjectRuleDraft,
@@ -24,6 +25,8 @@ const SECTION_PLACEHOLDERS: Record<ProjectRuleSectionKey, string> = {
   decisions: '- YYYY-MM-DD: 决策、原因、影响范围',
   acceptance: '- 验证命令:\n- 完成标准:\n- 风险说明:'
 }
+
+type ProjectContextWriteResult = ProjectContextOperationResult<ProjectContextReadResult>
 
 export default function ProjectSettings(): React.JSX.Element {
   const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
@@ -84,10 +87,10 @@ export default function ProjectSettings(): React.JSX.Element {
     setBusy(true)
     setMessage('')
     try {
-      const result = await window.agentDesk.writeProjectContext(projectPath.trim(), content)
-      setContext(result)
-      setProjectPath(result.projectRoot)
-      setContent(result.content)
+      const saved = await requireSavedContext(await window.agentDesk.writeProjectContext(projectPath.trim(), content))
+      setContext(saved)
+      setProjectPath(saved.projectRoot)
+      setContent(saved.content)
       setMessage('已保存 caogen.md,下一轮 Agent 消息生效')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err))
@@ -121,11 +124,11 @@ export default function ProjectSettings(): React.JSX.Element {
     setMessage('')
     try {
       const merged = mergeProjectRuleDraft(content || context?.template || '', draft)
-      const result = await window.agentDesk.writeProjectContext(projectPath.trim(), merged)
-      setContext(result)
-      setProjectPath(result.projectRoot)
-      setContent(result.content)
-      setDraft(parseProjectRuleDraft(result.content))
+      const saved = await requireSavedContext(await window.agentDesk.writeProjectContext(projectPath.trim(), merged))
+      setContext(saved)
+      setProjectPath(saved.projectRoot)
+      setContent(saved.content)
+      setDraft(parseProjectRuleDraft(saved.content))
       setMessage('已同步并保存项目规则,下一轮 Agent 消息生效')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err))
@@ -241,4 +244,12 @@ export default function ProjectSettings(): React.JSX.Element {
       {message && <div className="notice notice-info project-context-message">{message}</div>}
     </div>
   )
+}
+
+async function requireSavedContext(
+  result: ProjectContextWriteResult
+): Promise<ProjectContextReadResult> {
+  if (result.ok) return result.context
+  if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
+  throw new Error(result.error)
 }

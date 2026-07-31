@@ -12,6 +12,7 @@ import type {
   TranscriptEntry
 } from '../shared/types'
 import { settingsForCaoGenDrive } from './model/drive'
+import type { Engine } from './engine'
 import { getProvider } from './providers'
 import { getSettings } from './settings'
 import {
@@ -37,24 +38,25 @@ export interface SessionNotificationState {
 
 export interface ManagedSessionCreationOptions { retainJournal?: boolean }
 
-export interface OrchestrationState {
-  parentSessionId: string
-  /** dispatchSubagents 仍在创建 child 时不触发最终汇总,避免极快 child 让编排过早收口。 */
-  acceptingChildren: boolean
-  /** 尚未完成首轮的 child session id */
-  pending: Set<string>
-  /** 已完成 child 的结果(按完成顺序) */
-  results: Array<{
-    taskId?: string
-    role?: string
-    sessionId: string
-    ok: boolean
-    resultText?: string
-    costUsd?: number
-    branch?: string
-    worktreePath?: string
-  }>
-  startedAt: number
+export function sendableSession(session: Engine | undefined): Engine | null {
+  if (!session) return null
+  if (session.meta.status !== 'running' && session.meta.status !== 'starting') return session
+  session.rejectSend('上一轮仍在运行,请等待完成或中断后再发送。')
+  return null
+}
+
+export function rejectSessionSend(session: Engine, message: string): false {
+  session.rejectSend(message)
+  return false
+}
+
+export function managedSessionSendGateError(
+  snapshotReplayPending: boolean,
+  supervisorBlocked: boolean
+): string | undefined {
+  if (snapshotReplayPending) return '快照恢复仍在按顺序续跑未完成步骤；请等待恢复完成或先中断。'
+  if (supervisorBlocked) return 'Supervisor 已暂停或仅授权重试；必须通过受信控制路径恢复后才能继续执行。'
+  return undefined
 }
 
 interface Lookup<T> { get(key: string): T | undefined }
@@ -311,8 +313,7 @@ export function effectiveBudgetUsd(meta: SessionMeta): number {
 
 export function canTrackCost(meta: SessionMeta): boolean {
   // Anthropic Messages reports token usage but not monetary cost. Keep budget enforcement fail-closed.
-  if (meta.engine === 'anthropic') return false
-  return meta.engine === 'claude' || meta.engine === 'openai'
+  return meta.engine === 'openai'
 }
 
 export async function withSessionCreationJournalBarrier<T>(

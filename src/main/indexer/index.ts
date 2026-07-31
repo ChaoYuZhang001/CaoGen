@@ -112,7 +112,7 @@ export async function ensureProjectIndex(projectRoot: string, options: EnsureOpt
   const existing = indexers.get(root)
   if (existing) {
     const indexer = await existing
-    if (options.watch !== false) indexer.startWatcher()
+    if (options.watch !== false) await indexer.startWatcher()
     return indexer
   }
   const created = ProjectIndexer.create(root, options)
@@ -128,6 +128,7 @@ export async function disposeProjectIndexers(): Promise<void> {
 
 export class ProjectIndexer {
   private watcher: FSWatcher | null = null
+  private watcherReady: Promise<void> | null = null
   private readonly pendingUpdates = new Map<string, NodeJS.Timeout>()
   private readonly indexPath: string
   private readonly ignoreRules: IgnoreRule[]
@@ -156,7 +157,7 @@ export class ProjectIndexer {
     const indexer = new ProjectIndexer(root, db)
     indexer.setupSchema()
     await indexer.rebuild()
-    if (options.watch !== false) indexer.startWatcher()
+    if (options.watch !== false) await indexer.startWatcher()
     return indexer
   }
 
@@ -165,6 +166,7 @@ export class ProjectIndexer {
     this.pendingUpdates.clear()
     if (this.watcher) await this.watcher.close()
     this.watcher = null
+    this.watcherReady = null
     this.persist()
     this.db.close()
   }
@@ -173,9 +175,9 @@ export class ProjectIndexer {
     return this.lastStats
   }
 
-  startWatcher(): void {
-    if (this.watcher) return
-    this.watcher = chokidar.watch(this.root, {
+  startWatcher(): Promise<void> {
+    if (this.watcherReady) return this.watcherReady
+    const watcher = chokidar.watch(this.root, {
       ignoreInitial: true,
       ignored: (targetPath, statsInfo) => {
         const rel = toProjectRelative(this.root, targetPath)
@@ -185,10 +187,23 @@ export class ProjectIndexer {
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
     })
-    this.watcher
+    this.watcher = watcher
+    watcher
       .on('add', (path) => this.queueUpdate(path))
       .on('change', (path) => this.queueUpdate(path))
       .on('unlink', (path) => this.removeFileByFullPath(path))
+    this.watcherReady = new Promise((resolve, reject) => {
+      let ready = false
+      watcher.once('ready', () => {
+        ready = true
+        resolve()
+      })
+      watcher.on('error', (error) => {
+        console.error('[caogen] 项目索引 watcher 失败:', error)
+        if (!ready) reject(error)
+      })
+    })
+    return this.watcherReady
   }
 
   async rebuild(): Promise<ProjectIndexStats> {

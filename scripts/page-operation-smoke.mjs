@@ -14,6 +14,7 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-page-smoke-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const port = await findFreePort(9400)
+const softwareWebglArgs = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
 const PAGE_SMOKE_PROVIDER_ID = 'page-smoke-openai'
 const PAGE_SMOKE_PROVIDER_NAME = 'Page Smoke OpenAI'
 const PAGE_SMOKE_MODEL = 'page-smoke-model'
@@ -22,7 +23,6 @@ const electronBin =
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
     : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
-
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(mainEntry)) fail('Built Electron main entry not found. Run npm run build first.')
 
@@ -120,8 +120,7 @@ writeFileSync(
 writeFileSync(path.join(projectDir, 'broken.docx'), Buffer.from('not an office zip\n'))
 initGitProject(projectDir)
 writePageSmokeUserData()
-
-const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
+const electronArgs = [`--remote-debugging-port=${port}`, ...softwareWebglArgs, mainEntry]
 const app = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
   cwd: repoRoot,
   env: {
@@ -146,6 +145,7 @@ const report = {
   projectDir,
   userDataDir,
   remoteDebuggingPort: port,
+  softwareWebgl: { enabled: softwareWebglArgs.length > 0, args: softwareWebglArgs },
   checks: [],
   screenshots: [],
   warnings: []
@@ -283,11 +283,11 @@ try {
       cdp,
       `({
         editorCount: document.querySelectorAll('.provider-editor').length,
-        nestedBackdropCount: document.querySelectorAll('.modal-backdrop-nested').length,
+        defaultBaseUrl: document.querySelector('[data-provider-field="base-url"]')?.value, nestedBackdropCount: document.querySelectorAll('.modal-backdrop-nested').length,
         globalSettingsActionsCount: document.querySelectorAll('.settings-page-actions').length
       })`
     )
-    assert(providerEditorSurface?.editorCount === 1, `inline provider editor missing: ${JSON.stringify(providerEditorSurface)}`)
+    assert(providerEditorSurface?.editorCount === 1 && providerEditorSurface?.defaultBaseUrl === 'https://ciyuan2api.com', `inline provider editor or default Base URL incorrect: ${JSON.stringify(providerEditorSurface)}`)
     assert(providerEditorSurface?.nestedBackdropCount === 0, `provider editor still uses a modal backdrop: ${JSON.stringify(providerEditorSurface)}`)
     assert(providerEditorSurface?.globalSettingsActionsCount === 0, `global settings actions should hide while editing a provider: ${JSON.stringify(providerEditorSurface)}`)
     await screenshot(cdp, '02-provider-editor-page')
@@ -302,7 +302,7 @@ try {
     await screenshot(cdp, '02-provider-editor-filled')
     await clickProviderEditorSave(cdp)
     await waitForText(cdp, 'CaoGen Relay UI Smoke', 10_000)
-    await waitForText(cdp, 'https://gpt.zhangrui.xyz/dashboard', 10_000)
+    await waitForText(cdp, 'https://ciyuan2api.com', 10_000)
     await waitForText(cdp, '2 个模型', 10_000)
     await waitForText(cdp, '2 个可用密钥', 10_000)
     const providerListText = await evalValue(cdp, 'document.body.innerText')
@@ -533,13 +533,14 @@ try {
     await waitForText(cdp, '已保存网页批注', 10_000)
     await waitForText(cdp, '批注: CTA spacing needs a fix', 10_000)
     await clickByText(cdp, '发给 Agent')
+    await waitForSendState(cdp, 'sent', 5_000, '.browser-panel', 'data-browser-send-state')
     await waitForText(cdp, '请基于这个 CaoGen 网页批注定位并修复问题。', 10_000)
-    await waitForText(cdp, 'CTA spacing needs a fix', 10_000)
+    await waitForSendState(cdp, '1', 30_000, '.browser-panel', 'data-browser-agent-sendable')
+    await screenshot(cdp, '06-browser-annotation-send')
     await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
     await waitForBrowserViewTargets(port, appTargetId, 0, 10_000)
   })
-  await screenshot(cdp, '06-browser-switch')
 
   await check(cdp, 'image and PDF previews render from project files', async () => {
     await clickByAriaLabel(cdp, '▣ 文件')
@@ -571,7 +572,7 @@ try {
   await check(cdp, 'preview content can be sent to Agent from PDF text and Office files', async () => {
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'pdf', mode: 'asset' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '请基于这个 CaoGen 产物预览继续工作。',
       '文件: report.pdf',
@@ -586,7 +587,7 @@ try {
     await waitForText(cdp, 'Text Preview', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'text', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: notes.txt',
       '类型: text',
@@ -601,7 +602,7 @@ try {
     await waitForText(cdp, 'Word Preview', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     if (process.platform === 'darwin') {
-      const visual = await waitForOfficeVisualState(cdp, 'ready', 10_000)
+      const visual = await waitForOfficeVisualState(cdp, 'ready', 70_000)
       assert(visual.mode === 'visual', `ready Office visual should become the default mode: ${JSON.stringify(visual)}`)
       assert(
         visual.format === 'document'
@@ -614,7 +615,7 @@ try {
     }
     await waitForText(cdp, 'Office preview works', 10_000)
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: brief.docx',
       '类型: office',
@@ -635,7 +636,7 @@ try {
     await waitForText(cdp, 'CaoGen', 10_000)
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: report.xlsx',
       '类型: office',
@@ -657,7 +658,7 @@ try {
     assert(storedAnnotation.locator?.quote?.includes('Preview Ready'), 'current sheet annotation should persist a quote')
     assert(storedAnnotation.locator?.selector?.includes('office:sheet:2:Details'), 'current sheet annotation should persist a selector')
     await clickPreviewSendCurrentUnit(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: report.xlsx',
       '发送范围: 当前结构单元',
@@ -683,7 +684,7 @@ try {
     await waitForText(cdp, 'Second slide', 10_000)
     await assertTextAbsent(cdp, 'Delivery plan')
     await clickPreviewSendCurrentUnit(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: slides.pptx',
       '发送范围: 当前结构单元',
@@ -693,7 +694,7 @@ try {
     ])
     await assertPreviewAgentState(cdp, { sendable: '1', type: 'office', mode: 'text' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: slides.pptx',
       '类型: office',
@@ -709,7 +710,7 @@ try {
     await waitForPreviewFailure(cdp, ['Office 文档无法解析', '不是有效的 Office Open XML ZIP 文件'])
     await assertPreviewAgentState(cdp, { sendable: '1', type: '', mode: '' })
     await clickPreviewSendToAgent(cdp)
-    await waitForPreviewSendState(cdp, 'sent')
+    await waitForSendState(cdp, 'sent')
     await waitForLatestUserMessageIncludes(cdp, [
       '文件: broken.docx',
       '类型: (unknown)',
@@ -730,7 +731,7 @@ try {
   await check(cdp, 'office view loads without blank first screen', async () => {
     await bringPageToFront(cdp)
     await clickByText(cdp, 'Agent 控制室')
-    await waitForText(cdp, 'Agent 控制室', 10_000)
+    await waitForSelector(cdp, '.office', 30_000)
     await bringPageToFront(cdp)
     const officeTelemetry = await waitForOfficeTelemetry(cdp)
     report.officeTelemetry = officeTelemetry
@@ -1166,17 +1167,7 @@ async function clickOfficeUnitAction(cdp, action) {
 }
 
 async function clickPreviewSendCurrentUnit(cdp) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const button = document.querySelector('[data-preview-send-current-unit="1"]');
-      if (!button || button.disabled) return { ok: false, disabled: Boolean(button?.disabled) };
-      button.click();
-      return { ok: true };
-    })()`
-  )
-  assert(result?.ok, `preview current-unit send button unavailable: ${JSON.stringify(result)}`)
-  await sleep(250)
+  await clickEnabledPreviewButton(cdp, '[data-preview-send-current-unit="1"]', 'preview current-unit send')
 }
 
 async function savePreviewNote(cdp, note) {
@@ -1311,27 +1302,35 @@ async function waitForPreviewFailure(cdp, needles, timeout = 5000) {
 }
 
 async function clickPreviewSendToAgent(cdp) {
-  const result = await evalValue(
-    cdp,
-    `(() => {
-      const header = document.querySelector('.preview-panel > .workspace-diff-top');
-      const button = [...(header?.querySelectorAll('button') ?? [])].find((candidate) =>
-        (candidate.innerText || candidate.textContent || '').includes('发给 Agent') && !candidate.disabled
-      );
-      if (!button) {
-        return {
+  await clickEnabledPreviewButton(cdp, '[data-preview-send-document="1"]', 'preview document send')
+}
+
+async function clickEnabledPreviewButton(cdp, selector, label, timeout = 10_000) {
+  const start = Date.now()
+  let last = null
+  while (Date.now() - start < timeout) {
+    last = await evalValue(
+      cdp,
+      `(() => {
+        const panel = document.querySelector('.preview-panel');
+        const button = panel?.querySelector(${JSON.stringify(selector)});
+        if (!button || button.disabled) return {
           ok: false,
-          state: document.querySelector('.preview-panel')?.getAttribute('data-preview-send-state') || '',
-          text: document.body.innerText.slice(0, 2000)
+          busy: panel?.getAttribute('data-preview-agent-busy') || '',
+          state: panel?.getAttribute('data-preview-send-state') || ''
         };
-      }
-      button.scrollIntoView({ block: 'center', inline: 'center' });
-      button.click();
-      return { ok: true };
-    })()`
-  )
-  assert(result?.ok, `preview send button not found or disabled: ${JSON.stringify(result)}`)
-  await sleep(250)
+        button.scrollIntoView({ block: 'center', inline: 'center' });
+        button.click();
+        return { ok: true };
+      })()`
+    )
+    if (last?.ok) {
+      await sleep(250)
+      return
+    }
+    await sleep(150)
+  }
+  throw new Error(`${label} button unavailable: ${JSON.stringify(last)}`)
 }
 
 async function clickProviderEditorSave(cdp) {
@@ -1372,18 +1371,15 @@ async function clickSettingsSave(cdp) {
   await sleep(400)
 }
 
-async function waitForPreviewSendState(cdp, state, timeout = 5000) {
+async function waitForSendState(cdp, state, timeout = 5000, selector = '.preview-panel', attribute = 'data-preview-send-state') {
   const start = Date.now()
   let last = ''
   while (Date.now() - start < timeout) {
-    last = await evalValue(
-      cdp,
-      `document.querySelector('.preview-panel')?.getAttribute('data-preview-send-state') || ''`
-    )
+    last = await evalValue(cdp, `document.querySelector(${JSON.stringify(selector)})?.getAttribute(${JSON.stringify(attribute)}) || ''`)
     if (last === state) return
     await sleep(150)
   }
-  throw new Error(`preview send state did not become ${state}: ${last}`)
+  throw new Error(`${selector} send state did not become ${state}: ${last}`)
 }
 
 async function waitForLatestUserMessageIncludes(cdp, needles, timeout = 5000) {

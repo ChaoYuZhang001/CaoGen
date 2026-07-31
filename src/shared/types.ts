@@ -1,5 +1,8 @@
-/** 主进程、预加载与渲染进程共享的编译期类型。 */
-import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, TaskRunOperationMetadata } from './effect-types'
+/**
+ * 主进程 / 预加载 / 渲染进程共享的类型定义。
+ * 仅包含类型(编译期擦除),两侧 tsconfig 都会引入本目录。
+ */
+import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, MigrationImportOperationResult, TaskRunOperationMetadata } from './effect-types'
 import type { TaskDagAutoMergeView, TaskDagFinalizationRecord, TaskDagFinalizationResolution, TaskDagFinalizationView } from './task-dag-finalization-types'
 import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-types'
 import type { ModelAttemptRecoveryApi } from './model-attempt-types'
@@ -13,6 +16,9 @@ import type { TaskPlanApi, TaskStrategy } from './task-plan-types'
 import type { MigrationApi } from './migration-types'
 import type { StudioResultApi } from './studio-result-types'
 import type { ProjectDataLifecycleApi } from './data-lifecycle-types'
+import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
+import type { TerminalEffectApi } from './terminal-operation-types'
+import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type * from './provider-profile-types'
 export type * from './task-plan-types'
@@ -20,11 +26,14 @@ export type * from './migration-types'
 export type * from './studio-result-types'
 export type * from './data-lifecycle-types'
 export type * from './project-aggregate-types'
+export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
 export type * from './digital-worker-types'
 export type * from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
+export type * from './terminal-operation-types'
+export type * from './browser-operation-types'
 export type {
   EffectEvidenceKind,
   EffectEvidenceRecord,
@@ -35,7 +44,7 @@ export type {
   FileSystemIdentity,
   InteractiveOperationKind,
   InteractiveOperationSource,
-  TaskRunOperationMetadata,
+  MigrationImportOperationResult, TaskRunOperationMetadata,
   ManagedWorktreeProjectionRecord
 } from './effect-types'
 export type {
@@ -279,8 +288,8 @@ export interface ProviderHealthView {
 }
 
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
-/** Agent 引擎标识:claude = Claude Agent SDK;anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
-export type EngineKind = 'claude' | 'anthropic' | 'openai'
+/** Agent 引擎标识:anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
+export type EngineKind = 'anthropic' | 'openai'
 export interface EngineInfo {
   kind: string
   label: string
@@ -642,12 +651,6 @@ export interface TaskDagDispatchResult {
   execution: TaskDagExecutionView
   /** 当前调度调用已经启动的 child sessions;后续依赖层通过 task-dag-update 同步。 */
   children: SubagentDispatchItem[]
-}
-
-export interface SdkAgentInfo {
-  name: string
-  description: string
-  model?: string
 }
 
 export type TaskSnapshotReason =
@@ -1096,8 +1099,6 @@ export interface AppSettings {
   notificationsEnabled: boolean
   /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
   preventDisplaySleep: boolean
-  /** Claude SDK agents 桥接:默认关闭,避免老会话系统提示词/Agent 工具上下文变化 */
-  sdkAgentsEnabled: boolean
   /** IDE Bridge:默认关闭,开启后 VS Code/JetBrains 插件可通过本机 WebSocket 连接桌面端。 */
   ideBridgeEnabled: boolean
   /** IDE Bridge 监听地址,默认仅本机。 */
@@ -1106,13 +1107,6 @@ export interface AppSettings {
   ideBridgePort: number
   /** IDE Bridge 可选 token,为空表示本机连接无需 token。 */
   ideBridgeToken: string
-  /**
-   * Hooks:文件写入类工具(Edit/Write)成功后执行的 shell 命令,
-   * 在会话 cwd 下运行,空 = 关闭。典型用法:自动格式化/测试。
-   */
-  hookPostEditCommand: string
-  /** Hooks:每轮结束(Stop)后执行的 shell 命令,空 = 关闭 */
-  hookTurnEndCommand: string
   /** 自动 Skill 沉淀:任务成功完成后后台复盘、验证并写入项目本地 Skill 库。默认关闭。 */
   autoSkillLearningEnabled: boolean
   /** Agent 控制室外观设置 */
@@ -1141,7 +1135,7 @@ export interface Provider {
   /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
   engine?: EngineKind
   /**
-   * 允许列表内的非敏感标准/路由元数据头,每行 "Name: value",注入 ANTHROPIC_CUSTOM_HEADERS。
+   * 允许列表内的非敏感标准/路由元数据头,每行 "Name: value",由原生 HTTP 引擎注入请求。
    * 未知头、畸形行、鉴权/密钥头和疑似凭据值禁止保存;凭据必须通过 Provider API 密钥字段配置。
    */
   customHeaders?: string
@@ -1152,7 +1146,7 @@ export interface Provider {
   /**
    * OpenAI 引擎协议:'responses'(OpenAI 官方 Responses API,默认)或
    * 'chat'(通用 /v1/chat/completions,DeepSeek/Qwen/网关/自部署 vLLM 等)。
-   * 仅 openai 引擎读取;Claude Agent SDK 与 Anthropic Messages 引擎忽略。
+   * 仅 openai 引擎读取;Anthropic Messages 引擎忽略。
    */
   openaiProtocol?: OpenAIProtocol
   /** 用户备注 */
@@ -1237,7 +1231,7 @@ export interface ImageAttachmentView {
 
 export type ImageAttachmentResult =
   | ({ ok: true } & ImageAttachmentView)
-  | { ok: false; error: string }
+  | { ok: false; error: string; effectStatus?: EffectStatus; operationId?: string; snapshotId?: string }
 
 /** OCR 结果(引擎:macOS Vision 或 tesseract) */
 export interface ImageOcrResult {
@@ -1643,21 +1637,6 @@ export interface PluginRegistryRevealResult {
 export interface PluginRegistrySetEnabledResult {
   ok: boolean
   item?: PluginRegistryItem
-  error?: string
-}
-
-/** 本地插件安装结果 */
-export interface PluginInstallResult {
-  ok: boolean
-  installedPath?: string
-  name?: string
-  error?: string
-}
-
-/** 插件卸载结果(回收站式) */
-export interface PluginUninstallResult {
-  ok: boolean
-  trashedTo?: string
   error?: string
 }
 
@@ -2091,33 +2070,6 @@ export interface PreviewAnnotationInput {
   createdAt?: string
 }
 
-export type TerminalBackend = 'pty' | 'pipe'
-export interface TerminalExitInfo {
-  exitCode: number | null
-  signal?: number | string
-  reason?: string
-  at: number
-}
-export interface TerminalInfo {
-  id: string
-  sessionId?: string
-  cwd: string
-  shell: string
-  pid?: number
-  backend: TerminalBackend
-  cols: number
-  rows: number
-  startedAt: number
-  fallbackReason?: string
-  exit?: TerminalExitInfo
-}
-
-export type TerminalEvent =
-  | { kind: 'started'; terminal: TerminalInfo }
-  | { kind: 'output'; id: string; data: string }
-  | { kind: 'exit'; id: string; exit: TerminalExitInfo }
-  | { kind: 'error'; id?: string; message: string; fatal: boolean }
-
 export interface BrowserBounds {
   x: number
   y: number
@@ -2150,15 +2102,6 @@ export interface BrowserAnnotation {
   consoleErrors: string[]
   viewport?: BrowserAnnotationViewport
   createdAt: string
-}
-
-export interface BrowserViewState {
-  sessionId: string
-  url: string
-  title: string
-  loading: boolean
-  canGoBack: boolean
-  canGoForward: boolean
 }
 
 export type BrowserEvent =
@@ -2239,7 +2182,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2275,7 +2218,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
     parentSessionId: string,
     input: TaskDagDispatchInput
   ): Promise<TaskDagDispatchResult>
-  listSupportedAgents(sessionId: string): Promise<SdkAgentInfo[]>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
   saveImageAttachmentBytes(
     sessionId: string,
@@ -2283,7 +2225,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   ): Promise<ImageAttachmentResult>
   /** OCR 附件图片(Vision/tesseract 降级;无引擎时 ok=false 如实报告) */
   ocrImageAttachment(sessionId: string, imagePath: string): Promise<ImageOcrResult>
-  sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<void>
+  sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<boolean>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>
   respondPermission(
@@ -2315,7 +2257,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
     sessionId?: string
   ): Promise<PluginRegistrySetEnabledResult>
   /** MCP 运行态探测:stdio 真握手 / http 可达性(最多 20 项) */
-  probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<McpProbeResult[]>
+  probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<import('./mcp-probe-types').McpProbeOperationResult>
   /** 本地安装插件:不传路径则弹目录选择器;仅复制入 ~/.claude/plugins */
   installLocalPlugin(sourcePath?: string, overwrite?: boolean): Promise<PluginInstallResult>
   /** 卸载托管插件:移入回收站(可恢复),仅限 ~/.claude/plugins 内 */
@@ -2359,12 +2301,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   preparePreviewVisual(sessionId: string, path: string): Promise<OfficeVisualPreview>
   savePreviewAnnotation(sessionId: string, input: PreviewAnnotationInput): Promise<PreviewAnnotation>
   listPreviewAnnotations(sessionId: string, path?: string): Promise<PreviewAnnotation[]>
-  openBrowser(sessionId: string, url?: string): Promise<BrowserViewState>
-  navigateBrowser(sessionId: string, url: string): Promise<BrowserViewState>
   setBrowserBounds(sessionId: string, bounds: BrowserBounds): Promise<void>
-  browserGoBack(sessionId: string): Promise<BrowserViewState>
-  browserGoForward(sessionId: string): Promise<BrowserViewState>
-  reloadBrowser(sessionId: string): Promise<BrowserViewState>
   closeBrowser(sessionId: string): Promise<void>
   captureBrowserAnnotation(sessionId: string, note: string): Promise<BrowserAnnotation>
   listBrowserAnnotations(sessionId: string): Promise<BrowserAnnotation[]>
@@ -2376,17 +2313,12 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   ): Promise<BrowserAnnotation>
   observeBrowser(sessionId: string): Promise<BrowserObservation>
   onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
-  listTerminals(): Promise<TerminalInfo[]>
-  startTerminal(sessionId: string, opts?: { cols?: number; rows?: number; reuse?: boolean }): Promise<TerminalInfo>
-  writeTerminal(id: string, data: string): Promise<void>
-  resizeTerminal(id: string, cols: number, rows: number): Promise<void>
-  closeTerminal(id: string): Promise<void>
-  onTerminalEvent(cb: (event: TerminalEvent) => void): () => void
+  importMigrationAssets(cwd: string, paths: string[]): Promise<MigrationImportOperationResult>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>
   deleteProject(id: string): Promise<void>
   readProjectContext(projectPath: string): Promise<ProjectContextReadResult>
-  writeProjectContext(projectPath: string, content: string): Promise<ProjectContextReadResult>
+  writeProjectContext(projectPath: string, content: string): Promise<import('./project-context-types').ProjectContextOperationResult<ProjectContextReadResult>>
   generateProjectContextTemplate(projectPath: string): Promise<string>
   readProjectMemory(sessionId: string): Promise<ReadProjectMemoryResult>
   proposeMemoryDraft(sessionId: string, input: ProjectMemoryDraftInput): Promise<ProjectMemoryDraft>

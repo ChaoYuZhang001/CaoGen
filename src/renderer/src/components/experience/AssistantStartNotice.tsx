@@ -3,7 +3,7 @@ import { useT } from '../../i18n'
 interface AssistantStartNoticeProps {
   busy: boolean
   error: string
-  recoverable: boolean
+  recoveryKind: 'compute' | 'provider' | null
   onOpenSettings: () => void
   onRetry: () => void
 }
@@ -13,20 +13,45 @@ export default function AssistantStartNotice({
   error,
   onOpenSettings,
   onRetry,
-  recoverable
+  recoveryKind
 }: AssistantStartNoticeProps): React.JSX.Element | null {
   const t = useT()
   if (!error) return null
+  const recoverable = recoveryKind !== null
+  const configureLabel = recoveryKind === 'provider'
+    ? t('welcomeConfigureProvider')
+    : t('assistantConfigureCompute')
+  const retryLabel = recoveryKind === 'provider'
+    ? busy ? t('welcomeRefreshingProviders') : t('welcomeRetryProviders')
+    : busy ? t('assistantCheckingCompute') : t('assistantRetryCompute')
   return (
-    <div className="notice notice-error welcome-error assistant-start-notice" role="alert" data-assistant-start-state={recoverable ? 'compute-unavailable' : 'error'}>
+    <div
+      className="notice notice-error welcome-error assistant-start-notice"
+      role="alert"
+      data-assistant-start-state={recoveryKind ? `${recoveryKind}-unavailable` : 'error'}
+      data-welcome-recovery-state={recoveryKind ?? 'error'}
+    >
       <span>{error}</span>
       {recoverable && (
         <div className="assistant-start-actions">
-          <button type="button" className="btn btn-primary btn-sm" data-assistant-start-action="configure" onClick={onOpenSettings}>
-            {t('assistantConfigureCompute')}
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            data-assistant-start-action="configure"
+            data-welcome-recovery-action="configure"
+            onClick={onOpenSettings}
+          >
+            {configureLabel}
           </button>
-          <button type="button" className="btn btn-ghost btn-sm" data-assistant-start-action="retry" disabled={busy} onClick={onRetry}>
-            {busy ? t('assistantCheckingCompute') : t('assistantRetryCompute')}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            data-assistant-start-action="retry"
+            data-welcome-recovery-action="retry"
+            disabled={busy}
+            onClick={onRetry}
+          >
+            {retryLabel}
           </button>
         </div>
       )}

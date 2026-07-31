@@ -586,6 +586,13 @@ function cloneDigitalWorkerBinding(binding: DigitalWorkerBinding): DigitalWorker
 
 const interactiveOperationKinds = new Set<InteractiveOperationKind>([
   'file_write',
+  'attachment_write',
+  'mcp_probe',
+  'migration_import',
+  'terminal_action',
+  'browser_navigation',
+  'plugin_install',
+  'plugin_uninstall',
   'workspace_hunk_discard',
   'git_commit',
   'git_index_update',

@@ -23,9 +23,6 @@ module.exports = {
     minimumSystemVersion: '14.0',
     entitlements: 'resources/entitlements.mac.plist',
     entitlementsInherit: 'resources/entitlements.mac.inherit.plist',
-    signIgnore: [
-      'app\\.asar\\.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-(x64|arm64)/claude$'
-    ],
     extendInfo: {
       ...(baseMac.extendInfo || {}),
       NSAppleEventsUsageDescription: 'CaoGen uses automation only for user-approved desktop actions.'

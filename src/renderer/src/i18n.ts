@@ -137,9 +137,9 @@ const DICT: Dict = {
     en: '{provider} key {from} failed ({reason}), switched → {to}, retrying automatically'
   },
   // 输入区
-  composerQueuedPlaceholder: {
-    zh: '继续输入,消息将排队处理…',
-    en: 'Keep typing — messages will queue…'
+  composerRunningPlaceholder: {
+    zh: '当前任务运行中,可继续输入;完成后再发送',
+    en: 'Current task is running. Keep drafting; send when it finishes.'
   },
   composerPlaceholder: {
     zh: '让 Agent 做点什么…(Enter 发送,Shift+Enter 换行)',
@@ -176,6 +176,26 @@ const DICT: Dict = {
     zh: '基于当前工作区和已有上下文，为目标生成一份可审查的执行计划。先识别缺失信息，再列出依赖、步骤与并行关系、预计产物、数据外发、成本与风险、验证方式和 Acceptance 条件。在我明确批准前不要执行、修改文件或派发子任务。',
     en: 'Use the current workspace and conversation context to produce a reviewable execution plan. Identify missing information first, then list dependencies, steps and parallelism, expected artifacts, data egress, cost and risk, verification, and Acceptance criteria. Do not execute, modify files, or dispatch subtasks until I explicitly approve the plan.'
   },
+  welcomeFirstReadOnly: { zh: '先只读了解项目', en: 'Read the project first' },
+  welcomeFirstReadOnlyPrompt: {
+    zh: '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。',
+    en: 'Read this project first. Tell me how to start it, its key entry points, and the three most worthwhile issues to fix. Do not change any code yet.'
+  },
+  welcomeConfigureProvider: { zh: '配置 Provider', en: 'Set up Provider' },
+  welcomeRetryProviders: { zh: '重新加载 Provider', en: 'Reload Providers' },
+  welcomeRefreshingProviders: { zh: '加载中…', en: 'Reloading…' },
+  welcomeProviderRefreshFailed: {
+    zh: '无法刷新 Provider。请检查配置后重试。',
+    en: 'Providers could not be reloaded. Check the configuration and try again.'
+  },
+  welcomeExploreCode: { zh: '探索并理解代码', en: 'Explore and understand code' },
+  welcomeExploreCodePrompt: { zh: '请帮我探索这个项目并说明核心架构。', en: 'Explore this project and explain its core architecture.' },
+  welcomeBuildFeature: { zh: '构建新功能或工具', en: 'Build a feature or tool' },
+  welcomeBuildFeaturePrompt: { zh: '请根据现有项目结构实现一个新功能。', en: 'Build a new feature that fits the existing project.' },
+  welcomeReviewCode: { zh: '审查代码并提出修改建议', en: 'Review code and suggest changes' },
+  welcomeReviewCodePrompt: { zh: '请审查当前改动，优先找出缺陷、回归风险和缺失测试。', en: 'Review the current changes for bugs, regressions, and missing tests.' },
+  welcomeFixIssue: { zh: '修复问题和失败', en: 'Fix issues and failures' },
+  welcomeFixIssuePrompt: { zh: '请诊断当前问题，实现修复并完成验证。', en: 'Diagnose the current issue, implement a fix, and verify it.' },
   welcomeToolRequiresSession: { zh: '先发起会话后即可打开该工具。', en: 'Start a session to open this tool.' },
   welcomePickProject: { zh: '选择项目', en: 'Choose project' },
   welcomeNeedProject: { zh: '请先选择项目目录', en: 'Pick a project folder first' },
@@ -430,6 +450,9 @@ const DICT: Dict = {
   previewLoading: { zh: '正在准备预览…', en: 'Preparing preview…' },
   previewEmpty: { zh: '从文件面板选择一个文件进行预览。', en: 'Choose a file from Files to preview.' },
   sendToAgent: { zh: '发给 Agent', en: 'Send to Agent' },
+  browserAnnotationSending: { zh: '发送中…', en: 'Sending…' },
+  browserAnnotationSentToAgent: { zh: '网页批注已发给 Agent。', en: 'Browser annotation sent to Agent.' },
+  browserAnnotationSendFailed: { zh: '网页批注发送失败', en: 'Browser annotation send failed' },
   previewSentToAgent: { zh: '预览内容已发给 Agent。', en: 'Preview sent to Agent.' },
   previewSendFailed: { zh: '预览发送失败', en: 'Preview send failed' },
   sendCurrentPreviewUnit: { zh: '发送当前页/表', en: 'Send current page/sheet' },
@@ -628,21 +651,6 @@ const DICT: Dict = {
     zh: '会话运行期间阻止屏幕休眠,长任务不中断;关闭后遵循系统电源设置。',
     en: 'Keep the display awake while a session runs; off = follow system power settings.'
   },
-  sdkAgentsEnabled: { zh: 'Claude SDK Agents 桥接', en: 'Claude SDK agents bridge' },
-  sdkAgentsHint: {
-    zh: '开启后把项目/用户 .claude/agents 定义注入 Claude SDK；默认关闭以保持老会话上下文不变。',
-    en: 'When enabled, inject project/user .claude/agents definitions into Claude SDK. Off by default to keep existing sessions unchanged.'
-  },
-  hookPostEdit: { zh: 'Hook:文件修改后执行', en: 'Hook: after file edits' },
-  hookPostEditHint: {
-    zh: 'Agent 用 Edit/Write 改完文件后,在会话目录执行此 shell 命令(如自动格式化/跑测试),输出回显到时间线。空 = 关闭。仅 Claude 引擎。',
-    en: 'Shell command run in the session cwd after the agent edits files (e.g. format/test). Output shows in the timeline. Empty = off. Claude engine only.'
-  },
-  hookTurnEnd: { zh: 'Hook:每轮结束后执行', en: 'Hook: after each turn' },
-  hookTurnEndHint: {
-    zh: '每轮对话结束(Stop)后执行此 shell 命令。空 = 关闭。仅 Claude 引擎。',
-    en: 'Shell command run when a turn ends (Stop hook). Empty = off. Claude engine only.'
-  },
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },
@@ -722,17 +730,16 @@ const DICT: Dict = {
   providerEngineLabel: { zh: '执行引擎', en: 'Execution engine' },
   providerEngineOpenAI: { zh: 'OpenAI-compatible', en: 'OpenAI-compatible' },
   providerEngineAnthropic: { zh: 'Anthropic Messages API', en: 'Anthropic Messages API' },
-  providerEngineClaude: { zh: 'Claude Agent SDK', en: 'Claude Agent SDK' },
   quickTemplate: { zh: '快速模板', en: 'Quick templates' },
   pickTemplate: { zh: '选择一个模板…', en: 'Pick a template…' },
   gatewayNote1: {
-    zh: 'OpenAI-compatible 使用 Responses / Chat Completions;Anthropic Messages 使用原生 /v1/messages。Claude Agent SDK 接入 ',
-    en: 'OpenAI-compatible uses Responses / Chat Completions; Anthropic Messages uses native /v1/messages. With Claude Agent SDK, '
+    zh: 'OpenAI-compatible 使用 Responses / Chat Completions;Anthropic Messages 使用原生 /v1/messages。',
+    en: 'OpenAI-compatible uses Responses / Chat Completions; Anthropic Messages uses native /v1/messages. '
   },
   gatewayNoteBold: { zh: 'OpenAI / Gemini / 国产模型', en: 'OpenAI / Gemini / other vendors' },
   gatewayNote2: {
-    zh: ' 仍需经 Anthropic 兼容网关(one-api、new-api、LiteLLM 等)转译。',
-    en: ' still needs an Anthropic-compatible gateway (one-api, new-api, LiteLLM, …).'
+    zh: '其他厂商可按实际兼容协议选择对应引擎。',
+    en: 'Choose the engine that matches each provider compatibility protocol.'
   },
   nameLabel: { zh: '名称', en: 'Name' },
   namePlaceholder: { zh: '例如:公司网关 / OpenRouter', en: 'e.g. Company gateway / OpenRouter' },
@@ -793,8 +800,8 @@ const DICT: Dict = {
   },
   openaiProtocolLabel: { zh: 'OpenAI 引擎协议', en: 'OpenAI engine protocol' },
   openaiProtocolHint: {
-    zh: '(仅 OpenAI-compatible 会话生效;Anthropic Messages 与 Claude Agent SDK 忽略)',
-    en: '(only used by OpenAI-compatible sessions; ignored by Anthropic Messages and Claude Agent SDK)'
+    zh: '(仅 OpenAI-compatible 会话生效;Anthropic Messages 忽略)',
+    en: '(only used by OpenAI-compatible sessions; ignored by Anthropic Messages)'
   },
   openaiProtocolResponses: {
     zh: 'Responses(OpenAI 原生)',
@@ -806,6 +813,8 @@ const DICT: Dict = {
   },
   noteOptional: { zh: '备注(可选)', en: 'Note (optional)' },
   errNameRequired: { zh: '请填写名称', en: 'Please enter a name' },
+  errProviderKeyRequired: { zh: '要继续首个任务，请填写至少一个 API 密钥', en: 'Add at least one API key to continue your first task' },
+  errProviderModelRequired: { zh: '要继续首个任务，请填写至少一个模型', en: 'Add at least one model to continue your first task' },
   saving: { zh: '保存中…', en: 'Saving…' }
 }
 

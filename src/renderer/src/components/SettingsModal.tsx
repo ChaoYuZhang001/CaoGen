@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
+import type { SettingsTab } from '../store/settings-navigation'
 import { useT } from '../i18n'
 import { AUTO_MODEL } from '../../../shared/types'
 import type {
@@ -22,10 +23,10 @@ import type {
 import ProviderEditor from './ProviderEditor'
 import ControlCenter from './ControlCenterWithWorkflow'
 import ProviderList from './settings/ProviderList'
+import { useProviderRecoverySettings } from './settings/useProviderRecoverySettings'
 import ProjectSettings from '../pages/ProjectSettings'
 import MigrationManager from './settings/MigrationManager'
-
-type Tab = 'control' | 'general' | 'permissions' | 'project' | 'persona' | 'office' | 'providers' | 'plugins' | 'migrate'
+import { requireMcpProbeResults } from '../store/task-recovery-actions'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -104,12 +105,11 @@ export default function SettingsPage(): React.JSX.Element {
   const deleteProvider = useStore((s) => s.deleteProvider)
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
-
-  const [tab, setTab] = useState<Tab>('control')
+  const { closeEditor, editing, setEditing } = useProviderRecoverySettings(providers)
+  const [tab, setTab] = useState<SettingsTab>(() => useStore.getState().settingsTab)
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
-  const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
   const [checkingProviderId, setCheckingProviderId] = useState('')
   const [providerProbe, setProviderProbe] = useState<{ providerId: string; ok: boolean; message: string } | null>(null)
@@ -230,7 +230,7 @@ export default function SettingsPage(): React.JSX.Element {
     setControlMcpProbing(true)
     setControlError('')
     try {
-      const results = await window.agentDesk.probeMcpServers(items, activeId ?? undefined)
+      const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(items, activeId ?? undefined), () => useStore.getState().refreshTaskSnapshots())
       setMcpProbeResults((prev) => {
         const merged = { ...prev }
         for (const result of results) merged[result.id] = result
@@ -295,7 +295,7 @@ export default function SettingsPage(): React.JSX.Element {
     }
   }
 
-  const TABS: Array<{ id: Tab; label: string }> = [
+  const TABS: Array<{ id: SettingsTab; label: string }> = [
     { id: 'control', label: t('tabControlCenter') },
     { id: 'general', label: t('tabGeneral') },
     { id: 'permissions', label: t('tabPermissions') },
@@ -346,7 +346,7 @@ export default function SettingsPage(): React.JSX.Element {
             {editing ? (
               <ProviderEditor
                 provider={editing === 'new' ? null : editing}
-                onClose={() => setEditing(null)}
+                onClose={closeEditor}
               />
             ) : (
               <>
@@ -892,16 +892,6 @@ export default function SettingsPage(): React.JSX.Element {
                 <label className="settings-check">
                   <input
                     type="checkbox"
-                    checked={draft.sdkAgentsEnabled}
-                    onChange={(e) => set('sdkAgentsEnabled', e.target.checked)}
-                  />
-                  {t('sdkAgentsEnabled')}
-                </label>
-                <p className="settings-hint">{t('sdkAgentsHint')}</p>
-
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
                     checked={draft.ideBridgeEnabled}
                     onChange={(e) => set('ideBridgeEnabled', e.target.checked)}
                   />
@@ -964,23 +954,6 @@ export default function SettingsPage(): React.JSX.Element {
                 />
                 <p className="settings-hint">按当前自然月统计历史会话费用；达到上限后会拦截下一轮发送，auto 调度会优先降级到低成本模型。</p>
 
-                <label className="field-label">{t('hookPostEdit')}</label>
-                <input
-                  className="input input-block"
-                  value={draft.hookPostEditCommand}
-                  placeholder="npx prettier --write . && npm test"
-                  onChange={(e) => set('hookPostEditCommand', e.target.value)}
-                />
-                <p className="settings-hint">{t('hookPostEditHint')}</p>
-
-                <label className="field-label">{t('hookTurnEnd')}</label>
-                <input
-                  className="input input-block"
-                  value={draft.hookTurnEndCommand}
-                  placeholder="npm run lint"
-                  onChange={(e) => set('hookTurnEndCommand', e.target.value)}
-                />
-                <p className="settings-hint">{t('hookTurnEndHint')}</p>
               </>
             )}
 

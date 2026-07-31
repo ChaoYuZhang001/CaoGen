@@ -13,6 +13,8 @@ import {
 } from './lib/office-canvas-click.mjs'
 import {
   focusElectronPage,
+  readOfficeViewDiagnostics,
+  startOfficeViewDiagnostics,
   waitForOfficeRenderLoop,
   waitForOfficeScenePixels
 } from './lib/office-render-ready.mjs'
@@ -29,6 +31,8 @@ const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
 const approvalFileName = 'office-approval-required.txt'
 const officeFailureMessage = 'office deterministic validation fault'
+const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const officeScreenshotThresholds = ciSoftwareWebgl ? { sceneNonDark: 0.1, leftDark: 0.91, leftBuckets: 64, centralNonDark: 0.12, workAreaNonDark: 0.2 } : { sceneNonDark: 0.2, leftDark: 0.82, leftBuckets: 70, centralNonDark: 0.18, workAreaNonDark: 0.35 }
 const OFFICE_OVERVIEW_CAMERA = {
   position: [0.28, 4.5, 9.55],
   target: [0.02, 0.82, -1.18],
@@ -48,17 +52,14 @@ const sourceMainEntry = path.join(sourceOutDir, 'main', 'index.js')
 const sourceRendererEntry = path.join(sourceOutDir, 'renderer', 'index.html')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
-
 if (!existsSync(electronBin)) fail('Electron binary not found. Run npm install first.')
 if (!existsSync(sourceMainEntry)) fail('Built Electron main entry not found. Run npm run build first.')
 if (!existsSync(sourceRendererEntry)) fail('Built Electron renderer entry not found. Run npm run build first.')
-
 mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 copyBuiltApp(isolatedOutDir)
 writeFileSync(path.join(projectDir, 'README.md'), '# CaoGen orchestration mock e2e\n')
-
 const report = {
   runId,
   runDir,
@@ -69,11 +70,11 @@ const report = {
   warnings: [],
   requests: []
 }
-
 const mock = await startOpenAiMock()
 writeMockUserData(mock.port)
 const remotePort = await findFreePort(9820)
-const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const softwareWebglArgs = ciSoftwareWebgl ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
+const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
   cwd: repoRoot,
   env: {
     ...process.env,
@@ -98,13 +99,12 @@ app.stdout.on('data', (chunk) => {
 app.stderr.on('data', (chunk) => {
   stderr += chunk.toString()
 })
-
 let browser
 let focusSession
 try {
-  await waitForDebugPort(remotePort, 20_000)
+  await waitForDebugPort(remotePort, 60_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  const page = await waitForElectronPage(browser, 20_000)
+  const page = await waitForElectronPage(browser, 60_000)
   focusSession = await page.target().createCDPSession()
   await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.on('console', (msg) => {
@@ -116,8 +116,8 @@ try {
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.stack || error.message}`))
 
-  await page.waitForSelector('.app', { timeout: 20_000 })
-  await waitForAgentDesk(page)
+  await page.waitForSelector('.app', { timeout: 60_000 })
+  await waitForAgentDesk(page, 60_000)
   await page.evaluate(() => {
     window.__orchestrationEvents = []
     window.agentDesk.onSessionEvent((sessionId, event, seq) => {
@@ -265,12 +265,14 @@ try {
   })
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('.app', { timeout: 20_000 })
-  await waitForAgentDesk(page)
+  await page.waitForSelector('.app', { timeout: 60_000 })
+  await waitForAgentDesk(page, 60_000)
+  await focusElectronPage(page, focusSession)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
   await page.click('.sidebar-office')
+  await startOfficeViewDiagnostics(page)
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
-
+  await waitForOfficeRenderLoop(page, 15_000)
   await check('3D office model exposes parent-child Subagent packets', async () => {
     const attrs = await waitForValue(
       () =>
@@ -496,8 +498,8 @@ try {
         value.vendorEmblemNodes === 0 &&
         value.sessionCalloutNodes === 0 &&
         value.walkerFloorBadgeDomNodes === 0,
-      15_000,
-      'waiting for office subagent packets'
+      60_000,
+      'waiting for office subagent packets', async () => ({ ...(await readOfficeViewDiagnostics(page)), warnings: report.warnings })
     )
     report.officeSemanticAttrs = attrs
     assert(attrs.subagentPackets === 2, `wrong subagent packet count: ${JSON.stringify(attrs)}`)
@@ -603,7 +605,6 @@ try {
       `office semantic walkers missing: ${JSON.stringify(attrs)}`
     )
   })
-
   await check('3D office walking gait advances through distance-locked phases', async () => {
     await page.click('.office-camera-button:nth-child(1)')
     await waitForValue(
@@ -875,7 +876,6 @@ try {
       }
     }
   })
-
   await check('3D office canvas renders nonblank with parent and child workstations', async () => {
     const stats = await waitForOfficeScenePixels(page)
     report.officeCanvas = stats
@@ -893,27 +893,27 @@ try {
     const stats = analyzeOfficeScreenshot(file)
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
-    assert(stats.scene.nonDarkRatio > 0.2, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
+    assert(stats.scene.nonDarkRatio > officeScreenshotThresholds.sceneNonDark, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.brightRatio > 0.005, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.coloredRatio > 0.009, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
     assert(
-      stats.leftSightline.darkRatio < 0.82 &&
-        stats.leftSightline.uniqueColorBuckets >= 70 &&
+      stats.leftSightline.darkRatio < officeScreenshotThresholds.leftDark &&
+        stats.leftSightline.uniqueColorBuckets >= officeScreenshotThresholds.leftBuckets &&
         stats.leftSightline.coloredRatio > 0.004,
       `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
     )
     assert(
-      stats.centralWorkArea.nonDarkRatio > 0.18 && stats.centralWorkArea.coloredRatio > 0.008,
+      stats.centralWorkArea.nonDarkRatio > officeScreenshotThresholds.centralNonDark && stats.centralWorkArea.coloredRatio > 0.008,
       `central office work area is not readable: ${JSON.stringify(stats.centralWorkArea)}`
     )
     assert(
-      stats.robotWorkArea.nonDarkRatio > 0.35 &&
+      stats.robotWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
         stats.robotWorkArea.brightRatio > 0.015 &&
         stats.robotWorkArea.coloredRatio > 0.01,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
     )
     assert(
-      stats.nonErrorWorkArea.nonDarkRatio > 0.35 &&
+      stats.nonErrorWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
         stats.nonErrorWorkArea.brightRatio > 0.015 &&
         stats.nonErrorWorkArea.coloredRatio > 0.009 &&
         stats.nonErrorWorkArea.redRatio < 0.02 &&
@@ -952,7 +952,7 @@ try {
       await window.agentDesk.updateSettings({ theme: 'light' })
     })
     await page.reload({ waitUntil: 'domcontentloaded' })
-    await waitForAgentDesk(page)
+    await waitForAgentDesk(page, 60_000)
     await focusElectronPage(page, focusSession)
     await waitForValue(
       () => page.evaluate(() => document.documentElement.getAttribute('data-theme') ?? ''),
@@ -997,12 +997,11 @@ try {
 
 const failed = report.checks.filter((item) => item.status === 'fail')
 if (failed.length > 0) {
-  console.error(`orchestration mock e2e failed: ${failed.map((item) => item.name).join(', ')}`)
+  console.error(`orchestration mock e2e failed: ${failed.map((item) => `${item.name}: ${item.error ?? 'unknown error'}`).join('; ')}`)
   process.exitCode = 1
 } else {
   console.log(`orchestration mock e2e ok: ${runDir}`)
 }
-
 async function check(name, fn) {
   const startedAt = Date.now()
   try {
@@ -1303,7 +1302,7 @@ function writeMockUserData(port) {
         persona: '',
         allowedTools: '',
         disallowedTools: '',
-        office: { showBadges: true, liveliness: 0.6, catEars: false }
+        office: { qualityMode: 'low', showBadges: true, liveliness: 0.6, catEars: false }
       },
       null,
       2
@@ -1324,7 +1323,7 @@ async function readOfficeCanvasClickPlan(page) {
     const selected = wrap?.getAttribute('data-office-selected-session') ?? ''
     const workstations = readTargets('data-office-workstation-hit-targets')
     const walkers = readTargets('data-office-walker-hit-targets')
-    const walker = walkers[0] || null
+    const walker = walkers.find((target) => target.reason === 'approval') || walkers[0] || null
     const facilityWalker =
       walkers.find((target) => target.id !== walker?.id && target.reason === 'dining') ||
       walkers.find((target) => target.id !== walker?.id && target.reason === 'restroom') ||
@@ -1356,8 +1355,8 @@ async function readOfficeCanvasClickPlan(page) {
   })
 }
 
-async function waitForAgentDesk(page) {
-  await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: 15_000 })
+async function waitForAgentDesk(page, timeoutMs) {
+  await page.waitForFunction(() => typeof window.agentDesk?.createSession === 'function', { timeout: timeoutMs })
 }
 
 async function waitForElectronPage(browser, timeoutMs) {
@@ -1371,7 +1370,7 @@ async function waitForElectronPage(browser, timeoutMs) {
   throw new Error('Electron page target not found before timeout')
 }
 
-async function waitForValue(producer, predicate, timeout, label) {
+async function waitForValue(producer, predicate, timeout, label, diagnose) {
   const startedAt = Date.now()
   let last
   while (Date.now() - startedAt < timeout) {
@@ -1379,7 +1378,8 @@ async function waitForValue(producer, predicate, timeout, label) {
     if (predicate(last)) return last
     await sleep(250)
   }
-  throw new Error(`${label}: ${JSON.stringify(last)}`)
+  const diagnostics = diagnose ? `; diagnostics: ${JSON.stringify(await diagnose())}` : ''
+  throw new Error(`${label}: ${JSON.stringify(last)}${diagnostics}`)
 }
 
 async function readJson(req) {

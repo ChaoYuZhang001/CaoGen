@@ -343,12 +343,25 @@ export function verifyRecoveryUiAndTray(repoRoot) {
     'restoreTranscriptIfMissing',
     'task-snapshot-replay',
     'buildTaskSnapshotReplayPrompts',
+    'TaskSnapshotReplayCoordinator',
+    'this.taskSnapshotReplay.start(snapshot.sessionId, replayPrompts',
+    'this.taskSnapshotReplay.handleEvent(sessionId, event, this.modelAttemptRecoveryGate.refreshAfterEvent(sessionId, event))',
+    'this.taskSnapshotReplay.blocksOrdinarySend(id, options)',
     'const imported = await listTaskSnapshots()',
     'const workflowRecoveryBlocks = await this.workflow.recover(imported)',
     'const recoverable = await this.reconcileTaskSnapshots(imported, workflowRecoveryBlocks)'
   ]) {
     assert(sessionManagerSource.includes(marker), `sessionManager missing snapshot marker ${marker}`)
   }
+  assert(
+    !sessionManagerSource.includes('for (const prompt of replayPrompts) this.send('),
+    'snapshot recovery must not dispatch every recovered prompt into one running turn'
+  )
+  const supervisorSource = read('src/main/session-supervisor-runtime.ts')
+  assert(
+    supervisorSource.includes('this.replaySnapshot(taskRun.sessionId, prompts'),
+    'Supervisor resume must use the same sequential snapshot replay coordinator'
+  )
   const taskRunEventSource = read('src/main/session-task-run-events.ts')
   for (const marker of [
     "event.kind === 'turn-result' ||",

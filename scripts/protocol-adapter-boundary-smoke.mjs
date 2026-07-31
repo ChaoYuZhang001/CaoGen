@@ -37,28 +37,24 @@ try {
   const runtimeModule = require(compiled('main/native-runtime-contract.js'))
   const boundModule = require(compiled('main/native-runtime-engine.js'))
   const anthropicModule = require(compiled('main/protocol-adapters/anthropic-messages.js'))
-  const claudeModule = require(compiled('main/protocol-adapters/claude-agent-sdk.js'))
   const openaiModule = require(compiled('main/protocol-adapters/openai-compatible.js'))
 
   enginesModule.registerBuiltinEngines()
   verifyFactoryBindings(engineModule, boundModule)
-  checks.push('three-production-factories-bind-protocol-adapters')
+  checks.push('two-production-factories-bind-protocol-adapters')
   checks.push('production-request-and-event-boundaries-fail-closed')
   verifyResumeSequenceBootstrap(engineModule)
   checks.push('production-resume-sequence-bootstraps-from-transcript')
 
-  verifyFactoryMismatch(engineModule, runtimeModule, claudeModule)
+  verifyFactoryMismatch(engineModule, runtimeModule, openaiModule)
   checks.push('runtime-protocol-identity-mismatch-fails-closed')
 
   verifyAnthropicAdapter(anthropicModule.ANTHROPIC_MESSAGES_PROTOCOL_ADAPTER)
   checks.push('anthropic-request-stream-tool-usage-error-normalization')
   checks.push('anthropic-malformed-tool-input-fails-closed')
 
-  verifyOtherAdapters(
-    claudeModule.CLAUDE_AGENT_SDK_PROTOCOL_ADAPTER,
-    openaiModule.OPENAI_COMPATIBLE_PROTOCOL_ADAPTER
-  )
-  checks.push('claude-and-openai-adapter-regression-boundaries')
+  verifyOpenAIAdapter(openaiModule.OPENAI_COMPATIBLE_PROTOCOL_ADAPTER)
+  checks.push('openai-adapter-regression-boundaries')
 
   const remainingOwners = verifyPartialIsolation()
   checks.push('remaining-engine-protocol-ownership-recorded')
@@ -69,7 +65,7 @@ try {
     checks,
     adapters: engineModule.listProtocolAdapters().map(adapterIdentity),
     remainingEngineProtocolOwners: remainingOwners,
-    limitation: 'Raw provider stream parsing and fragmented tool-call assembly still live inside the three engines.'
+    limitation: 'Raw provider stream parsing and fragmented tool-call assembly still live inside the two engines.'
   }
   console.log(JSON.stringify(result, null, 2))
 } catch (error) {
@@ -93,9 +89,9 @@ try {
 
 function verifyFactoryBindings(engineModule, boundModule) {
   const adapters = engineModule.listProtocolAdapters()
-  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['claude', 'anthropic', 'openai'])
+  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'openai'])
   assert.deepEqual(adapters.map((adapter) => adapter.protocol), [
-    'claude.agent-sdk', 'anthropic.messages', 'openai.compatible'
+    'anthropic.messages', 'openai.compatible'
   ])
   for (const adapter of adapters) {
     assert.equal(Object.isFrozen(adapter), true)
@@ -124,14 +120,14 @@ function verifyFactoryBindings(engineModule, boundModule) {
   }
 }
 
-function verifyFactoryMismatch(engineModule, runtimeModule, claudeModule) {
+function verifyFactoryMismatch(engineModule, runtimeModule, openaiModule) {
   assert.throws(
     () => engineModule.registerEngine({
       kind: 'anthropic',
       label: 'forged factory',
       available: () => true,
       nativeRuntime: runtimeModule.ANTHROPIC_NATIVE_RUNTIME_ADAPTER,
-      protocolAdapter: claudeModule.CLAUDE_AGENT_SDK_PROTOCOL_ADAPTER,
+      protocolAdapter: openaiModule.OPENAI_COMPATIBLE_PROTOCOL_ADAPTER,
       create: () => { throw new Error('must not create forged engine') }
     }),
     (error) => error?.code === 'adapter_identity'
@@ -152,8 +148,8 @@ function verifyResumeSequenceBootstrap(engineModule) {
   })}\n`, 'utf8')
   const emitted = []
   const engine = engineModule.createEngine(
-    'claude',
-    sessionMeta('claude'),
+    'anthropic',
+    sessionMeta('anthropic'),
     (event, seq) => emitted.push({ event, seq }),
     sdkSessionId
   )
@@ -213,10 +209,7 @@ function verifyAnthropicAdapter(adapter) {
   )
 }
 
-function verifyOtherAdapters(claude, openai) {
-  assert.deepEqual(claude.decodeStreamChunk({
-    type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'plan' }
-  }), [{ kind: 'thinking', text: 'plan' }])
+function verifyOpenAIAdapter(openai) {
   assert.deepEqual(openai.decodeStreamChunk({
     type: 'response.output_text.delta', delta: 'answer'
   }), [{ kind: 'text', text: 'answer' }])
@@ -224,7 +217,6 @@ function verifyOtherAdapters(claude, openai) {
 
 function verifyPartialIsolation() {
   const ownership = [
-    ['src/main/agentSession.ts', 'sdk.query({'],
     ['src/main/anthropicEngine.ts', 'streamAnthropicMessage'],
     ['src/main/openaiEngine.ts', 'res.body.getReader()']
   ]

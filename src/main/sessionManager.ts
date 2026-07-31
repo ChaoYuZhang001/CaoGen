@@ -31,10 +31,10 @@ import {
 import { restoreActiveSessionRegistry, updateActiveSessionRegistryWorktreeState, writeActiveSessionRegistry } from './session-active-registry'
 import {
   buildTaskSnapshotReplayPrompts, canTrackCost, cleanOneLine, effectiveBudgetUsd, estimateTurnCostUsd,
-  mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, requireDagPromptAccepted, shouldDispatchChildResult,
+  managedSessionSendGateError, mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, rejectSessionSend, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
-  type ManagedSessionCreationOptions, type OrchestrationState
+  type ManagedSessionCreationOptions
 } from './session-manager-support'
 import { SessionSupervisorRuntime } from './session-supervisor-runtime'
 import {
@@ -52,6 +52,8 @@ import {
   flushTaskSnapshotMutations
 } from './task/task-snapshot'
 import { ModelAttemptRecoveryGate } from './task/model-attempt-recovery-gate'
+import { TaskSnapshotReplayCoordinator } from './task/task-snapshot-replay'
+import { SubagentOrchestrationCoordinator } from './task/subagent-orchestration-coordinator'
 import {
   createTaskRun,
   isTaskRunTerminal,
@@ -98,7 +100,6 @@ import type {
   TaskDecomposeResult,
   SessionEventPayload,
   SessionMeta,
-  SdkAgentInfo,
   SendMessagePayload,
   TaskSnapshotRecord,
   TaskSnapshotReason,
@@ -122,8 +123,17 @@ class SessionManager {
   private readonly sessionEventListeners = new Set<(payload: SessionEventPayload) => void>()
   private readonly notifications = new SessionNotificationCoordinator(
     (id) => this.sessions.get(id)?.meta)
-  /** 真编排事件总线:orchestrationId → 状态;全部 child 首轮完成后回灌父 Agent */
-  private readonly orchestrations = new Map<string, OrchestrationState>()
+  /** 自由编排在 child 拒发或父汇总暂不可投递时保持可观察、可重试。 */
+  private readonly subagentOrchestration = new SubagentOrchestrationCoordinator({
+    send: (sessionId, prompt) => this.send(sessionId, prompt),
+    getMeta: (sessionId) => this.sessions.get(sessionId)?.meta,
+    emit: (sessionId, event) => {
+      const session = this.sessions.get(sessionId)
+      if (session?.emitSyntheticEvent) session.emitSyntheticEvent(event)
+      else this.dispatch(sessionId, event, 0)
+    },
+    acknowledgeSessionCreation: (sessionId) => this.acknowledgeSessionCreation(sessionId)
+  })
   /** DAG 编排:executionId → 调度器;按依赖层释放 child sessions。 */
   private readonly dagSchedulers = new Map<string, TaskDagScheduler>()
   /** DAG 最新执行视图:用于恢复/快照保留已经完成或已从调度器移除的 DAG 状态。 */
@@ -180,25 +190,22 @@ class SessionManager {
   private readonly blockedPendingDagSessions = new Map<string, SessionCreationDraft>()
   private readonly retainedSessionCreationJournals = new Set<string>()
   private readonly modelAttemptRecoveryGate = new ModelAttemptRecoveryGate()
+  private readonly taskSnapshotReplay = new TaskSnapshotReplayCoordinator({
+    send: (sessionId, prompt, options) => this.send(sessionId, prompt, options), emit: (sessionId, event) => this.dispatch(sessionId, event, 0) })
   private readonly supervisor = new SessionSupervisorRuntime(
     () => app.getPath('userData'), this.sessions, this.taskRuns,
-    (id, input, options) => this.send(id, input, options),
+    (sessionId, prompts, options) => this.taskSnapshotReplay.start(sessionId, prompts, options),
     (id) => this.interrupt(id), (id) => this.workflow.flush(id),
-    (sessionId, reason, seq, eventKind, eventId, strict) =>
-      this.writeTaskSnapshot(sessionId, reason, seq, eventKind, eventId, strict)
+    (sessionId, reason, seq, eventKind, eventId, strict) => this.writeTaskSnapshot(sessionId, reason, seq, eventKind, eventId, strict)
   )
 
   constructor() {
     configureDigitalWorkerActionPolicyRoot(app.getPath('userData'))
   }
 
-  list(): SessionMeta[] {
-    return [...this.sessions.values()].map((s) => ({ ...s.meta }))
-  }
+  list(): SessionMeta[] { return [...this.sessions.values()].map((s) => ({ ...s.meta })) }
 
-  get(id: string): Engine | undefined {
-    return this.sessions.get(id)
-  }
+  get(id: string): Engine | undefined { return this.sessions.get(id) }
 
   async setTaskStrategy(id: string, value: unknown): Promise<void> {
     await this.taskPlans.setStrategy(id, value)
@@ -367,10 +374,10 @@ class SessionManager {
     if (!session) return false
     if (!this.taskPlans.authorizeSend(session)) return false
     const currentRun = this.taskRuns.get(id)
-    if (this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true)) {
-      session.rejectSend('Supervisor 已暂停或仅授权重试；必须通过受信控制路径恢复后才能继续执行。')
-      return false
-    }
+    const sendGateError = managedSessionSendGateError(
+      this.taskSnapshotReplay.blocksOrdinarySend(id, options),
+      this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true))
+    if (sendGateError) return rejectSessionSend(session, sendGateError)
     const workerPolicyError = digitalWorkerSendPolicyError({
       rootDir: app.getPath('userData'),
       meta: session.meta,
@@ -401,6 +408,7 @@ class SessionManager {
       session.rejectSend(budgetError)
       return false
     }
+    if (!sendableSession(session)) return false
     if (!currentRun || isTaskRunTerminal(currentRun.status)) {
       this.taskRuns.set(
         id,
@@ -414,7 +422,6 @@ class SessionManager {
     this.modelAttemptRecoveryGate.acceptedSend(id, modelAttemptDecision)
     return true
   }
-
   async controlSupervisorRun(
     store: SupervisorStateStore,
     request: SupervisorSessionControlRequest
@@ -480,14 +487,7 @@ class SessionManager {
       return { task, taskId, prompt, role, title }
     })
 
-    const state: OrchestrationState = {
-      parentSessionId,
-      acceptingChildren: true,
-      pending: new Set(),
-      results: [],
-      startedAt: Date.now()
-    }
-    this.orchestrations.set(orchestrationId, state)
+    this.subagentOrchestration.begin(orchestrationId, parentSessionId)
 
     try {
       for (const { task, taskId, prompt, role, title } of plannedTasks) {
@@ -505,18 +505,15 @@ class SessionManager {
           childTaskId: taskId,
           childRole: role
         })
-        state.pending.add(meta.id)
+        this.subagentOrchestration.addChild(orchestrationId, meta.id)
         children.push({ taskId, prompt, meta })
       }
     } catch (error) {
-      state.acceptingChildren = false
-      this.orchestrations.delete(orchestrationId)
+      this.subagentOrchestration.cancel(orchestrationId)
       await this.rollbackProvisionedSubagents(children)
       throw error
     }
-    state.acceptingChildren = false
-    for (const child of children) this.send(child.meta.id, child.prompt)
-    this.completeOrchestrationIfReady(orchestrationId, state)
+    this.subagentOrchestration.finishProvisioning(orchestrationId, children)
 
     return { orchestrationId, parentSessionId, children }
   }
@@ -666,12 +663,6 @@ class SessionManager {
     }
   }
 
-  async supportedAgents(sessionId: string): Promise<SdkAgentInfo[]> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.supportedAgents) return []
-    return session.supportedAgents()
-  }
-
   private emitTaskDagUpdate(parentSessionId: string, execution: TaskDagExecutionView): void {
     this.dagExecutionSnapshots.set(execution.id, execution)
     const event: AgentEvent = { kind: 'task-dag-update', execution }
@@ -711,61 +702,6 @@ class SessionManager {
       this.dagAutoMergeOptions.get(execution.id),
       this.snapshotDagMergeSessionsFor(execution)
     )
-  }
-
-  /**
-   * 真编排回灌:child 首轮 turn-result 到达时记录;全部完成后把
-   * 汇总(任务/状态/产物 worktree/分支/结果摘要)作为一条用户消息
-   * 发给父 Agent,让父 Agent 真正"知道"子任务结果并能继续编排
-   * (审查 diff、合并、追加任务)。此前结果只进 UI,父 Agent 全盲。
-   */
-  private recordOrchestrationResult(childMeta: SessionMeta, event: AgentEvent & { kind: 'turn-result' }): void {
-    const orchestrationId = childMeta.orchestrationId
-    if (!orchestrationId) return
-    const state = this.orchestrations.get(orchestrationId)
-    if (!state || !state.pending.has(childMeta.id)) return
-    state.pending.delete(childMeta.id)
-    state.results.push({
-      taskId: childMeta.childTaskId,
-      role: childMeta.childRole,
-      sessionId: childMeta.id,
-      ok: !event.isError,
-      resultText: event.resultText,
-      costUsd: childMeta.costUsd,
-      branch: childMeta.branch,
-      worktreePath: childMeta.worktreePath
-    })
-    this.acknowledgeSessionCreation(childMeta.id)
-    if (state.pending.size > 0) return
-    this.completeOrchestrationIfReady(orchestrationId, state)
-  }
-
-  private completeOrchestrationIfReady(orchestrationId: string, state: OrchestrationState): void {
-    if (state.acceptingChildren || state.pending.size > 0) return
-
-    this.orchestrations.delete(orchestrationId)
-    const parent = this.sessions.get(state.parentSessionId)
-    if (!parent || parent.meta.status === 'closed') return
-
-    const okCount = state.results.filter((r) => r.ok).length
-    const lines: string[] = [
-      `[子代理编排完成] ${okCount}/${state.results.length} 成功,耗时 ${Math.round((Date.now() - state.startedAt) / 1000)}s。各任务结果:`,
-      ''
-    ]
-    for (const r of state.results) {
-      lines.push(
-        `## ${r.taskId ?? r.sessionId}${r.role ? `(${r.role})` : ''} — ${r.ok ? '成功' : '失败'}`
-      )
-      if (r.branch) lines.push(`分支: ${r.branch}`)
-      if (r.worktreePath) lines.push(`worktree: ${r.worktreePath}`)
-      if (r.resultText) lines.push(`结果摘要:\n${r.resultText.slice(0, 1500)}`)
-      lines.push('')
-    }
-    lines.push(
-      '请汇总以上子任务结果:指出成功/失败与冲突风险,给出合并顺序建议;如需修复失败项或追加任务,说明具体做法。'
-    )
-    // 回灌走 send:预算闸门照常生效,防止编排递归烧穿预算
-    this.send(state.parentSessionId, lines.join('\n'))
   }
 
   close(id: string): Promise<void> {
@@ -810,8 +746,8 @@ class SessionManager {
         error: '子会话被手动关闭'
       })
     }
-    if (orchestrationId && this.orchestrations.get(orchestrationId)?.pending.has(id)) {
-      this.recordOrchestrationResult(session.meta, {
+    if (orchestrationId && this.subagentOrchestration.hasPendingChild(orchestrationId, id)) {
+      this.subagentOrchestration.recordChildResult(session.meta, {
         kind: 'turn-result',
         subtype: 'closed',
         isError: true,
@@ -833,6 +769,7 @@ class SessionManager {
     this.persistActiveSessions()
     this.notifications.delete(id)
     clearIdeDocumentContext(id)
+    this.taskSnapshotReplay.clearSession(id)
     this.modelAttemptRecoveryGate.clearSession(id)
     this.acknowledgeSessionCreation(id)
   }
@@ -850,6 +787,8 @@ class SessionManager {
 
   async disposeAll(): Promise<void> {
     this.persistActiveSessions()
+    this.taskSnapshotReplay.clear()
+    this.subagentOrchestration.clear()
     // dispose 后 provider 仍可能异步发出尾事件。关机期间保持保护，避免晚到的
     // turn-result/status 把刚写好的恢复快照删掉。
     this.preservingSnapshotsOnDispose = true
@@ -1177,7 +1116,7 @@ class SessionManager {
           },
           0
         )
-        for (const prompt of replayPrompts) this.send(snapshot.sessionId, prompt, { modelAttemptRecoveryReplay: true })
+        this.taskSnapshotReplay.start(snapshot.sessionId, replayPrompts, { modelAttemptRecoveryReplay: true })
       })
       .catch((err) => {
         console.error('[caogen] 恢复任务快照启动失败:', err)
@@ -1360,7 +1299,6 @@ class SessionManager {
       preserveClosedRun: this.preservingSnapshotsOnDispose ||
         this.effectRecoveryPreservedSessions.has(sessionId)
     })
-    this.modelAttemptRecoveryGate.refreshAfterEvent(sessionId, event)
     const payload: SessionEventPayload = { sessionId, ...identity, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
@@ -1389,6 +1327,8 @@ class SessionManager {
         console.error('[caogen] resume DAG finalization after parent event failed:', error)
       })
     }
+    this.taskSnapshotReplay.handleEvent(sessionId, event, this.modelAttemptRecoveryGate.refreshAfterEvent(sessionId, event))
+    this.subagentOrchestration.handleEvent(sessionId, event)
   }
 
   private dispatchChildResult(sessionId: string, session: Engine | undefined, event: AgentEvent): void {
@@ -1409,7 +1349,7 @@ class SessionManager {
     const parent = this.sessions.get(parentSessionId)
     if (parent?.emitSyntheticEvent) parent.emitSyntheticEvent(childResult)
     else this.dispatch(parentSessionId, childResult, 0)
-    this.recordOrchestrationResult(childSession.meta, event)
+    this.subagentOrchestration.recordChildResult(childSession.meta, event)
     const dag = childSession.meta.orchestrationId
       ? this.dagSchedulers.get(childSession.meta.orchestrationId)
       : undefined
@@ -1479,7 +1419,7 @@ class SessionManager {
   private handleEnginePowerBlocker(sessionId: string, event: AgentEvent): void {
     if (event.kind !== 'status') return
     const engine = this.sessions.get(sessionId)?.meta.engine
-    if (!engine || engine === 'claude') return
+    if (!engine) return
     if (event.status === 'running') {
       this.startEnginePowerBlocker(sessionId)
     } else if (event.status === 'idle' || event.status === 'error' || event.status === 'closed') {
@@ -1494,7 +1434,7 @@ class SessionManager {
       const blockerId = powerSaveBlocker.start('prevent-display-sleep')
       this.enginePowerBlockers.set(sessionId, blockerId)
     } catch (err) {
-      console.error('[caogen] 启动非 Claude 引擎防休眠失败:', err)
+      console.error('[caogen] 启动引擎防休眠失败:', err)
     }
   }
 
@@ -1505,7 +1445,7 @@ class SessionManager {
     try {
       if (powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId)
     } catch (err) {
-      console.error('[caogen] 释放非 Claude 引擎防休眠失败:', err)
+      console.error('[caogen] 释放引擎防休眠失败:', err)
     }
   }
 
@@ -1586,7 +1526,7 @@ class SessionManager {
 
   private snapshotSubtasksFor(sessionId: string): TaskSnapshotSubtaskState[] {
     const subtasks: TaskSnapshotSubtaskState[] = []
-    for (const state of this.orchestrations.values()) {
+    for (const state of this.subagentOrchestration.states()) {
       if (state.parentSessionId !== sessionId) continue
       for (const childSessionId of state.pending) {
         const child = this.sessions.get(childSessionId)?.meta

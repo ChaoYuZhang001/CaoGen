@@ -323,7 +323,7 @@ function WorkbenchRoot(): React.JSX.Element {
       )}
     </div>
   )
-}
+})
 
 export default memo(WorkbenchRoot)
 

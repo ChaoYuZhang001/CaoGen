@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { memo, useCallback, useState } from 'react'
 import type { Goal, ProjectWorkspace, WorkItem } from '../../../../shared/types'
 import DigitalWorkerStudio from './DigitalWorkerStudio'
 import ProjectWorkspaceStudio, { type ProjectWorkspaceStudioContext } from './ProjectWorkspaceStudio'
@@ -12,7 +12,7 @@ const EMPTY_CONTEXT: ProjectWorkspaceStudioContext = {
   workItems: []
 }
 
-export default function StudioView(): React.JSX.Element {
+function StudioView(): React.JSX.Element {
   const [section, setSection] = useState<StudioSection>('work')
   const [context, setContext] = useState<ProjectWorkspaceStudioContext>(EMPTY_CONTEXT)
 
@@ -56,6 +56,8 @@ export default function StudioView(): React.JSX.Element {
     </div>
   )
 }
+
+export default memo(StudioView)
 
 function sameContext(left: ProjectWorkspaceStudioContext, right: ProjectWorkspaceStudioContext): boolean {
   return sameRecord(left.project, right.project) &&

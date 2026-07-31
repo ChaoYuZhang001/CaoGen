@@ -1,7 +1,7 @@
 ﻿import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs'
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
 import { applySessionModelSwitch } from './ipc/session-model-switch-handler'
 import { getSettings, updateSettings } from './settings'
@@ -17,12 +17,12 @@ import {
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
-import { scanMigration, importAssets } from './migration'
+import { scanMigration } from './migration'
+import { executeMigrationImportEffect } from './migrationEffect'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
   generateProjectContextTemplate,
-  readProjectContext,
-  writeProjectContext
+  readProjectContext
 } from './agent/context-loader'
 import { registerProjectMemoryIpc } from './ipc/memory-handlers'
 import { readProjectMemory } from './memoryStore'
@@ -71,13 +71,17 @@ import {
   executeInteractiveOperationEffectGitIndex,
   executeInteractiveOperationEffectWriteFile
 } from './ipc/renderer-mutation-handlers'
+import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
+import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
+import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
+import { registerPluginInstallIpc } from './ipc/plugin-install-ipc'
+import { registerTerminalMutationIpc } from './ipc/terminal-mutation-ipc'
+import { registerBrowserMutationIpc } from './ipc/browser-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
-import { copyImageAttachment, saveImageAttachmentBytes } from './attachmentOps'
+import { sessionImageAttachmentsRoot } from './attachmentOps'
 import { ocrImage } from './imageOcr'
-import { probeMcpServers } from './mcpProbe'
-import { installLocalPlugin, uninstallPlugin } from './pluginInstall'
 import {
   pluginRegistryItemKey,
   readPluginRegistryState,
@@ -107,7 +111,6 @@ import type {
   PluginRegistryScanOptions,
   ProviderInput,
   ProviderModelFetchInput,
-  SaveImageAttachmentBytesInput,
   SendMessagePayload,
   TaskDagDispatchInput,
   TaskDecomposeInput,
@@ -137,7 +140,7 @@ function shouldEmitMemorySuggestion(sessionId: string, text: string, now = Date.
 }
 
 function attachmentRoot(sessionId: string): string {
-  return join(app.getPath('userData'), 'attachments', sessionId)
+  return sessionImageAttachmentsRoot(app.getPath('userData'), sessionId)
 }
 
 function normalizeSendPayload(sessionId: string, raw: unknown): SendMessagePayload | null {
@@ -283,6 +286,19 @@ function findScannedPluginRegistryItem(item: PluginRegistryItem, sessionId?: str
   return view.items.find((candidate) => pluginRegistryItemKey(candidate) === key)
 }
 
+function mcpProbeOperationContext(sessionId?: string): {
+  sourceSessionId: string
+  projectId?: string
+  cwd: string
+} {
+  const session = typeof sessionId === 'string' ? sessionManager.get(sessionId) : undefined
+  return {
+    sourceSessionId: session?.meta.id ?? 'mcp-probe:settings',
+    projectId: session?.meta.projectId,
+    cwd: session?.meta.cwd ?? homedir()
+  }
+}
+
 function isInsidePath(root: string, target: string): boolean {
   const rel = relative(root, target)
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
@@ -318,6 +334,21 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 
 export function registerIpc(): void {
   for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
+  registerAttachmentMutationIpc(attachmentRoot)
+  registerProjectContextMutationIpc()
+  registerMcpProbeIpc({
+    findScannedItem: findScannedPluginRegistryItem,
+    operationContext: mcpProbeOperationContext
+  })
+  registerPluginInstallIpc({ pluginsRoot: caogenPluginsRoot })
+  registerTerminalMutationIpc({
+    getSessionMeta: (id) => sessionManager.get(id)?.meta,
+    manager: terminalManager
+  })
+  registerBrowserMutationIpc({
+    getSessionMeta: (id) => sessionManager.get(id)?.meta,
+    manager: browserViewManager
+  })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
 
@@ -525,31 +556,6 @@ export function registerIpc(): void {
     })
   }
 
-  ipcMain.handle('browser:open', async (e, id: string, url?: string) => {
-    const win = BrowserWindow.fromWebContents(e.sender)
-    if (!win) throw new Error('浏览器宿主窗口不存在')
-    if (!sessionManager.get(id)) throw new Error('会话不存在')
-    return browserViewManager.open(win, id, typeof url === 'string' ? url : undefined)
-  })
-
-  ipcMain.handle('browser:navigate', (_e, id: string, url: string) =>
-    browserViewManager.navigate(id, typeof url === 'string' ? url : '')
-  )
-
-  ipcMain.handle('browser:bounds', (_e, id: string, bounds: BrowserBounds) => {
-    browserViewManager.setBounds(id, bounds)
-  })
-
-  ipcMain.handle('browser:back', (_e, id: string) => browserViewManager.goBack(id))
-
-  ipcMain.handle('browser:forward', (_e, id: string) => browserViewManager.goForward(id))
-
-  ipcMain.handle('browser:reload', (_e, id: string) => browserViewManager.reload(id))
-
-  ipcMain.handle('browser:close', (_e, id: string) => {
-    browserViewManager.close(id)
-  })
-
   ipcMain.handle('browser:captureAnnotation', (_e, id: string, note: string) =>
     browserViewManager.captureAnnotation(id, typeof note === 'string' ? note : '')
   )
@@ -580,33 +586,6 @@ export function registerIpc(): void {
   }
 
   ipcMain.handle('terminals:list', () => terminalManager.list())
-
-  ipcMain.handle(
-    'terminals:start',
-    (_e, id: string, opts?: { cols?: number; rows?: number; reuse?: boolean }) => {
-      const session = sessionManager.get(id)
-      if (!session) throw new Error('会话不存在')
-      return terminalManager.start({
-        cwd: session.meta.cwd,
-        sessionId: id,
-        cols: opts?.cols,
-        rows: opts?.rows,
-        reuse: opts?.reuse
-      })
-    }
-  )
-
-  ipcMain.handle('terminals:write', (_e, id: string, data: string) => {
-    terminalManager.write(id, typeof data === 'string' ? data : '')
-  })
-
-  ipcMain.handle('terminals:resize', (_e, id: string, cols: number, rows: number) => {
-    terminalManager.resize(id, cols, rows)
-  })
-
-  ipcMain.handle('terminals:close', (_e, id: string) => {
-    terminalManager.close(id)
-  })
 
   ipcMain.handle('sessions:create', async (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string') {
@@ -645,33 +624,6 @@ export function registerIpc(): void {
     return sessionManager.dispatchTaskDag(parentSessionId, input)
   })
 
-  ipcMain.handle('sessions:supportedAgents', (_e, sessionId: string) => {
-    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) return []
-    return sessionManager.supportedAgents(sessionId)
-  })
-
-  ipcMain.handle('attachments:copyImage', async (_e, id: string, sourcePath: string) => {
-    if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
-    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
-      return { ok: false, error: '图片路径不能为空' }
-    }
-    return copyImageAttachment(sourcePath, attachmentRoot(id))
-  })
-
-  ipcMain.handle(
-    'attachments:saveImageBytes',
-    async (_e, id: string, input: SaveImageAttachmentBytesInput) => {
-      if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
-      const data = input?.data
-      if (typeof data !== 'string' && !(data instanceof ArrayBuffer)) {
-        return { ok: false, error: '图片内容不能为空' }
-      }
-      return saveImageAttachmentBytes(data, attachmentRoot(id), {
-        mime: typeof input.mime === 'string' ? input.mime : undefined
-      })
-    }
-  )
-
   // OCR:提取附件图片文字(Vision/tesseract 逐级降级;路径必须在会话附件区内)
   ipcMain.handle('attachments:ocr', async (_e, id: string, imagePath: string) => {
     if (!sessionManager.get(id)) return { ok: false, error: '会话不存在' }
@@ -683,7 +635,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
-    if (!payload) return
+    if (!payload || !sessionManager.send(id, payload)) return false
     if (payload.text && shouldProposeMemory(payload.text) && shouldEmitMemorySuggestion(id, payload.text)) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
@@ -702,7 +654,7 @@ export function registerIpc(): void {
         console.error('[caogen] memory draft auto-extract failed:', error)
       })
     }
-    sessionManager.send(id, payload)
+    return true
   })
 
   ipcMain.handle('sessions:interrupt', async (_e, id: string) => {
@@ -793,52 +745,6 @@ export function registerIpc(): void {
         readPluginRegistryState(pluginRegistryStateFile())
       )
   )
-
-  // 本地安装:目录选择器 → 校验形似插件 → 复制入 ~/.claude/plugins(路径牢笼)
-  ipcMain.handle('plugins:installLocal', async (e, sourcePath?: string, overwrite?: boolean) => {
-    let dir = typeof sourcePath === 'string' && sourcePath.trim() ? sourcePath : ''
-    if (!dir) {
-      const win = BrowserWindow.fromWebContents(e.sender)
-      const picked = await dialog.showOpenDialog(win ?? BrowserWindow.getAllWindows()[0], {
-        title: '选择插件目录(需含 plugin.json / SKILL.md / agent .md)',
-        properties: ['openDirectory']
-      })
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: false, error: 'canceled' }
-      dir = picked.filePaths[0]
-    }
-    return installLocalPlugin(dir, caogenPluginsRoot(), { overwrite: overwrite === true })
-  })
-
-  // 卸载:仅限托管目录内,移入回收站(可恢复),绝不 rm -rf
-  ipcMain.handle('plugins:uninstall', (_e, targetPath: string) => {
-    if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '路径无效' }
-    return uninstallPlugin(targetPath, caogenPluginsRoot())
-  })
-
-  // MCP 运行态:对选中的 mcp 条目做真实连接探测(stdio 握手 / http 可达)
-  ipcMain.handle('plugins:probeMcp', async (_e, items: unknown, sessionId?: string) => {
-    if (!Array.isArray(items) || items.length === 0) return []
-    const capped = items.filter(isPluginRegistryItem).filter((item) => item.kind === 'mcp').slice(0, 20)
-    const inputs: Array<{ id: string; config: Record<string, unknown> }> = []
-    for (const item of capped) {
-      // 安全:仅探测允许扫描范围内的条目;config 从其声明的配置文件按名重取
-      const scanned = findScannedPluginRegistryItem(item, sessionId)
-      if (!scanned) continue
-      try {
-        const raw = JSON.parse(readFileSync(scanned.path, 'utf8')) as Record<string, unknown>
-        const servers = raw.mcpServers
-        if (servers && typeof servers === 'object') {
-          const config = (servers as Record<string, unknown>)[scanned.name]
-          if (config && typeof config === 'object') {
-            inputs.push({ id: scanned.id, config: config as Record<string, unknown> })
-          }
-        }
-      } catch {
-        // 配置读不了就跳过该项,探测结果自然缺席
-      }
-    }
-    return probeMcpServers(inputs)
-  })
 
   ipcMain.handle('plugins:reveal', (_e, targetPath: string, sessionId?: string) => {
     if (!canRevealPluginPath(targetPath, sessionId)) {
@@ -1011,8 +917,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('migration:import', (_e, cwd: string, paths: string[]) => {
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
-    if (!Array.isArray(paths)) return '未选择任何资产'
-    return importAssets(cwd, paths.filter((p): p is string => typeof p === 'string'))
+    return executeMigrationImportEffect(cwd, paths, executeInteractiveOperationEffect)
   })
 
   ipcMain.handle('projects:list', () => listProjects())
@@ -1029,10 +934,6 @@ export function registerIpc(): void {
   ipcMain.handle('projectContext:read', (_e, projectPath: string) => {
     if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
     return readProjectContext(projectPath)
-  })
-  ipcMain.handle('projectContext:write', (_e, projectPath: string, content: string) => {
-    if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')
-    return writeProjectContext(projectPath, typeof content === 'string' ? content : '')
   })
   ipcMain.handle('projectContext:template', (_e, projectPath: string) => {
     if (typeof projectPath !== 'string' || projectPath.length === 0) throw new Error('必须指定项目目录')

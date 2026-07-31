@@ -24,7 +24,9 @@ import {
   type AnthropicMessagesToolUseBlock
 } from './anthropicMessagesAdapter'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
+import { augmentNativePayloadWithLayeredMemory } from './native-layered-prompt'
 import { OPENAI_CODING_TOOLS } from './openaiTools'
+import { buildProjectContextSystemAppendSync } from './agent/context-loader'
 import {
   listProviders, markProviderKeyUsed, recordProviderKeySuccess, rotateProviderKey
 } from './providers'
@@ -59,7 +61,6 @@ import type {
   UserMessageAttachmentView,
   UsageTotals
 } from '../shared/types'
-
 const DEFAULT_MAX_TOKENS = 8192
 const MAX_MESSAGES_REQUESTS_PER_TURN = 40
 /** Anthropic tool declarations derive from the shared native coding-tool source. */
@@ -68,18 +69,15 @@ export const ANTHROPIC_CODING_TOOLS: AnthropicMessagesTool[] = OPENAI_CODING_TOO
   description: tool.function.description,
   input_schema: tool.function.parameters as AnthropicMessagesToolInputSchema
 }))
-
 interface AnthropicAttemptExecutor {
   startTurn(messageId: string): void
   execute(input: AnthropicModelAttemptInput): Promise<AnthropicMessagesResult>
 }
-
 interface AnthropicAttemptLineage {
   requestId: string
   failoverFromAttemptId: string
   routeReason: string
 }
-
 interface AnthropicMessageResponse {
   result: AnthropicMessagesResult
   target: AnthropicMessagesTarget
@@ -298,7 +296,8 @@ export class AnthropicEngine implements Engine {
       })
       this.rememberTarget(target)
       this.resolvedModel = target.model
-      const userContent = buildAnthropicUserContent(payload, this.dependencies.resolveImageAttachment)
+      const enrichedPayload = await augmentNativePayloadWithLayeredMemory(payload, this.meta)
+      const userContent = buildAnthropicUserContent(enrichedPayload, this.dependencies.resolveImageAttachment)
       await this.runMessagesLoop(target, userContent, controller)
     } catch (error) {
       this.finishTurnError(error, controller)
@@ -382,7 +381,8 @@ export class AnthropicEngine implements Engine {
       model: target.model,
       maxTokens: DEFAULT_MAX_TOKENS,
       messages: [...this.history, ...turnMessages],
-      tools: ANTHROPIC_CODING_TOOLS
+      tools: ANTHROPIC_CODING_TOOLS,
+      system: buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
     }
     this.rememberTarget(target)
     if (target.keyId) this.dependencies.markProviderKeyUsed(target.providerId, target.keyId)

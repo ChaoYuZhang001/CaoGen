@@ -418,7 +418,7 @@ function providerInfrastructure(options = {}) {
     providerView('anthropic-primary', 'Primary Anthropic', 'anthropic', true, ['claude-primary']),
     providerView('anthropic-backup', 'Backup Anthropic', 'anthropic', true, ['claude-backup']),
     providerView('openai-decoy', 'OpenAI decoy', 'openai', true, ['gpt-decoy']),
-    providerView('claude-decoy', 'Claude SDK decoy', 'claude', true, ['claude-decoy']),
+    providerView('other-protocol-decoy', 'Other protocol decoy', 'unsupported', true, ['other-decoy']),
     providerView('anthropic-no-token', 'Anthropic no token', 'anthropic', false, ['claude-empty'])
   ]
   const calls = {

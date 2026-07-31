@@ -78,7 +78,8 @@ async function run() {
 
   try {
     const engines = await invoke('engines:list')
-    check('IPC engines:list 含 claude 引擎', Array.isArray(engines) && engines.some((x) => x.kind === 'claude'), JSON.stringify(engines).slice(0, 80))
+    const kinds = Array.isArray(engines) ? engines.map((engine) => engine.kind).sort() : []
+    check('IPC engines:list 仅含两种原生引擎', JSON.stringify(kinds) === JSON.stringify(['anthropic', 'openai']), JSON.stringify(engines).slice(0, 120))
   } catch (e) { check('IPC engines:list', false, String(e.message)) }
 
   try {
@@ -91,6 +92,7 @@ async function run() {
     check('IPC providers:health 可调用', Array.isArray(health))
   } catch (e) { check('IPC providers:health', false, String(e.message)) }
 
+  await exerciseMcpProbeIpc()
   await exerciseNativeDomainIpc()
 
   // 3. 创建真会话(会 spawn SDK 子进程;无 Key/网络会失败,但不应让主进程崩)
@@ -123,6 +125,19 @@ async function run() {
   } catch (e) { check('IPC sessions:create/close', false, String(e.message)) }
 
   finish()
+}
+
+async function exerciseMcpProbeIpc() {
+  try {
+    const probe = await invoke('plugins:probeMcp', [])
+    check(
+      'IPC plugins:probeMcp 已注册并返回操作结果',
+      probe?.ok === true && Array.isArray(probe.results) && probe.results.length === 0,
+      JSON.stringify(probe).slice(0, 120)
+    )
+  } catch (error) {
+    check('IPC plugins:probeMcp', false, String(error.message))
+  }
 }
 
 async function exerciseNativeDomainIpc() {

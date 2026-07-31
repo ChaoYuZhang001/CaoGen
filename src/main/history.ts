@@ -15,11 +15,16 @@ export function listHistory(): HistoryEntry[] {
   if (cache) return cache
   try {
     const raw = JSON.parse(readFileSync(historyFile(), 'utf8'))
-    cache = Array.isArray(raw) ? (raw as HistoryEntry[]) : []
+    cache = Array.isArray(raw) ? (raw as HistoryEntry[]).map(migrateLegacyHistoryEngine) : []
   } catch {
     cache = []
   }
   return cache
+}
+
+function migrateLegacyHistoryEngine(entry: HistoryEntry): HistoryEntry {
+  const engine = (entry as unknown as { engine?: string }).engine
+  return engine === 'claude' ? { ...entry, engine: 'anthropic' } : entry
 }
 
 function persist(): void {

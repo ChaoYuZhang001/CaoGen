@@ -158,10 +158,6 @@ class ContractBoundEngine implements NativeRuntimeBoundEngine {
     this.assertIdentity()
   }
 
-  supportedAgents(): ReturnType<NonNullable<Engine['supportedAgents']>> {
-    return this.engine.supportedAgents?.() ?? Promise.resolve([])
-  }
-
   rename(title: string): void {
     requiredString(title, 'session title')
     this.engine.rename(title)

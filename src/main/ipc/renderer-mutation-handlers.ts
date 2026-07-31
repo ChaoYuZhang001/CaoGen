@@ -1,4 +1,10 @@
 import type { GitCommitResult, WorkspaceHunkResult, WriteTextFileResult } from '../../shared/types'
+import {
+  prepareImageAttachmentBytes,
+  prepareImageAttachmentFile,
+  type ImageAttachmentBytesInput
+} from '../attachmentOps'
+import { executePreparedImageAttachmentEffect } from '../attachmentEffect'
 import { writeTextFile } from '../fileOps'
 import { gitCommit } from '../git/git-helper'
 import { applyHunk } from '../gitDiff'
@@ -136,6 +142,50 @@ export async function executeInteractiveOperationEffectGitIndex(
     : incompleteOperationResult(outcome)
 }
 
+export async function executeInteractiveOperationEffectCopyImage(
+  id: string,
+  sourcePath: unknown,
+  attachmentsRoot: string,
+  runOperation: OperationGateway
+) {
+  const context = rendererOperationContext(id)
+  if (!context) return { ok: false, error: '会话不存在' }
+  if (typeof sourcePath !== 'string' || !sourcePath.trim()) return { ok: false, error: '图片路径不能为空' }
+  try {
+    const prepared = await prepareImageAttachmentFile(sourcePath)
+    return executePreparedImageAttachmentEffect(
+      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      prepared,
+      'user_file',
+      runOperation
+    )
+  } catch (error) {
+    return { ok: false, error: errorText(error) }
+  }
+}
+
+export async function executeInteractiveOperationEffectSaveImageBytes(
+  id: string,
+  data: ImageAttachmentBytesInput,
+  mime: string | undefined,
+  attachmentsRoot: string,
+  runOperation: OperationGateway
+) {
+  const context = rendererOperationContext(id)
+  if (!context) return { ok: false, error: '会话不存在' }
+  try {
+    const prepared = prepareImageAttachmentBytes(data, { mime })
+    return executePreparedImageAttachmentEffect(
+      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      prepared,
+      'renderer_bytes',
+      runOperation
+    )
+  } catch (error) {
+    return { ok: false, error: errorText(error) }
+  }
+}
+
 function rendererOperationContext(id: string): { cwd: string; projectId?: string } | undefined {
   const session = sessionManager.get(id)
   return session?.meta.cwd ? { cwd: session.meta.cwd, projectId: session.meta.projectId } : undefined
@@ -208,4 +258,8 @@ function incompleteOperationResult<T>(outcome: IncompleteOutcome<T>) {
     operationId: outcome.operationId,
     ...(outcome.status === 'waiting_reconciliation' ? { snapshotId: outcome.snapshotId } : {})
   }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

@@ -5,6 +5,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { detachDmg } from './lib/macos-dmg-detach.mjs'
+import { macosX64UpdateMetadataChecks } from './lib/release-matrix-evidence.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -55,12 +57,6 @@ const inheritEntitlementKeys = [
   'com.apple.security.cs.allow-unsigned-executable-memory',
   'com.apple.security.cs.disable-library-validation'
 ]
-const claudeEntitlementKeys = [
-  'com.apple.security.automation.apple-events',
-  ...inheritEntitlementKeys
-]
-const expectedClaudeSignIgnore = 'app\\.asar\\.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-(x64|arm64)/claude$'
-
 const configSummary = inspectReleaseConfig()
 const artifactPresence = {
   app: isDirectory(appPath),
@@ -70,12 +66,15 @@ const artifactPresence = {
 const artifacts = {
   app: { path: reportPath(appPath), present: artifactPresence.app },
   dmg: { path: reportPath(dmgPath), present: artifactPresence.dmg },
-  zip: { path: reportPath(zipPath), present: artifactPresence.zip }
+  zip: { path: reportPath(zipPath), present: artifactPresence.zip },
+  updateMetadata: targetArch === 'x64'
+    ? { path: 'dist/latest-mac.yml', present: isFile(path.join(repoRoot, 'dist', 'latest-mac.yml')) }
+    : null
 }
 let appSigning = null
 let appEntitlements = null
 let machOAudit = null
-let claudeAudit = null
+let forbiddenRuntimeAudit = null
 const archiveAudits = {}
 const buildProvenance = { app: null, dmg: null, zip: null }
 
@@ -99,7 +98,7 @@ const report = {
   appSigning,
   appEntitlements,
   machOAudit,
-  claudeAudit,
+  forbiddenRuntimeAudit,
   archiveAudits,
   buildProvenance,
   summary: summarizeChecks(checks),
@@ -136,7 +135,7 @@ function inspectReleaseConfig() {
     minimumSystemVersion: null,
     entitlements: null,
     entitlementsInherit: null,
-    preservesAnthropicSignature: false,
+    excludesClaudeRuntime: false,
     declaresAppleEventsUsage: false
   }
 
@@ -161,7 +160,7 @@ function inspectReleaseConfig() {
   summary.timestampRetryHook = mac.sign === 'scripts/macos-sign-with-retry.cjs'
   summary.identityDisabled = mac.identity === null
   summary.minimumSystemVersion = typeof mac.minimumSystemVersion === 'string' ? mac.minimumSystemVersion : null
-  summary.preservesAnthropicSignature = asArray(mac.signIgnore).some((pattern) => pattern === expectedClaudeSignIgnore)
+  summary.excludesClaudeRuntime = !asArray(mac.signIgnore).some((pattern) => pattern.includes('claude-agent-sdk'))
   summary.declaresAppleEventsUsage =
     typeof mac.extendInfo?.NSAppleEventsUsageDescription === 'string' &&
     mac.extendInfo.NSAppleEventsUsageDescription.trim().length > 0
@@ -174,7 +173,7 @@ function inspectReleaseConfig() {
   check('config', 'minimumSystemVersion is 14.0 or newer', versionAtLeast(mac.minimumSystemVersion, '14.0'))
   check('config', 'DMG target is enabled', hasTarget(mac.target, 'dmg'))
   check('config', 'ZIP target is enabled', hasTarget(mac.target, 'zip'))
-  check('config', 'Anthropic CLI is the approved signIgnore exception', summary.preservesAnthropicSignature)
+  check('config', 'Claude Agent SDK has no signing exception', summary.excludesClaudeRuntime)
   check('config', 'NSAppleEventsUsageDescription is present', summary.declaresAppleEventsUsage)
 
   summary.entitlements = inspectConfiguredEntitlements(mac.entitlements, mainEntitlementKeys, 'main entitlements')
@@ -226,6 +225,7 @@ function inspectArtifacts() {
   check('dmg', 'release DMG exists', artifactPresence.dmg, reportPath(dmgPath))
   check('zip', 'release ZIP exists', artifactPresence.zip, reportPath(zipPath))
   check('artifact_set', 'all expected uploadable assets exist', artifactSet.complete, artifactSet.missing.join(', '))
+  if (targetArch === 'x64') inspectX64UpdateMetadata()
 
   if (process.platform !== 'darwin') {
     warnings.push('Artifact signing, notarization, and archive checks require macOS.')
@@ -241,6 +241,23 @@ function inspectArtifacts() {
     commandCheck('zip', 'unzip verifies the ZIP', 'unzip', ['-t', zipPath])
     archiveAudits.zip = inspectZipPayload()
   }
+}
+
+function inspectX64UpdateMetadata() {
+  const metadataPath = path.join(repoRoot, 'dist', 'latest-mac.yml')
+  const metadataText = isFile(metadataPath) ? readFileSync(metadataPath, 'utf8') : ''
+  const metadataChecks = macosX64UpdateMetadataChecks(metadataText, {
+    version,
+    distDir: path.join(repoRoot, 'dist')
+  })
+  for (const [name, passed] of Object.entries(metadataChecks)) {
+    check('update_metadata', name, passed)
+  }
+  check(
+    'update_metadata',
+    'macOS x64 update metadata matches the signed assets',
+    Object.values(metadataChecks).every(Boolean)
+  )
 }
 
 function inspectApp() {
@@ -283,7 +300,7 @@ function inspectApp() {
   commandCheck('app', 'the app has a valid stapled notarization ticket', 'xcrun', ['stapler', 'validate', appPath])
 
   machOAudit = inspectMachOFiles()
-  claudeAudit = inspectAnthropicClaude(machOAudit.files)
+  forbiddenRuntimeAudit = inspectForbiddenClaudeRuntime(machOAudit.files)
 }
 
 function inspectMainExecutableArchitecture() {
@@ -385,52 +402,13 @@ function inspectMachOFiles() {
   }
 }
 
-function inspectAnthropicClaude(machOFiles) {
-  const expectedSuffix = `/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-${targetArch}/claude`
-  const candidates = machOFiles.filter((item) => item.path.split(path.sep).join('/').endsWith(expectedSuffix))
+function inspectForbiddenClaudeRuntime(machOFiles) {
+  const candidates = machOFiles.filter((item) => item.path.split(path.sep).join('/').includes('/node_modules/@anthropic-ai/claude-agent-sdk'))
   const summary = {
-    expectedSuffix,
     count: candidates.length,
-    path: candidates[0]?.path || null,
-    authority: null,
-    teamIdentifier: null,
-    hardenedRuntime: false,
-    entitlements: null,
-    architectures: []
+    paths: candidates.map((item) => item.path)
   }
-  check('claude', `exactly one ${targetArch} Anthropic CLI is present`, candidates.length === 1, `${candidates.length} found`)
-  if (candidates.length !== 1) return summary
-
-  const claudePath = resolvePath(candidates[0].path)
-  commandCheck('claude', 'Anthropic CLI signature verifies strictly', 'codesign', ['--verify', '--strict', claudePath])
-
-  const details = runCommand('codesign', ['-dvvv', claudePath])
-  const parsed = parseCodeSignDetails(details.output)
-  summary.authority = parsed.developerAuthority
-  summary.teamIdentifier = parsed.teamIdentifier
-  summary.hardenedRuntime = parsed.hardenedRuntime
-  check('claude', 'Anthropic CLI codesign details are readable', details.ok, details.ok ? undefined : commandFailureDetail(details))
-  check(
-    'claude',
-    'Anthropic CLI retains the Anthropic PBC Developer ID signature',
-    parsed.developerAuthority === 'Developer ID Application: Anthropic PBC (Q6L2SF6YDW)',
-    parsed.developerAuthority || 'missing'
-  )
-  check('claude', 'Anthropic CLI TeamIdentifier is Q6L2SF6YDW', parsed.teamIdentifier === 'Q6L2SF6YDW')
-  check('claude', 'Anthropic CLI enables hardened runtime', parsed.hardenedRuntime)
-
-  const lipo = runCommand('lipo', ['-archs', claudePath])
-  if (lipo.ok) summary.architectures = lipo.stdout.trim().split(/\s+/).filter(Boolean)
-  const expectedArchitecture = targetArch === 'x64' ? 'x86_64' : targetArch
-  check('claude', 'Anthropic CLI architecture is readable', lipo.ok, lipo.ok ? undefined : commandFailureDetail(lipo))
-  check(
-    'claude',
-    `Anthropic CLI contains only ${expectedArchitecture}`,
-    summary.architectures.length === 1 && summary.architectures[0] === expectedArchitecture,
-    summary.architectures.join(', ') || 'none'
-  )
-
-  summary.entitlements = inspectSignedEntitlements(claudePath, claudeEntitlementKeys, 'claude')
+  check('runtime', 'Claude Agent SDK and CLI are absent from packaged Mach-O files', candidates.length === 0, summary.paths.join(', '))
   return summary
 }
 
@@ -455,7 +433,7 @@ function inspectDmgPayload() {
     return summary
   } finally {
     if (summary.mounted) {
-      const detached = detachDmg(mountPoint)
+      const detached = detachDmg(mountPoint, { runCommand })
       check('dmg_app', 'DMG detaches cleanly', detached.ok, detached.ok ? undefined : commandFailureDetail(detached))
     }
     const cleanupError = removeTemporaryTree(mountPoint)
@@ -508,7 +486,7 @@ function inspectArchivedApp(scope, archivedApp) {
   ])
   commandCheck(scope, 'archived app has a valid stapled ticket', 'xcrun', ['stapler', 'validate', archivedApp])
   inspectArchivedArchitecture(scope, archivedApp)
-  inspectArchivedClaude(scope, archivedApp)
+  inspectArchivedClaudeRuntimeAbsence(scope, archivedApp)
   return summarizeChecks(checks.slice(startIndex))
 }
 
@@ -553,24 +531,19 @@ function inspectArchivedArchitecture(scope, archivedApp) {
   }
 }
 
-function inspectArchivedClaude(scope, archivedApp) {
-  const claudePath = path.join(
+function inspectArchivedClaudeRuntimeAbsence(scope, archivedApp) {
+  const anthropicModulesPath = path.join(
     archivedApp,
     'Contents',
     'Resources',
     'app.asar.unpacked',
     'node_modules',
-    '@anthropic-ai',
-    `claude-agent-sdk-darwin-${targetArch}`,
-    'claude'
+    '@anthropic-ai'
   )
-  check(scope, 'archived app contains the target Anthropic CLI', isFile(claudePath))
-  if (!isFile(claudePath)) return
-  const details = runCommand('codesign', ['-dvvv', claudePath])
-  const parsed = parseCodeSignDetails(details.output)
-  check(scope, 'archived Anthropic CLI retains its Developer ID', parsed.developerAuthority === 'Developer ID Application: Anthropic PBC (Q6L2SF6YDW)')
-  check(scope, 'archived Anthropic CLI retains TeamIdentifier Q6L2SF6YDW', parsed.teamIdentifier === 'Q6L2SF6YDW')
-  check(scope, 'archived Anthropic CLI enables hardened runtime', parsed.hardenedRuntime)
+  const forbidden = isDirectory(anthropicModulesPath)
+    ? readdirSync(anthropicModulesPath).filter((name) => name.startsWith('claude-agent-sdk'))
+    : []
+  check(scope, 'archived app excludes Claude Agent SDK and CLI', forbidden.length === 0, forbidden.join(', '))
 }
 
 function findAppBundle(root) {
@@ -633,17 +606,6 @@ function removeTemporaryTree(targetPath) {
   } catch (error) {
     return errorMessage(error)
   }
-}
-
-function detachDmg(mountPoint) {
-  let result
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const args = attempt === 5 ? ['detach', '-force', mountPoint] : ['detach', mountPoint]
-    result = runCommand('hdiutil', args)
-    if (result.ok) return result
-    if (attempt < 5) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 500)
-  }
-  return result
 }
 
 function parseCodeSignDetails(output) {
@@ -738,7 +700,8 @@ function inspectArtifactSet() {
         `CaoGen-${version}-mac.zip`,
         `CaoGen-${version}-mac.zip.blockmap`,
         `CaoGen-${version}.dmg`,
-        `CaoGen-${version}.dmg.blockmap`
+        `CaoGen-${version}.dmg.blockmap`,
+        'latest-mac.yml'
       ]
   const sortedFiles = files.sort()
   const missing = sortedFiles.filter((file) => !isFile(path.join(repoRoot, 'dist', file)))

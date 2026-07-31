@@ -334,7 +334,7 @@ function OneAgentWalker({
   const rightFootTargetRef = useRef<Group>(null)
   const stageRef = useRef<WalkStage>('toTarget')
   const awayRef = useRef(false)
-  const startedAtRef = useRef<number | null>(null)
+  const startedAtRef = useRef(performance.now() / 1_000)
   const [stage, setStage] = useState<WalkStage>('toTarget')
 
   const home = useMemo(() => new Vector3(...spec.home), [spec.home])
@@ -404,8 +404,8 @@ function OneAgentWalker({
 
     const clock = state.clock.getElapsedTime()
     const elapsed = clock + spec.phase
-    if (startedAtRef.current === null) startedAtRef.current = clock
-    const oneWayElapsed = Math.max(0, clock - startedAtRef.current)
+    const timelineNow = performance.now() / 1_000
+    const oneWayElapsed = Math.max(0, timelineNow - startedAtRef.current)
     const oneWay = spec.reason === 'approval' || spec.holdAtTarget
     const departureDelay = Math.max(0, spec.departureDelay ?? 0)
     const waitingToDepart = oneWay && oneWayElapsed < departureDelay

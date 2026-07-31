@@ -1,7 +1,9 @@
 import type {
+  McpProbeResult,
   TaskDagFinalizationResolution,
   TaskSnapshotRecord
 } from '../../../shared/types'
+import type { McpProbeOperationResult } from '../../../shared/mcp-probe-types'
 import type {
   ModelAttemptReconciliationResolution,
   ModelAttemptReconciliationView
@@ -45,6 +47,15 @@ export interface TaskRecoveryActions {
     expectedRevision: number,
     resolution: ModelAttemptReconciliationResolution
   ): Promise<void>
+}
+
+export async function requireMcpProbeResults(
+  outcome: McpProbeOperationResult,
+  refreshRecovery: () => Promise<void>
+): Promise<McpProbeResult[]> {
+  if (outcome.ok) return outcome.results
+  if (outcome.effectStatus === 'waiting_reconciliation') await refreshRecovery()
+  throw new Error(outcome.error)
 }
 
 export function createTaskRecoveryActions(

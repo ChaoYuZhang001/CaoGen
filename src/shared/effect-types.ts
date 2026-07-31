@@ -18,6 +18,13 @@ export type EffectEvidenceKind =
 
 export type InteractiveOperationKind =
   | 'file_write'
+  | 'attachment_write'
+  | 'mcp_probe'
+  | 'migration_import'
+  | 'terminal_action'
+  | 'browser_navigation'
+  | 'plugin_install'
+  | 'plugin_uninstall'
   | 'workspace_hunk_discard'
   | 'git_commit'
   | 'git_index_update'
@@ -29,6 +36,15 @@ export type InteractiveOperationKind =
   | 'issue_create'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
+
+export interface MigrationImportOperationResult {
+  ok: boolean
+  summary?: string
+  error?: string
+  effectStatus?: EffectStatus
+  operationId?: string
+  snapshotId?: string
+}
 
 export interface TaskRunOperationMetadata {
   schemaVersion: 1
@@ -352,6 +368,38 @@ export type EffectTarget =
       /** 来源材料引用（输入文档/数据表的 workspace 路径或 sourceRef），用于可追溯 */
       sourceRefs: string[]
       title: string
+    }
+  | {
+      kind: 'managed_plugin_install'
+      rootPath: string
+      rootAnchorPath: string
+      rootAnchorIdentity: FileSystemIdentity
+      rootPreState: 'absent' | 'directory'
+      rootIdentity?: FileSystemIdentity
+      pluginName: string
+      targetPreState: 'absent' | 'directory'
+      targetPreIdentity?: FileSystemIdentity
+      targetPreDigest?: string
+      targetPreFiles?: number
+      targetPreBytes?: number
+      expectedDigest: string
+      expectedFiles: number
+      expectedBytes: number
+      stagingRelativePath: string
+      trashRelativePath?: string
+    }
+  | {
+      kind: 'managed_plugin_uninstall'
+      rootPath: string
+      rootAnchorPath: string
+      rootAnchorIdentity: FileSystemIdentity
+      rootIdentity: FileSystemIdentity
+      pluginName: string
+      targetPreIdentity: FileSystemIdentity
+      targetPreDigest: string
+      targetPreFiles: number
+      targetPreBytes: number
+      trashRelativePath: string
     }
   | {
       kind: 'unsupported'

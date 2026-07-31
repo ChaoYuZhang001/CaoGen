@@ -1,0 +1,50 @@
+name: CaoGen community response SLA
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+  issues:
+    types: [opened]
+  discussion:
+    types: [created]
+  discussion_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  discussions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: caogen-community-response-sla
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Check public feedback response time
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the current default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          clean: true
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Audit feedback channels and 48-hour responses
+        env:
+          CAOGEN_COMMUNITY_REPOSITORY: ${{ github.repository }}
+          CAOGEN_COMMUNITY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/community-feedback-audit.mjs --required --live
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: caogen-community-response-sla-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: test-results/community-feedback-audit/**

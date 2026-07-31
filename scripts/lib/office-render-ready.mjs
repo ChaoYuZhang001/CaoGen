@@ -8,6 +8,49 @@ export async function focusElectronPage(page, focusSession) {
   await page.bringToFront()
 }
 
+export async function startOfficeViewDiagnostics(page) {
+  await page.evaluate(() => {
+    const target = window
+    if (target.__officeViewDiagnosticsTimer) window.clearInterval(target.__officeViewDiagnosticsTimer)
+    const diagnostics = { startedAt: performance.now(), timeline: [] }
+    let previous = ''
+    const capture = () => {
+      const state = {
+        app: Boolean(document.querySelector('.app')),
+        office: Boolean(document.querySelector('.office')),
+        canvasWrap: Boolean(document.querySelector('.office-canvas-wrap')),
+        officeEmpty: Boolean(document.querySelector('.office-empty')),
+        officeLoading: Boolean(document.querySelector('.office-loading')),
+        settings: Boolean(document.querySelector('.settings-page')),
+        list: Boolean(document.querySelector('.sidebar-office')),
+        focused: document.hasFocus(),
+        hidden: document.hidden
+      }
+      const serialized = JSON.stringify(state)
+      if (serialized === previous) return
+      previous = serialized
+      diagnostics.timeline.push({ elapsedMs: Math.round(performance.now() - diagnostics.startedAt), ...state })
+    }
+    target.__officeViewDiagnostics = diagnostics
+    capture()
+    target.__officeViewDiagnosticsTimer = window.setInterval(capture, 100)
+  })
+}
+
+export async function readOfficeViewDiagnostics(page) {
+  return page.evaluate(() => {
+    const target = window
+    const diagnostics = target.__officeViewDiagnostics ?? { startedAt: performance.now(), timeline: [] }
+    return {
+      url: window.location.href,
+      focused: document.hasFocus(),
+      hidden: document.hidden,
+      body: document.body?.innerText.slice(0, 1_200) ?? '',
+      timeline: diagnostics.timeline
+    }
+  })
+}
+
 export async function waitForOfficeRenderLoop(page, timeout = 8_000) {
   let lastState = null
   const startedAt = Date.now()
