@@ -8,6 +8,8 @@ import type {
 } from '../../shared/digital-worker-types'
 import type { SessionMeta, TaskRunStatus } from '../../shared/types'
 import { monthKeyFor } from '../../shared/budget'
+import { activeSessionRecordsFromDocument } from '../active-session-registry-format'
+import { historyEntriesFromDocument } from '../history-store-format'
 import {
   digitalWorkerPolicyContract,
   evaluateDigitalWorkerToolPolicy,
@@ -280,18 +282,20 @@ function loadSessionRecords(
   input: DigitalWorkerActionPolicyInput
 ): SessionCostRecord[] {
   const records = new Map<string, SessionCostRecord>()
-  for (const record of readSessionFile(join(rootDir, 'sessions.json'))) records.set(record.id, record)
-  for (const record of readSessionFile(join(rootDir, 'active-sessions.json'))) records.set(record.id, record)
+  for (const record of readSessionFile(join(rootDir, 'sessions.json'), 'history')) records.set(record.id, record)
+  for (const record of readSessionFile(join(rootDir, 'active-sessions.json'), 'active')) records.set(record.id, record)
   for (const record of input.activeSessions ?? []) records.set(record.id, normalizeSessionRecord(record))
   records.set(input.meta.id, normalizeSessionRecord(input.meta))
   return [...records.values()]
 }
 
-function readSessionFile(filePath: string): SessionCostRecord[] {
+function readSessionFile(filePath: string, kind: 'history' | 'active'): SessionCostRecord[] {
   if (!existsSync(filePath)) return []
   const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'))
-  if (!Array.isArray(parsed)) throw new Error(`${filePath} must contain an array`)
-  return parsed.map(normalizeSessionRecord)
+  const values = kind === 'history'
+    ? historyEntriesFromDocument<unknown>(parsed, filePath)
+    : activeSessionRecordsFromDocument<unknown>(parsed, filePath)
+  return values.map(normalizeSessionRecord)
 }
 
 function normalizeSessionRecord(value: unknown): SessionCostRecord {

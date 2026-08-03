@@ -28,7 +28,7 @@ export interface SubagentOrchestrationState {
 }
 
 interface SubagentOrchestrationDependencies {
-  send(sessionId: string, prompt: string): boolean
+  send(sessionId: string, prompt: string): Promise<boolean>
   getMeta(sessionId: string): SessionMeta | undefined
   emit(sessionId: string, event: AgentEvent): void
   acknowledgeSessionCreation(sessionId: string): void
@@ -65,11 +65,11 @@ export class SubagentOrchestrationCoordinator {
     this.plans.delete(orchestrationId)
   }
 
-  finishProvisioning(orchestrationId: string, children: SubagentDispatchItem[]): void {
+  async finishProvisioning(orchestrationId: string, children: SubagentDispatchItem[]): Promise<void> {
     const state = this.requirePlan(orchestrationId)
     state.acceptingChildren = false
-    for (const child of children) this.dispatchChild(orchestrationId, state, child)
-    this.tryDeliver(orchestrationId, state)
+    for (const child of children) await this.dispatchChild(orchestrationId, state, child)
+    await this.tryDeliver(orchestrationId, state)
   }
 
   recordChildResult(
@@ -80,7 +80,7 @@ export class SubagentOrchestrationCoordinator {
     if (!orchestrationId) return
     const state = this.plans.get(orchestrationId)
     if (!state || !state.pending.has(childMeta.id)) return
-    this.completeChild(orchestrationId, state, childMeta, {
+    void this.completeChild(orchestrationId, state, childMeta, {
       taskId: childMeta.childTaskId,
       role: childMeta.childRole,
       sessionId: childMeta.id,
@@ -123,15 +123,15 @@ export class SubagentOrchestrationCoordinator {
     this.plans.clear()
   }
 
-  private dispatchChild(
+  private async dispatchChild(
     orchestrationId: string,
     state: SubagentOrchestrationState,
     child: SubagentDispatchItem
-  ): void {
+  ): Promise<void> {
     let accepted = false
     let thrown: unknown
     try {
-      accepted = this.dependencies.send(child.meta.id, child.prompt)
+      accepted = await this.dependencies.send(child.meta.id, child.prompt)
     } catch (error) {
       thrown = error
     }
@@ -155,7 +155,7 @@ export class SubagentOrchestrationCoordinator {
       event: 'subagent-dispatch-rejected',
       detail: `子任务 ${child.taskId} 首条指令未被接受,已记为失败并继续收口。原因:${cleanOneLine(reason)}`
     })
-    this.completeChild(orchestrationId, state, child.meta, {
+    await this.completeChild(orchestrationId, state, child.meta, {
       taskId: child.meta.childTaskId ?? child.taskId,
       role: child.meta.childRole,
       sessionId: child.meta.id,
@@ -167,19 +167,19 @@ export class SubagentOrchestrationCoordinator {
     })
   }
 
-  private completeChild(
+  private async completeChild(
     orchestrationId: string,
     state: SubagentOrchestrationState,
     childMeta: SessionMeta,
     result: SubagentOrchestrationResult
-  ): void {
+  ): Promise<void> {
     if (!state.pending.delete(childMeta.id)) return
     state.results.push(result)
     this.dependencies.acknowledgeSessionCreation(childMeta.id)
-    this.tryDeliver(orchestrationId, state)
+    await this.tryDeliver(orchestrationId, state)
   }
 
-  private tryDeliver(orchestrationId: string, state: SubagentOrchestrationState): void {
+  private async tryDeliver(orchestrationId: string, state: SubagentOrchestrationState): Promise<void> {
     if (this.plans.get(orchestrationId) !== state || state.acceptingChildren || state.pending.size > 0 || state.delivering) return
     const parent = this.dependencies.getMeta(state.parentSessionId)
     if (!parent || parent.status === 'closed') {
@@ -194,7 +194,7 @@ export class SubagentOrchestrationCoordinator {
     let accepted = false
     let thrown: unknown
     try {
-      accepted = this.dependencies.send(state.parentSessionId, state.summaryText)
+      accepted = await this.dependencies.send(state.parentSessionId, state.summaryText)
     } catch (error) {
       thrown = error
     } finally {
@@ -220,7 +220,7 @@ export class SubagentOrchestrationCoordinator {
     state.retryScheduled = true
     const run = () => {
       state.retryScheduled = false
-      this.tryDeliver(orchestrationId, state)
+      void this.tryDeliver(orchestrationId, state)
     }
     if (this.dependencies.schedule) this.dependencies.schedule(run)
     else queueMicrotask(run)

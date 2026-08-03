@@ -17,6 +17,7 @@ export function projectAggregateRootsForUserData(
     workspaceRoot: root,
     workflowRoot: root,
     digitalWorkerRoot: root,
+    routineRoot: join(root, 'routines'),
     learningRoot: join(root, 'learning'),
     aggregateRoot: root,
     legacyLearningRoots

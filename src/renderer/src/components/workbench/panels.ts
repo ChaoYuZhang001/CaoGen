@@ -1,4 +1,4 @@
-import { lazy } from 'react'
+import { createElement, lazy } from 'react'
 import type * as React from 'react'
 import type { HeaderIconName } from '../ChatHeaderIcons'
 
@@ -35,9 +35,16 @@ export interface PanelDefinition {
   /** DeskControlRail / 面板头图标 */
   icon: HeaderIconName
   /** 懒加载组件，首次打开才加载代码 */
-  component: React.LazyExoticComponent<React.ComponentType<any>>
+  component: React.LazyExoticComponent<React.ComponentType<unknown>>
   /** 是否在切换时保持挂载（keep-alive）。Q-1 决议：全部 true */
   keepAlive: boolean
+}
+
+type PanelComponent = React.LazyExoticComponent<React.ComponentType<unknown>>
+
+function lazyPanel(loader: () => Promise<{ default: unknown }>): PanelComponent {
+  const typedLoader = loader as unknown as () => Promise<{ default: React.ComponentType<unknown> }>
+  return lazy(typedLoader)
 }
 
 /**
@@ -65,77 +72,77 @@ export const PANEL_REGISTRY: readonly PanelDefinition[] = [
     id: 'result',
     titleKey: 'toggleDeskSummary',
     icon: 'summary',
-    component: lazy(() => import('./StudioResultPanel')),
+    component: lazyPanel(() => import('./StudioResultPanel')),
     keepAlive: true
   },
   {
     id: 'diff',
     titleKey: 'deskReview',
     icon: 'review',
-    component: lazy(() => import('./DiffPanel')),
+    component: lazyPanel(() => import('./DiffPanel')),
     keepAlive: true
   },
   {
     id: 'terminal',
     titleKey: 'deskTerminal',
     icon: 'terminal',
-    component: lazy(() => import('./TerminalPanel')),
+    component: lazyPanel(() => import('./TerminalPanel')),
     keepAlive: true
   },
   {
     id: 'browser',
     titleKey: 'deskBrowser',
     icon: 'browser',
-    component: lazy(() => import('./BrowserPanel')),
+    component: lazyPanel(() => import('./BrowserPanel')),
     keepAlive: true
   },
   {
     id: 'files',
     titleKey: 'deskFiles',
     icon: 'files',
-    component: lazy(() => import('./FilePanel')),
+    component: lazyPanel(() => import('./FilePanel')),
     keepAlive: true
   },
   {
     id: 'preview',
     titleKey: 'deskFiles',
     icon: 'files',
-    component: lazy(() => import('./PreviewPanel')),
+    component: lazyPanel(() => import('./PreviewPanel')),
     keepAlive: true
   },
   {
     id: 'worktree',
     titleKey: 'deskReview',
     icon: 'review',
-    component: lazy(() => import('./WorktreePanel')),
+    component: lazyPanel(() => import('./WorktreePanel')),
     keepAlive: true
   },
   {
     id: 'pluginRegistry',
     titleKey: 'openDeskTools',
     icon: 'plugins',
-    component: lazy(() => import('./PluginRegistryPanel')),
+    component: lazyPanel(() => import('./PluginRegistryPanel')),
     keepAlive: true
   },
   {
     id: 'subagent',
     titleKey: 'deskSideChat',
     icon: 'subagents',
-    component: lazy(() => import('./SubagentPanel')),
+    component: lazyPanel(() => import('./SubagentPanel')),
     keepAlive: true
   },
   {
     id: 'routine',
     titleKey: 'openDeskTools',
     icon: 'routines',
-    component: lazy(() => import('./RoutinePanel')),
+    component: lazyPanel(() => import('./RoutinePanel')),
     keepAlive: true
   },
   {
     id: 'memory',
     titleKey: 'memoryShort',
     icon: 'memory',
-    component: lazy(() => import('../MemoryPanel')),
+    component: lazyPanel(() => import('../MemoryPanel')),
     keepAlive: true
   }
 ] as const

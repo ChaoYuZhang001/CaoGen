@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
-import type { Goal, GoalPatch, GoalRiskLevel, WorkItem, WorkItemStatus } from '../../../../shared/types'
+import type { Goal, GoalPatch, GoalRiskLevel, WorkItem, WorkItemOwner, WorkItemStatus } from '../../../../shared/types'
 import { GoalEditForm } from './ProjectWorkspaceStudioForms'
+import { WorkItemTransferForm } from './WorkItemTransferForm'
 import {
   acceptancePresentation,
   DEFAULT_WORK_ITEM_FILTERS,
@@ -55,6 +56,7 @@ export function WorkItemsView({
   onCreate,
   onControl,
   onReorder,
+  onTransfer,
   onViewChange,
   projectId,
   view
@@ -64,14 +66,17 @@ export function WorkItemsView({
   onCreate: () => void
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  onTransfer?: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   onViewChange: (view: StudioView) => void
   projectId: string
   view: StudioView
 }): React.JSX.Element {
   const titleId = useId()
   const [filters, setFilters] = useState<WorkItemFilters>(() => readStoredWorkItemFilters(projectId))
+  const [transferItemId, setTransferItemId] = useState('')
   const goalNames = useMemo(() => new Map(goals.map((goal) => [goal.id, goal.title])), [goals])
   const visibleItems = useMemo(() => projectWorkItems(items, filters), [filters, items])
+  const transferItem = items.find((item) => item.id === transferItemId)
   useEffect(() => {
     try {
       window.localStorage.setItem(workItemFilterStorageKey(projectId), JSON.stringify(filters))
@@ -92,12 +97,20 @@ export function WorkItemsView({
         </div>
       </div>
       <WorkItemFilterBar goals={goals} filters={filters} onChange={setFilters} />
+      {transferItem && onTransfer && (
+        <WorkItemTransferForm
+          key={`${transferItem.id}:${transferItem.revision}`}
+          item={transferItem}
+          onCancel={() => setTransferItemId('')}
+          onSubmit={onTransfer}
+        />
+      )}
       {items.length === 0 ? <EmptyState message={TEXT.noWorkItems} action={TEXT.createWorkItem} onAction={onCreate} /> : (
         visibleItems.length === 0
           ? <div className="pws-filter-empty" data-work-item-filter-empty>{TEXT.noMatchingWorkItems}</div>
           : view === 'list'
-            ? <WorkItemList items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} />
-            : <WorkItemBoard items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} />
+            ? <WorkItemList items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
+            : <WorkItemBoard items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
       )}
     </section>
   )
@@ -289,12 +302,14 @@ function WorkItemList({
   items,
   goalNames,
   onControl,
-  onReorder
+  onReorder,
+  onTransferRequest
 }: {
   items: WorkItem[]
   goalNames: Map<string, string>
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  onTransferRequest?: (workItemId: string) => void
 }): React.JSX.Element {
   return (
     <div className="pws-table" role="table" aria-rowcount={items.length + 1} data-work-item-list>
@@ -329,7 +344,7 @@ function WorkItemList({
               <span role="cell"><AcceptanceBadge status={acceptance.status} label={acceptance.label} /></span>
               <span role="cell" className="pws-table-actions">
                 {onReorder && <WorkItemOrderControls item={item} previous={items[index - 1]} next={items[index + 1]} onReorder={onReorder} />}
-                {onControl && <WorkItemControls item={item} onAction={onControl} />}
+                {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransferRequest ? () => onTransferRequest(item.id) : undefined} />}
               </span>
             </div>
           )
@@ -343,12 +358,14 @@ function WorkItemBoard({
   items,
   goalNames,
   onControl,
-  onReorder
+  onReorder,
+  onTransferRequest
 }: {
   items: WorkItem[]
   goalNames: Map<string, string>
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  onTransferRequest?: (workItemId: string) => void
 }): React.JSX.Element {
   const baseId = useId()
   return (
@@ -371,6 +388,7 @@ function WorkItemBoard({
                     goalName={item.goalId ? goalNames.get(item.goalId) : undefined}
                     onControl={onControl}
                     onReorder={onReorder}
+                    onTransfer={onTransferRequest ? () => onTransferRequest(item.id) : undefined}
                     previous={statusItems[index - 1]}
                     next={statusItems[index + 1]}
                   />
@@ -390,6 +408,7 @@ function WorkItemBoardCard({
   next,
   onControl,
   onReorder,
+  onTransfer,
   previous
 }: {
   item: WorkItem
@@ -397,6 +416,7 @@ function WorkItemBoardCard({
   next?: WorkItem
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  onTransfer?: () => void
   previous?: WorkItem
 }): React.JSX.Element {
   const acceptance = acceptancePresentation(item.acceptanceSpec.length, item.acceptance)
@@ -424,7 +444,7 @@ function WorkItemBoardCard({
         <AcceptanceBadge status={acceptance.status} label={acceptance.label} />
       </div>
       {onReorder && <WorkItemOrderControls item={item} previous={previous} next={next} onReorder={onReorder} />}
-      {onControl && <WorkItemControls item={item} onAction={onControl} />}
+      {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransfer} />}
     </article>
   )
 }
@@ -544,10 +564,12 @@ function VirtualWorkItemStack<T extends { id: string }>({
 
 function WorkItemControls({
   item,
-  onAction
+  onAction,
+  onTransfer
 }: {
   item: WorkItem
   onAction: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onTransfer?: () => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -569,6 +591,11 @@ function WorkItemControls({
   return (
     <div className="pws-work-item-controls" data-work-item-controls={item.id} aria-label={TEXT.workItemControls}>
       <div className="pws-work-item-control-actions">
+        {onTransfer && (
+          <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={onTransfer} data-work-item-transfer="open">
+            {TEXT.transferWorkItem}
+          </button>
+        )}
         {transitions.map((status) => (
           <button
             key={status}
@@ -667,6 +694,7 @@ function budgetLabel(budget: Goal['budget']): string {
   const parts: string[] = []
   if (budget.amount !== undefined) parts.push(`${budget.currency ?? ''} ${budget.amount}`.trim())
   if (budget.maxRuns !== undefined) parts.push(`${budget.maxRuns} 次`)
+  if (budget.maxConcurrentRuns !== undefined) parts.push(`${budget.maxConcurrentRuns} 并发`)
   if (budget.maxTokens !== undefined) parts.push(`${budget.maxTokens} tokens`)
   return parts.join(' · ') || TEXT.noDueDate
 }

@@ -48,9 +48,15 @@ try {
   const workerStore = new workerApi.DigitalWorkerStore(roots.digitalWorkerRoot)
   const role = await workerStore.createRoleTemplate({
     id: 'role-global-project-ownership',
-    name: 'Global role must not be embedded',
-    purpose: 'Prove RoleTemplate remains global rather than Project-owned',
-    instructions: 'Global role instructions must not be copied into an aggregate.'
+    name: 'Shared role dependency',
+    purpose: 'Prove a referenced global RoleTemplate is exported only as an explicit dependency',
+    instructions: 'This role is shared globally and required to restore the Project worker.'
+  })
+  const unrelatedRole = await workerStore.createRoleTemplate({
+    id: 'role-unrelated-project-ownership',
+    name: 'Unrelated global role must not be embedded',
+    purpose: 'Prove unrelated RoleTemplates remain outside the Project export',
+    instructions: 'This role is not referenced by either Project fixture.'
   })
 
   const fixtures = []
@@ -225,7 +231,11 @@ try {
   ]) {
     assert(!firstExport.json.includes(foreignId), `aggregate export excludes foreign object ${foreignId}`)
   }
-  assert(!firstExport.json.includes('Global role must not be embedded'), 'aggregate export excludes global RoleTemplate bodies')
+  assertEqual(firstExport.bundle.dependencies.roleTemplates.length, 1,
+    'aggregate export includes only the referenced RoleTemplate dependency')
+  assertEqual(firstExport.bundle.dependencies.roleTemplates[0].id, role.id,
+    'aggregate export dependency binds the referenced RoleTemplate')
+  assert(!firstExport.json.includes(unrelatedRole.id), 'aggregate export excludes unrelated global RoleTemplates')
   assert(!firstExport.json.includes(credentialCanary), 'aggregate export excludes credential values')
   assert(firstExport.json.includes('[REDACTED]'), 'aggregate export marks excluded credential fields')
   assertDigest(firstExport.exportDigest, 'export digest')
@@ -242,10 +252,12 @@ try {
     'export survives service restart'
   )
 
-  await proveMissingObjectFailsClosed(aggregateApi, roots, alpha, afterRestart)
-  await proveOwnershipTamperFailsClosed(aggregateApi, roots, alpha)
-  await proveSealTamperFailsClosed(aggregateApi, roots, alpha)
-  await proveTornSnapshotFailsClosed(aggregateApi, workspaceApi, alpha, alphaSeal2.aggregateRevision)
+  await withCanonicalWorkflowRead(async () => {
+    await proveMissingObjectFailsClosed(aggregateApi, roots, alpha, afterRestart)
+    await proveOwnershipTamperFailsClosed(aggregateApi, roots, alpha)
+    await proveSealTamperFailsClosed(aggregateApi, roots, alpha)
+    await proveTornSnapshotFailsClosed(aggregateApi, workspaceApi, alpha, alphaSeal2.aggregateRevision)
+  })
 
   report = {
     status: 'pass',
@@ -256,7 +268,7 @@ try {
       'cross-project-reference-rejection-by-domain',
       'rejected-write-store-digests-unchanged',
       'closed-aggregate-query-and-export',
-      'global-role-template-not-embedded',
+      'minimal-role-template-dependency-closure',
       'credential-value-exclusion',
       'schema-object-aggregate-digests',
       'aggregate-seal-cas',
@@ -601,6 +613,11 @@ function assertProductionMutationIngressCutover() {
   }
   assert(service.includes('async verifyLiveProject(') && service.includes('async authorizeLiveReferences('),
     'ProjectAggregateService must expose the live production mutation boundary')
+  assert(
+    service.includes('LIVE_AGGREGATE_STABILITY_ATTEMPTS') &&
+      service.includes("error.code !== 'REVISION_CONFLICT'"),
+    'live aggregate reads must retry only bounded cross-store revision conflicts'
+  )
 }
 
 function sourceText(relativePath) {
@@ -864,7 +881,22 @@ async function proveLiveSnapshotStability(aggregateApi, scenarioRoots, projectId
 function copyScenario(name) {
   const scenario = path.join(tempRoot, name)
   cpSync(stateRoot, scenario, { recursive: true })
+  // Migration receipts bind absolute paths. A cloned fault-injection root must
+  // establish its own readiness receipts instead of replaying the source root.
+  rmSync(path.join(scenario, 'workflow', 'backups', 'workflow-ledger'), { recursive: true, force: true })
   return scenario
+}
+
+async function withCanonicalWorkflowRead(operation) {
+  const key = 'CAOGEN_WORKFLOW_LEDGER_READ_MODE'
+  const previous = process.env[key]
+  process.env[key] = 'canonical'
+  try {
+    return await operation()
+  } finally {
+    if (previous === undefined) delete process.env[key]
+    else process.env[key] = previous
+  }
 }
 
 function aggregateRoots(root) {

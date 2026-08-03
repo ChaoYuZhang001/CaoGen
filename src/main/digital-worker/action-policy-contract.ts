@@ -54,7 +54,9 @@ const NETWORK_TOOLS = new Set([
   'china_notify',
   'gitee_prepare',
   'git_push',
-  'git_create_pr'
+  'git_create_pr',
+  'git_create_issue',
+  'send_notification'
 ])
 
 const WORKSPACE_WRITE_TOOLS = new Set([

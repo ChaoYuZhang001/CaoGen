@@ -33,48 +33,68 @@ export function durableImageFixture(sessionId, bytes) {
 }
 
 export function storedTargetFixture(runtime) {
+  const secret = 'secret-for-smoke-broker-canary'
+  const ref = { providerId: 'provider-saved', keyId: 'key-primary' }
+  runtime.credentials.forgetProviderCredentials(ref.providerId)
+  const record = runtime.credentials.storeProviderCredential(ref, secret)
   const provider = providerFixture({
-    id: 'provider-saved',
+    id: ref.providerId,
     name: 'Saved Anthropic',
     baseUrl: 'https://saved.example/gateway/v1',
     customHeaders: [
       'Anthropic-Beta: interleaved-thinking-2025-05-14',
       'X-Route: saved-route'
     ].join('\n'),
+    encryptedToken: record.encryptedToken,
+    apiKeys: [{
+      id: ref.keyId,
+      label: 'primary',
+      ...record,
+      createdAt: 1,
+      disabled: false
+    }],
+    activeKeyId: ref.keyId,
     credentialHeaderNames: undefined
   })
-  const secret = 'secret-for-smoke-broker-canary'
-  const ref = { providerId: provider.id, keyId: 'key-primary' }
-  const broker = new runtime.broker.ProviderCredentialBroker({
-    isEncryptionAvailable: () => false,
-    encryptString: () => Buffer.alloc(0),
-    decryptString: () => ''
-  })
-  const record = broker.store(ref, secret)
+  runtime.providers.commitProviderProfileStore([provider])
   return {
     provider,
     secret,
     ref,
+    credentials: runtime.credentials,
     dependencies: {
       getProvider: (id) => id === provider.id ? provider : undefined,
-      resolveProviderToken: (savedProvider) => {
+      selectProviderCredential: (savedProvider) => {
         assert.equal(savedProvider, provider)
-        const resolution = broker.resolve(ref, record)
-        return {
-          token: resolution.token,
-          keyId: ref.keyId,
-          keyLabel: 'primary',
-          storage: resolution.storage
-        }
+        return runtime.providers.selectProviderCredential(savedProvider)
+      },
+      issueProviderCredentialLease: (savedProvider, scope, expectedKeyId) => {
+        assert.equal(savedProvider, provider)
+        assert.equal(expectedKeyId, ref.keyId)
+        return runtime.providers.issueProviderCredentialLease(
+          savedProvider,
+          scope,
+          {},
+          expectedKeyId
+        )
       }
     }
   }
 }
 
-export function targetDependencies(provider, token) {
+export function targetDependencies(provider) {
   return {
     getProvider: (id) => id === provider.id ? provider : undefined,
-    resolveProviderToken: () => ({ token, keyId: 'key-endpoint', keyLabel: 'endpoint' })
+    selectProviderCredential: () => ({
+      providerId: provider.id,
+      keyId: 'key-endpoint',
+      keyLabel: 'endpoint',
+      authMode: 'api-key',
+      available: true
+    }),
+    issueProviderCredentialLease: () => {
+      throw new Error('endpoint construction must not issue a credential lease')
+    }
   }
 }
 
@@ -85,6 +105,8 @@ export function providerFixture(overrides = {}) {
     baseUrl: 'https://provider.example/v1',
     encryptedToken: 'opaque',
     models: ['claude-default'],
+    authMode: 'api-key',
+    engine: 'anthropic',
     customHeaders: '',
     credentialHeaderNames: ['x-api-key'],
     createdAt: 1,
@@ -431,6 +453,9 @@ export function loadRuntime() {
       broker: require(findCompiled(outDir, 'providerCredentialBroker.js')),
       engine: require(findCompiled(outDir, 'anthropicEngine.js')),
       modelAttempt: require(findCompiled(outDir, 'model-attempt-runtime.js')),
+      providers: require(findCompiled(outDir, 'providers.js')),
+      credentials: require(findCompiled(outDir, 'providerCredentialRuntime.js')),
+      settings: require(findCompiled(outDir, 'settings.js')),
       taskRuntimeRegistry: require(findCompiled(outDir, 'task-runtime-registry.js')).taskRuntimeRegistry,
       target: require(findCompiled(outDir, 'anthropicMessagesTarget.js'))
     }

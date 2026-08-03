@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { TaskStrategy } from '../../../shared/types'
+import type { LocalComputeActivationResult, Project, TaskStrategy } from '../../../shared/types'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 import AssistantStartNotice from './experience/AssistantStartNotice'
 import TaskStrategyControl from './experience/TaskStrategyControl'
@@ -17,12 +17,65 @@ import {
   NEW_PROJECT_SESSION_CHOICE,
   welcomeSessionOptions,
   welcomeValidationKey,
-  type WelcomeRoutingMode
+  type WelcomeRoutingMode,
+  type WelcomeSessionDraft
 } from './experience/welcome-session-projection'
 import {
   UNASSIGNED,
   useWelcomeDraftController
 } from './experience/useWelcomeDraft'
+import {
+  deriveFirstTaskOnboardingStatus,
+  deriveFirstTaskProgress,
+  patchFirstTaskOnboardingRecord,
+  runFirstTaskSubmissionExclusive,
+  useFirstTaskOnboardingRecord
+} from './experience/first-task-onboarding'
+
+type WelcomeStoreState = ReturnType<typeof useStore.getState>
+type WelcomeProjection = ReturnType<typeof useExperienceProjection>
+
+function useLocalComputeActivation(
+  projection: WelcomeProjection,
+  providersLoaded: boolean,
+  computeAvailable: boolean,
+  activateLocalCompute: () => Promise<LocalComputeActivationResult>,
+  updateWelcomeDraft: WelcomeStoreState['updateWelcomeDraft']
+) {
+  const [status, setStatus] = useState<'idle' | 'checking' | 'ready' | 'unavailable'>('idle')
+  const activation = useRef<Promise<boolean> | null>(null)
+  const ensure = useCallback(async (): Promise<boolean> => {
+    if (hasAvailableCompute(useStore.getState().providers)) return true
+    if (activation.current) return activation.current
+    setStatus('checking')
+    const pending = activateLocalCompute()
+      .then((result) => {
+        if (result.status !== 'activated' || !result.provider) {
+          setStatus('unavailable')
+          return false
+        }
+        updateWelcomeDraft({ providerId: result.provider.id, model: AUTO_MODEL })
+        setStatus('ready')
+        return true
+      })
+      .catch(() => {
+        setStatus('unavailable')
+        return false
+      })
+      .finally(() => {
+        activation.current = null
+      })
+    activation.current = pending
+    return pending
+  }, [activateLocalCompute, updateWelcomeDraft])
+
+  useEffect(() => {
+    if (!providersLoaded || projection !== 'assistant' || computeAvailable || status !== 'idle') return
+    void ensure()
+  }, [computeAvailable, ensure, projection, providersLoaded, status])
+
+  return { localComputeStatus: status, ensureLocalCompute: ensure }
+}
 
 interface WelcomeTool {
   key: string
@@ -70,65 +123,258 @@ const WELCOME_TOOLS: WelcomeTool[] = [
   }
 ]
 
-/**
- * 首屏"打开即输入":居中引导语 + 中央大输入框,
- * 内嵌项目选择 / Provider / 模型 / 权限,回车直接建会话并发送首条消息。
- */
-export default function WelcomeView(): React.JSX.Element {
+interface WelcomeStartActionsInput {
+  projection: WelcomeProjection
+  sessionDraft: WelcomeSessionDraft
+  text: string
+  taskStrategy: TaskStrategy
+  computeAvailable: boolean
+  ensureLocalCompute: () => Promise<boolean>
+  startSessionWithPrompt: WelcomeStoreState['startSessionWithPrompt']
+  refreshProviders: WelcomeStoreState['refreshProviders']
+}
+
+function useWelcomeStartActions(input: WelcomeStartActionsInput) {
   const t = useT()
-  const projection = useExperienceProjection()
-  const settings = useStore((s) => s.settings)
-  const providers = useStore((s) => s.providers)
-  const projects = useStore((s) => s.projects)
-  const requestedProjectId = useStore((s) => s.newSessionProjectId)
-  const startSessionWithPrompt = useStore((s) => s.startSessionWithPrompt)
-  const refreshProviders = useStore((s) => s.refreshProviders)
-  const activateLocalCompute = useStore((s) => s.activateLocalCompute)
-  const setShowSettings = useStore((s) => s.setShowSettings)
-  const welcome = useWelcomeDraftController({ projects, providers, requestedProjectId, settings })
-  const {
-    availableProjects, cwd, driveMode, model, projectChoice,
-    providerId, routingMode, text
-  } = welcome
-  const [taskStrategy, setTaskStrategy] = useState<TaskStrategy>('execute')
+  const startSessionWithPrompt = input.startSessionWithPrompt
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [recoveryKind, setRecoveryKind] = useState<WelcomeRecoveryKind | null>(null)
-  const [localComputeStatus, setLocalComputeStatus] = useState<'idle' | 'checking' | 'ready' | 'unavailable'>('idle')
-  const localComputeActivation = useRef<Promise<boolean> | null>(null)
-  const submitPending = useRef(false)
-  const taRef = useRef<HTMLTextAreaElement>(null)
-  const computeAvailable = hasAvailableCompute(providers)
 
-  const ensureLocalCompute = async (): Promise<boolean> => {
-    if (hasAvailableCompute(useStore.getState().providers)) return true
-    if (localComputeActivation.current) return localComputeActivation.current
-    setLocalComputeStatus('checking')
-    const pending = activateLocalCompute()
-      .then((result) => {
-        if (result.status !== 'activated' || !result.provider) {
-          setLocalComputeStatus('unavailable')
-          return false
+  const submit = async (
+    promptInput = input.text,
+    selectedStrategy = input.taskStrategy,
+    title?: string
+  ): Promise<void> => {
+    const prompt = promptInput.trim()
+    if (!prompt || busy) return
+    await runFirstTaskSubmissionExclusive(async () => {
+      setBusy(true)
+      const draft = { ...input.sessionDraft, taskStrategy: selectedStrategy }
+      try {
+        let available = input.computeAvailable
+        if (input.projection === 'assistant' && !available) available = await input.ensureLocalCompute()
+        const validationKey = welcomeValidationKey(input.projection, draft, available)
+        if (validationKey) {
+          setError(t(validationKey))
+          setRecoveryKind(welcomeRecoveryKind(validationKey))
+          return
         }
-        welcome.update({ providerId: result.provider.id, model: AUTO_MODEL })
-        setLocalComputeStatus('ready')
-        return true
-      })
-      .catch(() => {
-        setLocalComputeStatus('unavailable')
-        return false
-      })
-      .finally(() => {
-        localComputeActivation.current = null
-      })
-    localComputeActivation.current = pending
-    return pending
+        setError('')
+        setRecoveryKind(null)
+        const options = welcomeSessionOptions(input.projection, draft, prompt)
+        const candidateSessionId = await startSessionWithPrompt(
+          title ? { ...options, title } : options,
+          prompt
+        )
+        patchFirstTaskOnboardingRecord({
+          candidateSessionId,
+          presetKey: title
+            ? WELCOME_TOOLS.find((tool) => t(tool.labelKey) === title)?.key ?? 'custom'
+            : 'custom',
+          startedAt: Date.now()
+        })
+        useStore.getState().clearWelcomeDraft()
+      } catch (err) {
+        const safeKey = assistantSafeStartError(input.projection, err)
+        setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
+        setRecoveryKind(safeKey ? 'compute' : null)
+      } finally {
+        setBusy(false)
+      }
+    })
   }
 
-  useEffect(() => {
-    if (projection !== 'assistant' || computeAvailable || localComputeStatus !== 'idle') return
-    void ensureLocalCompute()
-  }, [computeAvailable, localComputeStatus, projection])
+  const retryCompute = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const nextRecovery = recoveryKind ?? (input.projection === 'assistant' ? 'compute' : 'provider')
+      if (nextRecovery === 'compute') {
+        const activated = await input.ensureLocalCompute()
+        if (!activated) await input.refreshProviders()
+      } else {
+        await input.refreshProviders()
+      }
+      const available = hasAvailableCompute(useStore.getState().providers)
+      setError(available ? '' : t(
+        nextRecovery === 'provider' ? 'explicitProviderRequired' : 'assistantComputeUnavailable'
+      ))
+      setRecoveryKind(available ? null : nextRecovery)
+    } catch {
+      const nextRecovery = recoveryKind ?? (input.projection === 'assistant' ? 'compute' : 'provider')
+      setError(t(
+        nextRecovery === 'provider' ? 'welcomeProviderRefreshFailed' : 'assistantComputeCheckFailed'
+      ))
+      setRecoveryKind(nextRecovery)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clearError = (): void => {
+    setError('')
+    setRecoveryKind(null)
+  }
+
+  return { busy, clearError, error, recoveryKind, retryCompute, submit }
+}
+
+interface WelcomeFirstTaskProgressProps {
+  providersLoaded: boolean
+  computeAvailable: boolean
+  activatingLocal: boolean
+}
+
+function WelcomeFirstTaskProgress({
+  providersLoaded,
+  computeAvailable,
+  activatingLocal
+}: WelcomeFirstTaskProgressProps): React.JSX.Element | null {
+  const t = useT()
+  const sessions = useStore((state) => state.sessions)
+  const onboardingRecord = useFirstTaskOnboardingRecord()
+  const candidateStatus = onboardingRecord.candidateSessionId
+    ? sessions[onboardingRecord.candidateSessionId]?.meta.status
+    : undefined
+  const onboardingStatus = deriveFirstTaskOnboardingStatus({
+    record: onboardingRecord,
+    providersHydrated: providersLoaded,
+    computeAvailable,
+    activatingLocal,
+    sessionStatus: candidateStatus
+  })
+  const onboardingProgress = deriveFirstTaskProgress(onboardingStatus, onboardingRecord)
+  if (onboardingStatus === 'completed') return null
+  return (
+    <div
+      className="first-task-progress"
+      aria-label={t('firstTaskProgressRun')}
+      data-first-task-status={onboardingStatus}
+    >
+      <span className={onboardingProgress.compute}>{t('firstTaskProgressCompute')}</span>
+      <span className={onboardingProgress.task}>{t('firstTaskProgressRun')}</span>
+      <span className={onboardingProgress.result}>{t('firstTaskProgressResult')}</span>
+      <span className={onboardingProgress.acceptance}>{t('firstTaskProgressAcceptance')}</span>
+    </div>
+  )
+}
+
+interface WelcomeProjectSelectorProps {
+  availableProjects: Project[]
+  cwd: string
+  projectChoice: string
+  onBrowse: () => void
+  onCwdChange: (cwd: string) => void
+  onProjectChange: (choice: string) => void
+}
+
+function WelcomeProjectSelector({
+  availableProjects,
+  cwd,
+  projectChoice,
+  onBrowse,
+  onCwdChange,
+  onProjectChange
+}: WelcomeProjectSelectorProps): React.JSX.Element {
+  const t = useT()
+  return (
+    <div className="welcome-project-bar">
+      <select
+        className="welcome-project-select"
+        aria-label={t('project')}
+        title={cwd || t('welcomePickProject')}
+        value={projectChoice}
+        onChange={(event) => onProjectChange(event.target.value)}
+      >
+        <option value={UNASSIGNED}>{t('directStartNoProject')}</option>
+        {availableProjects.map((project) => (
+          <option key={project.id} value={project.id}>{project.name}</option>
+        ))}
+        <option value={NEW_PROJECT_SESSION_CHOICE}>{t('newProjectDirectory')}</option>
+      </select>
+      {projectChoice === NEW_PROJECT_SESSION_CHOICE ? (
+        <>
+          <input
+            className="welcome-project-path"
+            value={cwd}
+            placeholder="/path/to/project"
+            aria-label={t('projectDir')}
+            onChange={(event) => onCwdChange(event.target.value)}
+          />
+          <button className="welcome-project-browse" onClick={onBrowse}>{t('browse')}</button>
+        </>
+      ) : projectChoice !== UNASSIGNED ? (
+        <span className="welcome-project-current" title={cwd}>{cwd}</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** 首屏打开即输入，任务策略决定后端派生的权限模式。 */
+export default function WelcomeView(): React.JSX.Element {
+  const t = useT()
+  const projection = useExperienceProjection()
+  const settings = useStore((state) => state.settings)
+  const providers = useStore((state) => state.providers)
+  const providersLoaded = useStore((state) => state.providersLoaded)
+  const projects = useStore((state) => state.projects)
+  const welcomeDraft = useStore((state) => state.welcomeDraft)
+  const requestedProjectId = useStore((state) => state.newSessionProjectId)
+  const startSessionWithPrompt = useStore((state) => state.startSessionWithPrompt)
+  const refreshProviders = useStore((state) => state.refreshProviders)
+  const activateLocalCompute = useStore((state) => state.activateLocalCompute)
+  const setShowSettings = useStore((state) => state.setShowSettings)
+  const welcome = useWelcomeDraftController({ projects, providers, requestedProjectId, settings })
+  const {
+    availableProjects,
+    cwd,
+    driveMode,
+    model,
+    projectChoice,
+    providerId,
+    routingMode,
+    text
+  } = welcome
+  const taskStrategy = welcomeDraft.taskStrategy ?? 'execute'
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const computeAvailable = hasAvailableCompute(providers)
+  const { localComputeStatus, ensureLocalCompute } = useLocalComputeActivation(
+    projection,
+    providersLoaded,
+    computeAvailable,
+    activateLocalCompute,
+    welcome.update
+  )
+  const sessionDraft: WelcomeSessionDraft = {
+    cwd,
+    driveMode,
+    model,
+    taskStrategy,
+    projectId: availableProjects.some((project) => project.id === projectChoice)
+      ? projectChoice
+      : undefined,
+    providerId,
+    routingMode,
+    unassigned: projectChoice === UNASSIGNED,
+    forkFromSdkSessionId: welcomeDraft.forkFromSdkSessionId
+  }
+  const {
+    busy,
+    clearError,
+    error,
+    recoveryKind,
+    retryCompute,
+    submit
+  } = useWelcomeStartActions({
+    projection,
+    sessionDraft,
+    text,
+    taskStrategy,
+    computeAvailable,
+    ensureLocalCompute,
+    startSessionWithPrompt,
+    refreshProviders
+  })
 
   const routingStrategy = driveMode === 'core'
     ? settings.schedulerStrategy
@@ -142,109 +388,41 @@ export default function WelcomeView(): React.JSX.Element {
           ? 'routingStrategySpeed'
           : 'routingStrategyBalanced'
   )
-
-  const modelOptions = useMemo(() => {
-    return modelOptionsForProvider(
-      providers,
-      providerId,
-      `${t('autoRoute')} · ${routingStrategyLabel}`,
-      model
-    )
-  }, [model, providerId, providers, routingStrategyLabel, t])
-
+  const modelOptions = useMemo(() => modelOptionsForProvider(
+    providers,
+    providerId,
+    `${t('autoRoute')} · ${routingStrategyLabel}`,
+    model
+  ), [model, providerId, providers, routingStrategyLabel, t])
   const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
 
   const onRoutingModeChange = (mode: WelcomeRoutingMode): void => {
     welcome.setRoutingMode(mode, fixedModelOptions[0]?.value ?? '')
   }
 
-  const browse = async (): Promise<void> => {
-    const dir = await window.agentDesk.pickDirectory()
-    if (dir) {
-      welcome.setPickedDirectory(dir)
-      setError('')
-      setRecoveryKind(null)
-    }
+  const onProjectChange = (choice: string): void => {
+    welcome.setProject(choice)
+    clearError()
   }
 
-  const submit = async (
-    promptInput = text,
-    selectedStrategy = taskStrategy,
-    title?: string
-  ): Promise<void> => {
-    const prompt = promptInput.trim()
-    if (!prompt || busy || submitPending.current) return
-    submitPending.current = true
-    setBusy(true)
-    const draft = {
-      cwd,
-      driveMode,
-      model,
-      taskStrategy: selectedStrategy,
-      projectId: availableProjects.some((project) => project.id === projectChoice) ? projectChoice : undefined,
-      providerId,
-      routingMode,
-      unassigned: projectChoice === UNASSIGNED
-    }
-    try {
-      let available = computeAvailable
-      if (projection === 'assistant' && !available) available = await ensureLocalCompute()
-      const validationKey = welcomeValidationKey(projection, draft, available)
-      if (validationKey) {
-        setError(t(validationKey))
-        setRecoveryKind(welcomeRecoveryKind(validationKey))
-        return
-      }
-      setError('')
-      setRecoveryKind(null)
-      const options = welcomeSessionOptions(projection, draft, prompt)
-      await startSessionWithPrompt(title ? { ...options, title } : options, prompt)
-      welcome.clear()
-    } catch (err) {
-      const safeKey = assistantSafeStartError(projection, err)
-      setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
-      setRecoveryKind(safeKey ? 'compute' : null)
-    } finally {
-      submitPending.current = false
-      setBusy(false)
-    }
+  const browse = async (): Promise<void> => {
+    const dir = await window.agentDesk.pickDirectory()
+    if (!dir) return
+    welcome.setPickedDirectory(dir)
+    clearError()
   }
 
   const startPreset = (tool: WelcomeTool): void => {
     const prompt = t(tool.promptKey)
-    const title = t(tool.labelKey)
-    welcome.update({ text: prompt })
-    setTaskStrategy(tool.taskStrategy)
-    void submit(prompt, tool.taskStrategy, title)
+    welcome.update({ text: prompt, taskStrategy: tool.taskStrategy })
+    if (tool.key !== 'understand') void submit(prompt, tool.taskStrategy, t(tool.labelKey))
+    else taRef.current?.focus()
   }
 
-  const retryCompute = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const nextRecovery = recoveryKind ?? (projection === 'assistant' ? 'compute' : 'provider')
-      if (nextRecovery === 'compute') {
-        const activated = await ensureLocalCompute()
-        if (!activated) await refreshProviders()
-      } else {
-        await refreshProviders()
-      }
-      const available = hasAvailableCompute(useStore.getState().providers)
-      setError(available ? '' : t(nextRecovery === 'provider' ? 'explicitProviderRequired' : 'assistantComputeUnavailable'))
-      setRecoveryKind(available ? null : nextRecovery)
-    } catch {
-      const nextRecovery = recoveryKind ?? (projection === 'assistant' ? 'compute' : 'provider')
-      setError(t(nextRecovery === 'provider' ? 'welcomeProviderRefreshFailed' : 'assistantComputeCheckFailed'))
-      setRecoveryKind(nextRecovery)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      void submit()
-    }
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    void submit()
   }
 
   return (
@@ -253,12 +431,17 @@ export default function WelcomeView(): React.JSX.Element {
         <div className="welcome-hero-inner">
           <img className="welcome-logo" src={APP_ICON_URL} alt={APP_NAME} />
           <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
+          <WelcomeFirstTaskProgress
+            providersLoaded={providersLoaded}
+            computeAvailable={computeAvailable || localComputeStatus === 'ready'}
+            activatingLocal={localComputeStatus === 'checking'}
+          />
           <div className="welcome-suggestion-grid">
             {WELCOME_TOOLS.map((tool) => (
               <button
                 key={tool.key}
                 type="button"
-                className="welcome-suggestion"
+                className={`welcome-suggestion ${tool.key === 'understand' ? 'welcome-suggestion-recommended' : ''}`}
                 data-welcome-preset={tool.key}
                 data-preset-strategy={tool.taskStrategy}
                 disabled={busy}
@@ -267,47 +450,29 @@ export default function WelcomeView(): React.JSX.Element {
               >
                 <HeaderIcon name={tool.icon} />
                 <span>{t(tool.labelKey)}</span>
+                {tool.key === 'understand' && <small>{t('firstTaskRecommended')}</small>}
               </button>
             ))}
           </div>
         </div>
 
         <div className="welcome-compose-dock">
-          <div className="welcome-project-bar">
-            <select
-              className="welcome-project-select"
-              aria-label={t('project')}
-              title={cwd || t('welcomePickProject')}
-              value={projectChoice}
-              onChange={(e) => welcome.setProject(e.target.value)}
-            >
-              <option value={UNASSIGNED}>{t('directStartNoProject')}</option>
-              {availableProjects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-              <option value={NEW_PROJECT_SESSION_CHOICE}>{t('newProjectDirectory')}</option>
-            </select>
-            {projectChoice === NEW_PROJECT_SESSION_CHOICE ? (
-              <>
-                <input
-                  className="welcome-project-path"
-                  value={cwd}
-                  placeholder="/path/to/project"
-                  aria-label={t('projectDir')}
-                  onChange={(event) => welcome.update({ cwd: event.target.value })}
-                />
-                <button className="welcome-project-browse" onClick={() => void browse()}>
-                  {t('browse')}
-                </button>
-              </>
-            ) : projectChoice !== UNASSIGNED ? (
-              <span className="welcome-project-current" title={cwd}>
-                {cwd}
-              </span>
-            ) : null}
-          </div>
+          {welcomeDraft.forkFromSdkSessionId ? (
+            <div className="welcome-fork-source">
+              {t('conversationForkSource', {
+                title: welcomeDraft.forkSourceTitle ?? t('conversation')
+              })}
+            </div>
+          ) : (
+            <WelcomeProjectSelector
+              availableProjects={availableProjects}
+              cwd={cwd}
+              projectChoice={projectChoice}
+              onBrowse={() => void browse()}
+              onCwdChange={(nextCwd) => welcome.update({ cwd: nextCwd })}
+              onProjectChange={onProjectChange}
+            />
+          )}
           <div className="welcome-composer">
             <textarea
               ref={taRef}
@@ -315,12 +480,16 @@ export default function WelcomeView(): React.JSX.Element {
               placeholder={t('welcomeInputPlaceholder')}
               value={text}
               rows={2}
-              onChange={(e) => welcome.update({ text: e.target.value })}
+              onChange={(event) => welcome.update({ text: event.target.value })}
               onKeyDown={onKeyDown}
               autoFocus
             />
             <div className="welcome-composer-bar">
-              <TaskStrategyControl value={taskStrategy} onChange={setTaskStrategy} compact />
+              <TaskStrategyControl
+                value={taskStrategy}
+                onChange={(nextStrategy) => welcome.update({ taskStrategy: nextStrategy })}
+                compact
+              />
               {projection === 'assistant' ? (
                 <AssistantComputeIndicator
                   available={computeAvailable || localComputeStatus === 'ready'}
@@ -341,7 +510,11 @@ export default function WelcomeView(): React.JSX.Element {
                   onRoutingModeChange={onRoutingModeChange}
                 />
               )}
-              <button className="welcome-send" disabled={busy || !text.trim()} onClick={() => void submit()}>
+              <button
+                className="welcome-send"
+                disabled={busy || !text.trim()}
+                onClick={() => void submit()}
+              >
                 {busy ? '···' : '↑'}
               </button>
             </div>

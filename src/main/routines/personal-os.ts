@@ -29,7 +29,8 @@ export interface PersonalOsRoutineSummary {
   name: string
   enabled: boolean
   state: PersonalOsRoutineState
-  projectCwd: string
+  projectId?: string
+  projectCwd?: string
   schedule: string
   nextRunAt: number | null
   lastRunAt: number | null
@@ -170,9 +171,9 @@ export function buildRoutineRunNotification(
   if (record.status === 'failed' && !notification.onFailure) return null
 
   return {
-    title: record.status === 'succeeded' ? `Routine 已完成: ${routine.name}` : `Routine 失败: ${routine.name}`,
+    title: record.status === 'succeeded' ? `Routine 待验收: ${routine.name}` : `Routine 失败: ${routine.name}`,
     body: record.status === 'succeeded'
-      ? `已创建会话${record.sessionId ? ` ${record.sessionId}` : ''}，并投递定时任务内容。`
+      ? (record.resultText ?? 'Agent 已完成本轮执行，结果已进入待验收。')
       : (record.error ?? '执行失败'),
     sessionId: record.sessionId ?? routine.id
   }
@@ -208,6 +209,7 @@ function summarizeRoutine(
     name: routine.name,
     enabled: routine.enabled,
     state,
+    projectId: routine.projectId,
     projectCwd: routine.projectCwd,
     schedule: routine.schedule,
     nextRunAt,

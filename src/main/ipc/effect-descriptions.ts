@@ -45,6 +45,18 @@ function queryableEffectTargetDescription(effect: EffectRecord): string | undefi
   if (effect.target.kind === 'pull_request_create') {
     return `${effect.target.provider}:${effect.target.projectPath} ${effect.target.sourceBranch} -> ${effect.target.baseBranch}`
   }
+  if (effect.target.kind === 'issue_create') {
+    return `${effect.target.provider}:${effect.target.projectPath} · issue ${effect.target.titleDigest.slice(0, 12)}`
+  }
+  if (effect.target.kind === 'mcp_tool_call') {
+    return `MCP ${effect.target.toolName} · server ${effect.target.serverIdentityDigest.slice(0, 12)}`
+  }
+  if (effect.target.kind === 'webhook_message_send') {
+    return `${effect.target.channel} · connector ${effect.target.connectorId.slice(0, 12)}`
+  }
+  if (effect.target.kind === 'office_artifact') {
+    return `${effect.target.artifactKind} · ${effect.target.relativePath}`
+  }
   if (effect.target.kind === 'git_worktree_create') {
     return `${effect.target.repoRoot} · create worktree ${effect.target.worktreePath}`
   }
@@ -66,6 +78,18 @@ function queryableEffectIntentDescription(effect: EffectRecord): string | undefi
   }
   if (effect.target.kind === 'pull_request_create') {
     return `marker ${stableValueDigest(effect.target.marker).slice(0, 16)} · head ${effect.target.sourceSha.slice(0, 16)}`
+  }
+  if (effect.target.kind === 'issue_create') {
+    return `marker ${effect.target.markerToken.slice(-16)} · ${effect.target.labels.length} label(s)`
+  }
+  if (effect.target.kind === 'mcp_tool_call') {
+    return `verify ${effect.target.queryToolName}${effect.target.jsonPointer} = ${effect.target.expectedValueDigest.slice(0, 16)}`
+  }
+  if (effect.target.kind === 'webhook_message_send') {
+    return `message sha256 ${effect.target.payloadDigest.slice(0, 16)} · no automatic replay`
+  }
+  if (effect.target.kind === 'office_artifact') {
+    return `generate ${effect.target.mediaType} · spec sha256 ${effect.target.specDigest.slice(0, 16)}`
   }
   if (effect.target.kind === 'git_worktree_create') {
     return `create ${effect.target.branchRef} at ${effect.target.baseSha.slice(0, 16)}`

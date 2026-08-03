@@ -26,11 +26,18 @@ try {
   restoreModuleLoad = installModuleStubs()
 
   const engineMod = M('main/engine.js')
+  const transcriptMod = M('main/transcript.js')
   engineMod.registerEngine({
     kind: 'openai',
     label: 'DAG Recovery Fake',
     available: () => true,
-    create: (meta, emit, resumeSdkSessionId) => new DagRecoveryFakeEngine(meta, emit, resumeSdkSessionId)
+    create: (meta, emit, resumeSdkSessionId, initialEventSeq) => new DagRecoveryFakeEngine({
+      meta,
+      emit,
+      resumeSdkSessionId,
+      initialEventSeq,
+      TranscriptWriter: transcriptMod.TranscriptWriter
+    })
   })
 
   const firstManager = M('main/sessionManager.js').sessionManager
@@ -184,7 +191,13 @@ try {
     kind: 'openai',
     label: 'DAG Recovery Fake',
     available: () => true,
-    create: (meta, emit, resumeSdkSessionId) => new DagRecoveryFakeEngine(meta, emit, resumeSdkSessionId)
+    create: (meta, emit, resumeSdkSessionId, initialEventSeq) => new DagRecoveryFakeEngine({
+      meta,
+      emit,
+      resumeSdkSessionId,
+      initialEventSeq,
+      TranscriptWriter: transcriptMod.TranscriptWriter
+    })
   })
   const sentBeforeRecovery = sentInputs.length
   const frozenPrepB = parentSnapshot.dagExecutions[0].tasks.find((task) => task.task.id === 'prep-b')
@@ -315,12 +328,11 @@ function installModuleStubs() {
 }
 
 class DagRecoveryFakeEngine {
-  constructor(meta, emit, resumeSdkSessionId) {
-    this.meta = meta
-    this.emit = emit
-    this.resumeSdkSessionId = resumeSdkSessionId
-    this.seq = 0
-    this.transcript = []
+  constructor(input) {
+    this.meta = input.meta
+    this.emit = input.emit
+    this.writer = new input.TranscriptWriter(input.resumeSdkSessionId, input.initialEventSeq ?? 0)
+    this.lastSeq = input.initialEventSeq ?? 0
   }
 
   async start() {
@@ -334,7 +346,7 @@ class DagRecoveryFakeEngine {
     const text = typeof input === 'string' ? input : input.text
     const messageId = typeof input === 'string' ? undefined : input.messageId
     sentInputs.push({ sessionId: this.meta.id, taskId: this.meta.childTaskId, text })
-    this.push({ kind: 'user-message', messageId: messageId || `msg-${this.meta.id}-${this.seq + 1}`, text })
+    this.push({ kind: 'user-message', messageId: messageId || `msg-${this.meta.id}-${this.lastSeq + 1}`, text })
     if (!autoCompleteRecoveredRoots && completeInitialTaskIds.has(this.meta.childTaskId)) {
       setTimeout(() => this.finish(`${this.meta.childTaskId} initial result`), 20)
       return
@@ -362,7 +374,7 @@ class DagRecoveryFakeEngine {
   }
 
   getTranscript() {
-    return [...this.transcript]
+    return this.writer.readAll()
   }
 
   pendingPermissions() {
@@ -386,8 +398,15 @@ class DagRecoveryFakeEngine {
   }
 
   push(event) {
-    this.transcript.push({ seq: ++this.seq, event })
-    this.emit(event, this.seq)
+    const entry = this.writer.nextEntry(event)
+    this.lastSeq = entry.seq
+    this.emit(event, entry.seq, {
+      eventId: entry.eventId,
+      streamId: entry.streamId,
+      occurredAt: entry.occurredAt,
+      correlationId: entry.correlationId,
+      causationId: entry.causationId
+    })
   }
 
   finish(resultText) {

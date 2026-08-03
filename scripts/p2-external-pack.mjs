@@ -57,8 +57,8 @@ This pack is generated from the current CaoGen checkout. It contains templates o
 ## Steps
 
 1. Copy \`.env.template\` to a private local file outside git tracking.
-2. Fill real webhook URLs, API tokens, provider keys, and JetBrains IDE paths.
-3. Fill \`china-parity-providers.template.json\` with real baseline and China model providers.
+2. Fill real webhook URLs, integration API tokens, and JetBrains IDE paths in the private env file.
+3. Fill \`china-parity-providers.template.json\`, then save the private copy as \`~/.caogen-private/provider-parity.json\`.
 4. Run the JetBrains plugin in a real IDE and fill \`jetbrains-evidence.template.json\` with observed evidence and artifact paths.
 5. Run \`run-required-gates.ps1 -EnvFile D:\\private\\p2.external.env\` from the repository root.
 
@@ -109,7 +109,6 @@ WECHAT_MINIPROGRAM_BODY=
 WECHAT_MINIPROGRAM_AUTH_PREFIX=
 
 CAOGEN_CHINA_TOOL_CALL_PARITY=1
-CAOGEN_CHINA_PARITY_PROVIDERS=<absolute-path-or-inline-json>
 CAOGEN_CHINA_PARITY_REQUIRE_BASELINE=1
 CAOGEN_CHINA_PARITY_MAX_GAP=0
 
@@ -244,7 +243,6 @@ function Assert-NoPlaceholderEnv {
 
 Import-P2EnvFile -Path $EnvFile
 Assert-NoPlaceholderEnv -Names @(
-  "CAOGEN_CHINA_PARITY_PROVIDERS",
   "CAOGEN_JETBRAINS_IDE_PATH",
   "CAOGEN_JETBRAINS_IDE_EVIDENCE_JSON",
   "CAOGEN_JETBRAINS_IDE_RECORDER_JSONL"

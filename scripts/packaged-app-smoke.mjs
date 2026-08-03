@@ -17,7 +17,9 @@ const requestedPlatform = argValue('--platform') || process.platform
 const targetPlatform = requestedPlatform === 'macos' ? 'darwin' : requestedPlatform === 'windows' ? 'win32' : requestedPlatform
 const targetArch = argValue('--arch') || process.arch
 const unsignedBuild = process.argv.includes('--unsigned')
-const sourceArtifact = releaseArtifactPath(targetPlatform, targetArch, packageJson.version)
+const previewMode = process.argv.includes('--preview')
+const distributionChannel = previewMode || unsignedBuild ? 'unsigned_preview' : 'formal'
+const sourceArtifact = releaseArtifactPath(targetPlatform, targetArch, packageJson.version, previewMode)
 const releaseAudit = readReleaseAudit(targetPlatform, targetArch)
 const userDataDir = mkdtempSync(path.join(tmpdir(), 'caogen-packaged-app-smoke-'))
 const installRoot = mkdtempSync(path.join(tmpdir(), 'caogen-installed-app-smoke-'))
@@ -47,7 +49,9 @@ try {
     throw new Error(`packaged app smoke for ${targetPlatform} must run on ${targetPlatform}, got ${process.platform}`)
   }
   if (targetArch !== 'x64' && targetArch !== 'arm64') throw new Error(`unsupported packaged app architecture: ${targetArch}`)
+  if (unsignedBuild && previewMode) throw new Error('use either --unsigned or --preview, not both')
   if (unsignedBuild && targetPlatform !== 'win32') throw new Error('unsigned packaged app smoke is Windows-only')
+  if (previewMode && targetPlatform !== 'win32') throw new Error('preview packaged app smoke is Windows-only')
   if (process.arch !== targetArch) {
     throw new Error(`native packaged app smoke for ${targetArch} must run on ${targetArch}, got ${process.arch}`)
   }
@@ -130,7 +134,8 @@ if (!failure && cleanupFailure) failure = `temporary user-data cleanup failed: $
 
 const report = {
   status: failure ? 'failed' : 'passed',
-  mode: unsignedBuild ? 'unsigned' : 'signed-release',
+  mode: unsignedBuild ? 'unsigned' : previewMode ? 'unsigned-preview' : 'signed-release',
+  distributionChannel,
   runId,
   reportDir,
   packageVersion: packageJson.version,
@@ -155,11 +160,14 @@ const report = {
 }
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-const reportName = unsignedBuild
-  ? `latest-${platformLabel(targetPlatform)}-unsigned-${targetArch}.json`
-  : `latest-${platformLabel(targetPlatform)}-${targetArch}.json`
-writeFileSync(path.join(reportRoot, reportName), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+const latestReportName = previewMode ? 'latest-preview.json' : 'latest.json'
+writeFileSync(path.join(reportRoot, latestReportName), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+const latestPlatformName = previewMode
+  ? `latest-${platformLabel(targetPlatform)}-${targetArch}-preview.json`
+  : unsignedBuild
+    ? `latest-${platformLabel(targetPlatform)}-unsigned-${targetArch}.json`
+    : `latest-${platformLabel(targetPlatform)}-${targetArch}.json`
+writeFileSync(path.join(reportRoot, latestPlatformName), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 
 console.log(JSON.stringify(report, null, 2))
 if (failure) process.exitCode = 1
@@ -259,12 +267,17 @@ function gitOutput(args) {
   }
 }
 
-function releaseArtifactPath(platform, arch, version) {
+function releaseArtifactPath(platform, arch, version, preview) {
   if (platform === 'darwin') {
     const suffix = arch === 'arm64' ? '-arm64' : ''
     return path.join(repoRoot, 'dist', `CaoGen-${version}${suffix}.dmg`)
   }
-  if (platform === 'win32') return path.join(repoRoot, 'dist', `CaoGen Setup ${version}.exe`)
+  if (platform === 'win32') {
+    const name = preview
+      ? `CaoGen-${version}-windows-x64-unsigned-preview.exe`
+      : `CaoGen Setup ${version}.exe`
+    return path.join(repoRoot, 'dist', name)
+  }
   return path.join(repoRoot, 'dist', 'unsupported')
 }
 
@@ -368,7 +381,9 @@ function packagedAsarPath(appRootPath, platform) {
 function readReleaseAudit(platform, arch) {
   const relativePath = platform === 'darwin'
     ? `test-results/macos-release-audit/latest-${arch}.json`
-    : `test-results/windows-release-audit/latest-${arch}.json`
+    : previewMode
+      ? `test-results/windows-preview-audit/latest-${arch}.json`
+      : `test-results/windows-release-audit/latest-${arch}.json`
   const absolutePath = path.join(repoRoot, relativePath)
   if (!existsSync(absolutePath)) return { relativePath, data: null, error: null }
   try {
@@ -387,7 +402,7 @@ function assertReleaseAuditBinding(audit) {
   if (audit.data.mode !== 'post_build') failures.push('mode')
   if (audit.data.packageVersion !== packageJson.version) failures.push('packageVersion')
   if (audit.data.targetArch !== targetArch) failures.push('targetArch')
-  if (audit.data.platform !== targetPlatform) failures.push('platform')
+  if (!auditPlatformMatches(audit.data)) failures.push('platformChannel')
   if (audit.data.git?.commit !== git.commit) failures.push('gitCommit')
   if (audit.data.git?.worktreeClean !== true || !git.worktreeClean) failures.push('cleanGit')
   if (!/^[0-9a-f]{64}$/i.test(audit.data.artifactSetSha256 || '')) failures.push('artifactSetSha256')
@@ -443,6 +458,10 @@ function powerShellExecutable() {
     windowsHide: true
   })
   return probe.status === 0 ? 'pwsh.exe' : 'powershell.exe'
+}
+
+function auditPlatformMatches(data) {
+  return data.platform === targetPlatform && (data.distributionChannel || 'formal') === distributionChannel
 }
 
 function platformLabel(platform) {

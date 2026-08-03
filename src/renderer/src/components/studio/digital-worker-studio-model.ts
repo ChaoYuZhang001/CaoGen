@@ -20,6 +20,7 @@ export interface DigitalWorkerStudioProject {
 }
 
 export interface DigitalWorkerStudioProps {
+  active?: boolean
   projectId?: string
   projects?: readonly DigitalWorkerStudioProject[]
   workItems?: readonly DigitalWorkerStudioWorkItem[]

@@ -1,4 +1,8 @@
+import type { GoalBudget } from './project-workspace-types'
+import type { TaskRunStatus, UsageTotals } from './types'
+
 export const SUPERVISOR_SCHEMA_VERSION = 1 as const
+export type SupervisorRunOrigin = 'manual' | 'task_run'
 
 /** Persistent state owned by the local Supervisor. */
 export type SupervisorRunStatus =
@@ -28,18 +32,47 @@ export interface SupervisorApproval {
   reason?: string
 }
 
+export interface SupervisorRunAccountingBase {
+  usage: UsageTotals
+  costUsd: number
+}
+
+export interface SupervisorRunUsage extends UsageTotals {
+  costUsd: number
+  turns: number
+}
+
+export interface SupervisorRunObservationInput {
+  taskRunStatus: TaskRunStatus
+  sourceEventId: string
+  /** Usage attributed to this event. Applied to Run totals only for a completed turn. */
+  usage: UsageTotals
+  /** Session-cumulative USD cost at this event. */
+  costUsd: number
+  turnCompleted?: boolean
+  observedAt?: number
+}
+
 export interface SupervisorRunRecord {
   schemaVersion: typeof SUPERVISOR_SCHEMA_VERSION
   id: string
   projectId: string
   goalId?: string
   workItemId: string
+  /** Distinguishes renderer-created coordination rows from TaskRun reservations. */
+  origin?: SupervisorRunOrigin
   status: SupervisorRunStatus
   revision: number
   /** Highest fencing token ever issued for this Run; never decreases on release/expiry. */
   fencingToken: number
   retryCount: number
   maxRetries: number
+  /** Immutable Goal budget snapshot inherited by the WorkItem when this Run was created. */
+  budget?: GoalBudget
+  /** Session accounting at Run creation; cumulative USD cost is measured from this base. */
+  accountingBase?: SupervisorRunAccountingBase
+  /** Durable usage attributable only to this Run. */
+  usage?: SupervisorRunUsage
   createdAt: number
   updatedAt: number
   lease?: SupervisorLease
@@ -60,6 +93,8 @@ export type SupervisorEventKind =
   | 'run.completed'
   | 'run.cancelled'
   | 'run.retry_authorized'
+  | 'run.observed'
+  | 'run.accounting'
   | 'lease.acquired'
   | 'lease.heartbeat'
   | 'lease.reassigned'
@@ -92,9 +127,15 @@ export interface SupervisorRunInput {
   projectId: string
   goalId?: string
   workItemId: string
+  origin?: SupervisorRunOrigin
   maxRetries?: number
+  budget?: GoalBudget
+  accountingBase?: SupervisorRunAccountingBase
   createdAt?: number
 }
+
+/** Renderer-facing create shape. Policy/accounting are derived in main from the canonical WorkItem. */
+export type SupervisorRunCreateInput = Omit<SupervisorRunInput, 'budget' | 'accountingBase' | 'origin'>
 
 export interface SupervisorMutationOptions {
   expectedRevision?: number
@@ -125,7 +166,7 @@ export interface SupervisorStateApi {
   listSupervisorRuns(options?: { projectId?: string; status?: SupervisorRunStatus }): Promise<SupervisorRunRecord[]>
   getSupervisorRun(id: string): Promise<SupervisorRunRecord | undefined>
   listSupervisorEvents(runId?: string): Promise<SupervisorEvent[]>
-  createSupervisorRun(input: SupervisorRunInput, options?: SupervisorMutationOptions): Promise<SupervisorRunRecord>
+  createSupervisorRun(input: SupervisorRunCreateInput, options?: SupervisorMutationOptions): Promise<SupervisorRunRecord>
   acquireSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>
   heartbeatSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>
   releaseSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>

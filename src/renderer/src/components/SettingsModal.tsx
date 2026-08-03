@@ -27,6 +27,7 @@ import { useProviderRecoverySettings } from './settings/useProviderRecoverySetti
 import ProjectSettings from '../pages/ProjectSettings'
 import MigrationManager from './settings/MigrationManager'
 import { requireMcpProbeResults } from '../store/task-recovery-actions'
+import NotificationConnectorManager from './settings/NotificationConnectorManager'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -106,7 +107,8 @@ export default function SettingsPage(): React.JSX.Element {
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const { closeEditor, editing, setEditing } = useProviderRecoverySettings(providers)
-  const [tab, setTab] = useState<SettingsTab>(() => useStore.getState().settingsTab)
+  const settingsTab = useStore((s) => s.settingsTab)
+  const [tab, setTab] = useState<SettingsTab>(() => settingsTab)
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
@@ -137,6 +139,10 @@ export default function SettingsPage(): React.JSX.Element {
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
   }, [])
+
+  useEffect(() => {
+    if (settingsTab) setTab(settingsTab)
+  }, [settingsTab])
 
   useEffect(() => {
     if (tab === 'control') void refreshControlCenter()
@@ -193,11 +199,17 @@ export default function SettingsPage(): React.JSX.Element {
       modelRoutingRules: (d.modelRoutingRules ?? []).filter((rule) => rule.id !== id)
     }))
 
+  const closeSettings = (): void => {
+    void refreshProviders().catch(() => undefined)
+    setShowSettings(false)
+  }
+
   const save = async (): Promise<void> => {
     setSaving(true)
     setSaveError('')
     try {
       await updateSettings(draft)
+      await refreshProviders()
       setShowSettings(false)
     } catch {
       setSaveError(t('settingsSaveFailed'))
@@ -303,6 +315,7 @@ export default function SettingsPage(): React.JSX.Element {
     { id: 'persona', label: t('tabPersona') },
     { id: 'office', label: t('tabOffice') },
     { id: 'providers', label: t('tabProviders') },
+    { id: 'notifications', label: t('tabNotifications') },
     { id: 'plugins', label: t('tabPlugins') },
     { id: 'migrate', label: t('tabMigrate') }
   ]
@@ -315,7 +328,7 @@ export default function SettingsPage(): React.JSX.Element {
           className="settings-page-back no-drag"
           aria-label={t('backToWorkspace')}
           title={t('backToWorkspace')}
-          onClick={() => setShowSettings(false)}
+          onClick={closeSettings}
         >
           ←
         </button>
@@ -1204,6 +1217,8 @@ export default function SettingsPage(): React.JSX.Element {
               />
             )}
 
+            {tab === 'notifications' && <NotificationConnectorManager />}
+
             {tab === 'plugins' && (
               <>
                 <h3 className="settings-h3">{t('tabPlugins')}</h3>
@@ -1231,7 +1246,7 @@ export default function SettingsPage(): React.JSX.Element {
               {saveError}
             </div>
           )}
-          <button className="btn btn-ghost" disabled={saving} onClick={() => setShowSettings(false)}>
+          <button className="btn btn-ghost" disabled={saving} onClick={closeSettings}>
             {t('cancel')}
           </button>
           <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>

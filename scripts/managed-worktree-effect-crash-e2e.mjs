@@ -36,7 +36,9 @@ if (workerMode) {
     installElectronStub()
     prepareRepos()
     await createCrashCase()
+    downgradeRegistryToLegacyArray()
     await removeCrashCase()
+    futureRegistrySchemaCase()
     console.log('managed worktree effect crash e2e: PASS')
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
@@ -58,12 +60,14 @@ async function createCrashCase() {
   assertEqual(resumed.message.pathExists, true)
   assertEqual(resumed.message.branchState, 'present')
   assertEqual(counterLines('create'), 1, 'create recovery must not replay the Git mutation')
+  assertVersionedRegistry('create recovery')
 }
 
 async function removeCrashCase() {
   const setup = await runChild('remove-setup', false)
   assertEqual(setup.message.status, 'completed')
   assertEqual(setup.message.registryState, 'active')
+  assertVersionedRegistry('legacy registry mutation')
 
   const crashed = await runChild('remove-crash', true)
   assertEqual(crashed.message.type, 'mutation-boundary')
@@ -80,6 +84,40 @@ async function removeCrashCase() {
   assertEqual(resumed.message.pathExists, false)
   assertEqual(resumed.message.branchState, 'absent')
   assertEqual(counterLines('remove'), 1, 'remove recovery must not replay the Git mutation')
+  assertVersionedRegistry('remove recovery')
+}
+
+function downgradeRegistryToLegacyArray() {
+  const document = registryDocument()
+  writeFileSync(registryFile(), `${JSON.stringify(document.records, null, 2)}\n`, 'utf8')
+}
+
+function futureRegistrySchemaCase() {
+  const document = registryDocument()
+  const future = `${JSON.stringify({ ...document, schemaVersion: 2 }, null, 2)}\n`
+  writeFileSync(registryFile(), future, 'utf8')
+  const lifecycle = loadModules().lifecycle
+  const result = lifecycle.inspectManagedWorktreeRegistryRecord(sessionId('create'))
+  assert(result.ok === false, 'future managed-worktree registry schema must fail closed')
+  assert(
+    result.error.includes('Unsupported managed worktree registry schema version: 2'),
+    `future schema error was not explicit: ${result.error}`
+  )
+  assertEqual(readFileSync(registryFile(), 'utf8'), future, 'future registry must not be overwritten')
+}
+
+function assertVersionedRegistry(label) {
+  const document = registryDocument()
+  assertEqual(document.schemaVersion, 1, `${label} must persist schemaVersion 1`)
+  assert(Array.isArray(document.records), `${label} must persist records`)
+}
+
+function registryDocument() {
+  return JSON.parse(readFileSync(registryFile(), 'utf8'))
+}
+
+function registryFile() {
+  return path.join(userData, 'worktrees', 'index.json')
 }
 
 async function runWorker(mode) {

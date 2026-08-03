@@ -57,13 +57,14 @@ interface StudioCollections {
   refresh: () => Promise<void>
 }
 
-function useStudioCollections(): StudioCollections {
+function useStudioCollections(enabled: boolean): StudioCollections {
   const [roles, setRoles] = useState<RoleTemplate[]>([])
   const [workers, setWorkers] = useState<DigitalWorker[]>([])
   const [assignments, setAssignments] = useState<DigitalWorkerAssignment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const requestRevision = useRef(0)
+  const loaded = useRef(false)
 
   const refresh = useCallback(async (): Promise<void> => {
     const revision = ++requestRevision.current
@@ -80,6 +81,7 @@ function useStudioCollections(): StudioCollections {
       setRoles(nextRoles)
       setWorkers(nextWorkers)
       setAssignments(nextAssignments)
+      loaded.current = true
     } catch (cause) {
       if (revision === requestRevision.current) setError(errorMessage(cause))
     } finally {
@@ -88,11 +90,16 @@ function useStudioCollections(): StudioCollections {
   }, [])
 
   useEffect(() => {
-    void refresh()
+    if (!enabled) {
+      requestRevision.current += 1
+      setLoading(false)
+      return
+    }
+    if (!loaded.current) void refresh()
     return () => {
       requestRevision.current += 1
     }
-  }, [refresh])
+  }, [enabled, refresh])
 
   return {
     roles,
@@ -238,8 +245,8 @@ function useStudioMutations(collections: StudioCollections): StudioMutationState
   }
 }
 
-export function useDigitalWorkerStudio(): DigitalWorkerStudioState {
-  const collections = useStudioCollections()
+export function useDigitalWorkerStudio(enabled = true): DigitalWorkerStudioState {
+  const collections = useStudioCollections(enabled)
   const mutations = useStudioMutations(collections)
   return {
     roles: collections.roles,

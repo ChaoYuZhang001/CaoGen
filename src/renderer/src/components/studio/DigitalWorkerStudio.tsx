@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type { DigitalWorkerStatus } from '../../../../shared/types'
 import type { DigitalWorkerStudioProps, StudioTab } from './digital-worker-studio-model'
 import { projectOptions } from './digital-worker-studio-model'
@@ -12,8 +12,9 @@ export type {
   DigitalWorkerStudioWorkItem
 } from './digital-worker-studio-model'
 
-export default function DigitalWorkerStudio(props: DigitalWorkerStudioProps): React.JSX.Element {
+function DigitalWorkerStudio(props: DigitalWorkerStudioProps): React.JSX.Element {
   const {
+    active = true,
     projectId,
     projects = [],
     workItems = [],
@@ -21,7 +22,7 @@ export default function DigitalWorkerStudio(props: DigitalWorkerStudioProps): Re
     className = '',
     onProjectChange
   } = props
-  const studio = useDigitalWorkerStudio()
+  const studio = useDigitalWorkerStudio(active)
   const [selectedProjectId, setSelectedProjectId] = useState(projectId || '')
   const [statusFilter, setStatusFilter] = useState<'' | DigitalWorkerStatus>('')
   const [activeTab, setActiveTab] = useState<StudioTab>('team')
@@ -95,3 +96,5 @@ export default function DigitalWorkerStudio(props: DigitalWorkerStudioProps): Re
     />
   )
 }
+
+export default memo(DigitalWorkerStudio)

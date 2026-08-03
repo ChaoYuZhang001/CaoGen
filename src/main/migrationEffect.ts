@@ -63,7 +63,13 @@ function safeAssetIdentity(asset: MigrationAsset): Record<string, string> {
 }
 
 function migrationKindCounts(assets: MigrationAsset[]): Record<MigrationAsset['kind'], number> {
-  const counts = { rules: 0, mcp: 0, config: 0 }
+  const counts: Record<MigrationAsset['kind'], number> = {
+    rules: 0,
+    mcp: 0,
+    config: 0,
+    skill: 0,
+    hook: 0
+  }
   for (const asset of assets) counts[asset.kind] += 1
   return counts
 }

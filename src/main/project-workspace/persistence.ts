@@ -40,6 +40,8 @@ function emptyState(): ProjectWorkspaceState {
     workspaces: [],
     goals: [],
     workItems: [],
+    squads: [],
+    comments: [],
     events: []
   }
 }
@@ -63,6 +65,11 @@ function assertState(value: unknown): asserts value is ProjectWorkspaceState {
       throw new ProjectWorkspaceError('corrupt_store', `project workspace store ${field} is invalid`)
     }
   }
+  for (const field of ['squads', 'comments'] as const) {
+    if (candidate[field] !== undefined && !Array.isArray(candidate[field])) {
+      throw new ProjectWorkspaceError('corrupt_store', `project workspace store ${field} is invalid`)
+    }
+  }
 }
 
 export async function readProjectWorkspaceState(filePath: string): Promise<ProjectWorkspaceState> {
@@ -78,7 +85,11 @@ export async function readProjectWorkspaceState(filePath: string): Promise<Proje
 export function parseProjectWorkspaceState(raw: string): ProjectWorkspaceState {
   const value: unknown = JSON.parse(raw)
   assertState(value)
-  return value
+  return {
+    ...value,
+    squads: value.squads ?? [],
+    comments: value.comments ?? []
+  }
 }
 
 async function fsyncDirectory(directory: string): Promise<void> {

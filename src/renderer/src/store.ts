@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
-
 // ART-005: store 层派生交付判定(纯函数,唯一真相源;不新增状态字段,不改既有 API)
 export { deriveDeliveryVerdict, canMarkGoalComplete } from './store/delivery-verdict'
 export type { DeliveryVerdict, DeliveryVerdictDetail } from './store/delivery-verdict'
@@ -767,9 +766,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   handleMemorySuggestion(event: MemorySuggestionEvent): void
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
-  createSession(opts: CreateSessionOptions): Promise<void>
+  createSession(opts: CreateSessionOptions): Promise<string>
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
-  startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
+  startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<string>
   recoverTaskSnapshot(snapshotId: string): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   decomposeAndDispatchTaskDag(
@@ -777,8 +776,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
     options?: { autoMerge?: boolean; verificationCommand?: string }
   ): Promise<TaskDagDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
+  forkFromHistory(entry: HistoryEntry): void
   selectSession(id: string): void
-  sendMessage(input: string | SendMessagePayload): Promise<void>
+  sendMessage(input: string | SendMessagePayload, sessionId?: string): Promise<void>
   sendQuickbarClipboard(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
   sendQuickbarScreenshot(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
   sendQuickbarFiles(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
@@ -924,6 +924,56 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   setShowTaskRecovery(v: boolean): void
 }
 
+function browserEventMatchesActiveSession(event: BrowserEvent, activeId: string | null): boolean {
+  if (event.kind === 'error') return !event.sessionId || !activeId || event.sessionId === activeId
+  return !activeId || event.sessionId === activeId
+}
+
+function reduceBrowserEvent(state: AppStore, event: BrowserEvent): AppStore {
+  if (!browserEventMatchesActiveSession(event, state.activeId)) return state
+  switch (event.kind) {
+    case 'state':
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          browserState: event.state,
+          browserUrlDraft: event.state.url,
+          browserLoading: event.state.loading,
+          browserError: undefined
+        }
+      }
+    case 'annotation': {
+      const known = new Set(state.workbench.browserAnnotations.map((item) => item.id))
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          browserAnnotations: known.has(event.annotation.id)
+            ? state.workbench.browserAnnotations
+            : [event.annotation, ...state.workbench.browserAnnotations],
+          browserMessage: '已保存网页批注'
+        }
+      }
+    }
+    case 'closed':
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          activePanelId: state.workbench.activePanelId === 'browser' ? null : state.workbench.activePanelId,
+          browserState: undefined,
+          browserLoading: false
+        }
+      }
+    case 'error':
+      return {
+        ...state,
+        workbench: { ...state.workbench, browserError: event.message, browserLoading: false }
+      }
+  }
+}
+
 export const useStore = create<AppStore>((set, get) => {
   const clearStreamBuffer = (sessionId: string): void => {
     const buffer = streamDeltaBuffers.get(sessionId)
@@ -1003,7 +1053,10 @@ export const useStore = create<AppStore>((set, get) => {
       }))
       void (async () => {
         try {
-          const state = await window.agentDesk.openBrowser(id, ctx?.url)
+          const result = await window.agentDesk.openBrowser(id, ctx?.url)
+          if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
+          if (!result.ok) throw new Error(result.error)
+          const state = result.state
           const annotations = await window.agentDesk
             .listBrowserAnnotations(id)
             .catch(() => [])
@@ -1363,7 +1416,7 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => {
           const session = s.sessions[sessionId]
           if (!session) return s
-          return { sessions: { ...s.sessions, [sessionId]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [sessionId]: replaceTranscript(session, transcript) } }
         })
       })
     }
@@ -1434,50 +1487,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   handleBrowserEvent(event) {
-    set((s) => {
-      const activeId = s.activeId
-      if (event.kind === 'state') {
-        if (activeId && event.sessionId !== activeId) return s
-        return {
-          workbench: {
-            ...s.workbench,
-            browserState: event.state,
-            browserUrlDraft: event.state.url,
-            browserLoading: event.state.loading,
-            browserError: undefined
-          }
-        }
-      }
-      if (event.kind === 'annotation') {
-        if (activeId && event.sessionId !== activeId) return s
-        const known = new Set(s.workbench.browserAnnotations.map((item) => item.id))
-        return {
-          workbench: {
-            ...s.workbench,
-            browserAnnotations: known.has(event.annotation.id)
-              ? s.workbench.browserAnnotations
-              : [event.annotation, ...s.workbench.browserAnnotations],
-            browserMessage: '已保存网页批注'
-          }
-        }
-      }
-      if (event.kind === 'closed') {
-        if (activeId && event.sessionId !== activeId) return s
-        return {
-          workbench: {
-            ...s.workbench,
-            activePanelId: s.workbench.activePanelId === 'browser' ? null : s.workbench.activePanelId,
-            browserState: undefined,
-            browserLoading: false
-          }
-        }
-      }
-      if (event.kind === 'error') {
-        if (event.sessionId && activeId && event.sessionId !== activeId) return s
-        return { workbench: { ...s.workbench, browserError: event.message, browserLoading: false } }
-      }
-      return s
-    })
+    set((state) => reduceBrowserEvent(state, event))
   },
 
   async createSession(opts) {
@@ -1495,23 +1505,25 @@ export const useStore = create<AppStore>((set, get) => {
     // M2 缺陷修复:resume 会话的 init 事件先于本 IPC 返回抵达,被 stash 后
     // drain 只做 reduce,不会触发 handleEvent 里的 init→转录回放副作用,
     // 导致恢复的会话聊天记录空白。此处注册完成后主动补拉一次转录。
-    if (opts.resumeSdkSessionId) {
+    if (opts.resumeSdkSessionId || opts.forkFromSdkSessionId) {
       const transcript = await window.agentDesk.getTranscript(meta.id)
       if (transcript.length > 0) {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
         })
       }
     }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
+    return meta.id
   },
 
   async startSessionWithPrompt(opts, prompt) {
-    await get().createSession(opts) // 建完 activeId 已指向新会话
+    const sessionId = await get().createSession(opts)
     const text = prompt.trim()
-    if (text) await get().sendMessage(text)
+    if (text) await get().sendMessage(text, sessionId)
+    return sessionId
   },
 
   async recoverTaskSnapshot(snapshotId) {
@@ -1537,7 +1549,7 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
         })
       }
       const [history, projects, taskSnapshots] = await Promise.all([
@@ -1652,6 +1664,44 @@ export const useStore = create<AppStore>((set, get) => {
     })
   },
 
+  forkFromHistory(entry) {
+    const state = get()
+    const projectExists = Boolean(entry.projectId && state.projects.some((project) => project.id === entry.projectId))
+    const projectChoice = projectExists
+      ? entry.projectId!
+      : entry.unassigned
+        ? '__unassigned__'
+        : '__new_project__'
+    const routingMode = entry.routingScope === 'global' || entry.routingScope === 'provider'
+      ? entry.routingScope
+      : 'fixed'
+    state.updateWelcomeDraft({
+      text: '',
+      projectChoice,
+      cwd: entry.cwd,
+      driveMode: entry.driveMode ?? state.settings.driveMode,
+      routingMode,
+      providerId: entry.providerId,
+      model: entry.model,
+      permissionMode: null,
+      taskStrategy: entry.taskStrategy ?? 'execute',
+      forkFromSdkSessionId: entry.sdkSessionId,
+      forkSourceTitle: entry.title
+    })
+    set((current) => ({
+      showNewSession: true,
+      newSessionProjectId: null,
+      showSettings: false,
+      showTaskRecovery: false,
+      view: 'list',
+      studioSessionNavigationNonce: nextStudioSessionNonce(
+        current.studioSessionNavigationNonce,
+        current.experienceMode,
+        true
+      )
+    }))
+  },
+
   selectSession(id) {
     const previousId = get().activeId
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
@@ -1673,8 +1723,16 @@ export const useStore = create<AppStore>((set, get) => {
     }))
   },
 
-  async sendMessage(input) {
-    await sendActiveSessionMessage({ getState: get, setState: set, nextId: genId }, input)
+  async sendMessage(input, sessionId) {
+    const id = sessionId ?? get().activeId
+    await sendActiveSessionMessage({
+      getState: () => {
+        const state = get()
+        return id ? { ...state, activeId: id } : state
+      },
+      setState: set,
+      nextId: genId
+    }, input)
   },
 
   async sendQuickbarClipboard(options) {
@@ -3549,6 +3607,12 @@ export const useStore = create<AppStore>((set, get) => {
     set({ rewindPanel: { open: false } })
   },
   setShowNewSession(v, projectId) {
+    if (v) {
+      get().updateWelcomeDraft({
+        forkFromSdkSessionId: undefined,
+        forkSourceTitle: undefined
+      })
+    }
     set((s) => ({
       showNewSession: v, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode, v),
       newSessionProjectId: v ? projectId ?? null : null,

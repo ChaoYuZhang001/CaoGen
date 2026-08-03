@@ -342,11 +342,98 @@ assert.equal(eventResponse.type, 'session.event')
 assert.equal(eventResponse.payload.sessionId, createdResponse.payload.id)
 assert.equal(eventResponse.payload.text, 'event back to IDE')
 
+// --- Origin rejection (CSWSH prevention) ---
+const originStatus = await rawUpgradeStatus(status.port, {
+  Origin: 'http://evil.example'
+})
+assert(
+  originStatus.includes('403'),
+  `browser Origin must be rejected with 403, got: ${originStatus}`
+)
+
+// A request with no Origin header still upgrades (local IDE clients send none).
+const noOriginStatus = await rawUpgradeStatus(status.port, {})
+assert(
+  noOriginStatus.includes('101'),
+  `no-Origin request must still upgrade, got: ${noOriginStatus}`
+)
+
+// --- Auth timeout: connection without hello is dropped ---
+const idleClient = await connectWebSocket(status.port)
+const idleClosed = await waitForClose(idleClient, 8000)
+assert(idleClosed, 'connection without hello must be dropped by auth timeout')
+
+// --- Connection cap ---
+// NOT YET ASSERTED. The MAX_CONNECTIONS ceiling is implemented in
+// ide-bridge.ts, but an end-to-end assertion here is still open: a socket
+// closed via client.close() is not reaped from the server-side connection map
+// within the test's observation window, so the pool cannot be filled to a known
+// count deterministically. Root cause unconfirmed (candidate: destroy() on an
+// upgraded socket not emitting 'close', or the new rate-limit early return
+// interfering with listener state). Do not add a cap assertion here until that
+// is resolved — see task 0-A follow-up.
 client.close()
 await bridge.stop()
 assert.equal(bridge.status().enabled, false, 'bridge should stop cleanly')
+
+// --- Empty token must be rejected at the token comparison layer ---
+const bridgeSourceText = readFileSync(bridgeSource, 'utf8')
+assert(
+  !/function isTokenAccepted\([^)]*\)[^{]*\{\s*if \(!expected\) return true/.test(bridgeSourceText),
+  'isTokenAccepted must not fail open when no token is configured'
+)
+
+// --- Manager must refuse to start an enabled bridge with an empty token ---
+const managerSource = readFileSync(bridgeManagerSource, 'utf8')
+assert(
+  /if \(!config\.token\)/.test(managerSource),
+  'ide-bridge-manager must refuse to start without a token'
+)
+
 rmSync(tempDir, { recursive: true, force: true })
 console.log('ide-bridge-smoke: PASS')
+
+function rawUpgradeStatus(port, extraHeaders) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port })
+    let received = ''
+    const finish = (value) => {
+      socket.destroy()
+      resolve(value)
+    }
+    socket.once('error', reject)
+    socket.setTimeout(5000, () => finish(received || 'TIMEOUT'))
+    socket.once('connect', () => {
+      const headers = [
+        'GET /ide-bridge HTTP/1.1',
+        `Host: 127.0.0.1:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${randomBytes(16).toString('base64')}`,
+        'Sec-WebSocket-Version: 13'
+      ]
+      for (const [name, value] of Object.entries(extraHeaders)) {
+        headers.push(`${name}: ${value}`)
+      }
+      headers.push('', '')
+      socket.write(headers.join('\r\n'))
+    })
+    socket.on('data', (chunk) => {
+      received += chunk.toString('utf8')
+      if (received.includes('\r\n')) finish(received)
+    })
+  })
+}
+
+function waitForClose(target, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs)
+    target.onClose(() => {
+      clearTimeout(timer)
+      resolve(true)
+    })
+  })
+}
 
 function pathToFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1:')}`
@@ -416,6 +503,9 @@ function makeClient(socket, queued, getBuffer, setBuffer) {
     },
     close() {
       socket.destroy()
+    },
+    onClose(listener) {
+      socket.once('close', listener)
     }
   }
 }

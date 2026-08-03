@@ -1,5 +1,5 @@
 export type ExperienceMode = 'assistant' | 'studio'
-export type StudioSurface = 'workspace' | 'session'
+export type StudioSurface = 'workspace' | 'result' | 'session'
 
 export interface ExperienceModeSlice {
   experienceMode: ExperienceMode

@@ -1,17 +1,21 @@
 import type {
   DigitalWorker,
   DigitalWorkerAssignment,
-  DigitalWorkerLease
+  DigitalWorkerLease,
+  RoleTemplate
 } from './digital-worker-types'
 import type { LearningAuditEvent, LearningRecord } from './learning-types'
 import type {
   Goal,
+  ProjectSquad,
   ProjectResource,
   ProjectWorkspace,
   ProjectWorkspaceEvent,
-  WorkItem
+  WorkItem,
+  WorkItemComment
 } from './project-workspace-types'
-import type { WorkflowLedgerExportSelection } from './workflow-types'
+import type { WorkflowLedgerExportSelection, WorkflowRunRecord } from './workflow-types'
+import type { Routine, RoutineRunRecord } from './types'
 
 export const PROJECT_AGGREGATE_SCHEMA_VERSION = 1 as const
 export const PROJECT_AGGREGATE_FORMAT = 'caogen.project-aggregate.v1' as const
@@ -22,6 +26,8 @@ export const PROJECT_AGGREGATE_OBJECT_KINDS = [
   'resource',
   'goal',
   'work_item',
+  'squad',
+  'comment',
   'digital_worker',
   'assignment',
   'lease',
@@ -84,7 +90,8 @@ export interface ProjectAggregateAuditRecord {
 }
 
 export interface ProjectAggregateWorkflowSelection {
-  runs: WorkflowLedgerExportSelection['runs']['items']
+  /** Explicit Project export is restorable; credential fields are sanitized later. */
+  runs: WorkflowRunRecord[]
   artifacts: WorkflowLedgerExportSelection['artifacts']['items']
   artifactEdges: WorkflowLedgerExportSelection['artifactEdges']['items']
   artifactLocations: WorkflowLedgerExportSelection['artifactLocations']['items']
@@ -104,6 +111,8 @@ export interface ProjectAggregateSnapshot {
   resources: ProjectResource[]
   goals: Goal[]
   workItems: WorkItem[]
+  squads: ProjectSquad[]
+  comments: WorkItemComment[]
   digitalWorkers: DigitalWorker[]
   assignments: DigitalWorkerAssignment[]
   leases: DigitalWorkerLease[]
@@ -142,12 +151,25 @@ export interface ProjectAggregateVerification {
   sealed: true
 }
 
+/** Global records required to make the Project-owned aggregate usable after import. */
+export interface ProjectAggregateDependencies {
+  roleTemplates: RoleTemplate[]
+}
+
+export interface ProjectAggregateAutomation {
+  routines: Routine[]
+  runs: RoutineRunRecord[]
+}
+
 export interface ProjectAggregateExportBundle {
   schemaVersion: typeof PROJECT_AGGREGATE_SCHEMA_VERSION
   format: typeof PROJECT_AGGREGATE_EXPORT_FORMAT
   projectId: string
   aggregateRevision: number
   aggregate: ProjectAggregateSnapshot
+  dependencies: ProjectAggregateDependencies
+  /** Project-owned local automation. Optional only for backward-compatible v1 imports. */
+  automation?: ProjectAggregateAutomation
   verification: ProjectAggregateVerification
   exportDigest: string
 }
@@ -176,6 +198,7 @@ export interface ProjectAggregateRoots {
   workspaceRoot: string
   workflowRoot: string
   digitalWorkerRoot: string
+  routineRoot: string
   learningRoot: string
   aggregateRoot: string
   /** Optional path-based namespaces are read for compatibility, never as Project identity. */

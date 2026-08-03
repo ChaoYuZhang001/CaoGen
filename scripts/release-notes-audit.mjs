@@ -6,7 +6,13 @@ import { macosX64ReleaseEvidenceChecks } from './lib/macos-x64-release-evidence.
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
-const finalMode = process.argv.includes('--final') || process.env.CAOGEN_RELEASE_NOTES_FINAL === '1'
+const platformScopedFinalMode =
+  process.argv.includes('--platform-scoped-final') ||
+  process.env.CAOGEN_RELEASE_NOTES_PLATFORM_SCOPED_FINAL === '1'
+const finalMode =
+  platformScopedFinalMode ||
+  process.argv.includes('--final') ||
+  process.env.CAOGEN_RELEASE_NOTES_FINAL === '1'
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'release-notes-audit')
 const reportDir = path.join(reportRoot, runId)
@@ -48,6 +54,7 @@ const scopedEvidence = macosX64Scope
 const doctorPackaging = Array.isArray(doctor?.domains)
   ? doctor.domains.find((domain) => domain?.id === 'packaging_release')
   : undefined
+const doctorPlatformScopedRelease = doctor?.distributionPolicy?.platformScopedRelease
 
 if (!existsSync(notesPath)) {
   failures.push(`release notes file is missing: ${path.relative(repoRoot, notesPath)}`)
@@ -58,7 +65,7 @@ if (!existsSync(notesPath)) {
 const report = {
   status: failures.length === 0 ? 'passed' : required ? 'failed' : existsSync(notesPath) ? 'failed' : 'skipped',
   required,
-  mode: finalMode ? 'final' : 'draft',
+  mode: platformScopedFinalMode ? 'platform_scoped_final' : finalMode ? 'final' : 'draft',
   platformScope,
   runId,
   reportDir,
@@ -73,7 +80,7 @@ const report = {
   artifactSetSha256: finalMode
     ? macosX64Scope
       ? scopedEvidence?.artifactSetSha256
-      : doctorPackaging?.artifacts?.artifactSetSha256
+      : expectedArtifactEvidence()?.artifactSetSha256
     : undefined,
   candidateEvidence: macosX64Scope
     ? {
@@ -105,6 +112,9 @@ if (!required && existsSync(notesPath) && report.status === 'failed') process.ex
 function validateNotes(text) {
   if (!['all', 'macos-x64'].includes(platformScope)) {
     failures.push(`unsupported release platform scope: ${platformScope}`)
+  }
+  if (platformScopedFinalMode && platformScope !== 'all') {
+    failures.push('--platform-scoped-final cannot be combined with --platform-scope')
   }
   if (!finalMode && platformScope !== 'all') {
     failures.push('draft release notes use the complete release-doctor scope; platform scopes apply only to final notes')
@@ -185,6 +195,11 @@ function validateFinalDoctorBinding() {
 
 function validateFinalMode(text) {
   if (!finalMode) return
+  if (platformScopedFinalMode) {
+    validatePlatformScopedFinalMode(text)
+    validateFinalAssets(text)
+    return
+  }
   if (macosX64Scope) {
     validateMacosX64FinalEvidence()
   } else {
@@ -216,8 +231,35 @@ function validateMacosX64FinalEvidence() {
   }
 }
 
+function validatePlatformScopedFinalMode(text) {
+  if (!doctor) {
+    failures.push('platform-scoped final release notes require a workos-release-doctor report')
+    return
+  }
+  if (doctor.status !== 'not_ready') {
+    failures.push(`platform-scoped final release notes require formal cross-platform doctor status not_ready, got ${doctor.status || 'missing'}`)
+  }
+  if (doctor.distributionPolicy?.formalCrossPlatform?.status !== 'blocked') {
+    failures.push('platform-scoped final release notes require the formal cross-platform gate to remain blocked')
+  }
+  if (doctorPlatformScopedRelease?.candidateGate?.status !== 'ready') {
+    const candidateFailures = Array.isArray(doctorPlatformScopedRelease?.candidateGate?.failures)
+      ? doctorPlatformScopedRelease.candidateGate.failures
+      : []
+    failures.push(`platform-scoped final release notes require a ready platform candidate gate${candidateFailures.length > 0 ? `: ${candidateFailures.join(', ')}` : ''}`)
+  }
+  requireText(text, 'unsigned preview', 'platform-scoped final release notes must label Windows as an unsigned preview')
+  requireText(text, 'SmartScreen', 'platform-scoped final release notes must disclose possible SmartScreen behavior')
+  requireText(text, 'formal cross-platform', 'platform-scoped final release notes must preserve the formal cross-platform boundary')
+  requireText(text, 'SSL.com IV', 'platform-scoped final release notes must record the deferred Windows signing plan')
+  requireText(text, 'eSigner', 'platform-scoped final release notes must record eSigner as part of the deferred Windows signing plan')
+  if (/Do not publish|No (?:new )?.*assets uploaded yet/i.test(text)) {
+    failures.push('platform-scoped final release notes must not contain draft-only no-publication language')
+  }
+}
+
 function validateFinalAssets(text) {
-  const expectedFiles = macosX64Scope ? scopedEvidence?.reportedFiles : doctorPackaging?.artifacts?.files
+  const expectedFiles = macosX64Scope ? scopedEvidence?.reportedFiles : expectedArtifactEvidence()?.files
   if (!isRecord(expectedFiles) || Object.keys(expectedFiles).length === 0) {
     failures.push('final release notes require packaging artifact evidence for the selected platform scope')
     return
@@ -253,6 +295,10 @@ function validateFinalAssets(text) {
       failures.push(`final release notes SHA256 mismatch for ${name}`)
     }
   }
+}
+
+function expectedArtifactEvidence() {
+  return platformScopedFinalMode ? doctorPlatformScopedRelease?.artifacts : doctorPackaging?.artifacts
 }
 
 function markdownSection(text, heading) {

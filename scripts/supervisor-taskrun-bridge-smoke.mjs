@@ -64,6 +64,15 @@ try {
     run,
     now: 1_000
   })
+  const reserved = await bridge.reserveSupervisorRunForSend(meta, run, {
+    rootDir,
+    store: supervisor,
+    accountingBase: { usage: meta.usage, costUsd: meta.costUsd }
+  })
+  assert.equal(reserved?.id, run.id)
+  assert.equal(reserved?.origin, 'task_run')
+  assert.deepEqual((await store.getWorkItem(workItem.id)).runRefs, [])
+  assert.equal((await supervisor.listRuns()).length, 1)
   await snapshotModule.saveTaskSnapshot(snapshot, rootDir)
 
   const first = await bridge.ensureSupervisorRunBinding(meta, run, { rootDir, store: supervisor })
@@ -76,6 +85,50 @@ try {
   assert.equal(second.supervisorRun?.revision, first.supervisorRun?.revision)
   assert.deepEqual((await store.getWorkItem(workItem.id)).runRefs, [run.id])
   assert.equal((await supervisor.listRuns()).length, 1)
+
+  const recoverySnapshot = {
+    ...snapshot,
+    updatedAt: 1_200,
+    meta: {
+      ...snapshot.meta,
+      usage: { input: 30, output: 20, cacheRead: 5, cacheCreation: 5 },
+      costUsd: 0.5
+    },
+    execution: {
+      ...snapshot.execution,
+      status: 'idle',
+      lastSeq: 1,
+      lastEventId: 'bridge-turn-result',
+      lastEventKind: 'turn-result',
+      lastEventAt: 1_100
+    },
+    run: { ...run, status: 'completed', revision: 2, finishedAt: 1_100 },
+    transcript: [{
+      schemaVersion: 1,
+      streamId: 'bridge-stream',
+      eventId: 'bridge-turn-result',
+      seq: 1,
+      occurredAt: 1_100,
+      event: {
+        kind: 'turn-result', subtype: 'success', isError: false,
+        usage: { input: 30, output: 20, cacheRead: 5, cacheCreation: 5 }
+      }
+    }]
+  }
+  const recovered = await bridge.recoverSupervisorRunBindings(
+    [recoverySnapshot], { rootDir, store: supervisor }
+  )
+  assert.deepEqual(recovered.observed, [run.id])
+  const recoveredRun = await supervisor.getRun(run.id)
+  assert.equal(recoveredRun.status, 'completed')
+  assert.deepEqual(recoveredRun.usage, {
+    input: 30, output: 20, cacheRead: 5, cacheCreation: 5, costUsd: 0.5, turns: 1
+  })
+  const beforeRepeatedRecovery = await supervisor.read()
+  await bridge.recoverSupervisorRunBindings([recoverySnapshot], { rootDir })
+  const afterRepeatedRecovery = await supervisor.read()
+  assert.equal(afterRepeatedRecovery.revision, beforeRepeatedRecovery.revision)
+  assert.equal(afterRepeatedRecovery.events.length, beforeRepeatedRecovery.events.length)
 
   await assert.rejects(
     bridge.ensureSupervisorRunBinding({ ...meta, id: 'different-session' }, run, { rootDir, store: supervisor }),
@@ -108,6 +161,9 @@ try {
     status: 'PASS',
     workItemRunRefs: (await store.getWorkItem(workItem.id)).runRefs,
     supervisorRuns: (await supervisor.listRuns()).length,
+    reservationBeforeBinding: true,
+    recoveredUsage: recoveredRun.usage,
+    repeatedRecoveryIdempotent: true,
     classifications: ['waiting_reconciliation', 'retryable', 'manual_approval', 'terminal']
   }
   smokeResult = result

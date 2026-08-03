@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
+  ProjectAggregateExportBundle,
   ProjectResourceInput,
   ProjectWorkspace,
-  ProjectWorkspaceManifest,
   ProjectWorkspacePatch
 } from '../../../../shared/types'
 import { errorText, TEXT, type ProjectLifecycleMutation } from './projectWorkspaceStudioModel'
@@ -18,7 +18,7 @@ interface LifecycleActions {
   announcement: string
   busy: ProjectLifecycleMutation | null
   error: string
-  manifest: ProjectWorkspaceManifest | null
+  manifest: ProjectAggregateExportBundle | null
   clearFeedback: () => void
   updateProject: (patch: ProjectWorkspacePatch) => Promise<void>
   addResource: (resource: ProjectResourceInput) => Promise<void>
@@ -42,7 +42,7 @@ type MutationRunner = <T>(
 export function useProjectWorkspaceLifecycle(options: LifecycleOptions): LifecycleActions {
   const { onMutationSuccess, project, refreshContents, refreshProjects } = options
   const feedback = useLifecycleFeedback(project.id, onMutationSuccess)
-  const [manifest, setManifest] = useState<ProjectWorkspaceManifest | null>(null)
+  const [manifest, setManifest] = useState<ProjectAggregateExportBundle | null>(null)
   const refreshProject = useCallback(async (updated: ProjectWorkspace): Promise<void> => {
     await refreshProjects(updated.id)
   }, [refreshProjects])
@@ -60,9 +60,9 @@ export function useProjectWorkspaceLifecycle(options: LifecycleOptions): Lifecyc
   const exportManifest = useCallback(async (): Promise<void> => {
     feedback.begin('export')
     try {
-      const exported = await window.agentDesk.exportProjectWorkspaceManifest(project.id)
-      setManifest(exported)
-      feedback.succeed(`${TEXT.exportManifest} · ${exported.digest.slice(0, 12)}`)
+      const exported = await window.agentDesk.exportProjectWorkspaceData(project.id)
+      setManifest(exported.bundle)
+      feedback.succeed(`${TEXT.exportManifest} · ${exported.exportDigest.slice(0, 12)}`)
     } catch (cause) {
       feedback.fail(cause)
     } finally {

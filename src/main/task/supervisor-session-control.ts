@@ -87,7 +87,15 @@ export async function executeSupervisorSessionControl(
   assertExpectedRevisions(document, supervisor, request.options)
 
   const binding = await runtime.resolve(supervisor.id)
-  if (!binding) return null
+  if (!binding) {
+    if (supervisor.origin === 'task_run') {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${supervisor.id} is TaskRun-owned but has no active canonical session runtime`
+      )
+    }
+    return null
+  }
   assertCanonicalIdentity(supervisor, binding)
   assertControlPreconditions(supervisor, binding, request)
   await runtime.preflight?.(request, binding)
@@ -136,6 +144,11 @@ export async function executeSupervisorSessionControl(
     throw error
   }
   await runtime.completed?.(request, binding, supervisorRun)
+  const currentSupervisorRun = await store.getRun(supervisor.id)
+  if (!currentSupervisorRun) {
+    throw new SupervisorStateError('corrupt_store', `run ${supervisor.id} disappeared after control`)
+  }
+  supervisorRun = currentSupervisorRun
   return {
     supervisorRun,
     sessionId: binding.taskRun.sessionId,

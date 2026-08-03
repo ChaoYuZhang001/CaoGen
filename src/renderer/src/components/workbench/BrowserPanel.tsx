@@ -124,7 +124,7 @@ export default function BrowserPanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
   const {
-    browserAnnotations,
+    activePanelId, browserAnnotations,
     browserError,
     browserLoading,
     browserMessage,
@@ -154,11 +154,11 @@ export default function BrowserPanel(): React.JSX.Element {
     if (browserUrlDraft) setUrlDraft(browserUrlDraft)
   }, [browserUrlDraft])
   useEffect(() => {
-    if (activeId && !browserState) void openBrowser()
-  }, [activeId, browserState, openBrowser])
+    if (activePanelId === 'browser' && activeId && !browserState) void openBrowser()
+  }, [activeId, activePanelId, browserState, openBrowser])
   useEffect(() => {
     const el = viewportRef.current
-    if (!el || !activeId) return
+    if (!el || !activeId || activePanelId !== 'browser') return
 
     const update = (): void => {
       const rect = el.getBoundingClientRect()
@@ -177,7 +177,7 @@ export default function BrowserPanel(): React.JSX.Element {
       observer.disconnect()
       window.removeEventListener('resize', update)
     }
-  }, [activeId, setBounds])
+  }, [activeId, activePanelId, setBounds])
 
   const submitUrl = (): void => {
     void navigate(urlDraft)

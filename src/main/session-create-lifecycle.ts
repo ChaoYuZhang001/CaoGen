@@ -46,15 +46,19 @@ export function prepareSessionCreationDraft(
   input: CreateSessionOptions,
   parentMeta?: SessionMeta
 ): SessionCreationDraft {
-  const resumeHistory = sessionResumeHistory(input)
-  const resumeWorktreeRecord = resumeHistoryWorktreeRecord(resumeHistory)
-  const opts = normalizedSessionCreationOptions(input, resumeHistory)
+  const historySource = sessionConversationHistory(input)
+  const resumeHistory = historySource?.history
+  const forking = historySource?.mode === 'fork'
+  const resumeWorktreeRecord = historySource?.mode === 'resume'
+    ? resumeHistoryWorktreeRecord(resumeHistory)
+    : undefined
+  const opts = normalizedSessionCreationOptions(input, resumeHistory, historySource?.mode)
   const settings = getSettings()
   const driveMode = sessionDriveMode(opts, resumeHistory, settings)
   const drivePolicy = getCaoGenDrivePolicy(driveMode)
   const routingScope = sessionRoutingScope(opts, resumeHistory, parentMeta)
-  const selectedModel = sessionModel(opts, resumeHistory)
-  const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode)
+  const selectedModel = sessionModel(opts, resumeHistory, forking)
+  const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode, forking)
   const provider = explicitSessionProvider(selectedProviderId, selectedModel)
   const unassigned = sessionUnassigned(opts, resumeHistory, parentMeta)
   const domainOwnership = resolveSessionDomainOwnership(opts, resumeHistory, parentMeta, unassigned)
@@ -62,13 +66,13 @@ export function prepareSessionCreationDraft(
     opts, resumeHistory, parentMeta, unassigned, Boolean(domainOwnership.workspaceId)
   )
   const baseMeta = createSessionDraftMeta({
-    opts, resumeHistory, resumeWorktreeRecord, driveMode, routingScope, projectId,
+    opts, resumeHistory, resumeWorktreeRecord, historyMode: historySource?.mode, driveMode, routingScope, projectId,
     ...domainOwnership, unassigned,
     selectedModel, selectedProviderId, engine: resolveProviderEngine(provider),
-    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta),
+    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta, forking),
     defaultPermissionMode: drivePolicy.defaultPermissionMode
   })
-  if (resumeHistory && resumeWorktreeRecord) {
+  if (historySource?.mode === 'resume' && resumeHistory && resumeWorktreeRecord) {
     baseMeta.id = resumeHistory.id
     baseMeta.createdAt = resumeHistory.createdAt
   }
@@ -79,6 +83,7 @@ interface SessionDraftMetaInput {
   opts: CreateSessionOptions
   resumeHistory?: HistoryEntry
   resumeWorktreeRecord?: ManagedWorktreeRecord
+  historyMode?: 'resume' | 'fork'
   driveMode: CaoGenDriveMode
   routingScope: SessionRoutingScope
   projectId?: string
@@ -115,8 +120,8 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     )
   }
   const meta = newSessionMeta({
-    ...sessionOwnership(opts, resumeHistory),
-    ...sessionWorktreeIdentity(resumeHistory, resumeWorktreeRecord),
+    ...sessionOwnership(opts, input.historyMode === 'fork' ? undefined : resumeHistory),
+    ...sessionWorktreeIdentity(input.historyMode === 'resume' ? resumeHistory : undefined, resumeWorktreeRecord),
     cwd: opts.cwd,
     driveMode: input.driveMode,
     projectId: input.projectId,
@@ -125,7 +130,9 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     providerId: input.selectedProviderId,
     routingScope: input.routingScope,
     budgetUsd: positiveNumber(opts.budgetUsd),
-    resumeSessionAt: opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt,
+    resumeSessionAt: input.historyMode === 'fork'
+      ? undefined
+      : opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt,
     engine: input.engine,
     taskStrategy: input.taskStrategy,
     permissionMode: derivedPermissionMode,
@@ -136,7 +143,10 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     workspaceId: input.workspaceId,
     goalId: input.goalId,
     workItemId: input.workItemId,
-    digitalWorkerBinding: resumeHistory?.digitalWorkerBinding
+    digitalWorkerBinding: input.historyMode === 'resume' ? resumeHistory?.digitalWorkerBinding : undefined,
+    conversationForkSourceSdkSessionId: input.historyMode === 'fork' ? resumeHistory?.sdkSessionId : undefined,
+    conversationForkSourceSessionId: input.historyMode === 'fork' ? resumeHistory?.id : undefined,
+    responsesContext: input.historyMode === 'resume' ? resumeHistory?.responsesContext : undefined
   }
 }
 
@@ -183,9 +193,19 @@ function sessionWorktreeIdentity(history?: HistoryEntry, record?: ManagedWorktre
 
 function normalizedSessionCreationOptions(
   input: CreateSessionOptions,
-  history?: HistoryEntry
+  history?: HistoryEntry,
+  mode?: 'resume' | 'fork'
 ): CreateSessionOptions {
   if (!history) return { ...input, cwd: assertUsableSessionCwd(input.cwd) }
+  if (mode === 'fork') {
+    return {
+      ...input,
+      cwd: assertUsableSessionCwd(history.cwd),
+      isolated: false,
+      resumeSdkSessionId: undefined,
+      resumeSessionAt: undefined
+    }
+  }
   return {
     ...input,
     cwd: assertUsableSessionCwd(history.cwd),
@@ -205,17 +225,18 @@ function sessionDriveMode(
   return opts.driveMode ?? history?.driveMode ?? settings.driveMode
 }
 
-function sessionModel(opts: CreateSessionOptions, history?: HistoryEntry): string {
-  return history?.model ?? opts.model ?? ''
+function sessionModel(opts: CreateSessionOptions, history?: HistoryEntry, forking = false): string {
+  return forking ? opts.model ?? '' : history?.model ?? opts.model ?? ''
 }
 
 function sessionProviderId(
   opts: CreateSessionOptions,
   history: HistoryEntry | undefined,
   settings: AppSettings,
-  driveMode: CaoGenDriveMode
+  driveMode: CaoGenDriveMode,
+  forking = false
 ): string {
-  return history?.providerId ?? initialProviderId(opts, settings, driveMode)
+  return forking ? initialProviderId(opts, settings, driveMode) : history?.providerId ?? initialProviderId(opts, settings, driveMode)
 }
 
 function sessionUnassigned(
@@ -453,9 +474,14 @@ export function sessionMetaForRecovery(meta: SessionMeta): SessionMeta {
 function sessionTaskStrategy(
   opts: CreateSessionOptions,
   history?: HistoryEntry,
-  parentMeta?: SessionMeta
+  parentMeta?: SessionMeta,
+  forking = false
 ): SessionMeta['taskStrategy'] {
-  return normalizeTaskStrategy(history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy)
+  return normalizeTaskStrategy(
+    forking
+      ? opts.taskStrategy ?? history?.taskStrategy ?? parentMeta?.taskStrategy
+      : history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy
+  )
 }
 
 export function assertTaskSnapshotWorktreeProjection(
@@ -608,13 +634,20 @@ export function assertUsableSessionCwd(rawCwd: string): string {
   return cwd
 }
 
-function sessionResumeHistory(opts: CreateSessionOptions): HistoryEntry | undefined {
-  if (opts.resumeSdkSessionId === undefined) return undefined
-  const sdkSessionId = opts.resumeSdkSessionId.trim()
-  if (!sdkSessionId) throw new Error('历史会话 sdkSessionId 不能为空')
+function sessionConversationHistory(
+  opts: CreateSessionOptions
+): { history: HistoryEntry; mode: 'resume' | 'fork' } | undefined {
+  if (opts.resumeSdkSessionId !== undefined && opts.forkFromSdkSessionId !== undefined) {
+    throw new Error('恢复会话与分叉会话不能同时指定')
+  }
+  const mode = opts.forkFromSdkSessionId !== undefined ? 'fork' : 'resume'
+  const raw = mode === 'fork' ? opts.forkFromSdkSessionId : opts.resumeSdkSessionId
+  if (raw === undefined) return undefined
+  const sdkSessionId = raw.trim()
+  if (!sdkSessionId) throw new Error(`${mode === 'fork' ? '分叉来源' : '历史会话'} sdkSessionId 不能为空`)
   const history = listHistory().find((entry) => entry.sdkSessionId === sdkSessionId)
   if (!history) throw new Error(`未找到 sdkSessionId 对应的历史会话:${sdkSessionId}`)
-  return history
+  return { history, mode }
 }
 
 function sessionRoutingScope(

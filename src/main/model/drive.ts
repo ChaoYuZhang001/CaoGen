@@ -47,7 +47,8 @@ const RUNTIME_POLICIES: Record<CaoGenDriveMode, Omit<CaoGenDriveRuntimePolicy, k
       'tool=task_decompose_and_dispatch_dag',
       'tool=code_forge_delivery',
       'tool=git_commit',
-      'tool=git_create_pr'
+      'tool=git_create_pr',
+      'tool=git_create_issue'
     ]
   },
   core: {

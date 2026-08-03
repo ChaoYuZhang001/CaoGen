@@ -22,6 +22,7 @@ export interface WelcomeSessionDraft {
   providerId: string
   routingMode: WelcomeRoutingMode
   unassigned: boolean
+  forkFromSdkSessionId?: string
 }
 
 export function hasAvailableCompute(
@@ -54,7 +55,8 @@ export function welcomeSessionOptions(
     cwd: draft.cwd.trim(),
     projectId: draft.projectId,
     unassigned: draft.unassigned,
-    initialPrompt: prompt
+    initialPrompt: prompt,
+    forkFromSdkSessionId: draft.forkFromSdkSessionId
   }
   if (projection === 'assistant') {
     return {

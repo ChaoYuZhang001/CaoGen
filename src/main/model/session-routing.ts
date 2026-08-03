@@ -219,7 +219,7 @@ function routeableProviders(
   allowAnyEngine: boolean
 ): { providers: ProviderView[]; warnings: string[] } {
   const compatible = providers.filter((provider) => {
-    if (!provider.hasToken || provider.models.length === 0) return false
+    if (!(provider.ready ?? provider.hasToken) || provider.models.length === 0) return false
     if (allowAnyEngine) return true
     return engine !== undefined && provider.engine === engine
   })

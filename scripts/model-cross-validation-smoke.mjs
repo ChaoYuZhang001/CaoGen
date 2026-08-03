@@ -301,7 +301,10 @@ try {
   assert(runtime.includes('modelCrossValidationAutoRunEnabled'), 'auto-run setting gate missing')
   assert(runtime.includes("childRole: 'model-review'"), 'review child role missing')
   assert(runtime.includes("childRole: 'model-arbitration'"), 'arbitration child role missing')
-  assert(runtime.includes("permissionMode: 'plan'"), 'review child must be plan-only')
+  assert(
+    runtime.includes("taskStrategy: 'plan'") || runtime.includes("permissionMode: 'plan'"),
+    'review child must be plan-only'
+  )
   assert(runtime.includes('buildCrossValidationReviewPrompt'), 'review child must receive validation prompt')
   assert(runtime.includes('buildCrossValidationArbitrationPrompt'), 'arbitration child must receive arbitration prompt')
   assert(runtime.includes('if (!reviewAccepted)'), 'rejected review prompt must clear its runtime association')

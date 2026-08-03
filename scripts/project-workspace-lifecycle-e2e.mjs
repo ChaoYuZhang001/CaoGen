@@ -21,6 +21,8 @@ const directoryRoot = path.join(tempRoot, 'directory-resource')
 const fileSetRoot = path.join(tempRoot, 'file-set-resource')
 const repositoryRoot = path.join(tempRoot, 'repository-resource')
 const sourceSentinel = path.join(repositoryRoot, 'source-must-survive.txt')
+const importBundlePath = path.join(tempRoot, 'project-export.json')
+const tamperedImportBundlePath = path.join(tempRoot, 'project-export-tampered.json')
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
@@ -32,7 +34,14 @@ const state = {
   projectId: '',
   projectName: 'Lifecycle Project Edited',
   goalId: '',
-  workItemId: ''
+  workItemId: '',
+  goalTaskGoalId: '',
+  goalTaskWorkItemId: '',
+  goalTaskSessionId: '',
+  importedRunId: '',
+  deletionOperationId: '',
+  deletionProofPath: '',
+  deletionProofDigest: ''
 }
 const report = {
   schemaVersion: 1,
@@ -54,9 +63,13 @@ const report = {
   coverage: {
     verified: [
       'directory-free managed ProjectWorkspace creation through Studio UI',
+      'one-input Goal/WorkItem/Session startup with exact ownership and double-click locking',
+      'directory-free Workspace execution root without a hidden legacy Project',
+      'Codex-style canonical Project grouping, controls, restart persistence, and mobile layout',
       'directory, file_set, repository, and connector resource lifecycle',
       'project edit, archive, restore, export, soft delete, and permanent delete',
-      'manifest digest and subordinate Goal/WorkItem inclusion',
+      'sealed sanitized Project aggregate export and digest verification',
+      'single-file Project import, merge preservation, duplicate/tamper rejection, and restart persistence',
       'WorkItem transition controls, owner-bound lease controls, and restart persistence',
       'source preservation and persistence across five Electron launches'
     ],
@@ -76,7 +89,7 @@ try {
   await runPhase('create-edit-archive', async (page) => {
     await check('empty Studio exposes an accessible directory-free create flow', async () => {
       await page.waitForSelector('.pws-project-empty', { visible: true, timeout: 10_000 })
-      await page.click('[data-studio-action="create-project"]')
+      await clickStudioActionWithRetry(page, 'create-project', '[data-studio-form="project"]')
       await page.waitForSelector('[data-studio-form="project"]', { visible: true, timeout: 5_000 })
       await page.type('[data-studio-form="project"] [name="projectName"]', 'Directory Free Lifecycle Project')
       await page.select('[data-studio-form="project"] [name="projectKind"]', 'research')
@@ -86,6 +99,12 @@ try {
       assert(project.resources.length === 0, `new project unexpectedly has resources: ${project.resources.length}`)
       await waitForProjectStatus(page, 'active')
     })
+
+    await check('one input starts exactly one canonical task and owned Session without a hidden legacy Project',
+      () => verifyOneInputGoalTask(page))
+
+    await check('Goal Task request retries recover partial writes and reject changed objectives',
+      () => verifyGoalTaskRetry(page))
 
     await check('resource form supports Escape without mutation', async () => {
       await page.click('[data-project-action="add-resource"]')
@@ -124,6 +143,7 @@ try {
 
   await runPhase('edit-controls-archive', async (page) => {
     await check('project edit and subordinate records persist before archive', async () => {
+      await verifyCanonicalProjectGroup(page, { expectedSessionId: state.goalTaskSessionId })
       await waitForEnabled(page, '[data-project-action="edit"]')
       await page.click('[data-project-action="edit"]')
       await page.waitForSelector('[data-project-form="edit"]', { visible: true, timeout: 5_000 })
@@ -231,7 +251,7 @@ try {
       assert(project.status === 'active', `restore status mismatch: ${project.status}`)
     })
 
-    await check('manifest UI exposes a verified digest and subordinate aggregate', async () => {
+    await check('Project export UI exposes a sealed sanitized aggregate with a verified digest', async () => {
       await waitForEnabled(page, '[data-project-action="export"]')
       await page.click('[data-project-action="export"]')
       await page.waitForSelector('[data-project-manifest]', { visible: true, timeout: 10_000 })
@@ -240,13 +260,21 @@ try {
         digest: document.querySelector('[data-manifest-digest]')?.textContent?.trim() || '',
         json: document.querySelector('[data-manifest-json]')?.value || ''
       }))
-      assert(rendered.ariaModal === 'true', 'manifest dialog is missing aria-modal')
+      assert(rendered.ariaModal === 'true', 'Project export dialog is missing aria-modal')
       assert(/^[a-f0-9]{64}$/.test(rendered.digest), `invalid rendered digest: ${rendered.digest}`)
       const manifest = JSON.parse(rendered.json)
-      assert(manifest.digest === rendered.digest, 'rendered digest and JSON digest differ')
-      assert(manifest.goals.some((goal) => goal.id === state.goalId), 'manifest omitted subordinate Goal')
-      assert(manifest.workItems.some((item) => item.id === state.workItemId), 'manifest omitted subordinate WorkItem')
-      assert(verifyManifestDigest(manifest), 'manifest SHA-256 digest verification failed')
+      assert(manifest.exportDigest === rendered.digest, 'rendered digest and JSON digest differ')
+      assert(manifest.aggregate.goals.some((goal) => goal.id === state.goalId), 'export omitted subordinate Goal')
+      assert(manifest.aggregate.workItems.some((item) => item.id === state.workItemId), 'export omitted subordinate WorkItem')
+      assert(manifest.aggregate.workflow.runs.length > 0, 'export omitted the Project Run payload')
+      state.importedRunId = manifest.aggregate.workflow.runs[0].id
+      assert(manifest.aggregate.sanitized === true && manifest.verification?.sealed === true,
+        'export omitted sanitized and sealed verification')
+      assert(verifyProjectExportDigest(manifest), 'project export SHA-256 digest verification failed')
+      writeFileSync(importBundlePath, `${rendered.json}\n`)
+      const tampered = structuredClone(manifest)
+      tampered.aggregate.workspace.name = 'Tampered Project Name'
+      writeFileSync(tamperedImportBundlePath, `${JSON.stringify(tampered)}\n`)
       report.manifestDigest = rendered.digest
       await screenshot(page, '02-manifest-dialog')
       await page.keyboard.press('Escape')
@@ -286,7 +314,7 @@ try {
       assert(existsSync(directoryRoot) && existsSync(repositoryRoot), 'soft delete removed linked source paths')
     })
 
-    await check('permanent delete requires exact project-name confirmation and cascades metadata only', async () => {
+    await check('permanent delete requires exact project-name confirmation and cascades CaoGen-owned data', async () => {
       await waitForEnabled(page, '[data-project-action="purge"]')
       await page.click('[data-project-action="purge"]')
       await page.waitForSelector('[data-project-delete-dialog="permanent"]', { visible: true, timeout: 5_000 })
@@ -305,6 +333,18 @@ try {
       assert(!removed.project && !removed.goal && !removed.workItem, 'permanent delete left subordinate metadata')
       assert(removed.projects.length === 0, `permanent delete left ${removed.projects.length} projects`)
       assert(readFileSync(sourceSentinel, 'utf8') === 'preserve me\n', 'permanent delete changed repository source')
+      const deletion = readCompletedDeletionProof(state.projectId)
+      state.deletionOperationId = deletion.entry.operationId
+      state.deletionProofPath = deletion.entry.proofPath
+      state.deletionProofDigest = deletion.entry.proofDigest
+      assert(verifyDeletionProofDigest(deletion.proof), 'durable deletion proof digest verification failed')
+      assert(Object.values(deletion.proof.residuals).every((value) => value === 0),
+        'durable deletion proof contains non-zero residuals')
+      assert(deletion.proof.backup.readbackVerified === true && existsSync(deletion.proof.backup.path),
+        'durable deletion proof is not bound to a readable private backup')
+      assert(deletion.proof.externalResources.preserved === true &&
+        deletion.proof.externalResources.externalDeleteAttempted === false,
+      'durable deletion proof did not preserve the external-resource boundary')
       await screenshot(page, '06-permanently-deleted')
     })
   })
@@ -334,7 +374,103 @@ try {
           tombstones[0].payload?.status === 'purged',
         `purge must retain exactly one durable Workspace identity tombstone: ${JSON.stringify(tombstones)}`
       )
+      const deletion = readCompletedDeletionProof(state.projectId)
+      assert(deletion.entry.operationId === state.deletionOperationId &&
+        deletion.entry.proofPath === state.deletionProofPath &&
+        deletion.entry.proofDigest === state.deletionProofDigest,
+      'final restart changed the deletion proof receipt')
+      assert(verifyDeletionProofDigest(deletion.proof), 'final restart deletion proof readback failed')
       await screenshot(page, '07-empty-after-restart')
+    })
+
+    await check('single-file import restores the Project without creating an empty Project first', async () => {
+      const unrelated = await page.evaluate(() => window.agentDesk.createProjectWorkspace({
+        id: 'project-unrelated-import-ui',
+        name: 'Unrelated Import UI Project',
+        kind: 'research'
+      }))
+      await page.click('[data-studio-action="refresh"]')
+      await page.waitForFunction(
+        (projectId) => Array.from(document.querySelectorAll('[data-project-workspace-select] option'))
+          .some((option) => option.value === projectId),
+        { timeout: 10_000 },
+        unrelated.id
+      )
+      await uploadProjectFile(page, importBundlePath)
+      await page.waitForFunction(
+        (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId &&
+          document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false',
+        { timeout: 20_000 },
+        state.projectId
+      )
+      await page.waitForFunction(
+        ({ goalId, workItemId }) => Boolean(
+          document.querySelector(`[data-goal-id="${goalId}"]`) ||
+          document.querySelector('[data-project-workspace-studio]')?.textContent?.includes('Lifecycle goal')
+        ) && Boolean(document.querySelector(`[data-work-item-id="${workItemId}"]`)),
+        { timeout: 15_000 },
+        state
+      )
+      const restored = await page.evaluate(async ({ projectId, goalId, workItemId, unrelatedId }) => ({
+        project: await window.agentDesk.getProjectWorkspace(projectId),
+        goal: await window.agentDesk.getProjectGoal(goalId),
+        workItem: await window.agentDesk.getProjectWorkItem(workItemId),
+        unrelated: await window.agentDesk.getProjectWorkspace(unrelatedId),
+        projects: await window.agentDesk.listProjectWorkspaces({ includeArchived: true, includeDeleted: true }),
+        ledger: await window.agentDesk.listWorkflowLedger({ projectId })
+      }), { ...state, unrelatedId: unrelated.id })
+      assert(restored.project?.name === state.projectName, 'single-file import did not restore the Project')
+      assert(restored.goal?.id === state.goalId, 'single-file import did not restore the Goal')
+      assert(restored.workItem?.id === state.workItemId, 'single-file import did not restore the WorkItem')
+      assert(restored.ledger.runs.items.some((run) => run.id === state.importedRunId),
+        'single-file import did not restore the exported Run')
+      assert(restored.unrelated?.id === unrelated.id && restored.projects.length === 2,
+        'single-file import changed an unrelated Project')
+      await screenshot(page, '08-import-restored')
+    })
+
+    await check('duplicate and tampered imports fail closed through the same UI', async () => {
+      await uploadProjectFile(page, importBundlePath)
+      await page.waitForFunction(
+        () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('conflict') === true,
+        { timeout: 10_000 }
+      )
+      await uploadProjectFile(page, tamperedImportBundlePath)
+      await page.waitForFunction(
+        () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('digest') === true,
+        { timeout: 10_000 }
+      )
+      const projects = await page.evaluate(() => window.agentDesk.listProjectWorkspaces({
+        includeArchived: true,
+        includeDeleted: true
+      }))
+      assert(projects.length === 2, `failed imports mutated the Project list: ${projects.length}`)
+    })
+  })
+
+  await runPhase('import-persistence', async (page) => {
+    await check('imported and unrelated Projects survive restart with restored subordinate data', async () => {
+      const projects = await page.evaluate(() => window.agentDesk.listProjectWorkspaces({
+        includeArchived: true,
+        includeDeleted: true
+      }))
+      assert(projects.some((project) => project.id === state.projectId), 'imported Project disappeared after restart')
+      assert(projects.some((project) => project.id === 'project-unrelated-import-ui'),
+        'unrelated Project disappeared after import restart')
+      const ledger = await page.evaluate((projectId) => window.agentDesk.listWorkflowLedger({ projectId }), state.projectId)
+      assert(ledger.runs.items.some((run) => run.id === state.importedRunId),
+        'imported Run disappeared after restart')
+      await page.select('[data-project-workspace-select]', state.projectId)
+      await page.waitForFunction(
+        ({ goalId, workItemId }) => document.querySelector('[data-project-workspace-studio]')?.textContent?.includes('Lifecycle goal') &&
+          Boolean(document.querySelector(`[data-work-item-id="${workItemId}"]`)),
+        { timeout: 15_000 },
+        state
+      )
+      const workspaceState = JSON.parse(readFileSync(path.join(userDataDir, 'project-workspace.json'), 'utf8'))
+      assert(!workspaceState.events.some((event) => event.projectId === state.projectId && event.kind === 'workspace.purged'),
+        'successful restore retained the stale purge tombstone')
+      await screenshot(page, '09-import-persisted')
     })
   })
 } catch (error) {
@@ -394,7 +530,13 @@ async function runPhase(name, execute) {
 
 async function launchRuntime(phase) {
   const port = await findFreePort(9940)
-  const child = spawn(electronBin, [`--remote-debugging-port=${port}`, mainEntry], {
+  const child = spawn(electronBin, [
+    `--remote-debugging-port=${port}`,
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    mainEntry
+  ], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -413,6 +555,7 @@ async function launchRuntime(phase) {
     await waitForDebugPort(port, 20_000)
     const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null })
     const page = await waitForElectronPage(browser, 20_000)
+    await page.bringToFront()
     page.on('console', (message) => {
       if (message.type() === 'error' || message.type() === 'warning') {
         report.warnings.push(`${phase} console ${message.type()}: ${message.text()}`)
@@ -422,8 +565,9 @@ async function launchRuntime(phase) {
     await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
     return { browser, child, output, page, phase }
   } catch (error) {
-    await terminate(child)
-    throw error
+    const exited = await terminate(child)
+    const details = summarizeProcessOutput(phase, output, exited).join('\n')
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${details ? `\n${details}` : ''}`)
   }
 }
 
@@ -463,6 +607,199 @@ async function check(name, execute) {
   }
 }
 
+async function verifyOneInputGoalTask(page) {
+  await page.evaluate(async () => {
+    await window.agentDesk.createProvider({
+      name: 'Goal Task Synthetic Provider',
+      baseUrl: 'http://127.0.0.1:9/v1',
+      token: 'test-only',
+      models: ['goal-task-synthetic'],
+      openaiProtocol: 'responses'
+    })
+  })
+  await page.waitForSelector('[data-goal-task-objective]', { visible: true, timeout: 15_000 })
+  const objective = 'Prepare a verified directory-free project brief'
+  await page.type('[data-goal-task-objective]', objective)
+  await page.$eval('[data-goal-task-start]', (button) => {
+    button.click()
+    button.click()
+  })
+  const started = await waitForValue(
+    () => page.evaluate(async (projectId) => ({
+      goals: await window.agentDesk.listProjectGoals(projectId),
+      workItems: await window.agentDesk.listProjectWorkItems(projectId),
+      sessions: await window.agentDesk.listSessions(),
+      legacyProjects: await window.agentDesk.listProjects()
+    }), state.projectId),
+    (value) => value.goals.length === 1 && value.workItems.length === 1 &&
+      value.sessions.some((session) => session.workspaceId === state.projectId),
+    15_000,
+    'waiting for one-input canonical task startup'
+  )
+  const goal = started.goals[0]
+  const workItem = started.workItems[0]
+  const sessions = started.sessions.filter((session) => session.workspaceId === state.projectId)
+  assert(sessions.length === 1, `double click created ${sessions.length} Sessions`)
+  const session = sessions[0]
+  assert(goal.objective === objective, `Goal objective mismatch: ${goal.objective}`)
+  assert(workItem.goalId === goal.id && workItem.description === objective,
+    'WorkItem did not inherit exact Goal ownership/objective')
+  assert(session.goalId === goal.id && session.workItemId === workItem.id,
+    'Session canonical ownership does not match Goal/WorkItem')
+  assert(session.projectId === undefined, `canonical Session created hidden legacy Project ownership: ${session.projectId}`)
+  assert(session.unassigned !== true, 'canonical Session was downgraded to a conversation')
+  assert(session.cwd.startsWith(path.join(userDataDir, 'workspace-execution') + path.sep),
+    `directory-free Session did not use app-owned Workspace root: ${session.cwd}`)
+  assert(started.legacyProjects.length === 0,
+    `one-input startup created ${started.legacyProjects.length} hidden legacy Projects`)
+  const transcript = await page.evaluate((id) => window.agentDesk.getTranscript(id), session.id)
+  assert(transcript.some((entry) => entry.event?.kind === 'user-message' && entry.event.text === objective),
+    'first objective was not accepted into the Session transcript')
+  state.goalTaskGoalId = goal.id
+  state.goalTaskWorkItemId = workItem.id
+  state.goalTaskSessionId = session.id
+  await verifyCanonicalProjectGroup(page, { expectedSessionId: session.id, exerciseControls: true })
+  await screenshot(page, '00-one-input-started')
+  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
+  await sleep(250)
+  const sidebarExpanded = await page.$eval('.mobile-sidebar-toggle', (button) => button.getAttribute('aria-expanded') === 'true')
+  if (sidebarExpanded) {
+    await page.click('.mobile-sidebar-toggle')
+    await page.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
+  }
+  const mobileLayout = await page.evaluate(() => {
+    const starter = document.querySelector('[data-goal-task-starter]')
+    const input = document.querySelector('[data-goal-task-objective]')
+    const button = document.querySelector('[data-goal-task-start]')
+    return {
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      starterOverflow: starter ? starter.scrollWidth - starter.clientWidth : -1,
+      inputWidth: input?.getBoundingClientRect().width ?? 0,
+      buttonWidth: button?.getBoundingClientRect().width ?? 0,
+      starterLeft: starter?.getBoundingClientRect().left ?? -1,
+      starterRight: starter?.getBoundingClientRect().right ?? -1
+    }
+  })
+  assert(mobileLayout.documentOverflow <= 1 && mobileLayout.starterOverflow <= 1,
+    `mobile Goal Task layout overflowed: ${JSON.stringify(mobileLayout)}`)
+  assert(mobileLayout.inputWidth > 0 && mobileLayout.buttonWidth > 0,
+    `mobile Goal Task controls are not visible: ${JSON.stringify(mobileLayout)}`)
+  assert(mobileLayout.starterLeft >= 0 && mobileLayout.starterRight <= 390,
+    `mobile Goal Task starter is outside the viewport: ${JSON.stringify(mobileLayout)}`)
+  await screenshot(page, '00-one-input-started-mobile')
+  await page.click('.mobile-sidebar-toggle')
+  await page.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar-mobile-open')).transform === 'matrix(1, 0, 0, 1, 0, 0)', { timeout: 5_000 })
+  const mobileSidebar = await page.evaluate((projectId) => {
+    const sidebar = document.querySelector('.sidebar-mobile-open')
+    const group = document.querySelector(`[data-project-kind="canonical"][data-project-id="${projectId}"]`)
+    const rect = group?.getBoundingClientRect()
+    return {
+      sidebarOverflow: sidebar ? sidebar.scrollWidth - sidebar.clientWidth : -1,
+      groupVisible: Boolean(rect && rect.width > 0 && rect.left >= 0 && rect.right <= window.innerWidth)
+    }
+  }, state.projectId)
+  assert(mobileSidebar.sidebarOverflow <= 1 && mobileSidebar.groupVisible,
+    `mobile canonical Project group is clipped: ${JSON.stringify(mobileSidebar)}`)
+  await screenshot(page, '00-one-input-sidebar-mobile')
+  await page.click('.sidebar-mobile-close')
+  await page.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
+  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await page.evaluate((id) => window.agentDesk.closeSession(id), session.id)
+  await waitForValue(
+    () => page.evaluate(() => window.agentDesk.listSessions()),
+    (items) => !items.some((item) => item.id === session.id),
+    10_000,
+    'waiting for synthetic Goal Task Session to close'
+  )
+}
+
+async function verifyCanonicalProjectGroup(page, { expectedSessionId, exerciseControls = false }) {
+  const group = `[data-project-kind="canonical"][data-project-id="${state.projectId}"]`
+  await page.waitForSelector(group, { visible: true, timeout: 10_000 })
+  const summary = await page.evaluate(({ projectId, sessionId }) => {
+    const projectGroup = document.querySelector(`[data-project-kind="canonical"][data-project-id="${projectId}"]`)
+    const conversation = document.querySelector('[data-project-id="unassigned"]')
+    return {
+      projectCount: document.querySelector('.sidebar-projects-count')?.textContent?.trim(),
+      groupCount: projectGroup?.querySelector('.sidebar-group-count')?.textContent?.trim(),
+      groupLabel: projectGroup?.querySelector('.sidebar-group-title')?.textContent?.trim(),
+      sessionInProject: sessionId ? Boolean(projectGroup?.querySelector(`[data-session-id="${sessionId}"]`)) : true,
+      sessionInConversation: sessionId ? Boolean(conversation?.querySelector(`[data-session-id="${sessionId}"]`)) : false,
+      conversationCount: conversation?.querySelector('.sidebar-group-count')?.textContent?.trim()
+    }
+  }, { projectId: state.projectId, sessionId: expectedSessionId })
+  assert(summary.projectCount === '1', `canonical Project was not counted in sidebar: ${JSON.stringify(summary)}`)
+  assert(summary.groupLabel, `canonical Project label is missing: ${JSON.stringify(summary)}`)
+  assert(summary.groupCount === (expectedSessionId ? '1' : '0'),
+    `canonical Project Session count mismatch: ${JSON.stringify(summary)}`)
+  assert(summary.sessionInProject && !summary.sessionInConversation,
+    `owned Session was not isolated from conversation grouping: ${JSON.stringify(summary)}`)
+  assert(summary.conversationCount === '0', `conversation group contains owned Sessions: ${JSON.stringify(summary)}`)
+  if (!exerciseControls) return
+
+  await page.click(`${group} .sidebar-group-head`)
+  await page.waitForSelector(`${group} [data-session-id="${expectedSessionId}"]`, { hidden: true, timeout: 5_000 })
+  await page.click(`${group} .sidebar-group-head`)
+  await page.waitForSelector(`${group} [data-session-id="${expectedSessionId}"]`, { visible: true, timeout: 5_000 })
+
+  await page.hover(`${group} .sidebar-group-row`)
+  await page.click(`${group} .sidebar-group-more`)
+  await page.waitForSelector('.ctx-menu', { visible: true, timeout: 5_000 })
+  const menuLabels = await page.$$eval('.ctx-menu [role="menuitem"]', (items) => items.map((item) => item.textContent?.trim()))
+  assert(menuLabels.some((label) => label?.includes('归档')) && menuLabels.some((label) => label?.includes('删除')),
+    `canonical Project menu is incomplete: ${JSON.stringify(menuLabels)}`)
+  await page.keyboard.press('Escape')
+
+  await page.hover(`${group} .sidebar-group-row`)
+  await page.click(`${group} .sidebar-group-new`)
+  await page.waitForFunction(
+    (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId,
+    { timeout: 5_000 },
+    state.projectId
+  )
+  await page.waitForSelector('[data-goal-task-objective]', { visible: true, timeout: 5_000 })
+
+  await page.hover('.sidebar-projects-toolbar')
+  await page.click('.sidebar-projects-actions .sidebar-projects-action:last-child')
+  await page.waitForSelector('[data-studio-form="project"]', { visible: true, timeout: 5_000 })
+  await page.focus('[data-studio-form="project"] [name="projectName"]')
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[data-studio-form="project"]', { hidden: true, timeout: 5_000 })
+}
+
+async function verifyGoalTaskRetry(page) {
+  const requestId = 'goal-task-partial-retry'
+  const objective = 'Recover the same canonical task after a partial write'
+  const digest = createHash('sha256')
+    .update(`caogen.project-goal-task.v1\0${state.projectId}\0${requestId}`)
+    .digest('hex')
+    .slice(0, 24)
+  const expectedGoalId = `goal-${digest}`
+  const expectedWorkItemId = `work-item-${digest}`
+  const result = await page.evaluate(async ({ projectId, requestId, objective, expectedGoalId }) => {
+    await window.agentDesk.createProjectGoal({
+      id: expectedGoalId, projectId, title: objective, objective, status: 'running'
+    })
+    const recovered = await window.agentDesk.createProjectGoalTask({ requestId, projectId, objective })
+    const retried = await window.agentDesk.createProjectGoalTask({ requestId, projectId, objective })
+    let conflict = ''
+    try {
+      await window.agentDesk.createProjectGoalTask({ requestId, projectId, objective: `${objective} changed` })
+    } catch (error) {
+      conflict = error instanceof Error ? error.message : String(error)
+    }
+    return { recovered, retried, conflict }
+  }, { projectId: state.projectId, requestId, objective, expectedGoalId })
+  assert(result.recovered.recovered === true, 'partial Goal write was not reported as recovered')
+  assert(result.recovered.goal.id === expectedGoalId && result.recovered.workItem.id === expectedWorkItemId,
+    'partial retry did not complete the deterministic Goal/WorkItem pair')
+  assert(result.retried.recovered === true && result.retried.goal.id === result.recovered.goal.id &&
+    result.retried.workItem.id === result.recovered.workItem.id, 'same requestId retry was not idempotent')
+  assert(result.conflict.includes('conflicts with existing Goal'),
+    `changed objective did not fail closed: ${result.conflict}`)
+}
+
 async function addResource(page, kind, label, location, expectedCount) {
   await waitForEnabled(page, '[data-project-action="add-resource"]')
   await page.click('[data-project-action="add-resource"]')
@@ -491,6 +828,30 @@ async function replaceInput(page, selector, value) {
     input.select()
   })
   await page.keyboard.type(value)
+}
+
+async function uploadProjectFile(page, filePath) {
+  const input = await page.$('[data-studio-import-input]')
+  assert(input, 'Project import file input is missing')
+  await input.uploadFile(filePath)
+}
+
+async function clickStudioActionWithRetry(page, action, resultSelector) {
+  await page.waitForFunction((actionName) => {
+    const button = document.querySelector(`[data-studio-action="${actionName}"]`)
+    if (!(button instanceof HTMLButtonElement) || button.disabled) return false
+    const rect = button.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return rect.width > 0 && rect.height > 0 && (hit === button || (hit !== null && button.contains(hit)))
+  }, { timeout: 5_000 }, action)
+  await page.click(`[data-studio-action="${action}"]`)
+  if (await page.$(resultSelector)) return
+  // A renderer layout commit can replace the button between mouse down/up; retry once after a fresh hit check.
+  await page.waitForFunction((actionName) => {
+    const button = document.querySelector(`[data-studio-action="${actionName}"]`)
+    return button instanceof HTMLButtonElement && !button.disabled
+  }, { timeout: 2_000 }, action)
+  await page.click(`[data-studio-action="${action}"]`)
 }
 
 async function waitForProject(page, predicate) {
@@ -558,19 +919,39 @@ function assertProjectResource(project, kind, location) {
   assert((resource.path ?? resource.uri) === location, `${kind} location mismatch: ${resource.path ?? resource.uri}`)
 }
 
-function verifyManifestDigest(manifest) {
-  const { digest, ...body } = manifest
+function verifyProjectExportDigest(bundle) {
+  const { exportDigest, ...body } = bundle
   const actual = createHash('sha256').update(JSON.stringify(stableValue(body))).digest('hex')
-  return actual === digest
+  return actual === exportDigest
+}
+
+function readCompletedDeletionProof(projectId) {
+  const journalPath = path.join(userDataDir, 'private', 'project-deletion-journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+  const entry = journal.entries.find((candidate) => candidate.projectId === projectId && candidate.phase === 'completed')
+  assert(entry?.proofPath && /^[a-f0-9]{64}$/.test(entry.proofDigest),
+    `completed deletion journal has no proof receipt: ${JSON.stringify(entry)}`)
+  const proof = JSON.parse(readFileSync(entry.proofPath, 'utf8'))
+  assert(proof.operationId === entry.operationId && proof.projectId === projectId &&
+    proof.proofDigest === entry.proofDigest, 'deletion proof identity does not match journal')
+  return { entry, proof }
+}
+
+function verifyDeletionProofDigest(proof) {
+  const { proofDigest, ...body } = proof
+  const actual = createHash('sha256').update(JSON.stringify(stableValue(body))).digest('hex')
+  return actual === proofDigest
 }
 
 function stableValue(value) {
+  if (value === undefined) return null
   if (Array.isArray(value)) return value.map(stableValue)
   if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, stableValue(item)])
-    )
+    const output = {}
+    for (const key of Object.keys(value).sort()) {
+      if (value[key] !== undefined) output[key] = stableValue(value[key])
+    }
+    return output
   }
   return value
 }

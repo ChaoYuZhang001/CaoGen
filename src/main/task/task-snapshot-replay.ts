@@ -22,7 +22,7 @@ interface TaskSnapshotReplayDependencies {
     sessionId: string,
     prompt: string,
     options: TaskSnapshotReplaySendOptions
-  ) => boolean
+  ) => Promise<boolean>
   emit: (sessionId: string, event: AgentEvent) => void
 }
 
@@ -32,11 +32,11 @@ export class TaskSnapshotReplayCoordinator {
 
   constructor(private readonly dependencies: TaskSnapshotReplayDependencies) {}
 
-  start(
+  async start(
     sessionId: string,
     prompts: readonly string[],
     options: TaskSnapshotReplaySendOptions = {}
-  ): boolean {
+  ): Promise<boolean> {
     const replayPrompts = prompts.filter((prompt) => prompt.trim().length > 0)
     if (replayPrompts.length === 0) return false
     if (this.plans.has(sessionId)) return false
@@ -85,7 +85,7 @@ export class TaskSnapshotReplayCoordinator {
     void recoveryReady.then(
       (ready) => {
         if (this.plans.get(sessionId) !== plan) return
-        if (ready) this.dispatchNext(plan)
+        if (ready) void this.dispatchNext(plan)
         else this.fail(plan, 'task-snapshot-replay-gated', 'ModelAttempt 恢复门禁刷新失败')
       },
       (error) => {
@@ -112,7 +112,7 @@ export class TaskSnapshotReplayCoordinator {
       !options.supervisorControlReplay
   }
 
-  private dispatchNext(plan: TaskSnapshotReplayPlan): boolean {
+  private async dispatchNext(plan: TaskSnapshotReplayPlan): Promise<boolean> {
     if (this.plans.get(plan.sessionId) !== plan || plan.inFlight) return false
     if (plan.nextIndex >= plan.prompts.length) {
       this.plans.delete(plan.sessionId)
@@ -127,7 +127,7 @@ export class TaskSnapshotReplayCoordinator {
     let accepted = false
     let sendError: unknown
     try {
-      accepted = this.dependencies.send(plan.sessionId, prompt, plan.options)
+      accepted = await this.dependencies.send(plan.sessionId, prompt, plan.options)
     } catch (error) {
       sendError = error
       plan.pendingFailure = errorText(error)
@@ -140,7 +140,6 @@ export class TaskSnapshotReplayCoordinator {
         'task-snapshot-replay-rejected',
         plan.pendingFailure ?? 'SessionManager rejected the recovered prompt'
       )
-      if (sendError) throw sendError
       return false
     }
     return true

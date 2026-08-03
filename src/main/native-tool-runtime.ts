@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { app } from 'electron'
 import { settingsForCaoGenDrive } from './model/drive'
 import { getSettings } from './settings'
 import { EDIT_TOOLS, executeCodingTool, type ToolExecResult } from './openaiTools'
@@ -197,7 +198,7 @@ export class NativeToolRuntime {
     input: Record<string, unknown>,
     toolUseId: string
   ): NativeToolPreflightDecision {
-    const workerPolicyError = digitalWorkerToolPolicyError(this.meta, name, input)
+    const workerPolicyError = digitalWorkerToolPolicyError(this.meta, name, input, app.getPath('userData'))
     if (workerPolicyError) return { allow: false, message: workerPolicyError }
     const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
     const policy = evaluateToolPermission(settings, { toolName: name, input, cwd: this.meta.cwd })
@@ -443,6 +444,9 @@ export class NativeToolRuntime {
         npmRegistry: settings.chinaNpmRegistry,
         pipIndexUrl: settings.chinaPipIndexUrl,
         sessionId: this.meta.id,
+        sessionMeta: this.meta,
+        userDataRoot: app.getPath('userData'),
+        toolUseId: effectInput.toolUseId,
         worktreeContext: {
           sessionId: this.meta.id,
           repoRoot: this.meta.repoRoot,

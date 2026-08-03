@@ -1,4 +1,5 @@
 import type * as React from 'react'
+import { flushSync } from 'react-dom'
 import type { ExperienceMode } from '../store/experience-mode'
 import './app-mode-switcher.css'
 
@@ -12,6 +13,10 @@ export default function AppModeSwitcher({ language, mode, onChange }: Props): Re
   const labels = language === 'zh'
     ? { navigation: '工作模式', assistant: '助手', studio: '工作台' }
     : { navigation: 'Work mode', assistant: 'Assistant', studio: 'Studio' }
+  const selectMode = (next: ExperienceMode): void => {
+    if (next === mode) return
+    flushSync(() => onChange(next))
+  }
 
   return (
     <nav className="app-mode-bar no-drag" role="group" aria-label={labels.navigation} data-experience-mode-switcher>
@@ -21,7 +26,7 @@ export default function AppModeSwitcher({ language, mode, onChange }: Props): Re
           aria-pressed={mode === 'assistant'}
           data-experience-mode-option="assistant"
           className={mode === 'assistant' ? 'active' : ''}
-          onClick={() => onChange('assistant')}
+          onClick={() => selectMode('assistant')}
         >
           {labels.assistant}
         </button>
@@ -30,7 +35,7 @@ export default function AppModeSwitcher({ language, mode, onChange }: Props): Re
           aria-pressed={mode === 'studio'}
           data-experience-mode-option="studio"
           className={mode === 'studio' ? 'active' : ''}
-          onClick={() => onChange('studio')}
+          onClick={() => selectMode('studio')}
         >
           {labels.studio}
         </button>

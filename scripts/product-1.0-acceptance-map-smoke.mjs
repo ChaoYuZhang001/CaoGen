@@ -4,7 +4,8 @@ import { buildAcceptanceMap } from './lib/product-acceptance-map.mjs'
 
 const packageScripts = {
   'test:exp': 'node exp.mjs',
-  'test:run': 'node run.mjs'
+  'test:run': 'node run.mjs',
+  'test:secret-canary-all-outputs:required': 'node secret-canary.mjs'
 }
 
 const valid = buildAcceptanceMap({
@@ -22,6 +23,19 @@ const valid = buildAcceptanceMap({
 assert.deepEqual(valid.structuralFailures, [])
 assert.equal(valid.summary.mapped, 2)
 assert.equal(valid.summary.criticalRecovery.complete, 1)
+
+const punctuated = buildAcceptanceMap({
+  prdMarkdown: requirementRows([['NFR-PRIV-003', 'P1', '立项目标', 'Redact outputs']]),
+  matrixMarkdown: matrixRows([
+    [
+      'NFR-PRIV-003', 'GOLDEN', '立项目标', 'gap', 'L5', 'LOCAL',
+      'Add gate `npm run test:secret-canary-all-outputs:required`.', 'open'
+    ]
+  ]),
+  packageScripts
+})
+assert.deepEqual(punctuated.entries[0].declaredCommands, ['test:secret-canary-all-outputs:required'])
+assert.deepEqual(punctuated.entries[0].missingCommands, [])
 
 const missing = buildAcceptanceMap({
   prdMarkdown: requirementRows([['EXP-001', 'P0', '立项目标', 'Switch modes']]),

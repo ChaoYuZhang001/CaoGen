@@ -3,8 +3,20 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { homedir } from 'node:os'
 import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
+import { previewOutboundContext } from './project-workspace/outbound-context-policy'
 import { applySessionModelSwitch } from './ipc/session-model-switch-handler'
+import { createUnassignedSession } from './ipc/unassigned-session'
+import { resolveWorkspaceSessionCwd } from './project-workspace/workspace-session-cwd'
+import { activateLocalCompute } from './provider/localCompute'
+import { registerInteractiveMutationIpc } from './ipc/interactive-mutation-handlers'
+import { registerAppFeatureIpc } from './ipc/app-feature-handlers'
 import { getSettings, updateSettings } from './settings'
+import {
+  createNotificationConnector,
+  deleteNotificationConnector,
+  listNotificationConnectors,
+  setDefaultNotificationConnector
+} from './notification/notification-connector-store'
 import { syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
 import { searchTranscripts } from './transcriptSearch'
@@ -17,7 +29,7 @@ import {
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
-import { scanMigration } from './migration'
+import { applyMigration, rollbackMigration, scanMigration } from './migration'
 import { executeMigrationImportEffect } from './migrationEffect'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
@@ -47,8 +59,7 @@ import { gitStatus } from './gitOps'
 import { getWorkspaceDiff } from './gitDiff'
 import { getStartSuggestions, type StartSuggestionSignal } from './startSuggestions'
 import {
-  checkManagedWorktreeApply, createManagedWorktreeMergePatch,
-  exportManagedWorktreePatch, getManagedWorktreeSummary,
+  checkManagedWorktreeApply, getManagedWorktreeSummary,
   getWorktreeConflictFiles, inspectManagedWorktreeMerge,
   listWorktreeMergeReceipts
 } from './worktrees'
@@ -60,17 +71,6 @@ import { registerProjectWorkspaceIpc } from './ipc/project-workspace-handlers'
 import { registerDigitalWorkerIpc } from './ipc/digital-worker-handlers'
 import { registerSupervisorIpc } from './ipc/supervisor-handlers'
 import { registerLearningIpc } from './ipc/learning-handlers'
-import {
-  executeInteractiveOperationEffectApplyPatch,
-  executeInteractiveOperationEffectCreatePr,
-  executeInteractiveOperationEffectRemoveWorktree
-} from './ipc/worktree-operation-handlers'
-import {
-  executeInteractiveOperationEffectDiscardHunk,
-  executeInteractiveOperationEffectGitCommit,
-  executeInteractiveOperationEffectGitIndex,
-  executeInteractiveOperationEffectWriteFile
-} from './ipc/renderer-mutation-handlers'
 import { registerAttachmentMutationIpc } from './ipc/attachment-mutation-ipc'
 import { registerProjectContextMutationIpc } from './ipc/project-context-mutation-ipc'
 import { registerMcpProbeIpc } from './ipc/mcp-probe-ipc'
@@ -92,23 +92,26 @@ import {
 import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
 import { runRoutineNow } from './routines/routine-executor'
 import { listRoutineRuns } from './routines/routine-runner'
+import { reviewRoutineRun } from './routines/routine-review'
 import { listRoutineTemplates } from './routines/routine-templates'
 import { registerQuickbarIpc } from './quickbar'
 import type {
   AppSettings,
   BrowserBounds,
   BrowserPickResult,
-  CheckpointRestoreMode,
   CreateRoutineInput,
   CreateSessionOptions,
+  NotificationConnectorInput,
   DispatchSubagentsInput,
   EffectRecord,
   ImageAttachmentView,
+  RoutineRunReviewInput,
   MarkRunOptions,
   PermissionModeId,
   PreviewAnnotationInput,
   PluginRegistryItem,
   PluginRegistryScanOptions,
+  MigrationApplyInput,
   ProviderInput,
   ProviderModelFetchInput,
   SendMessagePayload,
@@ -266,6 +269,10 @@ function pluginRegistryStateFile(): string {
   return join(app.getPath('userData'), 'plugin-registry-state.json')
 }
 
+function migrationBackupRoot(): string {
+  return join(app.getPath('userData'), 'private', 'migration-backups')
+}
+
 function canRevealPluginPath(targetPath: string, sessionId?: string): boolean {
   if (typeof targetPath !== 'string' || targetPath.trim().length === 0) return false
   const target = resolve(targetPath)
@@ -333,7 +340,7 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 }
 
 export function registerIpc(): void {
-  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc]) register()
+  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc, registerInteractiveMutationIpc, registerAppFeatureIpc]) register()
   registerAttachmentMutationIpc(attachmentRoot)
   registerProjectContextMutationIpc()
   registerMcpProbeIpc({
@@ -342,6 +349,7 @@ export function registerIpc(): void {
   })
   registerPluginInstallIpc({ pluginsRoot: caogenPluginsRoot })
   registerTerminalMutationIpc({
+    assertExecutionAuthorized: (id, action) => sessionManager.assertInteractiveExecutionAuthorized(id, action),
     getSessionMeta: (id) => sessionManager.get(id)?.meta,
     manager: terminalManager
   })
@@ -382,40 +390,6 @@ export function registerIpc(): void {
     return cwd ? suggestFiles(cwd, typeof query === 'string' ? query : '') : []
   })
 
-  ipcMain.handle('sessions:rewindFiles', async (_e, id: string, messageId: string, dryRun: boolean) => {
-    const session = sessionManager.get(id)
-    if (!session?.rewindFiles) return { canRewind: false, error: '会话不存在或引擎不支持' }
-    return session.rewindFiles(messageId, dryRun === true)
-  })
-
-  ipcMain.handle(
-    'sessions:restoreCheckpoint',
-    async (_e, id: string, messageId: string, mode: CheckpointRestoreMode, dryRun: boolean) => {
-      const session = sessionManager.get(id)
-      const safeMode: CheckpointRestoreMode =
-        mode === 'chat' || mode === 'both' || mode === 'code' ? mode : 'code'
-      if (!session?.restoreCheckpoint) {
-        return {
-          mode: safeMode,
-          checkpointId: messageId,
-          canRewind: false,
-          applied: false,
-          error: '会话不存在或引擎不支持'
-        }
-      }
-      if (session.meta.status === 'running' || session.meta.status === 'starting') {
-        return {
-          mode: safeMode,
-          checkpointId: messageId,
-          canRewind: false,
-          applied: false,
-          error: '会话仍在运行,请停止后再回溯'
-        }
-      }
-      return session.restoreCheckpoint(messageId, safeMode, dryRun === true)
-    }
-  )
-
   ipcMain.handle('git:status', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
     if (!cwd) {
@@ -433,22 +407,6 @@ export function registerIpc(): void {
     return gitStatus(cwd)
   })
 
-  ipcMain.handle('git:stage', (_e, id: string, paths: string[]) =>
-    executeInteractiveOperationEffectGitIndex(id, 'git:stage', { paths }, executeInteractiveOperationEffect)
-  )
-
-  ipcMain.handle('git:stageAll', (_e, id: string) =>
-    executeInteractiveOperationEffectGitIndex(id, 'git:stageAll', {}, executeInteractiveOperationEffect)
-  )
-
-  ipcMain.handle('git:unstage', (_e, id: string, paths: string[]) =>
-    executeInteractiveOperationEffectGitIndex(id, 'git:unstage', { paths }, executeInteractiveOperationEffect)
-  )
-
-  ipcMain.handle('git:commit', (_e, id: string, message: string) =>
-    executeInteractiveOperationEffectGitCommit(id, message, executeInteractiveOperationEffect)
-  )
-
   ipcMain.handle('workspace:diff', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
     if (!cwd) {
@@ -457,31 +415,9 @@ export function registerIpc(): void {
     return getWorkspaceDiff(cwd)
   })
 
-  ipcMain.handle('workspace:applyHunk', (_e, id: string, filePath: string, hunkPatch: string) =>
-    executeInteractiveOperationEffectGitIndex(
-      id,
-      'workspace:applyHunk',
-      { filePath, hunkPatch },
-      executeInteractiveOperationEffect
-    )
-  )
-
-  ipcMain.handle('workspace:discardHunk', (_e, id: string, filePath: string, hunkPatch: string) =>
-    executeInteractiveOperationEffectDiscardHunk(
-      id,
-      filePath,
-      hunkPatch,
-      executeInteractiveOperationEffect
-    )
-  )
-
   ipcMain.handle('worktrees:summary', (_e, id: string) => getManagedWorktreeSummary(id))
 
-  ipcMain.handle('worktrees:exportPatch', (_e, id: string) => exportManagedWorktreePatch(id))
-
   ipcMain.handle('worktrees:mergeInspect', (_e, id: string) => inspectManagedWorktreeMerge(id))
-
-  ipcMain.handle('worktrees:mergePatch', (_e, id: string) => createManagedWorktreeMergePatch(id))
 
   ipcMain.handle('worktrees:applyCheck', (_e, id: string) => checkManagedWorktreeApply(id))
 
@@ -490,20 +426,6 @@ export function registerIpc(): void {
 
   // 合并回执列表(最新在前),验收"上次到底合了什么"。
   ipcMain.handle('worktrees:mergeReceipts', () => listWorktreeMergeReceipts())
-
-  ipcMain.handle('worktrees:applyPatch', (_e, id: string) =>
-    executeInteractiveOperationEffectApplyPatch(id, executeInteractiveOperationEffect)
-  )
-
-  ipcMain.handle('worktrees:createPr', (_e, id: string) =>
-    executeInteractiveOperationEffectCreatePr(id, executeInteractiveOperationEffect)
-  )
-
-  ipcMain.handle(
-    'worktrees:remove',
-    (_e, id: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
-      executeInteractiveOperationEffectRemoveWorktree(id, opts ?? {}, executeInteractiveOperationEffect)
-  )
 
   ipcMain.handle('files:list', (_e, id: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -516,10 +438,6 @@ export function registerIpc(): void {
     if (!cwd) return { ok: false, error: '会话不存在' }
     return readTextFile(cwd, typeof relPath === 'string' ? relPath : '')
   })
-
-  ipcMain.handle('files:write', (_e, id: string, relPath: string, content: string) =>
-    executeInteractiveOperationEffectWriteFile(id, relPath, content, executeInteractiveOperationEffect)
-  )
 
   ipcMain.handle('preview:prepare', (_e, id: string, relPath: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -591,11 +509,12 @@ export function registerIpc(): void {
     if (!opts || typeof opts.cwd !== 'string') {
       throw new Error('创建会话参数无效')
     }
-    // 未选项目目录 → 走"对话分组":用用户主目录作 cwd,强制不隔离(无 worktree)
     if (opts.cwd.trim().length === 0) {
-      return sessionManager.create({ ...opts, cwd: app.getPath('home'), isolated: false })
+      if (!opts.workspaceId?.trim()) return createUnassignedSession(opts)
+      const cwd = await resolveWorkspaceSessionCwd(opts.workspaceId, app.getPath('userData'))
+      return sessionManager.createManaged({ ...opts, cwd })
     }
-    return await sessionManager.createManaged(opts)
+    return sessionManager.createManaged(opts)
   })
 
   ipcMain.handle('sessions:dispatchSubagents', (_e, parentSessionId: string, input: DispatchSubagentsInput) => {
@@ -633,17 +552,22 @@ export function registerIpc(): void {
     return ocrImage(imagePath)
   })
 
-  ipcMain.handle('sessions:send', (_e, id: string, raw: unknown) => {
+  ipcMain.handle('sessions:send', async (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
-    if (!payload || !sessionManager.send(id, payload)) return false
-    if (payload.text && shouldProposeMemory(payload.text) && shouldEmitMemorySuggestion(id, payload.text)) {
+    if (!payload) return false
+    const accepted = await sessionManager.send(id, payload)
+    if (!accepted) return false
+    const sessionMeta = sessionManager.get(id)?.meta
+    if (
+      payload.text && sessionMeta?.taskStrategy === 'execute' &&
+      shouldProposeMemory(payload.text) && shouldEmitMemorySuggestion(id, payload.text)
+    ) {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) win.webContents.send('memory:suggestion', { sessionId: id, text: payload.text })
       }
     }
-    if (payload.text) {
-      const meta = sessionManager.get(id)?.meta
-      const projectRoot = meta ? (meta.sourceCwd ?? meta.cwd) : undefined
+    if (payload.text && sessionMeta?.taskStrategy === 'execute') {
+      const projectRoot = sessionMeta ? (sessionMeta.sourceCwd ?? sessionMeta.cwd) : undefined
       void writeExtractedMemory({
         rootDir: memoryRoot(),
         text: payload.text,
@@ -655,6 +579,13 @@ export function registerIpc(): void {
       })
     }
     return true
+  })
+
+  ipcMain.handle('sessions:outboundContextPreview', async (_e, id: string, raw: unknown) => {
+    const meta = sessionManager.get(id)?.meta
+    if (!meta) throw new Error('会话不存在')
+    const payload = normalizeSendPayload(id, raw) ?? { text: '' }
+    return previewOutboundContext(meta, app.getPath('userData'), payload)
   })
 
   ipcMain.handle('sessions:interrupt', async (_e, id: string) => {
@@ -715,7 +646,19 @@ export function registerIpc(): void {
     return next
   })
 
+  ipcMain.handle('notificationConnectors:list', () => listNotificationConnectors())
+  ipcMain.handle('notificationConnectors:create', (_e, input: NotificationConnectorInput) =>
+    createNotificationConnector(input)
+  )
+  ipcMain.handle('notificationConnectors:delete', (_e, id: string) =>
+    deleteNotificationConnector(typeof id === 'string' ? id : '')
+  )
+  ipcMain.handle('notificationConnectors:setDefault', (_e, id: string) =>
+    setDefaultNotificationConnector(typeof id === 'string' ? id : '')
+  )
+
   ipcMain.handle('providers:list', () => listProviders())
+  ipcMain.handle('providers:activateLocalCompute', () => activateLocalCompute())
 
   ipcMain.handle('providers:create', (_e, input: ProviderInput) => {
     if (!input || typeof input.name !== 'string' || input.name.trim().length === 0) {
@@ -733,7 +676,6 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('providers:health', () => listHealth())
-
   ipcMain.handle('engines:list', () => listEngines())
 
   ipcMain.handle(
@@ -812,6 +754,11 @@ export function registerIpc(): void {
     listRoutineRuns(routineStoreRoot(), typeof id === 'string' && id.trim() ? id : undefined)
   )
 
+  ipcMain.handle('routines:reviewRun', (_e, id: string, input: RoutineRunReviewInput) => {
+    if (typeof id !== 'string' || !id.trim()) return null
+    return reviewRoutineRun(routineStoreRoot(), app.getPath('userData'), id, input)
+  })
+
   ipcMain.handle('routines:listTemplates', () => listRoutineTemplates())
 
   ipcMain.handle('startSuggestions:get', async (_e, id: string) => {
@@ -838,6 +785,7 @@ export function registerIpc(): void {
         ok: true
       }))
     const routines = (await listRoutines(routineStoreRoot())).filter((routine) =>
+      (session.meta.workspaceId && routine.projectId === session.meta.workspaceId) ||
       belongsToCurrentProject(routine.projectCwd)
     )
     const routineSignals: StartSuggestionSignal[] = routines.map((routine) => ({
@@ -849,19 +797,18 @@ export function registerIpc(): void {
       updatedAt: routine.updatedAt,
       ok: true
     }))
-    // routineRuns:从已实际跑过的 routine(lastRunAt 非空)派生运行记录。
-    // 注意:routineStore 只持久化 lastRunAt/nextRunAt,不记录每次运行的成功/失败结果,
-    // 因此这里无法标记 failed,只提供"最近运行过"的时间信号,绝不臆造失败状态。
-    const routineRunSignals: StartSuggestionSignal[] = routines
-      .filter((routine) => typeof routine.lastRunAt === 'number' && routine.lastRunAt > 0)
-      .map((routine) => ({
-        id: `${routine.id}:run`,
-        title: routine.name,
-        body: routine.prompt,
+    const routineIds = new Set(routines.map((routine) => routine.id))
+    const routineRunSignals: StartSuggestionSignal[] = (await listRoutineRuns(routineStoreRoot()))
+      .filter((run) => routineIds.has(run.routineId))
+      .slice(0, 16)
+      .map((run) => ({
+        id: run.id,
+        title: run.routineName,
+        body: run.resultText ?? run.error ?? run.projectCwd,
         source: 'routine-run',
-        status: 'ran',
-        updatedAt: routine.lastRunAt ?? undefined,
-        ok: true
+        status: run.inboxStatus,
+        updatedAt: run.finishedAt ?? run.startedAt,
+        ok: run.status === 'succeeded' ? true : run.status === 'failed' ? false : undefined
       }))
     // recentFailures:用 Provider 健康度作为唯一可靠的失败来源。
     // 成功恢复会清掉 lastError,历史失败仍保留在 recentFailures 供控制中心审计。
@@ -910,14 +857,27 @@ export function registerIpc(): void {
     })
   })
 
-  ipcMain.handle('migration:scan', (_e, cwd: string) => {
-    if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
-    return scanMigration(cwd)
+  ipcMain.handle('migration:scan', (_e, cwd?: string) => {
+    if (cwd !== undefined && typeof cwd !== 'string') throw new Error('项目目录格式无效')
+    const testHome = !app.isPackaged && process.env.CAOGEN_MIGRATION_TEST_MODE === '1'
+      ? process.env.CAOGEN_MIGRATION_TEST_HOME
+      : undefined
+    return scanMigration(cwd, testHome)
   })
 
   ipcMain.handle('migration:import', (_e, cwd: string, paths: string[]) => {
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('必须指定项目目录')
     return executeMigrationImportEffect(cwd, paths, executeInteractiveOperationEffect)
+  })
+
+  ipcMain.handle('migration:apply', (_e, input: MigrationApplyInput) => {
+    if (!input || typeof input !== 'object') throw new Error('迁移决策格式无效')
+    return applyMigration(input, { backupRoot: migrationBackupRoot() })
+  })
+
+  ipcMain.handle('migration:rollback', (_e, backupId: string) => {
+    if (typeof backupId !== 'string' || backupId.length === 0) throw new Error('必须指定迁移备份')
+    return rollbackMigration(backupId, migrationBackupRoot())
   })
 
   ipcMain.handle('projects:list', () => listProjects())
@@ -976,7 +936,6 @@ export function registerIpc(): void {
     'providers:fetchModels',
     (_e, opts: ProviderModelFetchInput) => fetchModels(opts ?? {})
   )
-
   ipcMain.handle('dialog:pickDirectory', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     const result = win

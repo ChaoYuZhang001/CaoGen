@@ -29,7 +29,8 @@ export function bindProviderModelDiscoveryInput(
       providerId: provider.id,
       customHeaders: provider.customHeaders,
       credentialHeaderNames: provider.credentialHeaderNames,
-      openaiProtocol: provider.openaiProtocol
+      openaiProtocol: provider.openaiProtocol,
+      authMode: provider.authMode
     },
     usesStoredCredential: true
   }
@@ -58,6 +59,9 @@ function assertSavedProviderBinding(input: ProviderModelFetchInput, provider: Pr
     input.openaiProtocol !== undefined
     && canonicalProtocol(input.openaiProtocol) !== canonicalProtocol(provider.openaiProtocol)
   ) {
+    throw bindingError()
+  }
+  if (input.authMode !== undefined && input.authMode !== (provider.authMode ?? 'api-key')) {
     throw bindingError()
   }
 }

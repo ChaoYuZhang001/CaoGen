@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import {
+  PrivateProviderConfigError,
+  resolvePrivateProviderConfig
+} from './lib/private-provider-config.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required') || process.env.CAOGEN_P2_EXTERNAL_PREFLIGHT_REQUIRED === '1'
@@ -194,9 +198,9 @@ function chinaRealNetworkCheck() {
 }
 
 function chinaToolCallParityCheck() {
-  const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1'
+  const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1' || required
   const rawProviders = process.env.CAOGEN_CHINA_PARITY_PROVIDERS
-  const providerSource = resolveProvidersSource(rawProviders)
+  const providerSource = enabled ? resolveProvidersSource(rawProviders) : { source: 'missing' }
   const validation = providerSource.text
     ? validateProviders(providerSource.text)
     : { ok: false, providers: [], error: providerSource.error ?? 'missing CAOGEN_CHINA_PARITY_PROVIDERS' }
@@ -215,29 +219,28 @@ function chinaToolCallParityCheck() {
     providerCount: validation.providers.length,
     baselineCount,
     chinaCount,
-    providerIds: validation.providers.map((provider) => provider.id),
-    providerApiFormats: Object.fromEntries(validation.providers.map((provider) => [provider.id, provider.apiFormat])),
-    providerThinkingModes: Object.fromEntries(
-      validation.providers.filter((provider) => provider.thinkingMode).map((provider) => [provider.id, provider.thinkingMode])
-    ),
-    requiredEnvironment: ['CAOGEN_CHINA_TOOL_CALL_PARITY=1', 'CAOGEN_CHINA_PARITY_PROVIDERS'],
+    protocolCounts: countValues(validation.providers, 'apiFormat'),
+    thinkingModeCounts: countValues(validation.providers.filter((provider) => provider.thinkingMode), 'thinkingMode'),
+    privateProviderConfigRedacted: true,
+    requiredEnvironment: required ? [] : ['CAOGEN_CHINA_TOOL_CALL_PARITY=1'],
     command: 'npm.cmd run test:china-tool-call-parity:required',
     failures
   }
 }
 
 function resolveProvidersSource(value) {
-  const text = value?.trim()
-  if (!text) return { source: 'missing' }
-  const maybePath = normalizePath(text)
-  if (maybePath && existsSync(maybePath)) {
-    try {
-      return { source: 'file', path: maybePath, text: readFileSync(maybePath, 'utf8') }
-    } catch (error) {
-      return { source: 'file', path: maybePath, error: error instanceof Error ? error.message : String(error) }
+  try {
+    return resolvePrivateProviderConfig({
+      setting: value,
+      repoRoot,
+      allowTestOverride: process.env.CAOGEN_PRIVATE_PROVIDER_TEST_MODE === '1'
+    })
+  } catch (error) {
+    return {
+      source: value?.trim() ? 'file' : 'private-default',
+      error: error instanceof PrivateProviderConfigError ? error.code : 'provider_config_invalid'
     }
   }
-  return { source: 'inline', text }
 }
 
 function target(name, requiredEnv, optionalEnv, requiredAliases = {}) {
@@ -258,7 +261,7 @@ function target(name, requiredEnv, optionalEnv, requiredAliases = {}) {
 function validateProviders(text) {
   try {
     const parsed = JSON.parse(stripJsonBom(text))
-    if (!Array.isArray(parsed)) return { ok: false, providers: [], error: 'CAOGEN_CHINA_PARITY_PROVIDERS must be a JSON array' }
+    if (!Array.isArray(parsed)) return { ok: false, providers: [], error: 'private Provider config must be a JSON array' }
     const providers = parsed.map((item, index) => {
       if (!isRecord(item)) throw new Error(`provider[${index}] must be an object`)
       const id = stringField(item, 'id')
@@ -280,11 +283,16 @@ function validateProviders(text) {
       if (!id || !baseUrl || !model || !apiKey) throw new Error(`provider[${index}] missing id/baseUrl/model/apiKey`)
       const endpointFailure = publicEndpointFailure(baseUrl, `provider[${index}]`)
       if (endpointFailure) throw new Error(endpointFailure)
-      return { id, group, apiFormat, baseUrl: maskUrl(baseUrl), model, thinkingMode }
+      return { group, apiFormat, thinkingMode }
     })
     return { ok: true, providers }
   } catch (error) {
-    return { ok: false, providers: [], error: error instanceof Error ? error.message : String(error) }
+    const message = error instanceof Error ? error.message : ''
+    return {
+      ok: false,
+      providers: [],
+      error: /^provider\[\d+\] /.test(message) ? message : 'provider_config_invalid'
+    }
   }
 }
 
@@ -928,7 +936,7 @@ function publicEndpointFailure(rawUrl, target) {
     /(^|[-.])mock([-.]|$)/i.test(host) ||
     isPrivateHost(host)
   ) {
-    return `${target} endpoint must be a public real-network host, got ${host}`
+    return `${target} endpoint must be a public real-network host`
   }
   return undefined
 }
@@ -973,14 +981,13 @@ function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function maskUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl)
-    for (const key of [...url.searchParams.keys()]) if (/token|key|secret|sign|access/i.test(key)) url.searchParams.set(key, '***')
-    return url.toString()
-  } catch {
-    return String(rawUrl).replace(/(token|key|secret|sign)=([^&\s]+)/gi, '$1=***')
+function countValues(records, key) {
+  const counts = {}
+  for (const record of records) {
+    const value = stringField(record, key)
+    if (value) counts[value] = (counts[value] ?? 0) + 1
   }
+  return counts
 }
 
 function writeReport(value) {

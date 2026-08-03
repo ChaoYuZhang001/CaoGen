@@ -2,14 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Goal,
   GoalInput,
+  ProjectSquad,
   ProjectWorkspace,
   ProjectWorkspaceInput,
   WorkItem,
+  WorkItemComment,
   WorkItemInput
 } from '../../../../shared/types'
+import { AUTO_MODEL, AUTO_PROVIDER_ID } from '../../../../shared/types'
+import { useStore } from '../../store'
 import { compareWorkItemsByBoardOrder, errorText, TEXT, type StudioMutationKind } from './projectWorkspaceStudioModel'
 
 export function useWorkspaceSelection(
+  active: boolean,
   initialProjectId?: string,
   onProjectChange?: (project: ProjectWorkspace | null) => void
 ): {
@@ -21,10 +26,13 @@ export function useWorkspaceSelection(
   selectProject: (id: string) => void
   refreshProjects: (preferredId?: string) => Promise<void>
 } {
-  const [projects, setProjects] = useState<ProjectWorkspace[]>([])
+  const projects = useStore((state) => state.projectWorkspaces)
+  const storeLoading = useStore((state) => state.projectWorkspacesLoading)
+  const storeError = useStore((state) => state.projectWorkspacesError)
+  const refreshStoredProjects = useStore((state) => state.refreshProjectWorkspaces)
   const [selectedProjectId, setSelectedProjectId] = useState('')
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const request = useRef(0)
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -33,22 +41,27 @@ export function useWorkspaceSelection(
 
   const refreshProjects = useCallback(async (preferredId?: string): Promise<void> => {
     const requestId = ++request.current
-    setLoading(true)
     setError('')
     try {
-      const next = await window.agentDesk.listProjectWorkspaces({ includeArchived: true, includeDeleted: true })
+      const next = await refreshStoredProjects()
       if (requestId !== request.current) return
-      next.sort((left, right) => right.updatedAt - left.updatedAt)
-      setProjects(next)
       setSelectedProjectId((current) => chooseProjectId(next, preferredId || current))
+      setLoaded(true)
     } catch (cause) {
       if (requestId === request.current) setError(errorText(cause))
-    } finally {
-      if (requestId === request.current) setLoading(false)
     }
-  }, [])
+  }, [refreshStoredProjects])
 
-  useEffect(() => { void refreshProjects(initialProjectId) }, [initialProjectId, refreshProjects])
+  useEffect(() => {
+    if (!active) {
+      request.current += 1
+      return
+    }
+    if (!loaded) void refreshProjects(initialProjectId)
+  }, [active, initialProjectId, loaded, refreshProjects])
+  useEffect(() => {
+    setSelectedProjectId((current) => chooseProjectId(projects, initialProjectId || current))
+  }, [initialProjectId, projects])
   useEffect(() => { onProjectChange?.(selectedProject) }, [onProjectChange, selectedProject])
   useEffect(() => () => { request.current += 1 }, [])
 
@@ -56,25 +69,30 @@ export function useWorkspaceSelection(
     projects,
     selectedProject,
     selectedProjectId,
-    loading,
-    error,
+    loading: active && !error && !storeError && (!loaded || storeLoading),
+    error: error || storeError || '',
     selectProject: setSelectedProjectId,
     refreshProjects
   }
 }
 
-export function useProjectContents(projectId: string): {
+export function useProjectContents(active: boolean, projectId: string): {
   goals: Goal[]
   workItems: WorkItem[]
+  squads: ProjectSquad[]
+  comments: WorkItemComment[]
   loading: boolean
   error: string
   refreshContents: () => Promise<void>
 } {
   const [goals, setGoals] = useState<Goal[]>([])
   const [workItems, setWorkItems] = useState<WorkItem[]>([])
+  const [squads, setSquads] = useState<ProjectSquad[]>([])
+  const [comments, setComments] = useState<WorkItemComment[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const request = useRef(0)
+  const loadedProjectId = useRef('')
 
   const refreshContents = useCallback(async (): Promise<void> => {
     if (!projectId) return
@@ -82,13 +100,18 @@ export function useProjectContents(projectId: string): {
     setLoading(true)
     setError('')
     try {
-      const [nextGoals, nextWorkItems] = await Promise.all([
+      const [nextGoals, nextWorkItems, nextSquads, nextComments] = await Promise.all([
         window.agentDesk.listProjectGoals(projectId, { includeArchived: true }),
-        window.agentDesk.listProjectWorkItems(projectId)
+        window.agentDesk.listProjectWorkItems(projectId),
+        window.agentDesk.listProjectSquads(projectId, { includeArchived: true }),
+        window.agentDesk.listProjectComments(projectId)
       ])
       if (requestId !== request.current) return
       setGoals(nextGoals.sort((left, right) => right.updatedAt - left.updatedAt))
       setWorkItems(nextWorkItems.sort(compareWorkItemsByBoardOrder))
+      setSquads(nextSquads.sort((left, right) => left.name.localeCompare(right.name)))
+      setComments(nextComments.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)))
+      loadedProjectId.current = projectId
     } catch (cause) {
       if (requestId === request.current) setError(errorText(cause))
     } finally {
@@ -98,14 +121,30 @@ export function useProjectContents(projectId: string): {
 
   useEffect(() => {
     request.current += 1
-    setGoals([])
-    setWorkItems([])
     setError('')
-    if (projectId) void refreshContents()
-  }, [projectId, refreshContents])
+    if (!active) {
+      setLoading(false)
+      return
+    }
+    if (!projectId) {
+      loadedProjectId.current = ''
+      setGoals([])
+      setWorkItems([])
+      setSquads([])
+      setComments([])
+      return
+    }
+    if (loadedProjectId.current !== projectId) {
+      setGoals([])
+      setWorkItems([])
+      setSquads([])
+      setComments([])
+      void refreshContents()
+    }
+  }, [active, projectId, refreshContents])
   useEffect(() => () => { request.current += 1 }, [])
 
-  return { goals, workItems, loading, error, refreshContents }
+  return { goals, workItems, squads, comments, loading, error, refreshContents }
 }
 
 export function useStudioCreateActions({
@@ -121,6 +160,7 @@ export function useStudioCreateActions({
   error: string
   announcement: string
   clearFeedback: () => void
+  importProject: (file: File) => Promise<void>
   createProject: (input: ProjectWorkspaceInput) => Promise<void>
   createGoal: (input: GoalInput) => Promise<void>
   createWorkItem: (input: WorkItemInput) => Promise<void>
@@ -156,6 +196,12 @@ export function useStudioCreateActions({
     (created) => refreshProjects(created.id),
     TEXT.projectCreated
   ), [refreshProjects, run])
+  const importProject = useCallback((file: File) => run(
+    'import',
+    async () => window.agentDesk.importProjectWorkspaceData(await file.text()),
+    (result) => refreshProjects(result.projectId),
+    TEXT.projectImported
+  ), [refreshProjects, run])
   const createGoal = useCallback((input: GoalInput) => run(
     'goal', () => window.agentDesk.createProjectGoal(input), async () => refreshContents(), TEXT.goalCreated
   ), [refreshContents, run])
@@ -164,7 +210,66 @@ export function useStudioCreateActions({
   ), [refreshContents, run])
   const clearFeedback = useCallback(() => { setError(''); setAnnouncement('') }, [])
 
-  return { busy, error, announcement, clearFeedback, createProject, createGoal, createWorkItem }
+  return { busy, error, announcement, clearFeedback, importProject, createProject, createGoal, createWorkItem }
+}
+
+export function useProjectGoalTaskStart(refreshContents: () => Promise<void>): {
+  busy: boolean
+  error: string
+  announcement: string
+  start: (projectId: string, objective: string) => Promise<boolean>
+} {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [announcement, setAnnouncement] = useState('')
+  const locked = useRef(false)
+  const retry = useRef<{ key: string; requestId: string } | null>(null)
+
+  const start = useCallback(async (projectId: string, rawObjective: string): Promise<boolean> => {
+    const objective = rawObjective.trim()
+    if (!objective || locked.current) return false
+    locked.current = true
+    setBusy(true)
+    setError('')
+    setAnnouncement('')
+    const key = `${projectId}\0${objective}`
+    if (retry.current?.key !== key) retry.current = { key, requestId: newGoalTaskRequestId() }
+    try {
+      const result = await window.agentDesk.createProjectGoalTask({
+        requestId: retry.current.requestId,
+        projectId,
+        objective
+      })
+      await refreshContents()
+      await useStore.getState().startSessionWithPrompt({
+        cwd: '',
+        workspaceId: projectId,
+        goalId: result.goal.id,
+        workItemId: result.workItem.id,
+        model: AUTO_MODEL,
+        providerId: AUTO_PROVIDER_ID,
+        routingScope: 'global',
+        initialPrompt: objective,
+        taskStrategy: 'execute',
+        title: result.workItem.title
+      }, objective)
+      retry.current = null
+      setAnnouncement(TEXT.goalTaskStarted)
+      return true
+    } catch (cause) {
+      setError(errorText(cause))
+      return false
+    } finally {
+      locked.current = false
+      setBusy(false)
+    }
+  }, [refreshContents])
+
+  return { busy, error, announcement, start }
+}
+
+function newGoalTaskRequestId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `goal-task-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function chooseProjectId(projects: ProjectWorkspace[], preferredId?: string): string {

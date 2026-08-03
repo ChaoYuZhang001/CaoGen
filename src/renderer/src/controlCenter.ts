@@ -204,7 +204,7 @@ export function buildControlCenterView(input: BuildControlCenterViewInput): Cont
       configuredKeys: input.providers.filter((provider) => provider.hasToken).length,
       totalKeys: input.providers.reduce((sum, provider) => sum + providerKeyCount(provider), 0),
       healthy: providerRows.filter((provider) => provider.status === 'available').length,
-      missingKeys: input.providers.filter((provider) => !provider.hasToken).length
+      missingKeys: input.providers.filter((provider) => !provider.ready).length
     },
     modelRoles: buildModelRoles(input.settings, input.providers),
     mcp,
@@ -258,7 +258,7 @@ function buildModelRole(
     ? 'disabled'
     : hasProvider && !provider
       ? 'needs-config'
-      : provider && !provider.hasToken
+      : provider && !provider.ready
         ? 'external-required'
         : provider && hasModel && provider.models.length > 0 && !provider.models.includes(model)
           ? 'needs-config'
@@ -290,14 +290,14 @@ function buildProviderStatus(
       : `failing · ${health.consecutiveFailures} consecutive${latestFailure ? ` · ${latestFailure.label}` : ''}`
     : 'not probed'
   const missingModels = provider.models.length === 0
-  const status: ControlCenterStatus = !provider.hasToken
+  const status: ControlCenterStatus = !provider.ready
     ? 'external-required'
     : health && !health.healthy
       ? 'needs-config'
       : missingModels
         ? 'needs-config'
         : 'available'
-  const detail = !provider.hasToken
+  const detail = !provider.ready
     ? 'API key required outside this view'
     : health && !health.healthy
       ? latestFailure?.message ?? health.lastError ?? 'provider health check is failing'
@@ -316,9 +316,7 @@ function buildProviderStatus(
     activeKeyLabel: provider.activeKeyLabel,
     budgetLabel: provider.budgetUsd > 0 ? moneyLabel(provider.budgetUsd) : 'inherits global budget',
     hasToken: provider.hasToken,
-    tokenLabel: provider.hasToken
-      ? `${providerKeyCount(provider)} key${providerKeyCount(provider) === 1 ? '' : 's'}${provider.activeKeyLabel ? ` · ${provider.activeKeyLabel}` : ''}`
-      : 'missing',
+    tokenLabel: providerTokenLabel(provider),
     healthLabel,
     successRateLabel: successRate === undefined ? 'no samples' : `${successRate}% success`,
     latencyLabel: latency ? `${Math.round(latency)}ms EMA` : 'no latency sample',
@@ -327,6 +325,13 @@ function buildProviderStatus(
     detail,
     selected: provider.id === selectedProviderId
   }
+}
+
+function providerTokenLabel(provider: ProviderView): string {
+  if (provider.authMode === 'none') return 'local service · no key required'
+  if (!provider.hasToken) return 'missing'
+  const count = providerKeyCount(provider)
+  return `${count} key${count === 1 ? '' : 's'}${provider.activeKeyLabel ? ` · ${provider.activeKeyLabel}` : ''}`
 }
 
 function providerKeyCount(provider: ProviderView): number {

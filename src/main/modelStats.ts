@@ -1,4 +1,15 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /**
@@ -56,46 +67,70 @@ function load(): StatsFile {
   return cache
 }
 
-function persist(): void {
-  if (!cache) return
+function persist(next: StatsFile): void {
+  const file = statsFile()
+  const directory = dirname(file)
+  const temporary = join(directory, `.model-stats.${process.pid}.${randomUUID()}.tmp`)
+  let descriptor: number | undefined
   try {
-    const file = statsFile()
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(cache, null, 2))
-  } catch {
-    // 持久化失败不影响本次路由(内存里仍生效)
+    mkdirSync(directory, { recursive: true })
+    descriptor = openSync(temporary, 'wx', 0o600)
+    writeFileSync(descriptor, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+    fsyncSync(descriptor)
+    closeSync(descriptor)
+    descriptor = undefined
+    renameSync(temporary, file)
+    syncDirectory(directory)
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor) } catch { /* best effort */ }
+    }
+    if (existsSync(temporary)) {
+      try { unlinkSync(temporary) } catch { /* canonical file remains authoritative */ }
+    }
+    throw error
   }
 }
 
-function ensure(model: string): ModelStat {
-  const store = load()
-  let stat = store.models[model]
-  if (!stat) {
-    stat = { model, successes: 0, failures: 0 }
-    store.models[model] = stat
+function syncDirectory(directory: string): void {
+  if (process.platform === 'win32') return
+  try {
+    const descriptor = openSync(directory, 'r')
+    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+  } catch {
+    // The file is fsynced; some filesystems reject directory fsync.
   }
-  return stat
+}
+
+function updateStat(model: string, update: (stat: ModelStat) => void): void {
+  const current = load()
+  const stat = { ...(current.models[model] ?? { model, successes: 0, failures: 0 }) }
+  update(stat)
+  const next: StatsFile = { version: 1, models: { ...current.models, [model]: stat } }
+  persist(next)
+  cache = next
 }
 
 /** 记一次成功(带真实延迟);model 为空则忽略(auto 哨兵等) */
 export function recordModelSuccess(model: string, latencyMs?: number): void {
   if (!model) return
-  const stat = ensure(model)
-  stat.successes += 1
-  stat.lastUsedAt = Date.now()
-  if (latencyMs !== undefined && latencyMs > 0) {
-    stat.latencyEmaMs =
-      stat.latencyEmaMs === undefined ? latencyMs : Math.round(stat.latencyEmaMs * (1 - EMA_ALPHA) + latencyMs * EMA_ALPHA)
-  }
-  persist()
+  updateStat(model, (stat) => {
+    stat.successes += 1
+    stat.lastUsedAt = Date.now()
+    if (latencyMs !== undefined && latencyMs > 0) {
+      stat.latencyEmaMs = stat.latencyEmaMs === undefined
+        ? latencyMs
+        : Math.round(stat.latencyEmaMs * (1 - EMA_ALPHA) + latencyMs * EMA_ALPHA)
+    }
+  })
 }
 
 export function recordModelFailure(model: string): void {
   if (!model) return
-  const stat = ensure(model)
-  stat.failures += 1
-  stat.lastUsedAt = Date.now()
-  persist()
+  updateStat(model, (stat) => {
+    stat.failures += 1
+    stat.lastUsedAt = Date.now()
+  })
 }
 
 /** 读取某模型统计(无样本返回 undefined) */

@@ -27,7 +27,7 @@ interface CrossValidationRuntimeDependencies {
   getMeta(sessionId: string): SessionMeta | undefined
   getTranscript(sessionId: string): TranscriptEntry[]
   getRun(sessionId: string): TaskRunRecord | undefined
-  send(sessionId: string, prompt: string): boolean
+  send(sessionId: string, prompt: string): Promise<boolean>
   dispatch(sessionId: string, event: AgentEvent): void
 }
 
@@ -132,7 +132,7 @@ export class ModelCrossValidationRuntime {
       turnSeq: seq,
       parentRunId
     })
-    const reviewAccepted = dispatchCrossValidationPrompt(this.dependencies, {
+    const reviewAccepted = await dispatchCrossValidationPrompt(this.dependencies, {
       parentSessionId: sessionId,
       childSessionId: reviewMeta.id,
       prompt: buildCrossValidationReviewPrompt({
@@ -188,7 +188,7 @@ export class ModelCrossValidationRuntime {
       verifier: `model-arbitration:${target.providerId}/${target.model}`,
       parentRunId: review.parentRunId
     })
-    const arbitrationAccepted = dispatchCrossValidationPrompt(this.dependencies, {
+    const arbitrationAccepted = await dispatchCrossValidationPrompt(this.dependencies, {
       parentSessionId: review.parentSessionId,
       childSessionId: arbitrationMeta.id,
       prompt: buildCrossValidationArbitrationPrompt({

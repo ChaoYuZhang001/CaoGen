@@ -29,7 +29,7 @@ const runDir = path.join(outDir, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-orchestration-mock-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
-const approvalFileName = 'office-approval-required.txt'
+const approvalFilePath = path.join(projectDir, 'office-approval-required.txt')
 const officeFailureMessage = 'office deterministic validation fault'
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
 const officeScreenshotThresholds = ciSoftwareWebgl ? { sceneNonDark: 0.1, leftDark: 0.91, leftBuckets: 64, centralNonDark: 0.12, workAreaNonDark: 0.2 } : { sceneNonDark: 0.2, leftDark: 0.82, leftBuckets: 70, centralNonDark: 0.18, workAreaNonDark: 0.35 }
@@ -222,11 +222,12 @@ try {
     }, approval.id, runId)
     const pending = await waitForValue(
       () => page.evaluate((sessionId) => window.agentDesk.listPendingPermissions(sessionId), approval.id),
-      (value) => Array.isArray(value) && value.some((request) => request.toolName === 'write_file'),
+      (value) => Array.isArray(value) && value.some((request) => request.toolName === 'bash'),
       15_000,
       'waiting for office approval pending permission'
     )
-    assert(pending.some((request) => JSON.stringify(request.input).includes(approvalFileName)), 'approval permission target missing')
+    assert(pending.some((request) => JSON.stringify(request.input).includes(path.basename(approvalFilePath))), 'approval permission target missing')
+    assert(!existsSync(approvalFilePath), 'pending approval command must not execute before user approval')
   })
 
   let failure
@@ -1167,8 +1168,7 @@ async function startOpenAiMock() {
       writeFunctionCallResponse(res, {
         responseId: 'resp_office_approval_1',
         callId: 'call_office_approval',
-        path: approvalFileName,
-        content: `approval required ${runId}`
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(approvalFilePath)}, ${JSON.stringify(`approval required ${runId}`)})`)}`
       })
       return
     }
@@ -1217,12 +1217,12 @@ async function startOpenAiMock() {
   return { server, port, requests }
 }
 
-function writeFunctionCallResponse(res, { responseId, callId, path: targetPath, content }) {
+function writeFunctionCallResponse(res, { responseId, callId, command }) {
   const item = {
     type: 'function_call',
     call_id: callId,
-    name: 'write_file',
-    arguments: JSON.stringify({ path: targetPath, content })
+    name: 'bash',
+    arguments: JSON.stringify({ command })
   }
   res.writeHead(200, {
     'content-type': 'text/event-stream',

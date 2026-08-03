@@ -111,14 +111,39 @@ function normalizeResource(input: ProjectResourceInput, index: number): ProjectR
   if (!path && !uri && input.kind !== 'custom') {
     throw new ProjectWorkspaceError('invalid_input', `resource ${index} requires path or uri`)
   }
+  const dataClass = normalizeResourceDataClass(input.dataClass, input.kind, index)
+  const requestedEgressPolicy = normalizeResourceEgressPolicy(input.egressPolicy, index)
   return {
     id: optionalId(input.id, `resource ${index} id`) ?? randomUUID(),
     kind: input.kind,
     label: optionalText(input.label, `resource ${index} label`),
     path,
     uri,
+    dataClass,
+    egressPolicy: dataClass === 'S3' ? 'deny' : requestedEgressPolicy,
     metadata: input.metadata ? redact(input.metadata) as Record<string, unknown> : undefined
   }
+}
+
+function normalizeResourceDataClass(
+  value: unknown,
+  kind: ProjectResource['kind'],
+  index: number
+): NonNullable<ProjectResource['dataClass']> {
+  if (value === undefined) return kind === 'connector' || kind === 'url' ? 'S1' : 'S2'
+  if (value === 'S0' || value === 'S1' || value === 'S2' || value === 'S3' || value === 'S4') {
+    return value
+  }
+  throw new ProjectWorkspaceError('invalid_input', `resource ${index} dataClass is invalid`)
+}
+
+function normalizeResourceEgressPolicy(
+  value: unknown,
+  index: number
+): NonNullable<ProjectResource['egressPolicy']> {
+  if (value === undefined) return 'allow'
+  if (value === 'allow' || value === 'local_only' || value === 'deny') return value
+  throw new ProjectWorkspaceError('invalid_input', `resource ${index} egressPolicy is invalid`)
 }
 
 export function normalizeResources(inputs: ProjectResourceInput[] | undefined): ProjectResource[] {
@@ -149,6 +174,19 @@ function normalizeBudget(value: GoalBudget | undefined): GoalBudget | undefined 
   if (value.maxRuns !== undefined) {
     budget.maxRuns = positiveInteger(value.maxRuns, 'goal budget maxRuns', 0)
     if (budget.maxRuns === 0) throw new ProjectWorkspaceError('invalid_input', 'goal budget maxRuns must be greater than zero')
+  }
+  if (value.maxConcurrentRuns !== undefined) {
+    budget.maxConcurrentRuns = positiveInteger(
+      value.maxConcurrentRuns,
+      'goal budget maxConcurrentRuns',
+      0
+    )
+    if (budget.maxConcurrentRuns === 0) {
+      throw new ProjectWorkspaceError(
+        'invalid_input',
+        'goal budget maxConcurrentRuns must be greater than zero'
+      )
+    }
   }
   return budget
 }

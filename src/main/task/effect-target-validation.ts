@@ -25,16 +25,47 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
 
 function isOfficeArtifactTarget(record: Record<string, unknown>): boolean {
   return [
-    record.artifactKind === 'document' || record.artifactKind === 'spreadsheet',
+    record.artifactKind === 'document' || record.artifactKind === 'spreadsheet' ||
+      record.artifactKind === 'presentation' || record.artifactKind === 'pdf',
     isString(record.rootPath),
     isFileSystemIdentity(record.rootIdentity),
     isString(record.relativePath),
     isString(record.workspacePath),
     isString(record.specDigest),
+    isOptionalOfficeOutputIdentity(
+      record.outputBindingVersion,
+      record.expectedSha256,
+      record.expectedBytes,
+      record.sourceSnapshots
+    ),
     isString(record.mediaType),
     isStringArray(record.sourceRefs),
+    record.sourceSnapshots === undefined || isOfficeSourceSnapshots(record.sourceSnapshots, record.sourceRefs),
     isString(record.title)
   ].every(Boolean)
+}
+
+function isOptionalOfficeOutputIdentity(
+  version: unknown,
+  sha256: unknown,
+  bytes: unknown,
+  sourceSnapshots: unknown
+): boolean {
+  if (version === undefined && sha256 === undefined && bytes === undefined) return true
+  return version === 1 && isString(sha256) && /^sha256:[a-f0-9]{64}$/.test(sha256) &&
+    isNonNegativeInteger(bytes) && Array.isArray(sourceSnapshots)
+}
+
+function isOfficeSourceSnapshots(value: unknown, sourceRefs: unknown): boolean {
+  if (!Array.isArray(value) || !Array.isArray(sourceRefs) || value.length !== sourceRefs.length) return false
+  return value.every((candidate, index) => {
+    if (!isRecord(candidate)) return false
+    return candidate.path === sourceRefs[index] &&
+      isFileSystemIdentity(candidate.identity) &&
+      isString(candidate.sha256) &&
+      /^sha256:[a-f0-9]{64}$/.test(candidate.sha256) &&
+      isNonNegativeInteger(candidate.bytes)
+  })
 }
 
 function isGitIndexUpdateTarget(record: Record<string, unknown>): boolean {

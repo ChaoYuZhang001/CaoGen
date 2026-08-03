@@ -143,7 +143,7 @@ try {
     'the production registry must create AnthropicEngine, not another engine kind'
   )
 
-  assert.equal(manager.send(sessionId, prompt), true, 'SessionManager must accept the Anthropic turn')
+  assert.equal(await manager.send(sessionId, prompt), true, 'SessionManager must accept the Anthropic turn')
   await eventually(
     () => manager.getTranscript(sessionId).some((entry) => entry.event.kind === 'turn-result'),
     'Anthropic turn result'

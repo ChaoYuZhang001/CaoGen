@@ -5,6 +5,8 @@ import { ASSISTANT_PROJECTION_TRANSLATIONS } from './i18n/assistantProjectionTra
 import { SIDEBAR_TRANSLATIONS } from './i18n/sidebarTranslations'
 import { PROVIDER_PROFILE_TRANSLATIONS } from './i18n/providerProfileTranslations'
 import { TASK_PLAN_TRANSLATIONS } from './i18n/taskPlanTranslations'
+import { PROVIDER_SETUP_TRANSLATIONS } from './i18n/providerSetupTranslations'
+import { OUTBOUND_CONTEXT_TRANSLATIONS } from './i18n/outboundContextTranslations'
 
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
@@ -45,6 +47,9 @@ const DICT: Dict = {
   },
   awaitingApproval: { zh: '等待授权', en: 'Awaiting approval' },
   resumeSessionTitle: { zh: '恢复会话:{cwd}', en: 'Resume session: {cwd}' },
+  forkConversation: { zh: '切换 Provider / 模型继续', en: 'Continue with another provider / model' },
+  conversationForkSource: { zh: '对话分叉 · {title}', en: 'Conversation fork · {title}' },
+  conversation: { zh: '原对话', en: 'Source conversation' },
   // 会话状态
   statusStarting: { zh: '启动中', en: 'Starting' },
   statusRunning: { zh: '运行中', en: 'Running' },
@@ -156,6 +161,19 @@ const DICT: Dict = {
   welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
   welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
   welcomePresetStartsNow: { zh: '点击即开始', en: 'Click to start' },
+  firstTaskRecommended: { zh: '推荐', en: 'Recommended' },
+  firstTaskProgressCompute: { zh: '算力', en: 'Compute' },
+  firstTaskProgressRun: { zh: '任务', en: 'Task' },
+  firstTaskProgressResult: { zh: '结果', en: 'Result' },
+  firstTaskProgressAcceptance: { zh: '验收', en: 'Acceptance' },
+  firstTaskRunning: { zh: '正在执行首个任务', en: 'Running your first task' },
+  firstTaskReviewing: { zh: '查看产物并完成验收', en: 'Review the result and finish acceptance' },
+  firstTaskFailedTitle: { zh: '首个任务未完成', en: 'Your first task did not finish' },
+  firstTaskFailedDetail: {
+    zh: '可在当前会话修改输入后继续，或保留此会话并重新开始。',
+    en: 'Continue in this conversation with revised input, or keep it and start again.'
+  },
+  firstTaskRestart: { zh: '保留会话，重新开始', en: 'Keep session and start again' },
   welcomeUnderstandProject: { zh: '读懂这个项目', en: 'Understand this project' },
   welcomeUnderstandProjectPrompt: {
     zh: '阅读当前工作区可访问的代码和文档，不要修改文件。输出项目用途、目录与核心模块、关键入口和数据流、运行与测试方式、主要风险和建议的下一步。引用具体文件；如果没有可分析内容，请明确提示我选择目录或添加文件，不要臆测。',
@@ -526,8 +544,22 @@ const DICT: Dict = {
   tabPersona: { zh: '通用指令', en: 'Global instructions' },
   tabOffice: { zh: '控制室 / 外观', en: 'Control Room / Appearance' },
   tabProviders: { zh: '厂商', en: 'Providers' },
+  tabNotifications: { zh: '消息', en: 'Messages' },
   tabPlugins: { zh: '插件 / 技能', en: 'Plugins / Skills' },
   tabMigrate: { zh: '迁移', en: 'Migrate' },
+  notificationConnectorsTitle: { zh: '消息连接器', en: 'Message connectors' },
+  notificationConnectorName: { zh: '名称（可选）', en: 'Name (optional)' },
+  notificationConnectorWebhook: { zh: '机器人 Webhook', en: 'Bot webhook' },
+  notificationConnectorSecret: { zh: '签名密钥（可选）', en: 'Signing secret (optional)' },
+  notificationConnectorAdd: { zh: '添加连接器', en: 'Add connector' },
+  notificationConnectorEmpty: { zh: '暂无消息连接器', en: 'No message connectors' },
+  notificationConnectorReady: { zh: '可用', en: 'Ready' },
+  notificationConnectorUnavailable: { zh: '需重新配置', en: 'Needs setup' },
+  notificationConnectorMakeDefault: { zh: '设为默认', en: 'Make default' },
+  notificationConnectorDefault: { zh: '默认', en: 'Default' },
+  notificationChannelFeishu: { zh: '飞书', en: 'Feishu' },
+  notificationChannelDingTalk: { zh: '钉钉', en: 'DingTalk' },
+  notificationChannelWeCom: { zh: '企业微信', en: 'WeCom' },
   migrateTitle: { zh: '导入历史工具资产', en: 'Import existing tool assets' },
   migrateHint: {
     zh: '扫描本机已有的规则与 MCP 配置。规则注入项目规则文件(带来源标注,原文件不动,已有规则文件先备份);MCP 合并进 .mcp.json(同名跳过)。',
@@ -711,6 +743,8 @@ const DICT: Dict = {
   officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
   modelsCount: { zh: '{n} 个模型', en: '{n} models' },
   // Provider 编辑器
+  ...PROVIDER_SETUP_TRANSLATIONS,
+  ...OUTBOUND_CONTEXT_TRANSLATIONS,
   providerEditTitle: { zh: '编辑 Provider', en: 'Edit Provider' },
   providerAddTitle: { zh: '添加 Provider', en: 'Add Provider' },
   providerQuickTitle: { zh: '快速开始', en: 'Quick start' },
@@ -783,6 +817,14 @@ const DICT: Dict = {
   providerAuthModeApiKey: { zh: 'API Key', en: 'API key' },
   providerAuthModeNone: { zh: '本机服务无需密钥', en: 'No key for local service' },
   providerAuthModeNoneHint: { zh: '仅允许本机回环地址，不会保存或发送 API Key。', en: 'Only loopback addresses are allowed. No API key is stored or sent.' },
+  providerAuthModeNoneDeletesKeysHint: {
+    zh: '保存后将永久删除此 Provider 已存的 {n} 个 API Key；切回 API Key 模式时必须重新录入。',
+    en: 'Saving will permanently delete {n} stored API key(s) for this Provider. They must be entered again if API key mode is restored.'
+  },
+  providerAuthModeNoneDeleteKeysConfirm: {
+    zh: '确认切换为本机无需密钥模式并永久删除 {n} 个已存 API Key？此操作不可撤销。',
+    en: 'Switch to local no-key mode and permanently delete {n} stored API key(s)? This cannot be undone.'
+  },
   providerLocalNoKey: { zh: '本机 · 无需密钥', en: 'Local · no key required' },
   fetchedModels: { zh: '已获取 {n} 个模型', en: 'Fetched {n} models' },
   fetchedModelsFrom: {

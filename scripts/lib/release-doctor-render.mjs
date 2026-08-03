@@ -7,6 +7,7 @@ export function renderReleaseDoctorMarkdown(value) {
     `Release target: ${value.releaseTarget.label}`,
     `Package version: ${value.currentPackageVersion}`,
     '',
+    ...renderDistributionPolicy(value.distributionPolicy),
     '## Refresh',
     '',
     `- Enabled: ${value.refresh.enabled ? 'yes' : 'no'}`,
@@ -23,6 +24,22 @@ export function renderReleaseDoctorMarkdown(value) {
   lines.push('## Stop Conditions', '')
   lines.push(...value.releaseStopConditions.map((item) => `- ${item}`), '')
   return `${lines.join('\n')}\n`
+}
+
+function renderDistributionPolicy(policy) {
+  if (!policy) return []
+  const scoped = policy.platformScopedRelease
+  return [
+    '## Distribution Policy',
+    '',
+    `- Selected channel: \`${policy.selectedReleaseChannel}\``,
+    `- Formal cross-platform gate: ${policy.formalCrossPlatform?.status || 'unknown'} (Doctor: ${policy.formalCrossPlatform?.doctorStatus || 'unknown'})`,
+    `- Platform-scoped candidate gate: ${scoped?.candidateGate?.status || 'unknown'}`,
+    `- Platform-scoped final notes gate: ${scoped?.finalNotesGate?.status || 'unknown'}`,
+    `- Platform-scoped post-publication gate: ${scoped?.postPublicationGate?.status || 'unknown'}`,
+    `- Windows formal signing plan: ${scoped?.windowsFormalSigningPlan || 'not recorded'}`,
+    ''
+  ]
 }
 
 function renderDomainSection(domain) {

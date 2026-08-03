@@ -113,8 +113,9 @@ function buildEntry(requirement, rowsById, packageScripts) {
 
 function extractCommands(gate) {
   const commands = new Set()
-  for (const match of gate.matchAll(/npm run\s+([A-Za-z0-9:._-]+)/g)) commands.add(match[1])
-  for (const match of gate.matchAll(/\b(test:[A-Za-z0-9:._-]+)/g)) commands.add(match[1])
+  const commandName = '[A-Za-z0-9:._-]*[A-Za-z0-9:_-]'
+  for (const match of gate.matchAll(new RegExp(`npm run\\s+(${commandName})`, 'g'))) commands.add(match[1])
+  for (const match of gate.matchAll(new RegExp(`\\b(test:${commandName})`, 'g'))) commands.add(match[1])
   return [...commands].sort()
 }
 

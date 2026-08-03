@@ -49,7 +49,7 @@ type SqlDatabase = TaskSnapshotDatabase
 
 // Finder/Dock may launch the app with cwd="/"; resolve packaged WASM beside the bundled module.
 const nodeRequire = createRequire(__filename)
-const STORE_VERSION = 8
+const STORE_VERSION = 9
 export const TASK_SNAPSHOT_EVENT_INTERVAL = 5
 const TASK_SNAPSHOT_DB_FILE = 'task-snapshots.db'
 const UNRESOLVED_EFFECT_STATUSES = new Set<EffectRecord['status']>([

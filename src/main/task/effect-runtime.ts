@@ -14,7 +14,10 @@ import {
 } from './effect-ledger'
 import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { buildEffectDescriptor, reconcileEffect } from './effect-reconciler'
-import { registerConfirmedRunArtifactLifecycles } from './artifact-lifecycle-producer'
+import {
+  officeArtifactEffectHasOutputBinding,
+  registerConfirmedRunArtifactLifecycles
+} from './artifact-lifecycle-producer'
 import { getTaskSnapshot, saveTaskRunBarrier, saveTaskSnapshot } from './task-snapshot'
 import { taskRuntimeRegistry } from './task-runtime-registry'
 import { isTaskRunTerminal, transitionTaskRun } from './task-run'
@@ -291,6 +294,12 @@ export async function resolvePersistedTaskEffect(
       if ('error' in projection) {
         throw new Error(`Effect 已由用户确认，但 managed worktree projection 失败: ${projection.error}`)
       }
+    }
+    if (resolution === 'confirmed_applied' && effect.target.kind === 'office_artifact' &&
+        !officeArtifactEffectHasOutputBinding(effect)) {
+      throw new Error(
+        '旧版 Office Effect 缺少确定性输出绑定，禁止确认已应用；请选择未应用后重新生成，或重新审批'
+      )
     }
     await options.beforePersist?.(effect)
     const run = manuallyResolveEffect(snapshot.run, effectId, resolution)

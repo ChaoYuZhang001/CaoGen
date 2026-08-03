@@ -1,4 +1,18 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, type Dirent } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  type Dirent
+} from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -154,8 +168,41 @@ export function readPluginRegistryState(path: string): PluginRegistryState {
 }
 
 export function writePluginRegistryState(path: string, state: PluginRegistryState): void {
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(normalizePluginRegistryState(state), null, 2))
+  const directory = dirname(path)
+  const temporary = join(directory, `.plugin-registry.${process.pid}.${randomUUID()}.tmp`)
+  let descriptor: number | undefined
+  try {
+    mkdirSync(directory, { recursive: true })
+    descriptor = openSync(temporary, 'wx', 0o600)
+    writeFileSync(
+      descriptor,
+      `${JSON.stringify(normalizePluginRegistryState(state), null, 2)}\n`,
+      'utf8'
+    )
+    fsyncSync(descriptor)
+    closeSync(descriptor)
+    descriptor = undefined
+    renameSync(temporary, path)
+    syncPluginRegistryDirectory(directory)
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor) } catch { /* best effort */ }
+    }
+    if (existsSync(temporary)) {
+      try { unlinkSync(temporary) } catch { /* canonical state remains authoritative */ }
+    }
+    throw error
+  }
+}
+
+function syncPluginRegistryDirectory(directory: string): void {
+  if (process.platform === 'win32') return
+  try {
+    const descriptor = openSync(directory, 'r')
+    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+  } catch {
+    // The file is fsynced; some filesystems reject directory fsync.
+  }
 }
 
 export function setPluginRegistryItemEnabled(

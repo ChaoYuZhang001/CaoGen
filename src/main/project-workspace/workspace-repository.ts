@@ -8,7 +8,9 @@ import type {
   ProjectWorkspaceKind,
   ProjectWorkspaceManifest,
   ProjectWorkspacePatch,
-  WorkItem
+  ProjectSquad,
+  WorkItem,
+  WorkItemComment
 } from '../../shared/project-workspace-types'
 import { isProjectWorkspaceKind, PROJECT_WORKSPACE_SCHEMA_VERSION } from '../../shared/project-workspace-types'
 import {
@@ -129,6 +131,8 @@ export class WorkspaceRepository {
       const purgeRevision = workspace.revision + 1
       state.goals = state.goals.filter((goal) => goal.projectId !== id)
       state.workItems = state.workItems.filter((item) => item.projectId !== id)
+      state.squads = state.squads.filter((item) => item.projectId !== id)
+      state.comments = state.comments.filter((item) => item.projectId !== id)
       state.events = state.events.filter((entry) => entry.projectId !== id)
       state.workspaces = state.workspaces.filter((candidate) => candidate.id !== id)
       appendEvent(state, id, 'workspace', id, 'workspace.purged', purgeRevision, { status: 'purged' }, now)
@@ -139,7 +143,15 @@ export class WorkspaceRepository {
   async exportManifest(id: string, destinationPath?: string): Promise<ProjectWorkspaceManifest> {
     const state = await this.persistence.read()
     const workspace = workspaceFrom(state, id)
-    const body = buildManifestBody(state.revision, workspace, state.goals, state.workItems, state.events)
+    const body = buildManifestBody(
+      state.revision,
+      workspace,
+      state.goals,
+      state.workItems,
+      state.squads,
+      state.comments,
+      state.events
+    )
     const manifest: ProjectWorkspaceManifest = { ...body, digest: digest(body) }
     if (destinationPath !== undefined) {
       if (typeof destinationPath !== 'string' || destinationPath.trim().length === 0) {
@@ -196,6 +208,8 @@ function buildManifestBody(
   workspace: ProjectWorkspace,
   goals: Goal[],
   workItems: WorkItem[],
+  squads: ProjectSquad[],
+  comments: WorkItemComment[],
   events: ProjectWorkspaceEvent[]
 ): Omit<ProjectWorkspaceManifest, 'digest'> {
   const projectId = workspace.id
@@ -208,6 +222,8 @@ function buildManifestBody(
     workspace: redact(workspace) as ProjectWorkspace,
     goals: redact(goals.filter((goal) => goal.projectId === projectId)) as Goal[],
     workItems: redact(workItems.filter((item) => item.projectId === projectId)) as WorkItem[],
+    squads: redact(squads.filter((squad) => squad.projectId === projectId)) as ProjectSquad[],
+    comments: redact(comments.filter((comment) => comment.projectId === projectId)) as WorkItemComment[],
     events: redact(events.filter((entry) => entry.projectId === projectId)) as ProjectWorkspaceEvent[]
   }
 }

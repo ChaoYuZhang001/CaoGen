@@ -5,7 +5,9 @@ import type {
   AgentEventIdentity,
   EffectRecord,
   InteractiveOperationKind,
+  SessionMeta,
   TaskRunRecord,
+  TaskRunContinuation,
   TaskRunOperationMetadata,
   TaskRunStatus,
   TaskStepRecord,
@@ -34,6 +36,7 @@ export interface CreateTaskRunInput {
   taskId: string
   now?: number
   id?: string
+  continuation?: TaskRunContinuation
   operation?: TaskRunOperationMetadata
   digitalWorkerBinding?: DigitalWorkerBinding
 }
@@ -62,10 +65,48 @@ export function createTaskRun(input: CreateTaskRunInput): TaskRunRecord {
     recoveryCount: 0,
     createdAt: now,
     updatedAt: now,
+    ...(input.continuation ? { continuation: { ...input.continuation } } : {}),
     ...(input.operation ? { operation: { ...input.operation } } : {}),
     steps: [],
     toolExecutions: [],
     effects: []
+  }
+}
+
+export function createSessionTaskRun(
+  meta: Pick<SessionMeta,
+    'id' | 'childTaskId' | 'digitalWorkerBinding' | 'conversationForkSourceSdkSessionId' |
+    'conversationForkSourceSessionId' | 'conversationForkSourceRunId'>
+): TaskRunRecord {
+  return createTaskRun({
+    sessionId: meta.id,
+    taskId: meta.childTaskId ?? meta.id,
+    digitalWorkerBinding: meta.digitalWorkerBinding,
+    continuation: sessionTaskRunContinuation(meta)
+  })
+}
+
+function sessionTaskRunContinuation(
+  meta: Pick<SessionMeta,
+    'conversationForkSourceSdkSessionId' | 'conversationForkSourceSessionId' |
+    'conversationForkSourceRunId'>
+): TaskRunContinuation | undefined {
+  const values = [
+    meta.conversationForkSourceSdkSessionId,
+    meta.conversationForkSourceSessionId,
+    meta.conversationForkSourceRunId
+  ]
+  if (values.every((value) => value === undefined)) return undefined
+  if (meta.conversationForkSourceRunId === undefined) return undefined
+  if (!values.every((value) => typeof value === 'string' && value.trim().length > 0)) {
+    throw new Error('conversation fork Run lineage is incomplete')
+  }
+  return {
+    schemaVersion: 1,
+    kind: 'conversation_fork',
+    sourceSdkSessionId: meta.conversationForkSourceSdkSessionId!,
+    sourceSessionId: meta.conversationForkSourceSessionId!,
+    sourceRunId: meta.conversationForkSourceRunId!
   }
 }
 
@@ -106,6 +147,7 @@ export function mergeTaskRunRecords(
   const preferred = compareTaskRunFreshness(current, incoming) >= 0 ? current : incoming
   const other = preferred === current ? incoming : current
   const effects = mergeEffects(preferred.effects ?? [], other.effects ?? [])
+  const continuation = mergeRunContinuation(current.continuation, incoming.continuation)
   const operation = mergeOperationMetadata(current.operation, incoming.operation)
   const digitalWorkerBinding = mergeDigitalWorkerBinding(
     current.digitalWorkerBinding,
@@ -127,10 +169,23 @@ export function mergeTaskRunRecords(
       (left, right) => mergeToolExecutions(left, right, effects)
     ),
     effects,
+    ...(continuation ? { continuation } : {}),
     ...(operation ? { operation } : {}),
     ...(digitalWorkerBinding ? { digitalWorkerBinding } : {})
   }
   return projectUnresolvedEffectState(merged)
+}
+
+function mergeRunContinuation(
+  current: TaskRunContinuation | undefined,
+  incoming: TaskRunContinuation | undefined
+): TaskRunContinuation | undefined {
+  if (!current) return incoming
+  if (!incoming) return current
+  if (JSON.stringify(current) !== JSON.stringify(incoming)) {
+    throw new Error('TaskRun continuation lineage is immutable')
+  }
+  return current
 }
 
 function mergeOperationMetadata(
@@ -502,9 +557,22 @@ function isTaskRunOptionalFields(record: Record<string, unknown>): boolean {
     isOptionalString(record.lastAppliedEventId),
     isOptionalString(record.lastEventKind),
     isOptionalString(record.error),
+    record.continuation === undefined || isTaskRunContinuation(record.continuation),
     isOptionalDigitalWorkerBinding(record.digitalWorkerBinding),
     record.operation === undefined || isTaskRunOperationMetadata(record.operation)
   ].every(Boolean)
+}
+
+function isTaskRunContinuation(value: unknown): value is TaskRunContinuation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return record.schemaVersion === 1 && record.kind === 'conversation_fork' &&
+    isNonEmptyString(record.sourceSessionId) && isNonEmptyString(record.sourceRunId) &&
+    isNonEmptyString(record.sourceSdkSessionId)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function isTaskRunCollections(record: Record<string, unknown>): boolean {
@@ -600,7 +668,9 @@ const interactiveOperationKinds = new Set<InteractiveOperationKind>([
   'managed_worktree_remove',
   'worktree_patch_apply',
   'git_push',
-  'pull_request_create'
+  'pull_request_create',
+  'issue_create',
+  'checkpoint_restore'
 ])
 
 function isTaskRunOperationMetadata(value: unknown): value is TaskRunOperationMetadata {

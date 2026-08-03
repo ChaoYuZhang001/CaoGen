@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import https from 'node:https'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import https from 'node:https'
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { platformScopedReleaseArtifactNames } from './lib/release-platform-matrix.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -17,6 +18,7 @@ const expectedAssetsFromDist = process.argv.includes('--expected-assets-from-dis
 const expectedAssetsDirArg = argValue('--expected-assets-dir') || process.env.CAOGEN_GITHUB_RELEASE_EXPECTED_ASSETS_DIR
 const expectedAssetsFromNotesArg = optionalArgValue('--expected-assets-from-notes', 'docs/RELEASE-NOTES-FINAL.md')
   || process.env.CAOGEN_GITHUB_RELEASE_EXPECTED_ASSETS_NOTES
+const platformScoped = process.argv.includes('--platform-scoped') || process.env.CAOGEN_GITHUB_RELEASE_PLATFORM_SCOPED === '1'
 const failures = []
 const warnings = []
 const expectedAssetsDir = expectedAssetsDirArg
@@ -27,10 +29,11 @@ const expectedAssetsDir = expectedAssetsDirArg
 const releaseNotesPath = expectedAssetsFromNotesArg ? path.resolve(expectedAssetsFromNotesArg) : undefined
 const releaseNotesContract = releaseNotesPath ? readReleaseNotesContract(releaseNotesPath) : null
 const tagFilter = explicitTagFilter || releaseNotesContract?.tagName
+const platformScopedEvidence = platformScoped ? await readPlatformScopedDistEvidence() : { assets: [], digests: {} }
 const expectedAssetEvidence = expectedAssetsDir
   ? readExpectedAssetEvidence(expectedAssetsDir)
   : releaseNotesContract?.assetEvidence || {}
-const expectedAssets = Object.keys(expectedAssetEvidence).sort()
+const expectedAssets = platformScoped ? platformScopedEvidence.assets : Object.keys(expectedAssetEvidence).sort()
 
 if (expectedAssetsFromDist && expectedAssetsDirArg) {
   failures.push('use either --expected-assets-from-dist or --expected-assets-dir, not both')
@@ -42,6 +45,10 @@ if (expectedAssetsDir && !tagFilter) failures.push('local expected assets requir
 if (releaseNotesContract?.tagName && explicitTagFilter && releaseNotesContract.tagName !== explicitTagFilter) {
   failures.push(`release notes tag ${releaseNotesContract.tagName} does not match requested tag ${explicitTagFilter}`)
 }
+if (platformScoped && (expectedAssetsDir || releaseNotesPath)) {
+  failures.push('use --platform-scoped without another expected-assets source')
+}
+if (platformScoped && !tagFilter) failures.push('--platform-scoped requires an explicit --tag')
 
 let releases = []
 let source = fixturePath ? `json:${path.relative(repoRoot, path.resolve(fixturePath))}` : `github:${repo}`
@@ -66,15 +73,18 @@ if (!fetchError) {
     if (required) failures.push('no GitHub Releases were found to audit')
     else warnings.push('no GitHub Releases were found to audit')
   }
-  if ((expectedAssetsDir || releaseNotesContract) && tagFilter && checkedReleases.length === 1) {
+  if ((expectedAssetsDir || releaseNotesContract || platformScoped) && tagFilter && checkedReleases.length === 1) {
     const actualAssets = checkedReleases[0].assets.map((asset) => asset.name).sort()
     if (JSON.stringify(actualAssets) !== JSON.stringify(expectedAssets)) {
-      const evidenceLabel = releaseNotesContract
-        ? `release notes contract ${releaseNotesContract.relativePath}`
-        : 'local dist evidence'
+      const evidenceLabel = platformScoped
+        ? 'platform-scoped local dist evidence'
+        : releaseNotesContract
+          ? `release notes contract ${releaseNotesContract.relativePath}`
+          : 'local dist evidence'
       failures.push(`${tagFilter}: release assets must exactly match ${evidenceLabel}; expected ${expectedAssets.join(', ')}`)
     }
-    validateExpectedAssetEvidence(checkedReleases[0])
+    if (!platformScoped) validateExpectedAssetEvidence(checkedReleases[0])
+    if (platformScoped) validatePlatformScopedDigests(checkedReleases[0].assets)
   }
 }
 
@@ -100,6 +110,8 @@ const report = {
     : null,
   expectedAssets,
   expectedAssetEvidence,
+  platformScoped,
+  expectedAssetDigests: platformScoped ? platformScopedEvidence.digests : undefined,
   releaseCount: checkedReleases.length,
   assetCount: checkedReleases.reduce((total, release) => total + release.assets.length, 0),
   redactionPolicy: 'No secret values are emitted. The audit reports release tags, asset names, sizes, states, and failure categories only.',
@@ -203,6 +215,7 @@ function allowedReleaseAssetName(name) {
     new RegExp(String.raw`^CaoGen-${version}(?:-arm64)?\.dmg(?:\.blockmap)?$`),
     new RegExp(String.raw`^CaoGen-${version}(?:-arm64)?-mac\.zip(?:\.blockmap)?$`),
     new RegExp(String.raw`^CaoGen\.Setup\.${version}\.exe(?:\.blockmap)?$`),
+    new RegExp(String.raw`^CaoGen-${version}-windows-x64-unsigned-preview\.exe$`),
     new RegExp(String.raw`^CaoGen-${version}\.AppImage(?:\.blockmap)?$`),
     /^latest(?:-mac|-linux)?\.ya?ml$/i
   ]
@@ -390,6 +403,42 @@ function validateExpectedAssetEvidence(release) {
       failures.push(`${tagFilter}/${name}: public digest ${actual.digest || 'missing'} does not match local ${expectedDigest}`)
     }
   }
+}
+
+async function readPlatformScopedDistEvidence() {
+  const version = versionFromTag(tagFilter || '')
+  if (!version) return { assets: [], digests: {} }
+  const expected = platformScopedReleaseArtifactNames(version).sort()
+  const missing = expected.filter((name) => !existsSync(path.join(repoRoot, 'dist', name)))
+  if (missing.length > 0) {
+    failures.push(`platform-scoped local dist assets are missing: ${missing.join(', ')}`)
+  }
+  const present = expected.filter((name) => !missing.includes(name))
+  const digests = Object.fromEntries(await Promise.all(present.map(async (name) => [
+    name,
+    await sha256File(path.join(repoRoot, 'dist', name))
+  ])))
+  return { assets: expected, digests }
+}
+
+function validatePlatformScopedDigests(assets) {
+  for (const asset of assets) {
+    const expected = platformScopedEvidence.digests[asset.name]
+    if (!expected) continue
+    if (asset.digest !== `sha256:${expected}`) {
+      failures.push(`${tagFilter}/${asset.name}: GitHub asset digest does not match local dist evidence`)
+    }
+  }
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = createReadStream(filePath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('error', reject)
+    stream.on('end', () => resolve(hash.digest('hex')))
+  })
 }
 
 async function readTextAsset(tagName, assetName, urls) {

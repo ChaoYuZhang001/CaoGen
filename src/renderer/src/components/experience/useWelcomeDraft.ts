@@ -160,11 +160,11 @@ function useResolvedProviderDraft(
   update: (patch: Partial<WelcomeDraftState>) => void
 ): { providerId: string; model: string } {
   const initialProvider = providers.find(
-    (provider) => provider.id === settings.defaultProviderId && provider.hasToken && provider.models.length > 0
+    (provider) => provider.id === settings.defaultProviderId && provider.ready && provider.models.length > 0
   )
   const storedProvider = providersLoaded && stored.providerId
-    ? providers.find(
-        (provider) => provider.id === stored.providerId && provider.hasToken && provider.models.length > 0
+      ? providers.find(
+        (provider) => provider.id === stored.providerId && provider.ready && provider.models.length > 0
       )
     : undefined
   const providerId = !providersLoaded

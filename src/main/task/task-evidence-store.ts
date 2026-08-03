@@ -61,6 +61,13 @@ export interface TaskEvidenceVerification {
   lastDigest: string
 }
 
+export interface TaskEvidenceProjectPurgeResult {
+  removed: number
+  remaining: number
+  lastSeq: number
+  lastDigest: string
+}
+
 export class TaskEvidenceCorruptionError extends Error {
   readonly code = 'TASK_EVIDENCE_CORRUPTION'
   readonly seq?: number
@@ -235,6 +242,45 @@ export function verifyTaskEvidence(db: SqlDatabase): TaskEvidenceVerification {
     count: records.length,
     lastSeq: last?.seq ?? 0,
     lastDigest: last?.digest ?? GENESIS_DIGEST
+  }
+}
+
+/** Remove one Project's evidence while preserving a valid chain for every remaining record. */
+export function purgeTaskEvidenceProject(
+  db: SqlDatabase,
+  projectId: string,
+  sessionIds: ReadonlySet<string> = new Set()
+): TaskEvidenceProjectPurgeResult {
+  const id = projectId.trim()
+  if (!id) throw new TaskEvidenceCorruptionError('project purge requires projectId')
+  setupTaskEvidenceSchema(db)
+  const records = readAndVerifyTaskEvidence(db)
+  const remaining = records.filter((record) =>
+    record.projectId !== id && !sessionIds.has(record.sessionId)
+  )
+  if (remaining.length === records.length) {
+    const verification = verifyTaskEvidence(db)
+    return { removed: 0, remaining: verification.count, lastSeq: verification.lastSeq, lastDigest: verification.lastDigest }
+  }
+  db.run('DELETE FROM task_evidence')
+  let previousDigest = GENESIS_DIGEST
+  for (let index = 0; index < remaining.length; index += 1) {
+    const current = remaining[index]
+    const withoutDigest: Omit<TaskEvidenceRecord, 'digest'> = {
+      ...recordWithoutDigest(current),
+      seq: index + 1,
+      prevDigest: previousDigest
+    }
+    const rebuilt: TaskEvidenceRecord = { ...withoutDigest, digest: digest(withoutDigest) }
+    insertEvidence(db, rebuilt)
+    previousDigest = rebuilt.digest
+  }
+  const verification = verifyTaskEvidence(db)
+  return {
+    removed: records.length - remaining.length,
+    remaining: verification.count,
+    lastSeq: verification.lastSeq,
+    lastDigest: verification.lastDigest
   }
 }
 
