@@ -103,7 +103,7 @@ export interface IdeBridgeErrorPayload {
 export interface IdeBridgeSessionPort {
   listSessions(): SessionMeta[]
   createSession(options: CreateSessionOptions): SessionMeta | Promise<SessionMeta>
-  sendMessage(sessionId: string, message: string | SendMessagePayload): boolean | Promise<boolean>
+  sendMessage(sessionId: string, message: string | SendMessagePayload): Promise<boolean>
   syncDocument?(payload: IdeBridgeDocumentSyncPayload): void
   subscribeSessionEvents?(listener: (event: SessionEventPayload) => void): () => void
 }
@@ -546,6 +546,7 @@ function requireCreateSessionPayload(value: unknown): IdeBridgeCreateSessionPayl
      */
     permissionMode: optionalPermissionMode(value.permissionMode),
     resumeSdkSessionId: optionalString(value.resumeSdkSessionId),
+    forkFromSdkSessionId: optionalString(value.forkFromSdkSessionId),
     title: optionalString(value.title),
     initialText: optionalString(value.initialText)
   }

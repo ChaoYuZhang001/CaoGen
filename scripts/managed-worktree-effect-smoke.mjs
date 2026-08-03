@@ -16,6 +16,10 @@ import path from 'node:path'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter)
+require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-managed-worktree-effect-'))
 const outDir = path.join(tempRoot, 'compiled')
 const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()

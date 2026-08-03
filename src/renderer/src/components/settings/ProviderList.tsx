@@ -1,4 +1,5 @@
 import { useT } from '../../i18n'
+import ProviderProfileManager from './ProviderProfileManager'
 import type {
   ProviderCredentialStorage,
   ProviderHealthView,
@@ -34,13 +35,7 @@ export default function ProviderList({
 }: Props): React.JSX.Element {
   const t = useT()
   return (
-    <>
-      <div className="settings-section-head">
-        <h3 className="settings-h3">{t('tabProviders')}</h3>
-        <button className="btn btn-ghost btn-sm" onClick={onAdd}>
-          {t('addProvider')}
-        </button>
-      </div>
+    <ProviderProfileManager providers={providers} onAdd={onAdd}>
       <div className="provider-list">
         {providers.length === 0 && <div className="provider-empty">{t('providerEmpty')}</div>}
         {providers.map((provider) => (
@@ -56,7 +51,7 @@ export default function ProviderList({
           />
         ))}
       </div>
-    </>
+    </ProviderProfileManager>
   )
 }
 
@@ -120,6 +115,7 @@ function ProviderListRow({
 
 function ProviderCredentialTag({ provider }: { provider: ProviderView }): React.JSX.Element | null {
   const t = useT()
+  if (provider.authMode === 'none') return <span className="provider-tag">{t('providerLocalNoKey')}</span>
   const tagKey = providerCredentialTagKey(provider.credentialStorage)
   if (tagKey) return <span className="provider-tag-warn">{t(tagKey)}</span>
   if (!provider.hasToken) return <span className="provider-tag-warn">{t('noKeyConfigured')}</span>
@@ -148,6 +144,7 @@ function ProviderHealthDot({ health }: { health: ProviderHealthView | undefined 
 }
 
 function providerCredentialSummary(provider: ProviderView, t: ReturnType<typeof useT>): string {
+  if (provider.authMode === 'none') return t('providerLocalNoKey')
   if (provider.hasToken) {
     const activeLabel = provider.activeKeyLabel ? ` · ${provider.activeKeyLabel}` : ''
     return `${t('apiKeyCountLabel', { n: provider.keyCount ?? 1 })}${activeLabel}`

@@ -18,6 +18,8 @@ const runDir = path.join(outputRoot, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-assistant-studio-ui-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
+const migrationHome = path.join(tempRoot, 'migration-home')
+const migrationCanary = 'secret-for-smoke-migration-ui-canary'
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
@@ -37,7 +39,20 @@ for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']
 mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
+mkdirSync(path.join(projectDir, '.cursor'), { recursive: true })
+mkdirSync(path.join(migrationHome, '.codex'), { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Assistant Studio UI required E2E\n', 'utf8')
+writeFileSync(path.join(projectDir, '.cursorrules'), 'Use the project fixture rule.\n', 'utf8')
+writeFileSync(path.join(migrationHome, '.codex', 'AGENTS.md'), 'Use the user fixture rule.\n', 'utf8')
+writeFileSync(path.join(projectDir, '.cursor', 'mcp.json'), JSON.stringify({
+  mcpServers: {
+    privateFixture: {
+      command: 'node',
+      args: ['fixture-server.js', '--token', migrationCanary],
+      env: { FIXTURE_TOKEN: migrationCanary }
+    }
+  }
+}), 'utf8')
 copyBuiltApp()
 
 const report = {
@@ -67,6 +82,10 @@ const report = {
       'session identity/count/transcript immutability while switching',
       'Welcome and Composer draft retention',
       'new-session/search/Office navigation mode retention',
+      'View/Plan/Execute strategy selection, persistence, and active-run switch rejection',
+      'immutable plan version creation, restart persistence, exact approval, and approve-to-execute gate',
+      'unassigned plan approval remains conversation-only and creates no hidden Project',
+      'redacted low-friction Codex migration preview, no-project conversation entry, responsive layout, safe defaults, apply, and rollback',
       'responsive horizontal-overflow and basic overlay stacking'
     ],
     explicitlyNotVerified: [
@@ -84,6 +103,8 @@ const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ..
     ...process.env,
     CAOGEN_USER_DATA_DIR: userDataDir,
     CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
+    CAOGEN_MIGRATION_TEST_MODE: '1',
+    CAOGEN_MIGRATION_TEST_HOME: migrationHome,
     OPENAI_API_KEY: '',
     ANTHROPIC_API_KEY: '',
     ANTHROPIC_AUTH_TOKEN: '',
@@ -120,6 +141,13 @@ try {
   await waitForApp(page)
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
 
+  await check('Welcome exposes one usable View Plan Execute strategy control', async () => {
+    await assertTaskStrategy(page, 'execute')
+    await clickTaskStrategy(page, 'view')
+    await clickTaskStrategy(page, 'plan')
+    await clickTaskStrategy(page, 'execute')
+  })
+
   await check('pointer switching is bidirectional with one pressed option', async () => {
     await assertMode(page, 'assistant')
     await enterText(page, '.welcome-composer-input', 'welcome draft survives projection changes', 'Welcome draft')
@@ -154,6 +182,7 @@ try {
         engine: 'openai',
         providerId: provider.id,
         model: 'mock-responses',
+        taskStrategy: 'plan',
         isolated: false,
         title: 'Assistant Studio UI session'
       })
@@ -179,6 +208,232 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForApp(page)
   await page.waitForSelector('.composer-input', { visible: true, timeout: 15_000 })
+
+  await check('migration manager supports conversation entry, responsive safe defaults, apply, and rollback', async () => {
+    await verifyMigrationManager(page, projectDir, migrationCanary)
+  })
+
+  await check('Plan strategy survives session creation, history persistence, and renderer reload', async () => {
+    await assertTaskStrategy(page, 'plan')
+    const persisted = await page.evaluate(async (id) => {
+      const sessions = await window.agentDesk.listSessions()
+      const history = await window.agentDesk.listHistory()
+      return {
+        active: sessions.find((item) => item.id === id)?.taskStrategy,
+        history: history.find((item) => item.id === id)?.taskStrategy
+      }
+    }, session.id)
+    assert(persisted.active === 'plan', `active strategy not persisted: ${JSON.stringify(persisted)}`)
+    assert(persisted.history === 'plan', `history strategy not persisted: ${JSON.stringify(persisted)}`)
+  })
+
+  await check('Plan requires a persisted exact-version approval before Execute', async () => {
+    const rejection = await page.evaluate(async (id) => {
+      try {
+        await window.agentDesk.setTaskStrategy(id, 'execute')
+        return ''
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }, session.id)
+    assert(/尚未形成结构化计划/.test(rejection), `unplanned Execute switch was not rejected: ${rejection}`)
+    await assertTaskStrategy(page, 'plan')
+
+    await setFieldValue(page, '[data-task-plan-objective]', 'Reviewable execution contract')
+    await setFieldValue(page, '[data-task-plan-step-title="0"]', 'Verify the implementation')
+    await setFieldValue(page, '[data-task-plan-acceptance]', 'Targeted regression passes')
+    await page.click('[data-task-plan-save]')
+    await page.waitForFunction(() =>
+      document.querySelector('[data-task-plan-status]')?.getAttribute('data-task-plan-status') === 'pending',
+    { timeout: 5_000 })
+    const created = await page.evaluate((id) => window.agentDesk.getTaskPlan(id), session.id)
+    assert(created.currentVersion?.version === 1, `plan v1 missing: ${JSON.stringify(created)}`)
+    assert(/^sha256:[0-9a-f]{64}$/.test(created.currentVersion?.digest ?? ''), 'plan digest missing')
+
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.waitForSelector('[data-task-plan-approve-execute]', { visible: true, timeout: 15_000 })
+    const restarted = await page.evaluate((id) => window.agentDesk.getTaskPlan(id), session.id)
+    assert(restarted.currentVersion?.digest === created.currentVersion.digest, 'plan digest changed after reload')
+    await page.click('[data-task-plan-approve-execute]')
+    await waitForValue(
+      () => page.evaluate((id) => window.agentDesk.listSessions().then((items) => items.find((item) => item.id === id)?.taskStrategy), session.id),
+      (strategy) => strategy === 'execute',
+      5_000,
+      'waiting for approved Execute strategy meta'
+    )
+    const approved = await page.evaluate((id) => window.agentDesk.getTaskPlan(id), session.id)
+    assert(approved.approvalStatus === 'approved', `plan approval missing: ${JSON.stringify(approved)}`)
+    assert(approved.projection?.mode === 'conversation', `unassigned plan projection is not conversation-only: ${JSON.stringify(approved)}`)
+    await page.waitForSelector('[data-task-plan-projection="conversation"]', { visible: true, timeout: 5_000 })
+    const workspaceCount = await page.evaluate(() => window.agentDesk.listProjectWorkspaces().then((items) => items.length))
+    assert(workspaceCount === 0, `unassigned plan created hidden Project state: ${workspaceCount}`)
+  })
+
+  await check('idle strategy switch is explicit and active-run switch fails closed', async () => {
+    await assertTaskStrategy(page, 'execute')
+    await page.evaluate((id) => window.agentDesk.sendMessage(id, { text: 'strategy running marker' }), session.id)
+    await waitForValue(
+      () => page.evaluate((id) => window.agentDesk.listSessions().then((items) => items.find((item) => item.id === id)?.status), session.id),
+      (status) => status === 'running',
+      5_000,
+      'waiting for running strategy fixture'
+    )
+    const runningState = await page.evaluate(async (id) => {
+      const disabled = [...document.querySelectorAll('[data-task-strategy-option]')]
+        .every((button) => button.disabled)
+      let rejection = ''
+      let planMutationRejection = ''
+      try {
+        await window.agentDesk.setTaskStrategy(id, 'plan')
+      } catch (error) {
+        rejection = error instanceof Error ? error.message : String(error)
+      }
+      try {
+        await window.agentDesk.createTaskPlanVersion(id, {
+          objective: 'Must not mutate while running',
+          steps: [{ id: 'blocked', title: 'Blocked' }],
+          acceptanceCriteria: ['Must remain unchanged'],
+          changeReason: 'Running mutation probe'
+        })
+      } catch (error) {
+        planMutationRejection = error instanceof Error ? error.message : String(error)
+      }
+      return { disabled, rejection, planMutationRejection }
+    }, session.id)
+    assert(runningState.disabled, `strategy control stayed enabled while running: ${JSON.stringify(runningState)}`)
+    assert(/任务正在运行/.test(runningState.rejection), `running switch did not fail closed: ${JSON.stringify(runningState)}`)
+    assert(/任务正在运行/.test(runningState.planMutationRejection),
+      `running plan mutation did not fail closed: ${JSON.stringify(runningState)}`)
+    await waitForValue(
+      () => page.evaluate((id) => window.agentDesk.getTranscript(id), session.id),
+      (entries) => entries.filter((entry) => entry.event?.kind === 'turn-result').length >= 2,
+      15_000,
+      'waiting for running strategy fixture completion'
+    )
+    const revokedGate = await page.evaluate(async (id) => {
+      const plan = await window.agentDesk.getTaskPlan(id)
+      const current = plan.currentVersion
+      if (!current) throw new Error('current plan missing')
+      await window.agentDesk.revokeTaskPlanApproval(id, { version: current.version, digest: current.digest })
+      const beforeSessions = await window.agentDesk.listSessions()
+      const beforeTranscript = await window.agentDesk.getTranscript(id)
+      let subagentRejection = ''
+      let dagRejection = ''
+      try {
+        await window.agentDesk.dispatchSubagents(id, { tasks: [{ id: 'blocked', prompt: 'must not run' }] })
+      } catch (error) {
+        subagentRejection = error instanceof Error ? error.message : String(error)
+      }
+      try {
+        await window.agentDesk.dispatchTaskDag(id, {
+          dag: {
+            id: 'blocked-dag',
+            title: 'Blocked DAG',
+            source: 'ui-e2e',
+            complexity: 'single',
+            createdAt: Date.now(),
+            tasks: [{
+              id: 'blocked', title: 'Blocked', description: 'must not run', dependencies: [], role: 'qa', prompt: 'must not run'
+            }]
+          }
+        })
+      } catch (error) {
+        dagRejection = error instanceof Error ? error.message : String(error)
+      }
+      await window.agentDesk.sendMessage(id, { text: 'must not enter the transcript' })
+      const afterSessions = await window.agentDesk.listSessions()
+      const afterTranscript = await window.agentDesk.getTranscript(id)
+      await window.agentDesk.approveTaskPlan(id, { version: current.version, digest: current.digest })
+      return {
+        subagentRejection,
+        dagRejection,
+        sessionCountBefore: beforeSessions.length,
+        sessionCountAfter: afterSessions.length,
+        transcriptCountBefore: beforeTranscript.length,
+        transcriptCountAfter: afterTranscript.length,
+        lastError: afterSessions.find((item) => item.id === id)?.lastError
+      }
+    }, session.id)
+    assert(/尚未批准|取代/.test(revokedGate.subagentRejection), `subagent gate missing: ${JSON.stringify(revokedGate)}`)
+    assert(/尚未批准|取代/.test(revokedGate.dagRejection), `DAG gate missing: ${JSON.stringify(revokedGate)}`)
+    assert(revokedGate.sessionCountAfter === revokedGate.sessionCountBefore,
+      `rejected dispatch created a session: ${JSON.stringify(revokedGate)}`)
+    assert(revokedGate.transcriptCountAfter === revokedGate.transcriptCountBefore,
+      `rejected send entered transcript: ${JSON.stringify(revokedGate)}`)
+    assert(/尚未批准|取代/.test(revokedGate.lastError ?? ''), `send gate missing: ${JSON.stringify(revokedGate)}`)
+    await clickTaskStrategy(page, 'plan')
+  })
+
+  await check('Plan can decompose but cannot dispatch, and v2 supersedes approval', async () => {
+    const result = await page.evaluate(async (id) => {
+      const before = await window.agentDesk.listSessions()
+      const decomposed = await window.agentDesk.decomposeTask(id, {
+        request: 'Inspect the implementation and verify its tests',
+        useModel: false
+      })
+      let dispatchRejection = ''
+      try {
+        await window.agentDesk.dispatchTaskDag(id, { dag: decomposed.dag })
+      } catch (error) {
+        dispatchRejection = error instanceof Error ? error.message : String(error)
+      }
+      const first = await window.agentDesk.getTaskPlan(id)
+      const current = first.currentVersion
+      if (!current) throw new Error('current plan missing')
+      const second = await window.agentDesk.createTaskPlanVersion(id, {
+        objective: `${current.objective} with a second review`,
+        steps: current.steps,
+        expectedArtifacts: current.expectedArtifacts,
+        dataEgress: current.dataEgress,
+        estimatedCostUsd: current.estimatedCostUsd,
+        riskLevel: current.riskLevel,
+        acceptanceCriteria: current.acceptanceCriteria,
+        changeReason: 'Electron supersession probe'
+      })
+      let executeRejection = ''
+      try {
+        await window.agentDesk.setTaskStrategy(id, 'execute')
+      } catch (error) {
+        executeRejection = error instanceof Error ? error.message : String(error)
+      }
+      const interactiveRejections = []
+      for (const operation of [
+        () => window.agentDesk.startTerminal(id, { reuse: false }),
+        () => window.agentDesk.writeTextFile(id, 'blocked-by-plan.txt', 'must not be written'),
+        () => window.agentDesk.stageAll(id)
+      ]) {
+        try {
+          await operation()
+          interactiveRejections.push('')
+        } catch (error) {
+          interactiveRejections.push(error instanceof Error ? error.message : String(error))
+        }
+      }
+      return {
+        taskCount: decomposed.dag.tasks.length,
+        dispatchRejection,
+        executeRejection,
+        beforeCount: before.length,
+        afterCount: (await window.agentDesk.listSessions()).length,
+        version: second.currentVersion?.version,
+        approvalStatus: second.approvalStatus,
+        lastEvent: second.approvalEvents.at(-1)?.kind,
+        interactiveRejections,
+        blockedFilePresent: (await window.agentDesk.listProjectFiles(id)).entries
+          .some((entry) => entry.path === 'blocked-by-plan.txt')
+      }
+    }, session.id)
+    assert(result.taskCount > 0, `Plan decomposition returned no tasks: ${JSON.stringify(result)}`)
+    assert(/规划策略不允许执行任务 DAG/.test(result.dispatchRejection), `Plan dispatch gate missing: ${JSON.stringify(result)}`)
+    assert(result.beforeCount === result.afterCount, `Plan dispatch created a session: ${JSON.stringify(result)}`)
+    assert(result.version === 2 && result.approvalStatus === 'pending' && result.lastEvent === 'superseded',
+      `v2 did not supersede v1 approval: ${JSON.stringify(result)}`)
+    assert(/尚未批准|取代/.test(result.executeRejection), `pending v2 Execute gate missing: ${JSON.stringify(result)}`)
+    assert(result.interactiveRejections.every((message) => /规划策略不允许/.test(message)),
+      `manual mutation gate missing: ${JSON.stringify(result)}`)
+    assert(result.blockedFilePresent === false, `manual file mutation escaped gate: ${JSON.stringify(result)}`)
+  })
 
   let stableSnapshot
   await check('switching preserves session id, count, and transcript bytes', async () => {
@@ -253,6 +508,8 @@ try {
         assert(measurement.appOverflow <= 1, `${mode} ${viewport.width}: app overflow ${measurement.appOverflow}px`)
         assert(measurement.mainOverflow <= 1, `${mode} ${viewport.width}: main overflow ${measurement.mainOverflow}px`)
         assert(measurement.switcherInsideViewport, `${mode} ${viewport.width}: mode switcher outside viewport`)
+        assert(measurement.strategyInsideViewport, `${mode} ${viewport.width}: task strategy outside viewport`)
+        assert(measurement.strategyTextFits, `${mode} ${viewport.width}: task strategy text clipped`)
         assert(measurement.visibleOffenders.length === 0, `${mode} ${viewport.width}: ${JSON.stringify(measurement.visibleOffenders)}`)
         await captureScreenshot(page, `${viewport.width}x${viewport.height}-${mode}`)
       }
@@ -306,6 +563,92 @@ if (report.status !== 'pass') {
   console.log(`${report.checks.length}/${report.checks.length} checks passed; ${report.screenshots.length} screenshots captured`)
 }
 
+async function verifyMigrationManager(targetPage, targetProject, secretCanary) {
+  await targetPage.click('.sidebar-footer .btn-ghost')
+  await targetPage.waitForSelector('[data-settings-tab="migrate"]', { visible: true, timeout: 10_000 })
+  await targetPage.click('[data-settings-tab="migrate"]')
+  await targetPage.waitForSelector('[data-migration-manager]', { visible: true, timeout: 5_000 })
+  await clearFieldValue(targetPage, '[data-migration-manager] input')
+  await targetPage.click('[data-migration-scan]')
+  await targetPage.waitForSelector('[data-migration-mode="conversation"]', { visible: true, timeout: 10_000 })
+  const conversation = await targetPage.evaluate(() => ({
+    directory: document.querySelector('[data-migration-manager] input')?.value,
+    rows: document.querySelectorAll('[data-migration-asset]').length,
+    selected: [...document.querySelectorAll('[data-migration-asset] input')].filter((input) => input.checked).length
+  }))
+  assert(conversation.directory === '', `conversation migration required a project path: ${JSON.stringify(conversation)}`)
+  assert(conversation.rows > 0, `conversation migration found no user assets: ${JSON.stringify(conversation)}`)
+  assert(conversation.selected === 0, `user-scoped assets were selected by default: ${JSON.stringify(conversation)}`)
+
+  await setFieldValue(targetPage, '[data-migration-manager] input', targetProject)
+  await targetPage.click('[data-migration-scan]')
+  await targetPage.waitForSelector('[data-migration-mode="project"]', { visible: true, timeout: 10_000 })
+  await targetPage.waitForSelector('[data-migration-asset]', { visible: true, timeout: 10_000 })
+  const state = await targetPage.evaluate((canary) => {
+    const rows = [...document.querySelectorAll('[data-migration-asset]')].map((row) => ({
+      kind: row.getAttribute('data-migration-kind'),
+      risk: row.getAttribute('data-migration-risk'),
+      checked: row.querySelector('input')?.checked,
+      disabled: row.querySelector('input')?.disabled
+    }))
+    return {
+      rows,
+      leaked: document.querySelector('[data-migration-manager]')?.textContent?.includes(canary) === true
+    }
+  }, secretCanary)
+  assert(!state.leaked, 'migration preview exposed the credential canary')
+  assert(state.rows.some((row) => row.kind === 'rules' && row.risk === 'low' && row.checked),
+    `safe rule was not selected by default: ${JSON.stringify(state.rows)}`)
+  assert(state.rows.some((row) => row.kind === 'mcp' && row.risk === 'review' && !row.checked),
+    `credential-bearing MCP was selected by default: ${JSON.stringify(state.rows)}`)
+  for (const viewport of [
+    { width: 1320, height: 860 },
+    { width: 760, height: 700 },
+    { width: 360, height: 520 }
+  ]) {
+    await targetPage.setViewport({ ...viewport, deviceScaleFactor: 1 })
+    await sleep(150)
+    const layout = await readMigrationLayout(targetPage)
+    assert(layout.documentOverflow <= 1, `migration ${viewport.width}: document overflow ${layout.documentOverflow}px`)
+    assert(layout.managerInsideViewport, `migration ${viewport.width}: manager outside viewport ${JSON.stringify(layout)}`)
+    assert(layout.visibleOffenders.length === 0, `migration ${viewport.width}: ${JSON.stringify(layout.visibleOffenders)}`)
+    await captureScreenshot(targetPage, `migration-manager-${viewport.width}x${viewport.height}`)
+  }
+  await targetPage.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await targetPage.click('[data-migration-apply]')
+  await targetPage.waitForSelector('[data-migration-rollback]', { visible: true, timeout: 10_000 })
+  assert(existsSync(path.join(targetProject, 'CLAUDE.md')), 'selected project rule was not imported')
+  assert(!existsSync(path.join(targetProject, '.mcp.json')), 'unselected MCP was imported')
+  await targetPage.click('[data-migration-rollback]')
+  await waitForValue(
+    async () => !existsSync(path.join(targetProject, 'CLAUDE.md')),
+    Boolean,
+    5_000,
+    'waiting for migration rollback'
+  )
+  await targetPage.click('.settings-page-back')
+  await targetPage.waitForSelector('.composer-input', { visible: true, timeout: 10_000 })
+}
+
+async function readMigrationLayout(targetPage) {
+  return targetPage.evaluate(() => {
+    const manager = document.querySelector('[data-migration-manager]')
+    const managerRect = manager?.getBoundingClientRect()
+    const visibleOffenders = [...(manager?.querySelectorAll('*') ?? [])].flatMap((element) => {
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return []
+      const overflow = Math.max(0, rect.right - innerWidth, -rect.left)
+      return overflow > 1 ? [{ tag: element.tagName, className: element.className, overflow }] : []
+    }).slice(0, 10)
+    return {
+      documentOverflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      managerInsideViewport: Boolean(managerRect && managerRect.left >= -1 && managerRect.right <= innerWidth + 1),
+      visibleOffenders
+    }
+  })
+}
+
 async function check(name, fn) {
   const startedAt = Date.now()
   try {
@@ -346,6 +689,54 @@ async function enterText(targetPage, selector, text, label) {
     5_000,
     `waiting for ${label} input`
   )
+}
+
+async function clickTaskStrategy(targetPage, strategy) {
+  await targetPage.click(`[data-task-strategy-option="${strategy}"]`)
+  await assertTaskStrategy(targetPage, strategy)
+}
+
+async function setFieldValue(targetPage, selector, value) {
+  await targetPage.waitForSelector(selector, { visible: true, timeout: 5_000 })
+  await targetPage.$eval(selector, (element, nextValue) => {
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (!setter) throw new Error('form value setter missing')
+    setter.call(element, nextValue)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+  }, value)
+}
+
+async function clearFieldValue(targetPage, selector) {
+  await targetPage.waitForSelector(selector, { visible: true, timeout: 5_000 })
+  await targetPage.$eval(selector, (input) => {
+    input.focus()
+    input.select()
+  })
+  await targetPage.keyboard.press('Backspace')
+  await waitForValue(
+    () => targetPage.$eval(selector, (input) => input.value),
+    (value) => value === '',
+    5_000,
+    `waiting for ${selector} to clear`
+  )
+}
+
+async function assertTaskStrategy(targetPage, expected) {
+  const state = await waitForValue(
+    () => targetPage.evaluate(() => {
+      const control = document.querySelector('[data-task-strategy]')
+      const pressed = [...document.querySelectorAll('[data-task-strategy-option][aria-pressed="true"]')]
+        .map((button) => button.getAttribute('data-task-strategy-option'))
+      return { value: control?.getAttribute('data-task-strategy'), pressed }
+    }),
+    (value) => value.value === expected && value.pressed.length === 1 && value.pressed[0] === expected,
+    5_000,
+    `waiting for task strategy ${expected}`
+  )
+  assert(state.pressed.length === 1, `task strategy pressed state is ambiguous: ${JSON.stringify(state)}`)
 }
 
 async function focusMode(targetPage, mode) {
@@ -472,6 +863,8 @@ async function readOverflow(targetPage, mode) {
     const main = document.querySelector('.main')
     const switcher = document.querySelector('[data-experience-mode-switcher]')
     const switcherRect = switcher?.getBoundingClientRect()
+    const strategy = document.querySelector('[data-task-strategy]')
+    const strategyRect = strategy?.getBoundingClientRect()
     const width = window.innerWidth
     const visibleOffenders = Array.from(document.querySelectorAll('body *')).flatMap((element) => {
       const rect = element.getBoundingClientRect()
@@ -498,6 +891,9 @@ async function readOverflow(targetPage, mode) {
       appOverflow: app ? Math.max(0, app.scrollWidth - app.clientWidth) : -1,
       mainOverflow: main ? Math.max(0, main.scrollWidth - main.clientWidth) : -1,
       switcherInsideViewport: Boolean(switcherRect && switcherRect.left >= -1 && switcherRect.right <= width + 1),
+      strategyInsideViewport: Boolean(strategyRect && strategyRect.left >= -1 && strategyRect.right <= width + 1),
+      strategyTextFits: [...document.querySelectorAll('[data-task-strategy-option]')]
+        .every((button) => button.scrollWidth <= button.clientWidth + 1),
       visibleOffenders
     }
   }, mode)
@@ -522,9 +918,9 @@ async function startOpenAiMock() {
       response.writeHead(404).end('not found')
       return
     }
-    for await (const _chunk of request) {
-      // Consume the request before completing the streaming response.
-    }
+    let body = ''
+    for await (const chunk of request) body += chunk.toString()
+    if (body.includes('strategy running marker')) await sleep(900)
     const reply = 'Stable assistant studio transcript response.'
     response.writeHead(200, {
       'content-type': 'text/event-stream',

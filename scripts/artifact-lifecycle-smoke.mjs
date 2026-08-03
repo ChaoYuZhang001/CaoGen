@@ -63,16 +63,17 @@ console.log(JSON.stringify({
 
 async function runLifecycleGate() {
   const workspaceApi = await importCompiled('main/project-workspace/index.js')
+  const workspaceCommands = await importCompiled('main/project-workspace/command-service.js')
   const lifecycleApi = await importCompiled('main/task/artifact-lifecycle-api.js')
   const lifecycleTypes = await importCompiled('main/task/artifact-lifecycle-types.js')
   const lifecycleContent = await importCompiled('main/task/artifact-lifecycle-content.js')
   const snapshotApi = await importCompiled('main/task/task-snapshot.js')
-  const workflowStore = await importCompiled('main/task/workflow-ledger-store.js')
   const effectRuntime = await importCompiled('main/task/effect-runtime.js')
   const runtimeRegistry = await importCompiled('main/task/task-runtime-registry.js')
   const gitTools = await importCompiled('main/agent/tools/git-tools.js')
+  const requiredKindCount = lifecycleTypes.REQUIRED_ARTIFACT_KINDS.length
 
-  const fixture = await seedCanonicalRun(workspaceApi, snapshotApi, workflowStore)
+  const fixture = await seedCanonicalRun(workspaceApi, workspaceCommands, snapshotApi)
   check('canonical ProjectWorkspace owns the creating Run and WorkItem')
   const registered = await registerRequiredArtifactKinds({
     fixture,
@@ -113,8 +114,8 @@ async function runLifecycleGate() {
     userData,
     lifecycleTypes.REQUIRED_ARTIFACT_KINDS
   )
-  assertEqual(final.artifacts, 18, 'final Artifact count including production output')
-  assertEqual(final.available, 14, 'final available Artifact count including production output')
+  assertEqual(final.artifacts, requiredKindCount + 2, 'final Artifact count including production output')
+  assertEqual(final.available, requiredKindCount - 2, 'final available Artifact count including production output')
   check('later Run revisions preserve historical creating-Run lifecycle validity')
 
   report.summary = {
@@ -130,6 +131,7 @@ async function runLifecycleGate() {
 }
 
 async function registerRequiredArtifactKinds({ fixture, lifecycleApi, lifecycleTypes, lifecycleContent }) {
+  const requiredKindCount = lifecycleTypes.REQUIRED_ARTIFACT_KINDS.length
   const sourcePath = path.join(tempRoot, 'source-input.txt')
   writeFileSync(sourcePath, 'source-ref artifact bytes\n', 'utf8')
   const registrations = new Map()
@@ -139,8 +141,12 @@ async function registerRequiredArtifactKinds({ fixture, lifecycleApi, lifecycleT
     registrations.set(input.id, input)
     results.push(await lifecycleApi.registerPersistedArtifactLifecycle(input, userData))
   }
-  check('all 16 required Artifact kinds register through the production persistence API')
-  assertEqual(new Set(results.map((item) => item.artifact.kind)).size, 16, 'required Artifact kind count')
+  check(`all ${requiredKindCount} required Artifact kinds register through the production persistence API`)
+  assertEqual(
+    new Set(results.map((item) => item.artifact.kind)).size,
+    requiredKindCount,
+    'required Artifact kind count'
+  )
   for (const result of results) {
     assertEqual(result.artifact.runId, fixture.runId, 'Artifact creating Run identity')
     assertEqual(result.lifecycle.runRevision, 1, 'Artifact creating Run revision')
@@ -152,6 +158,7 @@ async function registerRequiredArtifactKinds({ fixture, lifecycleApi, lifecycleT
 }
 
 async function verifyRegistrationContracts(input) {
+  const requiredKindCount = input.lifecycleTypes.REQUIRED_ARTIFACT_KINDS.length
   const reportV1 = input.results.find((item) => item.lifecycle.kind === 'report')
   assert(reportV1, 'report v1 fixture is required')
   const reportV2Input = {
@@ -174,9 +181,9 @@ async function verifyRegistrationContracts(input) {
     userData,
     input.lifecycleTypes.REQUIRED_ARTIFACT_KINDS
   )
-  assertEqual(initial.artifacts, 17, 'initial Artifact count')
-  assertEqual(initial.available, 17, 'initial available Artifact count')
-  assertEqual(initial.kinds.length, 16, 'verified required kind count')
+  assertEqual(initial.artifacts, requiredKindCount + 1, 'initial Artifact count')
+  assertEqual(initial.available, requiredKindCount + 1, 'initial available Artifact count')
+  assertEqual(initial.kinds.length, requiredKindCount, 'verified required kind count')
   check('restart-safe verification covers all kinds, graph rows, events, and physical bytes')
   return reportV2
 }
@@ -229,6 +236,7 @@ async function verifyOwnershipRejections(input) {
 }
 
 async function verifyRetentionAndContentIntegrity(input) {
+  const requiredKindCount = input.lifecycleTypes.REQUIRED_ARTIFACT_KINDS.length
   const byKind = new Map(input.results.map((item) => [item.lifecycle.kind, item]))
   await assertRejects(
     input.lifecycleApi.purgePersistedArtifactContent({
@@ -246,9 +254,9 @@ async function verifyRetentionAndContentIntegrity(input) {
     userData,
     input.lifecycleTypes.REQUIRED_ARTIFACT_KINDS
   )
-  assertEqual(afterPurge.artifacts, 17, 'post-purge Artifact count')
+  assertEqual(afterPurge.artifacts, requiredKindCount + 1, 'post-purge Artifact count')
   assertEqual(afterPurge.purged, 4, 'post-purge tombstone count')
-  assertEqual(afterPurge.available, 13, 'post-purge available count')
+  assertEqual(afterPurge.available, requiredKindCount - 3, 'post-purge available count')
   check('later final-owner deletion preserves validity of earlier shared-blob purge evidence')
   await verifyPhysicalTamper(input)
 }
@@ -370,7 +378,7 @@ async function runProductionPatchProducer({
   return record
 }
 
-async function seedCanonicalRun(workspaceApi, snapshotApi, workflowStore) {
+async function seedCanonicalRun(workspaceApi, workspaceCommands, snapshotApi) {
   const projectId = 'project-a'
   const goalId = 'goal-a'
   const workItemId = 'work-item-a'
@@ -379,19 +387,20 @@ async function seedCanonicalRun(workspaceApi, snapshotApi, workflowStore) {
   await workspace.open()
   await workspace.createWorkspace({ id: projectId, name: 'Artifact Project', kind: 'software', resources: [] })
   await workspace.createWorkspace({ id: 'project-b', name: 'Foreign Project', kind: 'software', resources: [] })
-  const goal = await workspace.createGoal({
+  const commands = workspaceCommands.createProjectWorkspaceCommandService(workspace, { rootDir: userData })
+  await commands.reconcileShadowProjection()
+  const goal = await commands.createGoal({
     id: goalId,
     projectId,
     title: 'Artifact Goal',
     objective: 'Prove Artifact lifecycle'
   })
-  const workItem = await workspace.createWorkItem({
+  let workItem = await commands.createWorkItem({
     id: workItemId,
     projectId,
     goalId,
     title: 'Create versioned Artifacts',
-    type: 'documentation',
-    runRefs: [runId]
+    type: 'documentation'
   })
   const run = {
     schemaVersion: 1,
@@ -408,41 +417,42 @@ async function seedCanonicalRun(workspaceApi, snapshotApi, workflowStore) {
     toolExecutions: [],
     effects: []
   }
-  await snapshotApi.mutateTaskSnapshotDatabase(userData, (db) => {
-    workflowStore.setupWorkflowLedgerSchema(db)
-    workflowStore.projectGoal(db, {
-      id: goal.id,
+  await snapshotApi.saveTaskSnapshot(snapshotApi.buildTaskSnapshot({
+    meta: {
+      id: run.sessionId,
+      title: 'Artifact lifecycle fixture',
+      cwd: tempRoot,
       projectId,
-      title: goal.title,
-      objective: goal.objective,
-      status: goal.status,
-      revision: goal.revision,
-      source: 'explicit',
-      createdAt: goal.createdAt,
-      updatedAt: goal.updatedAt
-    })
-    workflowStore.projectWorkItem(db, {
-      id: workItem.id,
-      projectId,
-      goalId: goal.id,
-      type: workItem.type,
-      title: workItem.title,
-      status: workItem.status,
-      revision: workItem.revision,
-      source: 'explicit',
-      runIds: [runId],
-      currentRunId: runId,
-      createdAt: workItem.createdAt,
-      updatedAt: workItem.updatedAt
-    })
-    workflowStore.projectTaskRun(db, run, {
-      projectId,
+      workspaceId: projectId,
       goalId,
       workItemId,
-      source: 'explicit',
-      canonicalSourceAuthority: true
-    })
-  })
+      childTaskId: run.taskId,
+      model: 'fixture-model',
+      providerId: 'fixture-provider',
+      permissionMode: 'default',
+      status: 'running',
+      sdkSessionId: 'sdk-artifact-fixture',
+      costUsd: 0,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      contextTokens: 0,
+      createdAt: run.createdAt
+    },
+    transcript: [],
+    lastSeq: 0,
+    eventCount: 0,
+    reason: 'created',
+    run,
+    now: run.updatedAt
+  }), userData)
+  const current = await workspace.getWorkItem(workItem.id)
+  if (!current) throw new Error(`Artifact fixture WorkItem disappeared:${workItem.id}`)
+  if (!current.runRefs.includes(runId)) {
+    workItem = await commands.updateWorkItem(current.id, {
+      runRefs: [...current.runRefs, runId]
+    }, { expectedRevision: current.revision })
+  } else {
+    workItem = current
+  }
   return { projectId, goalId, workItemId, runId, run }
 }
 

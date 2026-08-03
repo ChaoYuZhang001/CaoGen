@@ -86,6 +86,22 @@ export class ProjectAggregateSealStore {
     }
   }
 
+  purgeProject(projectId: string): boolean {
+    const id = requiredProjectId(projectId)
+    const lock = acquireLock(this.lockPath)
+    try {
+      const document = this.readDocument()
+      const next = document.projects.filter((project) => project.projectId !== id)
+      if (next.length === document.projects.length) return false
+      document.projects = next
+      document.revision += 1
+      this.writeDocument(document)
+      return true
+    } finally {
+      releaseLock(this.lockPath, lock)
+    }
+  }
+
   private readDocument(): ProjectAggregateSealDocument {
     if (!existsSync(this.filePath)) return emptyDocument()
     let parsed: unknown
@@ -149,15 +165,30 @@ function validateDocument(value: unknown, filePath: string): ProjectAggregateSea
   if (document.documentDigest !== expected) {
     throw new ProjectAggregateError('STORE_CORRUPT', `Project aggregate seal digest mismatch: ${filePath}`)
   }
+  const normalized = clone(document)
+  normalized.projects = normalized.projects.map(normalizeLegacySeal)
   const ids = new Set<string>()
-  for (const seal of document.projects) {
+  for (const seal of normalized.projects) {
     validateSeal(seal, filePath)
     if (ids.has(seal.projectId)) {
       throw new ProjectAggregateError('STORE_CORRUPT', `Duplicate Project aggregate seal: ${seal.projectId}`)
     }
     ids.add(seal.projectId)
   }
-  return clone(document)
+  return normalized
+}
+
+function normalizeLegacySeal(seal: ProjectAggregateSeal): ProjectAggregateSeal {
+  if (!isRecord(seal.objectCounts) || !isRecord(seal.objectDigests)) return seal
+  for (const kind of PROJECT_AGGREGATE_OBJECT_KINDS) {
+    if (seal.objectCounts[kind] === undefined && (kind === 'squad' || kind === 'comment')) {
+      seal.objectCounts[kind] = 0
+    }
+    if (seal.objectDigests[kind] === undefined && (kind === 'squad' || kind === 'comment')) {
+      seal.objectDigests[kind] = {}
+    }
+  }
+  return seal
 }
 
 function validateSeal(seal: ProjectAggregateSeal, filePath: string): void {

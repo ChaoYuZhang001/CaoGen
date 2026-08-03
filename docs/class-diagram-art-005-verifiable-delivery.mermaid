@@ -1,0 +1,125 @@
+classDiagram
+    %% ── 数据模型(来自 shared/studio-result-types.ts,本棒只读) ──
+    class StudioResultSnapshot {
+        +StudioResultAcceptance[] acceptances
+        +StudioResultArtifact[] artifacts
+        +StudioResultEvidence[] evidence
+        +StudioResultGoal goal
+        +StudioResultRun[] runs
+    }
+    class StudioResultAcceptance {
+        +string id
+        +WorkflowAcceptanceStatus status
+        +string[] criteria
+        +number coveredCriteria
+    }
+    class StudioResultArtifact {
+        +string id
+        +string[] evidenceIds
+        +string[] acceptanceIds
+        +StudioResultArtifactLocation[] locations
+    }
+    class StudioResultEvidence {
+        +string id
+        +WorkflowEvidenceKind kind
+        +WorkflowEvidenceSource source
+        +string verifier
+        +string contentDigest
+    }
+    class StudioResultGoal {
+        +string status
+    }
+    class StudioResultRun {
+        +string status
+    }
+    StudioResultSnapshot "1" *-- "many" StudioResultAcceptance
+    StudioResultSnapshot "1" *-- "many" StudioResultArtifact
+    StudioResultSnapshot "1" *-- "many" StudioResultEvidence
+
+    %% ── 派生层(本棒新增:F01) ──
+    class DeliveryVerdict {
+        <<enum>>
+        verifiable
+        not_done
+    }
+    class DeliveryVerdictDetail {
+        +DeliveryVerdict verdict
+        +number total
+        +number passed
+        +number waived
+        +number failed
+        +number pending
+        +number verifying
+        +boolean modelReportedDone
+    }
+    class DeliveryVerdictModule {
+        <<pure module>>
+        +deriveDeliveryVerdict(snapshot) DeliveryVerdictDetail
+        +canMarkGoalComplete(verdict) boolean
+    }
+    DeliveryVerdictModule ..> DeliveryVerdictDetail : produces
+    DeliveryVerdictDetail --> DeliveryVerdict : verdict
+    DeliveryVerdictModule ..> StudioResultSnapshot : reads only acceptances
+
+    %% ── store 派生落点(F06) ──
+    class AppStore {
+        <<zustand>>
+        +openPanel / closePanel
+    }
+    AppStore ..> DeliveryVerdictModule : re-export
+
+    %% ── UI 组件(本棒新增/修改) ──
+    class StudioResultPanel {
+        +snapshot
+        +useResultAcceptanceReview()
+        +onDrillEvidence(artifact)
+        +evidenceDrill
+    }
+    class DeliveryVerdictBanner {
+        +DeliveryVerdictDetail detail
+    }
+    class AcceptanceSummary {
+        +DeliveryVerdictDetail detail
+    }
+    class WorkflowAcceptanceRow {
+        +WorkflowAcceptanceRecord acceptance
+        +WorkflowEvidenceRecord[] evidence
+        +() onRefresh
+        +string repairWorkItemId
+        +onOpenRepair(workItemId)
+    }
+    class ArtifactRow {
+        +StudioResultArtifact artifact
+        +onOpen(location)
+        +onDrillEvidence(artifact)
+    }
+    class TraceabilityView {
+        +StudioResultSnapshot snapshot
+    }
+
+    StudioResultPanel *-- DeliveryVerdictBanner : 头部下方挂载
+    StudioResultPanel *-- AcceptanceSummary : evidence Tab 顶部
+    StudioResultPanel *-- WorkflowAcceptanceRow : evidence Tab 逐条
+    StudioResultPanel *-- ArtifactRow : artifacts Tab
+    StudioResultPanel *-- TraceabilityView : P1-4 追溯
+
+    StudioResultPanel ..> DeliveryVerdictModule : deriveDeliveryVerdict(snapshot)
+    StudioResultPanel ..> DeliveryVerdictModule : canMarkGoalComplete(verdict)
+
+    %% ── 既有契约(复用,不动) ──
+    class WorkflowAcceptanceReviewResult {
+        +WorkflowAcceptanceRecord acceptance
+        +repair: { workItemId, acceptanceId }
+    }
+    StudioResultPanel ..> WorkflowAcceptanceReviewResult : 捕获 repair 回填 repairWorkItemId
+    WorkflowAcceptanceRow ..> WorkflowAcceptanceReviewResult : reviewWorkflowAcceptance 返回
+
+    class AgentDeskIPC {
+        <<existing>>
+        +getStudioResultSnapshot()
+        +reviewWorkflowAcceptance()
+        +createWorkflowEvidenceLink()
+        +saveStudioResultSnapshot()
+    }
+    StudioResultPanel ..> AgentDeskIPC : 复用,无新增
+    ArtifactRow ..> AgentDeskIPC : createWorkflowEvidenceLink(P1-1)

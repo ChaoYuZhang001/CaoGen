@@ -463,6 +463,28 @@ function buildResourceKey(
       sourceBranch: target.sourceBranch
     })}`
   }
+  if (target.kind === 'issue_create') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'issue-marker',
+      repositoryDigest: target.repositoryDigest,
+      markerToken: target.markerToken
+    })}`
+  }
+  if (target.kind === 'mcp_tool_call') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'mcp-tool-call',
+      serverIdentityDigest: target.serverIdentityDigest,
+      toolName: target.toolName,
+      toolArgumentsDigest: target.toolArgumentsDigest
+    })}`
+  }
+  if (target.kind === 'webhook_message_send') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'webhook-message',
+      connectorId: target.connectorId,
+      payloadDigest: target.payloadDigest
+    })}`
+  }
   return `resource-v1:${stableValueDigest({
     scope: 'opaque',
     cwd: realpathSync(resolve(cwd)),

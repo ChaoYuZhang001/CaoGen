@@ -57,12 +57,22 @@ type PathRuleMatchMode = 'any' | 'all'
 
 const RISK_ORDER: ToolRiskLevel[] = ['low', 'medium', 'high', 'critical']
 const READ_TOOLS = new Set(['read_file', 'view', 'list_dir', 'search_symbol', 'search_code', 'find_file', 'get_dependencies', 'task_decompose'])
-const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])
+const EDIT_TOOLS = new Set([
+  'write_file',
+  'search_replace',
+  'edit_file',
+  'create_document',
+  'create_spreadsheet',
+  'create_presentation',
+  'create_pdf'
+])
 const FIXED_MUTATION_RISKS: Partial<Record<string, { level: ToolRiskLevel; reason: string }>> = {
   git_stage: { level: 'medium', reason: '暂存指定 Git 文件' },
   git_stage_all: { level: 'high', reason: '暂存当前范围全部 Git 变更' },
   mcp_discover: { level: 'high', reason: 'MCP 连接可能启动本机进程或访问外部服务' },
-  mcp_call_tool: { level: 'high', reason: 'MCP 连接可能启动本机进程或调用外部工具' }
+  mcp_call_tool: { level: 'high', reason: 'MCP 连接可能启动本机进程或调用外部工具' },
+  git_create_issue: { level: 'high', reason: '创建远端 Git Issue' },
+  send_notification: { level: 'high', reason: '向外部消息渠道发送通知' }
 }
 const BLOCKED_CODE_FORGE_MODES = new Set(['commit', 'pr'])
 const CRITICAL_COMMAND_PATTERNS = [

@@ -11,7 +11,8 @@ import {
 } from './model-attempt-runtime'
 
 export interface OpenAIModelAttemptAuth {
-  token: string
+  /** Legacy test-only identity input; production request paths use keyId/keyLabel and a scoped lease. */
+  token?: string
   keyId?: string
   keyLabel?: string
 }
@@ -27,8 +28,9 @@ export interface OpenAIModelAttemptFetch<T> {
   auth: OpenAIModelAttemptAuth
   readUsage: () => UsageTotals | undefined
   consume: (response: Response) => Promise<T>
-  preflight?: () => void
+  preflight?: () => void | Promise<void>
   fetch?: typeof fetch
+  executeFetch?: (operationId: string) => Promise<Response>
 }
 
 interface LogicalRequest {
@@ -100,7 +102,7 @@ export class OpenAIModelAttemptTracker {
     let failoverFromAttemptId = logical.failoverFromAttemptId
     for (let attempt = 0; attempt <= delays.length; attempt += 1) {
       // Keep policy denial outside the Attempt transaction: no ledger start and no network.
-      input.preflight?.()
+      await input.preflight?.()
       let fetchResolved = false
       const usageBefore = input.readUsage()
       try {
@@ -117,7 +119,9 @@ export class OpenAIModelAttemptTracker {
           keyIdentity: { providerId: input.providerId, ...input.auth },
           failoverFromAttemptId
         }, async () => {
-          const response = await (input.fetch ?? fetch)(input.url, input.init)
+          const response = input.executeFetch
+            ? await input.executeFetch(logical.requestId)
+            : await (input.fetch ?? fetch)(input.url, input.init)
           fetchResolved = true
           return input.consume(response)
         }, {

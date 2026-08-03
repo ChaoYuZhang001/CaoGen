@@ -34,6 +34,7 @@ export type InteractiveOperationKind =
   | 'git_push'
   | 'pull_request_create'
   | 'issue_create'
+  | 'checkpoint_restore'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
 
@@ -77,6 +78,13 @@ export interface EffectEvidenceRecord {
 export interface FileSystemIdentity {
   device: string
   inode: string
+}
+
+export interface OfficeSourceSnapshot {
+  path: string
+  identity: FileSystemIdentity
+  sha256: string
+  bytes: number
 }
 
 export interface ManagedWorktreeProjectionRecord {
@@ -352,7 +360,7 @@ export type EffectTarget =
   | {
       kind: 'office_artifact'
       /** 对应 canonical Artifact 的 kind，非 artifact 自身 kind 字段。 */
-      artifactKind: 'document' | 'spreadsheet'
+      artifactKind: 'document' | 'spreadsheet' | 'presentation' | 'pdf'
       /** 审批时冻结的 Project 根及文件系统身份，防止路径在执行前被替换。 */
       rootPath: string
       rootIdentity: FileSystemIdentity
@@ -361,12 +369,20 @@ export type EffectTarget =
       workspacePath: string
       /** 结构化输入摘要；生成前不伪造尚未知的二进制摘要。 */
       specDigest: string
+      /** 新版确定性输出绑定；缺省表示旧版只读 Effect，禁止自动执行/确认/交接。 */
+      outputBindingVersion?: 1
+      /** 审批前确定性生成并冻结的输出字节摘要；可选仅用于读取旧版持久化 Effect。 */
+      expectedSha256?: string
+      /** 与 expectedSha256 成对存在的审批输出字节长度。 */
+      expectedBytes?: number
       /** OOXML media type：
        *  document → application/vnd.openxmlformats-officedocument.wordprocessingml.document
        *  spreadsheet → application/vnd.openxmlformats-officedocument.spreadsheetml.sheet */
       mediaType: string
       /** 来源材料引用（输入文档/数据表的 workspace 路径或 sourceRef），用于可追溯 */
       sourceRefs: string[]
+      /** 新建 Effect 冻结来源文件身份与内容；可选仅用于读取旧版持久化 Effect。 */
+      sourceSnapshots?: OfficeSourceSnapshot[]
       title: string
     }
   | {

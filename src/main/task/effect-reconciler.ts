@@ -5,6 +5,9 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { EffectRecord, EffectTarget, FileSystemIdentity } from '../../shared/types'
+import { reconcileMcpEffectTarget } from '../mcp/mcp-effect'
+import { reconcileWebhookMessageEffectTarget } from '../notification/notification-effect'
+import { reconcileOfficeArtifactEffectTarget } from '../agent/tools/office-artifact'
 import {
   gitAlternateObjectDirectories,
   isolatedLocalGitEnv,
@@ -28,6 +31,7 @@ import {
   type EffectReconciliationResult
 } from './effect-reconciliation-result'
 import {
+  reconcileIssueCreate,
   reconcilePullRequestCreate,
   reconcileWorktreePatchApply,
   type OperationEffectReconcilerContext
@@ -111,7 +115,10 @@ export async function buildEffectDescriptor(input: {
     targetDigest,
     inputDigest,
     intentDigest: stableValueDigest({ toolName, targetDigest, inputDigest }),
-    reconcilability: target.kind === 'unsupported' ? 'opaque' : 'queryable'
+    reconcilability:
+      target.kind === 'unsupported' || target.kind === 'webhook_message_send'
+        ? 'opaque'
+        : 'queryable'
   }
 }
 
@@ -135,6 +142,12 @@ export async function reconcileEffect(
     if (effect.target.kind === 'pull_request_create') {
       return await reconcilePullRequestCreate(effect.target, operationEffectReconcilerContext)
     }
+    if (effect.target.kind === 'issue_create') {
+      return await reconcileIssueCreate(effect.target, operationEffectReconcilerContext)
+    }
+    if (effect.target.kind === 'mcp_tool_call') return await reconcileMcpEffectTarget(effect.target)
+    if (effect.target.kind === 'webhook_message_send') return reconcileWebhookMessageEffectTarget(effect.target)
+    if (effect.target.kind === 'office_artifact') return reconcileOfficeArtifactEffectTarget(effect.target)
     if (effect.target.kind === 'unsupported') {
       return unresolved({
         kind: 'unsupported',

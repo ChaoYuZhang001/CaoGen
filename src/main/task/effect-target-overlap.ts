@@ -6,31 +6,33 @@ interface FileOverlapOptions {
   canonicalizeRoots?: boolean
 }
 
+type OutputFileTarget = Extract<EffectTarget, { kind: 'file_content' | 'office_artifact' }>
+
 export function effectTargetsShareFile(
   left: EffectTarget,
   right: EffectTarget,
   options: FileOverlapOptions = {}
 ): boolean {
   if (left.kind === 'worktree_patch_apply') {
-    return right.kind === 'file_content' && patchTargetIncludesFile(left, right, options)
+    return isOutputFileTarget(right) && patchTargetIncludesFile(left, right, options)
   }
   if (right.kind === 'worktree_patch_apply') {
-    return left.kind === 'file_content' && patchTargetIncludesFile(right, left, options)
+    return isOutputFileTarget(left) && patchTargetIncludesFile(right, left, options)
   }
   if (left.kind === 'code_forge_patch') {
-    return right.kind === 'file_content' && codeForgeTargetIncludesFile(left, right, options)
+    return isOutputFileTarget(right) && codeForgeTargetIncludesFile(left, right, options)
   }
   if (right.kind === 'code_forge_patch') {
-    return left.kind === 'file_content' && codeForgeTargetIncludesFile(right, left, options)
+    return isOutputFileTarget(left) && codeForgeTargetIncludesFile(right, left, options)
   }
-  if (left.kind !== 'file_content' || right.kind !== 'file_content') return false
-  if (samePreFileIdentity(left, right)) return true
+  if (!isOutputFileTarget(left) || !isOutputFileTarget(right)) return false
+  if (left.kind === 'file_content' && right.kind === 'file_content' && samePreFileIdentity(left, right)) return true
   return fileTargetPath(left, options) === fileTargetPath(right, options)
 }
 
 function codeForgeTargetIncludesFile(
   patch: Extract<EffectTarget, { kind: 'code_forge_patch' }>,
-  file: Extract<EffectTarget, { kind: 'file_content' }>,
+  file: OutputFileTarget,
   options: FileOverlapOptions
 ): boolean {
   const worktreeRoot = rootPath(patch.worktreePath, options)
@@ -41,7 +43,7 @@ function codeForgeTargetIncludesFile(
 
 function patchTargetIncludesFile(
   patch: Extract<EffectTarget, { kind: 'worktree_patch_apply' }>,
-  file: Extract<EffectTarget, { kind: 'file_content' }>,
+  file: OutputFileTarget,
   options: FileOverlapOptions
 ): boolean {
   const repoRoot = rootPath(patch.repoRoot, options)
@@ -66,10 +68,14 @@ function samePreFileIdentity(
 }
 
 function fileTargetPath(
-  target: Extract<EffectTarget, { kind: 'file_content' }>,
+  target: OutputFileTarget,
   options: FileOverlapOptions
 ): string {
   return resolve(rootPath(target.rootPath, options), target.relativePath)
+}
+
+function isOutputFileTarget(target: EffectTarget): target is OutputFileTarget {
+  return target.kind === 'file_content' || target.kind === 'office_artifact'
 }
 
 function rootPath(value: string, options: FileOverlapOptions): string {

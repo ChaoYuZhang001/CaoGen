@@ -4,44 +4,41 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import deepTestStatus from './deep-test-status.cjs'
+import {
+  PrivateProviderConfigError,
+  resolvePrivateProviderConfig
+} from './lib/private-provider-config.mjs'
 
 const { reportDeepTestStatus } = deepTestStatus
 
-const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1'
 const required = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED === '1' || process.argv.includes('--required')
+const enabled = process.env.CAOGEN_CHINA_TOOL_CALL_PARITY === '1' || required
 const repoRoot = process.cwd()
 const rawProvidersSetting = process.env.CAOGEN_CHINA_PARITY_PROVIDERS
+const allowTestOverride = process.env.CAOGEN_PRIVATE_PROVIDER_TEST_MODE === '1'
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
-const reportDir = path.join(repoRoot, 'test-results', 'china-tool-call-parity', runId)
+const reportRoot = path.resolve(
+  process.env.CAOGEN_CHINA_TOOL_CALL_PARITY_REPORT_ROOT || path.join(repoRoot, 'test-results', 'china-tool-call-parity')
+)
+const reportDir = path.join(reportRoot, runId)
 const configurationGuide = 'docs/P2-EXTERNAL-REQUIRED.md'
-const providerTemplate = [
-  {
-    id: 'openai-baseline',
-    name: 'OpenAI baseline',
-    group: 'baseline',
-    apiFormat: 'openai-responses',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4.1-mini',
-    apiKey: '<secret>'
-  },
-  {
-    id: 'deepseek-china',
-    name: 'DeepSeek China',
-    group: 'china',
-    apiFormat: 'openai-compatible',
-    baseUrl: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
-    apiKey: '<secret>'
-  }
-]
 mkdirSync(reportDir, { recursive: true })
 
 let rawProviders
+let providerSource = 'missing'
 if (enabled) {
   try {
-    rawProviders = resolveProvidersInput(rawProvidersSetting)
+    const resolved = resolvePrivateProviderConfig({
+      setting: rawProvidersSetting,
+      repoRoot,
+      allowTestOverride
+    })
+    rawProviders = resolved.text
+    providerSource = resolved.source
   } catch (error) {
-    blockConfiguration(error instanceof Error ? error.message : String(error))
+    blockConfiguration(
+      error instanceof PrivateProviderConfigError ? error.code : 'provider_config_invalid'
+    )
   }
 }
 
@@ -50,10 +47,10 @@ if (!enabled || !rawProviders?.trim()) {
     status: required ? 'blocked' : 'skipped',
     required,
     reportDir,
-    reason: 'set CAOGEN_CHINA_TOOL_CALL_PARITY=1 and CAOGEN_CHINA_PARITY_PROVIDERS JSON',
-    requiredEnvironment: ['CAOGEN_CHINA_TOOL_CALL_PARITY=1', 'CAOGEN_CHINA_PARITY_PROVIDERS'],
+    reason: 'run with --required or opt in with CAOGEN_CHINA_TOOL_CALL_PARITY=1',
+    requiredEnvironment: required ? [] : ['CAOGEN_CHINA_TOOL_CALL_PARITY=1'],
+    providerSource,
     configurationGuide,
-    providerTemplate,
     goldenCases: 0,
     results: [],
     parityFailures: required ? ['required parity mode needs explicit baseline and China provider configuration'] : []
@@ -63,7 +60,7 @@ if (!enabled || !rawProviders?.trim()) {
     reason: report.reason,
     details: { reportDir }
   })
-  console.log('SKIP china tool-call parity: set CAOGEN_CHINA_TOOL_CALL_PARITY=1 and CAOGEN_CHINA_PARITY_PROVIDERS JSON')
+  console.log('SKIP china tool-call parity: use --required or set CAOGEN_CHINA_TOOL_CALL_PARITY=1')
   if (required && !deepStatusReported) process.exit(1)
   process.exit(0)
 }
@@ -127,18 +124,15 @@ const goldenCases = expandToolChoiceModes([
   })
 ])
 
-const results = await Promise.all(providers.map(async (provider) => {
+const results = await Promise.all(providers.map(async (provider, index) => {
   const cases = []
   for (const item of goldenCases) cases.push(await runGoldenCase(provider, item))
   const passed = cases.filter((item) => item.ok).length
   return {
-    id: provider.id,
-    name: provider.name,
+    providerRef: `provider-${String(index + 1).padStart(2, '0')}`,
     group: provider.group,
     apiFormat: provider.apiFormat,
     ...(provider.thinkingMode ? { thinkingMode: provider.thinkingMode } : {}),
-    model: provider.model,
-    endpoint: maskUrl(provider.baseUrl),
     passRate: passed / cases.length,
     cases
   }
@@ -155,15 +149,15 @@ if (chinaProviders.length === 0) parityFailures.push('missing China provider; ad
 if (baselines.length > 0) {
   for (const provider of chinaProviders) {
     if (provider.passRate === 0) {
-      parityFailures.push(`${provider.id} did not pass any golden tool-call cases`)
+      parityFailures.push(`${provider.providerRef} did not pass any golden tool-call cases`)
     } else if (provider.passRate + maxGap < bestBaseline) {
-      parityFailures.push(`${provider.id} passRate ${provider.passRate.toFixed(3)} is below baseline ${bestBaseline.toFixed(3)}`)
+      parityFailures.push(`${provider.providerRef} passRate ${provider.passRate.toFixed(3)} is below baseline ${bestBaseline.toFixed(3)}`)
     }
   }
 }
 for (const provider of results) {
   if (provider.passRate < 1 && (!baselines.length || provider.group === 'baseline')) {
-    parityFailures.push(`${provider.id} did not pass all golden tool-call cases`)
+    parityFailures.push(`${provider.providerRef} did not pass all golden tool-call cases`)
   }
 }
 
@@ -171,17 +165,19 @@ const report = {
   status: parityFailures.length === 0 ? 'passed' : 'failed',
   required,
   goldenCases: goldenCases.length,
-  providerTemplate,
   configurationGuide,
+  providerSource,
   requireBaseline,
   maxGap,
   requestTimeoutMs,
   providerConcurrency: providers.length,
+  privateProviderConfigRedacted: true,
   bestBaseline,
   results,
   reportDir,
   parityFailures
 }
+assertReportDoesNotContainPrivateConfig(report, providers)
 writeReport(report)
 reportDeepTestStatus(report.status === 'passed' ? 'pass' : 'fail', {
   ...(report.status === 'passed' ? {} : { reason: report.parityFailures.join('; ') || 'tool-call parity failed' }),
@@ -196,9 +192,9 @@ function blockConfiguration(reason) {
     required,
     reportDir,
     reason,
-    requiredEnvironment: ['CAOGEN_CHINA_TOOL_CALL_PARITY=1', 'CAOGEN_CHINA_PARITY_PROVIDERS'],
+    requiredEnvironment: required ? [] : ['CAOGEN_CHINA_TOOL_CALL_PARITY=1'],
+    providerSource,
     configurationGuide,
-    providerTemplate,
     requireBaseline: process.env.CAOGEN_CHINA_PARITY_REQUIRE_BASELINE !== '0',
     maxGap: null,
     requestTimeoutMs: null,
@@ -245,7 +241,7 @@ async function runOpenAiResponsesGoldenCase(provider, item) {
     const args = typeof toolCall?.arguments === 'string' ? parseJson(toolCall.arguments) : toolCall?.arguments
     return validateToolCall(item, response.status, response.ok, toolCall?.name, args, Date.now() - started, text, attempts)
   } catch (error) {
-    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
+    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: requestErrorCode(error) }
   }
 }
 
@@ -272,7 +268,7 @@ async function runOpenAiCompatibleGoldenCase(provider, item) {
     const args = typeof argsText === 'string' ? parseJson(argsText) : argsText
     return validateToolCall(item, response.status, response.ok, name, args, Date.now() - started, text, attempts)
   } catch (error) {
-    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
+    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: requestErrorCode(error) }
   }
 }
 
@@ -299,7 +295,7 @@ async function runAnthropicGoldenCase(provider, item) {
     const toolUse = Array.isArray(parsed?.content) ? parsed.content.find((part) => part?.type === 'tool_use') : undefined
     return validateToolCall(item, response.status, response.ok, toolUse?.name, toolUse?.input, Date.now() - started, text, attempts)
   } catch (error) {
-    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: error instanceof Error ? error.message : String(error) }
+    return { id: item.id, ok: false, latencyMs: Date.now() - started, error: requestErrorCode(error) }
   }
 }
 
@@ -343,7 +339,7 @@ function validateToolCall(item, statusCode, responseOk, name, args, latencyMs, r
     latencyMs,
     toolName: name,
     argumentKeys: isRecord(args) ? Object.keys(args).sort() : [],
-    error: ok ? undefined : preview(rawText)
+    error: ok ? undefined : responseOk ? 'tool_call_contract_mismatch' : 'provider_http_error'
   }
 }
 
@@ -448,8 +444,13 @@ function findCompiledOptional(root, fileName) {
 }
 
 function parseProviders(text) {
-  const parsed = JSON.parse(stripJsonBom(text))
-  if (!Array.isArray(parsed)) throw new Error('CAOGEN_CHINA_PARITY_PROVIDERS must be a JSON array')
+  let parsed
+  try {
+    parsed = JSON.parse(stripJsonBom(text))
+  } catch {
+    throw new Error('provider_config_invalid')
+  }
+  if (!Array.isArray(parsed)) throw new Error('private Provider config must be a JSON array')
   return parsed.map((item, index) => {
     if (!isRecord(item)) throw new Error(`provider[${index}] must be an object`)
     const id = stringField(item, 'id')
@@ -507,14 +508,6 @@ function parseRequestTimeout(value) {
   return parsed
 }
 
-function resolveProvidersInput(value) {
-  const text = value?.trim()
-  if (!text) return undefined
-  const candidate = path.isAbsolute(text) ? text : path.join(repoRoot, text)
-  if (existsSync(candidate)) return readFileSync(candidate, 'utf8')
-  return text
-}
-
 function stripJsonBom(text) {
   return text.replace(/^\uFEFF/, '')
 }
@@ -561,16 +554,6 @@ function parseJson(text) {
   }
 }
 
-function maskUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl)
-    for (const key of [...url.searchParams.keys()]) if (/token|key|secret|sign|access/i.test(key)) url.searchParams.set(key, '***')
-    return url.toString()
-  } catch {
-    return String(rawUrl)
-  }
-}
-
 function publicEndpointFailure(rawUrl, target) {
   if (!required) return undefined
   let url
@@ -592,7 +575,7 @@ function publicEndpointFailure(rawUrl, target) {
     /(^|[-.])mock([-.]|$)/i.test(host) ||
     isPrivateHost(host)
   ) {
-    return `${target} endpoint must be a public real-network host, got ${host}`
+    return `${target} endpoint must be a public real-network host`
   }
   return undefined
 }
@@ -614,14 +597,31 @@ function isPrivateHost(host) {
   )
 }
 
-function preview(text) {
-  if (!text) return undefined
-  return text.length > 500 ? `${text.slice(0, 500)}...` : text
+function requestErrorCode(error) {
+  const name = error instanceof Error ? error.name : ''
+  if (name === 'TimeoutError' || name === 'AbortError') return 'request_timeout'
+  return 'request_failed'
+}
+
+function assertReportDoesNotContainPrivateConfig(report, configuredProviders) {
+  const serialized = JSON.stringify(report)
+  for (const provider of configuredProviders) {
+    for (const field of ['apiKey', 'baseUrl']) {
+      const value = provider[field]
+      if (value && serialized.includes(value)) throw new Error('report_private_config_redaction_failed')
+    }
+    for (const field of ['id', 'name', 'model']) {
+      const value = provider[field]
+      if (value && serialized.includes(JSON.stringify(value))) {
+        throw new Error('report_private_config_redaction_failed')
+      }
+    }
+  }
 }
 
 function writeReport(report) {
   mkdirSync(reportDir, { recursive: true })
   const json = JSON.stringify(report, null, 2)
   writeFileSync(path.join(reportDir, 'report.json'), json, 'utf8')
-  writeFileSync(path.join(repoRoot, 'test-results', 'china-tool-call-parity', 'latest.json'), json, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), json, 'utf8')
 }

@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter)
+require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-project-workspace-'))
 const outDir = path.join(tempRoot, 'compiled')
 const userData = path.join(tempRoot, 'user-data')
@@ -19,7 +21,7 @@ writeFileSync(path.join(sourceDir, 'sentinel.txt'), 'source content\n')
 try {
   compileSources()
   installElectronStub()
-  const api = await import(pathToFileURL(findCompiledModule(outDir, 'index.js')).href)
+  const api = await import(pathToFileURL(path.join(outDir, 'main', 'project-workspace', 'index.js')).href)
   const first = new api.ProjectWorkspaceStore(userData)
   await first.open()
 

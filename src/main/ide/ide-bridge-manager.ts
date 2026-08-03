@@ -33,6 +33,13 @@ export async function syncIdeBridgeFromSettings(): Promise<IdeBridgeStatus> {
     return ideBridgeStatus()
   }
 
+  // Refuse to start without a token — an empty token means unauthenticated access.
+  if (!config.token) {
+    await stopIdeBridge()
+    activeConfig = config
+    return ideBridgeStatus()
+  }
+
   if (bridge && activeConfig && sameConfig(activeConfig, config)) return bridge.status()
 
   await stopIdeBridge()

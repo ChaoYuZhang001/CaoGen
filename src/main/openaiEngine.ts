@@ -2,16 +2,24 @@ import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
+import { app } from 'electron'
 import { TranscriptWriter } from './transcript'
 import {
   getProvider,
   listProviders,
   markProviderKeyUsed,
+  providerAuthMode,
+  providerIsReady,
   recordProviderKeySuccess,
-  resolveProviderToken,
+  issueDirectProviderCredentialLease,
+  issueProviderCredentialLease,
+  selectProviderCredential,
   rotateProviderKey
 } from './providers'
-import { mergeProviderCredentialHeaders } from './providerRuntimeAuth'
+import {
+  fetchWithProviderCredentialLease,
+  providerCredentialScopeForSession
+} from './providerRuntimeAuth'
 import { listHistory } from './history'
 import {
   classifyFailure,
@@ -41,7 +49,24 @@ import {
 } from './agent/context-compressor'
 import { isGuiToolName } from './agent/tools/gui-tools'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { taskStrategySystemPrompt, updateTaskStrategyMeta } from './task/task-strategy'
+import { buildWorkflowStageHandoffPrompt } from './task/workflow-stage-handoff'
+import {
+  assertOutboundContextAllowed,
+  OutboundContextPolicyError,
+  prepareOutboundContext,
+  providerAllowedByOutboundContext
+} from './project-workspace/outbound-context-policy'
+import {
+  openAiEndpoint,
+  parseProviderHeaders,
+  redactProviderBaseUrl
+} from './provider/openai-provider-utils'
 import { normalizeStableMessagePayload } from './stable-message-payload'
+import {
+  buildPortableConversationReplay,
+  portableConversationReplayDetail
+} from './conversation-ledger-replay'
 import { isModelAttemptPersistenceError, unwrapModelAttemptOperationError } from './task/model-attempt-runtime'
 import { addUsageTotals, OpenAIModelAttemptTracker } from './task/openai-model-attempt-runtime'
 import {
@@ -55,8 +80,12 @@ import type {
   EffectStatus,
   ImageAttachmentView,
   OpenAIProtocol,
+  OutboundContextItemView,
+  OutboundContextManifest,
   PermissionModeId,
   PermissionRequestInfo,
+  Provider,
+  ResponsesConversationContext,
   SendMessagePayload,
   SessionMeta,
   TranscriptEntry,
@@ -100,8 +129,12 @@ interface OpenAIErrorContext {
 
 interface OpenAIAuthConfig {
   baseUrl: string
-  token: string
+  authMode: 'api-key' | 'none'
   headers: Record<string, string>
+  providerId: string
+  available: boolean
+  provider?: Provider
+  environmentCredential: boolean
   keyId?: string
   keyLabel?: string
 }
@@ -117,7 +150,8 @@ const MAX_TOOL_ITERATIONS = 40
  * 协议按 Provider 的 openaiProtocol 字段选择。
  *
  * 多轮上下文:chat 协议在内存维护 user/assistant 历史并随每轮全量发送;
- * resume 时从转录重建。(responses 路径沿用单轮行为,历史桥接待补。)
+ * resume 时从转录重建。responses 路径持久化受 Provider/模型/协议/Key 约束的
+ * server response id；身份不匹配时丢弃该优化并回退本地转录。
  * OpenAI 的工具调用与本地文件编辑权限模型暂未桥接,因此权限请求如实为空。
  */
 export class OpenAIEngine implements Engine {
@@ -127,6 +161,7 @@ export class OpenAIEngine implements Engine {
   private abort: AbortController | null = null
   private disposed = false
   private activeTurn: Promise<void> | null = null
+  private activeOutboundContext?: OutboundContextManifest
   private disposePromise: Promise<void> | null = null
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
@@ -140,6 +175,7 @@ export class OpenAIEngine implements Engine {
   /** 本轮 GUI 工具失败;最终文本不能掩盖真实桌面自动化失败 */
   private turnGuiToolFailures: TurnToolFailure[] = []
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
+  private forkBoundaryPending = false
 
   constructor(
     meta: SessionMeta,
@@ -149,11 +185,16 @@ export class OpenAIEngine implements Engine {
   ) {
     this.meta = meta
     this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
+    if (!resumeSdkSessionId && meta.conversationForkSourceSdkSessionId) {
+      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId)
+      this.forkBoundaryPending = true
+    }
     this.emitRaw = (event) => {
       const entry = this.transcript.nextEntry(event)
       emit(event, entry.seq, entry)
     }
     this.nativeToolRuntime = new NativeToolRuntime(this.meta, (event) => this.emit(event))
+    this.restoreResponsesContext()
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
       this.rebuildChatHistory()
@@ -186,13 +227,21 @@ export class OpenAIEngine implements Engine {
     if (this.disposed) return
     this.setStatus('starting')
     const auth = this.authConfig()
-    if (!auth.token) {
+    if (!auth.available && auth.authMode !== 'none') {
       this.setStatus('error', this.missingKeyMessage())
       return
     }
     if (!this.meta.sdkSessionId) {
       this.meta.sdkSessionId = `openai-${randomUUID()}`
       this.emit({ kind: 'init', sdkSessionId: this.meta.sdkSessionId, model: this.effectiveModel() })
+    }
+    if (this.forkBoundaryPending) {
+      this.forkBoundaryPending = false
+      this.emit({
+        kind: 'hook-event',
+        event: 'conversation-forked',
+        detail: '已从本地会话账本创建独立会话；未复用来源 Provider 的服务端上下文。'
+      })
     }
     this.setStatus('idle')
   }
@@ -203,10 +252,11 @@ export class OpenAIEngine implements Engine {
       this.rejectSend('上一轮仍在运行,请等待完成或中断后再发送。')
       return
     }
-    const payload = normalizeStableMessagePayload(input)
-    if (!payload.text && payload.images.length === 0) return
+    const normalizedPayload = normalizeStableMessagePayload(input)
+    if (!normalizedPayload.text && normalizedPayload.images.length === 0) return
 
-    const messageId = payload.messageId || randomUUID()
+    const messageId = normalizedPayload.messageId || randomUUID()
+    const payload: SendMessagePayload = { ...normalizedPayload, messageId }
     this.modelAttempts.startTurn(messageId)
     this.emit({
       kind: 'user-message',
@@ -293,6 +343,8 @@ export class OpenAIEngine implements Engine {
           projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
         if (smart.kind === 'routed') {
+          const routeChanged = smart.providerId !== this.meta.providerId || smart.model !== this.effectiveModel()
+          if (routeChanged) this.clearResponsesContext(this.protocol() === 'responses')
           this.modelAttempts.setRouteReason(smart.reason)
           this.routedModel = smart.model
           if (smart.switchedProvider) this.meta.providerId = smart.providerId
@@ -311,7 +363,7 @@ export class OpenAIEngine implements Engine {
       }
       // 候选:有端点且已配 key 的厂商(没 key 的选中必失败,不进池)
       const candidates = listProviders()
-        .filter((p) => p.baseUrl.trim().length > 0 && p.hasToken)
+        .filter((p) => p.baseUrl.trim().length > 0 && providerIsReady(p))
         .map((p) => ({ id: p.id, name: p.name, models: p.models }))
       const decision = pickModelAcrossProviders({
         candidates,
@@ -320,6 +372,8 @@ export class OpenAIEngine implements Engine {
         currentProviderId: this.meta.providerId
       })
       if (!decision) return
+      const routeChanged = decision.providerId !== this.meta.providerId || decision.model !== this.effectiveModel()
+      if (routeChanged) this.clearResponsesContext(this.protocol() === 'responses')
       this.modelAttempts.setRouteReason(decision.reason)
       this.routedModel = decision.model
       if (decision.switchedProvider) {
@@ -397,7 +451,13 @@ export class OpenAIEngine implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
+  async setTaskStrategy(strategy: SessionMeta['taskStrategy']): Promise<void> {
+    this.nativeToolRuntime.rejectAllPending('任务策略已切换，原审批已作废')
+    updateTaskStrategyMeta(this.meta, strategy, (meta) => this.emit({ kind: 'meta', meta }))
+  }
+
   async setModel(model: string): Promise<void> {
+    if (this.meta.model !== model) this.clearResponsesContext(this.protocol() === 'responses')
     this.meta.model = model
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
@@ -428,18 +488,19 @@ export class OpenAIEngine implements Engine {
   private async runResponse(payload: SendMessagePayload, controller: AbortController): Promise<void> {
     let auth: OpenAIAuthConfig | undefined
     try {
-      const payloadWithMemory = await this.augmentPayloadWithLayeredMemory(payload)
+      const prepared = await this.augmentPayloadWithLayeredMemory(payload)
+      this.activeOutboundContext = prepared.manifest
       auth = this.authConfig()
-      if (!auth.token) throw new Error(this.missingKeyMessage())
+      if (!auth.available && auth.authMode !== 'none') throw new Error(this.missingKeyMessage())
       if (auth.keyId) {
         this.triedProviderKeys.add(auth.keyId)
         markProviderKeyUsed(this.meta.providerId, auth.keyId)
       }
 
       if (this.protocol() === 'chat') {
-        await this.runChatCompletion(payloadWithMemory, controller, auth)
+        await this.runChatCompletion(prepared.payload, controller, auth)
       } else {
-        await this.runResponsesLoop(payloadWithMemory, controller, auth)
+        await this.runResponsesLoop(prepared.payload, controller, auth)
       }
       const latency = Date.now() - this.turnStartedAt
       if (auth.keyId) recordProviderKeySuccess(this.meta.providerId, auth.keyId)
@@ -454,6 +515,10 @@ export class OpenAIEngine implements Engine {
       }
       if (isDigitalWorkerProviderDispatchDeniedError(err)) {
         this.finishTurn(true, err.message, 'policy-denied')
+        return
+      }
+      if (err instanceof OutboundContextPolicyError) {
+        this.finishTurn(true, err.message, 'outbound-policy-denied')
         return
       }
       if (isModelAttemptPersistenceError(err)) {
@@ -471,33 +536,60 @@ export class OpenAIEngine implements Engine {
     }
   }
 
-  private async augmentPayloadWithLayeredMemory(payload: SendMessagePayload): Promise<SendMessagePayload> {
-    if (!payload.text.trim()) return payload
-    try {
-      const skillPrompt = buildSkillInvocationPrompt({
+  private async augmentPayloadWithLayeredMemory(payload: SendMessagePayload): Promise<{
+    payload: SendMessagePayload
+    manifest: OutboundContextManifest
+  }> {
+    const skillPrompt = payload.text.trim()
+      ? buildSkillInvocationPrompt({
         enabled: getSettings().autoSkillLearningEnabled,
         projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
         query: payload.text,
         maxSkills: 2
       })
-      const memory = await buildEffectiveMemoryPrompt({
+      : ''
+    const memory = payload.text.trim()
+      ? await buildEffectiveMemoryPrompt({
         rootDir: openAiMemoryRoot(),
         query: payload.text,
         projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
         limit: 6
+      }).catch((error) => {
+        console.error('[caogen] layered memory retrieval failed:', error)
+        return ''
       })
-      const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
-      if (!memory.trim() && !skillPrompt.trim() && !ideDocumentContext.trim()) return payload
-      return {
+      : ''
+    const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
+      .catch((error) => {
+        console.error('[caogen] workflow stage handoff retrieval failed:', error)
+        return ''
+      })
+    const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
+    const additionalItems = openAiAdditionalContextItems({
+      memory,
+      ideDocumentContext,
+      handoff,
+      hasConversationContext: this.chatHistory.length > 0 || Boolean(this.lastResponseId)
+    })
+    const outbound = await prepareOutboundContext({
+      meta: this.meta,
+      rootDir: app.getPath('userData'),
+      payload,
+      providerId: this.meta.providerId,
+      model: this.effectiveModel(),
+      additionalItems
+    })
+    const projectResources = outbound.resourceContext.prompt
+    const enriched = memory.trim() || skillPrompt.trim() || ideDocumentContext.trim() ||
+      handoff.trim() || projectResources.trim()
+      ? {
         ...payload,
-        text: [skillPrompt, ideDocumentContext, memory, '## Current User Request', payload.text]
+        text: [projectResources, handoff, skillPrompt, ideDocumentContext, memory, '## Current User Request', payload.text]
           .filter((item) => item.trim().length > 0)
           .join('\n\n')
       }
-    } catch (error) {
-      console.error('[caogen] layered memory retrieval failed:', error)
-      return payload
-    }
+      : payload
+    return { payload: enriched, manifest: outbound.manifest }
   }
 
   /** 本轮已试过的厂商(防切换打转);send 时重置 */
@@ -506,9 +598,75 @@ export class OpenAIEngine implements Engine {
   private triedProviderKeys = new Set<string>()
   /** Responses 协议的上一轮 response id(服务端多轮上下文) */
   private lastResponseId?: string
+  /** 服务端链不可复用时，从本地耐久事件重建可移植上下文。 */
+  private responsesReplayRequired = false
   /** 本轮流式累积的 Responses 函数调用(按 output_index 拼装) */
   private pendingResponseCalls: Array<{ callId: string; name: string; argsText: string }> = []
   private static readonly MAX_FAILOVERS_PER_TURN = 3
+
+  /**
+   * 恢复前一轮 Responses 链时做严格身份校验。
+   * AUTO 模型会把已落盘的实际模型带回本轮，避免重启后错误地从 Provider 首模型续链。
+   */
+  private restoreResponsesContext(): void {
+    const context = this.meta.responsesContext
+    if (!context) {
+      this.responsesReplayRequired = this.transcript.read().length > 0
+      return
+    }
+    if (!isResponsesConversationContext(context)) {
+      this.meta.responsesContext = undefined
+      this.responsesReplayRequired = this.transcript.read().length > 0
+      return
+    }
+    if (this.meta.model === AUTO_MODEL) this.routedModel = context.model
+    const currentKeyId = this.authConfig().keyId
+    const keyMatches = (context.keyId ?? '') === (currentKeyId ?? '')
+    const matches = this.protocol() === 'responses' &&
+      context.providerId === this.meta.providerId &&
+      context.model === this.effectiveModel() &&
+      keyMatches
+    if (matches) {
+      this.lastResponseId = context.responseId
+      return
+    }
+    // 不匹配时 fail closed:保留本地 Transcript，丢弃不可安全复用的服务端链。
+    this.meta.responsesContext = undefined
+    this.lastResponseId = undefined
+    this.responsesReplayRequired = this.transcript.read().length > 0
+  }
+
+  private clearResponsesContext(requireReplay = true): void {
+    this.lastResponseId = undefined
+    if (this.meta.responsesContext) this.meta.responsesContext = undefined
+    if (requireReplay) this.responsesReplayRequired = true
+  }
+
+  private rememberResponsesContext(responseId: string): void {
+    const normalized = responseId.trim()
+    if (!normalized || this.protocol() !== 'responses') return
+    const previous = this.meta.responsesContext
+    const currentKeyId = this.authConfig().keyId
+    const context: ResponsesConversationContext = {
+      responseId: normalized,
+      providerId: this.meta.providerId,
+      model: this.effectiveModel(),
+      protocol: 'responses',
+      ...(currentKeyId ? { keyId: currentKeyId } : {}),
+      generation: previous &&
+        previous.providerId === this.meta.providerId &&
+        previous.model === this.effectiveModel() &&
+        previous.protocol === 'responses'
+        ? previous.generation + 1
+        : 1,
+      updatedAt: Date.now()
+    }
+    this.lastResponseId = normalized
+    this.meta.responsesContext = context
+    this.responsesReplayRequired = false
+    // meta 事件进入 SessionManager 的统一持久化路径，形成重启可恢复的 ledger 游标。
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+  }
 
   /**
    * Responses 协议的 Agent 循环:与 chat 对等地接编码工具。
@@ -521,7 +679,20 @@ export class OpenAIEngine implements Engine {
     controller: AbortController,
     auth: OpenAIAuthConfig
   ): Promise<void> {
-    let input: unknown[] = [{ role: 'user', content: buildInputContent(payload) }]
+    const replay = this.responsesReplayRequired
+      ? buildPortableConversationReplay(this.transcript.read(), payload.messageId)
+      : null
+    let input: unknown[] = [
+      ...(replay ? [{ role: 'user', content: [{ type: 'input_text', text: replay.text }] }] : []),
+      { role: 'user', content: buildInputContent(payload) }
+    ]
+    if (replay) {
+      this.emit({
+        kind: 'hook-event',
+        event: 'conversation-ledger-replay',
+        detail: portableConversationReplayDetail(replay)
+      })
+    }
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       if (controller.signal.aborted) throw new Error('已中断')
@@ -540,7 +711,7 @@ export class OpenAIEngine implements Engine {
         openAiEndpoint(auth.baseUrl, 'responses'),
         {
           method: 'POST',
-          headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+          headers: openAIRequestHeaders(auth),
           body: JSON.stringify(body),
           signal: controller.signal
         },
@@ -604,7 +775,8 @@ export class OpenAIEngine implements Engine {
     if (!failure.switchable) return false
 
     const candidates = listProviders()
-      .filter((p) => p.baseUrl.trim().length > 0 && p.hasToken)
+      .filter((p) => p.baseUrl.trim().length > 0 && providerIsReady(p))
+      .filter((p) => providerAllowedByOutboundContext(this.activeOutboundContext, p, this.effectiveModel()))
       .map((p) => ({ id: p.id, name: p.name, models: p.models }))
     const target = pickFailoverTarget({
       candidates,
@@ -617,6 +789,7 @@ export class OpenAIEngine implements Engine {
 
     const fromId = this.meta.providerId
     const fromName = listProviders().find((p) => p.id === fromId)?.name ?? fromId ?? '当前厂商'
+    const requiresPortableReplay = this.protocol() === 'responses' || Boolean(this.lastResponseId)
     this.triedProviders.add(target.providerId)
     this.meta.providerId = target.providerId
     if (target.model) {
@@ -624,7 +797,7 @@ export class OpenAIEngine implements Engine {
       else this.meta.model = target.model
     }
     // Responses 的 response id 不跨厂商;换家后重新开始服务端上下文链
-    this.lastResponseId = undefined
+    this.clearResponsesContext(requiresPortableReplay)
     const routeReason = [failure.label, target.preference].filter(Boolean).join(' · ')
     this.modelAttempts.setRouteReason(routeReason)
     this.emit({
@@ -663,7 +836,7 @@ export class OpenAIEngine implements Engine {
     if (!rotation) return false
 
     this.triedProviderKeys.add(rotation.toKeyId)
-    this.lastResponseId = undefined
+    this.clearResponsesContext(this.protocol() === 'responses')
     this.modelAttempts.setRouteReason(`Provider key failover: ${failure.label}`)
     this.emit({
       kind: 'provider-key-failover',
@@ -691,6 +864,18 @@ export class OpenAIEngine implements Engine {
     controller: AbortController,
     auth: OpenAIAuthConfig
   ): Promise<void> {
+    if (this.responsesReplayRequired) {
+      const replay = buildPortableConversationReplay(this.transcript.read(), payload.messageId)
+      if (replay) {
+        this.chatHistory = [{ role: 'system', content: replay.text }]
+        this.emit({
+          kind: 'hook-event',
+          event: 'conversation-ledger-replay',
+          detail: portableConversationReplayDetail(replay)
+        })
+      }
+      this.responsesReplayRequired = false
+    }
     const userMessage: ChatMessage = { role: 'user', content: buildChatContent(payload) }
     this.chatHistory.push(userMessage)
 
@@ -719,11 +904,7 @@ export class OpenAIEngine implements Engine {
           openAiEndpoint(auth.baseUrl, 'chat/completions'),
           {
             method: 'POST',
-            headers: {
-              authorization: `Bearer ${auth.token}`,
-              'content-type': 'application/json',
-              ...auth.headers
-            },
+            headers: openAIRequestHeaders(auth),
             body: JSON.stringify(adaptation.body),
             signal: controller.signal
           },
@@ -900,7 +1081,7 @@ export class OpenAIEngine implements Engine {
       openAiEndpoint(auth.baseUrl, 'chat/completions'),
       {
         method: 'POST',
-        headers: { authorization: `Bearer ${auth.token}`, 'content-type': 'application/json', ...auth.headers },
+        headers: openAIRequestHeaders(auth),
         body: JSON.stringify(body)
       },
       this.abort?.signal ?? new AbortController().signal,
@@ -927,14 +1108,15 @@ export class OpenAIEngine implements Engine {
     const lines = [
       projectContext,
       providerPrompt,
+      taskStrategySystemPrompt(this.meta.taskStrategy),
       '你是 CaoGen 桌面工作室里的编码 Agent。',
       `当前工作目录: ${this.meta.cwd}`,
-      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_stage/git_stage_all/git_commit/git_push/git_create_pr/git_merge/code_forge_delivery)读写项目文件、执行命令、规划编排和完成 Git 流程。',
+      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/create_document/create_spreadsheet/create_presentation/create_pdf/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_stage/git_stage_all/git_commit/git_push/git_create_pr/git_create_issue/git_merge/code_forge_delivery/send_notification)读写项目文件、生成 Word/Excel/PowerPoint/PDF 办公成品、执行命令、规划编排、发送已配置通知并完成 Git 流程。',
       '开始任务时先用 search_symbol/search_code/find_file 定位相关文件和符号,不要盲猜路径;修改文件前用 get_dependencies 查看正向/反向依赖影响面。',
       '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
       'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
       '修改前可用 search_replace dry_run=true 预览 diff;完成后简要说明改动、测试和备份路径。',
-      '涉及提交、推送、创建 PR/MR 或合并分支时,先用 git_status/git_diff 核对改动;提交前优先用 git_stage 精确暂存文件,仅在确认当前范围全部改动都应纳入时使用 git_stage_all,禁止用 bash git add 绕过可对账的 Git index Effect;验证命令必须作为显式 bash 工具单独执行和审批,git_commit 不会隐式运行 caogen.md 命令或 Git hooks;code_forge_delivery 仅生成 report/patch,不会执行验证、暂存、提交、推送或创建 PR;git_stage_all/git_push/git_create_pr/git_merge 属高风险操作,必须尊重权限审批和失败输出。',
+      '涉及提交、推送、创建 PR/MR、创建 Issue 或合并分支时,先用 git_status/git_diff 核对改动;提交前优先用 git_stage 精确暂存文件,仅在确认当前范围全部改动都应纳入时使用 git_stage_all,禁止用 bash git add 绕过可对账的 Git index Effect;验证命令必须作为显式 bash 工具单独执行和审批,git_commit 不会隐式运行 caogen.md 命令或 Git hooks;code_forge_delivery 仅生成 report/patch,不会执行验证、暂存、提交、推送或创建 PR;git_stage_all/git_push/git_create_pr/git_create_issue/git_merge 属高风险操作,必须尊重权限审批和失败输出。',
       '复杂或跨模块任务先用 task_decompose 生成 DAG;用户明确要求 Genesis/多 Agent/隔离交付时,优先用 genesis_orchestrate 生成可审查的编排/验证/交付协议。genesis_orchestrate 第一版只规划,不会真实控制外部子 Agent、不会创建 worktree、不会提交或推送。',
       '只有在用户明确要求并通过权限审批后,才使用 task_dispatch_dag 或 task_decompose_and_dispatch_dag 启动子任务调度;Spark/Core/Forge 不应默认推动 Genesis 编排,Command/Genesis 才是编排类任务的目标档位。',
       settings.guiAutomationEnabled
@@ -1049,6 +1231,10 @@ export class OpenAIEngine implements Engine {
       const text = extractResponseText(json)
       if (text) this.appendText(text)
       this.applyUsage(json)
+      const responseId = json && typeof json === 'object' && !Array.isArray(json)
+        ? (json as Record<string, unknown>).id
+        : undefined
+      if (typeof responseId === 'string') this.rememberResponsesContext(responseId)
       return
     }
 
@@ -1122,7 +1308,7 @@ export class OpenAIEngine implements Engine {
         this.applyUsage(record.response)
         // 记录 response id 供下一轮 previous_response_id 续上下文
         const responseId = (record.response as Record<string, unknown> | undefined)?.id
-        if (typeof responseId === 'string' && responseId) this.lastResponseId = responseId
+        if (typeof responseId === 'string' && responseId) this.rememberResponsesContext(responseId)
         const text = extractResponseText(record.response)
         if (text && !this.assistantText.includes(text)) this.appendText(text)
       }
@@ -1153,8 +1339,25 @@ export class OpenAIEngine implements Engine {
       url,
       init: { ...init, signal },
       signal,
-      auth,
-      preflight: () => assertDigitalWorkerProviderDispatchAllowed(this.meta),
+      auth: { keyId: auth.keyId, keyLabel: auth.keyLabel },
+      executeFetch: (operationId) => this.executeProviderFetch(url, { ...init, signal }, auth, operationId),
+      preflight: async () => {
+        assertDigitalWorkerProviderDispatchAllowed(this.meta)
+        const manifest = this.activeOutboundContext
+        if (!manifest) {
+          throw new OutboundContextPolicyError(
+            'OUTBOUND_CONTEXT_STALE',
+            '模型请求缺少外发上下文清单，已阻止发送'
+          )
+        }
+        await assertOutboundContextAllowed({
+          manifest,
+          rootDir: app.getPath('userData'),
+          providerId: this.meta.providerId || 'openai',
+          model: this.effectiveModel(),
+          engine: this.meta.engine
+        })
+      },
       readUsage: () => this.turnUsage,
       consume
     })
@@ -1247,14 +1450,54 @@ export class OpenAIEngine implements Engine {
     // OpenAI 引擎上时,剥掉子路径回到裸域 —— DeepSeek 等厂商在裸域同时提供
     // /v1/chat/completions,直接可用而非 404。
     if (this.protocol() === 'chat') baseUrl = baseUrl.replace(/\/anthropic$/, '')
-    const selection = provider ? resolveProviderToken(provider) : { token: process.env.OPENAI_API_KEY || '' }
+    const providerId = provider?.id || this.meta.providerId || 'openai'
+    const selection = provider
+      ? selectProviderCredential(provider)
+      : {
+          providerId,
+          keyId: 'environment:OPENAI_API_KEY',
+          authMode: 'api-key' as const,
+          available: Boolean(process.env.OPENAI_API_KEY)
+        }
     return {
       baseUrl,
-      token: selection.token,
-      headers: mergeProviderCredentialHeaders(provider, selection.token, parseHeaders(provider?.customHeaders)),
+      authMode: providerAuthMode(provider),
+      headers: parseProviderHeaders(provider?.customHeaders),
+      providerId,
+      available: selection.available,
+      provider,
+      environmentCredential: !provider,
       keyId: selection.keyId,
       keyLabel: selection.keyLabel
     }
+  }
+
+  private executeProviderFetch(
+    url: string,
+    init: RequestInit,
+    auth: OpenAIAuthConfig,
+    operationId: string
+  ): Promise<Response> {
+    const scope = providerCredentialScopeForSession(this.meta, auth.providerId, operationId)
+    const currentProvider = auth.provider ? getProvider(auth.providerId) : undefined
+    const selection = currentProvider
+      ? issueProviderCredentialLease(currentProvider, scope, {}, auth.keyId)
+      : issueDirectProviderCredentialLease(
+          auth.providerId,
+          auth.keyId || 'environment:OPENAI_API_KEY',
+          process.env.OPENAI_API_KEY || '',
+          scope
+        )
+    if (auth.authMode !== 'none' && (!selection.available || !selection.lease)) {
+      throw new Error('Provider credential lease is unavailable')
+    }
+    return fetchWithProviderCredentialLease({
+      provider: currentProvider ?? auth.provider,
+      lease: selection.lease,
+      scope,
+      url,
+      init: { ...init, headers: openAIRequestHeaders(auth) }
+    })
   }
 
   private effectiveModel(): string {
@@ -1284,7 +1527,7 @@ export class OpenAIEngine implements Engine {
     return {
       providerId: this.meta.providerId || 'none',
       providerName: provider?.name || this.meta.providerId || 'OpenAI',
-      baseUrl: redactBaseUrl(auth.baseUrl),
+      baseUrl: redactProviderBaseUrl(auth.baseUrl),
       model: this.effectiveModel(),
       protocol: this.protocol()
     }
@@ -1294,6 +1537,49 @@ export class OpenAIEngine implements Engine {
     const auth = this.authConfig()
     return `${message}\n${formatProviderErrorContext(this.openAIErrorContext(auth))}`
   }
+}
+
+function openAIRequestHeaders(auth: OpenAIAuthConfig): Record<string, string> {
+  return {
+    'content-type': 'application/json',
+    ...auth.headers
+  }
+}
+
+function isResponsesConversationContext(value: unknown): value is ResponsesConversationContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.responseId === 'string' && record.responseId.trim().length > 0 &&
+    typeof record.providerId === 'string' && record.providerId.trim().length > 0 &&
+    typeof record.model === 'string' && record.model.trim().length > 0 &&
+    record.protocol === 'responses' &&
+    (record.keyId === undefined || typeof record.keyId === 'string') &&
+    typeof record.generation === 'number' && Number.isInteger(record.generation) && record.generation > 0 &&
+    typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+}
+
+function openAiAdditionalContextItems(input: {
+  memory: string
+  ideDocumentContext: string
+  handoff: string
+  hasConversationContext: boolean
+}): OutboundContextItemView[] {
+  const items: OutboundContextItemView[] = []
+  const add = (
+    present: boolean,
+    id: string,
+    kind: OutboundContextItemView['kind'],
+    label: string,
+    dataClass: OutboundContextItemView['dataClass']
+  ): void => {
+    if (!present) return
+    items.push({ id, kind, label, dataClass, egressPolicy: 'allow', decision: 'included' })
+  }
+  add(Boolean(input.memory.trim()), 'context:memory', 'memory_context', 'Local memory matches', 'S2')
+  add(Boolean(input.ideDocumentContext.trim()), 'context:ide', 'ide_context', 'IDE document context', 'S2')
+  add(Boolean(input.handoff.trim()), 'context:workflow', 'workflow_context', 'Workflow handoff', 'S4')
+  add(input.hasConversationContext, 'context:conversation', 'conversation_context', 'Conversation history', 'S2')
+  return items
 }
 
 function buildInputContent(payload: SendMessagePayload): Array<Record<string, string>> {
@@ -1330,25 +1616,6 @@ function imageToDataUrl(image: ImageAttachmentView): string | null {
 
 function openAiMemoryRoot(): string {
   return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
-}
-
-function openAiEndpoint(baseUrl: string, endpoint: 'chat/completions' | 'responses'): string {
-  const clean = baseUrl.replace(/\/+$/, '')
-  if (clean.toLowerCase().endsWith(`/${endpoint}`)) return clean
-  if (/\/(?:v\d+|api\/v\d+|compatible-mode\/v\d+)$/i.test(clean)) return `${clean}/${endpoint}`
-  return `${clean}/v1/${endpoint}`
-}
-
-function parseHeaders(raw: string | undefined): Record<string, string> {
-  const headers: Record<string, string> = {}
-  for (const line of (raw ?? '').split(/\r?\n/)) {
-    const idx = line.indexOf(':')
-    if (idx <= 0) continue
-    const name = line.slice(0, idx).trim()
-    const value = line.slice(idx + 1).trim()
-    if (name && value) headers[name] = value
-  }
-  return headers
 }
 
 function normalizeOpenAIUsage(value: unknown): UsageTotals | null {
@@ -1426,20 +1693,6 @@ function statusHint(status: number): string {
 
 function formatProviderErrorContext(context: OpenAIErrorContext): string {
   return `Provider: ${context.providerName} (${context.providerId}); baseUrl: ${context.baseUrl}; model: ${context.model}; protocol: ${context.protocol}`
-}
-
-function redactBaseUrl(value: string): string {
-  const clean = (value || '').trim()
-  try {
-    const url = new URL(clean)
-    url.username = ''
-    url.password = ''
-    url.search = ''
-    url.hash = ''
-    return url.toString().replace(/\/+$/, '')
-  } catch {
-    return clean.replace(/([?&](?:key|token|api_key|apikey|access_token)=)[^&]+/gi, '$1[redacted]')
-  }
 }
 
 function extractErrorMessage(error: unknown): string {

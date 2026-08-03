@@ -107,6 +107,11 @@ try {
   assert.deepEqual(snapshots.map(normalizeSnapshot), [normalizeSnapshot(snapshots[0]), normalizeSnapshot(snapshots[0])])
   checks.push('two-engine-runtime-state-parity')
 
+  verifyForkHydrationIdentity(engineModule, boundModule, adapters)
+  checks.push('fork-hydration-session-and-engine-identity')
+  verifyResumeHydrationIdentity(engineModule)
+  checks.push('resume-hydration-rebinds-app-session-identity')
+
   verifyRestartSequence(guardModule, adapters[0], sessionMeta('anthropic'), serialized[0])
   checks.push('restart-serialization-stability')
   checks.push('restart-stream-and-sequence-boundary')
@@ -178,6 +183,59 @@ function executeCanonicalTrace(engine, meta) {
     { kind: 'assistant-message', blocks: [{ type: 'text', text: 'done' }] }
   ]
   for (const event of trace) engine.emitSyntheticEvent(event)
+}
+
+function verifyForkHydrationIdentity(engineModule, boundModule, adapters) {
+  const parentMeta = sessionMeta('anthropic', 'fork-parent-session')
+  const parent = engineModule.createEngine('anthropic', parentMeta, () => undefined)
+  engines.push(parent)
+  parent.emitSyntheticEvent({ kind: 'init', sdkSessionId: 'sdk-fork-parent-contract' })
+  parent.emitSyntheticEvent({ kind: 'status', status: 'idle' })
+  parent.emitSyntheticEvent({ kind: 'meta', meta: { ...parentMeta } })
+  parent.emitSyntheticEvent({ kind: 'user-message', text: 'inherited prompt', messageId: 'fork-message' })
+  parent.emitSyntheticEvent({ kind: 'assistant-message', blocks: [{ type: 'text', text: 'inherited answer' }] })
+
+  for (const adapter of adapters) {
+    const childMeta = {
+      ...sessionMeta(adapter.engineKind, `fork-child-${adapter.engineKind}`),
+      conversationForkSourceSdkSessionId: 'sdk-fork-parent-contract'
+    }
+    const child = engineModule.createEngine(
+      adapter.engineKind,
+      childMeta,
+      () => undefined,
+      undefined,
+      5
+    )
+    engines.push(child)
+    assert.equal(boundModule.isNativeRuntimeBoundEngine(child), true)
+    assert.equal(child.meta.id, childMeta.id)
+    assert.equal(child.nativeRuntimeAdapter.engineKind, adapter.engineKind)
+    assert.equal(child.getNativeRuntimeSnapshot().session.id, childMeta.id)
+    assert.equal(child.getNativeRuntimeSnapshot().session.engineKind, adapter.engineKind)
+    assert.deepEqual(
+      child.getTranscript().map((entry) => entry.event.kind),
+      ['user-message', 'assistant-message']
+    )
+  }
+}
+
+function verifyResumeHydrationIdentity(engineModule) {
+  const resumedMeta = sessionMeta('anthropic', 'resumed-app-session')
+  const resumed = engineModule.createEngine(
+    'anthropic',
+    resumedMeta,
+    () => undefined,
+    'sdk-fork-parent-contract',
+    0
+  )
+  engines.push(resumed)
+  assert.equal(resumed.getNativeRuntimeSnapshot().session.id, resumedMeta.id)
+  assert.equal(resumed.getNativeRuntimeSnapshot().session.engineKind, 'anthropic')
+  assert.deepEqual(
+    resumed.getTranscript().filter((entry) => entry.event.kind === 'meta').map((entry) => entry.event.meta.id),
+    ['fork-parent-session']
+  )
 }
 
 function verifyRestartSequence(guardModule, adapter, meta, serialized) {

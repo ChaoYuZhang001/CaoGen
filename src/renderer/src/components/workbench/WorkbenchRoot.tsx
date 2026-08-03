@@ -1,4 +1,4 @@
-import { memo, Suspense, useEffect, useRef, useState } from 'react'
+import { createElement, memo, Suspense, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import ChatView from '../ChatView'
 import RoutineEditor from '../RoutineEditor'
@@ -6,7 +6,13 @@ import { HeaderIcon, type HeaderIconName } from '../ChatHeaderIcons'
 import { PANEL_REGISTRY, type PanelId } from './panels'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import type { LayoutSettings, Routine, SessionMeta } from '../../../../shared/types'
+import type { LayoutSettings, PluginRegistryItem, Routine, SessionMeta } from '../../../../shared/types'
+import {
+  deriveFirstTaskOnboardingStatus,
+  deriveFirstTaskProgress,
+  restartFirstTaskOnboardingCandidate,
+  useFirstTaskOnboardingRecord
+} from '../experience/first-task-onboarding'
 
 type RoutineEditorState = { mode: 'create' } | { mode: 'edit'; id: string }
 
@@ -25,6 +31,38 @@ interface DeskToolItem {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function startWorkbenchSideResize(
+  event: React.PointerEvent<HTMLDivElement>,
+  sideWidth: number,
+  setSideWidth: (width: number) => void,
+  patchLayout: (patch: Partial<LayoutSettings>) => void
+): void {
+  event.preventDefault()
+  const gutter = event.currentTarget
+  try {
+    gutter.setPointerCapture(event.pointerId)
+  } catch {
+    // Electron/CDP 合成指针可能不支持捕获;window 级监听仍可完成拖拽。
+  }
+  const startX = event.clientX
+  const startWidth = sideWidth
+  let nextWidth = startWidth
+  const move = (moveEvent: PointerEvent): void => {
+    nextWidth = clamp(startWidth - (moveEvent.clientX - startX), SIDE_MIN_WIDTH, SIDE_MAX_WIDTH)
+    setSideWidth(nextWidth)
+  }
+  const stop = (): void => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    if (gutter.hasPointerCapture(event.pointerId)) gutter.releasePointerCapture(event.pointerId)
+    document.body.classList.remove('is-resizing-layout')
+    patchLayout({ workbenchSideWidth: nextWidth })
+  }
+  document.body.classList.add('is-resizing-layout')
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop, { once: true })
 }
 
 function WorkbenchRoot(): React.JSX.Element {
@@ -92,26 +130,6 @@ function WorkbenchRoot(): React.JSX.Element {
     })
   }
 
-  const startSideResize = (event: React.PointerEvent<HTMLDivElement>): void => {
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = sideWidth
-    let nextWidth = startWidth
-    const move = (moveEvent: PointerEvent): void => {
-      nextWidth = clamp(startWidth - (moveEvent.clientX - startX), SIDE_MIN_WIDTH, SIDE_MAX_WIDTH)
-      setSideWidth(nextWidth)
-    }
-    const stop = (): void => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', stop)
-      document.body.classList.remove('is-resizing-layout')
-      patchLayout({ workbenchSideWidth: nextWidth })
-    }
-    document.body.classList.add('is-resizing-layout')
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', stop, { once: true })
-  }
-
   const collapseSidePanel = (): void => {
     closePanel()
   }
@@ -129,10 +147,9 @@ function WorkbenchRoot(): React.JSX.Element {
     setRoutineEditor(null)
     void refreshRoutinePanel()
   }
-  const selectedRoutine =
-    routineEditor?.mode === 'edit'
-      ? (routines.find((routine) => routine.id === routineEditor.id) as Routine | undefined)
-      : undefined
+  const selectedRoutine = routineEditor?.mode === 'edit'
+    ? (routines.find((routine) => routine.id === routineEditor.id) as Routine | undefined)
+    : undefined
   const childSessions = activeId
     ? order
         .map((id) => sessions[id]?.meta)
@@ -203,13 +220,13 @@ function WorkbenchRoot(): React.JSX.Element {
           onRefresh: refreshPluginRegistryPanel,
           onClose: closePluginRegistryPanel,
           onSelectItem: (item: { id: string }) => selectPluginRegistryItem(item.id),
-          onUseItem: (item: unknown) => void sendPluginRegistryItemToAgent(item as any),
-          onDispatchAgent: (item: unknown) => void dispatchPluginAgent(item as any),
-          onRevealItem: (item: unknown) => void revealPluginRegistryItem(item as any),
-          onToggleItem: (item: unknown, enabled: boolean) => void togglePluginRegistryItem(item as any, enabled),
-          onProbeMcp: (items: unknown[]) => void probeMcpRuntime(items as any[]),
+          onUseItem: (item: PluginRegistryItem) => void sendPluginRegistryItemToAgent(item),
+          onDispatchAgent: (item: PluginRegistryItem) => void dispatchPluginAgent(item),
+          onRevealItem: (item: PluginRegistryItem) => void revealPluginRegistryItem(item),
+          onToggleItem: (item: PluginRegistryItem, enabled: boolean) => void togglePluginRegistryItem(item, enabled),
+          onProbeMcp: (items: PluginRegistryItem[]) => void probeMcpRuntime(items),
           onInstall: () => void installPluginFromLocal(),
-          onUninstall: (item: unknown) => void uninstallManagedPlugin(item as any),
+          onUninstall: (item: PluginRegistryItem) => void uninstallManagedPlugin(item),
           mcpProbeResults,
           mcpProbing
         }
@@ -270,6 +287,7 @@ function WorkbenchRoot(): React.JSX.Element {
         onToggleSidePanel={toggleSidePanel}
       />
       <section className="workbench-pane workbench-chat">
+        <FirstTaskWorkbenchStatus />
         <ChatView />
       </section>
       <div
@@ -278,7 +296,7 @@ function WorkbenchRoot(): React.JSX.Element {
         aria-orientation="vertical"
         aria-label={t('resizeToolPanel')}
         title={t('resizeToolPanel')}
-        onPointerDown={startSideResize}
+        onPointerDown={(event) => startWorkbenchSideResize(event, sideWidth, setSideWidth, patchLayout)}
         style={{ display: sideOpen ? undefined : 'none' }}
       >
         <button
@@ -309,7 +327,7 @@ function WorkbenchRoot(): React.JSX.Element {
                 style={{ display: isActive ? 'flex' : 'none' }}
                 aria-hidden={!isActive}
               >
-                <Component {...renderPanelContent(def.id)} />
+                {createElement(Component, renderPanelContent(def.id))}
               </div>
             )
           })}
@@ -323,7 +341,68 @@ function WorkbenchRoot(): React.JSX.Element {
       )}
     </div>
   )
-})
+}
+
+function FirstTaskWorkbenchStatus(): React.JSX.Element | null {
+  const t = useT()
+  const onboardingRecord = useFirstTaskOnboardingRecord()
+  const activeId = useStore((s) => s.activeId)
+  const candidateSession = useStore((s) =>
+    onboardingRecord.candidateSessionId
+      ? s.sessions[onboardingRecord.candidateSessionId]
+      : undefined
+  )
+  const setShowNewSession = useStore((s) => s.setShowNewSession)
+  const activeFirstTask = Boolean(
+    activeId &&
+    activeId === onboardingRecord.candidateSessionId &&
+    !onboardingRecord.completedAt
+  )
+
+  if (!activeFirstTask) return null
+  if (candidateSession?.meta.status === 'error') {
+    return (
+      <div className="first-task-recovery" role="alert" data-first-task-recovery>
+        <div>
+          <strong>{t('firstTaskFailedTitle')}</strong>
+          <span>{t('firstTaskFailedDetail')}</span>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            if (!activeId) return
+            restartFirstTaskOnboardingCandidate(activeId)
+            setShowNewSession(true)
+          }}
+        >
+          {t('firstTaskRestart')}
+        </button>
+      </div>
+    )
+  }
+
+  const firstTaskStatus = deriveFirstTaskOnboardingStatus({
+    record: onboardingRecord,
+    providersHydrated: true,
+    computeAvailable: true,
+    activatingLocal: false,
+    sessionStatus: candidateSession?.meta.status
+  })
+  const firstTaskProgress = deriveFirstTaskProgress(firstTaskStatus, onboardingRecord)
+
+  return (
+    <div className="first-task-workbench-progress" role="status" data-first-task-status={firstTaskStatus}>
+      <strong>{t(firstTaskStatus === 'reviewing_result' ? 'firstTaskReviewing' : 'firstTaskRunning')}</strong>
+      <div className="first-task-progress" aria-label={t('firstTaskProgressRun')}>
+        <span className={firstTaskProgress.compute}>{t('firstTaskProgressCompute')}</span>
+        <span className={firstTaskProgress.task}>{t('firstTaskProgressRun')}</span>
+        <span className={firstTaskProgress.result}>{t('firstTaskProgressResult')}</span>
+        <span className={firstTaskProgress.acceptance}>{t('firstTaskProgressAcceptance')}</span>
+      </div>
+    </div>
+  )
+}
 
 export default memo(WorkbenchRoot)
 

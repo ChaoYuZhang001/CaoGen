@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 export interface CredentialCryptoBackend {
   isEncryptionAvailable(): boolean
   encryptString(value: string): Buffer
@@ -26,6 +28,40 @@ export interface ProviderCredentialResolution {
   token: string
   storage: CredentialStorageState
   available: boolean
+}
+
+export interface ProviderCredentialLeaseScope {
+  providerId: string
+  projectId: string
+  sessionId: string
+  operationId: string
+}
+
+export interface ProviderCredentialLease extends ProviderCredentialLeaseScope {
+  id: string
+  keyId: string
+  issuedAt: number
+  expiresAt: number
+}
+
+export interface ProviderCredentialLeaseOptions {
+  now?: number
+  ttlMs?: number
+}
+
+export type ProviderCredentialLeaseErrorCode =
+  | 'invalid_scope'
+  | 'unavailable'
+  | 'not_found'
+  | 'scope_mismatch'
+  | 'expired'
+
+export class ProviderCredentialLeaseError extends Error {
+  readonly name = 'ProviderCredentialLeaseError'
+
+  constructor(readonly code: ProviderCredentialLeaseErrorCode) {
+    super(`Provider credential lease rejected: ${code}`)
+  }
 }
 
 const SENSITIVE_HEADER_NAMES = new Set([
@@ -81,8 +117,22 @@ const FORBIDDEN_HEADER_VALUE_CHARACTERS = /[\0-\x08\x0A-\x1F\x7F]/
 
 export type ProviderCredentialSessionSnapshot = Array<[keyId: string, token: string]>
 
+interface ProviderCredentialLeaseState {
+  ref: ProviderCredentialRef
+  record?: ProviderCredentialRecord
+  token?: string
+  scope: ProviderCredentialLeaseScope
+  issuedAt: number
+  expiresAt: number
+}
+
+const DEFAULT_LEASE_TTL_MS = 30_000
+const MAX_LEASE_TTL_MS = 60_000
+
 export class ProviderCredentialBroker {
   private readonly sessionTokens = new Map<string, Map<string, string>>()
+  private readonly leases = new Map<string, ProviderCredentialLeaseState>()
+  private readonly knownTokens = new Set<string>()
 
   constructor(private readonly backend: CredentialCryptoBackend) {}
 
@@ -100,6 +150,7 @@ export class ProviderCredentialBroker {
     if (!isValidProviderCredentialToken(token)) {
       throw new Error('Credential token must be non-empty and must not contain ASCII control characters')
     }
+    this.rememberToken(token)
     if (this.canPersistSecurely()) {
       try {
         const encrypted = this.backend.encryptString(token)
@@ -123,6 +174,7 @@ export class ProviderCredentialBroker {
     if (record.sessionOnly) {
       const sessionToken = this.getSessionToken(ref)
       if (sessionToken.found) {
+        this.rememberToken(sessionToken.token)
         return {
           token: sessionToken.token,
           storage: 'session',
@@ -142,6 +194,7 @@ export class ProviderCredentialBroker {
       try {
         const token = this.backend.decryptString(encrypted)
         if (!isValidProviderCredentialToken(token)) return unavailableResolution()
+        this.rememberToken(token)
         return {
           token,
           storage: 'encrypted',
@@ -155,6 +208,7 @@ export class ProviderCredentialBroker {
     if (encryptedToken.startsWith('b64:')) {
       const token = decodeUtf8Base64Strict(encryptedToken.slice(4))
       if (token === null || !isValidProviderCredentialToken(token)) return unavailableResolution()
+      this.rememberToken(token)
       return {
         token,
         storage: 'legacy-b64',
@@ -163,6 +217,72 @@ export class ProviderCredentialBroker {
     }
 
     return unavailableResolution()
+  }
+
+  inspect(
+    ref: ProviderCredentialRef,
+    record: ProviderCredentialRecord
+  ): Omit<ProviderCredentialResolution, 'token'> {
+    const { storage, available } = this.resolve(ref, record)
+    return { storage, available }
+  }
+
+  issueLease(
+    ref: ProviderCredentialRef,
+    record: ProviderCredentialRecord,
+    scope: ProviderCredentialLeaseScope,
+    options: ProviderCredentialLeaseOptions = {}
+  ): ProviderCredentialLease {
+    return this.issueLeaseState(ref, { record }, scope, options)
+  }
+
+  issueTokenLease(
+    ref: ProviderCredentialRef,
+    token: string,
+    scope: ProviderCredentialLeaseScope,
+    options: ProviderCredentialLeaseOptions = {}
+  ): ProviderCredentialLease {
+    if (!isValidProviderCredentialToken(token)) {
+      throw new ProviderCredentialLeaseError('unavailable')
+    }
+    this.rememberToken(token)
+    return this.issueLeaseState(ref, { token }, scope, options)
+  }
+
+  redeemLease(
+    lease: ProviderCredentialLease,
+    expectedScope: ProviderCredentialLeaseScope,
+    now = Date.now()
+  ): ProviderCredentialResolution {
+    const state = this.leases.get(lease.id)
+    if (!state) throw new ProviderCredentialLeaseError('not_found')
+    // Every redemption attempt consumes the capability, including a mismatched one.
+    this.leases.delete(lease.id)
+    if (!sameLeaseDescriptor(lease, state) || !sameCredentialScope(expectedScope, state.scope)) {
+      throw new ProviderCredentialLeaseError('scope_mismatch')
+    }
+    if (!Number.isFinite(now) || now >= state.expiresAt) {
+      throw new ProviderCredentialLeaseError('expired')
+    }
+    const resolution = state.record
+      ? this.resolve(state.ref, state.record)
+      : directTokenResolution(state.token)
+    if (!resolution.available || !resolution.token) {
+      throw new ProviderCredentialLeaseError('unavailable')
+    }
+    return resolution
+  }
+
+  revokeLease(leaseId: string): void {
+    this.leases.delete(leaseId)
+  }
+
+  redactKnownCredentials(value: string): string {
+    let redacted = value
+    for (const token of this.knownTokens) {
+      if (token) redacted = redacted.split(token).join('[REDACTED]')
+    }
+    return redacted
   }
 
   migrateLegacy(
@@ -184,6 +304,7 @@ export class ProviderCredentialBroker {
   }
 
   forget(ref: ProviderCredentialRef): void {
+    this.revokeMatchingLeases(ref)
     const providerTokens = this.sessionTokens.get(ref.providerId)
     if (!providerTokens) return
     providerTokens.delete(ref.keyId)
@@ -192,6 +313,9 @@ export class ProviderCredentialBroker {
 
   forgetProvider(providerId: string): void {
     this.sessionTokens.delete(providerId)
+    for (const [leaseId, state] of this.leases) {
+      if (state.ref.providerId === providerId) this.leases.delete(leaseId)
+    }
   }
 
   snapshotProvider(providerId: string): ProviderCredentialSessionSnapshot {
@@ -222,6 +346,108 @@ export class ProviderCredentialBroker {
     if (!providerTokens?.has(ref.keyId)) return { found: false, token: '' }
     return { found: true, token: providerTokens.get(ref.keyId) ?? '' }
   }
+
+  private issueLeaseState(
+    ref: ProviderCredentialRef,
+    credential: { record?: ProviderCredentialRecord; token?: string },
+    scope: ProviderCredentialLeaseScope,
+    options: ProviderCredentialLeaseOptions
+  ): ProviderCredentialLease {
+    const normalizedRef = validCredentialRef(ref)
+    const normalizedScope = validCredentialScope(scope)
+    if (!normalizedRef || !normalizedScope || normalizedRef.providerId !== normalizedScope.providerId) {
+      throw new ProviderCredentialLeaseError('invalid_scope')
+    }
+    if (credential.record && !this.inspect(normalizedRef, credential.record).available) {
+      throw new ProviderCredentialLeaseError('unavailable')
+    }
+    const issuedAt = finiteTimestamp(options.now, Date.now())
+    const requestedTtl = finiteTimestamp(options.ttlMs, DEFAULT_LEASE_TTL_MS)
+    const ttlMs = Math.min(MAX_LEASE_TTL_MS, Math.max(1, requestedTtl))
+    const expiresAt = issuedAt + ttlMs
+    this.pruneExpiredLeases(issuedAt)
+    const id = randomUUID()
+    const state: ProviderCredentialLeaseState = {
+      ref: normalizedRef,
+      ...credential,
+      scope: normalizedScope,
+      issuedAt,
+      expiresAt
+    }
+    this.leases.set(id, state)
+    return { id, keyId: normalizedRef.keyId, ...normalizedScope, issuedAt, expiresAt }
+  }
+
+  private revokeMatchingLeases(ref: ProviderCredentialRef): void {
+    for (const [leaseId, state] of this.leases) {
+      if (state.ref.providerId === ref.providerId && state.ref.keyId === ref.keyId) {
+        this.leases.delete(leaseId)
+      }
+    }
+  }
+
+  private pruneExpiredLeases(now: number): void {
+    for (const [leaseId, state] of this.leases) {
+      if (now >= state.expiresAt) this.leases.delete(leaseId)
+    }
+  }
+
+  private rememberToken(token: string): void {
+    if (isValidProviderCredentialToken(token)) this.knownTokens.add(token)
+  }
+}
+
+function validCredentialRef(ref: ProviderCredentialRef): ProviderCredentialRef | null {
+  const providerId = validScopePart(ref.providerId)
+  const keyId = validScopePart(ref.keyId)
+  return providerId && keyId ? { providerId, keyId } : null
+}
+
+function validCredentialScope(scope: ProviderCredentialLeaseScope): ProviderCredentialLeaseScope | null {
+  const providerId = validScopePart(scope.providerId)
+  const projectId = validScopePart(scope.projectId)
+  const sessionId = validScopePart(scope.sessionId)
+  const operationId = validScopePart(scope.operationId)
+  return providerId && projectId && sessionId && operationId
+    ? { providerId, projectId, sessionId, operationId }
+    : null
+}
+
+function validScopePart(value: string): string | null {
+  if (typeof value !== 'string' || value !== value.trim() || value.length === 0 || value.length > 256) return null
+  return /[\0-\x1F\x7F]/.test(value) ? null : value
+}
+
+function sameCredentialScope(
+  left: ProviderCredentialLeaseScope,
+  right: ProviderCredentialLeaseScope
+): boolean {
+  const normalized = validCredentialScope(left)
+  return Boolean(normalized)
+    && normalized!.providerId === right.providerId
+    && normalized!.projectId === right.projectId
+    && normalized!.sessionId === right.sessionId
+    && normalized!.operationId === right.operationId
+}
+
+function sameLeaseDescriptor(
+  lease: ProviderCredentialLease,
+  state: ProviderCredentialLeaseState
+): boolean {
+  return lease.keyId === state.ref.keyId
+    && lease.issuedAt === state.issuedAt
+    && lease.expiresAt === state.expiresAt
+    && sameCredentialScope(lease, state.scope)
+}
+
+function finiteTimestamp(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback
+}
+
+function directTokenResolution(token: string | undefined): ProviderCredentialResolution {
+  return token && isValidProviderCredentialToken(token)
+    ? { token, storage: 'session', available: true }
+    : unavailableResolution()
 }
 
 export function isSensitiveProviderHeaderName(name: string): boolean {

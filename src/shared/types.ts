@@ -8,6 +8,7 @@ import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-ty
 import type { ModelAttemptRecoveryApi } from './model-attempt-types'
 import type { WorkflowLedgerApi } from './workflow-types'
 import type { ProjectWorkspaceApi } from './project-workspace-types'
+import type { OutboundContextManifest } from './project-workspace-types'
 import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
@@ -19,12 +20,14 @@ import type { ProjectDataLifecycleApi } from './data-lifecycle-types'
 import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 import type { TerminalEffectApi } from './terminal-operation-types'
 import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
+import type { NotificationConnectorInput, NotificationConnectorView } from './notification-connector-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type * from './provider-profile-types'
 export type * from './task-plan-types'
 export type * from './migration-types'
 export type * from './studio-result-types'
 export type * from './data-lifecycle-types'
+export type * from './notification-connector-types'
 export type * from './project-aggregate-types'
 export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
@@ -44,26 +47,17 @@ export type {
   FileSystemIdentity,
   InteractiveOperationKind,
   InteractiveOperationSource,
-  MigrationImportOperationResult, TaskRunOperationMetadata,
-  ManagedWorktreeProjectionRecord
+  ManagedWorktreeProjectionRecord,
+  MigrationImportOperationResult,
+  OfficeSourceSnapshot,
+  TaskRunOperationMetadata
 } from './effect-types'
 export type {
-  TaskDagAutoMergeConflict,
-  TaskDagAutoMergeEntry,
-  TaskDagAutoMergeEntryStatus,
-  TaskDagAutoMergeRollback,
-  TaskDagAutoMergeRollbackEntry,
-  TaskDagAutoMergeStatus,
-  TaskDagAutoMergeVerification,
-  TaskDagAutoMergeVerificationStatus,
-  TaskDagAutoMergeView,
-  TaskDagFinalizationPatchPlan,
-  TaskDagFinalizationPhase,
-  TaskDagFinalizationRecord,
-  TaskDagFinalizationResolution,
-  TaskDagFinalizationSummary,
-  TaskDagFinalizationVerification,
-  TaskDagFinalizationView
+  TaskDagAutoMergeConflict, TaskDagAutoMergeEntry, TaskDagAutoMergeEntryStatus, TaskDagAutoMergeRollback,
+  TaskDagAutoMergeRollbackEntry, TaskDagAutoMergeStatus, TaskDagAutoMergeVerification,
+  TaskDagAutoMergeVerificationStatus, TaskDagAutoMergeView, TaskDagFinalizationPatchPlan,
+  TaskDagFinalizationPhase, TaskDagFinalizationRecord, TaskDagFinalizationResolution,
+  TaskDagFinalizationSummary, TaskDagFinalizationVerification, TaskDagFinalizationView
 } from './task-dag-finalization-types'
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 /** 用户可理解的任务合同；与 Experience、Drive、Provider 和 permissionMode 正交。 */
@@ -309,6 +303,23 @@ export interface UsageTotals {
 }
 
 export type ContextPressureLevel = 'normal' | 'warning' | 'critical'
+
+/**
+ * OpenAI Responses 服务端上下文的持久投影。
+ *
+ * response id 只能在同一 Provider、模型、协议和凭据链内续用；
+ * 它不是通用的会话身份，恢复时必须做严格匹配，失败则回退本地转录。
+ */
+export interface ResponsesConversationContext {
+  responseId: string
+  providerId: string
+  model: string
+  protocol: 'responses'
+  keyId?: string
+  generation: number
+  updatedAt: number
+}
+
 export interface SessionMeta {
   id: string
   title: string
@@ -375,6 +386,14 @@ export interface SessionMeta {
   permissionMode: PermissionModeId
   status: SessionStatus
   sdkSessionId?: string
+  /** 显式跨 Provider/模型分叉的直接来源；仅用于本地账本继承，不可作为 SDK resume id。 */
+  conversationForkSourceSdkSessionId?: string
+  /** 分叉来源的 CaoGen Session；用于把新 Run 绑定到明确的前驱，而不复用旧 Session 身份。 */
+  conversationForkSourceSessionId?: string
+  /** 分叉时观察到的 canonical source Run；新 Session 会创建独立 successor Run。 */
+  conversationForkSourceRunId?: string
+  /** OpenAI Responses 服务端上下文；仅在严格身份匹配时恢复。 */
+  responsesContext?: ResponsesConversationContext
   costUsd: number
   usage: UsageTotals
   contextTokens: number
@@ -418,6 +437,12 @@ export interface HistoryEntry {
   taskStrategy?: TaskStrategy
   permissionMode: PermissionModeId
   sdkSessionId: string
+  /** 显式跨 Provider/模型分叉的直接来源；新会话拥有独立 sdkSessionId。 */
+  conversationForkSourceSdkSessionId?: string
+  conversationForkSourceSessionId?: string
+  conversationForkSourceRunId?: string
+  /** OpenAI Responses 服务端上下文；仅在严格身份匹配时恢复。 */
+  responsesContext?: ResponsesConversationContext
   createdAt: number
   updatedAt: number
   costUsd: number
@@ -462,6 +487,8 @@ export interface CreateSessionOptions {
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
+  /** 从历史账本创建全新会话；与 resumeSdkSessionId 互斥，不复用任何 Provider 服务端上下文。 */
+  forkFromSdkSessionId?: string
   title?: string
 }
 
@@ -725,6 +752,14 @@ export type TaskRunStatus =
 
 export type TaskStepStatus = TaskRunStatus
 
+export interface TaskRunContinuation {
+  schemaVersion: 1
+  kind: 'conversation_fork'
+  sourceSessionId: string
+  sourceRunId: string
+  sourceSdkSessionId: string
+}
+
 export interface TaskStepRecord {
   id: string
   runId: string
@@ -810,6 +845,8 @@ export interface TaskRunRecord {
   recentEventIds?: string[]
   lastEventKind?: AgentEvent['kind']
   error?: string
+  /** 新会话的逻辑前驱；Run/Session 身份保持独立，业务 WorkItem 继续承接。 */
+  continuation?: TaskRunContinuation
   operation?: TaskRunOperationMetadata
   steps?: TaskStepRecord[]
   toolExecutions?: ToolExecutionRecord[]
@@ -827,6 +864,15 @@ export interface TaskSnapshotSubtaskState {
   worktreePath?: string
 }
 
+export interface ConversationLedgerIntegrityView {
+  schemaVersion: 1
+  valid: boolean
+  mode: 'empty' | 'legacy' | 'sealed'
+  entryCount: number
+  headDigest?: string
+  error?: string
+}
+
 export interface TaskSnapshotRecord {
   id: string
   taskId: string
@@ -842,6 +888,8 @@ export interface TaskSnapshotRecord {
   reason: TaskSnapshotReason
   meta: SessionMeta
   execution: TaskSnapshotExecutionPosition
+  /** Provider 无关会话账本的持久完整性投影；旧快照可缺失。 */
+  conversationLedger?: ConversationLedgerIntegrityView
   run?: TaskRunRecord
   replayCandidate?: TaskSnapshotReplayCandidate
   worktree?: TaskSnapshotWorktreeInfo
@@ -1667,7 +1715,10 @@ export interface Routine extends Record<string, unknown> {
   name: string
   prompt: string
   content?: string
-  projectCwd: string
+  projectId?: string
+  goalTemplateId?: string
+  digitalWorkerId?: string
+  projectCwd?: string
   schedule: string
   frequency?: string
   providerId: string
@@ -1688,7 +1739,10 @@ export type CreateRoutineInput = {
   name: string
   prompt?: string
   content?: string
-  projectCwd: string
+  projectId?: string
+  goalTemplateId?: string
+  digitalWorkerId?: string
+  projectCwd?: string
   schedule?: string
   frequency?: string
   providerId?: string
@@ -1708,6 +1762,9 @@ export type UpdateRoutineInput = {
   name?: string
   prompt?: string
   content?: string
+  projectId?: string | null
+  goalTemplateId?: string | null
+  digitalWorkerId?: string | null
   projectCwd?: string
   schedule?: string
   frequency?: string
@@ -1728,18 +1785,42 @@ export interface MarkRunOptions {
 }
 
 export type RoutineRunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+export type RoutineInboxStatus = 'running' | 'waiting_approval' | 'needs_review' | 'accepted' | 'rejected' | 'failed'
+export type RoutineDispatchState = 'preparing' | 'session_created' | 'prompt_accepted'
+export type RoutineReviewDecision = 'accepted' | 'rejected'
 
 export interface RoutineRunRecord {
   id: string
   routineId: string
   routineName: string
+  projectId?: string
+  goalId?: string
+  workItemId?: string
   projectCwd: string
   startedAt: number
   finishedAt?: number
   status: RoutineRunStatus
+  inboxStatus: RoutineInboxStatus
+  dispatchState: RoutineDispatchState
   sessionId?: string
+  workflowRunId?: string
+  /** Canonical persisted result produced by this automation run. */
+  artifactId?: string
+  /** Immutable Workflow Evidence bound to the result Artifact and creating Run. */
+  evidenceId?: string
+  /** Stable observation timestamp used for idempotent result finalization. */
+  resultObservedAt?: number
   nextRunAt?: number | null
+  resultText?: string
   error?: string
+  reviewDecision?: RoutineReviewDecision
+  reviewNote?: string
+  reviewedAt?: number
+}
+
+export interface RoutineRunReviewInput {
+  decision: 'accept' | 'reject'
+  note?: string
 }
 
 export interface RoutineTemplate {
@@ -2147,6 +2228,12 @@ export interface SessionEventPayload {
 /** 转录文件(JSONL)中的一行 */
 export interface TranscriptEntry {
   seq: number
+  /** Canonical Conversation Ledger 封链版本；旧 JSONL 缺失时按 legacy 前缀读取。 */
+  ledgerVersion?: 1
+  /** 前一条耐久事件 digest；legacy 前缀后第一条使用 legacy anchor。 */
+  previousDigest?: string
+  /** 当前耐久事件的 SHA-256 canonical digest。 */
+  digest?: string
   /** 可选仅用于兼容旧 JSONL;新写入的转录总是携带身份。 */
   eventId?: string
   occurredAt?: number
@@ -2226,6 +2313,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   /** OCR 附件图片(Vision/tesseract 降级;无引擎时 ok=false 如实报告) */
   ocrImageAttachment(sessionId: string, imagePath: string): Promise<ImageOcrResult>
   sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<boolean>
+  previewOutboundContext(sessionId: string, payload: SendMessagePayload): Promise<OutboundContextManifest>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>
   respondPermission(
@@ -2246,6 +2334,10 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   deleteHistory(id: string): Promise<void>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  listNotificationConnectors(): Promise<NotificationConnectorView[]>
+  createNotificationConnector(input: NotificationConnectorInput): Promise<NotificationConnectorView>
+  deleteNotificationConnector(id: string): Promise<boolean>
+  setDefaultNotificationConnector(id: string): Promise<NotificationConnectorView>
   scanPluginRegistry(
     sessionId?: string,
     options?: PluginRegistryScanOptions
@@ -2269,6 +2361,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
   runRoutineNow(id: string): Promise<RoutineRunRecord | null>
   listRoutineRuns(routineId?: string): Promise<RoutineRunRecord[]>
+  reviewRoutineRun(runId: string, input: RoutineRunReviewInput): Promise<RoutineRunRecord | null>
   listRoutineTemplates(): Promise<RoutineTemplate[]>
   getStartSuggestions(sessionId: string): Promise<StartSuggestion[]>
   gitStatus(sessionId: string): Promise<GitStatus>

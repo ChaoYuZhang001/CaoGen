@@ -34,6 +34,13 @@ try {
   const restarted = new SupervisorStateStore(userData, { now: () => baseNow + ttlMs + 1 })
   const recovery = await restarted.recoverExpiredLeases()
   assert.deepEqual(recovery, { expiredRunIds: ['strong-kill-run'], blockedRunIds: ['strong-kill-run'] })
+  const orphanedRunIds = await restarted.recoverOrphanedTaskRunReservations(
+    new Set(['strong-kill-run'])
+  )
+  assert.deepEqual(orphanedRunIds, ['orphaned-reservation'])
+  const orphaned = await restarted.getRun('orphaned-reservation')
+  assert.equal(orphaned?.status, 'blocked')
+  assert.match(orphaned?.error ?? '', /no durable TaskRun/)
   const blocked = await restarted.getRun('strong-kill-run')
   assert.equal(blocked?.status, 'blocked')
   assert.equal(blocked?.lease, undefined)
@@ -65,6 +72,7 @@ try {
     classification: 'blocked_then_explicit_retry',
     childSignal: childExit.signal ?? null,
     recovery,
+    orphanedRunIds,
     fencingToken: takeover.lease?.fencingToken,
     eventCount: events.length
   }
@@ -128,8 +136,13 @@ async function runWorker() {
   const runtime = await import(pathToFileURL(process.env.CAOGEN_SUPERVISOR_MODULE).href)
   const { SupervisorStateStore } = runtime
   const store = new SupervisorStateStore(process.env.CAOGEN_SUPERVISOR_ROOT, { now: () => baseNow })
+  await store.createRun({
+    id: 'orphaned-reservation', projectId: 'restart-project', workItemId: 'orphaned-work',
+    origin: 'task_run'
+  }, { actorId: 'supervisor-bridge' })
   const created = await store.createRun({
-    id: 'strong-kill-run', projectId: 'restart-project', workItemId: 'restart-work'
+    id: 'strong-kill-run', projectId: 'restart-project', workItemId: 'restart-work',
+    origin: 'task_run'
   }, { actorId: 'worker' })
   const lease = await store.acquireLease('strong-kill-run', {
     ownerId: 'crashed-worker', expectedRevision: created.revision, ttlMs

@@ -10,6 +10,7 @@ export interface RoutinePanelItem {
   schedule: string
   enabled: boolean
   prompt?: string
+  projectId?: string
   projectCwd?: string
   providerId?: string
   model?: string
@@ -185,8 +186,12 @@ function stateLabel(state: string): string {
   }
 }
 
-function runStatusLabel(status: RoutineRunRecord['status']): string {
-  switch (status) {
+function runStatusLabel(run: RoutineRunRecord): string {
+  if (run.inboxStatus === 'waiting_approval') return '待审批'
+  if (run.inboxStatus === 'needs_review') return '待验收'
+  if (run.inboxStatus === 'accepted') return '已验收'
+  if (run.inboxStatus === 'rejected') return '已驳回'
+  switch (run.status) {
     case 'failed':
       return '失败'
     case 'running':
@@ -280,8 +285,9 @@ function RoutineRow({
           </div>
         </div>
 
-        {(routine.projectCwd || modelLabel || routine.prompt) && (
+        {(routine.projectId || routine.projectCwd || modelLabel || routine.prompt) && (
           <div className="routine-panel-meta">
+            {routine.projectId && <span className="routine-panel-model">项目任务</span>}
             {routine.projectCwd && (
               <span className="routine-panel-path" title={routine.projectCwd}>
                 {routine.projectCwd}
@@ -323,7 +329,7 @@ function RoutineRow({
           title={routine.disabledReason}
           onClick={() => onRunRoutine?.(routine)}
         >
-          {running ? '运行中' : queued ? '排队中' : '标记运行'}
+          {running ? '运行中' : queued ? '排队中' : '立即运行'}
         </button>
         <div className="routine-panel-row-buttons">
           <button
@@ -442,7 +448,7 @@ export default function RoutinePanel({
           <div className="routine-panel-history-list">
             {visibleRuns.map((run) => (
               <div key={run.id} className={`routine-panel-history-item routine-panel-history-${run.status}`}>
-                <span>{runStatusLabel(run.status)}</span>
+                <span>{runStatusLabel(run)}</span>
                 <strong>{run.routineName}</strong>
                 <time title={formatFull(new Date(run.startedAt))}>{formatRelative(new Date(run.startedAt), nowDate)}</time>
                 {run.error && <small title={run.error}>{run.error}</small>}

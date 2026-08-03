@@ -3,11 +3,12 @@ import type {
   SupervisorApprovalInput,
   SupervisorLeaseOptions,
   SupervisorMutationOptions,
-  SupervisorRunInput,
+  SupervisorRunCreateInput,
   SupervisorRunStatus
 } from '../../shared/supervisor-types'
 import { sessionManager } from '../sessionManager'
-import { SupervisorStateStore } from '../task/supervisor-state'
+import { SupervisorStateError, SupervisorStateStore } from '../task/supervisor-state'
+import { createCanonicalSupervisorRun } from '../task/supervisor-taskrun-bridge'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 
 type SupervisorHandler = (store: SupervisorStateStore, payload: Record<string, unknown>) => unknown
@@ -32,33 +33,42 @@ const HANDLERS: Record<string, SupervisorHandler> = {
   },
   create: (store, payload) => {
     assertAllowedKeys(payload, ['input', 'options'], 'Supervisor create request')
-    return store.createRun(normalizeRunInput(payload.input), normalizeMutationOptions(payload.options))
+    return createCanonicalSupervisorRun(
+      store,
+      app.getPath('userData'),
+      normalizeRunInput(payload.input),
+      normalizeMutationOptions(payload.options)
+    )
   },
-  'lease:acquire': leaseAction((store, id, options) => store.acquireLease(id, options)),
-  'lease:heartbeat': leaseAction((store, id, options) => store.heartbeatLease(id, options)),
-  'lease:release': leaseAction((store, id, options) => store.releaseLease(id, options)),
-  start: leaseAction((store, id, options) => store.startRun(id, options)),
+  'lease:acquire': manualLeaseAction('acquire a lease for', (store, id, options) => store.acquireLease(id, options)),
+  'lease:heartbeat': manualLeaseAction('heartbeat a lease for', (store, id, options) => store.heartbeatLease(id, options)),
+  'lease:release': manualLeaseAction('release a lease for', (store, id, options) => store.releaseLease(id, options)),
+  start: manualLeaseAction('start', (store, id, options) => store.startRun(id, options)),
   pause: controlledLeaseAction('pause', (store, id, options) => store.pauseRun(id, options)),
   resume: controlledLeaseAction('resume', (store, id, options) => store.resumeRun(id, options)),
-  block: leaseAction((store, id, options) => store.markBlocked(id, options)),
-  reconcile: leaseAction((store, id, options) => store.markWaitingReconciliation(id, options)),
-  complete: leaseAction((store, id, options) => store.completeRun(id, options)),
-  fail: (store, payload) => {
+  block: manualLeaseAction('block', (store, id, options) => store.markBlocked(id, options)),
+  reconcile: manualLeaseAction('mark for reconciliation', (store, id, options) => store.markWaitingReconciliation(id, options)),
+  complete: manualLeaseAction('complete', (store, id, options) => store.completeRun(id, options)),
+  fail: async (store, payload) => {
     assertAllowedKeys(payload, ['id', 'error', 'options'], 'Supervisor fail request')
+    const id = requiredId(payload.id, 'run id')
+    await assertManualSupervisorMutation(store, id, 'fail')
     return store.failRun(
-      requiredId(payload.id, 'run id'),
+      id,
       requiredText(payload.error, 'run error', 4_000),
       normalizeLeaseOptions(payload.options)
     )
   },
   cancel: controlledMutationAction('cancel', (store, id, options) => store.cancelRun(id, options)),
   retry: controlledMutationAction('retry', (store, id, options) => store.authorizeRetry(id, options)),
-  'approval:request': (store, payload) => {
+  'approval:request': async (store, payload) => {
     assertAllowedKeys(payload, ['id', 'approval', 'options'], 'Supervisor approval request')
+    const id = requiredId(payload.id, 'run id')
+    await assertManualSupervisorMutation(store, id, 'request approval for')
     const approval = requiredRecord(payload.approval, 'approval')
     assertAllowedKeys(approval, ['id', 'reason'], 'approval')
     return store.requestApproval(
-      requiredId(payload.id, 'run id'),
+      id,
       {
         id: requiredId(approval.id, 'approval id'),
         ...(approval.reason === undefined ? {} : { reason: requiredText(approval.reason, 'approval reason', 4_000) })
@@ -66,10 +76,12 @@ const HANDLERS: Record<string, SupervisorHandler> = {
       normalizeLeaseOptions(payload.options)
     )
   },
-  'approval:resolve': (store, payload) => {
+  'approval:resolve': async (store, payload) => {
     assertAllowedKeys(payload, ['id', 'input'], 'Supervisor approval resolution')
+    const id = requiredId(payload.id, 'run id')
+    await assertManualSupervisorMutation(store, id, 'resolve approval for')
     return store.resolveApproval(
-      requiredId(payload.id, 'run id'),
+      id,
       normalizeApprovalInput(payload.input)
     )
   },
@@ -85,7 +97,7 @@ const HANDLERS: Record<string, SupervisorHandler> = {
   },
   recover: (store, payload) => {
     assertAllowedKeys(payload, [], 'Supervisor recovery request')
-    return store.recoverExpiredLeases()
+    return store.recoverExpiredManualLeases()
   }
 }
 
@@ -108,12 +120,30 @@ function supervisorStore(): SupervisorStateStore {
   return singleton ??= new SupervisorStateStore(app.getPath('userData'))
 }
 
-function leaseAction(
+function manualLeaseAction(
+  label: string,
   action: (store: SupervisorStateStore, id: string, options: SupervisorLeaseOptions) => unknown
 ): SupervisorHandler {
-  return (store, payload) => {
+  return async (store, payload) => {
     assertAllowedKeys(payload, ['id', 'options'], 'Supervisor lease action')
-    return action(store, requiredId(payload.id, 'run id'), normalizeLeaseOptions(payload.options))
+    const id = requiredId(payload.id, 'run id')
+    await assertManualSupervisorMutation(store, id, label)
+    return action(store, id, normalizeLeaseOptions(payload.options))
+  }
+}
+
+async function assertManualSupervisorMutation(
+  store: SupervisorStateStore,
+  runId: string,
+  action: string
+): Promise<void> {
+  const run = await store.getRun(runId)
+  if (!run) throw new SupervisorStateError('not_found', `run ${runId} was not found`)
+  if (run.origin === 'task_run') {
+    throw new SupervisorStateError(
+      'invalid_transition',
+      `run ${run.id} is TaskRun-owned; renderer cannot ${action} it directly`
+    )
   }
 }
 
@@ -143,7 +173,7 @@ function controlledMutationAction(
   }
 }
 
-function normalizeRunInput(value: unknown): SupervisorRunInput {
+function normalizeRunInput(value: unknown): SupervisorRunCreateInput {
   const input = requiredRecord(value, 'Supervisor run input')
   assertAllowedKeys(input, ['id', 'projectId', 'goalId', 'workItemId', 'maxRetries', 'createdAt'], 'Supervisor run input')
   return {

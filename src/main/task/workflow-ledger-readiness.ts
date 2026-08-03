@@ -34,6 +34,15 @@ import {
   readWorkflowLedgerStoreIdentity,
   WORKFLOW_LEDGER_STORE_IDENTITY_TABLE
 } from './workflow-ledger-store-identity'
+import {
+  verifyWorkflowLedgerAuthorizedPurges,
+  type WorkflowLedgerAuthorizedPurgeVerification
+} from './workflow-ledger-authorized-purge'
+import { CONVERSATION_LEDGER_TABLES } from './conversation-ledger-schema'
+import {
+  verifyConversationLedgerArchive,
+  type ConversationLedgerArchiveVerification
+} from './conversation-ledger-store'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
 
@@ -68,6 +77,7 @@ interface ReadinessVerifications {
   workflow?: WorkflowLedgerVerification
   evidence?: TaskEvidenceVerification
   recovery?: WorkflowRecoveryVerification
+  conversationLedger?: ConversationLedgerArchiveVerification
 }
 
 type ReadinessParity = Pick<WorkflowLedgerCanonicalReadinessReport['counts'],
@@ -88,6 +98,7 @@ export function assessWorkflowLedgerCanonicalReadiness(
   verifyReadinessSupportState(tables, records, diagnostics)
   const dagFinalizations = readDagFinalizationCount(db, tables, diagnostics)
   const verifications = collectReadinessVerifications(db, tables, records, diagnostics)
+  const authorizedPurges = readAuthorizedPurges(db, diagnostics)
   const evidenceAssessment = verifyEvidenceProjection(db, tables, diagnostics)
   const parity = assessWorkflowReadinessParity({
     taskRuns: records.taskRuns,
@@ -106,6 +117,7 @@ export function assessWorkflowLedgerCanonicalReadiness(
     parity,
     dagFinalizations,
     hasDagFinalizers: tables.has(DAG_FINALIZERS_TABLE),
+    authorizedPurges,
     diagnostics
   })
 }
@@ -119,15 +131,18 @@ function buildReadinessReport(input: {
   parity: ReadinessParity
   dagFinalizations: number
   hasDagFinalizers: boolean
+  authorizedPurges: WorkflowLedgerAuthorizedPurgeVerification
   diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]
 }): WorkflowLedgerCanonicalReadinessReport {
   const {
-    source, storeId, storeVersion, records, verifications, parity, dagFinalizations, hasDagFinalizers, diagnostics
+    source, storeId, storeVersion, records, verifications, parity, dagFinalizations, hasDagFinalizers,
+    authorizedPurges, diagnostics
   } = input
   const corrupt = diagnostics.some((item) => item.category === 'corruption')
   const repairable = diagnostics.some((item) => item.category === 'additive_projection')
   const safeForShadowUse = !corrupt && !repairable
-  const readyForCanonicalRead = !hasCanonicalBlocker(diagnostics) && verifications.recovery !== undefined
+  const readyForCanonicalRead = !hasCanonicalBlocker(diagnostics) &&
+    verifications.recovery !== undefined && verifications.conversationLedger !== undefined
   const reportWithoutDigest = {
     schemaVersion: 1 as const,
     format: WORKFLOW_LEDGER_READINESS_FORMAT,
@@ -149,26 +164,58 @@ function buildReadinessReport(input: {
       workflowRuns: records.workflowRuns.length,
       workflowRecoverySessions: records.recoverySessions.length,
       dagFinalizations,
+      conversationStreams: verifications.conversationLedger?.streams ?? 0,
+      conversationGenerations: verifications.conversationLedger?.generations ?? 0,
+      conversationEvents: verifications.conversationLedger?.events ?? 0,
+      currentConversationEvents: verifications.conversationLedger?.currentEvents ?? 0,
       ...parity
     },
     digests: {
       taskRuns: collectionDigest(records.taskRuns),
       workflowRuns: collectionDigest(records.workflowRuns.map((run) => run.taskRun)),
-      taskSnapshots: collectionDigest(records.snapshots)
+      taskSnapshots: collectionDigest(records.snapshots),
+      conversationLedger: verifications.conversationLedger?.digest ?? collectionDigest([])
     },
-    ...(verifications.workflow && verifications.evidence && verifications.recovery && hasDagFinalizers
+    ...(verifications.workflow && verifications.evidence && verifications.recovery &&
+      verifications.conversationLedger && hasDagFinalizers
       ? {
           verification: {
             workflowLedger: verifications.workflow,
             taskEvidence: verifications.evidence,
             taskDagFinalizations: { valid: true as const, count: dagFinalizations },
-            workflowRecovery: verifications.recovery
+            workflowRecovery: verifications.recovery,
+            conversationLedger: verifications.conversationLedger
           }
         }
       : {}),
+    authorizedPurges,
     diagnostics
   }
   return { ...reportWithoutDigest, reportDigest: digest(reportWithoutDigest) }
+}
+
+function readAuthorizedPurges(
+  db: WorkflowLedgerDatabase,
+  diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]
+): WorkflowLedgerAuthorizedPurgeVerification {
+  try {
+    return verifyWorkflowLedgerAuthorizedPurges(db)
+  } catch (error) {
+    addDiagnostic(
+      diagnostics,
+      'authorized_project_purge_ledger_corrupt',
+      'corruption',
+      safeErrorMessage(error),
+      { table: 'workflow_authorized_project_purges', scope: 'shared' }
+    )
+    return {
+      valid: true,
+      operations: 0,
+      removed: { taskRuns: 0, workflowRuns: 0, workflowEvents: 0, taskEvidence: 0 },
+      lastSeq: 0,
+      lastDigest: '0'.repeat(64)
+    }
+  }
 }
 
 function readStoreIdentity(
@@ -243,7 +290,28 @@ function collectReadinessVerifications(
     workflowProjectionRowCount(db, tables) === 0
   return {
     workflow: verifyWorkflowProjection(db, !missingWorkflowTables, projectionEmpty, diagnostics),
-    recovery: verifyRecoveryProjection(db, tables.has('workflow_recovery_sessions'), diagnostics)
+    recovery: verifyRecoveryProjection(db, tables.has('workflow_recovery_sessions'), diagnostics),
+    conversationLedger: verifyConversationArchive(db, tables, diagnostics)
+  }
+}
+
+function verifyConversationArchive(
+  db: WorkflowLedgerDatabase,
+  tables: ReadonlySet<string>,
+  diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]
+): ConversationLedgerArchiveVerification | undefined {
+  if (CONVERSATION_LEDGER_TABLES.some((table) => !tables.has(table))) return undefined
+  try {
+    return verifyConversationLedgerArchive(db)
+  } catch (error) {
+    addDiagnostic(
+      diagnostics,
+      'conversation_ledger_archive_corrupt',
+      'corruption',
+      safeErrorMessage(error),
+      { table: 'conversation_ledger_events', scope: 'canonical' }
+    )
+    return undefined
   }
 }
 
@@ -378,6 +446,12 @@ function verifyRequiredTables(
     if (!tables.has(table)) {
       addDiagnostic(diagnostics, 'additive_task_support_table_missing', 'additive_projection',
         `Additive task support table ${table} is missing`, { table, scope: 'shared' })
+    }
+  }
+  for (const table of CONVERSATION_LEDGER_TABLES) {
+    if (!tables.has(table)) {
+      addDiagnostic(diagnostics, 'additive_conversation_ledger_table_missing', 'additive_projection',
+        `Additive Conversation Ledger table ${table} is missing`, { table, scope: 'canonical' })
     }
   }
   if (!tables.has(DAG_FINALIZERS_TABLE)) {

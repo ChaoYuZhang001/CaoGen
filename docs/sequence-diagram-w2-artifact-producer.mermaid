@@ -1,0 +1,55 @@
+sequenceDiagram
+    autonumber
+    participant M as 模型(Claude/OpenAI)
+    participant T as Office生成工具(main)
+    participant FS as 工作区文件系统
+    participant EL as Effect 账本
+    participant P as Producer(registerConfirmedRunArtifactLifecycles)
+    participant L as registerPersistedArtifactLifecycle
+    participant WL as Workflow Ledger(artifact/evidence/acceptance)
+    participant SC as StudioResultSnapshot(getStudioResultSnapshot)
+    participant R as Renderer(Zustand store)
+    participant UI as StudioResultPanel / PreviewRenderer
+    participant V as deriveDeliveryVerdict(纯函数)
+
+    Note over M,T: T02 模型调用 office 工具（main 侧，docx/exceljs 写字节）
+    M->>T: 调用 office 工具(document/spreadsheet 规格)
+    T->>T: docx / exceljs 生成字节
+    T->>FS: 写入 Project 工作区路径(workspacePath)
+    T->>T: 计算 sha256(bytes) + 断言 kind/mediaType 与字节一致
+    T->>EL: 记录 confirmed `office_artifact` Effect(sha256, mediaType, kind, sourceRefs)
+    EL-->>M: 工具结果(workspace 路径)
+
+    Note over P,L: T01/T03 effect-runtime 既有触发点(registerConfirmedRunArtifactLifecycles)
+    EL->>P: run 持久化后触发 registerConfirmedRunArtifactLifecycles(run)
+    P->>P: 遍历 run.effects，过滤 confirmed && target.kind==='office_artifact'
+    P->>L: registerPersistedArtifactLifecycle(input)
+    Note right of P: input.kind = 'document' | 'spreadsheet'<br/>content = { storageKind:'source_ref', sourceRef: workspacePath, expectedDigest: sha256 }<br/>复用 ART-001，不新写 lifecycle / 不新写 blob
+    L->>WL: registerWorkflowArtifact + recordWorkflowArtifactLocation(自动 canonical Artifact)
+    WL-->>SC: 新 Artifact 进入 snapshot.artifacts
+
+    Note over P,WL: T03 自动 Evidence + Acceptance 关联(复用既有 ledger API，无新 IPC)
+    P->>T: 回读文件做结构/打开性 self-check(parse + 字节一致性)
+    T-->>P: check = { ok, kind, mediaType, digestMatch, reason }
+    P->>WL: createWorkflowEvidence(结构校验结果, source='runtime')
+    P->>WL: saveWorkflowAcceptance(针对 office 成品的 criterion, status 由 check 派生)
+    P->>WL: createWorkflowEvidenceLink(verifies, acceptanceId, criterionId)
+    WL-->>SC: 新 Evidence + Acceptance 进入 snapshot.evidence / snapshot.acceptances
+
+    Note over SC,UI: 复用 ART-005 闸门，renderer 经既有 getStudioResultSnapshot 消费
+    R->>SC: getStudioResultSnapshot(sessionId)
+    SC-->>R: 含新 Artifact / Evidence / Acceptance 的 snapshot
+    R->>UI: 渲染 ArtifactRow + DeliveryVerdictBanner + TraceabilityView
+    R->>V: deriveDeliveryVerdict(snapshot)
+    alt check 失败 / Acceptance=failed|pending|verifying
+        V-->>UI: verdict = 'not_done' → Goal 完成门禁禁用，Banner 标红
+        UI->>UI: WorkflowAcceptanceRow 显示「查看返工 WorkItem」(既有入口)
+        UI->>UI: openTool('tasks') 回到 WorkItem 返工(M 重新生成)
+    else check 通过 / Acceptance=passed|waived
+        V-->>UI: verdict = 'verifiable' → Goal 可标记完成
+    end
+
+    Note over UI: P0-3 预览 / 下钻（既有，无新 IPC）
+    UI->>UI: 点「打开」→ openLocation → openTool('preview', location.path)
+    UI->>UI: PreviewRenderer 走既有 office 视觉预览(docx 视觉 / xlsx 结构提取)
+    UI->>UI: 点「下钻证据」→ handleDrillEvidence 切到 evidence Tab 高亮

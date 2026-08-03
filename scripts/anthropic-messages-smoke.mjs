@@ -40,8 +40,9 @@ import {
 try {
   compileRuntime()
   const runtime = loadRuntime()
+  runtime.settings.updateSettings({ failoverEnabled: false })
 
-  await check('saved Provider binds target and Broker credential', () => verifySavedProviderBinding(runtime))
+  await check('saved Provider binds target and scoped Broker credential lease', () => verifySavedProviderBinding(runtime))
   await check('credentialed fetch rejects redirects without leaking headers', () => verifyCredentialRedirectRejected(runtime))
   await check('Messages endpoints are constructed canonically', () => verifyEndpointConstruction(runtime))
   await check('SSE preserves thinking/text order and usage', () => verifySseAndUsage(runtime))
@@ -76,13 +77,33 @@ function verifySavedProviderBinding(runtime) {
   assert.equal(target.baseUrl, fixture.provider.baseUrl)
   assert.equal(target.endpoint, 'https://saved.example/gateway/v1/messages')
   assert.equal(target.model, 'claude-sonnet-4-20250514')
-  assert.equal(target.headers['x-api-key'], fixture.secret)
+  assert.equal(target.headers['x-api-key'], undefined)
   assert.equal(target.headers['anthropic-version'], '2023-06-01')
   assert.equal(target.headers['anthropic-beta'], 'interleaved-thinking-2025-05-14')
   assert.equal(target.headers['x-route'], 'saved-route')
   assert.equal(JSON.stringify(target.headers).includes('attacker'), false)
+  assert.equal(JSON.stringify(target).includes(fixture.secret), false)
   assert.equal(target.keyId, fixture.ref.keyId)
   assert.equal(target.keyLabel, 'primary')
+
+  const scope = {
+    providerId: fixture.provider.id,
+    projectId: 'project-target-binding',
+    sessionId: 'session-target-binding',
+    operationId: 'operation-target-binding'
+  }
+  const selection = target.issueCredentialLease(scope)
+  assert.equal(selection.available, true)
+  assert(selection.lease)
+  assert.equal(selection.lease.keyId, fixture.ref.keyId)
+  assert.equal(
+    fixture.credentials.redeemProviderCredentialLease(selection.lease, scope).token,
+    fixture.secret
+  )
+  assert.throws(
+    () => fixture.credentials.redeemProviderCredentialLease(selection.lease, scope),
+    { code: 'not_found' }
+  )
 }
 
 async function verifyCredentialRedirectRejected(runtime) {
@@ -133,7 +154,7 @@ function verifyEndpointConstruction(runtime) {
     const provider = providerFixture({ baseUrl })
     const target = runtime.target.resolveAnthropicMessagesTarget(
       { providerId: provider.id },
-      targetDependencies(provider, 'endpoint-secret')
+      targetDependencies(provider)
     )
     assert.equal(target.endpoint, endpoint)
   }
@@ -148,9 +169,10 @@ async function verifySseAndUsage(runtime) {
   const deltas = []
   const requests = []
   const request = messagesRequest('hello from smoke')
+  const credentialedHeaders = { ...target.headers, 'x-api-key': fixture.secret }
   const result = await runtime.adapter.streamAnthropicMessage({
     endpoint: target.endpoint,
-    headers: target.headers,
+    headers: credentialedHeaders,
     request,
     signal: new AbortController().signal,
     onThinking: (text) => deltas.push(`thinking:${text}`),
@@ -197,7 +219,7 @@ async function verifySseAndUsage(runtime) {
 
   const jsonResult = await runtime.adapter.streamAnthropicMessage({
     endpoint: target.endpoint,
-    headers: target.headers,
+    headers: credentialedHeaders,
     request,
     signal: new AbortController().signal,
     fetch: async () => new Response(JSON.stringify(jsonMessage('msg-json', 'json answer')), {
@@ -762,7 +784,7 @@ async function verifyEngineHarness(runtime) {
     assert(kinds.includes(kind), `missing Engine event ${kind}`)
   }
   assert.equal(requests.length, 2)
-  assert.equal(requests[0].headers['x-api-key'], fixture.secret)
+  assert.equal(requests[0].headers['x-api-key'], undefined)
   assert.equal(attemptDependencies.calls.start.length, 2)
   assert.equal(attemptDependencies.calls.complete[0].input.status, 'succeeded')
   const retainedImageContent = requests[1].request.messages[0].content

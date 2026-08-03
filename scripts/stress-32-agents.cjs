@@ -3,27 +3,31 @@
  * 验证:一次 dispatchSubagents 派 32 个真实 child session 并发跑,
  * 后端不崩、事件不丢、全部回灌、父 Agent 汇总,统计吞吐/时延/成本。
  *
- * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/stress-32-agents.cjs
+ * Real calls require CAOGEN_REAL_PROVIDER_E2E=1 and read only
+ * ~/.caogen-private/provider-parity.json. Private values and responses are not printed.
  */
 const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
 const { app, ipcMain } = require('electron')
+const {
+  loadPrivateChatProvider,
+  suppressRuntimeConsole,
+  writePublicLine
+} = require('./lib/private-provider-e2e.cjs')
 
-const repoOut = path.resolve(__dirname, '..', 'out', 'main')
+const repoRoot = path.resolve(__dirname, '..')
+const repoOut = path.join(repoRoot, 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-stress32-'))
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
 
-const BASE_URL = process.env.CHAT_E2E_BASE_URL || 'https://api.deepseek.com'
-const KEY = process.env.CHAT_E2E_KEY || ''
-const MODEL = process.env.CHAT_E2E_MODEL || 'deepseek-chat'
 const N = Number(process.env.STRESS_N || 32)
-const TIMEOUT_MS = Number(process.env.STRESS_TIMEOUT || 300_000)
+const TIMEOUT_MS = Number(process.env.CAOGEN_REAL_PROVIDER_E2E_TIMEOUT || process.env.STRESS_TIMEOUT || 300_000)
 
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
-  console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${String(detail).slice(0, 160)}` : ''}`)
+  writePublicLine(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` (${detail})` : ''}`)
 }
 
 async function invoke(channel, ...args) {
@@ -33,21 +37,22 @@ async function invoke(channel, ...args) {
 }
 
 async function run() {
-  if (!KEY) {
-    // 无 key(如 CI / deep-test 默认):如实跳过而非误判失败
-    console.log('[SKIP] 压力测试需真实厂商 key(CHAT_E2E_KEY);未提供,跳过')
-    console.log('\nstress-32: skipped (no key)')
-    app.exit(0)
-    return
+  const privateConfig = await loadPrivateChatProvider(repoRoot)
+  if (privateConfig.state === 'skipped') return skip()
+  if (privateConfig.state !== 'ready') {
+    check('私有 Provider 配置可用', false, privateConfig.code)
+    return finish(1)
   }
+  suppressRuntimeConsole()
+  const { baseUrl, model, apiKey } = privateConfig.provider
   require(path.join(repoOut, 'index.js'))
   await new Promise((r) => setTimeout(r, 900))
 
   const provider = await invoke('providers:create', {
-    name: 'stress32', baseUrl: BASE_URL, models: [MODEL], openaiProtocol: 'chat', token: KEY
+    name: 'Private Provider Stress', baseUrl, models: [model], openaiProtocol: 'chat', token: apiKey
   })
   const parent = await invoke('sessions:create', {
-    cwd: tmpUserData, engine: 'openai', providerId: provider.id, model: MODEL, isolated: false
+    cwd: tmpUserData, engine: 'openai', providerId: provider.id, model, isolated: false
   })
   check('创建父会话', !!parent.id)
 
@@ -78,7 +83,7 @@ async function run() {
       settledCount = settled.length
       lastDone = Date.now() - start
       const err = children.filter((m) => m.status === 'error').length
-      console.log(`  进度: ${settledCount}/${N} 到终态(其中 error ${err})(${Math.round(lastDone / 1000)}s)`)
+      writePublicLine(`progress: ${settledCount}/${N}; errors=${err}; elapsed_seconds=${Math.round(lastDone / 1000)}`)
     }
     if (settledCount >= N) {
       const entries = await invoke('sessions:transcript', parent.id)
@@ -100,16 +105,7 @@ async function run() {
   const idleCount = children.filter((m) => m.status === 'idle').length
   const errorChildren = children.filter((m) => m.status === 'error')
   const runningCount = children.filter((m) => m.status === 'running' || m.status === 'starting').length
-  console.log(`  终态分布: idle(成功) ${idleCount} · error(失败) ${errorChildren.length} · 仍运行 ${runningCount}`)
-
-  // 打印每个失败 child 的诊断(turn-result / resultText / lastError)
-  for (const child of errorChildren) {
-    const entries = await invoke('sessions:transcript', child.id).catch(() => [])
-    const turn = entries.filter((e) => e.event.kind === 'turn-result').pop()
-    console.log(
-      `  ✗ 失败 child ${child.childTaskId || child.id}: ${child.lastError || turn?.event?.resultText || '(无 turn-result)'}`.slice(0, 200)
-    )
-  }
+  writePublicLine(`settled: success=${idleCount}; errors=${errorChildren.length}; running=${runningCount}`)
 
   check(`${N} 个子代理全部到达终态`, settledCount >= N, `首个 ${Math.round(firstDone / 1000)}s / 最后 ${Math.round(lastDone / 1000)}s`)
   // 独立的硬断言:全部 child 必须成功(error=0)—— 这是压力达标的核心
@@ -126,21 +122,27 @@ async function run() {
       .flatMap((e) => e.event.blocks ?? [])
       .map((b) => (b.type === 'text' ? b.text : ''))
       .join('')
-    check('抽查 t7 计算正确(7*3=21)', /21/.test(text), text.slice(0, 60))
+    check('抽查 t7 计算正确(7*3=21)', /21/.test(text))
   }
 
   // 成本统计
   const totalCost = children.reduce((sum, m) => sum + (m.costUsd || 0), 0)
-  console.log(`  总成本: $${totalCost.toFixed(4)} · 平均并发时延: 首完 ${Math.round(firstDone / 1000)}s → 全完 ${Math.round(lastDone / 1000)}s`)
+  writePublicLine(`aggregate: cost_usd=${totalCost.toFixed(4)}; first_seconds=${Math.round(firstDone / 1000)}; last_seconds=${Math.round(lastDone / 1000)}`)
 
   return finish(results.every((r) => r.ok) ? 0 : 1)
 }
 
 function finish(code) {
   const pass = results.filter((r) => r.ok).length
-  console.log(`\nstress-32: ${pass}/${results.length} 通过`)
+  writePublicLine(`stress-32: ${pass}/${results.length} passed`)
   try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
   app.exit(code)
 }
 
-app.whenReady().then(() => run().catch((e) => { console.error(e); finish(1) }))
+function skip() {
+  writePublicLine('stress-32: skipped (explicit opt-in required)')
+  try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
+  app.exit(0)
+}
+
+app.whenReady().then(() => run().catch(() => { check('真实并发 E2E 运行', false, 'runtime_failed'); finish(1) }))

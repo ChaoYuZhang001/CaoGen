@@ -1,7 +1,7 @@
 # CaoGen 1.0 产品需求说明书
 
 > 文档状态：产品需求基线候选版 1.0
-> 更新日期：2026-07-22
+> 更新日期：2026-07-28
 > 上位文档：[`PROJECT-CHARTER.md`](./PROJECT-CHARTER.md)
 > 当前事实源：[`STATUS.md`](../STATUS.md)
 > 配套技术：[`PRODUCT-TECHNICAL-REQUIREMENTS.md`](./PRODUCT-TECHNICAL-REQUIREMENTS.md) · [`HIGH-LEVEL-DESIGN.md`](./HIGH-LEVEL-DESIGN.md) · [`SECURITY-AND-RISK.md`](./SECURITY-AND-RISK.md)
@@ -34,20 +34,21 @@
 - 当前能力发生变化时，以 `STATUS.md` 和最新测试工件为准。
 - 需求冲突时，按“数据安全与真实性 > 可恢复与可审计 > 用户目标闭环 > 体验效率 > 视觉效果”排序。
 - Provider、模型、协议和引擎均不得成为用户必须管理的顶层业务对象。
+- 竞品能力只能转译为 CaoGen 原生需求；不得复制品牌、界面、封闭生态假设或未经核验的底层实现。
 
 ## 2. 产品定义
 
 ### 2.1 产品定位
 
-**立项目标**：CaoGen 是本地优先、厂商中立、可恢复、可审计的 Agent Work OS。用户提交目标、约束、预算和验收标准；CaoGen 使用内部数字员工、模型算力和工具完成工作并交付证据。
+**立项目标**：CaoGen 是本地优先、厂商中立、用户可自定义、可恢复、可审计的 Agent Work OS。它在一个产品中统一代码执行、办公成品、项目知识、自动化、任务协作和跨端接续；用户提交目标、约束、预算和验收标准，自主选择或自动路由任意受支持的 Provider、模型、协议 Adapter、本地模型、Skill、MCP、连接器与工具，CaoGen 使用内部数字员工完成工作并交付证据。
 
 ### 2.2 核心边界
 
 CaoGen 不是：
 
-- 外部 Agent 或 Agent CLI 启动器。
-- Claude Code、Codex、Gemini CLI、OpenCode 等产品的切换面板。
-- 以外部 Agent 进程为员工的劳动力管理平台。
+- 只负责启动外部 Agent 或 Agent CLI、自己不持有任务和交付状态的启动器。
+- 只在 Claude Code、Codex、Gemini CLI、OpenCode 等产品之间切换的配置面板。
+- 未经 CaoGen Runtime、Trust、Artifact、Evidence 和 Acceptance 合同就把外部 Agent 进程登记成员工的劳动力管理平台。
 - 完整 Jira、飞书、Notion、CRM、ERP 或 HR 系统。
 - 只提供聊天回答、无法持久执行和验收的对话壳。
 
@@ -57,15 +58,44 @@ CaoGen 是：
 - 一个默认自动选择不同厂商和模型、用户可在专家模式检查原因的调度系统。
 - 一个为普通任务提供 Assistant、为复杂任务提供 Studio 的双模式产品。
 - 一个用内部岗位实例表达“数字员工”，用 CaoGen Runtime 执行工作的系统。
+- 一个把代码、办公、研究、设计、自动化、协作和远程接续纳入同一 Project/Goal/Artifact 生命周期的统一工作系统。
+- 一个允许用户自定义 Provider、Base URL、协议、模型、Key、本地服务、Skill、MCP、连接器、工具和路由政策，且支持迁移与导出的开放系统。
+
+### 2.3 正式竞品对标后的产品原则
+
+Codex 和 Claude Code 直接争夺代码任务入口；WorkBuddy 证明办公 Agent 必须交付成品；Multica 把人和 Agent 的任务协作产品化；CC Switch 降低多工具和 Provider 配置门槛；Marvis 建立跨端常驻助手心智。CaoGen 的终极需求是把这些核心优势作为一个产品内的原生能力统一提供，而不是只选择其中一个方向；其边界约束的是锁定、套壳和不可治理的实现方式，不是能力范围：
+
+- **直接竞品迁移是第一天留存能力**：Codex/Claude Code 用户的项目规则、Skill、MCP、Hook、命令和工作习惯必须可选择性导入、预览和回滚；不得要求用户先放弃原生态资产。
+- **借鉴成品体验，不复制封闭生态**：任务结果必须聚合 Artifact、工作区文件、变更、预览、Evidence 和后续动作；连接器、模型与设计工具必须可替换。
+- **三轴分离**：Assistant/Studio 是界面投影；查看/规划/执行是任务执行策略；权限、预算和数据外发是风险约束。三个轴不得互相隐式改写。
+- **项目知识必须可追溯**：知识库或连接器检索结果必须带来源、版本、授权主体、检索时间和引用，不得把不透明 RAG 输出当作 Evidence。
+- **远程控制不转移执行主权**：远程端可发起、续接、审批和查看结果，但本地文件、凭据、工具与高风险决策仍受绑定设备的 Trust Kernel 控制。
+- **协作只扩展任务所有权**：支持分享、转交、评论和共享审批，不自建聊天、会议或多人 Office 套件。
+- **办公、设计和代码使用同一交付合同**：Word/Excel/PPT/PDF、设计稿、代码、PR、报告和测试结果都进入统一 Artifact/Evidence/Acceptance 生命周期。
+- **外部 Runtime 不等于内部员工**：CaoGen 1.0 的 DigitalWorker 由原生领域模型持有；外部 CLI/Agent 只能通过明确 Adapter 或迁移入口参与，不能绕过权限、Effect、Artifact、Evidence、Acceptance 和 Recovery。
+- **默认路径必须少配置**：普通对话不要求创建 Project；导入已有工作只选择一个文件；可发现的本地算力、Provider 能力和模型由系统自动探测并给出可解释默认值。目录、Base URL、协议、模型、角色依赖和迁移冲突只在必要时渐进披露，专家设置不能成为首任务前置条件。
+- **工作状态必须厂商中立且可移植**：Project 包不得依赖某一厂商账号或私有会话 ID 才能读回；依赖必须显式列出，缺失依赖可安全安装或明确阻止，绝不静默替换；更换 Provider 后继续使用同一 Goal、WorkItem、Run、Artifact、Evidence 和 Acceptance 身份。
+
+### 2.4 统一集成的终极能力集合
+
+| 能力来源 | CaoGen 必须原生提供的核心能力 | 厂商中立要求 |
+|---|---|---|
+| Codex / Claude Code | 项目理解、代码编辑、终端、Git、测试、审查、长任务、并行执行、Skill/MCP/Hook 和会话恢复 | 不绑定 OpenAI 或 Anthropic；相同 Goal、Run、Context 和 Artifact 可跨 Provider/协议延续 |
+| WorkBuddy | 查看/规划/执行策略、办公文件、统一结果工作台、项目知识、连接器、专家协作、Routine 和远程接续 | Office/知识/设计工具可替换；本地文件、引用和权限不依赖单一云生态 |
+| Multica | Issue 式 WorkItem、成员/Agent 派工、评论、转交、Squad、cron/webhook/manual 自动化和运行历史 | 外部 Runtime 通过 Adapter 接入；身份、权限、Effect 和审计由 CaoGen 持有 |
+| CC Switch | Provider profile、预设、模型发现、健康、failover、MCP/Skill/Prompt 配置、导入导出、备份和回滚 | 用户自带 Key/Base URL/本地模型；配置原子可逆，导出不锁定、不默认携带凭据 |
+| Marvis | 常驻助手、本地个人知识、PC/移动端接续、远程查看、审批和任务控制 | 设备绑定、本地执行优先、远程通道不托管本地凭据，支持用户选择同步与保留政策 |
+| CaoGen 原生内核 | Goal、WorkItem、Run、Effect、Artifact、Evidence、Acceptance、Recovery、预算、权限和审计 | 所有上层能力复用同一合同；任何 Provider、模型或连接器均不可绕过 |
 
 ## 3. 当前能力基线
 
 | 能力域 | 状态 | 当前事实 |
 |---|---|---|
 | 多厂商配置 | 当前已验证 | 多 Provider、多 Key、自定义 Base URL、OpenAI-compatible 与原生 Anthropic Messages。 |
+| Provider Profile 可逆迁移 | 部分完成（Service/Store、强杀恢复与当前 Electron UI 已验证） | `test-results/provider-profile-smoke/2026-07-31T18-36-07-764Z/report.json` 的 135/135 覆盖无凭据导出、严格导入/规范化重复拒绝、URL 目标匹配、活动 Key 标签/数量、凭据绑定影响、IPv4/IPv6 loopback no-auth、远程 no-auth 网络前拒绝、冲突预览、目标变化凭据隔离/显式重绑、权威快照字段清除、配置漂移 CAS、脱敏私密备份、Key 真删除、journal 文件边界，以及 backup 文件名/内嵌 ID 不一致时回滚拒绝且 Store 不变；`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json` 的 13/13 真实跨进程/`SIGKILL` 场景证明存活 owner 竞争返回 `LOCK_HELD`、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback checkpoint、死锁回收、零 replay/字节稳定、同进程对账收敛和 6 类 pending writer 阻断。safety/source backup 在 Store commit 前和 terminal 前复核 ID/digest，prepare 后或 Store commit 后篡改均 fail-closed；恢复冻结字节后才收敛并恢复普通写入。`test-results/provider-profile-e2e/2026-07-31T18-36-51-341Z/report.json` 的 54/54 通过真实 IPC/Renderer 和四张截图证明 Key 标签/凭据影响预览、应用、跨启动回滚、脱敏导出/备份、Key 删除确认/重新录入及 compact 布局。Provider Profile Service、operation journal、mutation lock 与 Store repository 均已登记于 `test-results/durable-write-inventory/2026-07-31T18-36-37-638Z/report.json`，但 Provider Store 顶层 schema 仍未版本化。报告绑定 dirty `8ba60148`；Windows ACL、真人、真实 Provider 发现/健康/failover 与 clean release 证据仍开放。 |
 | 原生 Anthropic Messages | 部分完成（本地 targeted 验证） | 已注册生产 Engine 并覆盖工具循环、权限/Effect、Key/同协议 Provider failover 和图片重启恢复；真实 Provider、统一 Run/Context 契约与 clean release-bound parity 仍开放。 |
 | 模型路由 | 当前已验证 | 支持任务类型、项目规则、用户规则、健康、预算、成本、质量、速度和 failover。 |
-| 项目与会话 | 当前已验证 | 目录型项目、未关联项目会话、项目规则、归档/恢复/删除和项目记忆。 |
+| 项目与会话 | 当前已验证 | canonical Workspace 与兼容旧目录 Project 共存；侧栏按 `workspaceId` 优先归组，只有无归属 Session 进入“对话”；项目提供展开/收起、更多和直达任务入口的 `+`，并保留项目规则、归档/恢复/删除和项目记忆。 |
 | 多任务 | 当前已验证 | 真实 child sessions、最多 33 个任务、DAG、重试、worktree、结果回传和可选自动合并。 |
 | 工作台 | 当前已验证 | 终端、文件、编辑、Diff、Git、浏览器、预览、插件、Skill、MCP 和部分 Office 能力。 |
 | Trust Kernel | 当前已验证 | Task Run、Effect Ledger、lease/fencing、部分文件/Git Reconciler 和强杀恢复。 |
@@ -75,7 +105,7 @@ CaoGen 是：
 | PR/MR 和远端交付 | 条件可用 | 依赖远端账号、权限及 `gh`/`glab` 等外部条件。 |
 | GUI 自动化 | 条件可用 | 默认关闭，需要显式权限，平台与应用覆盖不完整。 |
 | Office 高保真 | 条件可用 | 支持结构提取和系统预览，不等价于原应用完整编辑与像素级一致。 |
-| Goal/Workflow Ledger | 当前已验证（v8 recovery read-source foundation） | `task-snapshots.db` v8 已提供 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、event chain、canonical recovery sessions、有限 API/IPC/UI 和 cursor 查询；Task Snapshot/TaskRun 恢复读取支持按数据库路径隔离的 `legacy / compare / canonical` 三态，mode flip 强制重新验证，未配置时默认 legacy。 |
+| Goal/Workflow Ledger | 部分完成（v9 Workflow/Conversation recovery foundation） | `task-snapshots.db` v9 已提供 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、event chain、canonical recovery sessions，以及按 generation 保留重写历史的 Conversation Ledger archive；Task Snapshot/TaskRun 恢复读取支持按数据库路径隔离的 `legacy / compare / canonical` 三态，mode flip 强制重新验证，未配置时默认 legacy。v9 新增部分当前仅完成类型检查，不计为行为验证。 |
 | Assistant/Studio | 部分完成（dirty-worktree UI E2E） | 固定模式切换、运行中流连续性和 Assistant 首次启动 zero-choice 已有本地 required E2E；统一 Project/Goal/WorkItem/Run/Artifact 契约、Studio 直接启动和 clean release-bound 证据仍开放。 |
 | DigitalWorker | 立项目标 | 当前子 Agent、固定角色和 persona 不等于数字员工。 |
 | 水墨轻动漫人物 | 立项目标 | 当前 3D 机器人/角色资产不是目标视觉形态。 |
@@ -149,6 +179,22 @@ CaoGen 是：
 3. 执行结果进入项目 Inbox、Artifact 和 Evidence。
 4. 失败、预算超限或待审批时通知用户并保持可恢复状态。
 
+### 5.6 通用办公成品
+
+1. 用户以附件、工作区文件、项目知识或连接器内容作为输入，描述要交付的文档、表格、演示文稿、PDF 或报告。
+2. CaoGen 在执行前确定输出格式、模板、来源要求、修改边界和最小 Acceptance。
+3. 生成结果进入 canonical Artifact，而不是只在聊天中返回一个文件路径。
+4. 用户在统一结果工作台查看产物、工作区文件、变更、预览、Evidence 和版本，并可批注、返工或导出交付包。
+5. “文件已生成”不等于完成；结构、内容、引用、可打开性和用户指定格式必须通过自动或人工 Acceptance。
+
+### 5.7 远程接续与协作
+
+1. 用户通过已绑定的远程通道发起或续接现有 Goal/WorkItem，而不是创建脱离项目的影子会话。
+2. 远程审批显示动作、目标、数据范围、成本和有效期；高风险审批不得降级为简单“同意”。
+3. Desktop 离线、休眠、网络中断或绑定撤销时，远程端明确显示不可执行状态，不伪造已接收或已完成。
+4. 分享和转交只改变显式访问权或 owner；Artifact、Evidence、审计和历史身份不复制、不丢失。
+5. 远程控制和多人协作属于 P2 扩展，不阻塞最小 1.0，但其领域和安全合同必须在 1.0 数据模型中预留。
+
 ## 6. Assistant / Studio 双模式
 
 ### 6.1 模式定义
@@ -178,9 +224,21 @@ CaoGen 是：
 | EXP-002 | P0 | 当前已验证 | 两种模式共用同一 canonical Project、Goal、WorkItem、Run 和 Artifact store；真实 Electron required gate 已用一次生产 SessionManager send、一次 Artifact 写入、十次 Assistant/Studio 往返和 renderer 重载证明身份、revision、归属、引用与 digest 不分叉，且源代码/构建新鲜度前后均通过。 |
 | EXP-003 | P0 | 部分完成（running projection continuity foundation） | 模式切换期间正在运行的任务继续执行，权限请求和通知保持有效。当前已验证运行中流式任务、重复发送防绕过、模型切换 fail-closed 和可见错误；审批、通知、失败与恢复连续性仍待完成。 |
 | EXP-004 | P1 | 立项目标 | Assistant 支持无目录的托管个人 Workspace。 |
-| EXP-005 | P1 | 立项目标 | Studio 可展开文件、终端、Diff、浏览器、DAG、成本、Evidence 和审计时间线。 |
+| EXP-005 | P1 | 部分完成（canonical result surface foundation） | Studio 与 Assistant 已复用同一结果合同，按当前 Session 的 canonical Project/Goal/WorkItem 聚合 Run、Artifact 位置/版本/摘要、Evidence、Acceptance、测试、成本覆盖率、风险、未完成项、审批和审计时间线；未绑定 Project 时明确显示“对话分组”。持久不一致 fail-closed，瞬时 revision 冲突只做有上限稳定重读。自动化已覆盖三档视口、脱敏导出、变更/文件/预览/浏览器/终端/任务六个工具交接，以及两层真实 child-Session DAG；真人代码/Office 主链与 clean release 绑定仍开放。 |
 | EXP-006 | P1 | 立项目标 | 用户偏好可持久化，但每个任务都允许临时切换。 |
 | EXP-007 | P2 | 后续规划 | 根据用户习惯推荐默认模式和布局，不静默改变当前模式。 |
+
+### 6.4 任务执行策略
+
+任务执行策略独立于 Assistant/Studio 和 CaoGen Drive，统一为三种用户可理解的合同：
+
+| 策略 | 合同 | 当前映射与缺口 |
+|---|---|---|
+| **查看** | 只读取和分析；不得写文件、执行命令、调用有副作用连接器或创建外部对象 | 部分完成：三条引擎工具门和手工终端/Git/文件/worktree 写入口已在 SessionManager/main IPC fail-closed；全部连接器、Routine 与全业务入口的端到端零副作用证明仍未完成 |
+| **规划** | 生成版本化 Workflow/DAG、Acceptance、预计数据外发和成本；用户批准前不得执行计划步骤 | 部分完成：会话级结构化计划、Genesis 捕获、不可变版本、摘要、变更原因、精确审批、自动 supersede、重启/篡改门和计划工作台已实现；已绑定 Project 的批准步骤已投影为现有父 WorkItem 下的 canonical WorkItem/Workflow Ledger，未绑定对话不创建隐藏 Project；Studio 已支持一句自然语言目标幂等创建 canonical Goal/父 WorkItem/绑定 Session，无目录 Project 使用应用隔离执行目录；计划合同自身的 Ledger 历史仍开放 |
+| **执行** | 按已批准目标直接执行；每个动作仍受权限、预算、隐私、Effect 和 Acceptance 约束 | 部分完成：无计划的既有执行会话保持可用；一旦存在计划，发送、子 Agent、DAG 首层/后续层及手工写入口必须命中当前 `version + digest` 审批；全连接器、远程入口和最终 Acceptance 仍待统一 |
+
+验收边界：切换 Assistant/Studio 不改变执行策略；切换 Drive 不扩大权限；Full Access/`bypassPermissions` 不跳过预算、数据外发、凭据隔离、Effect、未知结果对账或最终 Acceptance。
 
 ## 7. 领域模型
 
@@ -413,7 +471,29 @@ sourceRef, verifier, observedAt, generation, metadata
 
 约束：Evidence 对高风险执行采用 append-only 语义；更正必须新增记录并引用被更正项。
 
-当前实现状态：`task-snapshots.db` v8 保留 v6 TaskRun Effect evidence 的本地 hash-chain foundation，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions、有限 API/IPC/UI 和 cursor 分页。Artifact Graph edge/location、关系/归属完整性、邻域查询、脱敏 export 和只读 diagnose/repair 已有 targeted smoke。Task Snapshot/TaskRun 恢复读取支持 `legacy`、`compare`、`canonical` 三态：compare 在两侧漂移时 fail-closed，canonical 从 Workflow Run/recovery session 读取；mode 按数据库路径隔离，运行时切换在 mutation queue 中 fresh revalidate 后才提交，未配置时默认 legacy。所有 Task Store open 共享按数据库路径隔离的 single-flight readiness；legacy JSON/旧 SQLite 迁移覆盖精确备份与 journal/checkpoint、候选校验、原子替换、崩溃续做和回滚恢复，future/corrupt source fail-closed。持久 `workflow_store_identity` 与 committed 高水位连续性会拒绝目标删除、截断、版本回退和同版本空库替换。该 cutover 只覆盖恢复读源；完整 Artifact Graph/blob/sourceRef/metadata 生命周期、所有入口与外部事件接入、Canonical Conversation Ledger、统一 retention/delete 和生产补偿仍未完成。
+当前实现状态：`task-snapshots.db` v9 保留 v6 TaskRun Effect evidence 的本地 hash-chain foundation，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions，以及 Conversation Ledger stream/generation/event archive。JSONL 是同步耐久源，DB archive 具有独立 hash chain；Checkpoint 或链前缀变化创建新 generation，旧代不覆盖。启动回填历史账本，恢复/分叉在 JSONL 缺失时从 DB 当前代重建，损坏文件 fail-closed；Project 永久删除同步清理 archive 并写授权计数。Artifact Graph edge/location、关系/归属完整性、邻域查询、脱敏 export 和只读 diagnose/repair 已有 targeted smoke。Task Snapshot/TaskRun 恢复读取支持 `legacy`、`compare`、`canonical` 三态：compare 在两侧漂移时 fail-closed，canonical 从 Workflow Run/recovery session 读取；mode 按数据库路径隔离，运行时切换在 mutation queue 中 fresh revalidate 后才提交，未配置时默认 legacy。所有 Task Store open 共享按数据库路径隔离的 single-flight readiness；legacy JSON/旧 SQLite 迁移覆盖精确备份与 journal/checkpoint、候选校验、原子替换、崩溃续做和回滚恢复，future/corrupt source fail-closed。持久 `workflow_store_identity` 与 committed 高水位连续性会拒绝未授权删除、截断、版本回退和同版本空库替换。Responses 服务端上下文已有 Provider/模型/协议/Key 约束的持久游标基础，身份不匹配时回退本地账本。v9 archive 已有独立 Conversation Ledger、跨进程 Provider fork 和 Checkpoint/Effect boundary required gate；完整 Artifact/blob/sourceRef/metadata 生命周期、所有入口与外部事件接入、真实 Provider 强杀/跨协议行为证据、统一 retention/export/import 和生产补偿仍未完成。
+
+2026-07-30 开发增量：耐久转录现包含 init/status/meta、权限、Key/Provider 路由、
+tool start/result、Checkpoint 和上下文压缩边界等语义事件；Responses 服务端链不可复用时，
+会从这些事件生成有界的跨 Provider/协议输入，附件只携带 content-addressed 引用，工具调用与结果
+按 ID 配对。恢复界面同步展示事件 causation/correlation、服务端 context generation、Checkpoint、
+Effect lease/fence/evidence。`npm run test:conversation-ledger` 已覆盖首次 archive、增量 append、
+Checkpoint rewrite 新 generation、旧 generation 保留、JSONL 缺失恢复、JSONL/DB 篡改 fail-closed、
+附件引用、tool-call/result 配对和 portable replay 不重放副作用。该 archive 仍是同步 JSONL 的
+canonical DB 副本，不代表所有业务入口、Artifact 或外部事件都已统一 canonical 化。
+
+同日显式分叉增量：历史对话可从侧栏进入现有 Provider/模型选择器；新分叉保留源
+Project/Goal/WorkItem 与本地语义账本，但生成新的 Session/SDK 身份，不继承 Responses response id、
+Claude SDK resume id 或 Key 身份。OpenAI Responses/Chat、Anthropic Messages 和 Claude Agent SDK
+分别使用同一 Provider-neutral 回放合同；来源没有 CaoGen 语义账本时 fail-closed，不伪装恢复隐藏
+Provider 上下文。v9 canonical archive 已按 stream/generation/event 保存并可在 JSONL 缺失时恢复；
+已有 JSONL 损坏时拒绝覆盖。`npm run test:provider-cross-resume` 通过两个独立 Node 进程证明：删除
+OpenAI 来源 JSONL 后可从 DB 恢复并 fork 到新的 Anthropic Session/SDK/Provider；Project/Goal/WorkItem、
+Run、request、step 和语义事件身份保持，ModelAttempt predecessor/successor 正确链接，附件和工具对可重建。
+`npm run test:checkpoint-effect-boundary` 同时要求 chat/code/both 与兼容 file-rewind 的实际恢复在未决 Effect 前 fail-closed，
+dry-run 只展示范围；组合 required gate 复用现有 Effect 强杀/close-race E2E。以上是 dirty-worktree
+确定性本地证据，不是真实 Provider、完整恢复阶梯、clean full Deep 或发布绑定，因此
+`TRUST-005`、`RUN-003/005/006` 与 `ROUTE-005` 均不关闭。
 
 ### 7.12 Acceptance
 
@@ -461,12 +541,12 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| PROJ-001 | P0 | 当前已验证 | 可创建不要求本地目录的托管 Project Workspace，并经真实 Electron 验证编辑、归档、重启、恢复、导出、软删除和永久删除后的身份连续性。 |
-| PROJ-002 | P0 | 当前已验证 | 本地目录、文件集合、仓库和连接器均为可选 first-class Resource，支持 Studio 增删、重启持久化、digest manifest 导出且删除关联不删除源。 |
+| PROJ-001 | P0 | 当前已验证 | 可创建不要求本地目录的托管 Project Workspace，并经真实 Electron 验证编辑、归档、重启、恢复、导出、软删除和永久删除后的身份连续性。侧栏同时投影 canonical Workspace 和兼容旧目录 Project，按 `workspaceId` 优先保存活动/历史 Session 归属；项目级展开、更多、任务 `+`、顶层新建项目和移动端布局已纳入 5 次启动回归。最新报告：`test-results/project-workspace-lifecycle-ui/2026-07-29T14-57-44-777Z/report.json`。 |
+| PROJ-002 | P0 | 当前已验证 | 本地目录、文件集合、仓库、知识库和连接器均可注册为可选 first-class Resource，支持 Studio 增删、重启持久化、digest manifest 导出且删除关联不删除源。该状态只证明 Resource 生命周期，不证明通用 RAG 检索、连接器执行或外部授权已实现；后者由 `CONN-002/003` 验收。 |
 | PROJ-003 | P0 | 当前已验证 | 稳定 Project ID 已成为跨 Store sealed aggregate 的统一身份；查询、授权、校验、导出、并发 seal、跨 Project 拒绝、重启、缺失/篡改、torn snapshot、Project-ID Memory IPC cutover 以及 ProjectWorkspace、DigitalWorker、Workflow Ledger、Memory 生产 mutation ingress 均由 27 项 required checks 覆盖，最新报告 `notProved=[]`。 |
-| PROJ-004 | P0 | 部分完成（Workspace/Goal/WorkItem lifecycle foundation） | 项目导出、删除、归档和恢复覆盖所有下属对象。 |
-| PROJ-005 | P1 | 立项目标 | 提供 `personal/office/education/research/software/opc/custom` 项目模板。 |
-| PROJ-006 | P1 | 当前已验证 | 项目规则、背景、技术栈、命令、禁止路径、调度和验收可通过 `caogen.md` 编辑。 |
+| PROJ-004 | P0 | 部分完成（完整导出 + 当前参与者可恢复导入/删除） | Studio 已输出包含 18 类对象和显式 RoleTemplate 依赖的 sealed/sanitized Project Aggregate canonical JSON，并提供不要求先创建空 Project 的单文件导入。导入校验 export/aggregate/credential/ownership，保存 `0600` 私密源副本，以 durable journal 分阶段合并 Workspace、Workforce、完整 TaskRun、Artifact Graph、Evidence、Acceptance 和 canonical Learning；缺失且匹配的 RoleTemplate 自动安装，同 ID 不同内容不覆盖，Workflow 先 dry-run、目标链坐标重建，阶段写入后可启动续做，最终重新封存并验证语义等价。永久删除仍强制私密备份、durable delete journal、授权删除连续性账本、零残留 proof 和外部 Resource 保留；同 Project 的删除墓碑可由已验证备份恢复。专项与真实 Electron gate 已覆盖删除后导入、无关 Project 保留、Run 读回、重复/篡改拒绝和重启持久化。全 28 Store owner proof、Artifact blob、Session/transcript/snapshot/ModelAttempt、旧路径 Memory、connector 和全 inventory 删除证明仍未关闭。 |
+| PROJ-005 | P1 | 立项目标 | 提供 `personal/office/education/research/software/opc/custom` 项目模板；模板包含最少必要的任务预设、Artifact 类型、Acceptance 草案和 Resource 建议，不静默授予工具或数据权限。 |
+| PROJ-006 | P1 | 当前已验证 | 项目规则、背景、技术栈、命令、禁止路径、调度和验收可通过 `caogen.md` 编辑。Codex `AGENTS.md`、Claude `CLAUDE.md` 等外部规则的选择性导入、来源标注、冲突预览、备份和回滚属于迁移黄金路径，不由当前状态证明。 |
 | PROJ-007 | P2 | 后续规划 | 多 Project Portfolio、跨项目依赖和资源计划。 |
 
 ### 8.2 Goal 和轻量项目管理
@@ -478,9 +558,9 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | WORK-001 | P0 | 部分完成（production canonical read/write foundation） | 支持 WorkItem 父子关系、依赖、优先级、状态、owner 和截止时间；生产 WorkItem list/get 已默认读取 verified rich view，生产命令已 canonical-first 并校验实体闭包、关系环和 Run 归属。List/Board 已由 WORK-002 单独闭环，完整控制语义和全业务入口 canonical 化仍开放。 |
 | WORK-002 | P0 | 当前已验证 | canonical WorkItem List/Board 共用同一排序与筛选投影，支持 revision-guarded 持久重排、按 Project 保存视图/筛选、1,000 项固定尺寸虚拟化和重启一致性；required gate 已通过真实 Electron 两次启动验证。 |
 | WORK-003 | P0 | 部分完成（canonical multi-Run invariant） | Run/session 只作为 WorkItem 明细展示，不得直接替代任务。当前本地 required smoke 已证明两个独立 Session Run 幂等共享一个 canonical WorkItem、启动重放不重复、Run 不可跨 WorkItem 漂移；完整 renderer→IPC→SessionManager 多入口 E2E 与 clean release 绑定仍开放。 |
-| WORK-004 | P0 | 部分完成（repair/retest + WorkItem/Supervisor control slices） | Workflow Acceptance 失败会确定性创建 canonical repair WorkItem 与 Acceptance；Studio 已覆盖 WorkItem transition/lease。受信 main-process SessionManager 切片已把 Supervisor pause/cancel/resume/retry/reassign 接到同一 canonical TaskRun，并覆盖强 revision/lease/fencing 校验、retry 快照预检、发送门禁、stale revision、failed-resume blocking 与重启后门禁重建；Studio Supervisor UI、真实 Provider parity、预算/并发 enforcement、自动 repair、跨文件事务补偿与跨域强杀仍开放。 |
-| WORK-005 | P1 | 立项目标 | 从自然语言 Goal 生成可审查 Workflow/DAG、依赖和 Acceptance 草案。 |
-| WORK-006 | P1 | 立项目标 | 手工编辑计划后保留原计划版本和变更原因。 |
+| WORK-004 | P0 | 部分完成（repair/retest + WorkItem/Supervisor control slices） | Workflow Acceptance 失败会确定性创建 canonical repair WorkItem 与 Acceptance；Studio 已覆盖 WorkItem transition/lease。受信 main-process SessionManager 切片已把 Supervisor pause/cancel/resume/retry/reassign 接到同一 canonical TaskRun，并覆盖强 revision/lease/fencing 校验、retry 快照预检、发送门禁、stale revision、failed-resume blocking 与重启后门禁重建。TaskRun-owned control 在 runtime 缺失时不再回落直写，其他 renderer mutation 和手工过期租约恢复仅限 manual Run；Goal maxRuns/maxConcurrentRuns/maxTokens/USD cost 已进入 canonical send/turn/retry 本地门禁。Studio Supervisor UI、真实 Provider parity、所有执行入口的一致 enforcement、自动 repair、跨文件事务补偿与跨域强杀仍开放。 |
+| WORK-005 | P1 | 部分完成（Goal Task + session plan + canonical step projection） | 从自然语言 Goal 生成可审查、版本化的 Workflow/DAG、依赖、预计产物、数据外发、成本和 Acceptance 草案；规划策略下用户批准前不得执行。当前 Studio 一句目标会幂等创建 canonical Goal/父 WorkItem、自动路由并启动精确绑定 Session；无目录 Project 使用应用隔离执行目录，普通对话仍不要求 Project，部分写入重试可恢复且冲突 fail-closed。canonical Project 侧栏 `+` 直达选中项目的该入口，活动 Session 与重启后的历史记录继续按 `workspaceId` 留在项目内。会话级计划工作台和 Genesis→计划版本捕获已接通，发送、子 Agent、DAG 与手工写入口均受审批门保护。已绑定 Project 的审批步骤会按稳定 step ID 幂等投影到现有父 WorkItem 下，依赖和预期产物 AcceptanceSpec 进入 canonical command/Workflow Ledger；增改删、重启、冲突 fail-closed 和无 Project 对话边界均有自动回归。自然语言 Goal 到完整 Workflow/DAG 草案仍需进入计划策略链。 |
+| WORK-006 | P1 | 部分完成（immutable versions + projection receipt） | 手工编辑或模型修订计划后保留原计划版本、变更原因和批准主体；批准只覆盖所见版本，后续实质变更必须重新确认。当前本地私有存储保留不可变版本、SHA-256 摘要、变更原因、append-only 批准/撤销/superseded 事件，并为审批保留可校验的 conversation/canonical 投影回执，在重启、篡改、绑定冲突或运行中重写时 fail-closed；计划合同自身的 canonical Ledger 历史、真实多主体审批和统一 retention/export/delete 仍开放。 |
 | WORK-007 | P2 | 后续规划 | 里程碑、Timeline、Gantt、Portfolio 和跨项目报表。 |
 
 ### 8.3 数字员工
@@ -492,7 +572,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | TEAM-003 | P0 | 部分完成（policy persistence + execution guards） | 员工职责、权限、数据范围、预算、并发、验收和升级策略已持久化并进入 Studio；35 项 required checks 已覆盖 provider send、native tool、Claude tool authorization、Supervisor control 与 Assignment owner 的前置拒绝、重启恢复和拒绝时无 durable mutation。仍有五类 P0 绕过：Session/Run 未冻结 immutable workerId+assignmentId；OpenAI/Anthropic tool loop 后续请求与 Claude queued turn dispatch 不重检 Provider policy；`bash`、`gui_*`、`mcp_call_tool` 存在 composite capability 逃逸；Claude 仅靠 `canUseTool`，`bypassPermissions`/`allowedTools` 与未强制的 `PreToolUse` 仍可能绕过；monthly budget 依赖可截断/删除的 `sessions.json` 累计且漏算跨月 active session 与历史不可计费引擎。 |
 | TEAM-004 | P0 | 立项目标 | 员工身份与 Provider/model 解耦，同一员工允许多个 ModelAttempt。 |
 | TEAM-005 | P0 | 部分完成（retirement and Assignment history） | 退休员工不删除历史 Assignment、Run、Artifact、Evidence 和 Audit。 |
-| TEAM-006 | P1 | 立项目标 | 根据 Goal 推荐 1 至 8 个必要岗位，默认避免无价值的多 Agent 扩张。 |
+| TEAM-006 | P1 | 立项目标 | 根据 Goal 推荐 1 至 8 个必要岗位并由负责人汇总；每个岗位必须声明方法、工具、数据、预算、输出和 Acceptance，默认避免仅靠人设命名的无价值多 Agent 扩张。 |
 | TEAM-007 | P1 | 立项目标 | 提供岗位记忆命名空间、项目记忆读取范围和用户确认式学习。 |
 | TEAM-008 | P1 | 立项目标 | 绩效以 Acceptance 通过率、返工、成本、时效和可靠性计算。 |
 | TEAM-009 | P2 | 后续规划 | 团队模板市场、岗位版本共享和组织级岗位策略。 |
@@ -503,10 +583,10 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 |---|---|---|---|
 | ROUTE-001 | P0 | 当前已验证 | 基于任务、规则、健康、预算、成本、质量和速度进行模型选择。 |
 | ROUTE-002 | P0 | 当前已验证 | 同 Provider 多 Key failover 和跨 Provider failover。 |
-| ROUTE-003 | P0 | 当前已验证 | Assistant 首次启动不显示 Provider/model/engine 选择；无计算资源时提供非技术可恢复状态，重试可零选择发现本地 Responses Provider，经真实 Router/stream path 完成发送，并无损切换 Studio 后返回同一 canonical session 与 draft。 |
+| ROUTE-003 | P0 | 当前已验证 | Assistant 首次启动不显示 Provider/model/engine 选择；自动发现并激活固定 loopback 地址上正在运行的 Ollama、LM Studio 或 vLLM，无需 API Key 或 Project 即可经真实 Router/stream path 发送。无计算资源时提供非技术可恢复状态和“使用本机模型”入口，并可无损切换 Studio 后返回同一 canonical session 与 draft；不得将“已运行本地服务时零 Key”扩大为通用零前置试用。 |
 | ROUTE-004 | P0 | 部分完成（two-native-engine local closure） | 每次路由形成 ModelAttempt 和可读 route reason；原生 Anthropic Messages 已接入可选 Engine/UI、每个 HTTP 请求独立 durable Attempt、NativeToolRuntime 工具循环、同 Provider Key/同协议 Provider failover 和图片重启恢复。真实 Provider、完整恢复阶梯、统一 Run/Context 契约与 clean release-bound 证据仍开放。 |
 | ROUTE-005 | P0 | 立项目标 | Provider 切换保持 Goal、WorkItem、DigitalWorker、Run、上下文和 Artifact 连续。 |
-| ROUTE-006 | P0 | 立项目标 | 预算、权限、隐私和能力要求高于成本/速度偏好，禁止不满足硬条件的候选。 |
+| ROUTE-006 | P0 | 部分完成（resource privacy hard-policy foundation） | 预算、权限、隐私和能力要求必须高于成本/速度偏好，禁止不满足硬条件的候选。当前 Project Resource `deny/S3/local_only` 已在 Provider Attempt 前 fail-closed，`local_only` 冻结原 Provider 并禁止跨 Provider failover，SessionManager DAG 直连也在 Attempt/network 前复核实际 request-body digest；region/domain/capability/permission/budget、初始统一候选过滤、其他 adapter/direct-fetch 入口与完整 request manifest 仍开放。 |
 | ROUTE-010 | P0 | 立项目标 | 故障恢复按“瞬时重试 → 同 Provider 换 Key → 同 Provider 换兼容模型 → 同协议健康 Provider → 跨协议 Adapter → 降级或人工处理”执行；每次请求形成可追踪 ModelAttempt，重放前检查未决 Effect。 |
 | ROUTE-007 | P1 | 立项目标 | 高风险或低置信度任务可自动交叉验证并记录独立 Evidence。 |
 | ROUTE-008 | P1 | 立项目标 | 专家模式允许固定模型、限制厂商、设置本地优先或禁止数据外发。 |
@@ -519,8 +599,8 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | RUN-001 | P0 | 当前已验证 | CaoGen 以冻结、Provider-neutral 的 `caogen.native-runtime.v1` 统一持有 Session、Run、Context、Tool、Permission、usage、error、checkpoint、hook 和 recovery；Anthropic/OpenAI 两内置引擎生产创建路径均强制套 runtime guard。 |
 | RUN-002 | P0 | 部分完成（adapter factories + boundary guards） | 两条生产 engine factory 已绑定 `anthropic.messages` 与 `openai.compatible` Adapter；原始 stream parsing 和 fragmented tool-call assembly 仍位于 `anthropicEngine.ts`、`openaiEngine.ts`，尚未达到纯协议 Adapter 隔离。 |
 | RUN-003 | P0 | 部分完成（Anthropic production-path local closure） | 原生 Anthropic Messages 已注册到生产 SessionManager，并由本地门禁覆盖请求/流/用量/错误/取消、`tool_use/tool_result`、NativeToolRuntime 权限与 Effect、历史/图片重启恢复和保守 failover；OpenAI Responses、Chat Completions 与 Anthropic Messages 的统一 Run/Context/Checkpoint/Hook 契约、真实 Provider 和 clean release-bound parity 仍未整体关闭。 |
-| RUN-004 | P0 | 部分完成（Supervisor foundation + identity/control bridge） | 本地 required gates 已覆盖持久 heartbeat、lease 过期接管、fencing、controls、approval/reconciliation、审计、重启读回、TaskRun→WorkItem/Supervisor 身份绑定，以及受控 SessionManager pause/cancel/resume/retry/reassign；canonical 控制强制 expected revision，lease 动作强制 lease ID/fencing token，retry 在状态提交前预检 durable snapshot，paused Run 在 SessionManager 重建后仍阻止普通发送/自动 replay，failed resume 转 blocked 并保持发送门禁。Studio UI、预算/并发 enforcement、自动编排、真实 Provider parity、跨文件事务补偿和跨域强杀恢复仍开放。 |
-| RUN-005 | P0 | 立项目标 | Desktop 重启后恢复所有非终态 Run，并区分可重试和待对账；Supervisor IPC 的重启读回不等于强杀后全域恢复，仍需逐状态 strong-kill 门禁。 |
+| RUN-004 | P0 | 部分完成（Supervisor foundation + identity/control bridge） | 本地 gates 已覆盖持久 heartbeat、lease 过期接管、fencing、controls、approval/reconciliation、审计、重启读回、TaskRun→WorkItem/Supervisor 身份绑定，以及受控 SessionManager pause/cancel/resume/retry/reassign；canonical 控制强制 expected revision，lease 动作强制 lease ID/fencing token，retry 在状态提交前预检 durable snapshot，paused Run 在 SessionManager 重建后仍阻止普通发送/自动 replay，failed resume 转 blocked 并保持发送门禁。`authorizeTurn` 仅允许 queued/running；renderer 的 direct store mutation/recovery 仅限 manual Run，TaskRun-owned control 缺少 active canonical runtime 时 fail-closed。Goal aggregate run/concurrency/token/USD limits 已在 canonical send reservation/turn/retry 覆盖。当前构建的 live Electron IPC 新负向因本轮端口审批失败未执行；Studio UI、所有执行入口 policy parity、自动编排、真实 Provider parity、跨文件事务补偿和跨域强杀恢复仍开放。 |
+| RUN-005 | P0 | 部分完成（canonical cross-domain strong-kill recovery foundation） | `test:domain-restart-parity:required` 在 Project→Goal→WorkItem→TaskRun→Supervisor→opaque Effect 单链上，于 Effect `executing` 且发生一次外部执行后实际 `SIGKILL`，全新进程恢复为 `waiting_reconciliation`，拒绝自动续跑，过期 lease/旧 fence 被拒绝，ID/ownership/revision/`runRefs` 稳定，重复恢复幂等且自动 replay 为 0。所有非终态、Board、Approval、Artifact、Acceptance、真实 Provider 和 clean release 仍未覆盖，故不关闭本项。 |
 | RUN-006 | P0 | 部分完成（legacy metadata migration） | 旧 `engine: claude` Provider/会话元数据迁移为 `anthropic`；CaoGen transcript 可读/可 fork，不伪称恢复 SDK 隐藏上下文。 |
 | RUN-007 | P1 | 部分完成（runtime removed） | Claude Agent SDK/CLI/AgentSession 已删除，本地 unsigned Intel 包体和真实 renderer 已复验；待完成精确提交 Deep、签名候选绑定和兼容资产边界审核。 |
 | RUN-008 | P2 | 后续规划 | 独立后台服务、远程 Runner 和 Desktop 关闭后继续执行。 |
@@ -531,22 +611,22 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | TRUST-001 | P0 | 当前已验证 | 主要文件编辑和 Git commit/merge/push 已有 Effect/Reconciler 基础。 |
-| TRUST-002 | P0 | 部分完成（versioned entry inventory foundation） | inventory v8 与 AST required gate 已覆盖 156 个 Electron IPC、52 个 Agent 工具和 79 个 ProjectWorkspace/DigitalWorker/Supervisor 嵌套动作；新增、遗漏或重复入口会因 inventory drift 失败，自动化 Agent 外部工具必须归入 queryable、conditional 或 opaque，未知工具保持 opaque 并禁止自动重放。附件写入、MCP probe、迁移导入、终端 start/write/resize/close 和 Browser open/navigate/back/forward/reload 已进入 opaque Effect；项目规则与本地插件安装/卸载已进入 queryable Effect。`migration:import` 在导入前持久化 `executing`，Ledger 只记录资产数量、类型计数和选择摘要，不保存源资产路径、源内容或原始错误；失败/SIGKILL 未知结果进入 `waiting_reconciliation`、刷新恢复面板并禁止自动重放。完整迁移预检、备份、跨文件原子回滚和幂等重跑仍属于 `NFR-REC-005`。其余 7 个 direct-user 外部 IPC 仍只登记为 `replay: never` 且未进入 Effect Ledger，Issue、消息、可查询 MCP 与其余直达入口的专用对账继续开放。 |
-| TRUST-003 | P0 | 立项目标 | PR、Issue、消息、可查询 MCP、Code Forge 和 Renderer 直接入口具备专用对账策略。 |
-| TRUST-004 | P0 | 立项目标 | 未知结果不得自动重放；必须只读对账或等待人工确认。 |
-| TRUST-005 | P0 | 部分完成（v8 recovery + production canonical Goal/WorkItem read/write foundation） | `task-snapshots.db` v8 保留 TaskRun Effect evidence append-only hash-chain，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions、有限 API/IPC/UI、cursor 查询和 fail-closed 校验；生产 Goal/WorkItem list/get 已默认从 verified rich view 读取，生产命令已切为 Ledger-first、JSON 投影，并覆盖提交顺序、死进程锁回收与三个强杀恢复点。未配置时 Task Snapshot/Run 恢复仍默认 legacy；其他业务入口、完整 Artifact/blob/sourceRef 生命周期、Canonical Conversation Ledger、统一 retention/delete 和生产补偿计划/审批/执行仍待完成。 |
-| TRUST-006 | P0 | 当前已验证（基础） | 新密钥的可逆 `b64:` 持久化 fallback 已移除并由主进程 Broker 提供；模型发现使用已存 Key 时已强制绑定保存的 Base URL、路由头、鉴权头名和协议，拒绝 renderer 替换网络目标。仍需完成 provider/project/session/operation/expiry 作用域和子进程最小环境。 |
+| TRUST-002 | P0 | 部分完成（static entrance inventory foundation） | Required AST gate 当前发现并登记 339 个工具、IPC、IPC action 与显式外部入口：117 read-only、222 mutation；123 `none`、46 `opaque/manual_only`、143 `durable_local/idempotent_resume`、27 `queryable/reconcile_before_retry`。15 种 EffectTarget 均有 Reconciler，漏登记入口、mutation 伪装只读、缺失 Reconciler 和 opaque 自动 replay 均 fail-closed；Acceptance review 还被显式锁定为 durable mutation。动态注册之外的入口完备性、注册表与运行时 enforcement 一致性，以及逐 mutation 权限/预算/强杀/恢复仍开放。 |
+| TRUST-003 | P0 | 部分完成（local external-effect recovery foundation） | PR、Issue、消息、可查询 MCP、Code Forge 和 Renderer 直接入口具备专用对账策略。GitHub/GitLab Issue 使用 marker 查询；MCP 只接受显式 `readOnlyHint=true` 查询器的后置条件；飞书/钉钉/企业微信未知结果永不自动重发。本地合成 external recovery `15/15` 与 notification `22/22` 已覆盖强杀、重启、零自动 replay/resend 和凭据脱敏；真实远端 readback、网络分区/限流矩阵、所有 connector parity 与 clean release 绑定仍开放。 |
+| TRUST-004 | P0 | 部分完成（registered replay-policy foundation） | 入口清单要求 queryable mutation `reconcile_before_retry`、opaque mutation `manual_only`、durable local mutation `idempotent_resume`；现有文件/Git/Issue/MCP/消息重点路径已通过强杀/重启 gate。该元数据规则尚未证明所有 222 个 mutation 的生产执行器都在每个重放入口复核策略，未知动态入口、跨域补偿和逐入口 strong-kill 仍开放。 |
+| TRUST-005 | P0 | 部分完成（v9 Workflow/Conversation recovery foundation） | `task-snapshots.db` v9 保留 TaskRun Effect evidence append-only hash-chain，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions 与按 generation 保留改写历史的 Conversation Ledger archive；JSONL 缺失可从 DB 当前代恢复，损坏文件 fail-closed，Project 永久删除同步清理并记录授权计数。生产 Goal/WorkItem list/get 已默认从 verified rich view 读取，生产命令已切为 Ledger-first、JSON 投影。Responses 服务端上下文持久游标已接入会话历史和快照；`test:provider-neutral-recovery:required` 已覆盖 archive/generation、防篡改、DB fallback、无副作用 portable replay、双进程 OpenAI→Anthropic fork 和 Checkpoint/Effect boundary。未配置时 Task Snapshot/Run 恢复仍默认 legacy；其他业务入口、完整 Artifact/blob/sourceRef 生命周期、真实 Provider 强杀/跨协议证据、统一 retention/export/import 和生产补偿计划/审批/执行仍待完成。 |
+| TRUST-006 | P0 | 当前已验证（基础） | 新密钥的可逆 `b64:` 持久化 fallback 已移除并由主进程 Broker 提供；模型发现使用已存 Key 时已强制绑定保存的 Base URL、路由头、鉴权头名和协议，拒绝 renderer 替换网络目标。`test-results/provider-runtime-containment/2026-08-01T01-58-13-107Z/report.json` 以 97/97 通过 Broker record、fresh-process session-only 隔离、单一 DAG raw resolver consumer、OpenAI/Anthropic scoped credential lease、动态 import/require 拒绝、全 IPC/preload/Renderer server-only 类型隔离、`ProviderView` 精确投影，以及七个 Provider channel 的目标函数、返回类型、恰好一次根委托调用与可达性审计；对抗性 AST/语义负例拒绝嵌套、序列、部分控制流、TypeScript 可报告的不可达、重复或非最终目标调用。该门禁使用确定性加密 backend test double，不证明平台密码学强度；provider/project/session/operation/expiry 作用域、所有子进程最小环境和全输出 secret canary 仍开放。 |
 | TRUST-007 | P1 | 立项目标 | 插件/MCP 安装、版本变化和能力扩大显示 provenance、digest 和 capability diff。 |
 
 ### 8.7 Artifact、Evidence 和交付
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| ART-001 | P0 | 部分完成（lifecycle contract + Code Forge producer） | canonical Artifact 生命周期已覆盖 16 种 required kind、digest/provenance/version/creating Run、supersession、blob/sourceRef、retention/purge、重启、字节篡改与跨 Project fail-closed；生产 Code Forge patch 已从 Effect confirmation 接入 Artifact lifecycle。report、document、screenshot、test、release、PR 及其他重要生产者仍未全部接入，不能视为“所有重要产物”闭环。 |
+| ART-001 | P0 | 部分完成（lifecycle contract + Code Forge/Office producers） | canonical Artifact 生命周期当前覆盖 17 种 required kind、digest/provenance/version/creating Run、supersession、blob/sourceRef、retention/purge、重启、字节篡改与跨 Project fail-closed；生产 Code Forge patch 与 Word/Excel/PowerPoint/PDF 已从 confirmed Effect 接入 Artifact/Evidence/Acceptance。Office Effect 在批准时冻结来源 identity/bytes/digest 和确定性输出 SHA-256/长度；执行与恢复对账精确验证真实字节，拒绝同格式异内容文件，旧 target 缺少冻结输出身份时要求重新审批。Artifact→Acceptance 缺口状态也由 handoff fail-closed，但完整强杀 checkpoint 矩阵尚未证明。report、design、screenshot、test、release、PR 及其他重要生产者仍未全部接入，不能视为“所有重要产物”闭环。 |
 | ART-002 | P0 | 部分完成（Acceptance identity and evidence hardening） | `done/completed` 门禁已要求 Acceptance/Evidence，支持逐 criterion Evidence link、可选不可变 kind/source policy、live-store/event/source/Artifact byte 复核，以及冻结 Run 所属 Acceptance ID/revision 的受限 failure ingress；旧 Run 首次晚到不得漂移到新 revision。repair-derived policy 传播已覆盖新建、重复恢复和启动恢复；policy authoring 与 review/evidence 选择 UI 已由真实 Electron required gate 覆盖多 criterion kind/source、空 source 拒绝、按 criterion 匹配 Evidence、通过和重启一致性；其余生产者、repair/retest review 和不可变端到端交付链仍开放。 |
-| ART-003 | P0 | 立项目标 | 支持调研→需求→设计输入→实现→审查→修复→测试→交付的阶段 Artifact 传递。 |
-| ART-004 | P0 | 部分完成（repair/retest 本地基础闭环） | 审查失败已幂等创建 canonical repair WorkItem/Acceptance，启动时恢复缺失 repair，完成后清空本轮 Evidence/Verifier 并进入新的 verifying revision；repair Acceptance 现在继承并按 repair criterion ID 重新绑定原 policy 的 kind/source 约束。跨阶段 Artifact 交付、不可变端到端 Evidence 链、UI 和 release-bound 强杀证据仍开放。 |
-| ART-005 | P1 | 立项目标 | 生成统一交付报告：目标、范围、改动、产物、测试、成本、风险、未完成项和审批。 |
+| ART-003 | P0 | 部分完成（Office/Code Forge + local verified staged-flow foundation） | 生产 Code Forge 与通过验收的 Office Artifact 会附加到 producing WorkItem，并按显式引用、dependency、parent 或同 Goal prior-stage 选择最多 24 个上游 Artifact；三条内置引擎都会注入 artifactId/digest/location handoff，自动 lineage 排除同 Run 兄弟输出。resolver 现在要求 Artifact 至少有一个 Acceptance link、每个链接都能解析到 Acceptance，且全部为 `passed/waived`；failed、missing 或无 link 的 Artifact 均不交接。Artifact 已持久化而 Acceptance/Evidence/Link 未完成的窗口已由当前进程与独立进程 readback 负向 gate 覆盖；完整调研→需求→设计→实现→审查→修复→测试→交付状态机、真实 Provider/用户、返工和逐 checkpoint 强杀矩阵仍开放。 |
+| ART-004 | P0 | 部分完成（repair/retest + repaired Artifact byte-flow local closure） | 审查失败已幂等创建 canonical repair WorkItem/Acceptance，启动时恢复缺失 repair，完成后清空本轮 Evidence/Verifier 并进入新的 verifying revision；repair Acceptance 现在继承并按 repair criterion ID 重新绑定原 policy 的 kind/source 约束。跨阶段 Artifact 交付、不可变端到端 Evidence 链、UI 和 release-bound 强杀证据仍开放。 |
+| ART-005 | P1 | 部分完成（canonical delivery report + Office/staged handoff foundation） | 已从 verified canonical records 生成 renderer-safe 统一结果与机器可读交付报告，覆盖目标/范围、WorkItem、Run、Artifact 位置/版本/摘要、Evidence、Acceptance、测试、已知成本覆盖率、风险、未完成项、审批和审计；JSON 导出绑定 SHA-256 且排除 Provider/模型响应与原始 Run 错误。最新自动化已证明两层 DAG、六个工具交接和四种真实文件字节的本地 Office producer/handoff 保持 Artifact/Evidence/Acceptance 身份；真实代码/Office 用户主链、原生应用打开、完整历史成本、返工/下载真人验收与 clean release 绑定仍开放。 |
 | ART-006 | P1 | 条件可用 | GitHub/GitLab PR/MR 依赖 `gh`/`glab`、远端账号和权限；失败时保留 patch 或本地交付包。 |
 | ART-007 | P2 | 立项目标 | 通用远端 Issue/Release 连接器必须具备明确账号范围、Effect/Reconciler 和失败恢复后再进入正式交付链；现有局部入口不等于通用支持。 |
 
@@ -555,10 +635,10 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | AUTO-001 | P1 | 当前已验证 | 本地 Routine、cron、运行记录、通知和防休眠。 |
-| AUTO-002 | P1 | 立项目标 | Routine 到期后创建 WorkItem/Run，并关联 DigitalWorker 和 Project Inbox。 |
+| AUTO-002 | P1 | 立项目标 | Routine 到期后创建 WorkItem/Run，并关联 DigitalWorker 和 Project Inbox；结果、失败、预算超限和待审批进入同一 Artifact/Evidence/通知链。 |
 | AUTO-003 | P0 | 当前已验证 | 自动/模型 Memory、自动 Skill review 与 `optimize_skill` 统一先写入 project-scoped draft，记录来源、置信度、payload digest、完整 before/after diff 和目标路径；未批准草稿不会进入有效 Memory、prompt 或写入 `SKILL.md`。 |
 | AUTO-004 | P0 | 当前已验证 | 仅主进程签发的可信用户决定可使 Memory/Skill 生效；统一生命周期支持 approve/reject、单调版本、revoke、rollback、expiry、delete、审计和重启恢复，Skill 物化采用 fail-closed journal；仅已批准且未过期的 Memory 进入 Anthropic、OpenAI Chat/Responses prompt。 |
-| AUTO-005 | P2 | 后续规划 | 远程 Routine、跨设备通知和云端持续执行。 |
+| AUTO-005 | P2 | 后续规划 | 提供设备绑定的远程任务发起、续接、审批、结果查看、跨设备通知、幂等 Webhook 触发和可选远程 Runner；默认仍由用户绑定设备执行，本地文件与凭据不上传到远程控制通道，离线/休眠/解绑状态必须明确且可审计。 |
 
 ### 8.9 水墨轻动漫 3D 团队
 
@@ -578,9 +658,9 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | CONN-001 | P1 | 当前已验证 | 插件、Skill、MCP 扫描、调用和基础治理。 |
-| CONN-002 | P1 | 立项目标 | 连接器作为 Project Resource 或 Tool 接入，不成为外部 Agent 员工。 |
-| CONN-003 | P2 | 后续规划 | Jira、Linear、Notion、飞书、Slack、Teams 等双向同步。 |
-| COLLAB-001 | P2 | 后续规划 | 多用户、评论、提及、共享审批和组织策略。 |
+| CONN-002 | P1 | 立项目标 | 连接器作为 Project Resource、Knowledge Source 或 Tool 接入，不成为外部 Agent 员工；必须声明 capability、数据方向、个人/共享授权主体、作用域、版本和撤销行为，读取结果保留 source/version/retrievedAt 引用，写操作进入 Effect/Reconciler。 |
+| CONN-003 | P2 | 后续规划 | Jira、Linear、Notion、飞书、Slack、Teams、Figma/Ardot 等双向连接器和知识检索；统一支持个人授权与管理员共享授权、增量刷新、权限变化、引用、删除和跨 Project 隔离。 |
+| COLLAB-001 | P2 | 部分完成（本地单用户转交基础） | 多用户、任务分享/转交、评论、提及、共享审批和组织策略；转交保持 Goal/WorkItem/Artifact/Evidence 身份和不可变审计。当前 Studio 已支持将 WorkItem 转交给同 Project 的人员或 active DigitalWorker；main-owned actor、WorkItem owner/active Assignment 原子协调、旧 lease 撤销、旧/新 owner 权限重算、原因/audit、CAS、幂等和重启读回已通过本地 required gate 与真实 Electron E2E。真实多用户身份、分享、评论、提及、共享审批、组织策略、Webhook 和统一 retention/export/delete 仍未实现。 |
 | COLLAB-002 | P2 | 明确不做 | 1.0 不自建团队聊天、会议和完整协同办公套件。 |
 
 ## 9. 非功能需求
@@ -589,18 +669,18 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| NFR-PRIV-001 | P0 | 立项目标 | Project、Goal、WorkItem、Run、Artifact、Memory 和 Audit 默认本地保存。 |
-| NFR-PRIV-002 | P0 | 立项目标 | UI 必须显示将发送给 Provider 的上下文范围；敏感资源可配置禁止外发。 |
+| NFR-PRIV-001 | P0 | 部分完成（inventory + 完整导出 + 当前参与者可恢复导入/删除） | `local-data-map.ts` 已机器登记 32 个数据条目、53 条路径和 17 类顶层 Project 对象；最新 required report `716/716` 且 `unregisteredSources=[]`，但仍为 29 个 `partial` + 3 个 `inventory_only`、0 个 `enforced`；sealed/sanitized export 按精细类型覆盖 18 类。`0600` 私密导入源/删除备份、durable import/delete journal、启动续做、RoleTemplate 依赖解析、当前 Project/Session 参与者清理、全局 hash-chain 重建、授权删除完整性账本、proof 和 residual scan 已实现。消息连接器作为全局用户配置排除于 Project export/delete；统一 retention 时钟、其余 inventory owner proof、Artifact blob、Session/transcript/snapshot/ModelAttempt、旧路径 Memory、其他 connector 合同和全 inventory 证明尚未关闭。证据：`test-results/local-data-map/2026-07-31T08-31-42-062Z/report.json`。 |
+| NFR-PRIV-002 | P0 | 部分完成（partial preview + resource no-egress foundation） | UI 必须显示将发送给 Provider 的完整上下文范围，敏感资源可配置禁止外发。当前 Studio 已提供 S0-S4 与 `allow/local_only/deny`，Composer 显示接收方、数据等级、排除项并明确标记“部分范围”，Provider Attempt 前会复核 Resource 策略；Claude `@文件` 已做 canonical containment，DAG 直连绑定实际 request-body digest。完整 system/Skill/tool/history/MCP/connector/自动入口预览、强制预览时序、持久 request binding 和 Claude SDK 内部请求仍开放。 |
 | NFR-PRIV-003 | P0 | 立项目标 | API Key、访问令牌和证书不得进入 Renderer、转录、Artifact、Memory、导出包或普通日志。 |
-| NFR-PRIV-004 | P0 | 当前已验证 | 本地模型和内网网关按与远端 Provider 相同的能力、预算、健康和 failover 规则参与自动/手动路由与交叉验证，不因位置或协议标签被降分；本地 Responses Provider 还通过真实 Electron 零选择发现、真实 Router/stream path 和 canonical session/draft 往返验证。 |
+| NFR-PRIV-004 | P0 | 当前已验证 | 本地模型和内网网关按与远端 Provider 相同的能力、预算、健康和 failover 规则参与自动/手动路由与交叉验证，不因位置或协议标签被降分；自动发现只访问固定 loopback HTTP 地址，不扫描 LAN。无鉴权只允许 loopback OpenAI-compatible Provider，不保存伪造 Key、不发送 `Authorization`，远端无鉴权目标必须 fail-closed；重复激活必须幂等。 |
 
 ### 9.2 可恢复性和一致性
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | NFR-REC-001 | P0 | 立项目标 | 已向用户确认成功的数据写入不得因应用崩溃丢失。 |
-| NFR-REC-002 | P0 | 立项目标 | 所有领域写入必须版本化、原子提交或具备事务/日志恢复。 |
-| NFR-REC-003 | P0 | 立项目标 | 重启后 Board、Run、Effect、Approval、Artifact 和 Acceptance 状态一致。 |
+| NFR-REC-002 | P0 | 部分完成（durable writer inventory foundation） | `test-results/durable-write-inventory/2026-08-03T14-22-17-696Z/report.json` 以 13/13 登记 76 个模块和 432 个写入调用，并要求每个 writer 声明 schema/version 与 atomic/transaction/log/delegated/direct/exempt 策略；Permission Audit 与 Conversation Ledger 已推进为 implemented-unverified，当前仍有 7 个 recovery gap、7 个显式 schema gap。Conversation Ledger 已覆盖 canonical append 文件 fsync、replace/copy candidate fsync、原子 rename、POSIX 目录 fsync、严格损坏拒绝和故障注入；Windows 目录 durability/ACL 仍未形成同等级证据，不能据此声称所有领域写入已版本化或可恢复。 |
+| NFR-REC-003 | P0 | 部分完成（canonical cross-domain and Provider Profile strong-kill foundations） | 当前 9/9 门禁证明一个 canonical Project/Goal/WorkItem/TaskRun/Supervisor/opaque Effect 链跨实际 `SIGKILL` 的一致恢复、待对账分类、fencing 和幂等；Provider Profile 的独立 13/13 跨进程/强杀门禁（`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json`）覆盖存活 owner 的 `LOCK_HELD` 竞争、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback checkpoint、死锁回收、备份绑定篡改拒绝、pending writer 阻断、同进程收敛与重复恢复字节稳定。Board、Approval、Artifact、Acceptance、其他非终态、真实 Provider、Windows ACL 与 clean release 仍未证明；当前 Provider Profile Electron UI 由独立 54/54 gate 覆盖。 |
 | NFR-REC-004 | P0 | 部分完成（Supervisor lease/fencing foundation） | Supervisor 记录已证明并发 CAS、过期接管、陈旧 writer 拒绝和单调 fencing token；canonical WorkItem 的所有执行入口尚未共用同一 lease ownership/release 约束，不能宣称完整 WorkItem 执行 lease 保证。 |
 | NFR-REC-005 | P0 | 立项目标 | 所有迁移支持预检、备份、幂等重跑和回滚。 |
 
@@ -608,16 +688,16 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| NFR-AUD-001 | P0 | 立项目标 | 用户能够回答“谁/哪个岗位、何时、为何、用什么模型、调用什么工具、产生什么结果”。 |
-| NFR-AUD-002 | P0 | 立项目标 | Provider/model、路由原因、成本、审批、Effect 和 Evidence 可按 Run 查看。 |
+| NFR-AUD-001 | P0 | 部分完成（canonical audit timeline foundation） | 用户能够回答“谁/哪个岗位、何时、为何、用什么模型、调用什么工具、产生什么结果”。 |
+| NFR-AUD-002 | P0 | 部分完成（canonical audit timeline foundation） | Provider/model、路由原因、成本、审批、Effect 和 Evidence 可按 Run 查看。 |
 | NFR-AUD-003 | P0 | 立项目标 | 日志显示 Key 标签或哈希标识，不显示明文凭据。 |
-| NFR-AUD-004 | P1 | 立项目标 | 项目导出包含机器可读 manifest 和每个 Artifact/Evidence 的 digest。 |
+| NFR-AUD-004 | P1 | 部分完成（Project aggregate export/import + 当前删除证明） | 项目导出已包含 schema-versioned、封存、脱敏的机器可读 Project Aggregate、显式依赖和可复算 SHA-256 `exportDigest`；当前参与者集合可从私密源经 durable journal 导入并做语义等价、重新封存和重启读回。私密删除备份可严格读回，当前 Project/Session 删除参与者生成绑定授权删除记录和零残留扫描的可复算 proof。每个 Artifact/Evidence blob 文件级 digest package、Session/ModelAttempt 等全量可移植包和全 inventory 删除证明仍开放。 |
 
 ### 9.4 性能和资源
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| NFR-PERF-001 | P1 | 当前已验证 | clean `1675eb50` 的真实 Electron required gate 覆盖 desktop/tablet/mobile：3 个 fresh-process cold shell 样本 P95 `31.4ms`，60 个 warm 样本 P95 `32.4ms`，阈值保持 `<300ms`。cold shell 必须首次可见、可聚焦、无遮挡且可真实操作；Provider 响应保持挂起，Session/runtime/canonical Run/请求保持唯一。Project/Goal/WorkItem hydration 为独立诊断 `1204.5–1516.9ms`，不属于切换延迟声明。每个 viewport 只允许首个调度污染、Studio 数据就绪超时或有效 cold 超阈值在全新 renderer/userData 中重试一次；失败 phase 与 DOM/IPC 诊断必须保留，连续失败仍阻断。证据：`test-results/assistant-studio-performance/2026-07-28T05-20-41-787Z/report.json`。 |
+| NFR-PERF-001 | P1 | 当前已验证（clean baseline + dirty-worktree targeted regression） | clean `1675eb50` 的真实 Electron required gate 覆盖 desktop/tablet/mobile：3 个 fresh-process cold shell 样本 P95 `31.4ms`，60 个 warm 样本 P95 `32.4ms`，阈值保持 `<300ms`；证据为 `test-results/assistant-studio-performance/2026-07-28T05-20-41-787Z/report.json`。较新的 dirty-worktree targeted gate 为 cold P95 `156.9ms`、warm P95 `238.1ms`，各视口仍严格 `<300ms`，并保持 Provider 响应挂起、Session/runtime/canonical Run/请求身份不变；证据为 `test-results/assistant-studio-performance/2026-07-28T19-59-33-903Z/report.json`。Project/Goal/WorkItem hydration `1204.5–1516.9ms` 是独立诊断，不属于切换延迟声明；dirty targeted pass 不替代 clean candidate、其他硬件或系统高负载下的 release 性能证据。 |
 | NFR-PERF-002 | P1 | 部分完成（1,000-item virtualization foundation） | 1,000 个 WorkItem 的 List/Board 已采用固定尺寸虚拟化并通过真实 Electron 有界 DOM 验证；参考设备上的初次可交互 P95 <1s 仍待独立测量。 |
 | NFR-PERF-003 | P1 | 立项目标 | 路由本地决策目标小于 500ms，不含 Provider 网络请求。 |
 | NFR-PERF-004 | P1 | 立项目标 | 3D 在定义的参考设备和 12 个可见员工场景保持可交互；不达标时自动降级 LOD 或列表。 |
@@ -627,7 +707,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
-| NFR-UX-001 | P0 | 立项目标 | Assistant 不暴露 Provider、Token、MCP、Git、DAG 等非必要术语。 |
+| NFR-UX-001 | P0 | 立项目标 | Assistant 不暴露 Provider、Token、MCP、Git、DAG 等非必要术语；首屏应提供 3-5 个覆盖代码与办公场景的一键任务，预设必须绑定 `view / plan / execute` 策略、明确产物与恢复方式，不要求先创建 Project，也不得因双击产生重复 Session 或模型请求。 |
 | NFR-UX-002 | P0 | 立项目标 | 待审批、失败、未知副作用和验收失败在两种模式均可见。 |
 | NFR-UX-003 | P1 | 立项目标 | 核心流程全键盘可达，图标按钮具备名称和 tooltip。 |
 | NFR-UX-004 | P1 | 立项目标 | 状态不能只依赖颜色，必须同时使用文字、图标或形状。 |
@@ -722,6 +802,8 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 ### 11.2 默认保留
 
+**当前基础**：`src/main/data-lifecycle/local-data-map.ts` 是本机持久化数据的机器可校验 inventory。它覆盖 32 个数据条目、53 条路径和 17 类顶层 Project aggregate 对象，并把每个条目标为 `enforced / partial / inventory_only`；当前 required report 明确显示 29 个条目仍为 `partial`、3 个仍为 `inventory_only`，没有 `enforced` 条目。Studio 已接入完整、脱敏、封存的 owner-scoped Project Aggregate 导出，但这不替代下列目标策略，也不证明统一 retention/delete 已执行。
+
 **立项目标**：
 
 - Project、Goal、WorkItem、Artifact、Acceptance 和关键 Audit 默认保留至用户显式删除。
@@ -731,6 +813,8 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 - 自动学习的 draft 可设置过期时间，过期不自动进入确认层。
 
 ### 11.3 导出
+
+**当前基础**：生产 Project Aggregate 服务在稳定读取后以 expected revision 封存，生成 schema-versioned canonical JSON、SHA-256 `exportDigest` 与 `sanitized/sealed` verification；Studio 支持复制和下载该完整 bundle。Provider 凭据被排除，敏感字段由 aggregate codec 脱敏并校验。当前基础不包含导入/readback，也不等于 Artifact/Evidence 文件内容打包。
 
 项目导出至少包含：
 
@@ -767,7 +851,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 ### 12.3 未关联会话迁移
 
-- 未关联会话继续保持 `unassigned`，或在用户确认后关联到系统 Personal Workspace。
+- “对话”分组中的会话继续保持内部 `unassigned` 状态，或在用户确认后关联到系统 Personal Workspace。
 - 不得自动猜测并写入错误项目。
 
 ### 12.4 DAG 和角色迁移
@@ -789,11 +873,35 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 - 旧 `engine: claude` 会话元数据迁移为 `anthropic`。
 - 旧会话允许只读、导出和从 CaoGen transcript fork；不得伪称恢复 SDK 未记录的隐藏上下文。
 
+### 12.7 Project 可移植包
+
+**终极要求**：用户只需选择一个 Project 包即可在另一 CaoGen 环境读回并继续工作，不需要先创建空 Project、手工复制角色模板、绑定原 Provider 或填写额外路径。包必须声明 schema、Project 身份、对象计数、依赖、文件摘要、脱敏状态和导出摘要；导入必须先预检，再以 durable journal 执行，应用强杀后可继续或安全阻止。
+
+导入规则：
+
+- 保留 Project、Goal、WorkItem、Run、Artifact、Evidence、Acceptance、Memory、DigitalWorker、Assignment 和 Lease 的 canonical 身份与 revision；目标环境专用的 hash-chain 坐标允许重建，但语义摘要必须等价。
+- RoleTemplate、Skill、MCP、连接器和其他全局依赖必须形成显式 manifest；缺失且内容匹配的依赖可安装，已存在的等价依赖可复用，同 ID/版本但内容冲突时必须在任何 Project 写入前 fail-closed。
+- Artifact/Evidence blob 必须按内容摘要打包并复验真实字节；外部 Resource 只保留引用和边界，除非用户明确选择并授权复制。
+- Provider Key、认证、Cookie、Header、URL 凭据和原始敏感错误不得进入包；Provider/model 只作为可选历史观测，不成为继续工作的硬绑定。
+- Session/transcript/snapshot/ModelAttempt、旧路径 Memory 和 connector 状态必须有明确导入、只读兼容或“不包含”清单，不能静默丢失。
+- 重复导入、篡改、身份冲突、依赖冲突和部分写入均不得破坏已有 Project；成功后必须重新封存、逐类计数、语义读回并在重启后复验。
+
+**当前实现基础**：单个 JSON 已覆盖当前 Project Aggregate 参与者集合、完整 TaskRun、Artifact Graph 元数据、两类 Evidence、Acceptance、DigitalWorker/Assignment/Lease、canonical Learning 和 RoleTemplate 自动依赖；私密源、阶段 journal、Workflow dry-run、写前/写后故障恢复、链重建、重新封存、语义读回、删除墓碑恢复、无关 Project 保留、重复/篡改拒绝及真实 Electron 重启已通过本地自动化。Artifact blob、Session/transcript/snapshot/ModelAttempt、旧路径 Memory、Skill/MCP/connector 依赖和全 inventory owner proof仍开放，因此本节目标与 `PROJ-004` 继续保持部分完成。
+
 ### 12.7 视觉设置迁移
 
 - 当前机器人/角色外观设置映射到新的默认水墨人物配置。
 - 用户的画质、Badge、动效强度和布局偏好尽量保留。
 - 旧资产仅在迁移和回滚窗口内保留，不再作为 1.0 用户主视觉。
+
+### 12.8 Provider Profile 可逆迁移
+
+- 导出文档必须版本化，默认排除 API Key、Token、加密凭据和活动 Key 引用；导入文件即使含凭据字段也必须忽略并明确警告。
+- 应用前必须预览 Provider 名称、Base URL、引擎/协议、匹配目标、冲突类型和变更字段，允许用户逐项选择新建、更新或跳过；多义匹配默认跳过。
+- 只有名称和目标绑定身份都精确匹配，且 Base URL、引擎、协议、自定义路由头、凭据头均未变化时，更新现有 Provider 才可保留 Broker 凭据；任一目标绑定变化必须隔离旧凭据并要求显式替换后重绑。新 Provider 不得从可移植 Profile 获得 Key；切换 `authMode:none` 必须删除旧 Key，切回时重新录入。
+- 应用前自动生成本机私密备份，备份需有完整性 digest；批量变更只能全部提交或全部回滚。一键回滚前再备份当前状态，使回滚本身可逆。
+- Import/rollback 写入必须共享跨进程 mutation lock，并在锁内复核预览 CAS。Durable journal 必须绑定前后 Store digest 以及 safety/source backup ID + digest；强杀恢复只允许把已发生结果分类为 committed/aborted，第三 digest 或备份替换必须进入 `waiting_reconciliation`，不得自动 replay。
+- 当前无 GUI Service/Store 自动化以 `135/135` 覆盖上述安全切片、活动 Key 标签/数量、目标凭据绑定变化、权威快照语义、journal malformed/篡改/symlink/超限及文件读取边界，并证明 backup 文件名/内嵌 ID 不一致时回滚失败且 Store 不变（`test-results/provider-profile-smoke/2026-07-31T18-36-07-764Z/report.json`）；真实跨进程/`SIGKILL` gate 以 `13/13` 覆盖存活 owner 的 `LOCK_HELD` 竞争、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback checkpoint、死进程锁回收、重复恢复字节稳定、同进程对账收敛和 6 类 pending writer 阻断（`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json`）。该 gate 精确断言 `prepared`/waiting 期间普通 writer 与伪造 operation ID 都不能旁路冲突；第三 Store digest 先持久进入 `waiting_reconciliation`，Store 修复为 before/desired 后分别收敛为 `aborted`/`committed` 并恢复普通写入。safety/source backup 在 Store commit 前和 terminal 前复核 ID/digest，prepare 后或 Store commit 后篡改均 fail-closed，恢复冻结字节后才收敛并恢复写入。死 owner 回收按设计保留一个有 5 分钟保护期的 bounded recovered tombstone。当前 Electron required gate 以 `54/54` 通过真实主进程 IPC、Renderer 与四张截图覆盖危险 URL 拒绝、预览/应用、跨启动回滚、脱敏备份/导出、活动 Key 标签与凭据影响说明、Key 删除取消/确认/重新录入及 `760x700` 布局（`test-results/provider-profile-e2e/2026-07-31T18-36-51-341Z/report.json`）。Windows ACL 和 Provider Store 顶层 schema 版本化仍未验证；最终关闭还必须在真实 Provider 下完成模型发现、健康检查、默认切换和故障切换，并由真实用户完成计时迁移及 clean release 绑定。
 
 ## 13. 端到端验收场景
 
@@ -863,10 +971,48 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 **操作**：导出 Project 后执行永久删除。
 **通过条件**：导出包包含 manifest/digest 和完整业务对象，不含凭据；删除只清除 CaoGen 数据，不删除原始目录或外部系统数据。
 
+**当前证据边界**：完整脱敏封存导出和当前参与者集合导入已由真实 Electron `19/19` gate 覆盖删除后单文件恢复、无关 Project 保留、Run 读回、重复/篡改拒绝和重启持久化；`test:project-import` 另覆盖私密源、RoleTemplate 自动依赖/冲突、Workflow 写前 journal 故障续做、语义读回和重新封存。`test:project-permanent-deletion` 覆盖删除前私密备份、durable journal、首批跨 Store 与 Session/Workflow 物理清理、双 Project hash-chain 隔离、deletion proof、篡改拒绝、residual scan 和外部源保留。全 inventory owner proof、Artifact/Evidence blob、Session/transcript/snapshot/ModelAttempt、旧路径 Memory 和 connector 包仍开放，因此 AC-13 未关闭。
+
 ### AC-14 水墨数字团队
 
 **操作**：打开包含至少 12 个员工及运行、审批、失败、完成状态的 3D 场景。
 **通过条件**：用户可通过人物、文字、图标和形状识别岗位与状态；动作来自真实事件；无机器人主角色；性能不足时自动降级且核心操作可用。
+
+### AC-15 通用办公成品（P1 黄金路径）
+
+**操作**：用户提供会议材料和数据表，要求生成带来源的决策纪要、可计算表格和演示文稿。
+**通过条件**：三个文件均可在目标应用打开；进入同一 Project 的 canonical Artifact；统一结果工作台可查看工作区、变更、结构/视觉预览、引用和版本；导出包包含 manifest/digest；格式或来源验收失败时不得标记 Goal 完成。
+
+**当前证据边界**：`npm run test:office-delivery:required` 最新以 40 项本地检查证明 Word/Excel/PowerPoint/PDF 四种 production tool 统一经过 durable Effect、Artifact、Evidence、Acceptance 与 dependency handoff；结构化输入、输出竞态、来源文件 identity/bytes/SHA-256、批准输出字节身份、失败自检、跨 Project、伪造 confirmed Effect、同格式异内容文件、重复执行、缺失 Acceptance、三时区确定性和独立 Node 进程重启均 fail-closed。6 个 confirmed Effect 中 5 个具备 v1 output binding，1 个旧 confirmed Effect 保持可读但被 producer 隔离；旧 waiting Effect 禁止确认已应用，可在确认未应用后 abandoned 并显式重新生成。7 个 canonical Artifact 对应 5 passed + 1 failed Acceptance，但旧 passed Artifact 和 Acceptance 未提交窗口均被隔离，只有 4 个 v1 passed Office Artifact 具备 handoff 资格。该门禁只证明当前生成器同输入的确定字节，不代表任意语义等价 OOXML ZIP 已完全规范化。保留文件已经结构解析和渲染目检，但尚无真实 Provider、Word/Excel/PowerPoint 原生应用打开、统一结果工作台真人钻取、30 分钟真实用户任务、完整强杀 checkpoint 矩阵、返工/导出和 clean release 绑定，因此 AC-15 仍开放。
+
+### AC-16 项目知识与连接器（P1 黄金路径）
+
+**操作**：项目同时接入本地资料和一个外部知识源，执行带引用的研究任务后撤销外部授权。
+**通过条件**：每条结论可追溯到 source/version/retrievedAt；个人与共享授权不混用；跨 Project 查询不召回；撤销后新 Run 无法读取该源，历史 Evidence 保留必要摘要但不泄露已撤销凭据或原文。
+
+### AC-17 远程接续（P2，非 1.0 阻塞）
+
+**操作**：用户从绑定移动端续接桌面上的 WorkItem、批准一个限定文件修改并查看最终 Artifact，期间令 Desktop 离线后恢复。
+**通过条件**：远程消息复用同一 Goal/WorkItem/Run；审批绑定动作、目标、有效期和 revision；离线期间明确不可执行且不丢消息身份；恢复后不重复副作用；解绑后远程端立即失去控制权。
+
+### AC-18 任务转交（P2，非 1.0 阻塞）
+
+**操作**：Project Owner 将一个进行中的 WorkItem 转交给另一成员，并保留原审批和 Artifact 历史。
+**通过条件**：新 owner 权限重新计算；旧 owner 不能继续写入；Goal/WorkItem/Artifact/Evidence ID 不变；转交原因和双方身份进入审计；系统没有内建聊天或会议依赖。
+
+**当前自动化基础**：本地可信用户已可在 Studio 将 WorkItem 转交给同 Project 的人员或 active DigitalWorker；`npm run test:work-item-transfer:required` 验证 owner/Assignment 协调、旧 lease 撤销、旧 owner 失权、新 owner 授权、历史保留、原因/audit、CAS、幂等、跨 Project/停用 Worker/策略拒绝零副作用和重启读回，`npm run test:work-item-transfer:e2e` 验证真实 Electron UI 与移动端布局。AC-18 仍开放，因为尚无两个真实成员身份、共享审批和完整 Artifact/Evidence 多主体保留验收。
+
+### AC-19 Codex / Claude Code 用户迁移（P1 黄金路径）
+
+**操作**：一名真实 Codex 或 Claude Code 深度用户在 30 分钟内导入现有项目规则、一个 Skill、一个 MCP 和一个 Hook，完成“理解项目→修改→测试→审查 Diff→交付”的真实任务。
+**通过条件**：导入前显示来源、目标、冲突和完整 diff；原文件有可恢复备份且可一键回滚；未选择资产不导入；敏感字段不进入 Renderer/日志；任务产生 canonical Artifact/Evidence/Acceptance；记录回退原工具次数和未迁移习惯，未通过不得宣称迁移完成。
+
+### AC-20 Provider Profile 迁移（P1 黄金路径）
+
+**操作**：从受支持配置源导入两个 Provider profile，完成模型发现、健康检查、默认切换、故障切换、导出和回滚。
+**通过条件**：Base URL、协议、鉴权目标和 Key 标签可预览；Key 只进入主进程 Broker；配置写入原子且有版本/备份；导出默认不含凭据；故障切换保持同一 Goal/WorkItem/Run/Context，route reason 和成本可见。
+
+**当前证据边界**：无 GUI Service/Store smoke 以 135/135 覆盖无凭据导出、冲突预览、逐项决策、凭据排除、活动 Key 标签/数量、目标凭据绑定变化、规范化重复/URL path 大小写、IPv4/IPv6 loopback no-auth、远程 no-auth 网络前拒绝、目标变化凭据隔离与显式重绑、权威快照字段清除、锁内配置漂移 CAS、脱敏备份、Key 真删除、journal 文件边界和 backup 文件名/内嵌 ID 绑定（`test-results/provider-profile-smoke/2026-07-31T18-36-07-764Z/report.json`）。独立 restart gate 以 13/13 真实跨进程/`SIGKILL` 场景证明存活 owner 竞争返回 `LOCK_HELD`、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback checkpoint、死进程锁回收、重复恢复零 replay/字节稳定、同进程对账收敛和 6 类 pending writer 阻断（`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json`）。未知 Store digest 会持久进入 `waiting_reconciliation`，修复为 before/desired digest 后分别收敛为 `aborted`/`committed` 并恢复普通写入；safety/source backup 在 Store commit 前和 terminal 前复核 ID/digest，prepare 后或 Store commit 后篡改均 fail-closed，恢复冻结字节后才收敛。死 owner 回收按设计保留一个有 5 分钟保护期的 bounded recovered tombstone。真实 Electron gate 以 54/54 覆盖危险 URL 拒绝、导入预览/应用、跨启动回滚、脱敏备份/导出、活动 Key 标签与“保留/需重新录入/删除/无需密钥”影响说明、Key 删除取消/确认/重新录入及 `760x700` 无水平溢出（`test-results/provider-profile-e2e/2026-07-31T18-36-51-341Z/report.json`）。以上证据均绑定 dirty merge commit `8ba60148`，不构成 release binding；Windows ACL、Provider Store 顶层 schema 版本化、真人迁移、真实 Provider 发现/健康/failover 与 clean release 仍未验证，因此 AC-20 保持开放。
 
 ## 14. 1.0 发布验收总表
 

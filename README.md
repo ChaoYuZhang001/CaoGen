@@ -39,9 +39,9 @@ CaoGen 面向需要完成真实任务的用户，把多模型、多项目、多�
 
 ## 当前进展
 
-截至 2026-07-28，PRD 64 个 P0 = 21 个已验证 + 19 个部分完成 + 23 个立项目标 + 1 个仅达到基础。这个口径来自 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)，不是版本完成率；已发布的 `v0.1.7` 是签名楔子版，不是 1.0 stable。
+截至 2026-07-31，PRD 64 个 P0 中 21 个已验证、43 个仍开放。最近一次 clean/public 快照把开放项分为 19 个部分完成、23 个立项目标和 1 个仅达到基础；较新的 dirty-worktree 结构投影为 30 个部分完成、12 个立项目标和 1 个仅达到基础。两者都不是版本完成率，也不构成发布绑定；已发布的 `v0.1.7` 是 macOS Intel 签名楔子版，不是 1.0 stable，正式跨平台 Release Gate 仍为 blocked。精确边界见 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md) 与 [STATUS.md](./STATUS.md)。
 
-> **正在招募 1 位 Intel Mac 首次用户**：用不超过 30 分钟从官网安装 v0.1.7、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
+> **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
 
 ## 当前核心能力
 
@@ -59,7 +59,7 @@ CaoGen 面向需要完成真实任务的用户，把多模型、多项目、多�
 2. **添加 Provider 和 Key**：打开设置，选择 Provider 模板或填写兼容服务的 Base URL，再添加你自己的 API Key。密钥不会提交到本仓库。
 3. **开始第一个任务**：新建会话，选择本地项目目录或使用“未关联项目”，然后输入：`先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。`
 
-> v0.1.7 macOS Intel x64 安装包已完成 Developer ID 签名、Apple 公证与 Gatekeeper 验证。Windows x64 v0.1.5 是保留的旧版本；请仅从本项目 Releases 下载并核对对应 Release 说明。正式 1.0 验收和发布准备状态以 [STATUS.md](./STATUS.md) 为准。
+> v0.1.7 macOS Intel x64 安装包已完成 Developer ID 签名、Apple 公证与 Gatekeeper 验证；但当前公开 Release 的资产集合和正文已偏离仓库批准合同，完整性审计仍失败。Windows x64 v0.1.5 是保留的旧版本；未来 Windows 资产只能在原生审计后以文件名和说明均明确标注的 `unsigned preview` 发布，且不能计入正式跨平台门禁。请仅从本项目 Releases 下载并核对对应 Release 说明，最新证据以 [STATUS.md](./STATUS.md) 为准。
 
 从源码运行：
 

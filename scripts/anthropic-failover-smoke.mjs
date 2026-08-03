@@ -28,10 +28,12 @@ Module._initPaths()
 
 let runtime
 let previousSettings
+let previousProviders
 try {
   compileRuntime()
   runtime = loadRuntime()
   previousSettings = { ...runtime.settings.getSettings() }
+  previousProviders = runtime.providers.loadProviderProfileStore()
   runtime.settings.updateSettings({ sandboxMode: 'restrictedLocal' })
 
   await check('401 and 429 rotate keys with linked successor Attempts', verifyKeyFailover)
@@ -47,6 +49,12 @@ try {
 } finally {
   runtime?.registry.taskRuntimeRegistry.clear()
   if (runtime && previousSettings) runtime.settings.updateSettings(previousSettings)
+  if (runtime && previousProviders) runtime.providers.restoreProviderProfileStoreMemory(previousProviders)
+  if (runtime) {
+    for (const providerId of ['anthropic-primary', 'anthropic-backup']) {
+      runtime.credentials.forgetProviderCredentials(providerId)
+    }
+  }
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
@@ -421,6 +429,7 @@ function providerInfrastructure(options = {}) {
     providerView('other-protocol-decoy', 'Other protocol decoy', 'unsupported', true, ['other-decoy']),
     providerView('anthropic-no-token', 'Anthropic no token', 'anthropic', false, ['claude-empty'])
   ]
+  installPolicyProviderFixtures(providers, keys)
   const calls = {
     resolve: [], rotate: [], pick: [], used: [], keySuccess: [], failure: [], success: []
   }
@@ -483,6 +492,35 @@ function providerInfrastructure(options = {}) {
       recordSuccess: (providerId, latencyMs) => calls.success.push({ providerId, latencyMs })
     }
   }
+}
+
+function installPolicyProviderFixtures(providers, keys) {
+  for (const provider of providers) runtime.credentials.forgetProviderCredentials(provider.id)
+  runtime.providers.restoreProviderProfileStoreMemory(providers.map((provider) => {
+    const apiKeys = (keys.get(provider.id) ?? []).map((key, index) => ({
+      id: key.id,
+      label: key.label,
+      ...runtime.credentials.storeProviderCredential(
+        { providerId: provider.id, keyId: key.id },
+        key.token
+      ),
+      createdAt: index + 1,
+      disabled: false
+    }))
+    return {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      encryptedToken: apiKeys[0]?.encryptedToken ?? '',
+      apiKeys,
+      activeKeyId: apiKeys[0]?.id,
+      models: provider.models,
+      authMode: 'api-key',
+      engine: provider.engine === 'anthropic' ? 'anthropic' : 'openai',
+      budgetUsd: 0,
+      createdAt: 1
+    }
+  }))
 }
 
 function providerView(id, name, engine, hasToken, models) {
@@ -713,6 +751,8 @@ function loadRuntime() {
       attempt: require(findCompiled(outDir, 'anthropic-model-attempt-runtime.js')),
       engine: require(findCompiled(outDir, 'anthropicEngine.js')),
       registry: require(findCompiled(outDir, 'task-runtime-registry.js')),
+      providers: require(findCompiled(outDir, 'providers.js')),
+      credentials: require(findCompiled(outDir, 'providerCredentialRuntime.js')),
       scheduler: require(findCompiled(outDir, 'scheduler.js')),
       settings: require(findCompiled(outDir, 'settings.js')),
       snapshot: require(findCompiled(outDir, 'task-snapshot.js')),

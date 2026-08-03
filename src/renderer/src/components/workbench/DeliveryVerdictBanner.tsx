@@ -59,13 +59,15 @@ export function DeliveryVerdictBanner({
         aria-hidden="true"
         style={{ width: 8, height: 8, borderRadius: '50%', background: color.dot, flex: '0 0 auto' }}
       />
-      <strong style={{ fontWeight: 600 }}>{t.title}</strong>
-      <span>{label}</span>
-      {hint && (
-        <span className="studio-result-verdict-hint" style={{ opacity: 0.85 }}>
-          —— {hint}
-        </span>
-      )}
+      <strong style={{ flex: '0 0 auto', fontWeight: 600, whiteSpace: 'nowrap' }}>{t.title}</strong>
+      <span style={{ flex: '1 1 240px', minWidth: 0, lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+        {label}
+        {hint && (
+          <span className="studio-result-verdict-hint" style={{ opacity: 0.85 }}>
+            {' —— '}{hint}
+          </span>
+        )}
+      </span>
     </div>
   )
 }

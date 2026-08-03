@@ -21,15 +21,28 @@ import {
   type GoalInput,
   type GoalPatch,
   type MutationOptions,
+  type ProjectGoalTaskInput,
+  type ProjectSquadCreateInput,
+  type ProjectSquadInput,
+  type ProjectSquadMemberInput,
+  type ProjectSquadPatch,
+  type ProjectWorkItemCommentCreateInput,
   type ProjectWorkspaceDeleteOptions,
   type ProjectWorkspaceInput,
   type ProjectWorkspaceLeaseOptions,
   type ProjectWorkspaceListOptions,
   type ProjectWorkspacePatch,
   type WorkItemInput,
+  type WorkItemCommentInput,
+  type WorkItemCommentPatch,
+  type WorkItemOwner,
+  type WorkItemOwnerType,
   type WorkItemPatch,
   type WorkItemReorderPlacement
 } from '../../shared/project-workspace-types'
+import { createProjectGoalTask } from '../project-workspace/goal-task-service'
+import { createWorkItemTransferService } from '../project-workspace/work-item-transfer-service'
+import { LOCAL_USER_ACTOR } from '../project-workspace/work-item-authorization'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 import {
   startAssignmentOwnerReadiness,
@@ -41,6 +54,14 @@ import {
   projectIdFromMutationResult,
   verifyProductionProjectMutation
 } from '../project-aggregate/project-mutation-ingress'
+import { createProductionProjectAggregateService } from '../project-aggregate/project-aggregate-factory'
+import { purgeProjectPermanently } from '../data-lifecycle/project-deletion-coordinator'
+import {
+  importProjectAggregate,
+  recoverPendingProjectImports
+} from '../data-lifecycle/project-import-coordinator'
+import { sessionManager } from '../sessionManager'
+import { invalidateHistoryCache } from '../history'
 
 const WORKSPACE_KEYS = new Set([
   'id', 'name', 'kind', 'ownerId', 'resources', 'rulesRef',
@@ -70,11 +91,25 @@ const WORK_ITEM_PATCH_KEYS = new Set([
   'title', 'description', 'type', 'parentId', 'dependencyIds', 'priority',
   'owner', 'dueAt', 'acceptanceSpec', 'artifactRefs', 'runRefs'
 ])
+const GOAL_TASK_KEYS = new Set(['requestId', 'projectId', 'objective'])
+const WORK_ITEM_TRANSFER_KEYS = new Set(['requestId', 'workItemId', 'target', 'reason', 'expectedRevision'])
+const WORK_ITEM_TRANSFER_TARGET_KEYS = new Set(['type', 'id', 'displayName'])
+const SQUAD_KEYS = new Set([
+  'id', 'projectId', 'name', 'description', 'members', 'createdAt', 'updatedAt'
+])
+const SQUAD_PATCH_KEYS = new Set(['name', 'description'])
+const SQUAD_MEMBER_KEYS = new Set(['type', 'id', 'displayName', 'role', 'joinedAt'])
+const COMMENT_CREATE_KEYS = new Set(['id', 'projectId', 'workItemId', 'body', 'mentions', 'createdAt', 'updatedAt'])
+const COMMENT_PATCH_KEYS = new Set(['body', 'mentions'])
 const PROJECT_WORKSPACE_MUTATIONS = new Set([
-  'create', 'update', 'archive', 'restore', 'delete', 'purge',
+  'create', 'update', 'archive', 'restore', 'delete', 'purge', 'import:data',
   'goals:create', 'goals:update', 'goals:transition', 'goals:archive', 'goals:restore', 'goals:acceptance',
-  'workItems:create', 'workItems:update', 'workItems:reorder', 'workItems:transition', 'workItems:acceptance',
-  'workItems:lease:acquire', 'workItems:lease:renew', 'workItems:lease:release'
+  'workItems:create', 'workItems:update', 'workItems:transfer', 'workItems:reorder', 'workItems:transition', 'workItems:acceptance',
+  'workItems:lease:acquire', 'workItems:lease:renew', 'workItems:lease:release',
+  'squads:create', 'squads:update', 'squads:archive', 'squads:restore',
+  'squads:members:add', 'squads:members:remove',
+  'comments:create', 'comments:update', 'comments:delete',
+  'goalTask:create'
 ])
 
 type ProjectWorkspaceHandler = (...args: unknown[]) => unknown
@@ -106,6 +141,8 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
   export: (rawId, rawDestination) => withStore((store) => store.exportManifest(
     requiredString(rawId, 'workspace id'), safeDestination(rawDestination)
   )),
+  'export:data': (rawId) => exportProjectData(requiredString(rawId, 'workspace id')),
+  'import:data': (rawSource) => importProjectAggregate(rawSource, app.getPath('userData')),
   'goals:list': (rawProjectId, rawOptions) => withReadService((reads) => reads.listGoals(
     optionalString(rawProjectId), normalizeListOptions(rawOptions)
   )),
@@ -135,7 +172,15 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
   'workItems:create': (rawInput, rawOptions) => withCommandService((commands) => commands.createWorkItem(
     normalizeWorkItemInput(rawInput), normalizeMutationOptions(rawOptions)
   )),
+  'goalTask:create': (rawInput) => createProjectGoalTask(
+    normalizeInput<ProjectGoalTaskInput>(rawInput, GOAL_TASK_KEYS, 'goal task'),
+    app.getPath('userData')
+  ),
   'workItems:update': (rawId, rawPatch, rawOptions) => updateWorkItem(rawId, rawPatch, rawOptions),
+  'workItems:transfer': (rawInput) => createWorkItemTransferService(app.getPath('userData')).transfer(
+    normalizeWorkItemTransferInput(rawInput),
+    LOCAL_USER_ACTOR
+  ),
   'workItems:reorder': (rawId, rawTargetId, rawPlacement, rawOptions) => withCommandService((commands) =>
     commands.reorderWorkItem(
       requiredString(rawId, 'work item id'),
@@ -155,13 +200,86 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
   )),
   'workItems:lease:release': (rawId, rawOptions) => withCommandService((commands) => commands.releaseWorkItemLease(
     requiredString(rawId, 'work item id'), normalizeLeaseOptions(rawOptions)
+  )),
+  'squads:list': (rawProjectId, rawOptions) => withStore((store) => store.listSquads(
+    optionalString(rawProjectId), normalizeListOptions(rawOptions)
+  )),
+  'squads:get': (rawId) => withStore((store) => store.getSquad(requiredString(rawId, 'squad id'))),
+  'squads:create': (rawInput, rawOptions) => withStore((store) => store.createSquad(
+    normalizeSquadInput(rawInput),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'squads:update': (rawId, rawPatch, rawOptions) => withStore((store) => store.updateSquad(
+    requiredString(rawId, 'squad id'),
+    normalizeInput<ProjectSquadPatch>(rawPatch, SQUAD_PATCH_KEYS, 'squad patch'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'squads:archive': (rawId, rawOptions) => withStore((store) => store.archiveSquad(
+    requiredString(rawId, 'squad id'), normalizeMutationOptions(rawOptions)
+  )),
+  'squads:restore': (rawId, rawOptions) => withStore((store) => store.restoreSquad(
+    requiredString(rawId, 'squad id'), normalizeMutationOptions(rawOptions)
+  )),
+  'squads:members:add': (rawId, rawMember, rawOptions) => withStore((store) => store.addSquadMember(
+    requiredString(rawId, 'squad id'),
+    normalizeInput<ProjectSquadMemberInput>(rawMember, SQUAD_MEMBER_KEYS, 'squad member'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'squads:members:remove': (rawId, rawType, rawMemberId, rawOptions) => withStore((store) => store.removeSquadMember(
+    requiredString(rawId, 'squad id'),
+    normalizeOwnerType(rawType),
+    requiredString(rawMemberId, 'squad member id'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'comments:list': (rawWorkItemId, rawOptions) => withStore((store) => store.listWorkItemComments(
+    requiredString(rawWorkItemId, 'comment work item id'), normalizeListOptions(rawOptions)
+  )),
+  'comments:listProject': (rawProjectId, rawOptions) => withStore((store) => store.listProjectComments(
+    optionalString(rawProjectId), normalizeListOptions(rawOptions)
+  )),
+  'comments:create': (rawInput, rawOptions) => withStore((store) => store.createWorkItemComment(
+    normalizeCommentInput(rawInput), normalizeMutationOptions(rawOptions)
+  )),
+  'comments:update': (rawId, rawPatch, rawOptions) => withStore((store) => store.updateWorkItemComment(
+    requiredString(rawId, 'comment id'),
+    normalizeInput<WorkItemCommentPatch>(rawPatch, COMMENT_PATCH_KEYS, 'comment patch'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'comments:delete': (rawId, rawOptions) => withStore((store) => store.deleteWorkItemComment(
+    requiredString(rawId, 'comment id'), normalizeMutationOptions(rawOptions)
   ))
 }
 
+async function exportProjectData(projectId: string) {
+  const service = createProductionProjectAggregateService(app.getPath('userData'))
+  const currentSeal = service.seals.readProject(projectId)
+  const seal = await service.sealProject(projectId, {
+    expectedAggregateRevision: currentSeal?.aggregateRevision ?? 0
+  })
+  return service.exportProject(projectId, {
+    expectedAggregateRevision: seal.aggregateRevision,
+    expectedAggregateDigest: seal.aggregateDigest
+  })
+}
+
 export function registerProjectWorkspaceIpc(): void {
-  startAssignmentOwnerReadiness(app.getPath('userData'))
+  const userDataRoot = app.getPath('userData')
+  const assignmentReadiness = startAssignmentOwnerReadiness(userDataRoot)
+  const importReadiness = assignmentReadiness.then(() => recoverPendingProjectImports(userDataRoot)).then(({ recovered, failures }) => {
+    if (recovered.length > 0) {
+      console.info(
+        `[caogen] Project import recovery completed: count=${recovered.length}; projects=${projectIds(recovered)}`
+      )
+    }
+    if (failures.length > 0) {
+      console.error(
+        `[caogen] Project import recovery blocked: count=${failures.length}; projects=${projectIds(failures)}`
+      )
+    }
+  })
   ipcMain.handle('projectWorkspace:invoke', async (event, rawAction: unknown, ...args: unknown[]) => {
     assertTrustedWorkflowLedgerSender(event)
+    await importReadiness
     const action = requiredString(rawAction, 'project workspace action')
     const handler = PROJECT_WORKSPACE_HANDLERS[action]
     if (!handler) throw new Error(`project workspace action is not supported: ${action}`)
@@ -171,6 +289,10 @@ export function registerProjectWorkspaceIpc(): void {
     }
     return result
   })
+}
+
+function projectIds(values: readonly { projectId: string }[]): string {
+  return [...new Set(values.map((value) => value.projectId))].sort().join(',')
 }
 
 async function verifyProjectWorkspaceMutation(action: string, args: unknown[], result: unknown): Promise<void> {
@@ -186,10 +308,28 @@ function workspaceMutationProjectId(action: string, args: unknown[], result: unk
   if (['update', 'archive', 'restore', 'delete', 'purge'].includes(action)) {
     return optionalString(args[0])
   }
-  if (action === 'goals:create' || action === 'workItems:create') {
+  if (action === 'goals:create' || action === 'workItems:create' || action === 'squads:create' || action === 'comments:create') {
+    return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
+  }
+  if (action === 'goalTask:create') {
     return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
   }
   return undefined
+}
+
+function normalizeCommentInput(value: unknown): WorkItemCommentInput {
+  const input = normalizeInput<ProjectWorkItemCommentCreateInput>(value, COMMENT_CREATE_KEYS, 'comment')
+  return { ...input, author: LOCAL_USER_ACTOR }
+}
+
+function normalizeSquadInput(value: unknown): ProjectSquadInput {
+  const input = normalizeInput<ProjectSquadCreateInput>(value, SQUAD_KEYS, 'squad')
+  return { ...input, createdBy: LOCAL_USER_ACTOR }
+}
+
+function normalizeOwnerType(value: unknown): WorkItemOwnerType {
+  if (value !== 'human' && value !== 'digital_worker') throw new Error('squad member type is invalid')
+  return value
 }
 
 function recordId(value: unknown): string | undefined {
@@ -233,11 +373,11 @@ function assertActiveAssignmentOwner(workItemId: string, rawOwner: WorkItemPatch
   }
 }
 
-function mutateWorkspaceWithoutActiveAssignments(
+async function mutateWorkspaceWithoutActiveAssignments(
   action: 'archive' | 'delete' | 'purge',
   rawId: unknown,
   rawOptions: unknown
-): unknown {
+): Promise<unknown> {
   const id = requiredString(rawId, 'workspace id')
   assertNoActiveProjectAssignment(id, action)
   if (action === 'archive') {
@@ -246,7 +386,14 @@ function mutateWorkspaceWithoutActiveAssignments(
   if (action === 'delete') {
     return withStore((store) => store.deleteWorkspace(id, normalizeDeleteOptions(rawOptions)))
   }
-  return withStore((store) => store.purgeWorkspace(id, normalizeMutationOptions(rawOptions)))
+  const activeSession = sessionManager.list().find((session) =>
+    session.workspaceId === id || session.projectId === id)
+  if (activeSession) {
+    throw new Error(`Project ${id} cannot purge while Session ${activeSession.id} is active`)
+  }
+  const result = await purgeProjectPermanently(id, app.getPath('userData'), normalizeMutationOptions(rawOptions))
+  invalidateHistoryCache()
+  return result
 }
 
 function assertNoActiveProjectAssignment(projectId: string, action: string): void {
@@ -305,6 +452,32 @@ function normalizeWorkItemInput(value: unknown): WorkItemInput {
   if (record.type !== undefined && !isWorkItemType(record.type)) throw new Error('work item type is invalid')
   if (record.status !== undefined && !isWorkItemStatus(record.status)) throw new Error('work item status is invalid')
   return record
+}
+
+function normalizeWorkItemTransferInput(value: unknown) {
+  const record = normalizeInput<Record<string, unknown>>(value, WORK_ITEM_TRANSFER_KEYS, 'work item transfer')
+  const targetRecord = normalizeInput<Record<string, unknown>>(
+    record.target,
+    WORK_ITEM_TRANSFER_TARGET_KEYS,
+    'work item transfer target'
+  )
+  if (targetRecord.type !== 'human' && targetRecord.type !== 'digital_worker') {
+    throw new Error('work item transfer target type is invalid')
+  }
+  const target: WorkItemOwner = {
+    type: targetRecord.type,
+    id: requiredString(targetRecord.id, 'work item transfer target id'),
+    ...(targetRecord.displayName === undefined
+      ? {}
+      : { displayName: requiredString(targetRecord.displayName, 'work item transfer target displayName') })
+  }
+  return {
+    requestId: requiredString(record.requestId, 'work item transfer requestId'),
+    workItemId: requiredString(record.workItemId, 'work item transfer workItemId'),
+    target,
+    reason: requiredString(record.reason, 'work item transfer reason'),
+    expectedRevision: positiveInteger(record.expectedRevision, 'work item transfer expectedRevision')
+  }
 }
 
 function normalizeReorderPlacement(value: unknown): WorkItemReorderPlacement {

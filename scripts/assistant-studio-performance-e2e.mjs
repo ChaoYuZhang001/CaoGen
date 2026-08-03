@@ -43,7 +43,8 @@ const electronBin = process.platform === 'win32'
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const thresholdMs = 300
 const maxFreshRendererAttempts = 2
-const warmSwitchesPerViewport = 20
+// Sixty samples keep one short scheduler stall from owning the entire nearest-rank P95 tail.
+const warmSwitchesPerViewport = 60
 const firstDelta = 'performance-held-stream '
 const finalDelta = 'performance-complete'
 const viewports = [
@@ -135,10 +136,11 @@ function createReport(sourceBuildBinding) {
     measurementProtocol: {
       clock: 'renderer window.performance.now()',
       start: 'programmatic activation of the visible Assistant/Studio mode button',
-      stop: 'target mode, visible panel, and enabled mode-local control committed through the next animation frame',
-      cold: 'first Studio mount in a fresh Electron renderer process and fresh userData directory',
-      warm: 'subsequent Assistant/Studio switches after Studio has mounted',
+      stop: 'target mode, visible panel, and enabled mode-local control committed through the first ready frame paint',
+      cold: 'first Studio activation after shell prewarm in a fresh Electron renderer process and fresh userData directory',
+      warm: 'subsequent Assistant/Studio switches after the first activation',
       foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
+      windowScheduling: 'the isolated Electron test process disables background and occluded-window throttling to model a foreground app while automation retains desktop focus',
       frameHealthPrecondition: 'each measured interaction starts only after four consecutive foreground frames at or below 50ms; inability to establish that condition within 5s fails the required gate',
       sampleIntegrity: 'one retry in a fresh Electron renderer and userData directory is allowed only after scheduler contamination, Studio data-readiness timeout, or a valid cold sample at/above 300ms; the failed attempt remains in phases and the second failure blocks the gate',
       networkIsolation: 'one local Responses request remains deliberately open and emits no data during all measurements',
@@ -240,7 +242,9 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     await controlledMock.waitForRequest(requestOrdinal)
     phase.before = await waitForRunningBaseline(page, fixture, requestOrdinal, controlledMock)
 
+    await page.waitForSelector('[data-studio-view]', { timeout: 5_000 })
     const coldSample = await measureModeSwitch(page, 'studio', 'cold', 1)
+    assert(coldSample.targetMountedBefore, `${viewport.name}: Studio shell was not prewarmed before first activation`)
     phase.samples.push(coldSample)
     phase.coldSampleIntegrity = classifyPerformanceSampleIntegrity(coldSample, { thresholdMs })
     if (phase.coldSampleIntegrity.status === 'scheduler-contaminated') {
@@ -530,9 +534,12 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
   const measurement = await page.evaluate(async ({ expectedMode, sampleTemperature, timeoutMs }) => {
     const button = document.querySelector(`[data-experience-mode-option="${expectedMode}"]`)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`mode button missing: ${expectedMode}`)
+    const targetMountedBefore = expectedMode !== 'studio' || Boolean(document.querySelector('[data-studio-view]'))
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()))
     const startedAt = performance.now()
     if (sampleTemperature === 'cold') window.__assistantStudioPerformanceColdStartedAt = startedAt
     button.click()
+    const clickCommittedAt = performance.now()
     return new Promise((resolve, reject) => {
       const deadline = startedAt + timeoutMs
       let frameCount = 0
@@ -551,14 +558,18 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
         const readiness = modeReadiness(expectedMode)
         lastNotReadyReason = readiness.reason
         if (readiness.ready) {
+          const readyAt = performance.now()
           requestAnimationFrame(() => {
             recordFrame()
             resolve({
               durationMs: performance.now() - startedAt,
+              clickCommitMs: clickCommittedAt - startedAt,
+              readyMs: readyAt - startedAt,
               frameCount,
               maxFrameGapMs,
               lastNotReadyReason,
-              visibilityState: document.visibilityState
+              visibilityState: document.visibilityState,
+              targetMountedBefore
             })
           })
           return
@@ -609,6 +620,7 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
     }
 
     function focusableAndUnblocked(element) {
+      if (element.matches(':disabled')) return false
       element.focus({ preventScroll: true })
       if (document.activeElement !== element) return false
       const rect = element.getBoundingClientRect()
@@ -625,6 +637,9 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
     temperature,
     ordinal,
     durationMs: roundMs(measurement.durationMs),
+    clickCommitMs: roundMs(measurement.clickCommitMs),
+    readyMs: roundMs(measurement.readyMs),
+    targetMountedBefore: measurement.targetMountedBefore,
     frameCount: measurement.frameCount,
     maxFrameGapMs: roundMs(measurement.maxFrameGapMs),
     rendererTaskDurationMs: rendererMetrics.taskDurationMs,

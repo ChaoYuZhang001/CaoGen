@@ -33,10 +33,12 @@ Module._initPaths()
 
 let runtime
 let previousSettings
+let previousProviders
 try {
   compileRuntime()
   runtime = loadRuntime()
   previousSettings = { ...runtime.settings.getSettings() }
+  previousProviders = runtime.providers.loadProviderProfileStore()
   runtime.settings.updateSettings({
     sandboxMode: 'restrictedLocal',
     permissionAllowlist: '',
@@ -61,6 +63,8 @@ try {
 } finally {
   runtime?.registry.taskRuntimeRegistry.clear()
   if (runtime && previousSettings) runtime.settings.updateSettings(previousSettings)
+  if (runtime && previousProviders) runtime.providers.restoreProviderProfileStoreMemory(previousProviders)
+  runtime?.credentials.forgetProviderCredentials('provider-anthropic-tool-loop')
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
@@ -209,7 +213,8 @@ async function verifyPlanDenial() {
   const harness = await createHarness({
     id: 'anthropic-plan-denial',
     project,
-    permissionMode: 'plan',
+    permissionMode: 'default',
+    taskStrategy: 'plan',
     messageIds: ['plan-user'],
     streamMessage: scriptedStream([
       messageResult('plan-1', [
@@ -228,7 +233,7 @@ async function verifyPlanDenial() {
     assert.equal(feedback.role, 'user')
     assert.equal(feedback.content[0].type, 'tool_result')
     assert.equal(feedback.content[0].is_error, true)
-    assert.match(String(feedback.content[0].content), /规划模式/)
+    assert.match(String(feedback.content[0].content), /规划策略/)
     const replayedAssistant = requests[1].messages.at(-2)
     assert.equal(replayedAssistant.role, 'assistant')
     assert.deepEqual(replayedAssistant.content, [
@@ -712,7 +717,7 @@ async function saveHarnessSnapshot(harness) {
 }
 
 async function createHarness(options) {
-  const meta = metaFixture(options.id, options.project, options.permissionMode)
+  const meta = metaFixture(options.id, options.project, options.permissionMode, options.taskStrategy)
   const run = runFixture(options.id, options.messageIds)
   runtime.registry.taskRuntimeRegistry.set(meta.id, run)
   const attempts = fakeAttemptDependencies()
@@ -721,7 +726,11 @@ async function createHarness(options) {
     resolveTarget: () => target,
     getRun: () => runtime.registry.taskRuntimeRegistry.get(meta.id),
     modelAttempts: new runtime.attempt.AnthropicModelAttemptTracker(attempts),
-    streamMessage: options.streamMessage
+    streamMessage: options.streamMessage,
+    markProviderKeyUsed: () => undefined,
+    recordProviderKeySuccess: () => undefined,
+    recordFailure: () => undefined,
+    recordSuccess: () => undefined
   }
   const events = []
   const engine = new runtime.engine.AnthropicEngine(
@@ -797,24 +806,53 @@ function usage(input, output, cacheRead = 0, cacheCreation = 0) {
 }
 
 function targetFixture(secret = 'anthropic-secret-for-smoke-tool-loop') {
-  return {
-    providerId: 'provider-anthropic-tool-loop',
-    providerName: 'Anthropic tool loop fixture',
+  const providerId = 'provider-anthropic-tool-loop'
+  const keyId = 'key-tool-loop'
+  runtime.credentials.forgetProviderCredentials(providerId)
+  const credential = runtime.credentials.storeProviderCredential({ providerId, keyId }, secret)
+  const provider = {
+    id: providerId,
+    name: 'Anthropic tool loop fixture',
     baseUrl: 'https://provider.invalid',
-    endpoint: 'https://provider.invalid/v1/messages',
+    encryptedToken: credential.encryptedToken,
+    apiKeys: [{
+      id: keyId,
+      label: 'primary',
+      ...credential,
+      createdAt: 1,
+      disabled: false
+    }],
+    activeKeyId: keyId,
+    models: ['claude-tool-loop'],
+    authMode: 'api-key',
+    engine: 'anthropic',
+    budgetUsd: 0,
+    createdAt: 1
+  }
+  runtime.providers.restoreProviderProfileStoreMemory([provider])
+  return {
+    providerId,
+    providerName: provider.name,
+    baseUrl: provider.baseUrl,
+    endpoint: `${provider.baseUrl}/v1/messages`,
     model: 'claude-tool-loop',
     headers: {
       'content-type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'x-api-key': secret
+      'anthropic-version': '2023-06-01'
     },
-    token: secret,
-    keyId: 'key-tool-loop',
+    credentialProvider: { ...provider, credentialHeaderNames: ['x-api-key'] },
+    issueCredentialLease: (scope) => runtime.providers.issueProviderCredentialLease(
+      provider,
+      scope,
+      {},
+      keyId
+    ),
+    keyId,
     keyLabel: 'primary'
   }
 }
 
-function metaFixture(id, project, permissionMode) {
+function metaFixture(id, project, permissionMode, taskStrategy = 'execute') {
   return {
     id,
     title: 'Anthropic tool loop smoke',
@@ -823,6 +861,7 @@ function metaFixture(id, project, permissionMode) {
     providerId: 'provider-anthropic-tool-loop',
     engine: 'anthropic',
     permissionMode,
+    taskStrategy,
     status: 'idle',
     costUsd: 0,
     usage: usage(0, 0),
@@ -965,6 +1004,8 @@ function loadRuntime() {
       engine: require(findCompiled(outDir, 'anthropicEngine.js')),
       effectRuntime: require(findCompiled(outDir, 'effect-runtime.js')),
       idempotency: require(findCompiled(outDir, 'tool-idempotency.js')),
+      providers: require(findCompiled(outDir, 'providers.js')),
+      credentials: require(findCompiled(outDir, 'providerCredentialRuntime.js')),
       registry: require(findCompiled(outDir, 'task-runtime-registry.js')),
       settings: require(findCompiled(outDir, 'settings.js')),
       snapshot: require(findCompiled(outDir, 'task-snapshot.js')),

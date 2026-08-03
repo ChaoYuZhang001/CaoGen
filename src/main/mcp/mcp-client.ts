@@ -29,6 +29,13 @@ export interface McpToolDefinition {
   name: string
   description?: string
   inputSchema?: Record<string, unknown>
+  annotations?: {
+    title?: string
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+    idempotentHint?: boolean
+    openWorldHint?: boolean
+  }
 }
 
 export interface McpResourceDefinition {
@@ -54,6 +61,7 @@ export interface McpDiscoveryResult {
 export interface McpCallToolResult {
   content: unknown[]
   isError?: boolean
+  structuredContent?: unknown
 }
 
 export interface ClaudeDesktopMcpImportResult {
@@ -168,7 +176,11 @@ export async function callMcpTool(
     const result = await client.request('tools/call', { name, arguments: args })
     if (!isRecord(result)) return { content: [{ type: 'text', text: String(result) }] }
     const content = Array.isArray(result.content) ? result.content : []
-    return { content, isError: result.isError === true }
+    return {
+      content,
+      isError: result.isError === true,
+      ...(Object.hasOwn(result, 'structuredContent') ? { structuredContent: result.structuredContent } : {})
+    }
   } finally {
     await client.close()
   }

@@ -14,7 +14,8 @@ export const ANTHROPIC_MESSAGES_PROTOCOL = 'anthropic.messages'
 export const ANTHROPIC_MESSAGES_ADAPTER_VERSION = 'anthropic-messages-v1'
 
 export interface AnthropicModelAttemptAuth {
-  token: string
+  /** Legacy test-only identity input; production request paths use key metadata and a scoped lease. */
+  token?: string
   keyId?: string
   keyLabel?: string
 }
@@ -31,8 +32,8 @@ export interface AnthropicModelAttemptInput {
   requestId?: string
   failoverFromAttemptId?: string
   routeReason?: string
-  preflight?: () => void
-  operation: () => Promise<AnthropicMessagesResult>
+  preflight?: () => void | Promise<void>
+  operation: (operationId: string) => Promise<AnthropicMessagesResult>
 }
 
 export class AnthropicModelAttemptTracker {
@@ -48,11 +49,11 @@ export class AnthropicModelAttemptTracker {
     this.sequence = 0
   }
 
-  execute(input: AnthropicModelAttemptInput): Promise<AnthropicMessagesResult> {
+  async execute(input: AnthropicModelAttemptInput): Promise<AnthropicMessagesResult> {
     // Policy denial must happen before the durable Attempt is opened.
-    input.preflight?.()
+    await input.preflight?.()
     const attempt = this.attemptInput(input)
-    return executePersistedModelAttempt(attempt, input.operation, {
+    return executePersistedModelAttempt(attempt, () => input.operation(attempt.requestId), {
       dependencies: this.dependencies,
       success: (result) => ({
         usage: modelAttemptUsage({
@@ -66,8 +67,8 @@ export class AnthropicModelAttemptTracker {
     })
   }
 
-  begin(input: Omit<AnthropicModelAttemptInput, 'operation'>): Promise<PersistedModelAttemptHandle> {
-    input.preflight?.()
+  async begin(input: Omit<AnthropicModelAttemptInput, 'operation'>): Promise<PersistedModelAttemptHandle> {
+    await input.preflight?.()
     return beginPersistedModelAttempt(this.attemptInput(input), {
       dependencies: this.dependencies
     })

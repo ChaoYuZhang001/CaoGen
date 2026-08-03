@@ -120,7 +120,7 @@ try {
   assert.match(record.recoverySha256, /^sha256:[0-9a-f]{64}$/)
   assert.equal(statSync(recordFile).mode & 0o777, 0o600)
   assert.equal(requests.length, 2)
-  assert(requests.every((item) => item.authorizationPresent))
+  assert.deepEqual(requests.map((item) => item.authorizationPresent), [true, true])
 
   const publicOutput = `${result.stdout}\n${result.stderr}\n${JSON.stringify(record)}`
   for (const forbidden of [
@@ -133,6 +133,23 @@ try {
   ]) {
     assert.equal(publicOutput.includes(forbidden), false, `public output leaked ${forbidden}`)
   }
+
+  const overrideRejected = await runProcess(process.execPath, [
+    path.join(repoRoot, 'scripts', 'real-provider-release-runner.mjs'),
+    '--providers', providerFile,
+    '--record', recordFile,
+    '--audit-report-root', auditRoot,
+    '--allow-loopback-fixture'
+  ], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, CAOGEN_REAL_PROVIDER_RELEASE_TEST_MODE: '' }
+  })
+  assert.equal(overrideRejected.status, 1)
+  assert.equal(overrideRejected.signal, null)
+  const overrideSummary = JSON.parse(overrideRejected.stdout.trim())
+  assert.equal(overrideSummary.errorCode, 'provider_config_override_disabled')
+  assert.equal(overrideRejected.stdout.includes(syntheticToken), false)
 
   const realRecordParent = path.join(tempRoot, 'real-record-parent')
   const symlinkRecordParent = path.join(tempRoot, 'symlink-record-parent')

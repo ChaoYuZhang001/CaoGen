@@ -23,10 +23,16 @@ import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
 
 const WORKTREE_BRANCH_PREFIX = 'caogen'
 const GIT_TIMEOUT_MS = 120_000
+const MANAGED_WORKTREE_REGISTRY_SCHEMA_VERSION = 1
 
 export type ManagedWorktreeState = 'active' | 'removed'
 
 export interface ManagedWorktreeRecord extends ManagedWorktreeProjectionRecord {}
+
+interface ManagedWorktreeRegistryDocument {
+  schemaVersion: 1
+  records: ManagedWorktreeRecord[]
+}
 
 export type ManagedWorktreeRegistryRecordLookup =
   | { ok: true; record: ManagedWorktreeRecord | null }
@@ -530,11 +536,7 @@ type RegistryReadMode = 'query' | 'mutation'
 function loadRegistry(mode: RegistryReadMode = 'query'): ManagedWorktreeRecord[] {
   try {
     const raw = JSON.parse(readFileSync(registryFile(), 'utf8')) as unknown
-    const values = Array.isArray(raw)
-      ? raw
-      : raw && typeof raw === 'object' && Array.isArray((raw as { records?: unknown }).records)
-        ? (raw as { records: unknown[] }).records
-        : null
+    const values = registryValues(raw)
     if (!values) throw new Error('registry 根节点不是 records 数组')
     return validateRegistryRecords(values)
   } catch (err) {
@@ -553,7 +555,11 @@ function saveRegistry(records: ManagedWorktreeRecord[]): void {
   let descriptor: number | undefined
   try {
     descriptor = openSync(temp, 'wx', 0o600)
-    writeFileSync(descriptor, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
+    const document: ManagedWorktreeRegistryDocument = {
+      schemaVersion: MANAGED_WORKTREE_REGISTRY_SCHEMA_VERSION,
+      records
+    }
+    writeFileSync(descriptor, `${JSON.stringify(document, null, 2)}\n`, 'utf8')
     fsyncSync(descriptor)
     closeSync(descriptor)
     descriptor = undefined
@@ -563,6 +569,16 @@ function saveRegistry(records: ManagedWorktreeRecord[]): void {
     if (descriptor !== undefined) closeSync(descriptor)
     if (existsSync(temp)) unlinkSync(temp)
   }
+}
+
+function registryValues(raw: unknown): unknown[] | null {
+  if (Array.isArray(raw)) return raw
+  if (!raw || typeof raw !== 'object') return null
+  const document = raw as { schemaVersion?: unknown; records?: unknown }
+  if ('schemaVersion' in document && document.schemaVersion !== MANAGED_WORKTREE_REGISTRY_SCHEMA_VERSION) {
+    throw new Error(`Unsupported managed worktree registry schema version: ${String(document.schemaVersion)}`)
+  }
+  return Array.isArray(document.records) ? document.records : null
 }
 
 function validateRegistryRecords(values: unknown[]): ManagedWorktreeRecord[] {

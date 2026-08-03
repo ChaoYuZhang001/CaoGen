@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  StudioAuditTimelineItem,
+  StudioAuditTimelinePage,
   StudioResultArtifact,
   StudioResultArtifactLocation,
   StudioResultIssue,
@@ -16,6 +18,7 @@ import { TraceabilityView } from './TraceabilityView'
 import { HeaderIcon } from '../ChatHeaderIcons'
 import { WorkflowAcceptanceRow } from '../WorkflowAcceptanceRow'
 import {
+  isActiveFirstTaskCandidate,
   isFirstTaskComplete,
   patchFirstTaskOnboardingRecord,
   readFirstTaskOnboardingRecord
@@ -182,10 +185,11 @@ function useStudioResult(sessionId: string | null, labels: Labels, language: 'zh
     }
   }, [labels, language, savedLabel, sessionId, snapshot?.state])
   useEffect(() => {
-    if (snapshot && isFirstTaskComplete(snapshot, readFirstTaskOnboardingRecord())) {
+    const record = readFirstTaskOnboardingRecord()
+    if (snapshot && isActiveFirstTaskCandidate(record, sessionId) && isFirstTaskComplete(snapshot, record)) {
       patchFirstTaskOnboardingRecord({ completedAt: Date.now() })
     }
-  }, [snapshot])
+  }, [sessionId, snapshot])
   return { snapshot, loading, error, message, refresh, save }
 }
 
@@ -361,7 +365,7 @@ function ReadyResult({
           onOpenRepair={handleOpenRepair}
         />
       )}
-      {tab === 'timeline' && <TimelineView snapshot={snapshot} labels={labels} />}
+      {tab === 'timeline' && <TimelineView snapshot={snapshot} sessionId={sessionId} labels={labels} />}
       {/* T10(P1-4):跨实体追溯视图,挂在 evidence Tab 之下作为总览 */}
       {tab === 'evidence' && (
         <TraceabilityView
@@ -741,22 +745,180 @@ function EvidenceView({
   )
 }
 
-function TimelineView({ snapshot, labels }: ResultViewProps): React.JSX.Element {
+function TimelineView({
+  snapshot,
+  sessionId,
+  labels
+}: ResultViewProps & { sessionId: string | null }): React.JSX.Element {
+  const [runId, setRunId] = useState('')
+  const [page, setPage] = useState<StudioAuditTimelinePage>()
+  const [items, setItems] = useState<StudioAuditTimelineItem[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const requestRef = useRef(0)
+
+  useEffect(() => {
+    if (runId && !snapshot.runs.some((run) => run.id === runId)) setRunId('')
+  }, [runId, snapshot.runs])
+
+  useEffect(() => {
+    if (!sessionId) return
+    const request = ++requestRef.current
+    setLoading(true)
+    setFailed(false)
+    setPage(undefined)
+    setItems([])
+    void window.agentDesk.queryStudioAuditTimeline(sessionId, {
+      limit: 25,
+      ...(runId ? { runId } : {})
+    }).then((next) => {
+      if (requestRef.current !== request) return
+      setPage(next)
+      setItems(next.items)
+    }).catch(() => {
+      if (requestRef.current === request) setFailed(true)
+    }).finally(() => {
+      if (requestRef.current === request) setLoading(false)
+    })
+    return () => {
+      if (requestRef.current === request) requestRef.current += 1
+    }
+  }, [runId, sessionId, snapshot.verification.resultDigest])
+
+  const loadMore = async (): Promise<void> => {
+    if (!sessionId || page?.state !== 'ready' || !page.nextCursor || loadingMore) return
+    const request = requestRef.current
+    setLoadingMore(true)
+    setFailed(false)
+    try {
+      const next = await window.agentDesk.queryStudioAuditTimeline(sessionId, {
+        limit: 25,
+        cursor: page.nextCursor,
+        ...(runId ? { runId } : {})
+      })
+      if (requestRef.current !== request) return
+      setPage(next)
+      if (next.state !== 'ready') {
+        setItems([])
+        return
+      }
+      setItems((current) => {
+        const ids = new Set(current.map((item) => item.id))
+        return [...current, ...next.items.filter((item) => !ids.has(item.id))]
+      })
+    } catch {
+      if (requestRef.current === request) setFailed(true)
+    } finally {
+      if (requestRef.current === request) setLoadingMore(false)
+    }
+  }
+
+  const integrityMessage = page?.state === 'integrity_error'
+    ? page.errorCode === 'PROJECT_INTEGRITY'
+      ? labels.projectAuditIntegrityError
+      : labels.modelAttemptAuditIntegrityError
+    : undefined
+
   return (
-    <div className="studio-result-content" role="tabpanel" data-studio-result-view="timeline">
-      {snapshot.timeline.length === 0 ? <div className="studio-result-muted studio-result-list-empty">{labels.noTimeline}</div> : (
-        <div className="studio-result-timeline">
-          {snapshot.timeline.map((item) => (
-            <div key={item.id} className="studio-result-timeline-row">
-              <time dateTime={new Date(item.occurredAt).toISOString()}>{formatTime(item.occurredAt)}</time>
-              <span>{item.source}</span>
-              <strong>{item.kind}</strong>
-              {item.entityId && <code>{shortId(item.entityId)}</code>}
-            </div>
+    <div
+      className="studio-result-content studio-result-audit"
+      role="tabpanel"
+      data-studio-result-view="timeline"
+      data-studio-audit-state={failed ? 'failed' : page?.state ?? (loading ? 'loading' : 'empty')}
+    >
+      <div className="studio-result-audit-toolbar">
+        <label htmlFor="studio-result-audit-run">{labels.filterRun}</label>
+        <select
+          id="studio-result-audit-run"
+          className="input"
+          value={runId}
+          disabled={loading || loadingMore}
+          onChange={(event) => setRunId(event.target.value)}
+          data-studio-audit-run-filter
+        >
+          <option value="">{labels.allRuns}</option>
+          {snapshot.runs.map((run) => (
+            <option key={run.id} value={run.id}>{shortId(run.id)} · {run.status}</option>
           ))}
+        </select>
+        {page?.state === 'ready' && (
+          <span className="studio-result-audit-count" data-studio-audit-total={page.total}>
+            {items.length}/{page.total}
+          </span>
+        )}
+      </div>
+
+      {failed && <div className="studio-result-audit-alert" role="alert" data-studio-audit-error>{labels.auditLoadFailed}</div>}
+      {integrityMessage && (
+        <div className="studio-result-audit-alert" role="alert" data-studio-audit-integrity-state={page?.errorCode}>
+          {integrityMessage}
+        </div>
+      )}
+      {page?.state === 'ready' && page.integrity.missingReferences > 0 && (
+        <div className="studio-result-audit-alert" role="status" data-studio-audit-missing-count={page.integrity.missingReferences}>
+          {labels.missingReferences.replace('{count}', String(page.integrity.missingReferences))}
+        </div>
+      )}
+
+      {loading ? <div className="studio-result-muted studio-result-list-empty">{labels.auditLoading}</div> :
+        page?.state === 'unbound' ? <div className="studio-result-muted studio-result-list-empty">{labels.auditUnbound}</div> :
+          page?.state === 'integrity_error' ? null :
+            items.length === 0 ? <div className="studio-result-muted studio-result-list-empty">{labels.noTimeline}</div> : (
+              <div className="studio-result-audit-list">
+                {items.map((item) => <AuditTimelineRow key={item.id} item={item} labels={labels} />)}
+              </div>
+            )}
+
+      {page?.state === 'ready' && page.hasMore && (
+        <div className="studio-result-audit-more">
+          <button type="button" className="btn btn-secondary btn-xs" disabled={loadingMore} onClick={() => void loadMore()} data-studio-audit-load-more>
+            {loadingMore ? labels.auditLoading : labels.loadMore}
+          </button>
         </div>
       )}
     </div>
+  )
+}
+
+function AuditTimelineRow({ item, labels }: { item: StudioAuditTimelineItem; labels: Labels }): React.JSX.Element {
+  return (
+    <article
+      className={`studio-result-audit-row category-${item.category} integrity-${item.integrity}`}
+      data-studio-audit-item={item.id}
+      data-studio-audit-category={item.category}
+      data-studio-audit-integrity={item.integrity}
+      data-studio-audit-run={item.runId}
+    >
+      <div className="studio-result-audit-head">
+        <time dateTime={new Date(item.occurredAt).toISOString()}>{formatTime(item.occurredAt)}</time>
+        <span className={`studio-result-status status-${statusTone(item.status)}`}>{item.status}</span>
+        <strong>{item.action}</strong>
+        <span
+          className="studio-result-audit-actor"
+          title={labels.actor}
+          data-studio-audit-actor={item.actor.kind}
+          data-studio-audit-role={item.actor.role}
+        >
+          {item.actor.label}{item.actor.role ? ` · ${item.actor.role}` : ''}
+        </span>
+      </div>
+      <div className="studio-result-audit-meta">
+        {item.runId && <code title={labels.run}>Run {shortId(item.runId)}</code>}
+        {item.providerId && <span title={labels.provider} data-studio-audit-provider={item.providerId}>{item.providerId}</span>}
+        {item.model && <span title={labels.model} data-studio-audit-model={item.model}>{item.model}</span>}
+        {item.protocol && <span title={labels.protocol} data-studio-audit-protocol={item.protocol}>{item.protocol}</span>}
+        {item.keyLabel && <code title={labels.keyLabel} data-studio-audit-key-label={item.keyLabel}>{item.keyLabel}</code>}
+        {item.toolName && <span title={labels.tool} data-studio-audit-tool={item.toolName}>{item.toolName}</span>}
+        {item.targetKind && <span title={labels.effectTarget} data-studio-audit-target={item.targetKind}>{item.targetKind}</span>}
+        {item.evidenceId && <code title={labels.evidence}>Evidence {shortId(item.evidenceId)}</code>}
+        {item.acceptanceId && <code title={labels.acceptance}>Acceptance {shortId(item.acceptanceId)}</code>}
+        {item.entityId && <code title={item.entityType}>{item.entityType ?? 'entity'} {shortId(item.entityId)}</code>}
+        {item.costUsd !== undefined && <span title={labels.cost} data-studio-audit-cost={item.costUsd}>${formatCost(item.costUsd)}</span>}
+        {item.resultDigest && <code title={labels.resultDigest} data-studio-audit-digest={item.resultDigest}>{shortDigest(item.resultDigest)}</code>}
+      </div>
+      {item.reason && <p className="studio-result-audit-reason" data-studio-audit-reason>{item.reason}</p>}
+    </article>
   )
 }
 
@@ -793,6 +955,10 @@ function shortId(value: string): string {
   return value.length > 12 ? value.slice(0, 12) : value
 }
 
+function formatCost(value: number): string {
+  return value.toFixed(6).replace(/\.?0+$/, '') || '0'
+}
+
 async function sha256Rendered(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value)
   const result = await crypto.subtle.digest('SHA-256', bytes)
@@ -818,7 +984,11 @@ interface Labels {
   openItems: string; approvals: string; noRisks: string; noOpenItems: string; noApprovals: string
   canonicalVerified: string; noArtifacts: string; noLocation: string; open: string; criteria: string
   covered: string; noAcceptance: string; noEvidence: string; noTests: string; noTimeline: string
-  resultPending: string; conversation: string
+  resultPending: string; conversation: string; filterRun: string; allRuns: string; loadMore: string
+  auditLoading: string; auditLoadFailed: string; auditUnbound: string; projectAuditIntegrityError: string
+  modelAttemptAuditIntegrityError: string; missingReferences: string; actor: string; run: string
+  provider: string; model: string; protocol: string; keyLabel: string; tool: string
+  effectTarget: string; resultDigest: string
 }
 
 const ZH: Labels = {
@@ -831,7 +1001,11 @@ const ZH: Labels = {
   noRisks: '没有已记录风险', noOpenItems: '没有未完成项', noApprovals: '没有待处理审批', canonicalVerified: 'Canonical aggregate 已校验',
   noArtifacts: '当前范围没有 canonical Artifact', noLocation: '没有可用位置', open: '打开', criteria: '项标准', covered: '已覆盖',
   noAcceptance: '没有验收记录', noEvidence: '没有 Evidence', noTests: '没有测试证据', noTimeline: '没有审计事件',
-  resultPending: '等待结果', conversation: '对话'
+  resultPending: '等待结果', conversation: '对话', filterRun: '运行筛选', allRuns: '全部运行', loadMore: '加载更多',
+  auditLoading: '正在校验审计记录…', auditLoadFailed: '审计记录加载失败，请重新打开时间线。', auditUnbound: '当前对话没有可审计的 Project 归属。',
+  projectAuditIntegrityError: 'Project 审计账本完整性校验失败。', modelAttemptAuditIntegrityError: '模型调用账本完整性校验失败。',
+  missingReferences: '发现 {count} 条缺失引用', actor: '执行者', run: '运行', provider: 'Provider', model: '模型', protocol: '协议',
+  keyLabel: 'Key 标签', tool: '工具', effectTarget: 'Effect 目标类型', resultDigest: '结果摘要'
 }
 
 const EN: Labels = {
@@ -844,5 +1018,10 @@ const EN: Labels = {
   noRisks: 'No recorded risks', noOpenItems: 'No open items', noApprovals: 'No pending approvals', canonicalVerified: 'Canonical aggregate verified',
   noArtifacts: 'No canonical Artifacts in this scope', noLocation: 'No available location', open: 'Open', criteria: 'criteria', covered: 'covered',
   noAcceptance: 'No acceptance records', noEvidence: 'No Evidence', noTests: 'No test evidence', noTimeline: 'No audit events',
-  resultPending: 'Results pending', conversation: 'Conversation'
+  resultPending: 'Results pending', conversation: 'Conversation', filterRun: 'Run filter', allRuns: 'All Runs', loadMore: 'Load more',
+  auditLoading: 'Verifying audit records…', auditLoadFailed: 'Audit records failed to load. Reopen the timeline to retry.',
+  auditUnbound: 'This conversation has no auditable Project ownership.', projectAuditIntegrityError: 'Project audit ledger integrity verification failed.',
+  modelAttemptAuditIntegrityError: 'Model attempt ledger integrity verification failed.', missingReferences: '{count} missing references found',
+  actor: 'Actor', run: 'Run', provider: 'Provider', model: 'Model', protocol: 'Protocol', keyLabel: 'Key label', tool: 'Tool',
+  effectTarget: 'Effect target kind', resultDigest: 'Result digest'
 }

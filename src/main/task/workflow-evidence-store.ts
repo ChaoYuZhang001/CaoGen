@@ -229,6 +229,7 @@ export function verifyWorkflowEvidence(db: WorkflowLedgerDatabase): WorkflowEvid
   }
 }
 
+/** Remove one Project's evidence and deterministically rebuild the global evidence chain. */
 function normalizeEvidenceInput(
   input: WorkflowEvidenceInput,
   authority: NormalizedAppendOptions = {}

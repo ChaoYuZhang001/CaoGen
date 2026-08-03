@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { nextAfter } from './cronParse'
 import type { EngineKind, PermissionModeId, RoutineNotificationOptions } from '../shared/types'
 
@@ -11,7 +12,14 @@ export interface Routine extends Record<string, unknown> {
   name: string
   prompt: string
   content?: string
-  projectCwd: string
+  /** Canonical Project ownership. Legacy path-only routines omit this field. */
+  projectId?: string
+  /** Source Goal whose contract is copied into a fresh Goal for each run. */
+  goalTemplateId?: string
+  /** Optional native DigitalWorker assigned to each generated WorkItem. */
+  digitalWorkerId?: string
+  /** Optional execution resource root. Canonical Projects can resolve it automatically. */
+  projectCwd?: string
   schedule: string
   frequency?: string
   providerId: string
@@ -32,7 +40,10 @@ export type CreateRoutineInput = {
   name: string
   prompt?: string
   content?: string
-  projectCwd: string
+  projectId?: string
+  goalTemplateId?: string
+  digitalWorkerId?: string
+  projectCwd?: string
   schedule?: string
   frequency?: string
   providerId?: string
@@ -52,6 +63,9 @@ export type UpdateRoutineInput = {
   name?: string
   prompt?: string
   content?: string
+  projectId?: string | null
+  goalTemplateId?: string | null
+  digitalWorkerId?: string | null
   projectCwd?: string
   schedule?: string
   frequency?: string
@@ -86,6 +100,7 @@ export class RoutineStoreValidationError extends Error {
 const ROUTINES_FILE = 'routines.json'
 const STORE_VERSION = 1
 const MINUTE_MS = 60_000
+const routineStoreWriteQueues = new Map<string, Promise<void>>()
 const PERMISSION_MODES = new Set<RoutinePermissionMode>([
   'default',
   'acceptEdits',
@@ -103,6 +118,9 @@ const SCHEMA_KEYS = new Set([
   'name',
   'prompt',
   'content',
+  'projectId',
+  'goalTemplateId',
+  'digitalWorkerId',
   'projectCwd',
   'schedule',
   'frequency',
@@ -129,48 +147,58 @@ export async function listRoutines(rootDir: string): Promise<Routine[]> {
 }
 
 export async function createRoutine(rootDir: string, input: CreateRoutineInput): Promise<Routine> {
-  const file = await readStore(rootDir)
-  const now = Date.now()
-  const id = normalizeOptionalString(input.id, 'id') || randomUUID()
+  return withRoutineStoreWriteLock(rootDir, async () => {
+    const file = await readStore(rootDir)
+    const now = Date.now()
+    const id = normalizeOptionalString(input.id, 'id') || randomUUID()
 
-  if (file.routines.some((routine) => routine.id === id)) {
-    throw new RoutineStoreValidationError(`Routine already exists: ${id}`)
-  }
+    if (file.routines.some((routine) => routine.id === id)) {
+      throw new RoutineStoreValidationError(`Routine already exists: ${id}`)
+    }
 
-  const createdAt = normalizeOptionalTimestamp(input.createdAt, 'createdAt') ?? now
-  const updatedAt = normalizeOptionalTimestamp(input.updatedAt, 'updatedAt') ?? createdAt
-  const prompt = normalizeRequiredString(input.prompt ?? input.content, 'prompt')
-  const schedule = normalizeRequiredString(input.schedule ?? input.frequency, 'schedule')
-  const routine: Routine = {
-    ...copyUnknownFields(input),
-    id,
-    name: normalizeRequiredString(input.name, 'name'),
-    prompt,
-    content: normalizeOptionalString(input.content, 'content') ?? prompt,
-    projectCwd: normalizeRequiredString(input.projectCwd, 'projectCwd'),
-    schedule,
-    frequency: normalizeOptionalString(input.frequency, 'frequency') ?? schedule,
-    providerId: normalizeOptionalString(input.providerId, 'providerId') ?? '',
-    model: normalizeOptionalString(input.model, 'model') ?? '',
-    engine: normalizeOptionalEngine(input.engine),
-    permissionMode: normalizePermissionMode(input.permissionMode ?? 'default'),
-    budgetUsd: normalizeBudget(input.budgetUsd ?? 0),
-    notification: normalizeNotificationOptions(input.notification),
-    enabled: normalizeOptionalBoolean(input.enabled, 'enabled') ?? true,
-    createdAt,
-    updatedAt,
-    lastRunAt: normalizeNullableTimestamp(input.lastRunAt, 'lastRunAt') ?? null
-  }
-  const nextRunAt = normalizeNullableTimestamp(input.nextRunAt, 'nextRunAt')
-  if (nextRunAt !== null) routine.nextRunAt = nextRunAt
-  else if (routine.enabled && !hasOwn(input, 'nextRunAt')) {
-    const seeded = computeInitialNextRun(routine.schedule, now)
-    if (seeded !== null) routine.nextRunAt = seeded
-  }
+    const createdAt = normalizeOptionalTimestamp(input.createdAt, 'createdAt') ?? now
+    const updatedAt = normalizeOptionalTimestamp(input.updatedAt, 'updatedAt') ?? createdAt
+    const prompt = normalizeRequiredString(input.prompt ?? input.content, 'prompt')
+    const schedule = normalizeRequiredString(input.schedule ?? input.frequency, 'schedule')
+    const projectId = normalizeOptionalId(input.projectId, 'projectId')
+    const projectCwd = normalizeOptionalString(input.projectCwd, 'projectCwd')?.trim() || undefined
+    if (!projectId && !projectCwd) {
+      throw new RoutineStoreValidationError('projectId or projectCwd is required')
+    }
+    const routine: Routine = {
+      ...copyUnknownFields(input),
+      id,
+      name: normalizeRequiredString(input.name, 'name'),
+      prompt,
+      content: normalizeOptionalString(input.content, 'content') ?? prompt,
+      projectId,
+      goalTemplateId: normalizeOptionalId(input.goalTemplateId, 'goalTemplateId'),
+      digitalWorkerId: normalizeOptionalId(input.digitalWorkerId, 'digitalWorkerId'),
+      projectCwd,
+      schedule,
+      frequency: normalizeOptionalString(input.frequency, 'frequency') ?? schedule,
+      providerId: normalizeOptionalString(input.providerId, 'providerId') ?? '',
+      model: normalizeOptionalString(input.model, 'model') ?? '',
+      engine: normalizeOptionalEngine(input.engine),
+      permissionMode: normalizePermissionMode(input.permissionMode ?? 'default'),
+      budgetUsd: normalizeBudget(input.budgetUsd ?? 0),
+      notification: normalizeNotificationOptions(input.notification),
+      enabled: normalizeOptionalBoolean(input.enabled, 'enabled') ?? true,
+      createdAt,
+      updatedAt,
+      lastRunAt: normalizeNullableTimestamp(input.lastRunAt, 'lastRunAt') ?? null
+    }
+    const nextRunAt = normalizeNullableTimestamp(input.nextRunAt, 'nextRunAt')
+    if (nextRunAt !== null) routine.nextRunAt = nextRunAt
+    else if (routine.enabled && !hasOwn(input, 'nextRunAt')) {
+      const seeded = computeInitialNextRun(routine.schedule, now)
+      if (seeded !== null) routine.nextRunAt = seeded
+    }
 
-  file.routines.push(routine)
-  await writeStore(rootDir, file.routines)
-  return routine
+    file.routines.push(routine)
+    await writeStore(rootDir, file.routines)
+    return routine
+  })
 }
 
 export async function updateRoutine(
@@ -178,9 +206,10 @@ export async function updateRoutine(
   id: string,
   patch: UpdateRoutineInput
 ): Promise<Routine | null> {
-  const file = await readStore(rootDir)
-  const index = file.routines.findIndex((routine) => routine.id === id)
-  if (index === -1) return null
+  return withRoutineStoreWriteLock(rootDir, async () => {
+    const file = await readStore(rootDir)
+    const index = file.routines.findIndex((routine) => routine.id === id)
+    if (index === -1) return null
 
   const current = file.routines[index]
   const prompt = hasOwn(patch, 'prompt')
@@ -193,6 +222,15 @@ export async function updateRoutine(
     : hasOwn(patch, 'frequency')
       ? normalizeRequiredString(patch.frequency, 'frequency')
       : current.schedule
+  const projectId = hasOwn(patch, 'projectId')
+    ? normalizeOptionalId(patch.projectId, 'projectId')
+    : current.projectId
+  const projectCwd = hasOwn(patch, 'projectCwd')
+    ? normalizeOptionalString(patch.projectCwd, 'projectCwd')?.trim() || undefined
+    : current.projectCwd
+  if (!projectId && !projectCwd) {
+    throw new RoutineStoreValidationError('projectId or projectCwd is required')
+  }
   const routine: Routine = {
     ...copyUnknownFields(current),
     ...copyUnknownFields(patch),
@@ -204,9 +242,14 @@ export async function updateRoutine(
       : hasOwn(patch, 'prompt')
         ? prompt
         : (current.content ?? current.prompt),
-    projectCwd: hasOwn(patch, 'projectCwd')
-      ? normalizeRequiredString(patch.projectCwd, 'projectCwd')
-      : current.projectCwd,
+    projectId,
+    goalTemplateId: hasOwn(patch, 'goalTemplateId')
+      ? normalizeOptionalId(patch.goalTemplateId, 'goalTemplateId')
+      : current.goalTemplateId,
+    digitalWorkerId: hasOwn(patch, 'digitalWorkerId')
+      ? normalizeOptionalId(patch.digitalWorkerId, 'digitalWorkerId')
+      : current.digitalWorkerId,
+    projectCwd,
     schedule,
     frequency: hasOwn(patch, 'frequency')
       ? normalizeOptionalString(patch.frequency, 'frequency')
@@ -240,17 +283,71 @@ export async function updateRoutine(
     routine.nextRunAt = current.nextRunAt
   }
 
-  file.routines[index] = routine
-  await writeStore(rootDir, file.routines)
-  return routine
+    file.routines[index] = routine
+    await writeStore(rootDir, file.routines)
+    return routine
+  })
 }
 
 export async function deleteRoutine(rootDir: string, id: string): Promise<boolean> {
-  const file = await readStore(rootDir)
-  const nextRoutines = file.routines.filter((routine) => routine.id !== id)
-  if (nextRoutines.length === file.routines.length) return false
-  await writeStore(rootDir, nextRoutines)
-  return true
+  return withRoutineStoreWriteLock(rootDir, async () => {
+    const file = await readStore(rootDir)
+    const nextRoutines = file.routines.filter((routine) => routine.id !== id)
+    if (nextRoutines.length === file.routines.length) return false
+    await writeStore(rootDir, nextRoutines)
+    return true
+  })
+}
+
+export async function importProjectRoutineDefinitions(
+  rootDir: string,
+  projectId: string,
+  values: readonly Routine[]
+): Promise<number> {
+  const expectedProjectId = normalizeOptionalId(projectId, 'projectId')
+  if (!expectedProjectId) throw new RoutineStoreValidationError('projectId is required')
+  return withRoutineStoreWriteLock(rootDir, async () => {
+    const file = await readStore(rootDir)
+    const incoming = values.map((value) => normalizeStoredRoutine(structuredClone(value)))
+    if (incoming.some((value) => value === null)) {
+      throw new RoutineStoreValidationError('Project import contains an invalid Routine definition')
+    }
+    let imported = 0
+    for (const routine of incoming as Routine[]) {
+      if (routine.projectId !== expectedProjectId) {
+        throw new RoutineStoreValidationError(`Routine ${routine.id} is not owned by Project ${expectedProjectId}`)
+      }
+      const existing = file.routines.find((candidate) => candidate.id === routine.id)
+      if (existing) {
+        if (!isDeepStrictEqual(existing, routine)) {
+          throw new RoutineStoreValidationError(`Routine import identity conflict: ${routine.id}`)
+        }
+        continue
+      }
+      file.routines.push(routine)
+      imported += 1
+    }
+    if (imported > 0) await writeStore(rootDir, file.routines)
+    return imported
+  })
+}
+
+export async function purgeProjectRoutineDefinitions(rootDir: string, projectId: string): Promise<number> {
+  const expectedProjectId = normalizeOptionalId(projectId, 'projectId')
+  if (!expectedProjectId) throw new RoutineStoreValidationError('projectId is required')
+  return withRoutineStoreWriteLock(rootDir, async () => {
+    const file = await readStore(rootDir)
+    const next = file.routines.filter((routine) => routine.projectId !== expectedProjectId)
+    const removed = file.routines.length - next.length
+    if (removed > 0) await writeStore(rootDir, next)
+    return removed
+  })
+}
+
+export async function countProjectRoutineDefinitions(rootDir: string, projectId: string): Promise<number> {
+  const expectedProjectId = normalizeOptionalId(projectId, 'projectId')
+  if (!expectedProjectId) throw new RoutineStoreValidationError('projectId is required')
+  return (await listRoutines(rootDir)).filter((routine) => routine.projectId === expectedProjectId).length
 }
 
 export async function markRun(
@@ -295,6 +392,25 @@ async function writeStore(rootDir: string, routines: Routine[]): Promise<void> {
   await rename(tempPath, filePath)
 }
 
+async function withRoutineStoreWriteLock<T>(rootDir: string, operation: () => Promise<T>): Promise<T> {
+  const key = getRoutineStorePath(rootDir)
+  const previous = routineStoreWriteQueues.get(key) ?? Promise.resolve()
+  let value!: T
+  const operationPromise = previous
+    .catch(() => undefined)
+    .then(async () => {
+      value = await operation()
+    })
+  const queueTail = operationPromise.then(() => undefined, () => undefined)
+  routineStoreWriteQueues.set(key, queueTail)
+  try {
+    await operationPromise
+    return value
+  } finally {
+    if (routineStoreWriteQueues.get(key) === queueTail) routineStoreWriteQueues.delete(key)
+  }
+}
+
 function normalizeStore(value: unknown): RoutineFile {
   const rawRoutines =
     Array.isArray(value) ? value : isRecord(value) && Array.isArray(value.routines) ? value.routines : []
@@ -309,13 +425,19 @@ function normalizeStoredRoutine(value: unknown): Routine | null {
 
   try {
     const id = normalizeRequiredString(value.id, 'id')
+    const projectId = normalizeOptionalId(value.projectId, 'projectId')
+    const projectCwd = normalizeOptionalString(value.projectCwd, 'projectCwd')?.trim() || undefined
+    if (!projectId && !projectCwd) return null
     const routine: Routine = {
       ...copyUnknownFields(value),
       id,
       name: normalizeRequiredString(value.name, 'name'),
       prompt: normalizeRequiredString(value.prompt ?? value.content, 'prompt'),
       content: normalizeOptionalString(value.content, 'content') ?? normalizeRequiredString(value.prompt ?? value.content, 'prompt'),
-      projectCwd: normalizeRequiredString(value.projectCwd, 'projectCwd'),
+      projectId,
+      goalTemplateId: normalizeOptionalId(value.goalTemplateId, 'goalTemplateId'),
+      digitalWorkerId: normalizeOptionalId(value.digitalWorkerId, 'digitalWorkerId'),
+      projectCwd,
       schedule: normalizeRequiredString(value.schedule ?? value.frequency, 'schedule'),
       frequency: normalizeOptionalString(value.frequency, 'frequency') ?? normalizeRequiredString(value.schedule ?? value.frequency, 'schedule'),
       providerId: normalizeOptionalString(value.providerId, 'providerId') ?? '',
@@ -365,6 +487,15 @@ function normalizeOptionalString(value: unknown, field: string): string | undefi
     throw new RoutineStoreValidationError(`${field} must be a string`)
   }
   return value
+}
+
+function normalizeOptionalId(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const id = normalizeRequiredString(value, field).trim()
+  if (id.length > 256 || /[\0-\x1f\x7f]/.test(id)) {
+    throw new RoutineStoreValidationError(`${field} is invalid`)
+  }
+  return id
 }
 
 function normalizePermissionMode(value: unknown): RoutinePermissionMode {

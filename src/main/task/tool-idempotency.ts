@@ -40,7 +40,13 @@ export const OPENAI_DISABLED_MODE_INSPECTION_TOOLS = new Set([
 const EFFECT_FREE_TOOLS = new Set([
   ...EFFECT_FREE_AGENT_TOOL_NAMES,
   'web_fetch',
-  'web_search'
+  'web_search',
+  'browser_wait_for',
+  'browser_screenshot',
+  'gui_list_windows',
+  'gui_screenshot',
+  // ProjectWorkspace owns deterministic comment idempotency and atomic recovery.
+  'work_item_comment'
 ])
 
 const DUPLICATE_CONFIRMATION_TOOLS = new Set([
@@ -56,9 +62,11 @@ const DUPLICATE_CONFIRMATION_TOOLS = new Set([
   'browser_evaluate',
   'git_stage_all',
   'mcp_call_tool',
+  'send_notification',
   'git_commit',
   'git_push',
   'git_create_pr',
+  'git_create_issue',
   'git_merge',
   'task_dispatch_dag',
   'task_decompose_and_dispatch_dag',
@@ -157,7 +165,9 @@ export function buildToolIdempotencyKey(input: {
 function canonicalToolInput(toolName: string, input: unknown): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const record = { ...(input as Record<string, unknown>) }
-  if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'search_replace' || toolName === 'read_file') {
+  if (toolName === 'write_file' || toolName === 'edit_file' || toolName === 'search_replace' ||
+      toolName === 'read_file' || toolName === 'create_document' || toolName === 'create_spreadsheet' ||
+      toolName === 'create_presentation' || toolName === 'create_pdf') {
     const path = record.path ?? record.file_path ?? record.notebook_path
     delete record.file_path
     delete record.notebook_path

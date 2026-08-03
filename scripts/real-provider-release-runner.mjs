@@ -18,6 +18,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import {
+  PrivateProviderConfigError,
+  resolvePrivateProviderConfig
+} from './lib/private-provider-config.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -25,6 +29,17 @@ const originalLoad = require('node:module').Module._load
 const originalFetch = globalThis.fetch
 const originalConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error }
 const isRecoveryChild = process.argv.includes('--recovery-child')
+const privateIpv6Patterns = [/^::1$/, /^(?:fc|fd|fe80):/, /^2001:db8(?::|$)/]
+const privateIpv4Ranges = [
+  [0x00000000, 0x00ffffff],
+  [0x0a000000, 0x0affffff],
+  [0x64400000, 0x647fffff],
+  [0x7f000000, 0x7fffffff],
+  [0xa9fe0000, 0xa9feffff],
+  [0xac100000, 0xac1fffff],
+  [0xc0a80000, 0xc0a8ffff],
+  [0xe0000000, 0xffffffff]
+]
 
 class SafeFailure extends Error {
   constructor(code) {
@@ -88,7 +103,7 @@ async function runEvidence() {
     const artifactFileName = 'release-evidence-output.txt'
     const expectedBytes = Buffer.from(`CaoGen release evidence ${randomUUID()}\n`, 'utf8')
     const prompt = releasePrompt(artifactFileName, expectedBytes.toString('utf8'))
-    if (!manager.send(meta.id, prompt)) fail('send_rejected')
+    if (!await manager.send(meta.id, prompt)) fail('send_rejected')
     const sendCompletedAt = marks.next()
 
     const completed = await verifyCompletedTurn({
@@ -217,6 +232,7 @@ async function prepareEvidenceHarness(input) {
     models: [provider.model],
     engine: 'openai',
     openaiProtocol: provider.apiFormat === 'openai-responses' ? 'responses' : 'chat',
+    credentialHeaderNames: ['authorization'],
     token: provider.apiKey,
     tokenLabel: 'release-evidence'
   })
@@ -443,20 +459,19 @@ function recoveryStepSync(code, action) {
 
 function readPrivateProviderConfig() {
   const setting = argValue('--providers') || process.env.CAOGEN_REAL_PROVIDER_PROVIDERS ||
-    process.env.CAOGEN_CHINA_PARITY_PROVIDERS || path.join(process.env.HOME || '', '.caogen-private', 'provider-parity.json')
+    process.env.CAOGEN_CHINA_PARITY_PROVIDERS
   const allowLoopback = process.env.CAOGEN_REAL_PROVIDER_RELEASE_TEST_MODE === '1' &&
     process.argv.includes('--allow-loopback-fixture')
-  const trimmed = setting.trim()
   let raw
-  if (trimmed.startsWith('[')) {
-    raw = trimmed
-  } else {
-    const file = path.resolve(trimmed)
-    if (!existsSync(file)) fail('provider_config_missing')
-    const info = lstatSync(file)
-    if (!info.isFile() || info.isSymbolicLink()) fail('provider_config_not_regular')
-    if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) fail('provider_config_permissions')
-    raw = readFileSync(file, 'utf8')
+  try {
+    raw = resolvePrivateProviderConfig({
+      setting,
+      repoRoot,
+      allowTestOverride: allowLoopback
+    }).text
+  } catch (error) {
+    if (error instanceof PrivateProviderConfigError) fail(error.code)
+    fail('provider_config_invalid')
   }
   let providers
   try {
@@ -479,25 +494,76 @@ async function selectEligibleProvider(providers, allowLoopback) {
     return [{ index, apiFormat: item.apiFormat, baseUrl: normalizeProviderUrl(baseUrl), model, apiKey }]
   }).sort((left, right) => formatRank(left.apiFormat) - formatRank(right.apiFormat) || left.index - right.index)
   if (candidates.length === 0) fail('eligible_baseline_missing')
+  const rejectionCodes = []
   for (const candidate of candidates) {
     try {
       await assertNetworkTarget(candidate.baseUrl, allowLoopback)
       return candidate
-    } catch {
+    } catch (error) {
+      rejectionCodes.push(safeErrorCode(error))
       // Try the next configured baseline without disclosing target details.
     }
+  }
+  if (rejectionCodes.length > 0 && rejectionCodes.every((code) => code === rejectionCodes[0])) {
+    fail(`eligible_baseline_${rejectionCodes[0]}`)
   }
   fail('eligible_baseline_target_rejected')
 }
 
 async function assertNetworkTarget(value, allowLoopback) {
-  const url = new URL(value)
-  const loopback = isLoopbackHostname(url.hostname)
-  if (allowLoopback && loopback && url.protocol === 'http:') return
+  const url = parseProviderTarget(value)
+  if (assertProviderUrlPolicy(url, allowLoopback)) return
+  const addresses = await resolveProviderAddresses(url.hostname)
+  assertProviderAddresses(addresses)
+}
+
+function parseProviderTarget(value) {
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    fail('provider_url_invalid')
+  }
+  return url
+}
+
+function assertProviderUrlPolicy(url, allowLoopback) {
+  let loopback
+  try {
+    loopback = isLoopbackHostname(url.hostname)
+  } catch {
+    fail('provider_hostname_invalid')
+  }
+  if (allowLoopback && loopback && url.protocol === 'http:') return true
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail('provider_target_rejected')
-  if (loopback || isPrivateAddress(url.hostname)) fail('provider_target_rejected')
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true })
-  if (addresses.length === 0 || addresses.some((entry) => isPrivateAddress(entry.address))) fail('provider_target_rejected')
+  let directPrivate
+  try {
+    directPrivate = isPrivateAddress(url.hostname)
+  } catch {
+    fail('provider_hostname_invalid')
+  }
+  if (loopback || directPrivate) fail('provider_target_rejected')
+  return false
+}
+
+async function resolveProviderAddresses(hostname) {
+  let addresses
+  try {
+    addresses = await lookup(hostname, { all: true, verbatim: true })
+  } catch {
+    fail('provider_dns_unavailable')
+  }
+  return addresses
+}
+
+function assertProviderAddresses(addresses) {
+  let resolvedPrivate
+  try {
+    resolvedPrivate = addresses.some((entry) => isPrivateAddress(entry.address))
+  } catch {
+    fail('provider_dns_result_invalid')
+  }
+  if (addresses.length === 0 || resolvedPrivate) fail('provider_target_rejected')
 }
 
 function installBoundedFetch(baseUrl, maxRequests, timeoutMs) {
@@ -827,18 +893,6 @@ function isLoopbackHostname(value) {
   const host = value.toLowerCase().replace(/^\[|\]$/g, '')
   return host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1'
 }
-
-const privateIpv6Patterns = [/^::1$/, /^(?:fc|fd|fe80):/, /^2001:db8(?::|$)/]
-const privateIpv4Ranges = [
-  [0x00000000, 0x00ffffff],
-  [0x0a000000, 0x0affffff],
-  [0x64400000, 0x647fffff],
-  [0x7f000000, 0x7fffffff],
-  [0xa9fe0000, 0xa9feffff],
-  [0xac100000, 0xac1fffff],
-  [0xc0a80000, 0xc0a8ffff],
-  [0xe0000000, 0xffffffff]
-]
 
 function isPrivateAddress(value) {
   const host = value.toLowerCase().replace(/^\[|\]$/g, '')

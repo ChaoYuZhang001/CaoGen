@@ -431,6 +431,16 @@ function verifyPermission(permission) {
 }
 
 function verifyAudit(audit) {
+  const auditDir = path.join(projectDir, '.caogen')
+  const auditPath = path.join(auditDir, 'audit.log')
+  mkdirSync(auditDir)
+  writeFileSync(auditPath, `${JSON.stringify({
+    ts: '2026-01-01T00:00:00.000Z',
+    action: 'deny',
+    source: 'policy',
+    toolName: 'legacy-v0'
+  })}\n`, { encoding: 'utf8', mode: 0o600 })
+
   audit.writeAuditLog(projectDir, {
     action: 'execute',
     source: 'local-execution',
@@ -443,15 +453,39 @@ function verifyAudit(audit) {
     modeUsed: 'restrictedLocal',
     sandboxed: false
   })
-  const text = readFileSync(path.join(projectDir, '.caogen', 'audit.log'), 'utf8')
-  const line = text.trim().split(/\r?\n/).at(-1)
+  const text = readFileSync(auditPath, 'utf8')
+  const lines = text.trim().split(/\r?\n/)
+  const parsedRecords = lines.map((candidate) => JSON.parse(candidate))
+  const line = lines.at(-1)
   assert(line, 'audit log should contain at least one line')
   const record = JSON.parse(line)
+  assert(parsedRecords.length === 2, 'legacy v0 and v1 audit records must coexist in one JSONL file')
+  assert(parsedRecords[0].schemaVersion === undefined, 'legacy v0 audit record must remain unchanged')
+  assert(record.schemaVersion === 1, 'execute audit record must declare schemaVersion 1')
   assert(record.toolName === 'bash', 'audit record toolName mismatch')
   assert(record.action === 'execute', 'audit record action mismatch')
   assert(record.input === undefined, 'audit record must never persist raw input')
   assert(record.inputSummary.startsWith('command bytes='), 'audit record should store only command metadata')
   assert(record.inputDigest && !record.inputSummary.includes('echo audit'), 'audit command summary must use a digest')
+  if (process.platform !== 'win32') {
+    assert((statSync(auditPath).mode & 0o777) === 0o600, 'project audit log must use mode 0600')
+  }
+
+  const tornProjectDir = path.join(tempRoot, 'torn-audit-project')
+  const tornAuditDir = path.join(tornProjectDir, '.caogen')
+  const tornAuditPath = path.join(tornAuditDir, 'audit.log')
+  const tornTail = '{"schemaVersion":1,"action":"deny"'
+  mkdirSync(tornAuditDir, { recursive: true })
+  writeFileSync(tornAuditPath, tornTail, { encoding: 'utf8', mode: 0o600 })
+  audit.writeAuditLog(tornProjectDir, {
+    action: 'execute',
+    source: 'local-execution',
+    toolName: 'torn-tail-recovery'
+  })
+  const recoveredAudit = readFileSync(tornAuditPath, 'utf8')
+  const recoveredLines = recoveredAudit.trim().split(/\r?\n/)
+  assert(recoveredAudit.startsWith(`${tornTail}\n`), 'torn audit tail bytes must be retained behind a framing newline')
+  assert(JSON.parse(recoveredLines.at(-1)).schemaVersion === 1, 'first record after a torn tail must remain parseable')
 
   const sentinel = 'AUDIT_SENTINEL_SECRET_7f2d'
   audit.writeAuditLog(projectDir, {
@@ -461,11 +495,44 @@ function verifyAudit(audit) {
     input: { path: 'src/private.txt', content: sentinel, authorization: `Bearer ${sentinel}` },
     message: `token=${sentinel}`
   })
-  const sanitizedText = readFileSync(path.join(projectDir, '.caogen', 'audit.log'), 'utf8')
+  const sanitizedText = readFileSync(auditPath, 'utf8')
   assert(!sanitizedText.includes(sentinel), 'audit log must not contain raw secrets or file content')
   const sanitizedRecord = JSON.parse(sanitizedText.trim().split(/\r?\n/).at(-1))
   assert(sanitizedRecord.input === undefined, 'sanitized audit record must omit input property')
   assert(sanitizedRecord.inputSummary.includes('path=src/private.txt'), 'write audit should retain safe target metadata')
+
+  const userDataRoot = path.join(tempRoot, 'user-data')
+  audit.configurePermissionAuditUserDataRoot(userDataRoot)
+  audit.writeSessionAuditLog({ id: 'view/session', cwd: projectDir, taskStrategy: 'view' }, {
+    action: 'deny',
+    source: 'task-strategy',
+    toolName: 'write_file',
+    input: { path: 'must-not-write.txt' }
+  })
+  const taskAuditPath = path.join(userDataRoot, 'task-audit', 'view_session.jsonl')
+  const taskAuditRecord = JSON.parse(readFileSync(taskAuditPath, 'utf8').trim())
+  assert(taskAuditRecord.schemaVersion === 1, 'private task audit record must declare schemaVersion 1')
+  assert(taskAuditRecord.source === 'task-strategy', 'view audit must retain the task-strategy denial source')
+  if (process.platform !== 'win32') {
+    assert((statSync(taskAuditPath).mode & 0o777) === 0o600, 'private task audit must use mode 0600')
+    assert((statSync(path.dirname(taskAuditPath)).mode & 0o777) === 0o700, 'private task audit directory must use mode 0700')
+  }
+
+  const redirectedUserDataRoot = path.join(tempRoot, 'redirected-user-data')
+  const redirectTarget = path.join(tempRoot, 'redirect-target')
+  mkdirSync(redirectedUserDataRoot)
+  mkdirSync(redirectTarget)
+  symlinkSync(redirectTarget, path.join(redirectedUserDataRoot, 'task-audit'), process.platform === 'win32' ? 'junction' : 'dir')
+  audit.configurePermissionAuditUserDataRoot(redirectedUserDataRoot)
+  audit.writeSessionAuditLog({ id: 'redirected', cwd: projectDir, taskStrategy: 'plan' }, {
+    action: 'deny',
+    source: 'task-strategy',
+    toolName: 'write_file'
+  })
+  assert(
+    !existsSync(path.join(redirectTarget, 'redirected.jsonl')),
+    'private task audit must reject a pre-positioned symlink or junction directory'
+  )
 }
 
 function verifyOpenAiToolsBridge(idempotency) {

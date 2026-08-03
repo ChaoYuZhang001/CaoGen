@@ -1,7 +1,9 @@
-import { access, readFile } from 'node:fs/promises'
+import { access, lstat, readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import JSZip from 'jszip'
+import type { OfficeSourceSnapshot } from '../../../shared/types'
 
-export type OfficeArtifactKind = 'document' | 'spreadsheet'
+export type OfficeArtifactKind = 'document' | 'spreadsheet' | 'presentation' | 'pdf'
 
 export interface OfficeSelfCheckInput {
   workspacePath: string
@@ -11,6 +13,8 @@ export interface OfficeSelfCheckInput {
   mediaType: string
   /** 来源材料引用（输入文档/数据表的 workspace 路径），用于可追溯 */
   sourceRefs: string[]
+  /** Effect 审批时冻结的来源文件身份与内容。缺省仅兼容旧持久化 Effect。 */
+  sourceSnapshots?: OfficeSourceSnapshot[]
   /** 无外部来源文件时，由调用方确认当前 Run/Effect 已提供耐久来源链。 */
   runtimeTraceable?: boolean
 }
@@ -25,19 +29,24 @@ export interface OfficeSelfCheckResult {
 }
 
 // OOXML 部件名以明文存于 ZIP 本地文件头（不被压缩），可作为"可被对应应用打开"的廉价硬信号；
-// media type 字符串本身位于压缩 XML 内，故改用部件名判定。
 const DOCUMENT_MEDIA_TYPE_FRAGMENT = 'wordprocessingml'
 const SPREADSHEET_MEDIA_TYPE_FRAGMENT = 'spreadsheetml'
-const DOCUMENT_PART_MARKER = 'word/document.xml'
-const SPREADSHEET_PART_MARKER = 'xl/workbook.xml'
+const PRESENTATION_MEDIA_TYPE_FRAGMENT = 'presentationml'
 const ZIP_LOCAL_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]) // 'PK\x03\x04'
-const OOXML_PART_SCAN_LIMIT = 1 * 1024 * 1024
+
+const OOXML_PRIMARY_PARTS: Record<Exclude<OfficeArtifactKind, 'pdf'>, {
+  path: string
+  rootElement: RegExp
+}> = {
+  document: { path: 'word/document.xml', rootElement: /<(?:[A-Za-z_][\w.-]*:)?document\b/ },
+  spreadsheet: { path: 'xl/workbook.xml', rootElement: /<(?:[A-Za-z_][\w.-]*:)?workbook\b/ },
+  presentation: { path: 'ppt/presentation.xml', rootElement: /<(?:[A-Za-z_][\w.-]*:)?presentation\b/ }
+}
 
 /**
  * Office 成品结构/打开性/来源可追溯自校验（producer 在 T03 调用于驱动 Acceptance）。
- * 仅做"硬失败信号"：OOXML(ZIP) 容器可被对应应用打开、kind/mediaType 一致、来源可追溯；
+ * 仅做"硬失败信号"：OOXML ZIP 可完整解析且 CRC/必要部件有效、kind/mediaType 一致、来源可追溯；
  * 字节完整性由 Effect 声明的 expectedSha256（producer 以 source_ref 摘要注入）二次保证。
- * 不依赖 ExcelJS/Docx 完整 DOM 解析，保持自校验轻量且环境无关。
  */
 export async function runOfficeSelfCheck(input: OfficeSelfCheckInput): Promise<OfficeSelfCheckResult> {
   const base: Omit<OfficeSelfCheckResult, 'ok' | 'reason'> = {
@@ -66,7 +75,7 @@ export async function runOfficeSelfCheck(input: OfficeSelfCheckInput): Promise<O
   }
 
   // 打开性 / 结构校验：OOXML 必须包含对应部件。
-  if (!isOpenableOfficeArtifact(bytes, input.artifactKind)) {
+  if (!await isOpenableOfficeArtifact(bytes, input.artifactKind)) {
     return {
       ...base,
       digestMatch,
@@ -76,7 +85,7 @@ export async function runOfficeSelfCheck(input: OfficeSelfCheckInput): Promise<O
   }
 
   const sourceTraceable = input.sourceRefs.length > 0
-    ? await checkSourceTraceability(input.sourceRefs)
+    ? await checkSourceTraceability(input.sourceRefs, input.sourceSnapshots)
     : input.runtimeTraceable === true
   if (!sourceTraceable) {
     return {
@@ -96,25 +105,64 @@ export async function runOfficeSelfCheck(input: OfficeSelfCheckInput): Promise<O
 
 function mediaTypeMatches(kind: OfficeArtifactKind, mediaType: string): boolean {
   if (kind === 'document') return mediaType.includes(DOCUMENT_MEDIA_TYPE_FRAGMENT)
-  return mediaType.includes(SPREADSHEET_MEDIA_TYPE_FRAGMENT)
+  if (kind === 'spreadsheet') return mediaType.includes(SPREADSHEET_MEDIA_TYPE_FRAGMENT)
+  if (kind === 'presentation') return mediaType.includes(PRESENTATION_MEDIA_TYPE_FRAGMENT)
+  return mediaType === 'application/pdf'
 }
 
-function isOpenableOfficeArtifact(bytes: Buffer, kind: OfficeArtifactKind): boolean {
-  const partMarker = kind === 'document' ? DOCUMENT_PART_MARKER : SPREADSHEET_PART_MARKER
-  return isOpenableOoxml(bytes, partMarker)
+async function isOpenableOfficeArtifact(bytes: Buffer, kind: OfficeArtifactKind): Promise<boolean> {
+  if (kind === 'pdf') return isOpenablePdf(bytes)
+  return isOpenableOoxml(bytes, kind)
 }
 
-function isOpenableOoxml(bytes: Buffer, partMarker: string): boolean {
+function isOpenablePdf(bytes: Buffer): boolean {
+  if (bytes.length < 8 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') return false
+  return bytes.subarray(Math.max(0, bytes.length - 1_024)).includes(Buffer.from('%%EOF', 'ascii'))
+}
+
+async function isOpenableOoxml(
+  bytes: Buffer,
+  kind: Exclude<OfficeArtifactKind, 'pdf'>
+): Promise<boolean> {
   if (bytes.length < 4 || !bytes.subarray(0, 4).equals(ZIP_LOCAL_HEADER)) return false
-  const scan = bytes.subarray(0, Math.min(bytes.length, OOXML_PART_SCAN_LIMIT))
-  return scan.includes(Buffer.from(partMarker, 'utf8'))
+  try {
+    const archive = await JSZip.loadAsync(bytes, { checkCRC32: true })
+    const commonParts = [
+      { path: '[Content_Types].xml', rootElement: /<(?:[A-Za-z_][\w.-]*:)?Types\b/ },
+      { path: '_rels/.rels', rootElement: /<(?:[A-Za-z_][\w.-]*:)?Relationships\b/ }
+    ]
+    for (const requirement of [...commonParts, OOXML_PRIMARY_PARTS[kind]]) {
+      const part = archive.file(requirement.path)
+      if (!part || !requirement.rootElement.test(await part.async('string'))) return false
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
-async function checkSourceTraceability(sourceRefs: string[]): Promise<boolean> {
+async function checkSourceTraceability(
+  sourceRefs: string[],
+  snapshots: OfficeSourceSnapshot[] | undefined
+): Promise<boolean> {
   if (sourceRefs.length === 0) return false
-  for (const ref of sourceRefs) {
+  if (snapshots && (snapshots.length !== sourceRefs.length || snapshots.some(
+    (snapshot, index) => snapshot.path !== sourceRefs[index]
+  ))) return false
+  for (let index = 0; index < sourceRefs.length; index += 1) {
+    const ref = sourceRefs[index]
     try {
-      await access(ref)
+      if (!snapshots) {
+        await access(ref)
+        continue
+      }
+      const snapshot = snapshots[index]
+      const state = await lstat(ref, { bigint: true })
+      if (!state.isFile() || state.dev.toString() !== snapshot.identity.device ||
+          state.ino.toString() !== snapshot.identity.inode) return false
+      const bytes = await readFile(ref)
+      if (bytes.byteLength !== snapshot.bytes ||
+          `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== snapshot.sha256) return false
     } catch {
       return false
     }

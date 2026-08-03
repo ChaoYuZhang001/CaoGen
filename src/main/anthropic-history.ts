@@ -13,6 +13,7 @@ import type {
   UserMessageAttachmentView,
   UsageTotals
 } from '../shared/types'
+import { buildPortableConversationReplay } from './conversation-ledger-replay'
 
 const MAX_IMAGES_PER_MESSAGE = 32
 const MAX_IMAGE_BYTES_PER_MESSAGE = 20 * 1024 * 1024
@@ -74,6 +75,15 @@ export function rebuildAnthropicHistory(
   } catch {
     return []
   }
+}
+
+export function rebuildPortableAnthropicHistory(
+  entries: TranscriptEntry[]
+): AnthropicMessagesMessage[] {
+  const replay = buildPortableConversationReplay(entries)
+  return replay
+    ? [{ role: 'user', content: [{ type: 'text', text: replay.text }] }]
+    : []
 }
 
 function applyHistoryEvent(

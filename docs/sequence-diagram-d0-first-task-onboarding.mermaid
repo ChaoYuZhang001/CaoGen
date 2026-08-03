@@ -1,0 +1,118 @@
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant W as WelcomeView
+  participant O as FirstTaskOnboarding
+  participant S as Renderer Store
+  participant L as Local Compute API existing
+  participant P as Provider API existing
+  participant G as SettingsPage
+  participant X as Session API existing
+  participant C as Workbench lifecycle
+  participant R as Result API existing
+  participant B as Workbench openPanel
+  participant V as StudioResultPanel
+  participant A as Acceptance Review API existing
+
+  Note over O: 仅持久化版本、candidate、里程碑、完成或跳过
+  Note over O: 不存 prompt、cwd、path、URI、Provider、Session、Result 或 Acceptance 副本
+
+  W->>S: 读取 providersHydrated 和 providers
+  alt Provider 尚未水合
+    W-->>U: 显示检测算力
+    S->>P: refreshProviders()
+    P-->>S: ProviderView[]
+    S->>S: providersHydrated=true
+  end
+
+  alt hasAvailableCompute(providers)
+    S-->>W: 可用 Provider 或现有全局路由
+    W->>O: milestone(compute_ready)
+  else Assistant 无可用算力
+    W->>L: activateLocalCompute()
+    Note over W,L: 同时请求共享同一 Promise
+    alt activated + provider
+      L-->>W: provider
+      W->>W: providerId=provider.id, model=AUTO_MODEL
+      W->>O: computeSource=local, compute_ready
+    else unavailable 或异常
+      L-->>W: unavailable/error
+      W-->>U: 重试检测 / 配置 Provider
+      opt 用户配置 Provider
+        U->>W: 点击配置 Provider
+        W->>S: 保存 WelcomeDraft 到 renderer 内存
+        W->>S: setShowSettings(true, providers)
+        Note over W,G: App 条件渲染使 Welcome 卸载
+        S-->>G: 打开现有 Provider tab
+        U->>G: 新增或修复并保存 Provider
+        G->>P: 现有 Provider 保存和测试链路
+        G->>S: refreshProviders()
+        G->>S: setShowSettings(false)
+        S-->>W: Welcome 重挂载并恢复内存草稿
+      end
+    end
+  end
+
+  U->>W: 选择真实目录与推荐预设或自定义输入
+  W->>W: 从 WELCOME_TOOLS 读取原始 promptKey 和 taskStrategy
+  W->>W: busy + submitPending 防重入
+  W->>S: startSessionWithPrompt(options, prompt)
+  S->>X: createSession + send first message
+  X-->>S: Session 已创建并首发
+  S-->>W: resolve, activeId 指向新 Session
+  W->>O: candidateSessionId + first_task_started
+  W-->>U: 进入聊天并显示轻量任务进度
+
+  loop 仅观察 candidateSessionId
+    C->>S: 读取 candidate SessionMeta.status
+    alt starting 或 running
+      C-->>U: 不覆盖聊天、策略、权限、审批和中断
+    else error 或 closed
+      C-->>U: 不完成，可继续或重新开始
+    else idle 可审查
+      C->>O: compare-and-set 自动打开标记
+      alt 尚未自动处理
+        C->>R: getStudioResultSnapshot(candidateSessionId)
+        R-->>C: StudioResultSnapshot
+        alt snapshot.state == ready
+          C->>S: 确保 candidate Session 为 active
+          C->>B: openPanel('result')
+          B->>B: activePanelId=result, mountedPanels keep-alive
+          C->>O: resultAutoOpenedForSessionId + first_result_opened
+        else unbound 或请求失败
+          C-->>U: 保持 reviewing_result 并给现有下一步
+        end
+      else 已自动打开
+        C-->>U: 不重复抢焦点
+      end
+    end
+  end
+
+  B-->>V: 渲染 result 面板, sessionId=activeId
+  V->>R: getStudioResultSnapshot(sessionId)
+  R-->>V: 最新 snapshot
+  V-->>U: Summary / Artifacts / Evidence / Timeline
+
+  U->>V: 打开 available Artifact location
+  V->>S: 调用现有 Preview/Browser/Diff/Files action
+  S-->>V: open Promise resolve
+  V->>O: firstArtifactOpenedAt + locationId
+
+  alt Acceptance pending 或 failed
+    U->>V: 选择 Evidence 并 review，或填写理由 waived
+    V->>A: reviewWorkflowAcceptance(existing input)
+    A-->>V: review result
+    V->>R: refresh getStudioResultSnapshot(sessionId)
+    R-->>V: Acceptance 真源已更新
+  end
+
+  V->>O: evaluate latest snapshot
+  alt 已打开 available Artifact 且全部 Acceptance passed 或合法 waived
+    O->>O: completedAt + first_acceptance_resolved, first-write-wins
+    O-->>U: 首任务 completed
+  else 零或不可用 Artifact，或 Acceptance 缺失/pending/failed
+    O-->>U: 保持 reviewing_result，显示缺口与现有工具入口
+  end
+
+  Note over C,R: 重启恢复只重新观察 candidate 与快照，绝不再次 startSessionWithPrompt
+  Note over B,V: 用户切到其他面板后不自动重复打开 result

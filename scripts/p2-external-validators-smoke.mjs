@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -37,6 +37,13 @@ writeFileSync(chinaOnlyProviderPath, `${JSON.stringify(chinaOnlyProviderFixture(
 writeFileSync(localProviderPath, `${JSON.stringify(localProviderFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(invalidApiFormatProviderPath, `${JSON.stringify(invalidApiFormatProviderFixture(), null, 2)}\n`, 'utf8')
 writeFileSync(invalidThinkingModeProviderPath, `${JSON.stringify(invalidThinkingModeProviderFixture(), null, 2)}\n`, 'utf8')
+for (const file of [
+  providerPath,
+  chinaOnlyProviderPath,
+  localProviderPath,
+  invalidApiFormatProviderPath,
+  invalidThinkingModeProviderPath
+]) chmodSync(file, 0o600)
 writeFileSync(artifactPath, `JetBrains interaction evidence artifact fixture ${runId}\n`, 'utf8')
 writeFileSync(fakeIdePath, `JetBrains executable name fixture ${runId}\n`, 'utf8')
 writeFileSync(evidencePath, `\uFEFF${JSON.stringify(jetBrainsEvidenceFixture(), null, 2)}\n`, 'utf8')
@@ -46,6 +53,7 @@ writeFileSync(recorderPath, `${recorderFixture().map((event) => JSON.stringify(e
 writeFileSync(weakRecorderPath, `${weakRecorderFixture().map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8')
 
 const preflight = runNodeScript('scripts/p2-external-preflight.mjs', {
+  CAOGEN_PRIVATE_PROVIDER_TEST_MODE: '1',
   CAOGEN_P2_EXTERNAL_PREFLIGHT_REPORT_ROOT: preflightRoot,
   CAOGEN_P2_EXTERNAL_PREFLIGHT_REQUIRED: '0',
   CAOGEN_CHINA_TOOL_CALL_PARITY: '1',
@@ -67,9 +75,11 @@ assertEqual(jetBrains.evidenceJsonValid, true)
 assertEqual(parity.status, 'ready')
 assertEqual(parity.providerSource, 'file')
 assertEqual(parity.providerCount, 2)
-assertEqual(parity.providerApiFormats['baseline-fixture'], 'openai-responses')
-assertEqual(parity.providerApiFormats['deepseek-fixture'], 'openai-compatible')
-assertEqual(parity.providerThinkingModes['deepseek-fixture'], 'disabled')
+assertEqual(parity.protocolCounts['openai-responses'], 1)
+assertEqual(parity.protocolCounts['openai-compatible'], 1)
+assertEqual(parity.thinkingModeCounts.disabled, 1)
+assertEqual(parity.privateProviderConfigRedacted, true)
+assertPrivateProviderFixtureRedacted(preflightReport)
 assertEqual(chinaNetwork.status, 'missing_configuration')
 
 const invalidApiFormat = runNodeScript('scripts/p2-external-preflight.mjs', readyPreflightEnv(path.join(reportRoot, 'preflight-invalid-api-format'), {
@@ -192,6 +202,7 @@ assert(
 )
 
 const localProviderParity = runNodeScript('scripts/china-tool-call-parity.mjs', {
+  CAOGEN_PRIVATE_PROVIDER_TEST_MODE: '1',
   CAOGEN_CHINA_TOOL_CALL_PARITY: '1',
   CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED: '1',
   CAOGEN_CHINA_PARITY_PROVIDERS: localProviderPath,
@@ -458,6 +469,7 @@ function weakRecorderFixture() {
 
 function readyPreflightEnv(caseReportRoot, overrides = {}) {
   return {
+    CAOGEN_PRIVATE_PROVIDER_TEST_MODE: '1',
     CAOGEN_P2_EXTERNAL_PREFLIGHT_REPORT_ROOT: caseReportRoot,
     CAOGEN_P2_EXTERNAL_PREFLIGHT_REQUIRED: '1',
     CAOGEN_CHINA_TOOL_CALL_PARITY: '1',
@@ -506,6 +518,15 @@ function readPackText(packReport, name) {
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''))
+}
+
+function assertPrivateProviderFixtureRedacted(reportValue) {
+  const serialized = JSON.stringify(reportValue)
+  for (const provider of providerFixture()) {
+    for (const field of ['id', 'baseUrl', 'model', 'apiKey']) {
+      assert(!serialized.includes(provider[field]), `preflight report leaked private Provider field: ${field}`)
+    }
+  }
 }
 
 function assertEqual(actual, expected) {

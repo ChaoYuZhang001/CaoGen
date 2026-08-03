@@ -56,7 +56,7 @@ export interface TaskDagFinalizationCoordinatorDependencies {
   snapshotSubtasks(sessionId: string): TaskSnapshotSubtaskState[]
   snapshotDagExecutions(sessionId: string): TaskDagExecutionView[]
   snapshotDagRuntimes(sessionId: string): TaskDagRuntimeSnapshot[]
-  send(parentSessionId: string, payload: SendMessagePayload): boolean
+  send(parentSessionId: string, payload: SendMessagePayload): Promise<boolean>
   emitParentEvent(parentSessionId: string, event: AgentEvent): void
   updateExecution(parentSessionId: string, execution: TaskDagExecutionView, emit: boolean): void
   releaseScheduler(executionId: string): void
@@ -410,7 +410,7 @@ export class TaskDagFinalizationCoordinator {
       error: undefined
     })
     const persisted = await this.persist(attempted, attempted.revision - 1)
-    const sent = this.dependencies.send(record.parentSessionId, {
+    const sent = await this.dependencies.send(record.parentSessionId, {
       text: attempted.summary!.text,
       messageId: attempted.summary!.messageId
     })

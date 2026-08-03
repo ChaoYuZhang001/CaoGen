@@ -71,15 +71,34 @@ function assertHighWaterNotRegressed(
   const currentWorkflow = current.verification?.workflowLedger
   const priorEvidence = prior.verification?.taskEvidence
   const currentEvidence = current.verification?.taskEvidence
-  const regressed = current.counts.workflowRuns < prior.counts.workflowRuns ||
-    current.counts.taskRuns < prior.counts.taskRuns ||
+  const priorConversation = prior.verification?.conversationLedger
+  const currentConversation = current.verification?.conversationLedger
+  const priorRemoved = prior.authorizedPurges?.removed
+  const currentRemoved = current.authorizedPurges?.removed
+  const logical = (physical: number, removed: number | undefined): number => physical + (removed ?? 0)
+  const regressed = logical(current.counts.workflowRuns, currentRemoved?.workflowRuns) <
+      logical(prior.counts.workflowRuns, priorRemoved?.workflowRuns) ||
+    logical(current.counts.taskRuns, currentRemoved?.taskRuns) <
+      logical(prior.counts.taskRuns, priorRemoved?.taskRuns) ||
     Boolean(priorWorkflow && (!currentWorkflow ||
-      currentWorkflow.runs < priorWorkflow.runs ||
-      currentWorkflow.events < priorWorkflow.events ||
-      currentWorkflow.lastSeq < priorWorkflow.lastSeq)) ||
+      logical(currentWorkflow.runs, currentRemoved?.workflowRuns) <
+        logical(priorWorkflow.runs, priorRemoved?.workflowRuns) ||
+      logical(currentWorkflow.events, currentRemoved?.workflowEvents) <
+        logical(priorWorkflow.events, priorRemoved?.workflowEvents) ||
+      logical(currentWorkflow.lastSeq, currentRemoved?.workflowEvents) <
+        logical(priorWorkflow.lastSeq, priorRemoved?.workflowEvents))) ||
     Boolean(priorEvidence && (!currentEvidence ||
-      currentEvidence.count < priorEvidence.count ||
-      currentEvidence.lastSeq < priorEvidence.lastSeq))
+      logical(currentEvidence.count, currentRemoved?.taskEvidence) <
+        logical(priorEvidence.count, priorRemoved?.taskEvidence) ||
+      logical(currentEvidence.lastSeq, currentRemoved?.taskEvidence) <
+        logical(priorEvidence.lastSeq, priorRemoved?.taskEvidence))) ||
+    Boolean(priorConversation && (!currentConversation ||
+      logical(currentConversation.streams, currentRemoved?.conversationStreams) <
+        logical(priorConversation.streams, priorRemoved?.conversationStreams) ||
+      logical(currentConversation.generations, currentRemoved?.conversationGenerations) <
+        logical(priorConversation.generations, priorRemoved?.conversationGenerations) ||
+      logical(currentConversation.events, currentRemoved?.conversationEvents) <
+        logical(priorConversation.events, priorRemoved?.conversationEvents)))
   if (regressed) {
     throw new WorkflowLedgerMigrationError(
       'COMMITTED_TARGET_STATE_REGRESSION',

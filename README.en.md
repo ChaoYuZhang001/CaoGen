@@ -39,9 +39,9 @@ This table describes the current product structure. It does not claim that every
 
 ## Current progress
 
-As of 2026-07-28, the PRD has 64 P0s: 21 verified, 19 partially complete, 23 project targets, and 1 foundation only. This snapshot comes from the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md), not a version-completion percentage; the published `v0.1.7` is a signed wedge release, not 1.0 stable.
+As of 2026-07-31, 21 of the PRD's 64 P0s are verified and 43 remain open. The latest clean/public snapshot classifies the open set as 19 partially complete, 23 project targets, and 1 foundation only; a newer dirty-worktree structural projection classifies it as 30 partially complete, 12 project targets, and 1 foundation only. Neither snapshot is a version-completion percentage or release binding. The published `v0.1.7` is a signed macOS Intel wedge release, not 1.0 stable, and the formal cross-platform Release Gate remains blocked. See the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md) and [STATUS.md](./STATUS.md) for exact boundaries.
 
-> **Seeking one first-time Intel Mac user** for a private, 30-minute v0.1.7 install, Provider setup, and read-only task drill. Eligibility, privacy boundaries, and the volunteer format are in [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9). Never post keys, Provider URLs, or project paths.
+> **First-time-user acceptance remains open**: the target is a private, 30-minute install of a supported release asset, Provider setup, and read-only task drill. Eligibility, privacy boundaries, and the volunteer format are in [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9). Never post keys, Provider URLs, or project paths.
 
 ## Core capabilities available today
 
@@ -59,7 +59,7 @@ As of 2026-07-28, the PRD has 64 P0s: 21 verified, 19 partially complete, 23 pro
 2. **Add a provider and key**: open Settings, select a provider template or enter the base URL of a compatible service, then add your own API key. Keys are never committed to this repository.
 3. **Run your first task**: create a session, select a local project directory or use an unassigned session, then try: `Read this project and tell me how it starts, which files matter most, and the three highest-value issues. Do not change anything yet.`
 
-> The v0.1.7 macOS Intel x64 installer is Developer ID signed, Apple-notarized, and Gatekeeper-verified. Windows x64 v0.1.5 is a retained older release; download only from this repository's Releases and verify the corresponding release notes. Formal 1.0 acceptance and release readiness are tracked in [STATUS.md](./STATUS.md).
+> The v0.1.7 macOS Intel x64 installer is Developer ID signed, Apple-notarized, and Gatekeeper-verified, but the current public Release asset set and body have drifted from the repository's approved contract, so its integrity audit is failing. Windows x64 v0.1.5 is a retained older release. Any future Windows asset must pass native validation and be labeled `unsigned preview` in both its filename and public copy; it cannot satisfy the formal cross-platform gate. Download only from this repository's Releases and verify the corresponding release notes. Current evidence is tracked in [STATUS.md](./STATUS.md).
 
 Run from source:
 

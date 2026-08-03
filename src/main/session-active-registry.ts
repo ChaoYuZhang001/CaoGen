@@ -13,6 +13,10 @@ import {
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import type { AgentEvent, AgentEventIdentity, SessionMeta } from '../shared/types'
+import {
+  activeSessionRecordsFromDocument,
+  activeSessionRegistryDocument
+} from './active-session-registry-format'
 import type { Engine } from './engine'
 import { createEngine } from './engine'
 import { touchProject } from './projects'
@@ -23,54 +27,158 @@ import {
 } from './digital-worker/session-binding'
 
 export interface ActiveSessionRecoveryPlan {
+  records: SessionMeta[]
   restorable: SessionMeta[]
   registryReconciled: boolean
   skippedErrors: string[]
+  registryReadError?: string
 }
 
-export function restoreActiveSessionRegistry(
+export interface ActiveSessionRegistryRestoreResult {
+  registryChanged: boolean
+  artifactsCanBePruned: boolean
+}
+
+export interface ActiveSessionRegistryRestoreOptions {
+  preserveRegistrySessionIds?: ReadonlySet<string>
+}
+
+export class ActiveSessionRegistryWriteQuarantinedError extends Error {
+  constructor(readonly reason: string) {
+    super(`Active Session Registry write quarantine is active: ${reason}`)
+    this.name = 'ActiveSessionRegistryWriteQuarantinedError'
+  }
+}
+
+let registryWriteQuarantineReason: string | undefined
+
+export function quarantineActiveSessionRegistryWrites(reason: string): void {
+  if (registryWriteQuarantineReason !== undefined) return
+  registryWriteQuarantineReason = reason.trim() || 'unspecified recovery failure'
+  console.error('[caogen] active session registry write quarantine enabled:', registryWriteQuarantineReason)
+}
+
+export function activeSessionRegistryWriteQuarantineReason(): string | undefined {
+  return registryWriteQuarantineReason
+}
+
+export async function restoreActiveSessionRegistry(
   snapshotSessionIds: ReadonlySet<string>,
   sessions: Map<string, Engine>,
   snapshotCounts: Map<string, { total: number; sinceSave: number; lastSeq: number; lastEventId?: string }>,
-  emit: (sessionId: string, event: AgentEvent, seq: number, identity?: AgentEventIdentity) => void
-): boolean {
+  emit: (sessionId: string, event: AgentEvent, seq: number, identity?: AgentEventIdentity) => void,
+  options: ActiveSessionRegistryRestoreOptions = {}
+): Promise<ActiveSessionRegistryRestoreResult> {
+  if (registryWriteQuarantineReason !== undefined) {
+    console.error('[caogen] active session registry 仍处于写隔离状态，拒绝再次恢复:', registryWriteQuarantineReason)
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
   const plan = planActiveSessionRecovery(snapshotSessionIds, new Set(sessions.keys()))
+  if (plan.registryReadError) {
+    quarantineActiveSessionRegistryWrites(`registry read failed: ${plan.registryReadError}`)
+    console.error('[caogen] active session registry 不可读取，已阻止覆盖和转录清理:', plan.registryReadError)
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
   for (const error of plan.skippedErrors) console.error('[caogen] 跳过不可恢复 active session:', error)
-  let restored = 0
-  let bindingRejected = false
-  for (const record of plan.restorable) {
-    let meta = restoredSessionMeta(record)
-    if (!meta.unassigned && !meta.projectId) meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
-    try {
-      meta = bindLegacyUnscopedSessionForRecovery(meta)
+  if (plan.skippedErrors.length > 0) {
+    quarantineActiveSessionRegistryWrites(`registry recovery rejected: ${plan.skippedErrors.join('; ')}`)
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
+  if ((options.preserveRegistrySessionIds?.size ?? 0) > 0) {
+    quarantineActiveSessionRegistryWrites(
+      `external recovery blocked sessions: ${[...options.preserveRegistrySessionIds!].sort().join(', ')}`
+    )
+    console.error('[caogen] active session 存在外部恢复阻断，已保留完整 registry 和会话证据')
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
+
+  const prepared: Array<{
+    meta: SessionMeta
+    engine: Engine
+    projectPath?: string
+    bufferedEvents: Array<{ event: AgentEvent; seq: number; identity?: AgentEventIdentity }>
+  }> = []
+  try {
+    const metas = plan.restorable.map((record) => {
+      const meta = bindLegacyUnscopedSessionForRecovery(restoredSessionMeta(record))
       resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
-      snapshotCounts.set(meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
-      const session = createEngine(
-        meta.engine,
+      return {
         meta,
-        (event, seq, identity) => emit(meta.id, event, seq, identity),
-        record.sdkSessionId
-      )
-      sessions.set(meta.id, session)
-      void session.start()
-      restored += 1
-    } catch (error) {
-      bindingRejected = true
-      console.error('[caogen] 恢复 active session 失败:', error)
+        sdkSessionId: record.sdkSessionId,
+        projectPath: !meta.unassigned && !meta.projectId ? meta.sourceCwd ?? meta.cwd : undefined
+      }
+    })
+    for (const item of metas) {
+      const bufferedEvents: Array<{ event: AgentEvent; seq: number; identity?: AgentEventIdentity }> = []
+      prepared.push({
+        meta: item.meta,
+        projectPath: item.projectPath,
+        bufferedEvents,
+        engine: createEngine(
+          item.meta.engine,
+          item.meta,
+          (event, seq, identity) => bufferedEvents.push({ event, seq, identity }),
+          item.sdkSessionId
+        )
+      })
+    }
+  } catch (error) {
+    await disposePreparedEngines(prepared)
+    quarantineActiveSessionRegistryWrites(
+      `batch recovery preflight failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+    console.error('[caogen] active session 批次恢复预检失败，已阻止部分恢复:', error)
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
+
+  try {
+    for (const item of prepared) {
+      if (item.projectPath) item.meta.projectId = touchProject(item.projectPath).id
+    }
+  } catch (error) {
+    await disposePreparedEngines(prepared)
+    quarantineActiveSessionRegistryWrites(
+      `batch recovery project binding failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+    console.error('[caogen] active session 批次 Project 绑定失败，已阻止部分恢复:', error)
+    return { registryChanged: false, artifactsCanBePruned: false }
+  }
+
+  for (const item of prepared) {
+    snapshotCounts.set(item.meta.id, { total: 0, sinceSave: 0, lastSeq: 0 })
+    sessions.set(item.meta.id, item.engine)
+  }
+  for (const item of prepared) {
+    for (const buffered of item.bufferedEvents) {
+      emit(item.meta.id, buffered.event, buffered.seq, buffered.identity)
     }
   }
-  return restored > 0 || plan.registryReconciled || bindingRejected
+  for (const item of prepared) {
+    void item.engine.start().catch((error) => {
+      console.error(`[caogen] active session Engine 启动失败 (${item.meta.id}):`, error)
+    })
+  }
+  const artifactsCanBePruned = activeSessionArtifactsCanBePruned(plan)
+  return {
+    registryChanged: prepared.length > 0 || plan.registryReconciled,
+    artifactsCanBePruned
+  }
 }
 
 export function planActiveSessionRecovery(
   snapshotSessionIds: ReadonlySet<string>,
   activeSessionIds: ReadonlySet<string>
 ): ActiveSessionRecoveryPlan {
+  const records: SessionMeta[] = []
   const restorable: SessionMeta[] = []
   const skippedErrors: string[] = []
   let registryReconciled = false
-  for (const record of readActiveSessionRegistry()) {
-    if (!record.id) continue
+  const registry = readActiveSessionRegistry()
+  if (registry.error) {
+    quarantineActiveSessionRegistryWrites(`registry read failed: ${registry.error}`)
+    return { records, restorable, registryReconciled, skippedErrors, registryReadError: registry.error }
+  }
+  for (const record of registry.records) {
     let reconciled: SessionMeta
     try {
       reconciled = sessionMetaForRecovery(record)
@@ -80,14 +188,39 @@ export function planActiveSessionRecovery(
       continue
     }
     registryReconciled ||= !sameSessionPlacement(record, reconciled)
+    records.push(reconciled)
     if (activeSessionIds.has(record.id) || snapshotSessionIds.has(record.id) || !record.sdkSessionId) continue
     restorable.push(reconciled)
   }
-  return { restorable, registryReconciled, skippedErrors }
+  if (skippedErrors.length > 0) {
+    quarantineActiveSessionRegistryWrites(`registry recovery rejected: ${skippedErrors.join('; ')}`)
+  }
+  return { records, restorable, registryReconciled, skippedErrors }
+}
+
+export function activeSessionRegistryPreserveIds(
+  plan: ActiveSessionRecoveryPlan,
+  blockedSessionIds: ReadonlySet<string>,
+  authoritativeSdkSessionIds: ReadonlyMap<string, string>
+): Set<string> {
+  return new Set(plan.records.flatMap((record) => {
+    if (!blockedSessionIds.has(record.id)) return []
+    const authoritativeSdkSessionId = authoritativeSdkSessionIds.get(record.id)
+    return record.sdkSessionId && record.sdkSessionId === authoritativeSdkSessionId ? [] : [record.id]
+  }))
+}
+
+export function activeSessionArtifactsCanBePruned(
+  plan: ActiveSessionRecoveryPlan,
+  externalRecoveryBlocked = false
+): boolean {
+  return registryWriteQuarantineReason === undefined &&
+    plan.registryReadError === undefined && plan.skippedErrors.length === 0 && !externalRecoveryBlocked
 }
 
 export function writeActiveSessionRegistry(records: SessionMeta[], strict = false): void {
   try {
+    assertActiveSessionRegistryWritesAllowed()
     writeRegistry(records)
   } catch (error) {
     if (strict) throw error
@@ -99,7 +232,12 @@ export function updateActiveSessionRegistryWorktreeState(
   sessionId: string,
   state: SessionMeta['worktreeState']
 ): void {
-  const records = readActiveSessionRegistry()
+  const registry = readActiveSessionRegistry()
+  if (registry.error) {
+    console.error('[caogen] active session registry 不可读取，已阻止 worktree 状态覆盖:', registry.error)
+    return
+  }
+  const records = registry.records
   const index = records.findIndex((record) => record.id === sessionId)
   if (index < 0 || records[index].worktreeState === state) return
   records[index] = { ...records[index], worktreeState: state }
@@ -128,28 +266,28 @@ function restoredSessionMeta(record: SessionMeta): SessionMeta {
   }
 }
 
-function readActiveSessionRegistry(): SessionMeta[] {
+function readActiveSessionRegistry(): { records: SessionMeta[]; error?: string } {
   const file = activeSessionsFile()
-  if (!existsSync(file)) return []
+  if (!existsSync(file)) return { records: [] }
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter(isSessionMetaRecord) as SessionMeta[]
+    return { records: activeSessionMetaRecordsFromDocument(parsed, file) }
   } catch (error) {
-    console.error('[caogen] 读取 active session registry 失败:', error)
-    return []
+    return { records: [], error: error instanceof Error ? error.message : String(error) }
   }
 }
 
 function writeRegistry(records: SessionMeta[]): void {
   const file = activeSessionsFile()
+  assertWritableRegistryVersion(file)
+  assertActiveSessionMetaRecords(records, 'active session registry candidate')
   const root = dirname(file)
   mkdirSync(root, { recursive: true })
   const temp = join(root, `.active-sessions.${process.pid}.${randomUUID()}.tmp`)
   let descriptor: number | undefined
   try {
     descriptor = openSync(temp, 'wx', 0o600)
-    writeFileSync(descriptor, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
+    writeFileSync(descriptor, `${JSON.stringify(activeSessionRegistryDocument(records), null, 2)}\n`, 'utf8')
     fsyncSync(descriptor)
     closeSync(descriptor)
     descriptor = undefined
@@ -161,8 +299,46 @@ function writeRegistry(records: SessionMeta[]): void {
   }
 }
 
+function assertWritableRegistryVersion(file: string): void {
+  if (!existsSync(file)) return
+  const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
+  activeSessionMetaRecordsFromDocument(parsed, file)
+}
+
+function activeSessionMetaRecordsFromDocument(value: unknown, file: string): SessionMeta[] {
+  const records = activeSessionRecordsFromDocument<unknown>(value, file)
+  assertActiveSessionMetaRecords(records, file)
+  return records as SessionMeta[]
+}
+
+function assertActiveSessionMetaRecords(records: readonly unknown[], source: string): void {
+  const invalidIndex = records.findIndex((record) => !isSessionMetaRecord(record))
+  if (invalidIndex >= 0) throw new Error(`${source} session at index ${invalidIndex} is invalid`)
+  const ids = new Set<string>()
+  const sdkSessionIds = new Set<string>()
+  for (const [index, value] of records.entries()) {
+    const record = value as SessionMeta
+    if (ids.has(record.id)) throw new Error(`${source} session at index ${index} has duplicate id: ${record.id}`)
+    ids.add(record.id)
+    if (!record.sdkSessionId) continue
+    if (sdkSessionIds.has(record.sdkSessionId)) {
+      throw new Error(`${source} session at index ${index} has duplicate sdkSessionId: ${record.sdkSessionId}`)
+    }
+    sdkSessionIds.add(record.sdkSessionId)
+  }
+}
+
 function activeSessionsFile(): string {
   return join(app.getPath('userData'), 'active-sessions.json')
+}
+
+async function disposePreparedEngines(prepared: ReadonlyArray<{ engine: Engine }>): Promise<void> {
+  const results = await Promise.allSettled(prepared.map((item) => item.engine.dispose()))
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.error('[caogen] active session 批次回滚 dispose 失败:', result.reason)
+    }
+  }
 }
 
 function fsyncDirectory(root: string): void {
@@ -178,13 +354,29 @@ function fsyncDirectory(root: string): void {
 function isSessionMetaRecord(value: unknown): value is SessionMeta {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
-  return typeof record.id === 'string' &&
+  return isRequiredSessionText(record.id) &&
     typeof record.title === 'string' &&
-    typeof record.cwd === 'string' &&
-    typeof record.model === 'string' &&
-    typeof record.providerId === 'string' &&
-    typeof record.permissionMode === 'string' &&
-    typeof record.status === 'string' &&
-    typeof record.costUsd === 'number' &&
-    typeof record.createdAt === 'number'
+    isRequiredSessionText(record.cwd) &&
+    isSessionModel(record.model) &&
+    isRequiredSessionText(record.providerId) &&
+    isRequiredSessionText(record.permissionMode) &&
+    isRequiredSessionText(record.status) &&
+    (record.sdkSessionId === undefined || isRequiredSessionText(record.sdkSessionId)) &&
+    typeof record.costUsd === 'number' && Number.isFinite(record.costUsd) &&
+    typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+}
+
+function assertActiveSessionRegistryWritesAllowed(): void {
+  if (registryWriteQuarantineReason !== undefined) {
+    throw new ActiveSessionRegistryWriteQuarantinedError(registryWriteQuarantineReason)
+  }
+}
+
+function isSessionModel(value: unknown): value is string {
+  return value === '' || isRequiredSessionText(value)
+}
+
+function isRequiredSessionText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim() &&
+    value.length <= 1024 && !/[\0-\x1f\x7f]/.test(value)
 }

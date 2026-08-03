@@ -108,13 +108,14 @@ export function normalizeReleaseRequest(value: unknown): AssignmentOwnerReleaseR
 export function normalizeReassignRequest(value: unknown): AssignmentOwnerReassignRequest {
   const record = exactRecord(value, [
     'requestId', 'currentAssignmentId', 'nextInput', 'expectedRevision',
-    'expectedStoreRevision', 'now', 'reason', 'ownerDisplayName'
+    'expectedWorkItemRevision', 'expectedStoreRevision', 'now', 'reason', 'ownerDisplayName'
   ], 'assignment reassign request')
   return {
     requestId: normalizeRequestId(record.requestId),
     currentAssignmentId: requiredText(record.currentAssignmentId, 'currentAssignmentId', 512),
     nextInput: normalizeCoordinatorAssignmentInput(record.nextInput),
     ...optionalRevision(record, 'expectedRevision'),
+    ...optionalRevision(record, 'expectedWorkItemRevision'),
     ...optionalRevision(record, 'expectedStoreRevision', true),
     ...(record.now === undefined ? {} : { now: timestamp(record.now, 'reassign now') }),
     ...(record.reason === undefined ? {} : { reason: requiredContent(record.reason, 'reassign reason', 8_192) }),

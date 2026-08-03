@@ -23,6 +23,14 @@ import { formatDependenciesResult, runGetDependencies } from './agent/tools/get-
 import { GIT_TOOLS, executeGitTool, isGitToolName } from './agent/tools/git-tools'
 import { BROWSER_TOOLS, executeBrowserTool, isBrowserToolName } from './agent/tools/browser-tools'
 import { P2_TOOLS, executeP2Tool, isP2ToolName } from './agent/tools/p2-tools'
+import {
+  CREATE_DOCUMENT_TOOL,
+  CREATE_PDF_TOOL,
+  CREATE_PRESENTATION_TOOL,
+  CREATE_SPREADSHEET_TOOL,
+  executeOfficeArtifactTool,
+  isOfficeArtifactTool
+} from './agent/tools/office-artifact'
 import { clipToolOutput } from './agent/tool-output'
 import type { CodeForgeWorktreeContext } from './code-forge/delivery'
 import {
@@ -41,15 +49,20 @@ import {
   discoverMcpServer,
   loadClaudeDesktopMcpServers,
   summarizeClaudeDesktopMcpImport,
-  type McpServerConfig,
-  type McpTransport
+  type McpServerConfig
 } from './mcp/mcp-client'
+import {
+  executeMcpEffectTarget,
+  mcpServerConfigFromToolInput,
+  recordApprovedMcpDiscovery
+} from './mcp/mcp-effect'
 import type {
   CommandTermination,
   EngineKind,
   EffectTarget,
   PermissionModeId,
   SandboxMode,
+  SessionMeta,
   TaskDag,
   TaskDagDispatchInput,
   TaskDagDispatchResult,
@@ -94,6 +107,9 @@ export interface ToolExecutionOptions {
   sessionId?: string
   worktreeContext?: CodeForgeWorktreeContext
   effectTarget?: EffectTarget
+  sessionMeta?: SessionMeta
+  userDataRoot?: string
+  toolUseId?: string
 }
 
 const READ_MAX_BYTES = 200 * 1024
@@ -160,6 +176,166 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           content: { type: 'string', description: '完整文件内容' }
         },
         required: ['path', 'content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: CREATE_DOCUMENT_TOOL,
+      description:
+        '在当前 Project 内生成可交付的 Word .docx 成品。输出禁止覆盖已有文件，并在审批后通过 Artifact、Evidence 和 Acceptance 链登记。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Project 内的 .docx 输出路径' },
+          title: { type: 'string', description: '文档标题' },
+          headings: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选的一级标题列表'
+          },
+          paragraphs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '正文段落列表'
+          },
+          source_refs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选；Project 内实际使用的来源文件路径。未提供时由当前 Run/Effect 保留来源链。'
+          }
+        },
+        required: ['path', 'title']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: CREATE_SPREADSHEET_TOOL,
+      description:
+        '在当前 Project 内生成可交付的 Excel .xlsx 成品。支持多工作表、标量单元格和带缓存结果的公式，输出禁止覆盖已有文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Project 内的 .xlsx 输出路径' },
+          title: { type: 'string', description: '工作簿标题' },
+          sheets: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: '工作表名称' },
+                rows: {
+                  type: 'array',
+                  items: {
+                    type: 'array',
+                    items: {
+                      anyOf: [
+                        { type: 'string' },
+                        { type: 'number' },
+                        { type: 'boolean' },
+                        {
+                          type: 'object',
+                          properties: {
+                            formula: { type: 'string' },
+                            result: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }] }
+                          },
+                          required: ['formula']
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              required: ['name', 'rows']
+            }
+          },
+          source_refs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选；Project 内实际使用的来源文件路径。未提供时由当前 Run/Effect 保留来源链。'
+          }
+        },
+        required: ['path', 'title', 'sheets']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: CREATE_PRESENTATION_TOOL,
+      description:
+        '在当前 Project 内生成可交付的 PowerPoint .pptx 成品。支持多页标题、正文和项目符号，输出禁止覆盖已有文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Project 内的 .pptx 输出路径' },
+          title: { type: 'string', description: '演示文稿标题' },
+          slides: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '页面标题' },
+                body: { type: 'string', description: '可选正文' },
+                bullets: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '可选项目符号列表'
+                }
+              },
+              required: ['title']
+            }
+          },
+          source_refs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选；Project 内实际使用的来源文件路径。未提供时由当前 Run/Effect 保留来源链。'
+          }
+        },
+        required: ['path', 'title', 'slides']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: CREATE_PDF_TOOL,
+      description:
+        '在当前 Project 内生成可交付的 PDF 成品。内置中文字体，支持章节和段落，输出禁止覆盖已有文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Project 内的 .pdf 输出路径' },
+          title: { type: 'string', description: 'PDF 标题' },
+          sections: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: {
+              type: 'object',
+              properties: {
+                heading: { type: 'string', description: '可选章节标题' },
+                paragraphs: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '章节正文段落'
+                }
+              }
+            }
+          },
+          source_refs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '可选；Project 内实际使用的来源文件路径。未提供时由当前 Run/Effect 保留来源链。'
+          }
+        },
+        required: ['path', 'title', 'sections']
       }
     }
   },
@@ -488,7 +664,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'mcp_call_tool',
-      description: '调用一个 MCP tool。需要传入 MCP server 配置、tool 名称和 arguments。',
+      description: '调用一个 MCP tool。普通调用按不可查询副作用保护；如已先执行 mcp_discover，可提供只读 reconciliation contract 以支持崩溃后自动对账。',
       parameters: {
         type: 'object',
         properties: {
@@ -498,6 +674,17 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           transport: { type: 'string', enum: ['stdio', 'http', 'sse'] },
           toolName: { type: 'string' },
           arguments: { type: 'object' },
+          reconciliation: {
+            type: 'object',
+            description: '可选自动对账契约；toolName 必须由同一 MCP server 声明 annotations.readOnlyHint=true。',
+            properties: {
+              toolName: { type: 'string', description: '专用只读查询工具名。' },
+              arguments: { type: 'object', description: '只读查询参数，不得包含凭据。' },
+              jsonPointer: { type: 'string', description: '指向查询结果的 RFC 6901 JSON Pointer；文本 JSON 可从 /content/0/parsed 读取。' },
+              expectedValue: { description: '确认副作用已发生时该位置的精确预期值。' }
+            },
+            required: ['toolName', 'jsonPointer', 'expectedValue']
+          },
           timeoutMs: { type: 'number' }
         },
         required: ['toolName']
@@ -535,7 +722,15 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
 /** 只读工具(plan 模式仅放行这些;default 模式免审批) */
 export const READONLY_TOOLS = OPENAI_PERMISSION_READ_ONLY_TOOLS
 /** 文件写入类(acceptEdits 模式自动放行) */
-export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])
+export const EDIT_TOOLS = new Set([
+  'write_file',
+  'search_replace',
+  'edit_file',
+  CREATE_DOCUMENT_TOOL,
+  CREATE_SPREADSHEET_TOOL,
+  CREATE_PRESENTATION_TOOL,
+  CREATE_PDF_TOOL
+])
 
 /**
  * Responses API 的工具 schema(扁平形态:type/name/description/parameters 平铺,
@@ -594,23 +789,12 @@ function memoryLayersArg(value: unknown): MemoryLayer[] | undefined {
 function recordArg(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
 }
-function mcpTransportArg(value: unknown): McpTransport | undefined {
-  return value === 'stdio' || value === 'http' || value === 'sse' ? value : undefined
-}
 function memoryRoot(): string {
   return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
 }
 
 function mcpConfigArg(args: Record<string, unknown>): McpServerConfig {
-  if (Object.hasOwn(args, 'env') || Object.hasOwn(args, 'headers')) {
-    throw new Error('模型 MCP 调用不允许传入 env 或 headers；请使用受管 MCP 配置')
-  }
-  return {
-    command: optionalStringArg(args.command),
-    args: stringArrayArg(args.args),
-    url: optionalStringArg(args.url),
-    transport: mcpTransportArg(args.transport)
-  }
+  return mcpServerConfigFromToolInput(args)
 }
 async function importClaudeDesktopMcp(args: Record<string, unknown>): Promise<ToolExecResult> {
   if (Object.keys(args).length > 0) {
@@ -754,7 +938,35 @@ export async function executeCodingTool(
         effectTarget: options.effectTarget
       }))
     }
-    if (isP2ToolName(name)) return clipExecResult(await executeP2Tool(name, args, cwd))
+    if (isP2ToolName(name)) {
+      return clipExecResult(await executeP2Tool(name, args, cwd, {
+        effectTarget: options.effectTarget,
+        sessionMeta: options.sessionMeta,
+        userDataRoot: options.userDataRoot,
+        toolUseId: options.toolUseId
+      }))
+    }
+    if (isOfficeArtifactTool(name)) {
+      const artifact = await executeOfficeArtifactTool(
+        name,
+        args,
+        cwd,
+        options.effectTarget,
+        options.signal
+      )
+      return {
+        ok: true,
+        output: clip(JSON.stringify({
+          path: artifact.path,
+          sha256: artifact.sha256,
+          bytes: artifact.bytes,
+          mediaType: artifact.mediaType,
+          artifactKind: artifact.artifactKind,
+          title: artifact.title,
+          sourceRefs: artifact.sourceRefs
+        }))
+      }
+    }
     switch (name) {
       case 'bash':
         return await runBash(String(args.command ?? ''), cwd, options)
@@ -962,11 +1174,17 @@ export async function executeCodingTool(
       }
       case 'mcp_discover': {
         const timeoutMs = numberArg(args.timeoutMs)
-        const result = await discoverMcpServer(mcpConfigArg(args), timeoutMs)
+        const config = mcpConfigArg(args)
+        const result = await discoverMcpServer(config, timeoutMs)
+        recordApprovedMcpDiscovery(config, result)
         return { ok: true, output: clip(JSON.stringify(result, null, 2)) }
       }
       case 'mcp_call_tool': {
         const timeoutMs = numberArg(args.timeoutMs)
+        if (options.effectTarget?.kind === 'mcp_tool_call') {
+          const execution = await executeMcpEffectTarget(options.effectTarget, args, timeoutMs)
+          return { ok: execution.ok, output: clip(JSON.stringify(execution, null, 2)) }
+        }
         const result = await callMcpTool(
           mcpConfigArg(args),
           stringArg(args, 'toolName', 'name'),

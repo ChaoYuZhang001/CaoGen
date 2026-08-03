@@ -53,6 +53,7 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'memory:layeredExport', 'memory:layeredList', 'memory:layeredSearch', 'memory:read',
     'migration:scan',
     'modelAttempts:listReconciliations',
+    'notificationConnectors:list',
     'plugins:scan',
     'preview:listAnnotations', 'preview:prepare', 'preview:prepareVisual',
     'projectContext:read', 'projectContext:template',
@@ -60,7 +61,7 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'providers:fetchModels', 'providers:health', 'providers:list',
     'quickbar:getState', 'quickbar:getWindowContext', 'quickbar:readClipboard',
     'routines:list', 'routines:listRuns', 'routines:listTemplates',
-    'sessions:decomposeTask', 'sessions:list', 'sessions:pendingPermissions',
+    'sessions:decomposeTask', 'sessions:list', 'sessions:outboundContextPreview', 'sessions:pendingPermissions',
     'sessions:suggestFiles', 'sessions:transcript',
     'settings:get',
     'startSuggestions:get',
@@ -78,20 +79,24 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'worktrees:summary'
   ], READ_ONLY),
   policyGroup([
+    'appFeatures:invoke',
     'browser:captureAnnotation', 'browser:captureElementAnnotation',
     'digitalWorker:invoke',
     'history:delete', 'history:rename', 'history:setArchived', 'history:setPinned',
     'learning:approve', 'learning:delete', 'learning:reject', 'learning:revoke', 'learning:rollback',
     'memory:accept', 'memory:delete', 'memory:layeredArchive', 'memory:layeredDelete',
     'memory:layeredUpdate', 'memory:propose',
+    'migration:apply', 'migration:rollback',
     'modelAttempts:resolveReconciliation',
+    'notificationConnectors:create', 'notificationConnectors:delete',
+    'notificationConnectors:setDefault',
     'plugins:setEnabled',
     'preview:saveAnnotation',
     'projects:delete', 'projects:update',
     'projectWorkspace:invoke',
-    'providers:create', 'providers:delete', 'providers:update',
+    'providers:activateLocalCompute', 'providers:create', 'providers:delete', 'providers:update',
     'quickbar:setVisible',
-    'routines:create', 'routines:delete', 'routines:markRun', 'routines:update',
+    'routines:create', 'routines:delete', 'routines:markRun', 'routines:reviewRun', 'routines:update',
     'sessions:close', 'sessions:interrupt', 'sessions:permission', 'sessions:rename',
     'sessions:setModel', 'sessions:setPermissionMode',
     'settings:update',
@@ -119,10 +124,12 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
     'attachments:copyImage', 'attachments:saveImageBytes',
     'browser:back', 'browser:forward', 'browser:navigate', 'browser:open', 'browser:reload',
-    'migration:import',
     'plugins:probeMcp',
     'terminals:close', 'terminals:resize', 'terminals:start', 'terminals:write'
   ], OPAQUE),
+  policyGroup(['migration:import'], {
+    ...OPAQUE, evidence: 'executeMigrationImportEffect'
+  }),
   policyGroup(['browser:bounds', 'browser:close'], LOCAL),
   policyGroup([
     'dialog:pickDirectory',
@@ -150,16 +157,18 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'search_symbol', 'task_decompose', 'view'
   ], READ_ONLY),
   policyGroup([
-    'edit_file', 'git_commit', 'git_create_pr', 'git_merge', 'git_push',
-    'git_stage', 'git_stage_all', 'write_file'
+    'create_document', 'create_pdf', 'create_presentation', 'create_spreadsheet',
+    'edit_file', 'git_commit', 'git_create_issue', 'git_create_pr', 'git_merge',
+    'git_push', 'git_stage', 'git_stage_all', 'write_file'
   ], QUERYABLE),
+  policyGroup(['work_item_comment'], LOCAL),
   policyGroup(['code_forge_delivery', 'search_replace'], CONDITIONAL),
   policyGroup([
     'bash',
     'browser_click', 'browser_evaluate', 'browser_navigate', 'browser_type',
     'gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type',
     'mcp_builtin_servers', 'mcp_call_tool', 'mcp_discover', 'mcp_import_claude_desktop',
-    'memory_add', 'optimize_skill',
+    'memory_add', 'optimize_skill', 'send_notification',
     'task_decompose_and_dispatch_dag', 'task_dispatch_dag'
   ], OPAQUE)
 )
@@ -167,14 +176,18 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
 export const GATEWAY_ACTION_EFFECT_ENTRY_POLICIES = {
   'projectWorkspace:invoke': mergePolicyGroups(
     policyGroup([
-      'get', 'goals:get', 'goals:list', 'list', 'workItems:get', 'workItems:list'
+      'comments:list', 'comments:listProject', 'get', 'goals:get', 'goals:list', 'list',
+      'squads:get', 'squads:list', 'workItems:get', 'workItems:list'
     ], READ_ONLY),
     policyGroup([
-      'archive', 'create', 'delete', 'goals:acceptance', 'goals:archive', 'goals:create',
-      'goals:restore', 'goals:transition', 'goals:update', 'purge', 'restore', 'update',
+      'archive', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
+      'export:data', 'goals:acceptance', 'goals:archive', 'goals:create', 'goals:restore',
+      'goals:transition', 'goals:update', 'goalTask:create', 'import:data', 'purge', 'restore',
+      'squads:archive', 'squads:create', 'squads:members:add', 'squads:members:remove',
+      'squads:restore', 'squads:update', 'update',
       'workItems:acceptance', 'workItems:create', 'workItems:lease:acquire',
       'workItems:lease:release', 'workItems:lease:renew', 'workItems:reorder',
-      'workItems:transition', 'workItems:update'
+      'workItems:transfer', 'workItems:transition', 'workItems:update'
     ], LOCAL),
     policyGroup(['export'], DIRECT_USER)
   ),

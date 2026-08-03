@@ -361,6 +361,16 @@ async function runSummaryReceiptCase() {
   assert.equal(resumed.summaryMessageId, boundary.messageId)
   assert.equal(resumed.summaryMessageCount, 1)
   assert.equal(resumed.summarySendCount, 1, 'receipt recovery must not call Engine.send again')
+  const recoveredSnapshot = await snapshotStore.getTaskSnapshot(
+    crashedRecord.parentSessionId,
+    fixture.userData
+  )
+  assert(recoveredSnapshot, 'summary receipt recovery must retain the parent snapshot')
+  assert.deepEqual(
+    recoveredSnapshot.conversationLedger,
+    compiled('main/transcript.js').verifyConversationLedgerEntries(recoveredSnapshot.transcript),
+    'receipt reconciliation must update transcript and its integrity projection together'
+  )
   console.log('[PASS] durable transcript receipt closes summary_pending without duplicate send')
 }
 
@@ -605,7 +615,7 @@ async function startScenario(mode, fixture, manager) {
     title: `${mode} parent`
   })
   await waitFor(() => manager.get(parent.id)?.meta.status === 'idle', 5000, 'parent engine idle')
-  assert.equal(manager.send(parent.id, 'durable finalization crash e2e'), true)
+  assert.equal(await manager.send(parent.id, 'durable finalization crash e2e'), true)
   await waitFor(() => manager.get(parent.id)?.meta.status === 'idle', 5000, 'parent bootstrap turn')
   fs.writeFileSync(fixture.parentIdFile, parent.id, 'utf8')
 

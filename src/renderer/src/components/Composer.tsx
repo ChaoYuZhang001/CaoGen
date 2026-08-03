@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
-import type { ImageAttachmentView } from '../../../shared/types'
+import type { ImageAttachmentView, SessionMeta } from '../../../shared/types'
 import ImageAttachmentTray from './ImageAttachmentTray'
+import { OutboundContextPreview, useOutboundContextPreview } from './OutboundContextPreview'
 import {
   filterCommandItems,
   type CommandDescriptor
@@ -22,6 +23,22 @@ interface Mention {
 interface ComposerImageAttachment extends ImageAttachmentView {
   name: string
   previewUrl?: string
+}
+
+type OutboundReceiverMeta = Pick<SessionMeta, 'providerId' | 'model' | 'projectId' | 'workspaceId'>
+
+function useComposerOutboundPreview(
+  sessionId: string | null,
+  meta: OutboundReceiverMeta | undefined,
+  text: string,
+  attachments: ComposerImageAttachment[]
+) {
+  const images = useMemo(
+    () => attachments.map<ImageAttachmentView>(({ name: _name, previewUrl: _previewUrl, ...image }) => image),
+    [attachments]
+  )
+  const receiverKey = [meta?.providerId, meta?.model, meta?.projectId, meta?.workspaceId].join('\u0000')
+  return { images, ...useOutboundContextPreview({ sessionId, receiverKey, text, images }) }
 }
 
 /** 定位光标处正在输入的 @提及(@ 在行首或空白后,且其后无空白) */
@@ -92,6 +109,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const [ocrBusyId, setOcrBusyId] = useState<string | null>(null)
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const outbound = useComposerOutboundPreview(activeId, activeSession?.meta, text, attachments)
 
   useEffect(() => {
     return () => {
@@ -186,7 +204,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     setAttachments([])
   }
 
-  const { attachmentsDisabled, sendDisabled, submit } = useComposerSubmission({
+  const { attachmentsDisabled, sendDisabled, submit: submitWithHelper } = useComposerSubmission({
     attachments,
     running,
     uploadingAttachment,
@@ -203,6 +221,11 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     },
     onError: (message) => setAttachmentError(message || null)
   })
+
+  const submit = async (): Promise<void> => {
+    if (outbound.rejectBlockedSend()) return
+    await submitWithHelper()
+  }
 
   const addImageFiles = async (files: Iterable<File>): Promise<void> => {
     if (!activeId) {
@@ -278,7 +301,6 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       setOcrBusyId(null)
     }
   }
-
   const applySuggestion = (path: string): void => {
     if (!mention) return
     const el = textareaRef.current
@@ -435,6 +457,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         }
       />
       {attachmentError && <div className="composer-error">{attachmentError}</div>}
+      <OutboundContextPreview manifest={outbound.manifest} error={outbound.error} />
       <div className="composer-row">
         <textarea
           ref={textareaRef}
@@ -455,7 +478,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         <button
           className="btn btn-primary composer-send"
           onClick={() => void submit()}
-          disabled={sendDisabled}
+          disabled={sendDisabled || outbound.sendDisabled(false)}
         >
           {uploadingAttachment ? '添加中' : t('send')}
         </button>

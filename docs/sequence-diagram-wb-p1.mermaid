@@ -1,0 +1,139 @@
+%% WB-P1 时序图:打开面板 → 切换面板 → 关闭面板
+%% 文件:docs/sequence-diagram-wb-p1.mermaid
+
+sequenceDiagram
+    participant U as 用户
+    participant WBR as WorkbenchRoot.tsx
+    participant ST as store.ts (Zustand)
+    participant PA as panelActivators
+    participant IPC as IPC / 主进程
+    participant Comp as 面板组件
+
+    Note over U,Comp: ═══ 场景 1:打开 Terminal 面板 ═══
+
+    U->>WBR: 点击 DeskControlRail Terminal 选项卡
+    WBR->>ST: openPanel('terminal')
+
+    Note over ST: ① closeNativeBrowserView(activeId)
+    ST->>IPC: closeBrowser(sessionId) [fire-and-forget]
+    IPC-->>ST: ok
+
+    Note over ST: ② set activePanelId='terminal'<br/>mountedPanels.add('terminal')
+    ST->>ST: set({ activePanelId: 'terminal',<br/>mountedPanels: new Set(s.mountedPanels).add('terminal') })
+
+    Note over ST: ③ panelActivators['terminal']()
+    ST->>PA: activate('terminal')
+    PA->>ST: startTerminal()
+    ST->>IPC: startTerminal(sessionId, {cols,rows,reuse})
+    IPC-->>ST: TerminalInfo
+    ST->>ST: set workbench.terminal = info
+
+    Note over ST: ④ React 重新渲染
+    ST-->>WBR: activePanelId='terminal', mountedPanels={'terminal'}
+    WBR->>WBR: PANEL_REGISTRY.map:<br/>'terminal' → display:flex<br/>其他 → 未挂载,跳过
+    WBR->>Comp: <TerminalPanel /> 挂载(首次)
+    Comp-->>U: 终端界面可见
+
+    Note over U,Comp: 用户输入 `npm test`,测试开始运行
+
+    U->>Comp: 输入 `npm test`
+    Comp->>ST: sendTerminalInput('npm test\n')
+    ST->>IPC: writeTerminal(terminalId, 'npm test\n')
+    IPC-->>Comp: 终端输出流式显示
+
+    Note over U,Comp: ═══ 场景 2:切到 Diff 面板(keep-alive 验证) ═══
+
+    U->>WBR: 点击 DeskControlRail Review 选项卡
+    WBR->>ST: openPanel('diff')
+
+    Note over ST: ① closeNativeBrowserView(activeId)
+    ST->>IPC: closeBrowser(sessionId) [fire-and-forget]
+
+    Note over ST: ② set activePanelId='diff'<br/>mountedPanels.add('diff')
+    Note over ST: mountedPanels = {'terminal', 'diff'}<br/>(terminal 仍在集合中!)
+
+    Note over ST: ③ panelActivators['diff']()
+    ST->>PA: activate('diff')
+    PA->>ST: refreshDiffPanel() + refreshGitStatus()
+    ST->>IPC: getWorkspaceDiff(sessionId)
+    ST->>IPC: gitStatus(sessionId)
+    IPC-->>ST: WorkspaceDiff + GitStatus
+    ST->>ST: set workbench.diff / workbench.gitStatus
+
+    Note over ST: ④ React 重新渲染
+    ST-->>WBR: activePanelId='diff', mountedPanels={'terminal','diff'}
+    WBR->>WBR: PANEL_REGISTRY.map:<br/>'terminal' → display:none (不卸载!)<br/>'diff' → display:flex (首次挂载)
+    WBR->>Comp: <TerminalPanel /> 保持挂载(隐藏)
+    WBR->>Comp: <DiffPanel /> 挂载(首次)
+    Comp-->>U: Diff 面板可见,Terminal 隐藏
+
+    Note over U,Comp: Terminal 的 npm test 在后台继续运行<br/>终端会话未断(主进程保持)
+
+    Note over U,Comp: ═══ 场景 3:切回 Terminal(状态保留验证) ═══
+
+    U->>WBR: 点击 DeskControlRail Terminal 选项卡
+    WBR->>ST: openPanel('terminal')
+
+    Note over ST: ① closeNativeBrowserView(activeId)
+    Note over ST: ② set activePanelId='terminal'<br/>mountedPanels 不变 {'terminal','diff'}
+    Note over ST: ③ panelActivators['terminal']()<br/>startTerminal() — 复用已有终端(reuse:true)
+
+    Note over ST: ④ React 重新渲染
+    ST-->>WBR: activePanelId='terminal', mountedPanels={'terminal','diff'}
+    WBR->>WBR: PANEL_REGISTRY.map:<br/>'diff' → display:none (不卸载!)<br/>'terminal' → display:flex (已挂载,无重载!)
+    WBR->>Comp: <DiffPanel /> 保持挂载(隐藏)
+    WBR->>Comp: <TerminalPanel /> 显示(已挂载)
+    Comp-->>U: Terminal 可见,npm test 输出完整<br/>无闪烁、无重连!
+
+    Note over U,Comp: ═══ 场景 4:打开结果面板(togglePanel) ═══
+
+    U->>WBR: 点击 DeskControlRail Summary 按钮
+    WBR->>ST: togglePanel('result')
+
+    Note over ST: activePanelId='terminal' ≠ 'result'<br/>→ openPanel('result')
+    Note over ST: ① closeNativeBrowserView
+    Note over ST: ② set activePanelId='result'<br/>mountedPanels.add('result')
+    Note over ST: mountedPanels = {'terminal','diff','result'}
+    Note over ST: ③ panelActivators['result']() — no-op<br/>(StudioResultPanel 内部 useStudioResult 自动拉取)
+
+    ST-->>WBR: activePanelId='result'
+    WBR->>WBR: 'terminal' → display:none<br/>'diff' → display:none<br/>'result' → display:flex (首次挂载)
+    Comp-->>U: 结果面板可见
+
+    Note over U,Comp: ═══ 场景 5:从结果面板跳转到 Diff ═══
+
+    U->>Comp: 点击"查看 Diff"按钮
+    Comp->>ST: openDiffPanel() [薄包装]
+    Note over ST: openDiffPanel() → openPanel('diff')
+    ST->>ST: set activePanelId='diff'
+
+    ST-->>WBR: activePanelId='diff'
+    WBR->>WBR: 'result' → display:none<br/>'diff' → display:flex (已挂载,diff 数据无需重新加载!)
+    Comp-->>U: Diff 面板可见,无网络请求、无重载
+
+    Note over U,Comp: ═══ 场景 6:关闭所有面板(closePanel) ═══
+
+    U->>WBR: 点击 workbench-side-gutter 折叠按钮
+    WBR->>ST: closePanel()
+
+    Note over ST: ① closeNativeBrowserView(activeId)
+    Note over ST: ② set activePanelId = null
+    Note over ST: mountedPanels 不变 {'terminal','diff','result'}<br/>(全部保持挂载!)
+
+    ST-->>WBR: activePanelId=null
+    Note over WBR: sideOpen = activePanelId !== null = false<br/>workbench-side 区域隐藏<br/>所有面板 display:none (保持挂载)
+    WBR-->>U: 侧栏隐藏,面板状态保留
+
+    Note over U,Comp: 下次打开任意面板时,若该面板在 mountedPanels 中<br/>直接 display:flex 恢复,无重载
+
+    Note over U,Comp: ═══ 场景 7:主动卸载面板(unmountPanel) ═══
+
+    Note over U,Comp: 用户在 Terminal 面板点击"重置终端"
+    U->>Comp: 点击"重置终端"按钮
+    Comp->>ST: unmountPanel('terminal')
+
+    Note over ST: mountedPanels.delete('terminal')<br/>activePanelId = null (若 terminal 是活动面板)
+    Note over ST: Terminal 面板从 DOM 卸载<br/>下次打开重新初始化
+
+    ST-->>WBR: mountedPanels={'diff','result'}
+    WBR-->>U: Terminal 面板已卸载

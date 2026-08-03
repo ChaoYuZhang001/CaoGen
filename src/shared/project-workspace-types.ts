@@ -28,6 +28,15 @@ export type ProjectResourceKind =
   | 'url'
   | 'custom'
 
+export type OutboundDataClass = 'S0' | 'S1' | 'S2' | 'S3' | 'S4'
+
+/**
+ * allow: any configured Provider may receive the resource.
+ * local_only: only a loopback Provider may receive it.
+ * deny: the resource is omitted from every Provider request.
+ */
+export type ProjectResourceEgressPolicy = 'allow' | 'local_only' | 'deny'
+
 export interface ProjectResource {
   id: string
   kind: ProjectResourceKind
@@ -35,11 +44,73 @@ export interface ProjectResource {
   /** A source path is metadata only; deleting a workspace never removes it. */
   path?: string
   uri?: string
+  /** Defaults to S2 for local content and S1 for metadata-only remote links. */
+  dataClass?: OutboundDataClass
+  /** Defaults to allow for backward compatibility; S3 is always denied. */
+  egressPolicy?: ProjectResourceEgressPolicy
   metadata?: Record<string, unknown>
 }
 
 export interface ProjectResourceInput extends Omit<ProjectResource, 'id'> {
   id?: string
+}
+
+export type OutboundContextItemKind =
+  | 'user_prompt'
+  | 'image_attachment'
+  | 'project_resource'
+  | 'project_resource_metadata'
+  | 'conversation_context'
+  | 'memory_context'
+  | 'ide_context'
+  | 'workflow_context'
+  | 'tool_result'
+
+export type OutboundContextItemDecision = 'included' | 'excluded'
+
+export interface OutboundContextItemView {
+  id: string
+  kind: OutboundContextItemKind
+  label: string
+  dataClass: OutboundDataClass
+  egressPolicy: ProjectResourceEgressPolicy
+  decision: OutboundContextItemDecision
+  resourceId?: string
+  bytes?: number
+  digest?: string
+  reason?: string
+}
+
+export type OutboundReceiverLocality = 'local' | 'remote' | 'unknown'
+
+export interface OutboundContextReceiverView {
+  providerId: string
+  providerName: string
+  engine: string
+  model: string
+  endpointOrigin: string
+  locality: OutboundReceiverLocality
+}
+
+/** Serializable and content-free projection of one Provider-bound request. */
+export interface OutboundContextManifest {
+  schemaVersion: 1
+  generatedAt: number
+  sessionId: string
+  projectId?: string
+  projectRevision?: number
+  projectPolicyDigest?: string
+  resourceContextDigest?: string
+  receiver: OutboundContextReceiverView
+  dataClasses: OutboundDataClass[]
+  items: OutboundContextItemView[]
+  /** Remains partial until every engine-owned system/tool context is projected. */
+  scopeCompleteness: 'partial' | 'complete'
+  blocked: boolean
+  blockReasons: string[]
+  failoverAllowed: boolean
+  routingMayChangeReceiver: boolean
+  manifestDigest: string
 }
 
 export type GoalRiskLevel = 'low' | 'medium' | 'high' | 'critical'
@@ -49,6 +120,8 @@ export interface GoalBudget {
   currency?: string
   maxTokens?: number
   maxRuns?: number
+  /** Maximum non-terminal Runs owned by this Goal. Undefined means unlimited. */
+  maxConcurrentRuns?: number
 }
 
 export interface AcceptanceSpec {
@@ -236,6 +309,49 @@ export interface WorkItemOwner {
   displayName?: string
 }
 
+export type WorkItemActorType = 'local_user' | WorkItemOwnerType
+
+export interface WorkItemActor {
+  type: WorkItemActorType
+  id: string
+  displayName?: string
+}
+
+export type WorkItemCapability = 'view' | 'edit' | 'execute' | 'approve' | 'transfer'
+
+export interface WorkItemAuthorizationView {
+  projectId: string
+  workItemId: string
+  actor: WorkItemActor
+  owner?: WorkItemOwner
+  authorizationRevision: number
+  projectAdministrator: boolean
+  currentOwner: boolean
+  capabilities: WorkItemCapability[]
+}
+
+export interface WorkItemTransferInput {
+  requestId: string
+  workItemId: string
+  target: WorkItemOwner
+  reason: string
+  expectedRevision: number
+}
+
+export interface WorkItemTransferResult {
+  requestId: string
+  projectId: string
+  workItemId: string
+  previousOwner?: WorkItemOwner
+  owner: WorkItemOwner
+  previousAssignmentId?: string
+  assignmentId: string
+  workItem: WorkItem
+  authorization: WorkItemAuthorizationView
+  auditEventIds: string[]
+  idempotentReplay: boolean
+}
+
 export interface WorkItemLease {
   id: string
   ownerId: string
@@ -306,13 +422,99 @@ export interface WorkItemPatch {
   runRefs?: string[]
 }
 
+export type ProjectSquadStatus = 'active' | 'archived'
+
+export interface ProjectSquadMember {
+  type: WorkItemOwnerType
+  id: string
+  displayName?: string
+  role?: string
+  joinedAt: number
+}
+
+export interface ProjectSquadMemberInput {
+  type: WorkItemOwnerType
+  id: string
+  displayName?: string
+  role?: string
+  joinedAt?: number
+}
+
+export interface ProjectSquad {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  name: string
+  description?: string
+  members: ProjectSquadMember[]
+  status: ProjectSquadStatus
+  createdBy?: WorkItemActor
+  createdAt: number
+  updatedAt: number
+  archivedAt?: number
+  revision: number
+}
+
+export interface ProjectSquadInput {
+  id?: string
+  projectId: string
+  name: string
+  description?: string
+  members?: ProjectSquadMemberInput[]
+  createdBy?: WorkItemActor
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface ProjectSquadPatch {
+  name?: string
+  description?: string
+}
+
+export type ProjectSquadCreateInput = Omit<ProjectSquadInput, 'createdBy'>
+
+export type WorkItemCommentStatus = 'active' | 'deleted'
+
+export interface WorkItemComment {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  workItemId: string
+  author: WorkItemActor
+  body: string
+  mentions: WorkItemActor[]
+  status: WorkItemCommentStatus
+  createdAt: number
+  updatedAt: number
+  deletedAt?: number
+  revision: number
+}
+
+export interface WorkItemCommentInput {
+  id?: string
+  projectId: string
+  workItemId: string
+  author: WorkItemActor
+  body: string
+  mentions?: WorkItemActor[]
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface WorkItemCommentPatch {
+  body?: string
+  mentions?: WorkItemActor[]
+}
+
+export type ProjectWorkItemCommentCreateInput = Omit<WorkItemCommentInput, 'author'>
+
 export type WorkItemReorderPlacement = 'before' | 'after'
 
 export interface ProjectWorkspaceEvent {
   schemaVersion: ProjectWorkspaceSchemaVersion
   id: string
   projectId: string
-  entityType: 'workspace' | 'goal' | 'work_item'
+  entityType: 'workspace' | 'goal' | 'work_item' | 'squad' | 'comment'
   entityId: string
   kind: string
   revision: number
@@ -326,6 +528,8 @@ export interface ProjectWorkspaceState {
   workspaces: ProjectWorkspace[]
   goals: Goal[]
   workItems: WorkItem[]
+  squads: ProjectSquad[]
+  comments: WorkItemComment[]
   events: ProjectWorkspaceEvent[]
 }
 
@@ -338,6 +542,8 @@ export interface ProjectWorkspaceManifest {
   workspace: ProjectWorkspace
   goals: Goal[]
   workItems: WorkItem[]
+  squads: ProjectSquad[]
+  comments: WorkItemComment[]
   events: ProjectWorkspaceEvent[]
   digest: string
 }
@@ -367,6 +573,34 @@ export interface ProjectWorkspaceLeaseOptions extends MutationOptions {
   fencingToken?: number
 }
 
+export interface ProjectGoalTaskInput {
+  /** Stable across retries of one user action; never reused for a different objective. */
+  requestId: string
+  projectId: string
+  objective: string
+}
+
+export interface ProjectGoalTaskResult {
+  requestId: string
+  goal: Goal
+  workItem: WorkItem
+  recovered: boolean
+}
+
+export interface ProjectDeletionResult {
+  operationId: string
+  projectId: string
+  phase: 'completed'
+  backupPath: string
+  backupDigest: string
+  exportDigest: string
+  proofPath: string
+  proofDigest: string
+  sessionIds: string[]
+  sdkSessionIds: string[]
+  residuals: Record<string, number>
+}
+
 export interface ProjectWorkspaceApi {
   listProjectWorkspaces(options?: ProjectWorkspaceListOptions): Promise<ProjectWorkspace[]>
   getProjectWorkspace(id: string): Promise<ProjectWorkspace | undefined>
@@ -375,7 +609,7 @@ export interface ProjectWorkspaceApi {
   archiveProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>
   restoreProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>
   deleteProjectWorkspace(id: string, options?: ProjectWorkspaceDeleteOptions): Promise<ProjectWorkspace | undefined>
-  purgeProjectWorkspace(id: string, options?: MutationOptions): Promise<void>
+  purgeProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectDeletionResult>
   exportProjectWorkspaceManifest(id: string, destinationPath?: string): Promise<ProjectWorkspaceManifest>
   listProjectGoals(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<Goal[]>
   getProjectGoal(id: string): Promise<Goal | undefined>
@@ -388,13 +622,28 @@ export interface ProjectWorkspaceApi {
   listProjectWorkItems(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<WorkItem[]>
   getProjectWorkItem(id: string): Promise<WorkItem | undefined>
   createProjectWorkItem(input: WorkItemInput, options?: MutationOptions): Promise<WorkItem>
+  createProjectGoalTask(input: ProjectGoalTaskInput): Promise<ProjectGoalTaskResult>
   updateProjectWorkItem(id: string, patch: WorkItemPatch, options?: MutationOptions): Promise<WorkItem>
+  transferProjectWorkItem(input: WorkItemTransferInput): Promise<WorkItemTransferResult>
   reorderProjectWorkItem(id: string, targetId: string, placement: WorkItemReorderPlacement, options?: MutationOptions): Promise<WorkItem>
   transitionProjectWorkItem(id: string, status: WorkItemStatus, options?: MutationOptions): Promise<WorkItem>
   setProjectWorkItemAcceptance(id: string, result: AcceptanceResult, options?: MutationOptions): Promise<WorkItem>
   acquireProjectWorkItemLease(id: string, options?: ProjectWorkspaceLeaseOptions): Promise<WorkItem>
   renewProjectWorkItemLease(id: string, options?: ProjectWorkspaceLeaseOptions): Promise<WorkItem>
   releaseProjectWorkItemLease(id: string, options?: ProjectWorkspaceLeaseOptions): Promise<WorkItem>
+  listProjectSquads(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<ProjectSquad[]>
+  getProjectSquad(id: string): Promise<ProjectSquad | undefined>
+  createProjectSquad(input: ProjectSquadCreateInput, options?: MutationOptions): Promise<ProjectSquad>
+  updateProjectSquad(id: string, patch: ProjectSquadPatch, options?: MutationOptions): Promise<ProjectSquad>
+  archiveProjectSquad(id: string, options?: MutationOptions): Promise<ProjectSquad>
+  restoreProjectSquad(id: string, options?: MutationOptions): Promise<ProjectSquad>
+  addProjectSquadMember(id: string, member: ProjectSquadMemberInput, options?: MutationOptions): Promise<ProjectSquad>
+  removeProjectSquadMember(id: string, memberType: WorkItemOwnerType, memberId: string, options?: MutationOptions): Promise<ProjectSquad>
+  listProjectComments(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<WorkItemComment[]>
+  listProjectWorkItemComments(workItemId: string, options?: ProjectWorkspaceListOptions): Promise<WorkItemComment[]>
+  createProjectWorkItemComment(input: ProjectWorkItemCommentCreateInput, options?: MutationOptions): Promise<WorkItemComment>
+  updateProjectWorkItemComment(id: string, patch: WorkItemCommentPatch, options?: MutationOptions): Promise<WorkItemComment>
+  deleteProjectWorkItemComment(id: string, options?: MutationOptions): Promise<WorkItemComment>
 }
 
 export function isProjectWorkspaceKind(value: unknown): value is ProjectWorkspaceKind {

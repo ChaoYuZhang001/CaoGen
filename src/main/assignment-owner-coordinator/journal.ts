@@ -103,6 +103,34 @@ export class AssignmentOwnerJournal {
       .filter((event) => requestId === undefined || event.requestId === requestId)
       .map(clone))
   }
+
+  async purgeProject(projectId: string): Promise<{ entries: number; audit: number }> {
+    if (!requiredString(projectId)) {
+      throw new AssignmentOwnerCoordinatorError('INVALID_INPUT', 'projectId is required')
+    }
+    return this.withExclusive(async ({ document, persist }) => {
+      const entries = document.entries.length
+      const audit = document.audit.length
+      document.entries = document.entries.filter((entry) => entry.projectId !== projectId)
+      document.audit = document.audit.filter((event) => event.projectId !== projectId)
+      const removed = {
+        entries: entries - document.entries.length,
+        audit: audit - document.audit.length
+      }
+      if (removed.entries > 0 || removed.audit > 0) persist()
+      return removed
+    })
+  }
+
+  async countProject(projectId: string): Promise<{ entries: number; audit: number }> {
+    if (!requiredString(projectId)) {
+      throw new AssignmentOwnerCoordinatorError('INVALID_INPUT', 'projectId is required')
+    }
+    return this.withExclusive(async ({ document }) => ({
+      entries: document.entries.filter((entry) => entry.projectId === projectId).length,
+      audit: document.audit.filter((event) => event.projectId === projectId).length
+    }))
+  }
 }
 
 function emptyJournal(): AssignmentOwnerJournalDocument {

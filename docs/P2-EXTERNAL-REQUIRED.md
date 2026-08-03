@@ -119,11 +119,10 @@ Required command:
 
 ```powershell
 $env:CAOGEN_CHINA_TOOL_CALL_PARITY = "1"
-$env:CAOGEN_CHINA_PARITY_PROVIDERS = '<providers-json>'
 npm.cmd run test:china-tool-call-parity:required
 ```
 
-`CAOGEN_CHINA_PARITY_PROVIDERS` may also point to a local JSON file when running the preflight, required parity gate, or generated external pack runner.
+Real local parity tests read only `~/.caogen-private/provider-parity.json`. Custom file paths and inline JSON are rejected outside synthetic fixture mode. The directory and file must use permissions `0700` and `0600` on macOS/Linux.
 In required mode, each provider `baseUrl` must use a public HTTPS host. Localhost, private IP ranges, mock hosts, and placeholder domains are rejected before parity is accepted.
 
 Provider JSON example:

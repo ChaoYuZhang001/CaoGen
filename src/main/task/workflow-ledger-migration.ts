@@ -343,7 +343,7 @@ async function ensureTaskStoreReady(
     if (resumed) return resumeTaskStoreMigration(options, source, resumed)
     if (version === options.targetStoreVersion) {
       if (report.safeForShadowUse || report.readyForCanonicalRead) {
-        return { disposition: 'ready_existing_v8', report }
+        return { disposition: 'ready_existing_current', report }
       }
     }
     const mode = selectMigrationMode(report)
@@ -351,7 +351,7 @@ async function ensureTaskStoreReady(
       source,
       migrationPath: mode === 'canonical'
         ? 'canonical_upgrade'
-        : version === options.targetStoreVersion ? 'existing_v8' : 'legacy_upgrade',
+        : version === options.targetStoreVersion ? 'existing_current' : 'legacy_upgrade',
       mode,
       fromVersion: version,
       toVersion: options.targetStoreVersion,

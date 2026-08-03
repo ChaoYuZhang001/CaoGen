@@ -9,6 +9,7 @@ import {
   trustedMacDistributionChecks
 } from './lib/release-packaging-policy.mjs'
 import {
+  buildDistributionPolicy,
   releaseArtifactEvidence,
   releasePackagingCommands,
   releasePackagingNextActions,
@@ -50,10 +51,12 @@ const reports = {
   macosReleaseX64Audit: readJson('test-results/macos-release-audit/latest-x64.json'),
   macosReleaseArm64Audit: readJson('test-results/macos-release-audit/latest-arm64.json'),
   windowsReleaseX64Audit: readJson('test-results/windows-release-audit/latest-x64.json'),
+  windowsPreviewX64Audit: readJson('test-results/windows-preview-audit/latest-x64.json'),
   packagedAppSmoke: readJson('test-results/packaged-app-smoke/latest.json'),
   packagedAppMacosX64Smoke: readJson('test-results/packaged-app-smoke/latest-macos-x64.json'),
   packagedAppMacosArm64Smoke: readJson('test-results/packaged-app-smoke/latest-macos-arm64.json'),
   packagedAppWindowsX64Smoke: readJson('test-results/packaged-app-smoke/latest-windows-x64.json'),
+  packagedAppWindowsX64PreviewSmoke: readJson('test-results/packaged-app-smoke/latest-windows-x64-preview.json'),
   releaseNotesAudit: readJson('test-results/release-notes-audit/latest.json'),
   productPositioningAudit: readJson('test-results/product-positioning-audit/latest.json'),
   githubReleaseAudit: readJson('test-results/github-release-audit/latest.json')
@@ -95,6 +98,14 @@ const domains = [
 ]
 const openDomains = domains.filter((domain) => domain.status !== 'ready' && domain.blocking !== false)
 const manualDomains = domains.filter((domain) => domain.blocking === false)
+const distributionPolicy = buildDistributionPolicy({
+  repoRoot,
+  releaseTargetVersion,
+  gitState,
+  domains,
+  openDomains,
+  reports
+})
 const report = {
   status: openDomains.length === 0 ? 'ready' : 'not_ready',
   required,
@@ -131,9 +142,11 @@ const report = {
   openDomains: openDomains.map((domain) => domain.id),
   manualDomains: manualDomains.map((domain) => domain.id),
   waivedDomains: domains.filter((domain) => domain.status === 'waived').map((domain) => domain.id),
+  distributionPolicy,
   parallelAgents: buildParallelAgents(),
   releaseStopConditions: [
-    'Do not publish a new release while workos-release-doctor status is not ready.',
+    'Do not claim formal cross-platform release readiness while workos-release-doctor status is not ready.',
+    'Do not publish a platform-scoped macOS formal plus Windows unsigned-preview release until the exact clean candidate passes the macOS distribution audits, native Windows preview audit and launch smoke, explicit preview labeling, final release-notes audit, and post-upload asset audit.',
     'Do not label a 1.x build stable while any PRD P0 remains short of the exact current-verified state.',
     'Do not publish a 1.x stable release without release-bound real default OpenAI-compatible provider evidence.',
     'Do not label a 1.x build stable without a release-bound CycloneDX/SPDX inventory and vulnerability disposition.',
@@ -145,9 +158,9 @@ const report = {
     'Do not publish a 1.x stable release without a passed private seven-day soak record bound to the exact frozen version, commit, and artifact set, except 1.0.0 when its explicit version-scoped owner waiver validates; that waiver never applies to another release.',
     'Do not publish if real secrets, webhooks, certs, signing material, .env files, test-results, out, dist, node_modules, or local evidence packs are staged.',
     'Do not publish public product or release copy that mentions external product names, uses comparison framing, or forces a fixed future version target.',
-    'Do not publish until npm run test:release-notes-audit:final passes for the exact GitHub Release body.',
+    'Do not publish until the exact GitHub Release body passes the final notes audit for its channel: formal cross-platform or platform-scoped.',
     'Do not leave forbidden GitHub Release assets public; delete the asset and rotate/revoke the credential if any real secret was exposed.',
-    'Do not claim a published release passed until npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist proves the exact local dist asset set and public text metadata.',
+    'Do not claim a published release passed until the matching post-upload GitHub audit proves the exact local dist asset set and public text metadata.',
     'Do not claim Genesis can execute, merge, push, or publish through external child Agents until that is implemented and proved.'
   ]
 }
@@ -961,14 +974,16 @@ function releaseNotesDomain() {
     commands: [
       'npm run test:release-notes-audit',
       'npm run test:release-notes-audit:required',
-      'npm run test:release-notes-audit:final'
+      'npm run test:release-notes-audit:final',
+      'npm run test:release-notes-audit:platform-scoped-final'
     ],
     nextActions: finalPassed
       ? ['Keep the final release notes audit green on the exact GitHub Release body and release commit.']
       : draftPassed
         ? [
             'Keep docs/RELEASE-NOTES-DRAFT.md aligned with current open gates.',
-            'After P2, N1, packaging, and public assets are ready, replace draft-only blocked-release language with exact uploaded assets and run npm run test:release-notes-audit:final.'
+            'For a formal cross-platform release, replace draft language with exact assets and run npm run test:release-notes-audit:final.',
+            'For the macOS-formal plus Windows-unsigned-preview channel, keep formal Doctor not_ready explicit and run npm run test:release-notes-audit:platform-scoped-final only after its candidate gate is ready.'
           ]
         : [
             'Create or update docs/RELEASE-NOTES-DRAFT.md with exact supported claims, blockers, asset policy, macOS first-open guidance, and security statement.',
@@ -1026,7 +1041,8 @@ function githubReleaseDomain() {
       'npm run test:github-release-audit:read-text',
       'npm run test:github-release-audit:required -- --tag vX.Y.Z',
       'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z',
-      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist'
+      'npm run test:github-release-audit:read-text:required -- --tag vX.Y.Z --expected-assets-from-dist',
+      'npm run test:github-release-audit:platform-scoped:required -- --tag vX.Y.Z'
     ],
     nextActions: audit.data?.status === 'passed'
       ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
@@ -1123,7 +1139,7 @@ function buildParallelAgents() {
         'npm run test:github-release-audit:read-text',
         'npm run secret:scan:history'
       ],
-      acceptance: 'Release notes and README match current evidence; no new release is published until every required gate is ready.'
+      acceptance: 'Release notes and README match current evidence. A platform-scoped release requires its dedicated candidate, notes, labeling, and post-upload gates; formal cross-platform readiness remains blocked until every formal Doctor gate is ready.'
     }
   ]
 }

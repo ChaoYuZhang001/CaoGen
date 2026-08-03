@@ -7,7 +7,13 @@ import {
 } from '../code-forge/delivery'
 import { buildCodeForgePatchEffectTarget } from '../code-forge/patch-effect'
 import { buildGitIndexEffectTarget, isGitIndexEffectToolName } from '../git/git-index-effect'
-import { buildPullRequestEffectTarget } from '../git/pull-request-effect'
+import { buildIssueEffectTarget, buildPullRequestEffectTarget } from '../git/pull-request-effect'
+import { buildMcpEffectTarget } from '../mcp/mcp-effect'
+import { buildWebhookMessageEffectTarget } from '../notification/notification-effect'
+import {
+  buildOfficeArtifactEffectTarget,
+  isOfficeArtifactTool
+} from '../agent/tools/office-artifact'
 import { buildDiscardWorkspaceHunkEffectTarget } from '../git/worktree-hunk-effect'
 import {
   buildManagedWorktreeCreateTarget,
@@ -79,6 +85,9 @@ async function buildFileEffectTarget(
   observationOptions: EffectTargetObservationOptions,
   context: EffectTargetBuilderContext
 ): Promise<EffectTarget | undefined> {
+  if (isOfficeArtifactTool(toolName)) {
+    return buildOfficeArtifactEffectTarget(toolName, input.toolInput, input.cwd)
+  }
   if (toolName === 'write_file') {
     return context.fileWriteTarget(input.cwd, input.toolInput, observationOptions)
   }
@@ -131,6 +140,11 @@ async function buildRepositoryEffectTarget(
   if (toolName === 'git_merge') return context.gitMergeTarget(input.cwd, input.toolInput)
   if (toolName === 'git_push') return context.gitPushTarget(input.cwd, input.toolInput)
   if (toolName === 'git_create_pr') return buildPullRequestTarget(input)
+  if (toolName === 'git_create_issue') return buildIssueTarget(input)
+  if (toolName === 'mcp_call_tool') {
+    return buildMcpEffectTarget(input.toolInput) ?? { kind: 'unsupported', toolName }
+  }
+  if (toolName === 'send_notification') return buildWebhookMessageEffectTarget(input.toolInput)
   if (toolName === 'code_forge_delivery') {
     assertCodeForgeEffectInput(input.toolInput)
     return buildCodeForgeTarget(input)
@@ -261,6 +275,15 @@ function buildPullRequestTarget(input: EffectTargetInput): Promise<EffectTarget>
   })
 }
 
+function buildIssueTarget(input: EffectTargetInput): Promise<EffectTarget> {
+  return buildIssueEffectTarget({
+    cwd: input.cwd,
+    title: requiredString(input.toolInput.title),
+    body: typeof input.toolInput.body === 'string' ? input.toolInput.body : '',
+    labels: stringArray(input.toolInput.labels)
+  })
+}
+
 function requiredString(value: unknown): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error('效果描述缺少必需字符串参数')
   return value
@@ -268,4 +291,12 @@ function requiredString(value: unknown): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringArray(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error('效果描述要求 labels 为字符串数组')
+  }
+  return value as string[]
 }

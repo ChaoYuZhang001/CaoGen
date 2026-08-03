@@ -3,7 +3,9 @@ import { lstat, readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { EffectTarget, FileSystemIdentity } from '../../shared/types'
 import {
+  exactIssueMarkerRecords,
   exactMarkerRecords,
+  queryIssueEffectTarget,
   queryPullRequestEffectTarget
 } from '../git/pull-request-effect'
 import type { EffectReconciliationResult } from './effect-reconciliation-result'
@@ -440,6 +442,75 @@ export async function reconcilePullRequestCreate(
     })
   }
   return classifyPullRequestObservation(target, observation.records, context)
+}
+
+export async function reconcileIssueCreate(
+  target: Extract<EffectTarget, { kind: 'issue_create' }>,
+  context: OperationEffectReconcilerContext
+): Promise<EffectReconciliationResult> {
+  const currentRoot = await context.resolveRepoRoot(target.repoRoot)
+  if (!issueRepositoryMatches(currentRoot, target, context)) {
+    return context.unresolved({ kind: target.kind, reason: 'Issue 本地仓库身份已变化' })
+  }
+  const currentUrls = await context.gitLines(currentRoot, ['remote', 'get-url', '--all', target.remote])
+  if (!issueRemoteMatches(currentUrls, target, context)) {
+    return context.unresolved({ kind: target.kind, remote: target.remote, reason: 'Issue remote URL 身份已变化' })
+  }
+  const observation = await queryIssueEffectTarget(target)
+  if (!observation.complete) {
+    return context.unresolved({
+      kind: target.kind,
+      repositoryDigest: target.repositoryDigest,
+      reason: observation.error ?? 'Issue 查询结果不完整'
+    })
+  }
+  const exact = exactIssueMarkerRecords(target, observation.records)
+  const payload = issueEvidence(target, observation.records, exact)
+  if (exact.length === 1) {
+    return context.confirmed(payload, '找到唯一 exact marker Issue，已确认创建副作用发生')
+  }
+  if (exact.length > 1) {
+    return context.unresolved({ ...payload, reason: '同一 Effect marker 匹配多个 Issue，无法唯一对账' })
+  }
+  if (observation.records.length > 0) {
+    return context.unresolved({ ...payload, reason: '找到 marker 候选 Issue，但标题、正文或标签意图不一致' })
+  }
+  return context.unresolved({
+    ...payload,
+    reason: '未观察到 Issue；平台不提供可证明历史上从未创建的幂等查询，禁止自动重放'
+  })
+}
+
+function issueRepositoryMatches(
+  currentRoot: string,
+  target: Extract<EffectTarget, { kind: 'issue_create' }>,
+  context: OperationEffectReconcilerContext
+): boolean {
+  return currentRoot === realpathSync(target.repoRoot) &&
+    context.sameFileSystemIdentity(context.fileSystemIdentity(currentRoot), target.repoRootIdentity)
+}
+
+function issueRemoteMatches(
+  currentUrls: string[],
+  target: Extract<EffectTarget, { kind: 'issue_create' }>,
+  context: OperationEffectReconcilerContext
+): boolean {
+  return currentUrls.length === 1 &&
+    stableValueDigest(context.sanitizeRemoteUrl(currentUrls[0])) === target.remoteUrlDigest
+}
+
+function issueEvidence(
+  target: Extract<EffectTarget, { kind: 'issue_create' }>,
+  records: Awaited<ReturnType<typeof queryIssueEffectTarget>>['records'],
+  exact: Awaited<ReturnType<typeof queryIssueEffectTarget>>['records']
+): Record<string, unknown> {
+  return {
+    kind: target.kind,
+    repositoryDigest: target.repositoryDigest,
+    markerDigest: stableValueDigest(target.marker),
+    exact: exact.map((record) => ({ id: record.id, url: record.url, state: record.state })),
+    observedCount: records.length
+  }
 }
 
 function pullRequestRepositoryMatches(

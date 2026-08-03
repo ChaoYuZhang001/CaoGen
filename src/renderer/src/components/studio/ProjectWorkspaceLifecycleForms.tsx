@@ -7,14 +7,16 @@ import {
   type KeyboardEvent
 } from 'react'
 import type {
+  ProjectAggregateExportBundle,
   ProjectResourceInput,
   ProjectWorkspace,
-  ProjectWorkspaceManifest,
   ProjectWorkspacePatch
 } from '../../../../shared/types'
 import {
   PROJECT_KIND_OPTIONS,
   PROJECT_RESOURCE_OPTIONS,
+  RESOURCE_DATA_CLASS_OPTIONS,
+  RESOURCE_EGRESS_OPTIONS,
   TEXT,
   projectEditDraft,
   resourceInputFromDraft,
@@ -82,7 +84,13 @@ export function ProjectResourceForm({
   onSubmit: (input: ProjectResourceInput) => Promise<void>
 }): React.JSX.Element {
   const baseId = useId()
-  const [draft, setDraft] = useState<ProjectResourceDraft>({ kind: 'directory', label: '', location: '' })
+  const [draft, setDraft] = useState<ProjectResourceDraft>({
+    kind: 'directory',
+    label: '',
+    location: '',
+    dataClass: 'S2',
+    egressPolicy: 'allow'
+  })
   const update = <K extends keyof ProjectResourceDraft>(field: K, value: ProjectResourceDraft[K]): void => {
     setDraft((current) => ({ ...current, [field]: value }))
   }
@@ -105,6 +113,38 @@ export function ProjectResourceForm({
           </LifecycleField>
           <LifecycleField id={`${baseId}-location`} label={TEXT.resourceLocation}>
             <input id={`${baseId}-location`} name="resourceLocation" className="input" value={draft.location} onChange={(event) => update('location', event.target.value)} required />
+          </LifecycleField>
+          <LifecycleField id={`${baseId}-data-class`} label={TEXT.resourceDataClass}>
+            <select
+              id={`${baseId}-data-class`}
+              name="resourceDataClass"
+              className="select select-block"
+              value={draft.dataClass}
+              onChange={(event) => {
+                const dataClass = event.target.value as ProjectResourceDraft['dataClass']
+                setDraft((current) => ({
+                  ...current,
+                  dataClass,
+                  ...(dataClass === 'S3' ? { egressPolicy: 'deny' as const } : {})
+                }))
+              }}
+              data-resource-data-class
+            >
+              {RESOURCE_DATA_CLASS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </LifecycleField>
+          <LifecycleField id={`${baseId}-egress`} label={TEXT.resourceEgressPolicy}>
+            <select
+              id={`${baseId}-egress`}
+              name="resourceEgressPolicy"
+              className="select select-block"
+              value={draft.dataClass === 'S3' ? 'deny' : draft.egressPolicy}
+              onChange={(event) => update('egressPolicy', event.target.value as ProjectResourceDraft['egressPolicy'])}
+              disabled={draft.dataClass === 'S3'}
+              data-resource-egress-policy
+            >
+              {RESOURCE_EGRESS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
           </LifecycleField>
         </div>
         <LifecycleFormActions busy={busy} submitLabel={TEXT.addResourceSubmit} onCancel={onCancel} />
@@ -160,7 +200,7 @@ export function ProjectManifestDialog({
   onCopy,
   projectName
 }: {
-  manifest: ProjectWorkspaceManifest
+  manifest: ProjectAggregateExportBundle
   onClose: () => void
   onCopy: () => Promise<void>
   projectName: string
@@ -173,7 +213,7 @@ export function ProjectManifestDialog({
       <h2 id={titleId}>{TEXT.manifestTitle}</h2>
       <div className="pws-manifest-digest">
         <span>{TEXT.manifestDigest}</span>
-        <output data-manifest-digest>{manifest.digest}</output>
+        <output data-manifest-digest>{manifest.exportDigest}</output>
       </div>
       <textarea className="input pws-manifest-json" aria-label={TEXT.manifestTitle} readOnly value={json} data-manifest-json />
       <div className="pws-form-actions">
@@ -240,7 +280,7 @@ function downloadManifest(projectName: string, json: string): void {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `${projectName.replace(/[^a-z0-9_-]+/gi, '-') || 'project'}-manifest.json`
+  link.download = `${projectName.replace(/[^a-z0-9_-]+/gi, '-') || 'project'}-export.json`
   link.click()
   URL.revokeObjectURL(url)
 }
