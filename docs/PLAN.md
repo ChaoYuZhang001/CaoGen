@@ -5,6 +5,8 @@
 > docs/EXECUTION-PLAN.md / docs/DEV-AND-RELEASE-PLAN.md 等)。
 > 愿景定义见 docs/PROJECT-CHARTER.md,实时完成状态见 STATUS.md。
 > 旧文档移入 docs/archive/ 仅作历史存档,不再更新。
+> 大规模架构重构的依赖顺序、迁移协议和派工门禁见
+> [`docs/WORKOS-REFACTOR-MASTER-PLAN.md`](./WORKOS-REFACTOR-MASTER-PLAN.md)；该文档从属于本计划。
 
 - 制定日期:2026-07-23
 - 最近校正:2026-07-30(外部 Effect 批次与“集中开发、统一测试”节奏)
