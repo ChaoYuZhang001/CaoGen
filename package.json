@@ -549,7 +549,8 @@
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
-    "@nut-tree-fork/nut-js": "^4.2.6"
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "@rollup/rollup-win32-x64-msvc": "^4.62.2"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
