@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 import yaml from 'js-yaml'
 
 const repoRoot = process.cwd()
@@ -26,6 +27,10 @@ const rendererOnlyDependencies = [
   'three',
   'zustand'
 ]
+const forbiddenRuntimePackages = new Set([
+  '@anthropic-ai/claude-agent-sdk'
+])
+const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'])
 
 for (const dependency of rendererOnlyDependencies) {
   assert.equal(packageJson.dependencies?.[dependency], undefined, `${dependency} must not ship as a runtime dependency`)
@@ -68,6 +73,26 @@ assert.equal(packageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'], undef
 assert.equal(packageLock.packages?.['']?.dependencies?.['@anthropic-ai/claude-agent-sdk'], undefined)
 assert(!Object.keys(packageLock.packages ?? {}).some((name) => name.includes('claude-agent-sdk')))
 assert(!(packageJson.build?.asarUnpack ?? []).some((pattern) => pattern.includes('claude-agent-sdk')))
+assert.deepEqual(
+  findForbiddenRuntimeImports(path.join(repoRoot, 'src')),
+  [],
+  'CaoGen source must not import a removed vendor Agent runtime'
+)
+assert.deepEqual(
+  collectForbiddenRuntimeImports('fixture.ts', `
+    import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+    type ClaudeSdk = typeof import('@anthropic-ai/claude-agent-sdk')
+    const sdk = await import('@anthropic-ai/claude-agent-sdk/runtime')
+    const legacy = require('@anthropic-ai/claude-agent-sdk')
+  `).map((item) => item.specifier),
+  [
+    '@anthropic-ai/claude-agent-sdk',
+    '@anthropic-ai/claude-agent-sdk',
+    '@anthropic-ai/claude-agent-sdk/runtime',
+    '@anthropic-ai/claude-agent-sdk'
+  ],
+  'vendor runtime guard must cover static, type-only, dynamic, subpath, and require imports'
+)
 assert.equal(packageJson.build?.afterPack, undefined)
 assert.equal(packageJson.build?.mac?.afterPack, undefined)
 assert(packageJson.scripts?.['dist:mac:release:x64']?.includes('test:macos-package-size:required'))
@@ -101,3 +126,101 @@ assert.equal(
 )
 
 console.log('package size policy smoke: passed')
+
+function findForbiddenRuntimeImports(root) {
+  return listSourceFiles(root).flatMap((file) =>
+    collectForbiddenRuntimeImports(file, readFileSync(file, 'utf8'))
+  )
+}
+
+function listSourceFiles(root) {
+  const files = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const absolute = path.join(root, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...listSourceFiles(absolute))
+    } else if (entry.isFile() && sourceExtensions.has(path.extname(entry.name))) {
+      files.push(absolute)
+    }
+  }
+  return files.sort()
+}
+
+function collectForbiddenRuntimeImports(file, sourceText) {
+  const source = ts.createSourceFile(
+    file,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKindFor(file)
+  )
+  const violations = []
+
+  const record = (node, specifier) => {
+    if (!isForbiddenRuntimeSpecifier(specifier)) return
+    const position = source.getLineAndCharacterOfPosition(node.getStart(source))
+    violations.push({
+      file: path.relative(repoRoot, file),
+      line: position.line + 1,
+      specifier
+    })
+  }
+
+  const visit = (node) => {
+    const specifier = moduleSpecifierFor(node)
+    if (specifier) record(node, specifier)
+    ts.forEachChild(node, visit)
+  }
+
+  visit(source)
+  return violations
+}
+
+function moduleSpecifierFor(node) {
+  return declarationModuleSpecifier(node) ??
+    importEqualsModuleSpecifier(node) ??
+    importTypeModuleSpecifier(node) ??
+    callModuleSpecifier(node)
+}
+
+function declarationModuleSpecifier(node) {
+  if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) return undefined
+  const specifier = node.moduleSpecifier
+  return specifier && ts.isStringLiteralLike(specifier) ? specifier.text : undefined
+}
+
+function importEqualsModuleSpecifier(node) {
+  if (!ts.isImportEqualsDeclaration(node)) return undefined
+  if (!ts.isExternalModuleReference(node.moduleReference)) return undefined
+  const specifier = node.moduleReference.expression
+  return specifier && ts.isStringLiteralLike(specifier) ? specifier.text : undefined
+}
+
+function importTypeModuleSpecifier(node) {
+  if (!ts.isImportTypeNode(node) || !ts.isLiteralTypeNode(node.argument)) return undefined
+  const specifier = node.argument.literal
+  return ts.isStringLiteralLike(specifier) ? specifier.text : undefined
+}
+
+function callModuleSpecifier(node) {
+  if (!ts.isCallExpression(node) || node.arguments.length === 0) return undefined
+  const specifier = node.arguments[0]
+  if (!ts.isStringLiteralLike(specifier)) return undefined
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return specifier.text
+  if (ts.isIdentifier(node.expression) && node.expression.text === 'require') return specifier.text
+  return undefined
+}
+
+function isForbiddenRuntimeSpecifier(specifier) {
+  for (const dependency of forbiddenRuntimePackages) {
+    if (specifier === dependency || specifier.startsWith(`${dependency}/`)) return true
+  }
+  return false
+}
+
+function scriptKindFor(file) {
+  if (file.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (file.endsWith('.jsx')) return ts.ScriptKind.JSX
+  if (file.endsWith('.js') || file.endsWith('.mjs') || file.endsWith('.cjs')) return ts.ScriptKind.JS
+  return ts.ScriptKind.TS
+}
