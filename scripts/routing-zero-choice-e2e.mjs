@@ -111,16 +111,18 @@ try {
     projectId
   )
 
-  const quickStartPrompt = '先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。'
+  const recommendedReadOnlyPrompt = '阅读当前工作区可访问的代码和文档，不要修改文件。输出项目用途、目录与核心模块、关键入口和数据流、运行与测试方式、主要风险和建议的下一步。引用具体文件；如果没有可分析内容，请明确提示我选择目录或添加文件，不要臆测。'
   const prompt = `zero choice assistant ${runId}`
   const expectedReply = `Zero-choice route completed: ${prompt}`
 
-  await check('published read-only Quick Start template fills the welcome composer exactly', async () => {
-    await page.click('[data-welcome-suggestion="quick_start_project_read_only_v1"]')
+  await check('recommended read-only preset fills the welcome composer without starting a session', async () => {
+    await page.click('[data-welcome-preset="understand"]')
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
-    assert(value === quickStartPrompt, `Quick Start prompt drifted: ${value}`)
+    assert(value === recommendedReadOnlyPrompt, `recommended read-only prompt drifted: ${value}`)
+    const strategy = await page.$eval('[data-task-strategy]', (node) => node.getAttribute('data-task-strategy'))
+    assert(strategy === 'view', `recommended read-only preset selected ${strategy} instead of view`)
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
-    assert(sessions.length === 0, 'selecting the Quick Start template created a session')
+    assert(sessions.length === 0, 'selecting the recommended read-only preset created a session')
   })
 
   await check('Assistant starts with no technical routing controls', async () => {
@@ -168,7 +170,7 @@ try {
 
     await page.click('[data-welcome-recovery-action="configure"]')
     await page.waitForSelector('.settings-page', { visible: true, timeout: 5_000 })
-    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
+    await openAdvancedProviderEditor(page)
     const currentTab = await page.$eval('[data-settings-tab="providers"]', (node) => node.getAttribute('aria-current'))
     assert(currentTab === 'page', `Provider recovery opened the wrong Settings tab: ${currentTab}`)
     await screenshot(page, '02-expert-provider-editor')
@@ -299,7 +301,7 @@ try {
     assert(sessions.length === 0, `stale Provider recovery created ${sessions.length} session(s)`)
 
     await page.click('[data-welcome-recovery-action="configure"]')
-    await page.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
+    await openAdvancedProviderEditor(page)
     await setValue(page, '[data-provider-field="name"]', 'Zero Choice Local Service')
     await setValue(page, '[data-provider-field="base-url"]', mock.baseUrl)
     await setValue(page, '[data-provider-field="api-key"]', 'test-only')
@@ -329,6 +331,9 @@ try {
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 1, `expected one session, got ${sessions.length}`)
     sessionId = sessions[0].id
+    assert(sessions[0].unassigned !== true, 'project-backed first task was created as unassigned')
+    assert(sessions[0].projectId === projectId, `first task lost its selected Project: ${sessions[0].projectId ?? ''}`)
+    assert((sessions[0].sourceCwd ?? sessions[0].cwd) === projectDir, `first task lost its project directory: ${sessions[0].sourceCwd ?? sessions[0].cwd}`)
     const transcript = await waitForValue(
       () => page.evaluate((id) => window.agentDesk.getTranscript(id), sessionId),
       (entries) => entries.some((entry) => entry.event?.kind === 'turn-result'),
@@ -366,6 +371,14 @@ try {
     await page.waitForSelector('[data-studio-projection-tab="workspace"][aria-selected="true"]', { visible: true })
     await page.focus('[data-studio-projection-tab="workspace"]')
     await page.keyboard.press('ArrowRight')
+    await page.waitForSelector('[data-studio-projection-tab="result"][aria-selected="true"]', { visible: true })
+    await waitForValue(
+      () => page.evaluate(() => document.activeElement?.getAttribute('data-studio-projection-tab')),
+      (focused) => focused === 'result',
+      5_000,
+      'ArrowRight did not move tab focus to result'
+    )
+    await page.keyboard.press('ArrowRight')
     await page.waitForSelector('[data-studio-projection-tab="session"][aria-selected="true"]', { visible: true })
     await page.waitForSelector('#studio-projection-panel-session:not([hidden])', { visible: true })
     await waitForValue(
@@ -385,6 +398,14 @@ try {
 
   await check('workspace roundtrip and Assistant return preserve DOM draft and canonical state', async () => {
     await page.focus('[data-studio-projection-tab="session"]')
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForSelector('[data-studio-projection-tab="result"][aria-selected="true"]', { visible: true })
+    await waitForValue(
+      () => page.evaluate(() => document.activeElement?.getAttribute('data-studio-projection-tab')),
+      (focused) => focused === 'result',
+      5_000,
+      'ArrowLeft did not move tab focus to result'
+    )
     await page.keyboard.press('ArrowLeft')
     await page.waitForSelector('[data-studio-projection-tab="workspace"][aria-selected="true"]', { visible: true })
     await page.waitForSelector('#studio-projection-panel-workspace:not([hidden])', { visible: true })
@@ -451,6 +472,12 @@ async function check(name, run) {
     report.checks.push({ name, status: 'fail', durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) })
     throw error
   }
+}
+
+async function openAdvancedProviderEditor(targetPage) {
+  await targetPage.waitForSelector('[data-provider-quick-setup]', { visible: true, timeout: 5_000 })
+  await targetPage.click('[data-provider-quick-action="advanced"]')
+  await targetPage.waitForSelector('[data-provider-editor="form"]', { visible: true, timeout: 5_000 })
 }
 
 async function assertAssistantProjection(targetPage) {

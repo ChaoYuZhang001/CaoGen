@@ -9,6 +9,7 @@ const MAX_ID_LENGTH = 2_048
 const DRIVE_MODES = new Set(['spark', 'core', 'forge', 'command', 'genesis'])
 const ROUTING_MODES = new Set(['fixed', 'provider', 'global'])
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions'])
+const TASK_STRATEGIES = new Set(['view', 'plan', 'execute'])
 
 export function loadWelcomeDraft(
   fallback: WelcomeDraftState,
@@ -57,6 +58,9 @@ function parseDraft(value: unknown): WelcomeDraftState | null {
   if (!validNullableString(draft.providerId, MAX_ID_LENGTH)) return null
   if (!validNullableString(draft.model, MAX_ID_LENGTH)) return null
   if (draft.permissionMode !== null && !PERMISSION_MODES.has(String(draft.permissionMode))) return null
+  if (draft.taskStrategy !== undefined && !TASK_STRATEGIES.has(String(draft.taskStrategy))) return null
+  if (!validOptionalString(draft.forkFromSdkSessionId, MAX_ID_LENGTH)) return null
+  if (!validOptionalString(draft.forkSourceTitle, MAX_ID_LENGTH)) return null
   return draft as unknown as WelcomeDraftState
 }
 
@@ -68,8 +72,13 @@ function validNullableString(value: unknown, maxLength: number): value is string
   return value === null || validString(value, maxLength)
 }
 
+function validOptionalString(value: unknown, maxLength: number): value is string | undefined {
+  return value === undefined || validString(value, maxLength)
+}
+
 function isEmptyDraft(draft: WelcomeDraftState): boolean {
   return draft.text === '' && draft.projectChoice === null && draft.cwd === null && draft.driveMode === null
     && draft.routingMode === 'global' && draft.providerId === null && draft.model === null
-    && draft.permissionMode === null
+    && draft.permissionMode === null && draft.taskStrategy === undefined
+    && draft.forkFromSdkSessionId === undefined && draft.forkSourceTitle === undefined
 }

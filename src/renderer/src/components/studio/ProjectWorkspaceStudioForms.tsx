@@ -180,6 +180,9 @@ function GoalContractForm({
             <FormField id={`${baseId}-runs`} label={TEXT.budgetRuns}>
               <input id={`${baseId}-runs`} className="input" type="number" min="1" step="1" value={draft.budgetRuns} onChange={(event) => update('budgetRuns', event.target.value)} data-goal-field="budget-runs" />
             </FormField>
+            <FormField id={`${baseId}-concurrent-runs`} label={TEXT.budgetConcurrentRuns}>
+              <input id={`${baseId}-concurrent-runs`} className="input" type="number" min="1" step="1" value={draft.budgetConcurrentRuns} onChange={(event) => update('budgetConcurrentRuns', event.target.value)} data-goal-field="budget-concurrent-runs" />
+            </FormField>
             <FormField id={`${baseId}-tokens`} label={TEXT.budgetTokens}>
               <input id={`${baseId}-tokens`} className="input" type="number" min="1" step="1" value={draft.budgetTokens} onChange={(event) => update('budgetTokens', event.target.value)} data-goal-field="budget-tokens" />
             </FormField>

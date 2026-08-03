@@ -24,16 +24,8 @@ export function createBrowserActions(set: SetState, get: GetState): BrowserActio
       set((state) => ({
         workbench: {
           ...state.workbench,
-          diffOpen: false,
-          worktreeOpen: false,
-          terminalOpen: false,
-          filesOpen: false,
-          previewOpen: false,
-          browserOpen: true,
-          pluginRegistryOpen: false,
-          subagentOpen: false,
-          routineOpen: false,
-          memoryOpen: false,
+          activePanelId: 'browser',
+          mountedPanels: new Set(state.workbench.mountedPanels).add('browser'),
           browserLoading: true,
           browserError: undefined,
           browserMessage: undefined
@@ -45,7 +37,6 @@ export function createBrowserActions(set: SetState, get: GetState): BrowserActio
         set((current) => ({
           workbench: {
             ...current.workbench,
-            browserOpen: true,
             browserLoading: state.loading,
             browserState: state,
             browserUrlDraft: state.url,
@@ -64,7 +55,7 @@ export function createBrowserActions(set: SetState, get: GetState): BrowserActio
       set((state) => ({
         workbench: {
           ...state.workbench,
-          browserOpen: false,
+          activePanelId: state.workbench.activePanelId === 'browser' ? null : state.workbench.activePanelId,
           browserLoading: false,
           browserError: undefined
         }
@@ -130,7 +121,7 @@ export function createBrowserActions(set: SetState, get: GetState): BrowserActio
 
     async setBrowserBounds(bounds) {
       const id = get().activeId
-      if (!id || !get().workbench.browserOpen) return
+      if (!id || get().workbench.activePanelId !== 'browser') return
       await window.agentDesk.setBrowserBounds(id, bounds)
     }
   }

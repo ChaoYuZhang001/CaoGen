@@ -7,6 +7,10 @@ export type WorkflowRunCanonicalBindingResult =
   | { disposition: 'unscoped' }
   | { disposition: 'existing' | 'attached'; workItem: WorkItem }
 
+export type WorkflowRunCanonicalResolution =
+  | { disposition: 'unscoped' }
+  | { disposition: 'resolved'; workItem: WorkItem }
+
 export interface WorkflowRunCanonicalBindingRecoveryResult {
   attached: string[]
   existing: string[]
@@ -30,23 +34,16 @@ export async function bindWorkflowRunToCanonicalWorkItem(
   run: TaskRunRecord,
   rootDir?: string
 ): Promise<WorkflowRunCanonicalBindingResult> {
-  const scope = resolveCanonicalRunBindingScope(meta)
-  if (!scope) return { disposition: 'unscoped' }
-  if (run.sessionId !== meta.id) throw new Error(`Run ${run.id} crosses session ownership`)
+  const resolved = await resolveWorkflowRunCanonicalWorkItem(meta, run, rootDir)
+  if (resolved.disposition === 'unscoped') return resolved
+  const scope = resolveCanonicalRunBindingScope(meta)!
   const runId = requiredId(run.id, 'runId')
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const store = await openProjectWorkspaceStore(rootDir)
     const commands = createProjectWorkspaceCommandService(store, { rootDir })
     await commands.reconcileShadowProjection()
-    const item = await store.getWorkItem(scope.workItemId)
-    if (!item) throw new Error(`canonical WorkItem does not exist:${scope.workItemId}`)
-    if (item.projectId !== scope.workspaceId) {
-      throw new Error(`canonical WorkItem crosses Workspace boundary:${scope.workItemId}`)
-    }
-    if (scope.goalId !== undefined && item.goalId !== scope.goalId) {
-      throw new Error(`canonical WorkItem crosses Goal boundary:${scope.workItemId}`)
-    }
+    const item = attempt === 0 ? resolved.workItem : await requireCanonicalWorkItem(scope, store)
     if (item.runRefs.includes(runId)) return { disposition: 'existing', workItem: item }
     try {
       const updated = await commands.updateWorkItem(
@@ -61,6 +58,35 @@ export async function bindWorkflowRunToCanonicalWorkItem(
     }
   }
   throw new Error(`canonical Run binding retry exhausted:${runId}`)
+}
+
+/** Resolve and validate ownership without mutating the canonical WorkItem. */
+export async function resolveWorkflowRunCanonicalWorkItem(
+  meta: Pick<SessionMeta, 'id' | 'workspaceId' | 'goalId' | 'workItemId'>,
+  run: TaskRunRecord,
+  rootDir?: string
+): Promise<WorkflowRunCanonicalResolution> {
+  const scope = resolveCanonicalRunBindingScope(meta)
+  if (!scope) return { disposition: 'unscoped' }
+  if (run.sessionId !== meta.id) throw new Error(`Run ${run.id} crosses session ownership`)
+  requiredId(run.id, 'runId')
+  const store = await openProjectWorkspaceStore(rootDir)
+  return { disposition: 'resolved', workItem: await requireCanonicalWorkItem(scope, store) }
+}
+
+async function requireCanonicalWorkItem(
+  scope: CanonicalRunBindingScope,
+  store: Awaited<ReturnType<typeof openProjectWorkspaceStore>>
+): Promise<WorkItem> {
+  const item = await store.getWorkItem(scope.workItemId)
+  if (!item) throw new Error(`canonical WorkItem does not exist:${scope.workItemId}`)
+  if (item.projectId !== scope.workspaceId) {
+    throw new Error(`canonical WorkItem crosses Workspace boundary:${scope.workItemId}`)
+  }
+  if (scope.goalId !== undefined && item.goalId !== scope.goalId) {
+    throw new Error(`canonical WorkItem crosses Goal boundary:${scope.workItemId}`)
+  }
+  return item
 }
 
 function resolveCanonicalRunBindingScope(

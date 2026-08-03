@@ -103,7 +103,7 @@ export interface IdeBridgeErrorPayload {
 export interface IdeBridgeSessionPort {
   listSessions(): SessionMeta[]
   createSession(options: CreateSessionOptions): SessionMeta | Promise<SessionMeta>
-  sendMessage(sessionId: string, message: string | SendMessagePayload): boolean | Promise<boolean>
+  sendMessage(sessionId: string, message: string | SendMessagePayload): Promise<boolean>
   syncDocument?(payload: IdeBridgeDocumentSyncPayload): void
   subscribeSessionEvents?(listener: (event: SessionEventPayload) => void): () => void
 }
@@ -128,11 +128,18 @@ export interface IdeBridgeServer {
   status(): IdeBridgeStatus
 }
 
+const MAX_CONNECTIONS = 8
+const AUTH_TIMEOUT_MS = 5000
+const RATE_LIMIT_PER_SECOND = 60
+
 interface IdeBridgeConnection {
   id: string
   socket: Duplex
   authenticated: boolean
   pending: Promise<void>
+  authTimer?: ReturnType<typeof setTimeout>
+  msgCount: number
+  msgWindowStart: number
 }
 
 type WebSocketOpcode = 0x1 | 0x8 | 0x9 | 0xa
@@ -241,6 +248,23 @@ class LocalIdeBridge implements IdeBridgeServer {
       return
     }
 
+    // Reject browser-originated connections (CSWSH prevention).
+    // Local IDE clients (VS Code extension, JetBrains plugin) do not send an
+    // Origin header; browsers always do.
+    const origin = headerValue(request.headers['origin'])
+    if (origin !== undefined) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
+    // Enforce connection limit.
+    if (this.connections.size >= MAX_CONNECTIONS) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
     const key = headerValue(request.headers['sec-websocket-key'])
     if (!key) {
       socket.destroy()
@@ -265,17 +289,45 @@ class LocalIdeBridge implements IdeBridgeServer {
       id: randomBytes(8).toString('hex'),
       socket,
       authenticated: false,
-      pending: Promise.resolve()
+      pending: Promise.resolve(),
+      msgCount: 0,
+      msgWindowStart: Date.now()
     }
     this.connections.set(connection.id, connection)
 
+    // Enforce authentication timeout: disconnect if hello not received in time.
+    connection.authTimer = setTimeout(() => {
+      if (!connection.authenticated) {
+        this.sendFrame(connection.socket, CLOSE_OPCODE, Buffer.alloc(0))
+        connection.socket.destroy()
+        this.connections.delete(connection.id)
+      }
+    }, AUTH_TIMEOUT_MS)
+
     let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0)
     socket.on('data', (chunk: Buffer<ArrayBufferLike>) => {
+      // Rate limiting: count messages per second.
+      const now = Date.now()
+      if (now - connection.msgWindowStart >= 1000) {
+        connection.msgCount = 0
+        connection.msgWindowStart = now
+      }
+      connection.msgCount++
+      if (connection.msgCount > RATE_LIMIT_PER_SECOND) {
+        this.sendError(connection, undefined, 'rate_limited', '消息速率超限')
+        return
+      }
       pending = Buffer.concat([pending, chunk])
       pending = this.consumeFrames(connection, pending)
     })
-    socket.on('close', () => this.connections.delete(connection.id))
-    socket.on('error', () => this.connections.delete(connection.id))
+    socket.on('close', () => {
+      clearTimeout(connection.authTimer)
+      this.connections.delete(connection.id)
+    })
+    socket.on('error', () => {
+      clearTimeout(connection.authTimer)
+      this.connections.delete(connection.id)
+    })
   }
 
   private consumeFrames(
@@ -389,6 +441,7 @@ class LocalIdeBridge implements IdeBridgeServer {
       return
     }
 
+    clearTimeout(connection.authTimer)
     connection.authenticated = true
     const payload: IdeBridgeHelloOkPayload = {
       protocol: IDE_BRIDGE_PROTOCOL_VERSION,
@@ -486,8 +539,14 @@ function requireCreateSessionPayload(value: unknown): IdeBridgeCreateSessionPayl
     budgetUsd: optionalFiniteNumber(value.budgetUsd),
     resumeSessionAt: optionalString(value.resumeSessionAt),
     engine: optionalEngine(value.engine),
+    taskStrategy: optionalTaskStrategy(value.taskStrategy),
+    /**
+     * @deprecated 兼容旧 IDE 调用，值将被忽略。
+     * 收编后 permissionMode 由 taskStrategy 派生，不接受外部设置。
+     */
     permissionMode: optionalPermissionMode(value.permissionMode),
     resumeSdkSessionId: optionalString(value.resumeSdkSessionId),
+    forkFromSdkSessionId: optionalString(value.forkFromSdkSessionId),
     title: optionalString(value.title),
     initialText: optionalString(value.initialText)
   }
@@ -561,10 +620,19 @@ function optionalEngine(value: unknown): CreateSessionOptions['engine'] {
   return undefined
 }
 
+/**
+ * @deprecated 兼容旧 IDE 调用，值将被后端忽略。
+ * 收编后 permissionMode 由 taskStrategy 派生，不接受外部设置。
+ */
 function optionalPermissionMode(value: unknown): CreateSessionOptions['permissionMode'] {
   if (value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'bypassPermissions') {
     return value
   }
+  return undefined
+}
+
+function optionalTaskStrategy(value: unknown): CreateSessionOptions['taskStrategy'] {
+  if (value === 'view' || value === 'plan' || value === 'execute') return value
   return undefined
 }
 
@@ -573,7 +641,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isTokenAccepted(expected: string | undefined, actual: string | undefined): boolean {
-  if (!expected) return true
+  if (!expected) return false
   if (!actual) return false
   const expectedBuffer = Buffer.from(expected)
   const actualBuffer = Buffer.from(actual)

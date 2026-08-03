@@ -1,0 +1,159 @@
+classDiagram
+  direction LR
+
+  class WelcomeView {
+    -text: string
+    -cwd: string
+    -providerId: string
+    -model: string
+    -taskStrategy: TaskStrategy
+    -submitPending: Ref~boolean~
+    +submit(prompt, strategy, title) Promise~void~
+    +startPreset(tool) void
+    +retryCompute() Promise~void~
+  }
+
+  class FirstTaskOnboardingModel {
+    <<pure renderer module>>
+    +deriveStatus(input) FirstTaskOnboardingStatus
+    +isResultResolved(snapshot, record) boolean
+    +readRecord() FirstTaskOnboardingRecordV1
+    +patchRecord(patch) FirstTaskOnboardingRecordV1
+    +useLifecycle() void
+  }
+
+  class FirstTaskOnboardingRecordV1 {
+    +schemaVersion: 1
+    +skippedAt?: number
+    +completedAt?: number
+    +candidateSessionId?: string
+    +presetKey?: PresetKey
+    +computeSource?: ComputeSource
+    +firstArtifactOpenedAt?: number
+    +openedArtifactLocationId?: string
+    +resultAutoOpenedForSessionId?: string
+    +milestones: Record
+  }
+
+  class RendererStore {
+    <<existing Zustand store>>
+    +providers: ProviderView[]
+    +providersHydrated: boolean
+    +sessions: Record
+    +activeId: string|null
+    +workbench: WorkbenchState
+    +welcomeDraft: WelcomeDraft|null
+    +refreshProviders() Promise~void~
+    +activateLocalCompute() Promise
+    +startSessionWithPrompt(options, prompt) Promise~void~
+    +setShowSettings(show, tab?) void
+    +openPanel(id, context?) void
+  }
+
+  class WelcomeDraft {
+    <<renderer memory only>>
+    +text: string
+    +cwd: string
+    +projectChoice: string
+    +providerId: string
+    +model: string
+    +routingMode: WelcomeRoutingMode
+    +driveMode: CaoGenDriveMode
+    +taskStrategy: TaskStrategy
+  }
+
+  class ProviderView {
+    <<existing truth>>
+    +id: string
+    +ready: boolean
+    +models: string[]
+  }
+
+  class SessionMeta {
+    <<existing truth>>
+    +id: string
+    +cwd: string
+    +status: SessionStatus
+    +taskStrategy: TaskStrategy
+    +workspaceId?: string
+    +goalId?: string
+    +workItemId?: string
+  }
+
+  class WorkbenchState {
+    <<existing truth>>
+    +activePanelId: PanelId|null
+    +mountedPanels: Set~PanelId~
+  }
+
+  class WorkbenchRoot {
+    +observeCandidateSession() void
+    +openPanel(result) void
+  }
+
+  class StudioResultPanel {
+    +sessionId: string|null
+    +refresh() Promise~void~
+    +openTool(tool, value?) Promise~void~
+    +onSnapshot(snapshot) void
+    +onArtifactOpened(location) void
+  }
+
+  class StudioResultSnapshot {
+    <<existing truth>>
+    +state: unbound|ready
+    +artifacts: StudioResultArtifact[]
+    +acceptances: StudioResultAcceptance[]
+    +evidence: StudioResultEvidence[]
+    +tests: StudioResultTest[]
+    +summary: StudioResultSummary
+  }
+
+  class WorkflowAcceptanceReview {
+    <<existing API and validation>>
+    +decision: passed|failed|retest|waived
+    +criterionEvidence: Selection[]
+    +waiverReason?: string
+    +reviewWorkflowAcceptance(input) Promise
+  }
+
+  class SettingsPage {
+    +tab: SettingsTab
+    +openProviderEditor(target) void
+    +save() Promise~void~
+    +refreshProviders() Promise~void~
+  }
+
+  class StudioView {
+    <<canonical workspace projection>>
+    +project: ProjectWorkspace|null
+    +goals: Goal[]
+    +workItems: WorkItem[]
+  }
+
+  class LocalStorage {
+    <<renderer persistence>>
+    +caogen.first-task-onboarding.v1: JSON
+  }
+
+  WelcomeView --> RendererStore : reuses existing actions
+  WelcomeView --> FirstTaskOnboardingModel : marks candidate and milestones
+  WelcomeView ..> WelcomeDraft : preserves across Settings replacement
+  RendererStore o-- ProviderView
+  RendererStore o-- SessionMeta
+  RendererStore o-- WorkbenchState
+  RendererStore o-- WelcomeDraft
+  FirstTaskOnboardingModel --> RendererStore : observes candidate and opens result
+  FirstTaskOnboardingModel --> FirstTaskOnboardingRecordV1
+  FirstTaskOnboardingModel --> StudioResultSnapshot : evaluates truth
+  FirstTaskOnboardingModel --> LocalStorage : minimal metadata only
+  WorkbenchRoot --> FirstTaskOnboardingModel : hosts lifecycle hook
+  WorkbenchRoot --> StudioResultPanel : existing result registry
+  StudioResultPanel --> StudioResultSnapshot : getStudioResultSnapshot
+  StudioResultPanel --> WorkflowAcceptanceReview : reuses review ingress
+  StudioResultPanel --> FirstTaskOnboardingModel : snapshot and artifact callbacks
+  SettingsPage --> RendererStore : Provider deep-link and refresh
+  StudioView --> FirstTaskOnboardingModel : optional read-only progress
+
+  note for FirstTaskOnboardingRecordV1 "No prompt, path, Provider, Session, Snapshot or Acceptance copies"
+  note for WorkflowAcceptanceReview "passed/failed require Evidence; waived requires explicit reason"

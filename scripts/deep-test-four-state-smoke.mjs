@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -152,27 +152,27 @@ async function runSmoke() {
     assertStandaloneRequiredFailure('china real network', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
-      env: requiredExternalEnv('china-real-required')
+      env: requiredExternalEnv('china-real-required', tempRoot)
     })
     assertStandaloneRequiredFailure('china tool-call parity', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
-      env: requiredExternalEnv('china-parity-required')
+      env: requiredExternalEnv('china-parity-required', tempRoot)
     })
     assertStandaloneRequiredFailure('china real network partial configuration', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-real-network-smoke.mjs'), '--required'],
-      env: requiredExternalEnv('china-real-partial-required')
+      env: requiredExternalEnv('china-real-partial-required', tempRoot)
     })
     assertStandaloneRequiredFailure('china parity missing provider credential', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
-      env: requiredExternalEnv('china-parity-missing-key-required')
+      env: requiredExternalEnv('china-parity-missing-key-required', tempRoot)
     })
     assertStandaloneRequiredFailure('china parity invalid max gap', {
       command: process.execPath,
       args: [path.join(repoRoot, 'scripts', 'china-tool-call-parity.mjs'), '--required'],
-      env: requiredExternalEnv('china-parity-invalid-gap-required')
+      env: requiredExternalEnv('china-parity-invalid-gap-required', tempRoot)
     })
 
     console.log('deep-test four-state smoke: pass')
@@ -193,7 +193,7 @@ function runScenario(scenario, tempRoot, fixturePath) {
       env: {
         ...process.env,
         ...(scenario === 'runtime-env-required-skip' ? { CAOGEN_FIXTURE_REQUIRED: '1' } : {}),
-        ...requiredExternalEnv(scenario)
+        ...requiredExternalEnv(scenario, tempRoot)
       }
     }
   )
@@ -347,7 +347,7 @@ function assertStandaloneRequiredFailure(name, spec) {
   assert.equal(result.status, 1, `${name} standalone required must exit 1\n${commandOutput(result)}`)
 }
 
-function requiredExternalEnv(scenario) {
+function requiredExternalEnv(scenario, privateRoot) {
   if (scenario === 'china-real-required') {
     return {
       CAOGEN_CHINA_REAL_NETWORK: '',
@@ -359,7 +359,10 @@ function requiredExternalEnv(scenario) {
     return {
       CAOGEN_CHINA_TOOL_CALL_PARITY: '',
       CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED: '',
-      CAOGEN_CHINA_PARITY_PROVIDERS: ''
+      CAOGEN_CHINA_PARITY_PROVIDERS: path.join(
+        tmpdir(),
+        `caogen-missing-private-provider-config-${process.pid}.json`
+      )
     }
   }
   if (scenario === 'china-real-partial-required') {
@@ -389,28 +392,35 @@ function requiredExternalEnv(scenario) {
     return parityRequiredEnv([
       parityProvider('baseline'),
       { ...parityProvider('china'), apiKey: '' }
-    ])
+    ], privateRoot, scenario)
   }
   if (scenario === 'china-parity-invalid-gap-required') {
     return {
-      ...parityRequiredEnv([parityProvider('baseline'), parityProvider('china')]),
+      ...parityRequiredEnv([parityProvider('baseline'), parityProvider('china')], privateRoot, scenario),
       CAOGEN_CHINA_PARITY_MAX_GAP: 'not-a-number'
     }
   }
   if (scenario === 'china-parity-missing-baseline-required') {
-    return parityRequiredEnv([parityProvider('china')])
+    return parityRequiredEnv([parityProvider('china')], privateRoot, scenario)
   }
   if (scenario === 'china-parity-missing-china-required') {
-    return parityRequiredEnv([parityProvider('baseline')])
+    return parityRequiredEnv([parityProvider('baseline')], privateRoot, scenario)
   }
   return {}
 }
 
-function parityRequiredEnv(providers) {
+function parityRequiredEnv(providers, privateRoot, scenario) {
+  const privateDirectory = path.join(privateRoot, '.caogen-private')
+  const providerFile = path.join(privateDirectory, `${scenario}.json`)
+  mkdirSync(privateDirectory, { recursive: true, mode: 0o700 })
+  chmodSync(privateDirectory, 0o700)
+  writeFileSync(providerFile, `${JSON.stringify(providers)}\n`, { mode: 0o600 })
+  chmodSync(providerFile, 0o600)
   return {
+    CAOGEN_PRIVATE_PROVIDER_TEST_MODE: '1',
     CAOGEN_CHINA_TOOL_CALL_PARITY: '1',
     CAOGEN_CHINA_TOOL_CALL_PARITY_REQUIRED: '1',
-    CAOGEN_CHINA_PARITY_PROVIDERS: JSON.stringify(providers),
+    CAOGEN_CHINA_PARITY_PROVIDERS: providerFile,
     CAOGEN_CHINA_PARITY_MAX_GAP: '0'
   }
 }

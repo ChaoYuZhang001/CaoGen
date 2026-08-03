@@ -3,7 +3,7 @@ import type { AgentEvent, SessionMeta } from '../../shared/types'
 export type CrossValidationDispatchStage = 'review' | 'arbitration'
 
 interface CrossValidationDispatchDependencies {
-  send(sessionId: string, prompt: string): boolean
+  send(sessionId: string, prompt: string): Promise<boolean>
   getMeta(sessionId: string): SessionMeta | undefined
   dispatch(sessionId: string, event: AgentEvent): void
 }
@@ -16,14 +16,14 @@ interface CrossValidationDispatchInput {
 }
 
 /** Converts a rejected validation prompt into an observable parent event. */
-export function dispatchCrossValidationPrompt(
+export async function dispatchCrossValidationPrompt(
   dependencies: CrossValidationDispatchDependencies,
   input: CrossValidationDispatchInput
-): boolean {
+): Promise<boolean> {
   let accepted = false
   let thrown: unknown
   try {
-    accepted = dependencies.send(input.childSessionId, input.prompt)
+    accepted = await dependencies.send(input.childSessionId, input.prompt)
   } catch (error) {
     thrown = error
   }

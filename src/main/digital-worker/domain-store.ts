@@ -79,6 +79,13 @@ import {
   normalizeTtl,
   requiredId
 } from './validation'
+import {
+  mergeDigitalWorkerProjectSlice,
+  projectSliceAlreadyImported,
+  purgeDigitalWorkerProjectSlice,
+  type DigitalWorkerProjectSliceInput,
+  type DigitalWorkerProjectPurgeResult
+} from './project-slice'
 
 /**
  * File-backed native worker domain store.
@@ -626,6 +633,22 @@ export class DigitalWorkerStore {
       .filter((event) => normalized.entityId === undefined || event.entityId === normalized.entityId)
       .filter((event) => normalized.kind === undefined || event.kind === normalized.kind)
       .map((event) => cloneValue(event))
+  }
+
+  async purgeProject(projectId: string): Promise<DigitalWorkerProjectPurgeResult> {
+    const id = requiredId(projectId, 'projectId')
+    return this.mutate((document) => purgeDigitalWorkerProjectSlice(document, id))
+  }
+
+  /** Merge a verified Project-owned workforce slice while preserving history. */
+  async importProjectSlice(input: DigitalWorkerProjectSliceInput): Promise<{ revision: number; projectId: string }> {
+    const projectId = requiredId(input.projectId, 'projectId')
+    const current = this.read()
+    if (projectSliceAlreadyImported(current, input, projectId)) return { revision: current.revision, projectId }
+    return this.mutate((document) => {
+      mergeDigitalWorkerProjectSlice(document, input, projectId)
+      return { revision: document.revision + 1, projectId }
+    })
   }
 
   async mutate<T>(operation: Mutation<T>, options: RevisionOptions = {}): Promise<T> {

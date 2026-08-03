@@ -1,11 +1,25 @@
 import { createHash } from 'node:crypto'
-import { appendFileSync, chmodSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
-import type { SandboxMode, ToolRiskLevel } from '../../shared/types'
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync
+} from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { SandboxMode, SessionMeta, ToolRiskLevel } from '../../shared/types'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
 
 export type AuditAction = 'allow' | 'deny' | 'ask' | 'execute'
-export type AuditSource = 'policy' | 'permission-mode' | 'idempotency' | 'user' | 'local-execution'
+export type AuditSource = 'policy' | 'permission-mode' | 'task-strategy' | 'idempotency' | 'user' | 'local-execution'
 
 export interface ToolAuditEvent {
   action: AuditAction
@@ -22,7 +36,8 @@ export interface ToolAuditEvent {
   fallbackReason?: string
 }
 
-interface AuditLogRecord extends Omit<ToolAuditEvent, 'input' | 'message' | 'fallbackReason'> {
+interface AuditLogRecordV1 extends Omit<ToolAuditEvent, 'input' | 'message' | 'fallbackReason'> {
+  schemaVersion: 1
   ts: string
   inputSummary?: string
   inputDigest?: string
@@ -30,25 +45,156 @@ interface AuditLogRecord extends Omit<ToolAuditEvent, 'input' | 'message' | 'fal
   fallbackReason?: string
 }
 
+let configuredUserDataRoot: string | undefined
+
+export function configurePermissionAuditUserDataRoot(userDataRoot: string): void {
+  const normalized = userDataRoot.trim()
+  if (!normalized) throw new Error('permission audit userData root is required')
+  configuredUserDataRoot = normalized
+}
+
 export function writeAuditLog(cwd: string, event: ToolAuditEvent): void {
   try {
     const initialPath = resolveWritableProjectPathSync(cwd, '.caogen/audit.log')
-    mkdirSync(dirname(initialPath.fullPath), { recursive: true })
+    ensureAuditDirectory(dirname(initialPath.fullPath))
     const logPath = resolveWritableProjectPathSync(cwd, '.caogen/audit.log').fullPath
-    const { input, message, fallbackReason, ...safeEvent } = event
-    const record: AuditLogRecord = {
-      ...safeEvent,
-      ts: new Date().toISOString(),
-      inputSummary: summarizeInput(event.toolName, input),
-      inputDigest: input === undefined ? undefined : digest(input),
-      message: redactSensitiveText(message),
-      fallbackReason: redactSensitiveText(fallbackReason)
-    }
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
-    chmodSync(logPath, 0o600)
+    writeAuditRecord(logPath, event)
   } catch {
     // 审计失败不能打断 Agent 工具执行。
   }
+}
+
+/** 查看/规划不得为了写审计而修改用户工作区；审计改落应用私有目录。 */
+export function writeSessionAuditLog(
+  meta: Pick<SessionMeta, 'id' | 'cwd'> & { taskStrategy?: SessionMeta['taskStrategy'] },
+  event: ToolAuditEvent
+): void {
+  if (meta.taskStrategy === 'execute' || meta.taskStrategy === undefined) {
+    writeAuditLog(meta.cwd, event)
+    return
+  }
+  try {
+    const root = privateSessionAuditRoot(sessionAuditUserDataRoot())
+    writeAuditRecord(join(root, `${safeSessionId(meta.id)}.jsonl`), event)
+  } catch {
+    // 私有审计失败同样不能扩大权限或打断只读模型响应。
+  }
+}
+
+function sessionAuditUserDataRoot(): string {
+  const root = configuredUserDataRoot ?? process.env.CAOGEN_USER_DATA_DIR?.trim()
+  if (!root) throw new Error('permission audit userData root is not configured')
+  return root
+}
+
+function writeAuditRecord(logPath: string, event: ToolAuditEvent): void {
+  const { input, message, fallbackReason, ...safeEvent } = event
+  const record: AuditLogRecordV1 = {
+    ...safeEvent,
+    schemaVersion: 1,
+    ts: new Date().toISOString(),
+    inputSummary: summarizeInput(event.toolName, input),
+    inputDigest: input === undefined ? undefined : digest(input),
+    message: redactSensitiveText(message),
+    fallbackReason: redactSensitiveText(fallbackReason)
+  }
+  appendDurableRecord(logPath, Buffer.from(`${JSON.stringify(record)}\n`, 'utf8'))
+}
+
+function appendDurableRecord(logPath: string, line: Buffer): void {
+  const opened = openAppendLog(logPath)
+  try {
+    if (process.platform === 'win32') chmodSync(logPath, 0o600)
+    else fchmodSync(opened.descriptor, 0o600)
+    restoreJsonlFraming(opened.descriptor)
+    appendFileSync(opened.descriptor, line)
+    fsyncSync(opened.descriptor)
+  } finally {
+    closeSync(opened.descriptor)
+  }
+  if (opened.created) fsyncDirectory(dirname(logPath))
+}
+
+function openAppendLog(logPath: string): { descriptor: number; created: boolean } {
+  const appendFlags = constants.O_RDWR | constants.O_APPEND | noFollowFlag()
+  try {
+    return {
+      descriptor: openSync(logPath, appendFlags | constants.O_CREAT | constants.O_EXCL, 0o600),
+      created: true
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    return { descriptor: openSync(logPath, appendFlags), created: false }
+  }
+}
+
+function restoreJsonlFraming(descriptor: number): void {
+  const size = fstatSync(descriptor).size
+  if (size === 0) return
+  const lastByte = Buffer.allocUnsafe(1)
+  if (readSync(descriptor, lastByte, 0, 1, size - 1) !== 1) {
+    throw new Error('permission audit tail could not be inspected')
+  }
+  if (lastByte[0] !== 0x0a) appendFileSync(descriptor, '\n')
+}
+
+function privateSessionAuditRoot(userDataRoot: string): string {
+  const requestedRoot = resolve(userDataRoot)
+  if (existsSync(requestedRoot)) assertPrivateAuditDirectory(requestedRoot, 'userData')
+  ensureAuditDirectory(requestedRoot, 0o700)
+  assertPrivateAuditDirectory(requestedRoot, 'userData')
+  const canonicalRoot = realpathSync(requestedRoot)
+  const auditRoot = join(canonicalRoot, 'task-audit')
+  if (existsSync(auditRoot)) assertPrivateAuditDirectory(auditRoot, 'task-audit')
+  ensureAuditDirectory(auditRoot, 0o700)
+  assertPrivateAuditDirectory(auditRoot, 'task-audit')
+  const canonicalAuditRoot = realpathSync(auditRoot)
+  const child = relative(canonicalRoot, canonicalAuditRoot)
+  if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('permission audit directory escaped userData')
+  }
+  return canonicalAuditRoot
+}
+
+function assertPrivateAuditDirectory(directory: string, label: string): void {
+  const info = lstatSync(directory)
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`permission audit ${label} must be a real directory`)
+  }
+}
+
+function ensureAuditDirectory(directory: string, mode?: number): void {
+  const missing: string[] = []
+  let current = directory
+  while (!existsSync(current)) {
+    missing.push(current)
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  mkdirSync(directory, { recursive: true, mode })
+  if (mode !== undefined) chmodSync(directory, mode)
+  for (const created of missing.reverse()) fsyncDirectory(dirname(created))
+}
+
+function fsyncDirectory(directory: string): void {
+  if (process.platform === 'win32') return
+  const descriptor = openSync(directory, constants.O_RDONLY | noFollowFlag())
+  try {
+    fsyncSync(descriptor)
+  } finally {
+    closeSync(descriptor)
+  }
+}
+
+function noFollowFlag(): number {
+  return process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number'
+    ? 0
+    : constants.O_NOFOLLOW
+}
+
+function safeSessionId(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128) || 'unknown-session'
 }
 
 function summarizeInput(toolName: string, input: unknown): string | undefined {

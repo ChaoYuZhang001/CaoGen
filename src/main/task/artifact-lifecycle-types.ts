@@ -14,6 +14,7 @@ export const REQUIRED_ARTIFACT_KINDS: readonly WorkflowArtifactKind[] = [
   'document',
   'spreadsheet',
   'presentation',
+  'pdf',
   'code',
   'patch',
   'diff',

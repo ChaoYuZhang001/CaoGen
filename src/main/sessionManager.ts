@@ -1,5 +1,5 @@
 import { app, BrowserWindow, powerSaveBlocker } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createEngine } from './engine'
 import type { Engine } from './engine'
 import { registerBuiltinEngines } from './engines'
@@ -9,7 +9,14 @@ import { configureProviderHealthDir } from './providerHealth'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
-import { cleanupTranscripts, restoreTranscriptIfMissing } from './transcript'
+import { checkpointRestoreEffectBoundary } from './checkpoint-effect-boundary'
+import { withSessionOperationQueue } from './session-operation-queue'
+import {
+  cleanupTranscripts,
+  readTranscriptEntries,
+  restoreTranscriptIfMissing,
+  shouldPersistConversationLedgerEvent
+} from './transcript'
 import { touchProject } from './projects'
 import { managedWorktreeRecordForSession } from './worktrees'
 import {
@@ -28,13 +35,21 @@ import {
   requiresEffectReconciliation, sessionCreationResolutionBarrier,
   type PendingSessionRecoveryPlan
 } from './session-creation-recovery'
-import { restoreActiveSessionRegistry, updateActiveSessionRegistryWorktreeState, writeActiveSessionRegistry } from './session-active-registry'
+import {
+  activeSessionArtifactsCanBePruned,
+  activeSessionRegistryPreserveIds,
+  planActiveSessionRecovery,
+  restoreActiveSessionRegistry,
+  updateActiveSessionRegistryWorktreeState,
+  writeActiveSessionRegistry,
+  type ActiveSessionRegistryRestoreResult
+} from './session-active-registry'
 import {
   buildTaskSnapshotReplayPrompts, canTrackCost, cleanOneLine, effectiveBudgetUsd, estimateTurnCostUsd,
   managedSessionSendGateError, mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, rejectSessionSend, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
-  type ManagedSessionCreationOptions, type SessionNotificationState
+  type ManagedSessionCreationOptions
 } from './session-manager-support'
 import { SessionSupervisorRuntime } from './session-supervisor-runtime'
 import {
@@ -43,6 +58,7 @@ import {
   shouldCleanupTaskSnapshot,
   taskSnapshotReason
 } from './session-task-run-events'
+import { SessionNotificationCoordinator } from './notification/session-notification-coordinator'
 import { showDesktopNotification } from './desktopNotify'
 import { scheduleAutoSkillReview } from './skill/auto-skill-review'
 import { clearIdeDocumentContext } from './ide/ide-document-context'
@@ -54,7 +70,7 @@ import { ModelAttemptRecoveryGate } from './task/model-attempt-recovery-gate'
 import { TaskSnapshotReplayCoordinator } from './task/task-snapshot-replay'
 import { SubagentOrchestrationCoordinator } from './task/subagent-orchestration-coordinator'
 import {
-  createTaskRun,
+  createSessionTaskRun,
   isTaskRunTerminal,
   transitionTaskRun
 } from './task/task-run'
@@ -68,21 +84,30 @@ import {
 } from './task/effect-runtime'
 import { prepareTaskSnapshotRecovery } from './task/task-snapshot-recovery-lifecycle'
 import type { SupervisorSessionControlRequest, SupervisorSessionControlResult } from './task/supervisor-session-control'
-import { SupervisorStateStore } from './task/supervisor-state'
+import { SupervisorStateError, SupervisorStateStore } from './task/supervisor-state'
 import {
   executeInteractiveOperationEffect,
-  isInteractiveOperationSnapshot
+  isInteractiveOperationSnapshot,
+  type InteractiveOperationEffectOutcome
 } from './task/operation-effect-gateway'
 import { assertAgentRecoverySnapshot, reconcileInteractiveOperationSnapshot } from './ipc/operation-snapshot'
 import { executeInteractiveOperationEffectRemoveWorktree } from './ipc/worktree-operation-handlers'
 import { decomposeTask } from './agent/task-decomposer'
 import { createModelDagDecomposer } from './agent/model-dag-decomposer'
+import {
+  assertOutboundContextAllowed,
+  prepareOutboundContext
+} from './project-workspace/outbound-context-policy'
 import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
 import { TaskDagFinalizationCoordinator } from './task/dag-finalization-coordinator'
+import { requirePlanningTaskStrategy } from './task/task-strategy'
+import { TaskPlanSessionCoordinator } from './task/task-plan-session-coordinator'
 import { ModelCrossValidationRuntime } from './model/cross-validation-runtime'
 import type {
   AgentEvent,
   AgentEventIdentity,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
   CreateSessionOptions,
   DispatchSubagentsInput,
   SubagentDispatchResult,
@@ -97,37 +122,44 @@ import type {
   TaskDecomposeResult,
   SessionEventPayload,
   SessionMeta,
+  RewindResult,
   SendMessagePayload,
   TaskSnapshotRecord,
   TaskSnapshotReason,
   TaskSnapshotSubtaskState,
+  TaskPlanApprovalInput,
+  TaskPlanDraftInput,
+  TaskPlanStateView,
   TaskRunRecord,
   TranscriptEntry
 } from '../shared/types'
 import type { ModelAttemptReconciliationResolution } from '../shared/model-attempt-types'
+import { resumeProjectDeletions } from './data-lifecycle/project-deletion-coordinator'
+import {
+  archiveConversationLedgerFromJsonl,
+  backfillConversationLedgerArchives,
+  restoreConversationLedgerJsonlFromArchive
+} from './task/conversation-ledger-archive'
+import {
+  conversationLedgerArchiveIdentity,
+  type ConversationLedgerArchiveIdentity
+} from './task/conversation-ledger-store'
 
 const TASK_SNAPSHOT_RECONCILIATION_CONCURRENCY = 4
 
-function trimForNotification(text: string, max = 120): string {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
-}
-
-function formatDuration(ms: number | undefined): string | undefined {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const seconds = Math.round(ms / 1000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
+type CheckpointOperationAttempt<T extends { error?: string }> = {
+  phase: 'preflight' | 'executed'
+  value: T
 }
 
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly taskPlans = new TaskPlanSessionCoordinator(
+    (id) => this.sessions.get(id), () => app.getPath('userData'))
   private readonly taskRuns = taskRuntimeRegistry
   private readonly sessionEventListeners = new Set<(payload: SessionEventPayload) => void>()
-  private readonly notificationStates = new Map<string, SessionNotificationState>()
+  private readonly notifications = new SessionNotificationCoordinator(
+    (id) => this.sessions.get(id)?.meta)
   /** 自由编排在 child 拒发或父汇总暂不可投递时保持可观察、可重试。 */
   private readonly subagentOrchestration = new SubagentOrchestrationCoordinator({
     send: (sessionId, prompt) => this.send(sessionId, prompt),
@@ -212,11 +244,219 @@ class SessionManager {
 
   get(id: string): Engine | undefined { return this.sessions.get(id) }
 
+  async rewindFiles(id: string, messageId: string, dryRun: boolean): Promise<RewindResult> {
+    const session = this.sessions.get(id)
+    if (!session?.rewindFiles) return { canRewind: false, error: '会话不存在或引擎不支持' }
+    if (dryRun) {
+      const attempt = await withSessionOperationQueue(
+        id,
+        () => this.rewindFilesAttempt(id, messageId, true)
+      )
+      return attempt.value
+    }
+    const outcome = await executeInteractiveOperationEffect<CheckpointOperationAttempt<RewindResult>>({
+      kind: 'checkpoint_restore',
+      title: `恢复文件 checkpoint ${messageId}`,
+      sourceSessionId: id,
+      projectId: session.meta.workspaceId ?? session.meta.projectId,
+      cwd: session.meta.cwd,
+      toolName: 'checkpoint_restore',
+      toolInput: { checkpointId: messageId, mode: 'code', legacy: true },
+      execute: () => this.rewindFilesAttempt(id, messageId, false),
+      isSuccess: checkpointOperationAttemptSucceeded,
+      resultSummary: checkpointOperationAttemptSummary
+    })
+    return checkpointRewindOutcome(outcome)
+  }
+
+  async restoreCheckpoint(
+    id: string,
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult> {
+    const session = this.sessions.get(id)
+    if (!session?.restoreCheckpoint) {
+      return {
+        mode,
+        checkpointId: messageId,
+        canRewind: false,
+        applied: false,
+        error: '会话不存在或引擎不支持'
+      }
+    }
+    if (dryRun) {
+      const attempt = await withSessionOperationQueue(
+        id,
+        () => this.restoreCheckpointAttempt(id, messageId, mode, true)
+      )
+      return attempt.value
+    }
+    const outcome = await executeInteractiveOperationEffect<CheckpointOperationAttempt<CheckpointRestoreResult>>({
+      kind: 'checkpoint_restore',
+      title: `恢复 ${mode} checkpoint ${messageId}`,
+      sourceSessionId: id,
+      projectId: session.meta.workspaceId ?? session.meta.projectId,
+      cwd: session.meta.cwd,
+      toolName: 'checkpoint_restore',
+      toolInput: { checkpointId: messageId, mode },
+      execute: () => this.restoreCheckpointAttempt(id, messageId, mode, false),
+      isSuccess: checkpointOperationAttemptSucceeded,
+      resultSummary: checkpointOperationAttemptSummary
+    })
+    return checkpointRestoreOutcome(outcome, messageId, mode)
+  }
+
+  private async rewindFilesAttempt(
+    id: string,
+    messageId: string,
+    dryRun: boolean
+  ): Promise<CheckpointOperationAttempt<RewindResult>> {
+    const session = this.sessions.get(id)
+    if (!session?.rewindFiles) {
+      return { phase: 'preflight', value: { canRewind: false, error: '会话不存在或引擎不支持' } }
+    }
+    if (session.meta.status === 'running' || session.meta.status === 'starting') {
+      return { phase: 'preflight', value: { canRewind: false, error: '会话仍在运行,请停止后再回溯' } }
+    }
+    const boundary = checkpointRestoreEffectBoundary(this.taskRuns.get(id), dryRun)
+    if (!boundary.allowed) {
+      return { phase: 'preflight', value: { canRewind: false, error: boundary.reason } }
+    }
+    const result = await session.rewindFiles(messageId, dryRun)
+    if (!dryRun && result.canRewind && !result.error) {
+      await this.archiveCheckpointConversation(session)
+    }
+    return { phase: 'executed', value: result }
+  }
+
+  private async restoreCheckpointAttempt(
+    id: string,
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointOperationAttempt<CheckpointRestoreResult>> {
+    const session = this.sessions.get(id)
+    if (!session?.restoreCheckpoint) {
+      return {
+        phase: 'preflight',
+        value: {
+          mode,
+          checkpointId: messageId,
+          canRewind: false,
+          applied: false,
+          error: '会话不存在或引擎不支持'
+        }
+      }
+    }
+    if (session.meta.status === 'running' || session.meta.status === 'starting') {
+      return {
+        phase: 'preflight',
+        value: {
+          mode,
+          checkpointId: messageId,
+          canRewind: false,
+          applied: false,
+          error: '会话仍在运行,请停止后再回溯'
+        }
+      }
+    }
+    const boundary = checkpointRestoreEffectBoundary(this.taskRuns.get(id), dryRun)
+    if (!boundary.allowed) {
+      return {
+        phase: 'preflight',
+        value: {
+          mode,
+          checkpointId: messageId,
+          canRewind: false,
+          applied: false,
+          error: boundary.reason
+        }
+      }
+    }
+    const result = await session.restoreCheckpoint(messageId, mode, dryRun)
+    if (!dryRun && result.applied === true && !result.error) {
+      await this.archiveCheckpointConversation(session)
+    }
+    if (!dryRun || !boundary.reason) return { phase: 'executed', value: result }
+    return {
+      phase: 'executed',
+      value: {
+        ...result,
+        applied: false,
+        note: [
+          result.note,
+          boundary.reason,
+          '当前结果仅为只读预览，完成对账前不可应用。'
+        ].filter(Boolean).join(' ')
+      }
+    }
+  }
+
+  private async archiveCheckpointConversation(session: Engine): Promise<void> {
+    const identity = conversationLedgerArchiveIdentity(session.meta)
+    if (!identity) throw new Error('Checkpoint 已执行，但会话缺少可归档的 Conversation Ledger 身份')
+    const archived = await archiveConversationLedgerFromJsonl(identity, {
+      rootDir: app.getPath('userData'),
+      reason: 'checkpoint_restore'
+    })
+    if (!archived) throw new Error('Checkpoint 已执行，但 Conversation Ledger 没有可归档事件')
+  }
+
+  async setTaskStrategy(id: string, value: unknown): Promise<void> {
+    await this.taskPlans.setStrategy(id, value)
+  }
+
+  getTaskPlan(id: string): TaskPlanStateView {
+    return this.taskPlans.get(id)
+  }
+
+  createTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+    return this.taskPlans.createManualVersion(id, draft)
+  }
+
+  createAgentTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+    return this.taskPlans.createAgentVersion(id, draft)
+  }
+
+  approveTaskPlan(id: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView> {
+    return this.taskPlans.approve(id, input)
+  }
+
+  revokeTaskPlanApproval(id: string, input: TaskPlanApprovalInput): TaskPlanStateView {
+    return this.taskPlans.revoke(id, input)
+  }
+
+  assertInteractiveExecutionAuthorized(id: string, action: string): void {
+    this.taskPlans.assertInteractiveExecution(id, action)
+  }
+
   subscribe(listener: (payload: SessionEventPayload) => void): () => void {
     this.sessionEventListeners.add(listener)
     return () => {
       this.sessionEventListeners.delete(listener)
     }
+  }
+
+  /** Read-only task Run projection for main-process lifecycle coordinators. */
+  getTaskRun(sessionId: string): TaskRunRecord | undefined {
+    const run = this.taskRuns.get(sessionId)
+    return run ? structuredClone(run) : undefined
+  }
+
+  /** Persist the latest TaskRun projection before a lifecycle consumer writes dependent records. */
+  async persistTaskRunLifecycleBarrier(sessionId: string): Promise<TaskRunRecord | undefined> {
+    const run = this.taskRuns.get(sessionId)
+    if (!run) return undefined
+    await this.writeTaskSnapshot(
+      sessionId,
+      'important-event',
+      0,
+      run.lastEventKind,
+      undefined,
+      true
+    )
+    return this.getTaskRun(sessionId)
   }
 
   /** Compatibility entrypoint for resume, non-Git and non-isolated sessions. */
@@ -241,7 +481,7 @@ class SessionManager {
     }
     if (lifecycle.retainJournal) this.retainedSessionCreationJournals.add(draft.baseMeta.id)
     try {
-      return await this.activateManagedSessionCreation(draft, placement)
+      return await this.activateManagedSessionCreation(draft, placement, lifecycle)
     } catch (error) {
       this.retainedSessionCreationJournals.delete(draft.baseMeta.id)
       throw managedSessionActivationRecoveryError(error, draft.baseMeta.id)
@@ -256,9 +496,21 @@ class SessionManager {
   }
 
   private async validatedSessionCreationDraft(opts: CreateSessionOptions): Promise<SessionCreationDraft> {
+    await restoreConversationLedgerJsonlFromArchive(
+      opts.resumeSdkSessionId ?? opts.forkFromSdkSessionId,
+      app.getPath('userData')
+    )
     const draft = this.sessionCreationDraft(opts)
-    const baseMeta = await prepareSessionIdentityForActivation(
+    let baseMeta = await prepareSessionIdentityForActivation(
       draft.baseMeta, app.getPath('userData'), draft.opts.resumeSdkSessionId !== undefined)
+    if (baseMeta.conversationForkSourceSessionId) {
+      const sourceSnapshot = await getTaskSnapshot(baseMeta.conversationForkSourceSessionId)
+      const sourceRuns = sourceSnapshot?.run
+        ? [sourceSnapshot.run]
+        : await listPersistedTaskRuns(baseMeta.conversationForkSourceSessionId)
+      const sourceRun = sourceRuns.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      if (sourceRun) baseMeta = { ...baseMeta, conversationForkSourceRunId: sourceRun.id }
+    }
     return { ...draft, baseMeta }
   }
 
@@ -275,7 +527,8 @@ class SessionManager {
 
   private async activateManagedSessionCreation(
     draft: SessionCreationDraft,
-    worktree: SessionWorktreePlacement
+    worktree: SessionWorktreePlacement,
+    lifecycle: ManagedSessionCreationOptions = {}
   ): Promise<SessionMeta> {
     let prepared: { meta: SessionMeta; session: Engine } | undefined
     const meta = await withSessionCreationJournalBarrier(
@@ -302,6 +555,17 @@ class SessionManager {
         }
       }
     )
+    try {
+      await lifecycle.beforeStart?.(meta)
+    } catch (error) {
+      if (prepared && this.sessions.get(meta.id) === prepared.session) {
+        this.sessions.delete(meta.id)
+        this.persistActiveSessions()
+        await prepared.session.dispose().catch(() => undefined)
+      }
+      await deleteTaskSnapshot(meta.id).catch(() => undefined)
+      throw error
+    }
     void prepared?.session.start()
     return meta
   }
@@ -312,11 +576,16 @@ class SessionManager {
   ): { meta: SessionMeta; session: Engine } {
     const meta = sessionMetaForPlacement(draft, worktree)
     resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
+    const initialEventSeq = meta.conversationForkSourceSdkSessionId
+      ? readTranscriptEntries(meta.conversationForkSourceSdkSessionId)
+        .reduce((max, entry) => Math.max(max, entry.seq), 0)
+      : 0
     const session = createEngine(
       meta.engine,
       meta,
       (event, seq, identity) => this.dispatch(meta.id, event, seq, identity),
-      draft.opts.resumeSdkSessionId
+      draft.opts.resumeSdkSessionId,
+      initialEventSeq
     )
     return { meta, session }
   }
@@ -346,9 +615,18 @@ class SessionManager {
     id: string,
     input: string | SendMessagePayload,
     options: { modelAttemptRecoveryReplay?: boolean; supervisorControlReplay?: boolean } = {}
-  ): boolean {
+  ): Promise<boolean> {
+    return withSessionOperationQueue(id, () => this.performSend(id, input, options))
+  }
+
+  private async performSend(
+    id: string,
+    input: string | SendMessagePayload,
+    options: { modelAttemptRecoveryReplay?: boolean; supervisorControlReplay?: boolean }
+  ): Promise<boolean> {
     const session = this.sessions.get(id)
     if (!session) return false
+    if (!this.taskPlans.authorizeSend(session)) return false
     const currentRun = this.taskRuns.get(id)
     const sendGateError = managedSessionSendGateError(
       this.taskSnapshotReplay.blocksOrdinarySend(id, options),
@@ -385,17 +663,34 @@ class SessionManager {
       return false
     }
     if (!sendableSession(session)) return false
-    if (!currentRun || isTaskRunTerminal(currentRun.status)) {
-      this.taskRuns.set(
-        id,
-        createTaskRun({
-          sessionId: id, taskId: session.meta.childTaskId ?? id,
-          digitalWorkerBinding: session.meta.digitalWorkerBinding
-        })
-      )
+    const nextRun = !currentRun || isTaskRunTerminal(currentRun.status)
+      ? createSessionTaskRun(session.meta)
+      : currentRun
+    try {
+      await this.supervisor.authorizeSend(session, nextRun, {
+        supervisorControlReplay: options.supervisorControlReplay
+      })
+    } catch (error) {
+      session.rejectSend(supervisorSendError(error))
+      return false
     }
-    session.send(input)
+    if (nextRun !== currentRun) this.taskRuns.set(id, nextRun)
+    try {
+      session.send(input)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (options.supervisorControlReplay === true) {
+        session.rejectSend(message)
+        throw error instanceof Error ? error : new Error(message)
+      }
+      const failed = transitionTaskRun(nextRun, 'failed', { error: message })
+      this.taskRuns.set(id, failed)
+      this.supervisor.observeAfterEvent(session, failed, `send-failed:${randomUUID()}`, false)
+      session.rejectSend(message)
+      return false
+    }
     this.modelAttemptRecoveryGate.acceptedSend(id, modelAttemptDecision)
+    await this.supervisor.settleAcceptedSend(id)
     return true
   }
   async controlSupervisorRun(
@@ -444,6 +739,7 @@ class SessionManager {
   ): Promise<SubagentDispatchResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    this.taskPlans.assertExecution(parent.meta, '派发子 Agent')
     const tasks = Array.isArray(input?.tasks) ? input.tasks : []
     if (tasks.length === 0) throw new Error('至少需要一个子代理任务')
     if (tasks.length > 33) throw new Error('一次最多派发 33 个子代理')
@@ -473,7 +769,7 @@ class SessionManager {
           model: task.model ?? input.model ?? parent.meta.model,
           providerId: task.providerId ?? input.providerId ?? parent.meta.providerId,
           engine: task.engine ?? input.engine ?? parent.meta.engine,
-          permissionMode: task.permissionMode ?? input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: task.taskStrategy ?? parent.meta.taskStrategy,
           title,
           parentSessionId,
           orchestrationId,
@@ -488,7 +784,7 @@ class SessionManager {
       await this.rollbackProvisionedSubagents(children)
       throw error
     }
-    this.subagentOrchestration.finishProvisioning(orchestrationId, children)
+    await this.subagentOrchestration.finishProvisioning(orchestrationId, children)
 
     return { orchestrationId, parentSessionId, children }
   }
@@ -513,6 +809,7 @@ class SessionManager {
   async decomposeTask(parentSessionId: string, input: TaskDecomposeInput): Promise<TaskDecomposeResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    requirePlanningTaskStrategy(parent.meta, '拆解任务 DAG')
     const request: TaskDecomposeInput = {
       ...input,
       cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -529,7 +826,36 @@ class SessionManager {
         }
       : undefined
     return decomposeTask(request, {
-      modelDecomposer: createModelDagDecomposer(request, attemptContext)
+      modelDecomposer: createModelDagDecomposer(request, attemptContext, {
+        fetch,
+        preflight: async ({ providerId, model, body }) => {
+          const serializedBody = JSON.stringify(body)
+          const outbound = await prepareOutboundContext({
+            meta: parent.meta,
+            rootDir: app.getPath('userData'),
+            payload: { text: request.request, images: [] },
+            providerId,
+            model,
+            additionalItems: [{
+              id: 'context:dag-request-body',
+              kind: 'workflow_context',
+              label: 'DAG decomposer request body',
+              dataClass: 'S2',
+              egressPolicy: 'allow',
+              decision: 'included',
+              bytes: Buffer.byteLength(serializedBody, 'utf8'),
+              digest: `sha256:${createHash('sha256').update(serializedBody).digest('hex')}`
+            }]
+          })
+          await assertOutboundContextAllowed({
+            manifest: outbound.manifest,
+            rootDir: app.getPath('userData'),
+            providerId,
+            model,
+            engine: parent.meta.engine
+          })
+        }
+      })
     })
   }
 
@@ -539,9 +865,11 @@ class SessionManager {
   ): Promise<TaskDagDispatchResult> {
     const parent = this.sessions.get(parentSessionId)
     if (!parent) throw new Error('父会话不存在')
+    this.taskPlans.assertExecution(parent.meta, '执行任务 DAG')
     const children: SubagentDispatchResult['children'] = []
     const scheduler = new TaskDagScheduler(parentSessionId, input, {
       runTask: async (task, context) => {
+        this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
         const prompt = buildDagTaskPrompt(task, context)
         const meta = await this.createManaged({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -550,7 +878,7 @@ class SessionManager {
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
-          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: parent.meta.taskStrategy,
           title: `${task.title}${context.attempt > 1 ? ` · 重试 ${context.attempt - 1}` : ''}`,
           parentSessionId,
           orchestrationId: input.dag.id,
@@ -562,7 +890,7 @@ class SessionManager {
         return {
           sessionId: meta.id,
           dispatchItem: item,
-          start: () => requireDagPromptAccepted(this.send(meta.id, prompt))
+          start: async () => requireDagPromptAccepted(await this.send(meta.id, prompt))
         }
       },
       onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
@@ -586,8 +914,9 @@ class SessionManager {
         if (!known.has(item.meta.id)) children.push(item)
       }
     }
-    const execution = scheduler.view()
-    this.emitTaskDagUpdate(parentSessionId, execution)
+    // The finalizer may have projected a newer view while scheduler.start() awaited a fast child.
+    // Never overwrite that durable finalization state with the scheduler's pre-finalization view.
+    const execution = this.dagExecutionSnapshots.get(input.dag.id) ?? scheduler.view()
     return { execution, children }
   }
 
@@ -600,6 +929,7 @@ class SessionManager {
       runTask: async (task, context) => {
         const parent = this.sessions.get(parentSessionId)
         if (!parent) throw new Error('Parent session no longer exists for recovered DAG')
+        this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
         const prompt = buildDagTaskPrompt(task, context)
         const meta = await this.createManaged({
           cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
@@ -608,7 +938,7 @@ class SessionManager {
           model: input.model ?? parent.meta.model,
           providerId: input.providerId ?? parent.meta.providerId,
           engine: input.engine ?? parent.meta.engine,
-          permissionMode: input.permissionMode ?? parent.meta.permissionMode,
+          taskStrategy: parent.meta.taskStrategy,
           title: `${task.title}${context.attempt > 1 ? ` retry ${context.attempt - 1}` : ''}`,
           parentSessionId,
           orchestrationId: input.dag.id,
@@ -620,7 +950,7 @@ class SessionManager {
         return {
           sessionId: meta.id,
           dispatchItem: item,
-          start: () => requireDagPromptAccepted(this.send(meta.id, prompt))
+          start: async () => requireDagPromptAccepted(await this.send(meta.id, prompt))
         }
       },
       onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
@@ -738,7 +1068,7 @@ class SessionManager {
     this.snapshotCounts.delete(id)
     this.recentEventIds.delete(id)
     this.persistActiveSessions()
-    this.notificationStates.delete(id)
+    this.notifications.delete(id)
     clearIdeDocumentContext(id)
     this.taskSnapshotReplay.clearSession(id)
     this.modelAttemptRecoveryGate.clearSession(id)
@@ -776,11 +1106,12 @@ class SessionManager {
       }
     }
     await this.dagFinalizationCoordinator.flushPending()
+    await this.supervisor.settleAllObservations()
     await Promise.all([...this.sessions.keys()].map((id) =>
       this.workflow.persistShutdownSnapshot(id, this.workflow.captureSnapshot(id, 'shutdown', 0, 'status'))))
     await flushTaskSnapshotMutations()
     this.sessions.clear()
-    this.notificationStates.clear()
+    this.notifications.clear()
     this.taskRuns.clear()
     this.recentEventIds.clear()
     this.modelAttemptRecoveryGate.clear()
@@ -954,6 +1285,10 @@ class SessionManager {
     if (!meta.unassigned && !meta.projectId) meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
     resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
     bindAndValidateTaskRun(meta, recoveredRun)
+    await restoreConversationLedgerJsonlFromArchive(
+      snapshot.execution.sdkSessionId,
+      app.getPath('userData')
+    )
     restoreTranscriptIfMissing(snapshot.execution.sdkSessionId, snapshot.transcript)
     this.taskRuns.set(snapshot.sessionId, recoveredRun)
     this.snapshotCounts.set(meta.id, {
@@ -1087,7 +1422,7 @@ class SessionManager {
           },
           0
         )
-        this.taskSnapshotReplay.start(snapshot.sessionId, replayPrompts, { modelAttemptRecoveryReplay: true })
+        await this.taskSnapshotReplay.start(snapshot.sessionId, replayPrompts, { modelAttemptRecoveryReplay: true })
       })
       .catch((err) => {
         console.error('[caogen] 恢复任务快照启动失败:', err)
@@ -1101,18 +1436,55 @@ class SessionManager {
     configureModelStatsDir(app.getPath('userData'))
     configureProviderHealthDir(app.getPath('userData'))
     registerBuiltinEngines()
+    await resumeProjectDeletions(app.getPath('userData'))
     await this.modelAttemptRecoveryGate.initialize(app.getPath('userData'))
     await this.dagFinalizationCoordinator.load()
     const persistedTaskRuns = await listPersistedTaskRuns()
     this.taskRuns.hydrateHistory(persistedTaskRuns)
-    await this.supervisor.hydrateSendGates(persistedTaskRuns)
+    await this.supervisor.recoverStartupState(persistedTaskRuns)
     await this.dagFinalizationCoordinator.migrateLegacyRecords()
     const imported = await listTaskSnapshots()
     const workflowRecoveryBlocks = await this.workflow.recover(imported)
+    await this.supervisor.hydrateSendGates(persistedTaskRuns)
     const recoverable = await this.reconcileTaskSnapshots(imported, workflowRecoveryBlocks)
     const activeRecoveryBlocks = activeSessionRecoveryBlocks(recoverable)
     this.modelAttemptRecoveryGate.blockActiveSessions(activeRecoveryBlocks)
-    this.restoreActiveSessions(activeRecoveryBlocks)
+    const activeRecoveryPlan = planActiveSessionRecovery(activeRecoveryBlocks, new Set(this.sessions.keys()))
+    const snapshotSdkSessionIds = new Map(recoverable.flatMap((snapshot) => {
+      const sdkSessionId = snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
+      return sdkSessionId ? [[snapshot.sessionId, sdkSessionId] as const] : []
+    }))
+    const preservedActiveRegistrySessionIds = activeSessionRegistryPreserveIds(
+      activeRecoveryPlan,
+      activeRecoveryBlocks,
+      snapshotSdkSessionIds
+    )
+    const archiveIdentities = [
+      ...listHistory().map((entry) => conversationArchiveIdentityFor(entry)),
+      ...recoverable.map((snapshot) => conversationArchiveIdentityFor(
+        snapshot.meta,
+        snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
+      )),
+      ...activeRecoveryPlan.restorable.map((meta) => conversationArchiveIdentityFor(meta))
+    ].filter((identity): identity is ConversationLedgerArchiveIdentity => identity !== null)
+    const backfill = await backfillConversationLedgerArchives(archiveIdentities, app.getPath('userData'))
+    for (const failure of backfill.failures) {
+      console.error(`[caogen] Conversation Ledger backfill skipped ${failure.sdkSessionId}: ${failure.error}`)
+    }
+    const ledgerBlockedActiveSessions = new Set<string>()
+    for (const meta of activeRecoveryPlan.restorable) {
+      try {
+        await restoreConversationLedgerJsonlFromArchive(meta.sdkSessionId, app.getPath('userData'))
+      } catch (error) {
+        ledgerBlockedActiveSessions.add(meta.id)
+        preservedActiveRegistrySessionIds.add(meta.id)
+        console.error(`[caogen] Conversation Ledger blocked active recovery ${meta.id}:`, error)
+      }
+    }
+    const activeRegistryRestore = await this.restoreActiveSessions(
+      new Set([...activeRecoveryBlocks, ...ledgerBlockedActiveSessions]),
+      preservedActiveRegistrySessionIds
+    )
     await this.restorePendingSessionCreations(recoverable)
     await this.dagFinalizationCoordinator.autoRecoverParents(recoverable)
     for (const session of this.sessions.values()) {
@@ -1123,10 +1495,18 @@ class SessionManager {
       const sdkSessionId = snapshot.execution.sdkSessionId ?? snapshot.meta.sdkSessionId
       if (sdkSessionId) keep.add(sdkSessionId)
     }
+    for (const meta of activeRecoveryPlan.records) {
+      if (meta.sdkSessionId) keep.add(meta.sdkSessionId)
+    }
     for (const session of this.sessions.values()) {
       if (session.meta.sdkSessionId) keep.add(session.meta.sdkSessionId)
     }
-    cleanupTranscripts(keep)
+    if (activeSessionArtifactsCanBePruned(activeRecoveryPlan, preservedActiveRegistrySessionIds.size > 0) &&
+      activeRegistryRestore.artifactsCanBePruned) {
+      cleanupTranscripts(keep)
+    } else {
+      console.error('[caogen] active session recovery 不完整，已保留全部 transcript 和 event receipt')
+    }
     const recoverableCount = this.modelAttemptRecoveryGate
       .recoverableSessionCount(recoverable.map((snapshot) => snapshot.sessionId))
     if (recoverableCount > 0 && getSettings().notificationsEnabled) {
@@ -1198,7 +1578,10 @@ class SessionManager {
       if (meta.orchestrationId !== execution.id || !meta.childTaskId) continue
       const item = await scheduler.adoptProvisionedSession(meta.childTaskId, { ...meta })
       if (item) {
-        await scheduler.startProvisionedSession(item.meta.id, () => requireDagPromptAccepted(this.send(item.meta.id, item.prompt)))
+        await scheduler.startProvisionedSession(
+          item.meta.id,
+          async () => requireDagPromptAccepted(await this.send(item.meta.id, item.prompt))
+        )
         continue
       }
       const task = execution.tasks.find((candidate) => candidate.task.id === meta.childTaskId)
@@ -1263,12 +1646,25 @@ class SessionManager {
     if (!identity) return
     const session = this.sessions.get(sessionId)
     const event = session ? this.normalizeTurnResultCost(session, rawEvent) : rawEvent
+    const runBeforeEvent = this.taskRuns.get(sessionId)
     handleSessionTaskRunEvent(this.taskRuns, sessionId, event, identity, {
       cwd: session?.meta.cwd ?? '',
       supervisorPauseIntent: this.supervisor.isPauseIntent(sessionId),
       preserveClosedRun: this.preservingSnapshotsOnDispose ||
         this.effectRecoveryPreservedSessions.has(sessionId)
     })
+    const runAfterEvent = this.taskRuns.get(sessionId)
+    if (
+      session && runAfterEvent &&
+      (event.kind === 'turn-result' || runBeforeEvent?.status !== runAfterEvent.status)
+    ) {
+      this.supervisor.observeAfterEvent(
+        session,
+        runAfterEvent,
+        identity.eventId,
+        event.kind === 'turn-result'
+      )
+    }
     const payload: SessionEventPayload = { sessionId, ...identity, event }
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send('session:event', payload)
@@ -1276,9 +1672,20 @@ class SessionManager {
     this.emitToSubscribers(payload)
     this.dispatchChildResult(sessionId, session, event)
     this.handleEnginePowerBlocker(sessionId, event)
-    this.handleNotification(sessionId, event)
+    this.notifications.handle(sessionId, event)
     this.handleAutoSkillReview(sessionId, event)
     this.workflow.handleEvent(sessionId, event, identity)
+    if (session && shouldPersistConversationLedgerEvent(event.kind)) {
+      const archiveIdentity = conversationLedgerArchiveIdentity(session.meta)
+      if (archiveIdentity) {
+        void archiveConversationLedgerFromJsonl(archiveIdentity, {
+          rootDir: app.getPath('userData'),
+          reason: event.kind === 'checkpoint-restore' ? 'checkpoint_restore' : 'append'
+        }).catch((error) => {
+          console.error('[caogen] Conversation Ledger archive failed:', error)
+        })
+      }
+    }
     void this.modelCrossValidation.handleEvent(sessionId, event, identity).catch((error) => {
       console.error('[caogen] model cross-validation runtime failed:', error)
     })
@@ -1642,90 +2049,6 @@ class SessionManager {
     return { ...event, costUsd: nextCost }
   }
 
-  private notificationState(sessionId: string): SessionNotificationState {
-    let state = this.notificationStates.get(sessionId)
-    if (!state) {
-      state = {
-        turnActive: false,
-        permissionNotified: false,
-        terminalNotified: false
-      }
-      this.notificationStates.set(sessionId, state)
-    }
-    return state
-  }
-
-  private sessionNotificationLabel(meta: SessionMeta | undefined): string {
-    if (!meta) return '未知会话'
-    if (meta.title && meta.title !== '新会话') return trimForNotification(meta.title, 80)
-    return trimForNotification(meta.cwd, 100)
-  }
-
-  private notify(sessionId: string, title: string, body: string): void {
-    // 读取当前设置(而非缓存),用户随时可关闭桌面通知
-    if (!getSettings().notificationsEnabled) return
-    showDesktopNotification({ title, body, sessionId })
-  }
-
-  private handleNotification(sessionId: string, event: AgentEvent): void {
-    if (!this.sessions.has(sessionId) && !this.notificationStates.has(sessionId)) return
-    const state = this.notificationState(sessionId)
-    const meta = this.sessions.get(sessionId)?.meta
-    const label = this.sessionNotificationLabel(meta)
-
-    if (event.kind === 'user-message') {
-      state.turnActive = true
-      state.permissionNotified = false
-      state.terminalNotified = false
-      return
-    }
-
-    if (event.kind === 'status') {
-      if (event.status === 'running' && !state.turnActive) {
-        state.turnActive = true
-        state.permissionNotified = false
-        state.terminalNotified = false
-      } else if (event.status === 'error') {
-        if (!state.terminalNotified) {
-          const error = event.error || meta?.lastError || '未知错误'
-          this.notify(sessionId, 'CaoGen: 任务失败', `${label} · ${trimForNotification(error)}`)
-          state.terminalNotified = true
-        }
-        state.turnActive = false
-      } else if (event.status === 'idle' || event.status === 'closed') {
-        state.turnActive = false
-        if (event.status === 'closed') this.notificationStates.delete(sessionId)
-      }
-      return
-    }
-
-    if (event.kind === 'permission-request') {
-      if (!state.permissionNotified) {
-        const tool = trimForNotification(event.request.toolName, 60)
-        this.notify(sessionId, 'CaoGen: 等待权限', `${label} · ${tool}`)
-        state.permissionNotified = true
-      }
-      return
-    }
-
-    if (event.kind === 'turn-result') {
-      if (!state.terminalNotified) {
-        const bits = [label]
-        const duration = formatDuration(event.durationMs)
-        if (duration) bits.push(duration)
-        if (typeof event.costUsd === 'number' && Number.isFinite(event.costUsd)) {
-          bits.push(`$${event.costUsd.toFixed(4)}`)
-        }
-        if (event.isError && event.resultText) {
-          bits.push(trimForNotification(event.resultText))
-        }
-        this.notify(sessionId, event.isError ? 'CaoGen: 任务失败' : 'CaoGen: 任务完成', bits.join(' · '))
-        state.terminalNotified = true
-      }
-      state.turnActive = false
-    }
-  }
-
   private persist(sessionId: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1757,8 +2080,13 @@ class SessionManager {
       providerId: meta.providerId,
       routingScope: meta.routingScope,
       engine: meta.engine,
+      taskStrategy: meta.taskStrategy,
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
+      conversationForkSourceSdkSessionId: meta.conversationForkSourceSdkSessionId,
+      conversationForkSourceSessionId: meta.conversationForkSourceSessionId,
+      conversationForkSourceRunId: meta.conversationForkSourceRunId,
+      responsesContext: meta.responsesContext,
       createdAt: meta.createdAt,
       updatedAt: Date.now(),
       costUsd: meta.costUsd,
@@ -1766,14 +2094,19 @@ class SessionManager {
     })
   }
 
-  private restoreActiveSessions(snapshotSessionIds: ReadonlySet<string> = new Set()): void {
-    const changed = restoreActiveSessionRegistry(
+  private async restoreActiveSessions(
+    snapshotSessionIds: ReadonlySet<string> = new Set(),
+    preserveRegistrySessionIds: ReadonlySet<string> = new Set()
+  ): Promise<ActiveSessionRegistryRestoreResult> {
+    const result = await restoreActiveSessionRegistry(
       snapshotSessionIds,
       this.sessions,
       this.snapshotCounts,
-      (sessionId, event, seq, identity) => this.dispatch(sessionId, event, seq, identity)
+      (sessionId, event, seq, identity) => this.dispatch(sessionId, event, seq, identity),
+      { preserveRegistrySessionIds }
     )
-    if (changed) this.persistActiveSessions()
+    if (result.registryChanged) this.persistActiveSessions()
+    return result
   }
 
   private persistActiveSessions(strict = false): void {
@@ -1793,6 +2126,91 @@ class SessionManager {
       }
     }
   }
+}
+
+function checkpointOperationAttemptSucceeded<T extends { error?: string }>(
+  attempt: CheckpointOperationAttempt<T>
+): boolean {
+  return attempt.phase === 'preflight' || attempt.value.error === undefined
+}
+
+function checkpointOperationAttemptSummary<T extends { error?: string }>(
+  attempt: CheckpointOperationAttempt<T>
+): string {
+  const value = attempt.value as T & { canRewind?: boolean; applied?: boolean }
+  return JSON.stringify({
+    phase: attempt.phase,
+    canRewind: value.canRewind === true,
+    applied: value.applied === true,
+    error: value.error ? 'reported' : 'none'
+  })
+}
+
+function checkpointRewindOutcome(
+  outcome: InteractiveOperationEffectOutcome<CheckpointOperationAttempt<RewindResult>>
+): RewindResult {
+  if (outcome.status === 'completed' && outcome.value) return outcome.value.value
+  const value = outcome.value?.value ?? { canRewind: false }
+  return {
+    ...value,
+    canRewind: false,
+    error: checkpointOperationOutcomeError(outcome, value.error)
+  }
+}
+
+function checkpointRestoreOutcome(
+  outcome: InteractiveOperationEffectOutcome<CheckpointOperationAttempt<CheckpointRestoreResult>>,
+  checkpointId: string,
+  mode: CheckpointRestoreMode
+): CheckpointRestoreResult {
+  if (outcome.status === 'completed' && outcome.value) return outcome.value.value
+  const value = outcome.value?.value ?? { mode, checkpointId, canRewind: false, applied: false }
+  return {
+    ...value,
+    canRewind: false,
+    applied: false,
+    error: checkpointOperationOutcomeError(outcome, value.error)
+  }
+}
+
+function checkpointOperationOutcomeError<T extends { operationId: string }>(
+  outcome: T & ({ status: 'completed' } | { status: 'failed'; error: string } | {
+    status: 'waiting_reconciliation'
+    snapshotId: string
+    effectId: string
+    error: string
+  }),
+  engineError?: string
+): string {
+  if (outcome.status === 'waiting_reconciliation') {
+    return [
+      engineError,
+      `Checkpoint 回退结果无法唯一确认；Effect ${outcome.effectId} 已保留在恢复项 ${outcome.snapshotId}，完成对账前禁止自动重放。`,
+      outcome.error
+    ].filter(Boolean).join(' ')
+  }
+  if (outcome.status === 'failed') {
+    return [engineError, `Checkpoint Effect ${outcome.operationId} 未能开始或持久化。`, outcome.error]
+      .filter(Boolean)
+      .join(' ')
+  }
+  return engineError ?? 'Checkpoint Effect 未返回结果'
+}
+
+function conversationArchiveIdentityFor(
+  meta: Parameters<typeof conversationLedgerArchiveIdentity>[0],
+  sdkSessionId = meta.sdkSessionId
+): ConversationLedgerArchiveIdentity | null {
+  return conversationLedgerArchiveIdentity({ ...meta, sdkSessionId })
+}
+
+function supervisorSendError(error: unknown): string {
+  if (error instanceof SupervisorStateError) {
+    if (error.code === 'budget_exhausted') return `Goal 预算已用尽，发送已阻止：${error.message}`
+    if (error.code === 'concurrency_exhausted') return `Goal 并发 Run 已达上限，发送已阻止：${error.message}`
+    return `Supervisor 发送门禁拒绝请求：${error.message}`
+  }
+  return `Supervisor 发送前检查失败，已按失败关闭处理：${error instanceof Error ? error.message : String(error)}`
 }
 
 export const sessionManager = new SessionManager()

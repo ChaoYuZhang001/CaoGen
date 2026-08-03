@@ -80,6 +80,8 @@ CaoGen remains a multi-vendor AI work desktop. This gate permits only capabiliti
 | Final notes | Exact five Intel assets and four candidate report families from run `30162696430` are bound; scoped final audit and clean publication preflight passed |
 | Formal 1.0 product acceptance | 21/64 P0 verified; 43 open; not required for an honest 0.1.x wedge release |
 | Publication | Passed; annotated tag `v0.1.7` targets `d8e883a21b64133b4ec18d20d0c77fd33c054718`, Release is public and is neither draft nor prerelease |
+| Windows preview policy | Separate unsigned-preview configuration disables signing discovery and stable update metadata and requires explicit filename/copy labeling; no preview evidence is counted as a formal platform pass |
+| Formal cross-platform matrix | Still blocked until native macOS arm64 evidence and timestamped Windows Authenticode evidence exist; preview evidence must never satisfy `packaging_release` |
 
 ## M1 Scope Boundary
 
@@ -100,6 +102,8 @@ The repository retains the complete three-platform contract for any future relea
 | Owner decision | Explicit authorization to create tag and GitHub Release | Passed on 2026-07-25 |
 | Public upload audit | Tag target, five uploaded assets, hashes, metadata, and public download parity | Passed: 5 assets, 0 warnings, 0 failures; every public SHA-256 digest matches the candidate |
 | Website sync | Intel-only version, download, signing state, and truth boundary match the published Release | Passed on `caogen.dev`, `/en/`, and `/docs/` |
+| Windows unsigned preview channel | Native x64 unsigned audit, install, renderer launch, uninstall, cleanup and explicit preview labeling | Policy/configuration exists; no preview evidence is counted in this historical Intel publication record, and preview can never satisfy the formal matrix |
+| Formal three-platform matrix | Exact 12 signed assets, native platform evidence, aggregate audit and Windows Authenticode | Remains `not_ready`; this is separate from the passed historical Intel-only publication record |
 
 ## Intel Distribution Contract
 
@@ -118,11 +122,82 @@ The repository retains the complete three-platform contract for any future relea
 - Genesis is planning-layer orchestration; autonomous external agent execution, merge, push, and publication are not release claims.
 - v0.1.7 does not claim full 1.0 acceptance, Apple Silicon, Windows, Linux, a public N1 migration result, or universal external-network parity.
 
+## Formal Cross-Platform Contract
+
+- The complete upload set is 12 assets: four macOS x64 assets, four macOS arm64
+  assets, three Windows x64 assets, and shared `latest-mac.yml`.
+- Windows x64 requires PE x64 validation, NSIS output, valid timestamped Authenticode
+  signatures on both the unpacked app and installer, and a native silent-install,
+  renderer-start, uninstall, and cleanup record.
+- Every platform report must bind the exact package version, clean Git commit, build
+  provenance, target architecture, and that platform's artifact-set digest.
+- The aggregate job must recalculate every downloaded asset digest, generate and parse
+  one shared dual-architecture `latest-mac.yml`, require the exact-commit Deep report,
+  and pass the complete packaging audit before it can upload an unpublished candidate bundle.
+- This formal contract remains blocked. It is not weakened, waived, or reclassified as
+  optional for the 0.1.7 platform-scoped release.
+
+## Windows Unsigned Preview Contract
+
+- Preview builds use `electron-builder.windows-preview.cjs`, not the formal release config.
+- Certificate auto-discovery, mandatory signing, and stable update
+  metadata are disabled. The only publishable installer name is
+  `CaoGen-<version>-windows-x64-unsigned-preview.exe`.
+- `npm run test:windows-preview-audit:required -- --arch x64` must prove that the app
+  and installer are actually unsigned, are PE x64/NSIS outputs, embed clean-commit
+  provenance, and are bound to the exact preview artifact digest.
+- `npm run test:packaged-app:win:preview:x64` must install into an isolated directory,
+  launch the real renderer, uninstall, and clean temporary data on native Windows x64.
+- The GitHub asset label, download page, and Release Notes must all say `unsigned preview`
+  and warn that Microsoft Defender SmartScreen may show an unrecognized-app prompt.
+- The preview must not ship `latest.yml` and must not enter the stable auto-update channel.
+- Preview evidence is never accepted by `trustedWindowsDistributionChecks`, the 12-asset
+  formal matrix, `packaging_release`, or a formal cross-platform readiness claim.
+
 ## Security And Credentials
 
 Signing and notarization credentials exist only in the ephemeral GitHub runner and are removed in `always()` cleanup. Certificate contents, passwords, private API keys, provider real keys, `.env` files, `test-results`, `out`, `dist`, `node_modules`, and local evidence packs must never be committed or uploaded as public assets.
 
 The workflow has repository `contents: read` permission, accepts only an exact 40-character commit already reachable from `main`, and never creates a tag, GitHub Release, or public update entry.
+
+Required GitHub Actions repository secrets for the formal cross-platform workflow:
+
+- `MACOS_CERTIFICATE_P12_BASE64` and `MACOS_CERTIFICATE_PASSWORD`
+- `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`
+- `WINDOWS_CERTIFICATE_P12_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`
+
+The Windows secrets are intentionally absent until commercialization. After purchasing
+SSL.com IV Code Signing + eSigner, configure the ephemeral signing credentials, rerun
+the formal Windows audit and native install/launch checks, and only then attempt to
+close the cross-platform Release Doctor.
+
+The certificate values are base64-encoded PKCS#12 payloads; the Apple API value is the
+complete private `.p8` text. They are materialized only under the ephemeral runner temp
+directory, removed in `always()` cleanup steps, and never included in artifacts or
+reports. A missing value fails its native lane before packaging.
+
+Run the workflow only after the intended commit is on `main`. Its final artifact is
+named `caogen-unpublished-candidate-<version>-<commit>` and expires after 14 days. A
+successful workflow proves the candidate evidence matrix, not publication approval;
+the final release notes, required Doctor, explicit owner release decision, tag, upload,
+and post-upload audit remain separate steps.
+
+## Release Notes Contract
+
+The final GitHub Releases body must list the exact uploaded assets and SHA256 values,
+supported platforms, signing/notarization state, minimum OS, conditional external
+requirements, and residual risks. It must not upgrade local tests, optional skips,
+roadmap work, or unavailable platform evidence into released capability.
+
+For the current channel, the body must describe macOS as formal only after notarization,
+stapling, Gatekeeper, and native launch evidence pass. Windows must be labeled `unsigned
+preview` everywhere it appears and must never be described as signed, trusted, stable,
+or formally cross-platform ready.
+
+The dedicated platform-scoped final audit requires the machine-readable Doctor
+`distributionPolicy.platformScopedRelease.candidateGate` to be ready while
+`distributionPolicy.formalCrossPlatform.status` remains `blocked`. The legacy final
+audit is unchanged and still requires formal cross-platform Doctor readiness.
 
 ## Stop Conditions
 
@@ -131,6 +206,10 @@ The workflow has repository `contents: read` permission, accepts only an exact 4
 - The final notes contain an unverified capability, platform, external condition, or 1.0 claim.
 - A secret, certificate, private key, signing material, local evidence directory, or unapproved extra asset enters the public upload set.
 - The owner has not explicitly authorized creation of the tag and GitHub Release.
+- Any required check is reclassified as optional to bypass the gate, or the version/commit changes after evidence is generated.
+- A platform asset lacks native install/runtime evidence, or a macOS asset lacks Hardened Runtime, notarization/stapling, Gatekeeper acceptance, or packaged launch proof.
+- The Windows preview filename or public copy omits `unsigned preview`, the preview is unexpectedly signed, or stable Windows update metadata is generated.
+- Release copy claims formal cross-platform readiness while the refreshed Release Doctor is `not_ready`.
 
 ## Publication Sequence
 

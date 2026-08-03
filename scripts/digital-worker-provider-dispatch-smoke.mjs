@@ -179,8 +179,8 @@ async function verifyAnthropicInitialDenial(runtime) {
   const tracker = new runtime.anthropic.AnthropicModelAttemptTracker(dependencies)
   tracker.startTurn('message-anthropic-deny')
   let operationCalls = 0
-  assert.throws(
-    () => tracker.execute(anthropicInput(run, {
+  await assert.rejects(
+    tracker.execute(anthropicInput(run, {
       preflight: () => { throw new runtime.policy.DigitalWorkerProviderDispatchDeniedError('denied') },
       operation: async () => {
         operationCalls += 1
@@ -208,8 +208,8 @@ async function verifyAnthropicSuccessorRecheck(runtime) {
       return anthropicResult()
     }
   }))
-  assert.throws(
-    () => tracker.execute(anthropicInput(run, {
+  await assert.rejects(
+    tracker.execute(anthropicInput(run, {
       requestId: 'model-request-anthropic-successor',
       failoverFromAttemptId: dependencies.calls.start[0].input.id,
       preflight: () => {
@@ -232,8 +232,9 @@ async function verifyAnthropicSuccessorRecheck(runtime) {
 function verifyProductionWiring() {
   const openai = source('src/main/openaiEngine.ts')
   const anthropic = source('src/main/anthropicEngine.ts')
-  assert.match(openai, /preflight:\s*\(\) => assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/)
-  assert.match(anthropic, /preflight:\s*\(\) => assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/)
+  const guardedPreflight = /preflight:\s*(?:async\s*)?\(\)\s*=>\s*\{\s*assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/
+  assert.match(openai, guardedPreflight)
+  assert.match(anthropic, guardedPreflight)
 }
 
 function unscopedFixture(runtime, suffix) {

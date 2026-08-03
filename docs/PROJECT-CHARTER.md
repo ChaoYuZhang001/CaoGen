@@ -74,7 +74,7 @@
 
 - 多 Provider、多 API Key、自定义 Base URL、OpenAI-compatible 与原生 Anthropic Messages 协议；不嵌入 Claude Code SDK/CLI。
 - 按任务、项目规则、预算、健康状态、成本、质量和速度进行模型路由，并支持同 Provider 密钥切换与跨 Provider failover。
-- 项目和未关联项目会话收纳、项目规则、项目记忆、历史会话和会话恢复。
+- 项目和无需项目的“对话”分组、项目规则、项目记忆、历史会话和会话恢复。
 - 真实 child sessions、最多 33 个子任务、DAG、重试、worktree 隔离、结果回传与可选自动合并。
 - 终端、文件、Diff、Git、浏览器、预览、Office 结构提取、插件、Skill、MCP 和 IDE Bridge 基础能力。
 - 持久 Task Run、Effect Ledger、资源 lease/fencing、部分文件和 Git 副作用对账及强杀恢复；`task-snapshots.db` v8 保留 v6 TaskRun Effect evidence append-only hash-chain foundation，并包含 Goal/WorkItem/Run/Artifact/Acceptance/Evidence Link、workflow event chain、canonical recovery sessions 和持久 `workflow_store_identity`。Task Snapshot/TaskRun 恢复读取支持按数据库路径隔离的 `legacy / compare / canonical` 三态，mode flip 强制重新验证，committed journal 校验 store identity 与历史高水位。显式对象已有有限 main API、IPC/preload、Control Center 查询/校验和 cursor 分页，并由 targeted smoke 覆盖。

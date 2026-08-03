@@ -6,6 +6,8 @@ import { setupWorkflowEvidenceSchema } from './workflow-evidence-store'
 import { setupWorkflowLedgerSchema } from './workflow-ledger-store'
 import { setupWorkflowRecoverySchema } from './workflow-ledger-recovery'
 import { setupWorkflowLedgerStoreIdentity } from './workflow-ledger-store-identity'
+import { setupWorkflowLedgerAuthorizedPurgeSchema } from './workflow-ledger-authorized-purge'
+import { setupConversationLedgerSchema } from './conversation-ledger-schema'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>
@@ -44,5 +46,7 @@ export function setupTaskSnapshotSchema(db: SqlDatabase, storeVersion: number): 
   setupWorkflowArtifactGraphSchema(db)
   setupWorkflowRecoverySchema(db)
   setupWorkflowLedgerStoreIdentity(db)
+  setupWorkflowLedgerAuthorizedPurgeSchema(db)
+  setupConversationLedgerSchema(db)
   db.run(`PRAGMA user_version = ${storeVersion}`)
 }

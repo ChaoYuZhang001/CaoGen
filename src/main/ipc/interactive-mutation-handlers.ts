@@ -1,0 +1,124 @@
+import { ipcMain } from 'electron'
+import type { CheckpointRestoreMode } from '../../shared/types'
+import { sessionManager } from '../sessionManager'
+import { executeInteractiveOperationEffect } from '../task/operation-effect-gateway'
+import { createManagedWorktreeMergePatch, exportManagedWorktreePatch } from '../worktrees'
+import {
+  executeInteractiveOperationEffectDiscardHunk,
+  executeInteractiveOperationEffectGitCommit,
+  executeInteractiveOperationEffectGitIndex,
+  executeInteractiveOperationEffectWriteFile
+} from './renderer-mutation-handlers'
+import {
+  executeInteractiveOperationEffectApplyPatch,
+  executeInteractiveOperationEffectCreatePr,
+  executeInteractiveOperationEffectRemoveWorktree
+} from './worktree-operation-handlers'
+
+export function registerInteractiveMutationIpc(): void {
+  registerCheckpointMutationIpc()
+  registerGitMutationIpc()
+  registerWorktreeMutationIpc()
+  registerFileMutationIpc()
+}
+
+function registerCheckpointMutationIpc(): void {
+  ipcMain.handle('sessions:rewindFiles', async (_event, id: string, messageId: string, dryRun: boolean) => {
+    const session = sessionManager.get(id)
+    if (!session?.rewindFiles) return { canRewind: false, error: '会话不存在或引擎不支持' }
+    if (dryRun !== true) authorize(id, '回溯文件')
+    return sessionManager.rewindFiles(id, messageId, dryRun === true)
+  })
+  ipcMain.handle(
+    'sessions:restoreCheckpoint',
+    async (_event, id: string, messageId: string, mode: CheckpointRestoreMode, dryRun: boolean) => {
+      const session = sessionManager.get(id)
+      const safeMode = checkpointMode(mode)
+      if (!session?.restoreCheckpoint) return unavailableCheckpoint(messageId, safeMode)
+      if (session.meta.status === 'running' || session.meta.status === 'starting') {
+        return runningCheckpoint(messageId, safeMode)
+      }
+      if (dryRun !== true && safeMode !== 'chat') authorize(id, '恢复代码检查点')
+      return sessionManager.restoreCheckpoint(id, messageId, safeMode, dryRun === true)
+    }
+  )
+}
+
+function registerGitMutationIpc(): void {
+  ipcMain.handle('git:stage', (_event, id: string, paths: string[]) =>
+    runGitIndex(id, 'git:stage', { paths }, '暂存 Git 文件'))
+  ipcMain.handle('git:stageAll', (_event, id: string) =>
+    runGitIndex(id, 'git:stageAll', {}, '暂存全部 Git 改动'))
+  ipcMain.handle('git:unstage', (_event, id: string, paths: string[]) =>
+    runGitIndex(id, 'git:unstage', { paths }, '取消暂存 Git 文件'))
+  ipcMain.handle('git:commit', (_event, id: string, message: string) => {
+    authorize(id, '提交 Git 改动')
+    return executeInteractiveOperationEffectGitCommit(id, message, executeInteractiveOperationEffect)
+  })
+  ipcMain.handle('workspace:applyHunk', (_event, id: string, filePath: string, hunkPatch: string) =>
+    runGitIndex(id, 'workspace:applyHunk', { filePath, hunkPatch }, '暂存工作区 hunk'))
+  ipcMain.handle('workspace:discardHunk', (_event, id: string, filePath: string, hunkPatch: string) => {
+    authorize(id, '丢弃工作区 hunk')
+    return executeInteractiveOperationEffectDiscardHunk(
+      id, filePath, hunkPatch, executeInteractiveOperationEffect
+    )
+  })
+}
+
+function registerWorktreeMutationIpc(): void {
+  ipcMain.handle('worktrees:exportPatch', (_event, id: string) => {
+    authorize(id, '导出 worktree patch')
+    return exportManagedWorktreePatch(id)
+  })
+  ipcMain.handle('worktrees:mergePatch', (_event, id: string) => {
+    authorize(id, '生成 worktree 合并 patch')
+    return createManagedWorktreeMergePatch(id)
+  })
+  ipcMain.handle('worktrees:applyPatch', (_event, id: string) => {
+    authorize(id, '应用 worktree patch')
+    return executeInteractiveOperationEffectApplyPatch(id, executeInteractiveOperationEffect)
+  })
+  ipcMain.handle('worktrees:createPr', (_event, id: string) => {
+    authorize(id, '创建 Pull Request')
+    return executeInteractiveOperationEffectCreatePr(id, executeInteractiveOperationEffect)
+  })
+  ipcMain.handle('worktrees:remove', (_event, id: string, options?: { deleteBranch?: boolean; force?: boolean }) => {
+    authorize(id, '移除 worktree')
+    return executeInteractiveOperationEffectRemoveWorktree(id, options ?? {}, executeInteractiveOperationEffect)
+  })
+}
+
+function registerFileMutationIpc(): void {
+  ipcMain.handle('files:write', (_event, id: string, relativePath: string, content: string) => {
+    authorize(id, '保存项目文件')
+    return executeInteractiveOperationEffectWriteFile(
+      id, relativePath, content, executeInteractiveOperationEffect
+    )
+  })
+}
+
+function runGitIndex(
+  id: string,
+  channel: 'git:stage' | 'git:stageAll' | 'git:unstage' | 'workspace:applyHunk',
+  input: Record<string, unknown>,
+  title: string
+) {
+  authorize(id, title)
+  return executeInteractiveOperationEffectGitIndex(id, channel, input, executeInteractiveOperationEffect)
+}
+
+function authorize(sessionId: string, title: string): void {
+  sessionManager.assertInteractiveExecutionAuthorized(sessionId, title)
+}
+
+function checkpointMode(mode: CheckpointRestoreMode): CheckpointRestoreMode {
+  return mode === 'chat' || mode === 'both' || mode === 'code' ? mode : 'code'
+}
+
+function unavailableCheckpoint(checkpointId: string, mode: CheckpointRestoreMode) {
+  return { mode, checkpointId, canRewind: false, applied: false, error: '会话不存在或引擎不支持' }
+}
+
+function runningCheckpoint(checkpointId: string, mode: CheckpointRestoreMode) {
+  return { mode, checkpointId, canRewind: false, applied: false, error: '会话仍在运行,请停止后再回溯' }
+}

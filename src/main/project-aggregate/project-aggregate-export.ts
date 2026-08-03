@@ -2,6 +2,8 @@ import {
   PROJECT_AGGREGATE_EXPORT_FORMAT,
   PROJECT_AGGREGATE_SCHEMA_VERSION,
   type ProjectAggregateExportResult,
+  type ProjectAggregateAutomation,
+  type ProjectAggregateDependencies,
   type ProjectAggregateSeal,
   type ProjectAggregateSnapshot,
   type ProjectAggregateVerification
@@ -27,7 +29,9 @@ export function buildProjectAggregateVerification(
 
 export function buildProjectAggregateExport(
   aggregate: ProjectAggregateSnapshot,
-  seal: ProjectAggregateSeal
+  seal: ProjectAggregateSeal,
+  dependencies: ProjectAggregateDependencies,
+  automation: ProjectAggregateAutomation
 ): ProjectAggregateExportResult {
   const verification = buildProjectAggregateVerification(aggregate, seal)
   const withoutDigest = {
@@ -36,6 +40,8 @@ export function buildProjectAggregateExport(
     projectId: aggregate.projectId,
     aggregateRevision: seal.aggregateRevision,
     aggregate,
+    dependencies,
+    automation,
     verification
   }
   const exportDigest = projectAggregateDigest(withoutDigest)

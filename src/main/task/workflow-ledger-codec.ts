@@ -52,7 +52,7 @@ const WORKFLOW_EVENT_KINDS = new Set([
 
 const ARTIFACT_KINDS: readonly WorkflowArtifactKind[] = [
   'report', 'source', 'requirement', 'design', 'document', 'spreadsheet',
-  'presentation', 'code', 'patch', 'diff', 'test_report', 'screenshot',
+  'presentation', 'pdf', 'code', 'patch', 'diff', 'test_report', 'screenshot',
   'pull_request', 'issue', 'release_package', 'custom'
 ]
 

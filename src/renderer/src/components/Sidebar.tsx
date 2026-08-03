@@ -7,14 +7,20 @@ import { APP_ICON_URL, APP_NAME } from '../brand'
 import type {
   HistoryEntry,
   LayoutSettings,
-  Project,
-  SessionMeta,
   SessionStatus,
   TaskSnapshotRecord,
   TranscriptSearchResult
 } from '../../../shared/types'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
 import { preloadOfficeView } from './office/loadOffice'
+import SidebarProjectSections, { type SidebarProjectSort } from './SidebarProjectSections'
+import {
+  buildSidebarProjectGroups,
+  sidebarEntryPath,
+  type ActiveSidebarEntry,
+  type ProjectGroup,
+  type SidebarEntry
+} from './sidebar-project-groups'
 
 const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   starting: 'statusStarting',
@@ -28,27 +34,7 @@ const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 420
 const SIDEBAR_COLLAPSED_WIDTH = 56
 
-type SidebarEntry =
-  | { kind: 'active'; id: string; meta: SessionMeta; history?: HistoryEntry; pendingCount: number }
-  | { kind: 'history'; id: string; history: HistoryEntry }
-
-type ActiveSidebarEntry = Extract<SidebarEntry, { kind: 'active' }>
-
-interface ProjectGroup {
-  key: string
-  projectId?: string
-  label: string
-  path: string
-  entries: SidebarEntry[]
-  updatedAt: number
-  archived?: boolean
-  unassigned?: boolean
-}
-
-interface EditingTarget {
-  kind: SidebarEntry['kind']
-  id: string
-}
+interface EditingTarget { kind: SidebarEntry['kind']; id: string }
 
 interface MenuState {
   x: number
@@ -59,7 +45,7 @@ interface MenuState {
 interface ProjectMenuState {
   x: number
   y: number
-  project: Project
+  group: ProjectGroup
 }
 
 function entryTitle(entry: SidebarEntry): string {
@@ -67,8 +53,7 @@ function entryTitle(entry: SidebarEntry): string {
 }
 
 function entryPath(entry: SidebarEntry): string {
-  if (entry.kind === 'active') return entry.meta.sourceCwd ?? entry.meta.cwd
-  return entry.history.sourceCwd ?? entry.history.cwd
+  return sidebarEntryPath(entry)
 }
 
 function historyPath(entry: HistoryEntry): string {
@@ -102,18 +87,16 @@ function highlightSnippet(snippet: string, query: string): React.ReactNode {
   )
 }
 
-interface SidebarProps {
-  mobileOpen?: boolean
-  onMobileClose?: () => void
-}
+interface SidebarProps { mobileOpen?: boolean; onMobileClose?: () => void }
 
-export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
+function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
   const activeId = useStore((s) => s.activeId)
   const history = useStore((s) => s.history)
   const projects = useStore((s) => s.projects)
+  const projectWorkspaces = useStore((s) => s.projectWorkspaces)
   const taskSnapshots = useStore((s) => s.taskSnapshots)
   const taskSnapshotsLoading = useStore((s) => s.taskSnapshotsLoading)
   const taskSnapshotsError = useStore((s) => s.taskSnapshotsError)
@@ -124,6 +107,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const openTranscriptSearchHit = useStore((s) => s.openTranscriptSearchHit)
   const selectSession = useStore((s) => s.selectSession)
   const resumeFromHistory = useStore((s) => s.resumeFromHistory)
+  const forkFromHistory = useStore((s) => s.forkFromHistory)
   const renameSession = useStore((s) => s.renameSession)
   const renameHistoryEntry = useStore((s) => s.renameHistoryEntry)
   const archiveHistory = useStore((s) => s.archiveHistory)
@@ -135,6 +119,10 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const closeSession = useStore((s) => s.closeSession)
   const archiveProject = useStore((s) => s.archiveProject)
   const deleteProject = useStore((s) => s.deleteProject)
+  const archiveCanonicalProject = useStore((s) => s.archiveCanonicalProject)
+  const deleteCanonicalProject = useStore((s) => s.deleteCanonicalProject)
+  const openProjectWorkspace = useStore((s) => s.openProjectWorkspace)
+  const openNewProjectWorkspace = useStore((s) => s.openNewProjectWorkspace)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setView = useStore((s) => s.setView)
@@ -146,14 +134,13 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [projectMenu, setProjectMenu] = useState<ProjectMenuState | null>(null)
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+  const [projectSort, setProjectSort] = useState<SidebarProjectSort>('recent')
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(layout.sidebarWidth)
-
   useEffect(() => {
     setSidebarWidth(layout.sidebarWidth)
   }, [layout.sidebarWidth])
-
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
     void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
       console.error('[agent-desk] Failed to persist sidebar layout:', error)
@@ -193,11 +180,20 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const projectNameForPath = (path: string): string =>
     projects.find((project) => project.path === path)?.name ?? basename(path)
 
+  const projectNameForEntry = (entry: SidebarEntry): string => {
+    const record = entry.kind === 'active' ? entry.meta : entry.history
+    if (record.workspaceId) {
+      const workspace = projectWorkspaces.find((item) => item.id === record.workspaceId)
+      if (workspace) return workspace.name
+    }
+    return projectNameForPath(entryPath(entry))
+  }
+
   const matchesQuery = (entry: SidebarEntry): boolean => {
     const q = query.trim().toLowerCase()
     if (!q) return true
     const path = entryPath(entry)
-    const projectName = projectNameForPath(path)
+    const projectName = projectNameForEntry(entry)
     const text = [entryTitle(entry), path, projectName].map(normalized).join('\n')
     return text.includes(q)
   }
@@ -265,59 +261,18 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
     .filter(matchesTaskSnapshot)
 
   const groupedEntries = useMemo(() => {
-    const groups = new Map<string, ProjectGroup>()
-    const groupsByPath = new Map<string, ProjectGroup>()
-    for (const project of projects) {
-      const group: ProjectGroup = {
-        key: project.id,
-        projectId: project.id,
-        label: project.name,
-        path: project.path,
-        entries: [],
-        updatedAt: project.lastUsedAt,
-        archived: project.archived === true
-      }
-      groups.set(project.id, group)
-      groupsByPath.set(project.path, group)
-    }
-
-    const unassigned: ProjectGroup = {
-      key: '__unassigned__',
-      label: t('unassignedSessions'),
-      path: '',
-      entries: [],
-      updatedAt: 0,
-      unassigned: true
-    }
-    const candidates: SidebarEntry[] = [
-      ...projectActiveEntries,
-      ...recentHistory.map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
-    ]
-    for (const entry of candidates) {
-      const record = entry.kind === 'active' ? entry.meta : entry.history
-      const path = entryPath(entry)
-      const group = record.unassigned
-        ? undefined
-        : record.projectId
-          ? groups.get(record.projectId)
-          : groupsByPath.get(path)
-      const target = group ?? unassigned
-      target.entries.push(entry)
-      target.updatedAt = Math.max(
-        target.updatedAt,
-        entry.kind === 'active' ? entry.meta.createdAt : entry.history.updatedAt
-      )
-    }
-
-    const q = query.trim().toLowerCase()
-    const matchingGroups = [...groups.values()]
-      .filter((group) => !q || group.entries.length > 0 || normalized(`${group.label}\n${group.path}`).includes(q))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-    const projectGroups = matchingGroups.filter((group) => !group.archived)
-    const archivedProjectGroups = matchingGroups.filter((group) => group.archived)
-    const showUnassigned = !q || unassigned.entries.length > 0 || normalized(unassigned.label).includes(q)
-    return { projectGroups, archivedProjectGroups, unassigned, showUnassigned }
-  }, [projectActiveEntries, projects, query, recentHistory, t])
+    return buildSidebarProjectGroups({
+      entries: [
+        ...projectActiveEntries,
+        ...recentHistory.map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
+      ],
+      legacyProjects: projects,
+      projectSort,
+      query,
+      unassignedLabel: t('unassignedSessions'),
+      workspaces: projectWorkspaces
+    })
+  }, [projectActiveEntries, projectSort, projectWorkspaces, projects, query, recentHistory, t])
 
   const { projectGroups, archivedProjectGroups, unassigned, showUnassigned } = groupedEntries
 
@@ -339,6 +294,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const showMenu = (e: React.MouseEvent, entry: SidebarEntry): void => {
     e.preventDefault()
     e.stopPropagation()
+    setProjectMenu(null)
     setMenu({ x: e.clientX, y: e.clientY, entry })
   }
 
@@ -350,14 +306,13 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
     setMenu({ x: rect.right - 4, y: rect.bottom + 4, entry })
   }
 
-  const showProjectButtonMenu = (e: React.MouseEvent<HTMLButtonElement>, projectId: string): void => {
+  const showProjectButtonMenu = (e: React.MouseEvent<HTMLButtonElement>, group: ProjectGroup): void => {
     e.preventDefault()
     e.stopPropagation()
-    const project = projects.find((item) => item.id === projectId)
-    if (!project) return
+    if (!group.workspace && !group.legacyProject) return
     const rect = e.currentTarget.getBoundingClientRect()
     setMenu(null)
-    setProjectMenu({ x: rect.right - 4, y: rect.bottom + 4, project })
+    setProjectMenu({ x: rect.right - 4, y: rect.bottom + 4, group })
   }
 
   const copyPath = (path: string): void => {
@@ -377,6 +332,11 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
     ]
 
     if (historyEntry) {
+      items.push({
+        key: 'fork-conversation',
+        label: t('forkConversation'),
+        onClick: () => forkFromHistory(historyEntry)
+      })
       items.push({
         key: 'pin',
         label: historyEntry.pinned ? t('unpinSession') : t('pinSession'),
@@ -407,23 +367,49 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
     return items
   }
 
-  const projectMenuItemsFor = (project: Project): SessionMenuItem[] => [
-    {
-      key: 'archive-project',
-      label: project.archived ? t('unarchiveProject') : t('archiveProject'),
-      onClick: () => void archiveProject(project.id, !project.archived)
-    },
-    { key: 'copy-project-path', label: t('copyPath'), onClick: () => copyPath(project.path) },
-    {
-      key: 'delete-project',
-      label: t('deleteProject'),
-      danger: true,
-      onClick: () => {
-        if (!window.confirm(t('deleteProjectConfirm', { name: project.name }))) return
-        void deleteProject(project.id)
-      }
+  const projectMenuItemsFor = (group: ProjectGroup): SessionMenuItem[] => {
+    if (group.kind === 'canonical' && group.workspace) {
+      const project = group.workspace
+      return [
+        {
+          key: 'archive-canonical-project',
+          label: project.status === 'archived' ? t('unarchiveProject') : t('archiveProject'),
+          onClick: () => void archiveCanonicalProject(project.id, project.status !== 'archived')
+        },
+        ...(group.path
+          ? [{ key: 'copy-project-path', label: t('copyPath'), onClick: () => copyPath(group.path) }]
+          : []),
+        {
+          key: 'delete-canonical-project',
+          label: t('deleteProject'),
+          danger: true,
+          onClick: () => {
+            if (!window.confirm(t('deleteProjectConfirm', { name: project.name }))) return
+            void deleteCanonicalProject(project.id)
+          }
+        }
+      ]
     }
-  ]
+    const project = group.legacyProject
+    if (!project) return []
+    return [
+      {
+        key: 'archive-project',
+        label: project.archived ? t('unarchiveProject') : t('archiveProject'),
+        onClick: () => void archiveProject(project.id, !project.archived)
+      },
+      { key: 'copy-project-path', label: t('copyPath'), onClick: () => copyPath(project.path) },
+      {
+        key: 'delete-project',
+        label: t('deleteProject'),
+        danger: true,
+        onClick: () => {
+          if (!window.confirm(t('deleteProjectConfirm', { name: project.name }))) return
+          void deleteProject(project.id)
+        }
+      }
+    ]
+  }
 
   const renderTitle = (entry: SidebarEntry): React.ReactNode => {
     const isolated = entry.kind === 'active' ? entry.meta.isolated : entry.history.isolated
@@ -464,6 +450,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
       <div
         key={entry.id}
         className={`session-card ${activeId === entry.id ? 'active' : ''}`}
+        data-session-id={entry.id}
         role="button"
         tabIndex={0}
         onClick={() => {
@@ -485,7 +472,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
         <span className="session-card-body">
           {renderTitle(entry)}
           <span className="session-card-sub">
-            {projectNameForPath(displayCwd)} · {formatCost(entry.meta.costUsd)}
+            {projectNameForEntry(entry)} · {formatCost(entry.meta.costUsd)}
           </span>
         </span>
         {entry.pendingCount > 0 && (
@@ -513,6 +500,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
       <div
         key={entry.id}
         className="session-card history-card"
+        data-session-id={entry.id}
         role="button"
         tabIndex={0}
         title={t('resumeSessionTitle', { cwd: path })}
@@ -532,7 +520,7 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
         <span className="session-card-body">
           {renderTitle(ref)}
           <span className="session-card-sub">
-            {projectNameForPath(path)} · {formatTime(entry.updatedAt)}
+            {projectNameForEntry(ref)} · {formatTime(entry.updatedAt)}
           </span>
         </span>
         <button
@@ -553,11 +541,11 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
   const renderProjectGroup = (group: ProjectGroup, allowNewSession: boolean): React.ReactNode => {
     const collapsed = collapsedProjects[group.key] === true
     return (
-      <div key={group.key} className="sidebar-project-group" data-project-id={group.projectId}>
+      <div key={group.key} className="sidebar-project-group" data-project-id={group.projectId} data-project-kind={group.kind}>
         <div className="sidebar-group-row">
           <button
             className="sidebar-group-head"
-            title={group.path}
+            title={group.path || group.label}
             onClick={() => setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))}
           >
             <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
@@ -572,20 +560,21 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
               title={t('newSessionHere')}
               onClick={() => {
                 closeMobile()
-                setShowNewSession(true, group.projectId)
+                if (group.kind === 'canonical' && group.projectId) openProjectWorkspace(group.projectId)
+                else setShowNewSession(true, group.projectId)
               }}
             >
               +
             </button>
           )}
-          {group.projectId && (
+          {(group.workspace || group.legacyProject) && (
             <button
               type="button"
               className="sidebar-group-more"
               aria-label={t('projectActions', { name: group.label })}
               title={t('moreActions')}
               aria-haspopup="menu"
-              onClick={(event) => showProjectButtonMenu(event, group.projectId!)}
+              onClick={(event) => showProjectButtonMenu(event, group)}
             >
               ⋯
             </button>
@@ -765,37 +754,35 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
           </section>
         )}
 
-        {(projectGroups.length > 0 || showUnassigned) && (
-          <section className="sidebar-section sidebar-projects-section">
-            <div className="sidebar-section-title">{t('projects')}</div>
-            {projectGroups.map((group) => renderProjectGroup(group, true))}
-            {showUnassigned && (
-              <div className="sidebar-project-group sidebar-unassigned-group" data-project-id="unassigned">
-                {(() => {
-                  const collapsed = collapsedProjects[unassigned.key] === true
-                  return (
-                    <>
-                      <button
-                        className="sidebar-group-head"
-                        onClick={() =>
-                          setCollapsedProjects((state) => ({ ...state, [unassigned.key]: !collapsed }))
-                        }
-                      >
-                        <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
-                        <span className="sidebar-group-title">{unassigned.label}</span>
-                        <span className="sidebar-group-count">{unassigned.entries.length}</span>
-                      </button>
-                      {!collapsed && unassigned.entries.map(renderSidebarEntry)}
-                      {!collapsed && unassigned.entries.length === 0 && (
-                        <div className="sidebar-empty sidebar-group-empty">{t('noSessions')}</div>
-                      )}
-                    </>
-                  )
-                })()}
-              </div>
-            )}
-          </section>
-        )}
+        <SidebarProjectSections
+          conversationCollapsed={collapsedProjects[unassigned.key] === true}
+          conversationContent={unassigned.entries.map(renderSidebarEntry)}
+          conversationCount={unassigned.entries.length}
+          conversationEmpty={unassigned.entries.length === 0}
+          conversationLabel={unassigned.label}
+          forceProjectsExpanded={query.trim().length > 0}
+          onCollapseAll={() => setCollapsedProjects((state) => ({
+            ...state,
+            ...Object.fromEntries(projectGroups.map((group) => [group.key, true]))
+          }))}
+          onExpandAll={() => setCollapsedProjects((state) => ({
+            ...state,
+            ...Object.fromEntries(projectGroups.map((group) => [group.key, false]))
+          }))}
+          onNewProject={() => {
+            closeMobile()
+            openNewProjectWorkspace()
+          }}
+          onProjectSortChange={setProjectSort}
+          onToggleConversation={() => setCollapsedProjects((state) => ({
+            ...state,
+            [unassigned.key]: state[unassigned.key] !== true
+          }))}
+          projectContent={projectGroups.map((group) => renderProjectGroup(group, true))}
+          projectCount={projectGroups.length}
+          projectSort={projectSort}
+          showConversation={showUnassigned}
+        />
 
         {archivedProjectGroups.length > 0 && (
           <section className="sidebar-section sidebar-archived-projects-section">
@@ -871,10 +858,12 @@ export default memo(function Sidebar({ mobileOpen = false, onMobileClose }: Side
         <SessionContextMenu
           x={projectMenu.x}
           y={projectMenu.y}
-          items={projectMenuItemsFor(projectMenu.project)}
+          items={projectMenuItemsFor(projectMenu.group)}
           onClose={() => setProjectMenu(null)}
         />
       )}
     </aside>
   )
-})
+}
+
+export default memo(Sidebar)

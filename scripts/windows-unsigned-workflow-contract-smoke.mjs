@@ -9,6 +9,7 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'windows-unsign
 const source = readFileSync(workflowPath, 'utf8')
 const workflow = yaml.load(source)
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+const packageLock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'))
 const triggers = workflow.on
 
 assert.equal(workflow.name, 'CaoGen Windows unsigned preview artifact')
@@ -76,6 +77,17 @@ assert.match(
   packageJson.scripts?.['test:packaged-app:win:x64:unsigned'] ?? '',
   /packaged-app-smoke\.mjs --platform windows --arch x64 --unsigned/
 )
+const rollupVersion = packageLock.packages?.['node_modules/rollup']?.version
+const windowsRollup = packageLock.packages?.['node_modules/@rollup/rollup-win32-x64-msvc']
+assert.equal(
+  packageJson.optionalDependencies?.['@rollup/rollup-win32-x64-msvc'],
+  `^${rollupVersion}`,
+  'Windows Rollup binary must be a root optional dependency so npm ci installs it from a macOS-generated lockfile'
+)
+assert.equal(windowsRollup?.version, rollupVersion, 'Windows Rollup binary must match the locked Rollup version')
+assert.deepEqual(windowsRollup?.os, ['win32'])
+assert.deepEqual(windowsRollup?.cpu, ['x64'])
+assert.equal(windowsRollup?.optional, true)
 assert(!/(^|\n)\s*(push|schedule|release):/m.test(source), 'unsigned builds must not run on pushes, schedules, or releases')
 assert(!/secrets\.|CSC_LINK|CSC_KEY_PASSWORD|electron-builder\.release\.cjs/i.test(source), 'unsigned workflow must not consume signing credentials or release signing config')
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'unsigned workflow must not publish a release')

@@ -8,6 +8,7 @@ import type {
   RewindResult,
   SendMessagePayload,
   SessionMeta,
+  TaskStrategy,
   TranscriptEntry
 } from '../shared/types'
 import type { NativeRuntimeAdapterDeclaration } from '../shared/native-runtime-types'
@@ -37,6 +38,7 @@ export interface Engine {
   /** 由 SessionManager 注入的本地合成事件,用于让编排/状态事件进入同一条转录链。 */
   emitSyntheticEvent?(event: AgentEvent): void
   setPermissionMode(mode: PermissionModeId): Promise<void>
+  setTaskStrategy(strategy: TaskStrategy): Promise<void>
   setModel(model: string): Promise<void>
   rename(title: string): void
   /** 文件检查点回退(引擎可选;不支持则返回 canRewind:false) */

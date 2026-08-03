@@ -11,7 +11,8 @@ import {
   buildAnthropicUserContent,
   durableImageReferences,
   finalStopFailure,
-  rebuildAnthropicHistory
+  rebuildAnthropicHistory,
+  rebuildPortableAnthropicHistory
 } from './anthropic-history'
 import {
   streamAnthropicMessage,
@@ -33,6 +34,7 @@ import {
 import { canRotateProviderKey } from './providerKeyRouting'
 import { resolveAnthropicMessagesTarget, type AnthropicMessagesTarget } from './provider/anthropicMessagesTarget'
 import { getSettings } from './settings'
+import { listHistory } from './history'
 import {
   classifyFailure, pickFailoverTarget, recordFailure, recordSuccess, type FailureClass
 } from './scheduler'
@@ -43,6 +45,20 @@ import {
 } from './task/model-attempt-runtime'
 import { runHasUnresolvedEffects } from './task/effect-runtime'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { taskStrategySystemAppend, updateTaskStrategyMeta } from './task/task-strategy'
+import { buildWorkflowStageHandoffPrompt } from './task/workflow-stage-handoff'
+import {
+  assertOutboundContextAllowed,
+  OutboundContextPolicyError,
+  prepareOutboundContext,
+  providerAllowedByOutboundContext
+} from './project-workspace/outbound-context-policy'
+import { effectiveSessionModel } from './provider/engine-provider-utils'
+import { redactProviderCredentials } from './providerCredentialRuntime'
+import {
+  fetchWithProviderCredentialLease,
+  providerCredentialScopeForSession
+} from './providerRuntimeAuth'
 import {
   assertDigitalWorkerProviderDispatchAllowed,
   isDigitalWorkerProviderDispatchDeniedError
@@ -52,6 +68,8 @@ import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit } from './engine'
 import type {
   AgentEvent,
+  OutboundContextItemView,
+  OutboundContextManifest,
   PermissionModeId,
   PermissionRequestInfo,
   SendMessagePayload,
@@ -115,6 +133,7 @@ export class AnthropicEngine implements Engine {
   private readonly nativeToolRuntime: NativeToolRuntime
   private abort: AbortController | null = null
   private activeTurn: Promise<void> | null = null
+  private activeOutboundContext?: OutboundContextManifest
   private disposePromise: Promise<void> | null = null
   private disposed = false
   private turnStartedAt = 0
@@ -125,7 +144,7 @@ export class AnthropicEngine implements Engine {
   private resolvedModel?: string
   private triedProviders = new Set<string>()
   private triedProviderKeys = new Map<string, Set<string>>()
-  private turnCredentialTokens = new Set<string>()
+  private forkBoundaryPending = false
 
   constructor(
     meta: SessionMeta,
@@ -136,6 +155,10 @@ export class AnthropicEngine implements Engine {
   ) {
     this.meta = meta
     this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
+    if (!resumeSdkSessionId && meta.conversationForkSourceSdkSessionId) {
+      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId)
+      this.forkBoundaryPending = true
+    }
     this.emitRaw = (event) => {
       const entry = this.transcript.nextEntry(event)
       emit(event, entry.seq, entry)
@@ -162,13 +185,21 @@ export class AnthropicEngine implements Engine {
       ...dependencies
     }
     this.nativeToolRuntime = new NativeToolRuntime(this.meta, (event) => this.emit(event))
-    this.history = rebuildAnthropicHistory(
-      this.transcript.readAll(),
-      this.dependencies.resolveImageAttachment
+    const sourceSessionId = meta.conversationForkSourceSdkSessionId
+      ? listHistory().find((entry) => entry.sdkSessionId === meta.conversationForkSourceSdkSessionId)?.id
+      : undefined
+    const historyImageResolver = dependencies.resolveImageAttachment ?? ((reference: UserMessageAttachmentView) =>
+      imageAttachmentRefToContentBlock(
+        reference,
+        sessionImageAttachmentsRoot(app.getPath('userData'), sourceSessionId ?? meta.id)
+      ) as AnthropicMessagesContentBlock
     )
+    this.history = meta.conversationForkSourceSdkSessionId
+      ? rebuildPortableAnthropicHistory(this.transcript.readAll())
+      : rebuildAnthropicHistory(this.transcript.readAll(), historyImageResolver)
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
-      this.emit({ kind: 'init', sdkSessionId: resumeSdkSessionId, model: this.effectiveModel() })
+      this.emit({ kind: 'init', sdkSessionId: resumeSdkSessionId, model: effectiveSessionModel(this.meta, this.resolvedModel) })
     }
   }
 
@@ -184,6 +215,14 @@ export class AnthropicEngine implements Engine {
       if (!this.meta.sdkSessionId) {
         this.meta.sdkSessionId = `anthropic-${randomUUID()}`
         this.emit({ kind: 'init', sdkSessionId: this.meta.sdkSessionId, model: target.model })
+      }
+      if (this.forkBoundaryPending) {
+        this.forkBoundaryPending = false
+        this.emit({
+          kind: 'hook-event',
+          event: 'conversation-forked',
+          detail: '已从本地会话账本创建独立会话；未复用来源 Provider 的服务端上下文。'
+        })
       }
       this.setStatus('idle')
     } catch (error) {
@@ -225,7 +264,6 @@ export class AnthropicEngine implements Engine {
     this.turnStartedAt = Date.now()
     this.triedProviders = new Set([this.meta.providerId])
     this.triedProviderKeys = new Map()
-    this.turnCredentialTokens = new Set()
     const controller = new AbortController()
     this.abort = controller
     this.setStatus('running')
@@ -269,6 +307,11 @@ export class AnthropicEngine implements Engine {
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
 
+  async setTaskStrategy(strategy: SessionMeta['taskStrategy']): Promise<void> {
+    this.nativeToolRuntime.rejectAllPending('任务策略已切换，原审批已作废')
+    updateTaskStrategyMeta(this.meta, strategy, (meta) => this.emit({ kind: 'meta', meta }))
+  }
+
   async setModel(model: string): Promise<void> {
     this.meta.model = model
     this.resolvedModel = model && model !== AUTO_MODEL ? model : undefined
@@ -296,7 +339,30 @@ export class AnthropicEngine implements Engine {
       })
       this.rememberTarget(target)
       this.resolvedModel = target.model
-      const enrichedPayload = await augmentNativePayloadWithLayeredMemory(payload, this.meta)
+      const layeredPayload = await augmentNativePayloadWithLayeredMemory(payload, this.meta)
+      const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
+        .catch((error) => {
+          console.error('[caogen] workflow stage handoff retrieval failed:', error)
+          return ''
+        })
+      const outbound = await prepareOutboundContext({
+        meta: this.meta,
+        rootDir: app.getPath('userData'),
+        payload: layeredPayload,
+        providerId: target.providerId,
+        model: target.model,
+        additionalItems: anthropicAdditionalContextItems(handoff, this.history.length > 0)
+      })
+      this.activeOutboundContext = outbound.manifest
+      const projectResources = outbound.resourceContext.prompt
+      const enrichedPayload = handoff || projectResources
+        ? {
+            ...payload,
+            text: [projectResources, handoff, '## Current User Request', layeredPayload.text]
+              .filter(Boolean)
+              .join('\n\n')
+          }
+        : layeredPayload
       const userContent = buildAnthropicUserContent(enrichedPayload, this.dependencies.resolveImageAttachment)
       await this.runMessagesLoop(target, userContent, controller)
     } catch (error) {
@@ -356,7 +422,7 @@ export class AnthropicEngine implements Engine {
         const failureText = anthropicErrorText(operationError)
         this.dependencies.recordFailure(
           activeTarget.providerId,
-          this.redactTurnCredentials(failureText)
+          redactProviderCredentials(failureText)
         )
         if (!this.logicalRequestCanReplay(controller, textOffset, thinkingOffset)) throw error
         const recovery = this.recoverTarget(activeTarget, failureText)
@@ -377,12 +443,13 @@ export class AnthropicEngine implements Engine {
     controller: AbortController,
     lineage?: AnthropicAttemptLineage
   ): Promise<AnthropicMessagesResult> {
+    const projectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
     const request: AnthropicMessagesRequest = {
       model: target.model,
       maxTokens: DEFAULT_MAX_TOKENS,
+      system: taskStrategySystemAppend(this.meta.taskStrategy, projectContext),
       messages: [...this.history, ...turnMessages],
-      tools: ANTHROPIC_CODING_TOOLS,
-      system: buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
+      tools: ANTHROPIC_CODING_TOOLS
     }
     this.rememberTarget(target)
     if (target.keyId) this.dependencies.markProviderKeyUsed(target.providerId, target.keyId)
@@ -394,16 +461,46 @@ export class AnthropicEngine implements Engine {
       method: 'POST',
       body: request,
       signal: controller.signal,
-      auth: { token: target.token, keyId: target.keyId, keyLabel: target.keyLabel },
-      preflight: () => assertDigitalWorkerProviderDispatchAllowed(this.meta),
+      auth: { keyId: target.keyId, keyLabel: target.keyLabel },
+      preflight: async () => {
+        assertDigitalWorkerProviderDispatchAllowed(this.meta)
+        const manifest = this.activeOutboundContext
+        if (!manifest) {
+          throw new OutboundContextPolicyError(
+            'OUTBOUND_CONTEXT_STALE',
+            '模型请求缺少外发上下文清单，已阻止发送'
+          )
+        }
+        await assertOutboundContextAllowed({
+          manifest,
+          rootDir: app.getPath('userData'),
+          providerId: target.providerId,
+          model: target.model,
+          engine: this.meta.engine
+        })
+      },
       ...(lineage ?? {}),
-      operation: () => this.dependencies.streamMessage({
+      operation: (operationId) => this.dependencies.streamMessage({
         endpoint: target.endpoint,
         headers: target.headers,
         request,
         signal: controller.signal,
         onText: (text) => this.appendText(text),
-        onThinking: (text) => this.appendThinking(text)
+        onThinking: (text) => this.appendThinking(text),
+        fetch: (url, init = {}) => {
+          const scope = providerCredentialScopeForSession(this.meta, target.providerId, operationId)
+          const selection = target.issueCredentialLease(scope)
+          if (target.credentialProvider.authMode !== 'none' && (!selection.available || !selection.lease)) {
+            throw new Error('Provider credential lease is unavailable')
+          }
+          return fetchWithProviderCredentialLease({
+            provider: target.credentialProvider,
+            lease: selection.lease,
+            scope,
+            url: typeof url === 'string' ? url : url.toString(),
+            init: { ...init, headers: target.headers }
+          })
+        }
       })
     })
   }
@@ -451,7 +548,7 @@ export class AnthropicEngine implements Engine {
       triedKeyIds.add(rotation.toKeyId)
       return undefined
     }
-    if (target.keyId !== rotation.toKeyId || !target.token) {
+    if (target.keyId !== rotation.toKeyId) {
       triedKeyIds.add(rotation.toKeyId)
       return undefined
     }
@@ -478,6 +575,11 @@ export class AnthropicEngine implements Engine {
     const settings = this.dependencies.getSettings()
     const candidates = this.dependencies.listProviders()
       .filter((provider) => provider.engine === 'anthropic' && provider.hasToken)
+      .filter((provider) => providerAllowedByOutboundContext(
+        this.activeOutboundContext,
+        provider,
+        current.model
+      ))
       .map((provider) => ({ id: provider.id, name: provider.name, models: provider.models }))
     const selected = this.dependencies.pickFailoverTarget({
       candidates,
@@ -521,7 +623,6 @@ export class AnthropicEngine implements Engine {
   }
 
   private rememberTarget(target: AnthropicMessagesTarget): void {
-    if (target.token) this.turnCredentialTokens.add(target.token)
     if (target.keyId) this.providerKeyIds(target.providerId).add(target.keyId)
   }
 
@@ -680,11 +781,15 @@ export class AnthropicEngine implements Engine {
       this.finishTurn(true, error.message, 'policy-denied')
       return
     }
+    if (error instanceof OutboundContextPolicyError) {
+      this.finishTurn(true, error.message, 'outbound-policy-denied')
+      return
+    }
     if (isModelAttemptPersistenceError(error)) {
       const phase = error.phase === 'start' ? '启动' : '完成'
       this.finishTurn(
         true,
-        this.redactTurnCredentials(`模型请求账本${phase}落盘失败:${error.message}`),
+        redactProviderCredentials(`模型请求账本${phase}落盘失败:${error.message}`),
         'ledger-error'
       )
       return
@@ -695,17 +800,9 @@ export class AnthropicEngine implements Engine {
     }
     this.finishTurn(
       true,
-      this.redactTurnCredentials(anthropicErrorText(unwrapModelAttemptOperationError(error))),
+      redactProviderCredentials(anthropicErrorText(unwrapModelAttemptOperationError(error))),
       'error'
     )
-  }
-
-  private redactTurnCredentials(value: string): string {
-    let redacted = value
-    for (const token of this.turnCredentialTokens) {
-      if (token) redacted = redacted.split(token).join('[REDACTED]')
-    }
-    return redacted
   }
 
   private appendText(text: string): void {
@@ -772,12 +869,6 @@ export class AnthropicEngine implements Engine {
     else this.setStatus('idle')
   }
 
-  private effectiveModel(): string {
-    return this.meta.model && this.meta.model !== AUTO_MODEL
-      ? this.meta.model
-      : this.resolvedModel || ''
-  }
-
   private emit(event: AgentEvent): void {
     this.emitRaw(event)
   }
@@ -797,4 +888,32 @@ export class AnthropicEngine implements Engine {
     this.abort = null
     this.setStatus('closed')
   }
+}
+
+function anthropicAdditionalContextItems(
+  handoff: string,
+  hasConversationContext: boolean
+): OutboundContextItemView[] {
+  const items: OutboundContextItemView[] = []
+  if (handoff.trim()) {
+    items.push({
+      id: 'context:workflow',
+      kind: 'workflow_context',
+      label: 'Workflow handoff',
+      dataClass: 'S4',
+      egressPolicy: 'allow',
+      decision: 'included'
+    })
+  }
+  if (hasConversationContext) {
+    items.push({
+      id: 'context:conversation',
+      kind: 'conversation_context',
+      label: 'Conversation history',
+      dataClass: 'S2',
+      egressPolicy: 'allow',
+      decision: 'included'
+    })
+  }
+  return items
 }

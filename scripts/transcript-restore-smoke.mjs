@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -42,7 +42,12 @@ try {
     path.join(outDir, 'src', 'main', 'transcript.js')
   ].find((candidate) => existsSync(candidate))
   assert(compiledPath, 'compiled transcript.js should exist')
-  const { TranscriptWriter, eventReceiptsFile } = await import(pathToFileURL(compiledPath).href)
+  const {
+    TranscriptWriter,
+    eventReceiptsFile,
+    readTranscriptEntriesStrict,
+    verifyConversationLedgerEntries
+  } = await import(pathToFileURL(compiledPath).href)
 
   const writer = new TranscriptWriter()
   writer.next(user('u-1', 'first prompt'))
@@ -68,19 +73,19 @@ try {
     chatRemovedEntries: preview.removedEntries
   })
   assert(restored.plan.ok, restored.plan.reason)
-  assertEqual(restored.entries.map((entry) => entry.seq).join(','), '1,2,3,4,10')
+  assertEqual(restored.entries.map((entry) => entry.seq).join(','), '1,2,3,4,5,10')
   assertEqual(restored.entries[restored.entries.length - 1].event.kind, 'checkpoint-restore')
 
   writer.next(user('u-3', 'third prompt'))
   const entries = writer.readAll()
-  assertEqual(entries.map((entry) => entry.seq).join(','), '1,2,3,4,10,11')
+  assertEqual(entries.map((entry) => entry.seq).join(','), '1,2,3,4,5,10,11')
   assert(entries.every((entry) => entry.eventId), 'new transcript entries must carry eventId')
   assertEqual(new Set(entries.map((entry) => entry.eventId)).size, entries.length)
   assertEqual(new Set(entries.map((entry) => entry.streamId)).size, 1)
 
   const transcriptFile = path.join(userData, 'transcripts', 'sdk-restore.jsonl')
   const lines = readFileSync(transcriptFile, 'utf8').trim().split('\n')
-  assertEqual(lines.length, 6)
+  assertEqual(lines.length, 7)
   assert(lines.every((line) => JSON.parse(line).seq), 'transcript file should contain valid JSONL')
   assert(lines.every((line) => JSON.parse(line).eventId), 'transcript JSONL should persist event identity')
 
@@ -90,6 +95,8 @@ try {
     .map((line) => JSON.parse(line))
   assertEqual(receipts.length, 11)
   assertEqual(new Set(receipts.map((receipt) => receipt.eventId)).size, receipts.length)
+  assert(receipts.every((receipt) => receipt.schemaVersion === 1), 'receipt schema identity should be canonical')
+  assert(receipts.every((receipt) => Number.isFinite(receipt.occurredAt)), 'receipt identity should include occurredAt')
   assert(receipts.every((receipt) => receipt.streamId === entries[0].streamId), 'receipt stream lineage should stay stable')
 
   const resumed = new TranscriptWriter('sdk-restore', 25)
@@ -120,9 +127,42 @@ try {
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line))
-  assertEqual(childEntries.length, 1)
-  assertEqual(childEntries[0].event.kind, 'subagent-result')
-  assertEqual(childEntries[0].event.childTaskId, 'child-1')
+  assertEqual(childEntries.length, 2)
+  assertEqual(childEntries[0].event.kind, 'init')
+  assertEqual(childEntries[1].event.kind, 'subagent-result')
+  assertEqual(childEntries[1].event.childTaskId, 'child-1')
+
+  const parentWriter = new TranscriptWriter()
+  parentWriter.next({ kind: 'init', sdkSessionId: 'sdk-fork-parent' })
+  parentWriter.next({ kind: 'status', status: 'idle' })
+  parentWriter.next({ kind: 'meta', meta: sessionMeta('parent-session', 'claude') })
+  parentWriter.next(user('fork-user', 'inherited prompt'))
+  parentWriter.next(assistant('inherited answer'))
+  const forkWriter = new TranscriptWriter()
+  forkWriter.seedFrom('sdk-fork-parent')
+  const forkEntries = forkWriter.readAll()
+  assertEqual(forkEntries.map((entry) => entry.event.kind).join(','), 'user-message,assistant-message')
+  assert(!forkEntries.some((entry) => entry.event.kind === 'meta'), 'fork must not inherit parent Session identity')
+  assertEqual(forkWriter.nextEntry({ kind: 'status', status: 'starting' }).seq, 6)
+
+  const tornSessionId = 'sdk-torn-tail-repair'
+  const tornWriter = new TranscriptWriter()
+  tornWriter.next({ kind: 'init', sdkSessionId: tornSessionId })
+  tornWriter.next(user('torn-user', 'survives a torn final record'))
+  const tornTranscriptFile = path.join(userData, 'transcripts', `${tornSessionId}.jsonl`)
+  appendFileSync(tornTranscriptFile, '{"seq":')
+
+  const repairedWriter = new TranscriptWriter(tornSessionId)
+  const repairedEntry = repairedWriter.nextEntry({ kind: 'status', status: 'running' })
+  const repairedRaw = readFileSync(tornTranscriptFile, 'utf8')
+  assert(repairedRaw.endsWith('\n'), 'tail repair must restore newline-delimited framing')
+  assert(!repairedRaw.includes('{"seq":\n'), 'tail repair must remove the truncated final fragment')
+  const repairedLines = repairedRaw.trim().split('\n').map((line) => JSON.parse(line))
+  assertEqual(repairedLines.length, 3)
+  assertEqual(repairedLines.at(-1).eventId, repairedEntry.eventId)
+  const repairedEntries = readTranscriptEntriesStrict(tornSessionId)
+  assertEqual(new Set(repairedEntries.map((entry) => entry.eventId)).size, repairedEntries.length)
+  assertEqual(verifyConversationLedgerEntries(repairedEntries).valid, true)
 
   console.log('transcriptRestore smoke ok')
 } finally {
@@ -156,6 +196,24 @@ function subagentResult() {
     resultText: 'child done',
     costUsd: 0.01,
     durationMs: 1234
+  }
+}
+
+function sessionMeta(id, engine) {
+  return {
+    id,
+    title: 'Fork source',
+    cwd: tempRoot,
+    unassigned: true,
+    model: 'fixture-model',
+    providerId: 'fixture-provider',
+    engine,
+    permissionMode: 'bypassPermissions',
+    status: 'idle',
+    costUsd: 0,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    contextTokens: 0,
+    createdAt: 1
   }
 }
 

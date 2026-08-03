@@ -1,0 +1,66 @@
+classDiagram
+    class TaskStrategyModule {
+        +VIEW_TOOLS: Set~string~
+        +PLAN_TOOLS: Set~string~
+        +DEFAULT_TASK_STRATEGY: TaskStrategy
+        +decideTaskStrategyTool(strategy, toolName, toolInput) TaskStrategyToolDecision
+        +derivePermissionModeFromStrategy(strategy, driveMode?) PermissionModeId
+        +migrateLegacyPermissionMode(oldMode, strategy) PermissionModeMigrationResult
+        +normalizeTaskStrategy(value) TaskStrategy
+        +taskStrategySystemPrompt(strategy) string
+    }
+
+    class SessionCreateLifecycle {
+        +resolveSessionDraftInput(opts, resumeHistory?, parentMeta?) SessionDraft
+        -createSessionDraftMeta(input) SessionMeta
+        -sessionTaskStrategy(opts, history?, parentMeta?) TaskStrategy
+    }
+
+    class SessionMeta {
+        +taskStrategy: TaskStrategy
+        +permissionMode: PermissionModeId
+        +driveMode: CaoGenDriveMode
+    }
+
+    class AgentSession {
+        -meta: SessionMeta
+        +setTaskStrategy(strategy) Promise~void~
+        +setPermissionMode(mode) Promise~void~
+        -invalidatePermissionSettlements(reason) Promise~void~
+    }
+
+    class NativeToolRuntime {
+        -meta: SessionMeta
+        +gateTool(name, input, toolUseId) GateDecision
+    }
+
+    class ClaudeTaskPreflight {
+        +claudePermissionPreflightDenial(input) Denial?
+    }
+
+    class CrossValidationRuntime {
+        -dependencies: CrossValidationDeps
+        +startReview(meta, validator, routePlan) void
+    }
+
+    class OpenaiTools {
+        +dispatchSubagents(input, options) Result
+        -permissionModeArg(value) PermissionModeId?
+    }
+
+    class SessionManager {
+        +dispatchSubagentTask(parent, task, input) Meta
+    }
+
+    TaskStrategyModule --> SessionMeta: derives permissionMode from taskStrategy
+    SessionCreateLifecycle --> TaskStrategyModule: calls derivePermissionModeFromStrategy
+    SessionCreateLifecycle --> SessionMeta: creates
+    AgentSession --> TaskStrategyModule: setTaskStrategy calls derive
+    AgentSession --> SessionMeta: owns
+    NativeToolRuntime --> TaskStrategyModule: calls decideTaskStrategyTool (preflight)
+    NativeToolRuntime --> SessionMeta: reads permissionMode (gate)
+    ClaudeTaskPreflight --> TaskStrategyModule: calls decideTaskStrategyTool
+    ClaudeTaskPreflight --> SessionMeta: reads permissionMode (via permissionPlanMode)
+    CrossValidationRuntime --> SessionCreateLifecycle: creates child session
+    OpenaiTools --> SessionManager: dispatches subagent tasks
+    SessionManager --> SessionCreateLifecycle: creates child sessions

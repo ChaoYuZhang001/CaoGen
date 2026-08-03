@@ -1,4 +1,9 @@
-import { decryptProviderToken, getProvider, providerCredentialHeaders } from '../providers'
+import {
+  decryptProviderToken,
+  getProvider,
+  providerAuthMode,
+  providerCredentialHeaders
+} from '../providers'
 import { getSettings } from '../settings'
 import type { OpenAIProtocol, TaskDagRole, TaskDecomposeInput } from '../../shared/types'
 import type { ModelDagDecomposer, ModelDagPayload, ModelDagTaskPayload } from './task-decomposer'
@@ -32,6 +37,15 @@ export interface ModelDagAttemptContext {
 export interface ModelDagRuntimeDependencies {
   fetch: typeof fetch
   attempt?: Partial<RuntimeModelAttemptDependencies>
+  preflight?: (input: ModelDagOutboundPreflightInput) => void | Promise<void>
+}
+
+export interface ModelDagOutboundPreflightInput {
+  url: string
+  providerId: string
+  model: string
+  protocol: OpenAIProtocol
+  body: Record<string, unknown>
 }
 
 const DEFAULT_RUNTIME_DEPENDENCIES: ModelDagRuntimeDependencies = { fetch }
@@ -82,7 +96,7 @@ function configFromInput(input: TaskDecomposeInput): ProviderModelConfig {
   const rawBaseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
   const baseUrl = protocol === 'chat' ? rawBaseUrl.replace(/\/anthropic$/, '') : rawBaseUrl
   const token = provider ? decryptProviderToken(provider) : process.env.OPENAI_API_KEY || ''
-  if (!token) {
+  if (!token && providerAuthMode(provider) !== 'none') {
     throw new Error(`${provider?.name ?? 'OpenAI'} 缺少 API Key,已回退本地 DAG 拆解`)
   }
   return {
@@ -209,6 +223,13 @@ async function fetchJson(
     controller.abort()
   }, MODEL_TIMEOUT_MS)
   try {
+    await runtime.preflight?.({
+      url,
+      providerId: config.providerId,
+      model: config.model,
+      protocol: config.protocol,
+      body
+    })
     const result = await executePersistedModelAttempt({
       ...attemptContext,
       providerId: config.providerId,

@@ -14,6 +14,30 @@ import { loadOfficeView, preloadOfficeView } from './components/office/loadOffic
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(loadOfficeView)
 
+function useMobileSidebar(): [boolean, () => void, () => void] {
+  const [open, setOpen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  const toggle = useCallback(() => setOpen((current) => !current), [])
+  return [open, close, toggle]
+}
+
+function useStudioPrewarm(visited: boolean, setVisited: (value: boolean) => void): void {
+  useEffect(() => {
+    if (visited) return
+    const frameId = window.requestAnimationFrame(() => setVisited(true))
+    return () => window.cancelAnimationFrame(frameId)
+  }, [setVisited, visited])
+}
+
+function useStudioVisited(experienceMode: 'assistant' | 'studio'): boolean {
+  const [visited, setVisited] = useState(experienceMode === 'studio')
+  useStudioPrewarm(visited, setVisited)
+  useEffect(() => {
+    if (experienceMode === 'studio') setVisited(true)
+  }, [experienceMode])
+  return visited
+}
+
 export default function App(): React.JSX.Element {
   const init = useStore((s) => s.init)
   const activeId = useStore((s) => s.activeId)
@@ -31,9 +55,8 @@ export default function App(): React.JSX.Element {
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
   const setExperienceMode = useStore((s) => s.setExperienceMode)
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const [studioVisited, setStudioVisited] = useState(experienceMode === 'studio')
-  const closeMobileSidebar = useCallback((): void => setMobileSidebarOpen(false), [])
+  const [mobileSidebarOpen, closeMobileSidebar, toggleMobileSidebar] = useMobileSidebar()
+  const studioVisited = useStudioVisited(experienceMode)
 
   useThemeEffect()
 
@@ -86,17 +109,13 @@ export default function App(): React.JSX.Element {
   useEffect(() => { preloadOfficeView() }, [])
 
   useEffect(() => {
-    if (experienceMode === 'studio') setStudioVisited(true)
-  }, [experienceMode])
-
-  useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
     return window.agentDesk.onMenuCommand(handleMenuCommand)
   }, [handleMenuCommand])
 
   useEffect(() => {
-    setMobileSidebarOpen(false)
-  }, [activeId, view])
+    closeMobileSidebar()
+  }, [activeId, closeMobileSidebar, view])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -161,7 +180,7 @@ export default function App(): React.JSX.Element {
           studioVisited={studioVisited}
           onCloseMobileSidebar={closeMobileSidebar}
           onExperienceModeChange={setExperienceMode}
-          onToggleMobileSidebar={() => setMobileSidebarOpen((open) => !open)}
+          onToggleMobileSidebar={toggleMobileSidebar}
         />
       )}
       {showCommandPalette && <CommandPalette />}

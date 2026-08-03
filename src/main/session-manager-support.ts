@@ -36,7 +36,11 @@ export interface SessionNotificationState {
   terminalNotified: boolean
 }
 
-export interface ManagedSessionCreationOptions { retainJournal?: boolean }
+export interface ManagedSessionCreationOptions {
+  retainJournal?: boolean
+  /** Durable owner binding that must commit before the engine can emit events. */
+  beforeStart?: (meta: Readonly<SessionMeta>) => Promise<void>
+}
 
 export function sendableSession(session: Engine | undefined): Engine | null {
   if (!session) return null
@@ -314,6 +318,11 @@ export function effectiveBudgetUsd(meta: SessionMeta): number {
 export function canTrackCost(meta: SessionMeta): boolean {
   // Anthropic Messages reports token usage but not monetary cost. Keep budget enforcement fail-closed.
   return meta.engine === 'openai'
+}
+
+/** Goal-level USD accounting requires provider-reported cost, not a fallback model estimate. */
+export function canEnforceGoalCostBudget(meta: SessionMeta): boolean {
+  return canTrackCost(meta)
 }
 
 export async function withSessionCreationJournalBarrier<T>(

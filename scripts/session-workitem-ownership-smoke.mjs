@@ -445,6 +445,11 @@ function assertSessionManagerRunGuard() {
     activationSource.includes('!ownership.workspaceId || claim.unassigned === true'),
     'activation gate must skip migration for unscoped and unassigned Sessions'
   )
+  assert(
+    activationSource.includes('createProjectWorkspaceCanonicalWriteBoundary') &&
+      activationSource.includes('withConsistentProjectionRead'),
+    'scoped Session activation must not observe the canonical-write migration-before-JSON window'
+  )
 }
 
 function assertCallOrder(source, startMarker, endMarker, markers, message) {

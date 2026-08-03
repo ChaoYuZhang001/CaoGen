@@ -23,6 +23,14 @@ publication preflight, and explicit owner authorization remain. The current sour
 also contains a later fixed-model/Drive correction, so this exact candidate is historical
 and must be regenerated before the latest source can be published.
 
+The platform policy remains separate from this Intel-only candidate: macOS can be
+described as formal only with Developer ID, notarization/stapling, Gatekeeper and native
+launch evidence. Any Windows distribution must be an explicitly labeled `unsigned
+preview`, omit stable update metadata, and pass native x64 install/launch/uninstall
+checks. Preview evidence never closes the 12-asset formal matrix or `packaging_release`;
+formal cross-platform Release Doctor remains `not_ready` until Windows Authenticode and
+the remaining native platform evidence exist.
+
 ## Candidate Highlights
 
 - Preserve the Quick Start prompt, project, directory, Drive mode, permission,
@@ -72,6 +80,9 @@ SHA256 digest.
 
 Public update metadata such as `latest*.yml` must match the exact installer set and
 must not advertise Apple Silicon or Windows artifacts that are outside this scope.
+Test reports, local evidence, and intermediate build directories are never release
+assets. A separately authorized Windows unsigned preview must not include Windows
+stable update metadata.
 
 ## Truth Boundary
 
@@ -121,6 +132,9 @@ must not advertise Apple Silicon or Windows artifacts that are outside this scop
 - Apple Silicon and Windows are paused. Skipped jobs must remain skips, not passes.
 - Do not publish while any required scoped gate fails or the owner has not explicitly
   authorized the exact tag and GitHub Release operation.
+- The current 3D office uses robot assets; richer character art remains roadmap work.
+- Any later Windows preview remains a separate unsigned channel and cannot satisfy the
+  formal cross-platform gate or change Release Doctor from `not_ready`.
 
 ## Security Statement
 
@@ -140,6 +154,13 @@ drag CaoGen to Applications, and launch it normally without bypass commands. Unt
 then, v0.1.7 remains the latest public release and no 0.1.8 first-open behavior is
 claimed.
 
+## Windows Preview Install
+
+The Windows artifact is an `unsigned preview`, not a formally signed Windows release.
+Microsoft Defender SmartScreen may show an unrecognized-app prompt. Final notes must
+describe the exact observed Windows x64 install flow and must not call the preview
+trusted, signed, stable, or formally cross-platform ready.
+
 ## Final Required Checks
 
 - `npm run test:release-workflow-contract`
@@ -157,3 +178,20 @@ claimed.
 - `npm run test:macos-release-audit:required -- --arch x64`
 - `npm run test:packaged-app:mac:x64`
 - final scoped notes and public asset audits after a separate publication decision
+
+For any separately authorized Windows preview outside this Intel candidate:
+
+- `npm run dist:win:preview:x64` on native Windows x64
+- `npm run test:windows-preview-audit:required -- --arch x64`
+- `npm run test:packaged-app:win:preview:x64`
+- verify filename, asset label, download copy, and notes all say `unsigned preview`
+- verify the preview does not include `latest.yml` or enter the stable update channel
+- refresh Release Doctor and retain the expected formal `not_ready` state
+
+The following remain future formal cross-platform checks and are deliberately blocked:
+
+- `npm run dist:win:release:x64` with a valid Authenticode identity on native Windows x64
+- `npm run test:windows-release-audit:required -- --arch x64`
+- `npm run test:packaged-app:win:x64`
+- `npm run test:release-packaging-audit:required`
+- `npm run workos:release-doctor -- --required --refresh --version 0.1.8`

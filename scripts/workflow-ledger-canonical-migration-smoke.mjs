@@ -39,7 +39,7 @@ try {
     locateFile: (file) => file.endsWith('.wasm') ? require.resolve('sql.js/dist/sql-wasm.wasm') : file
   })
 
-  await healthyV8IsReadOnly()
+  await healthyV9IsReadOnly()
   await singleFlightAndAdditiveRepair()
   await workflowEvidenceTableAdditiveRepair()
   await canonicalSupersetV8UpgradesToV9()
@@ -60,23 +60,23 @@ try {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
-async function healthyV8IsReadOnly() {
-  const fixture = await seedStore('healthy-v8', { projectId: 'project-healthy' })
+async function healthyV9IsReadOnly() {
+  const fixture = await seedStore('healthy-v9', { projectId: 'project-healthy' })
   const before = readFileSync(fixture.databasePath)
   const backupRoot = path.join(fixture.root, 'backups')
   let builds = 0
   const result = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, async () => {
     builds += 1
-    throw new Error('healthy v8 must not invoke candidate builder')
+    throw new Error('healthy v9 must not invoke candidate builder')
   }, { backupsRoot: backupRoot }))
-  assertEqual(result.disposition, 'ready_existing_v8', 'healthy v8 should be directly ready')
-  assertEqual(builds, 0, 'healthy v8 builder count')
-  assertEqual(Buffer.compare(before, readFileSync(fixture.databasePath)), 0, 'healthy v8 bytes unchanged')
-  assert(!existsSync(backupRoot), 'healthy v8 must not create a backup directory')
+  assertEqual(result.disposition, 'ready_existing_current', 'healthy current store should be directly ready')
+  assertEqual(builds, 0, 'healthy v9 builder count')
+  assertEqual(Buffer.compare(before, readFileSync(fixture.databasePath)), 0, 'healthy v9 bytes unchanged')
+  assert(!existsSync(backupRoot), 'healthy v9 must not create a backup directory')
   const report = await migration.assessWorkflowLedgerCanonicalReadinessFile(fixture.databasePath, { assessedAt: 42 })
   assertEqual(report.status, 'ready', 'healthy readiness status')
   assertEqual(report.counts.dagFinalizations, 0, 'healthy finalizer count')
-  console.log('[PASS] healthy v8 direct readiness is read-only')
+  console.log('[PASS] healthy v9 direct readiness is read-only')
 }
 
 async function singleFlightAndAdditiveRepair() {
@@ -94,10 +94,10 @@ async function singleFlightAndAdditiveRepair() {
     migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, builder))
   ])
   assertEqual(builds, 1, 'single-flight must invoke candidate builder once')
-  assertEqual(results[0].disposition, 'migrated', 'additive v8 should migrate')
+  assertEqual(results[0].disposition, 'migrated', 'additive current store should migrate')
   assertEqual(results[1].migration.journal.state, 'committed', 'single-flight journal must commit')
   assert(existsSync(fixture.databasePath), 'migrated target must remain')
-  console.log('[PASS] v8 additive repair and process single-flight')
+  console.log('[PASS] current-store additive repair and process single-flight')
 }
 
 async function workflowEvidenceTableAdditiveRepair() {
@@ -128,6 +128,7 @@ async function workflowEvidenceTableAdditiveRepair() {
 async function canonicalSupersetV8UpgradesToV9() {
   const fixture = await seedStore('canonical-superset-v8', { projectId: 'project-canonical-upgrade' })
   mutateDb(fixture.databasePath, (db) => {
+    db.run('PRAGMA user_version = 8')
     db.run('DELETE FROM task_snapshots')
     db.run('DELETE FROM task_runs')
     db.run('DROP TABLE workflow_store_identity')
@@ -178,6 +179,7 @@ async function canonicalSupersetV8UpgradesToV9() {
 
   const lossy = await seedStore('canonical-superset-lossy', { projectId: 'project-canonical-lossy' })
   mutateDb(lossy.databasePath, (db) => {
+    db.run('PRAGMA user_version = 8')
     db.run('DELETE FROM task_snapshots')
     db.run('DELETE FROM task_runs')
     db.run('DROP TABLE workflow_store_identity')
@@ -210,7 +212,7 @@ async function committedTargetIdentityContinuity() {
   const committed = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, buildCandidate))
   assertEqual(committed.migration.journal.state, 'committed', 'identity fixture migration must commit')
 
-  const replacementRoot = path.join(tempRoot, 'replacement-empty-v8')
+  const replacementRoot = path.join(tempRoot, 'replacement-empty-v9')
   mkdirSync(replacementRoot, { recursive: true })
   await snapshotStore.mutateTaskSnapshotDatabase(replacementRoot, () => undefined)
   const replacement = readFileSync(snapshotStore.taskSnapshotsDbFile(replacementRoot))
@@ -221,7 +223,7 @@ async function committedTargetIdentityContinuity() {
       throw new Error('same-version replacement must fail before candidate build')
     })),
     (error) => error?.code === 'COMMITTED_TARGET_IDENTITY_MISMATCH',
-    'same-version valid empty v8 replacement must fail store identity continuity'
+    'same-version valid empty v9 replacement must fail store identity continuity'
   )
   console.log('[PASS] committed target rejects same-version valid empty store replacement')
 }
@@ -230,8 +232,15 @@ async function committedCanonicalSupersetV8UpgradesToV9() {
   const fixture = await seedStore('committed-canonical-superset-v8', {
     projectId: 'project-committed-canonical-upgrade'
   })
-  mutateDb(fixture.databasePath, (db) => db.run('DROP TABLE workflow_artifact_locations'))
-  const v8 = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, buildCandidate))
+  mutateDb(fixture.databasePath, (db) => {
+    db.run('PRAGMA user_version = 8')
+    db.run('DROP TABLE workflow_artifact_locations')
+  })
+  const v8 = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(
+    fixture,
+    (source) => buildVersionedCandidate(source, 8),
+    { supportedStoreVersion: 9, targetStoreVersion: 8 }
+  ))
   assertEqual(v8.migration.journal.toVersion, 8, 'canonical-superset fixture must retain a committed v8 anchor')
 
   const canonicalOnly = await makeSnapshot(
@@ -300,7 +309,7 @@ async function futureAndCorruptionFailClosed() {
   const compat = await migration.assessWorkflowLedgerCanonicalReadinessFile(snapshotOnly.databasePath, { assessedAt: 44 })
   assert(compat.diagnostics.some((item) => item.code === 'legacy_snapshot_without_run'), 'Snapshot compatibility diagnostic')
   assertEqual(compat.status, 'ready', 'Snapshot compatibility is not corruption')
-  assertEqual(compat.readyForCanonicalRead, true, 'v8 recovery projection makes Snapshot compatibility canonical-ready')
+  assertEqual(compat.readyForCanonicalRead, true, 'v9 recovery projection makes Snapshot compatibility canonical-ready')
   console.log('[PASS] future/corrupt/active gates and compatibility diagnostics')
 }
 
@@ -555,7 +564,7 @@ async function faultCheckpointsResume() {
     )
     migration.clearWorkflowLedgerMigrationSingleFlightForTests()
     const resumed = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, builder))
-    assert(['migrated', 'ready_existing_v8'].includes(resumed.disposition), `${checkpoint} should resume`)
+    assert(['migrated', 'ready_existing_current'].includes(resumed.disposition), `${checkpoint} should resume`)
     if (checkpoint === 'after_migrated_verified' || checkpoint === 'before_source_rename' || checkpoint === 'after_source_rename') {
       assertEqual(builds, 1, `${checkpoint} must reuse durable candidate bytes`)
     }
@@ -679,8 +688,8 @@ function optionsFor(fixture, builder, overrides = {}) {
   return {
     databasePath: fixture.databasePath,
     legacyJsonPath: fixture.legacyPath ?? path.join(fixture.root, 'task-snapshots.json'),
-    supportedStoreVersion: 8,
-    targetStoreVersion: 8,
+    supportedStoreVersion: 9,
+    targetStoreVersion: 9,
     backupsRoot: fixture.backupsRoot ?? path.join(fixture.root, 'backups'),
     buildCandidate: builder,
     now: () => 1000,

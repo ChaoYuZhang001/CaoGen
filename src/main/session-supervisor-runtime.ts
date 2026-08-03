@@ -10,8 +10,12 @@ import {
   type SupervisorSessionControlRequest,
   type SupervisorSessionControlResult
 } from './task/supervisor-session-control'
+import {
+  ensureSupervisorRunBinding,
+  reserveSupervisorRunForSend
+} from './task/supervisor-taskrun-bridge'
 import { SupervisorStateError, SupervisorStateStore } from './task/supervisor-state'
-import { buildTaskSnapshotReplayPrompts } from './session-manager-support'
+import { buildTaskSnapshotReplayPrompts, canEnforceGoalCostBudget } from './session-manager-support'
 import type {
   AgentEvent,
   TaskRunRecord,
@@ -49,11 +53,13 @@ export class SessionSupervisorRuntime {
       sessionId: string,
       prompts: readonly string[],
       options: TaskSnapshotReplaySendOptions
-    ) => boolean,
+    ) => Promise<boolean>,
     private readonly interruptSession: (id: string) => Promise<void>,
     private readonly flushWorkflow: (id: string) => Promise<void>,
     private readonly writeSnapshot: SnapshotWriter
   ) {}
+
+  private readonly observationTasks = new Map<string, Promise<void>>()
 
   blocksSend(
     sessionId: string,
@@ -80,6 +86,88 @@ export class SessionSupervisorRuntime {
     this.pauseIntents.clear()
     this.runSendGates.clear()
     this.sessionSendGates.clear()
+    this.observationTasks.clear()
+  }
+
+  async authorizeSend(
+    session: Engine,
+    run: TaskRunRecord,
+    options: { supervisorControlReplay?: boolean } = {}
+  ): Promise<void> {
+    await this.observationTasks.get(session.meta.id)
+    if (
+      options.supervisorControlReplay !== true &&
+      (this.sessionSendGates.has(session.meta.id) || this.runSendGates.has(run.id))
+    ) {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${run.id} is closed by a Supervisor accounting or control gate`
+      )
+    }
+    const store = this.getStateStore()
+    const supervisorRun = await reserveSupervisorRunForSend(session.meta, run, {
+      rootDir: this.rootDir(),
+      store,
+      accountingBase: sessionAccountingBase(session),
+      costBudgetEnforceable: canEnforceGoalCostBudget(session.meta)
+    })
+    if (supervisorRun) await store.authorizeTurn(supervisorRun.id)
+  }
+
+  observeAfterEvent(
+    session: Engine,
+    run: TaskRunRecord,
+    sourceEventId: string,
+    turnCompleted: boolean
+  ): void {
+    if (!session.meta.workspaceId && !session.meta.workItemId && !session.meta.goalId) return
+    const previous = this.observationTasks.get(session.meta.id) ?? Promise.resolve()
+    const next = previous
+      .then(async () => {
+        await this.writeSnapshot(
+          session.meta.id,
+          'important-event',
+          0,
+          run.lastEventKind,
+          sourceEventId,
+          true
+        )
+        const store = this.getStateStore()
+        const binding = await ensureSupervisorRunBinding(session.meta, run, {
+          rootDir: this.rootDir(),
+          store,
+          accountingBase: sessionAccountingBase(session)
+        })
+        if (!binding.supervisorRun) return
+        await store.observeRun(binding.supervisorRun.id, {
+          taskRunStatus: run.status,
+          sourceEventId,
+          usage: { ...session.meta.usage },
+          costUsd: session.meta.costUsd,
+          turnCompleted
+        }, { actorId: 'session-runtime' })
+      })
+      .catch((error) => {
+        this.runSendGates.add(run.id)
+        this.sessionSendGates.add(session.meta.id)
+        console.error(`[caogen] Supervisor accounting failed for run ${run.id}:`, error)
+      })
+    this.observationTasks.set(session.meta.id, next)
+    void next.finally(() => {
+      if (this.observationTasks.get(session.meta.id) === next) {
+        this.observationTasks.delete(session.meta.id)
+      }
+    })
+  }
+
+  async settleAcceptedSend(sessionId: string): Promise<void> {
+    await this.observationTasks.get(sessionId)
+  }
+
+  async settleAllObservations(): Promise<void> {
+    while (this.observationTasks.size > 0) {
+      await Promise.all([...this.observationTasks.values()])
+    }
   }
 
   async hydrateSendGate(run: TaskRunRecord | undefined): Promise<void> {
@@ -102,6 +190,19 @@ export class SessionSupervisorRuntime {
     }
   }
 
+  async recoverStartupState(runs: readonly TaskRunRecord[]): Promise<{
+    expiredRunIds: string[]
+    blockedRunIds: string[]
+    orphanedRunIds: string[]
+  }> {
+    const store = this.getStateStore()
+    const expired = await store.recoverExpiredLeases()
+    const orphanedRunIds = await store.recoverOrphanedTaskRunReservations(
+      new Set(runs.map((run) => run.id))
+    )
+    return { ...expired, orphanedRunIds }
+  }
+
   control(
     store: SupervisorStateStore,
     request: SupervisorSessionControlRequest
@@ -119,7 +220,8 @@ export class SessionSupervisorRuntime {
           this.setSendGate(binding, true)
         }
       },
-      completed: (completedRequest, binding) => {
+      completed: async (completedRequest, binding) => {
+        await this.observationTasks.get(binding.taskRun.sessionId)
         if (completedRequest.action === 'resume' || completedRequest.action === 'cancel') {
           this.setSendGate(binding, false)
         }
@@ -143,6 +245,7 @@ export class SessionSupervisorRuntime {
     request: SupervisorSessionControlRequest,
     binding: SupervisorSessionControlBinding
   ): Promise<void> {
+    await this.observationTasks.get(binding.taskRun.sessionId)
     if (request.action !== 'retry' && request.action !== 'resume') return
     const { taskRun } = this.assertRuntimeBinding(binding)
     const workerPolicyError = digitalWorkerSupervisorPolicyError({
@@ -239,7 +342,7 @@ export class SessionSupervisorRuntime {
     if (prompts.length === 0) {
       throw new SupervisorStateError('invalid_transition', `run ${taskRun.id} has no durable replay request`)
     }
-    const accepted = this.replaySnapshot(taskRun.sessionId, prompts, {
+    const accepted = await this.replaySnapshot(taskRun.sessionId, prompts, {
       modelAttemptRecoveryReplay: true,
       supervisorControlReplay: true
     })
@@ -299,6 +402,16 @@ export class SessionSupervisorRuntime {
       )
     }
     return snapshot
+  }
+}
+
+function sessionAccountingBase(session: Engine): {
+  usage: Engine['meta']['usage']
+  costUsd: number
+} {
+  return {
+    usage: { ...session.meta.usage },
+    costUsd: session.meta.costUsd
   }
 }
 

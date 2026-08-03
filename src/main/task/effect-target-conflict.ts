@@ -3,6 +3,8 @@ import type { EffectTarget, FileSystemIdentity } from '../../shared/types'
 import { effectTargetsShareFile } from './effect-target-overlap'
 
 type FileContentTarget = Extract<EffectTarget, { kind: 'file_content' }>
+type OfficeArtifactTarget = Extract<EffectTarget, { kind: 'office_artifact' }>
+type OutputFileTarget = FileContentTarget | OfficeArtifactTarget
 type GitCommitTarget = Extract<EffectTarget, { kind: 'git_commit' }>
 type GitIndexTarget = Extract<EffectTarget, { kind: 'git_index_update' }>
 type GitMergeTarget = Extract<EffectTarget, { kind: 'git_merge' }>
@@ -41,7 +43,7 @@ function opaqueFileTargetsConflict(left: EffectTarget, right: EffectTarget): boo
 }
 
 function isFileEdit(target: EffectTarget): boolean {
-  return target.kind === 'file_content' || isOpaqueFileEdit(target)
+  return target.kind === 'file_content' || target.kind === 'office_artifact' || isOpaqueFileEdit(target)
 }
 
 function isOpaqueFileEdit(target: EffectTarget): boolean {
@@ -56,7 +58,7 @@ function gitIndexTargetConflicts(index: GitIndexTarget, other: EffectTarget): bo
   if (other.kind === 'git_index_update') return sameIndexWorktree(index, other)
   if (other.kind === 'git_commit') return sameCommitWorktree(index, other)
   if (other.kind === 'git_merge') return sameMergeWorktree(index, other)
-  if (other.kind === 'file_content') return indexReadsFile(index, other)
+  if (other.kind === 'file_content' || other.kind === 'office_artifact') return indexReadsFile(index, other)
   if (other.kind === 'worktree_patch_apply') return indexReadsPatchPaths(index, other)
   if (isWorktreeLifecycleTarget(other)) return worktreeLifecycleConflicts(other, index)
   return false
@@ -71,10 +73,10 @@ function worktreeLifecycleConflicts(lifecycle: WorktreeLifecycleTarget, other: E
   if (other.kind === 'git_commit' || other.kind === 'git_merge') {
     return paths.includes(resolve(other.repoRoot))
   }
-  if (other.kind === 'file_content') {
+  if (other.kind === 'file_content' || other.kind === 'office_artifact') {
     return pathIsInside(lifecycle.worktreePath, resolve(other.rootPath, other.relativePath))
   }
-  if (other.kind === 'git_push' || other.kind === 'pull_request_create') {
+  if (other.kind === 'git_push' || other.kind === 'pull_request_create' || other.kind === 'issue_create') {
     return paths.includes(resolve(other.repoRoot))
   }
   if (other.kind === 'worktree_patch_apply') {
@@ -173,7 +175,7 @@ function sameMergeWorktree(index: GitIndexTarget, merge: GitMergeTarget): boolea
   )
 }
 
-function indexReadsFile(index: GitIndexTarget, file: FileContentTarget): boolean {
+function indexReadsFile(index: GitIndexTarget, file: OutputFileTarget): boolean {
   const relativePath = relativeGitPath(index.repoRoot, resolve(file.rootPath, file.relativePath))
   return relativePath !== undefined && indexReadsPath(index, relativePath)
 }

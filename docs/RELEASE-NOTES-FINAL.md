@@ -1,11 +1,16 @@
-# CaoGen v0.1.8 Release Notes
+# CaoGen v0.1.8 Historical Candidate Notes
+
+> Status: do not publish. v0.1.7 remains the latest public release; the v0.1.8 assets
+> recorded here are private historical candidate evidence for exact commit `03c3fee2`,
+> not an authorized or current release.
 
 ## Release Decision
 
-v0.1.8 is the selected signed and notarized macOS Intel x64 patch release. The five
-assets below are the complete upload set for this version on GitHub Releases. This is
-a truthful 0.1.x delivery of verified onboarding, recovery, and send-reliability fixes,
-not a claim that the full CaoGen 1.0 vision is complete.
+Exact commit `03c3fee2` produced a signed and notarized macOS Intel x64 patch candidate.
+The five assets below are the complete private candidate set for that commit; they have
+not been authorized or uploaded as a v0.1.8 GitHub Release and do not represent the
+current source successor. The evidence is not a claim that the full CaoGen 1.0 vision
+is complete.
 
 ## Highlights
 
@@ -24,8 +29,15 @@ not a claim that the full CaoGen 1.0 vision is complete.
   unavailable states cannot send, and failures no longer appear as success.
 - Continue using OpenAI-compatible HTTP APIs and native Anthropic Messages HTTP APIs
   without embedding or requiring an external Agent SDK, CLI login, or CLI runtime.
+- Creating a session no longer requires selecting a project; those sessions remain available in the dedicated "Chats" collection.
+- Deleting the last session returns to a usable empty state, and a newly created session accepts input immediately.
+- Projects can be archived, restored, and deleted from the project collection.
+- New-session actions from the 3D office and project/session navigation now share the same creation path.
+- Start suggestions remain closed when a session becomes active and load only after an explicit user action.
+- Provider settings use a full-page workspace, and sessions support fixed Provider/model, automatic routing inside one Provider, or automatic routing across configured Providers.
+- The packaged app now declares the `tree-sitter` runtime loader directly. Packaging fails if `node-gyp-build` is absent from `app.asar`, and the release gate launches the packaged app from a fresh user-data directory before publication.
 
-## Uploaded Assets
+## Historical Candidate Assets (Not Uploaded)
 
 - `CaoGen-0.1.8.dmg`
 - `CaoGen-0.1.8.dmg.blockmap`
@@ -33,8 +45,9 @@ not a claim that the full CaoGen 1.0 vision is complete.
 - `CaoGen-0.1.8-mac.zip.blockmap`
 - `latest-mac.yml`
 
-The `latest*.yml` metadata and the four installer/update files above are the only public
-release assets for v0.1.8. Local build output and evidence directories are excluded.
+The `latest*.yml` metadata and four installer/update files above are the complete private
+candidate set for `03c3fee2`; no public v0.1.8 asset set exists. Local build output and
+evidence directories remain excluded from any future public upload.
 
 ### SHA256
 
@@ -61,18 +74,22 @@ release assets for v0.1.8. Local build output and evidence directories are exclu
 - Multiple encrypted keys and error-driven same-provider failover are verified. Proactive
   quota probing, weighted key load balancing, and universal cross-provider continuity are
   not claimed.
-- This release contains macOS Intel x64 assets only. Apple Silicon, Windows, Linux, full
-  1.0 product acceptance, and the private 30-minute migration drill are outside this
-  release claim.
+- This historical candidate contains macOS Intel x64 assets only. Apple Silicon,
+  Windows, Linux, full 1.0 product acceptance, and the private 30-minute migration
+  drill are outside its evidence scope.
 - The application bundles inside both DMG and ZIP are Developer ID signed, notarized,
   accepted by Gatekeeper, and carry valid application tickets. The DMG file itself is not
   claimed to carry a stapled ticket.
 - AGPL-compliant commercial use does not require a separate license. Proprietary
   integration or distribution rights require a signed written commercial agreement.
 
-## Known Blockers
+## Publication Blockers
 
-- No Apple Silicon, Windows, or Linux installer is included in v0.1.8.
+- Current source has moved beyond `03c3fee2`; a refreshed clean candidate, independent
+  verification, scoped publication preflight, final notes, and explicit owner approval
+  are required before any v0.1.8 publication.
+- No public v0.1.8 Release or asset set exists, and no Apple Silicon, Windows, or Linux
+  installer is included in this historical candidate.
 - External provider connectivity still depends on the user's network, credentials,
   provider account, quota, and service compatibility.
 - The full 1.0 acceptance matrix remains open; v0.1.8 does not represent 1.0 stable.
@@ -90,9 +107,9 @@ insufficient; the credential must also be rotated or revoked at its provider.
 
 ## macOS First Open
 
-Open `CaoGen-0.1.8.dmg`, drag CaoGen to Applications, and launch it normally. The app is
-Developer ID signed and notarized for macOS Intel x64. Download only from the official
-GitHub Releases page and verify the SHA256 value above.
+No public v0.1.8 package is available. The recorded private candidate app is Developer
+ID signed and notarized for macOS Intel x64, but it must not be presented as the current
+download or installed from an unofficial public location.
 
 ## Verification
 

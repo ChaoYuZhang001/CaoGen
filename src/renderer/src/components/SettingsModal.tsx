@@ -9,7 +9,6 @@ import type {
   CaoGenDriveMode,
   EngineInfo,
   McpProbeResult,
-  MigrationScan,
   ModelRoutingRule,
   ModelRoutingTaskKind,
   OfficeQualityMode,
@@ -26,7 +25,9 @@ import ControlCenter from './ControlCenterWithWorkflow'
 import ProviderList from './settings/ProviderList'
 import { useProviderRecoverySettings } from './settings/useProviderRecoverySettings'
 import ProjectSettings from '../pages/ProjectSettings'
+import MigrationManager from './settings/MigrationManager'
 import { requireMcpProbeResults } from '../store/task-recovery-actions'
+import NotificationConnectorManager from './settings/NotificationConnectorManager'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -106,7 +107,8 @@ export default function SettingsPage(): React.JSX.Element {
   const refreshProviders = useStore((s) => s.refreshProviders)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const { closeEditor, editing, setEditing } = useProviderRecoverySettings(providers)
-  const [tab, setTab] = useState<SettingsTab>(() => useStore.getState().settingsTab)
+  const settingsTab = useStore((s) => s.settingsTab)
+  const [tab, setTab] = useState<SettingsTab>(() => settingsTab)
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
@@ -121,15 +123,9 @@ export default function SettingsPage(): React.JSX.Element {
   const [controlError, setControlError] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
-  // 迁移向导状态
   const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const activeId = useStore((s) => s.activeId)
   const projects = useStore((s) => s.projects)
-  const [migrateDir, setMigrateDir] = useState('')
-  const [scan, setScan] = useState<MigrationScan | null>(null)
-  const [picked, setPicked] = useState<Set<string>>(new Set())
-  const [migrateBusy, setMigrateBusy] = useState(false)
-  const [migrateResult, setMigrateResult] = useState('')
   const selectedDrive = DRIVE_MODE_OPTIONS.find((option) => option.value === draft.driveMode) ?? DRIVE_MODE_OPTIONS[1]
   const draftOffice = draft.office ?? DEFAULT_OFFICE_SETTINGS
   const activeSessions = useMemo<SessionMeta[]>(
@@ -145,6 +141,10 @@ export default function SettingsPage(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (settingsTab) setTab(settingsTab)
+  }, [settingsTab])
+
+  useEffect(() => {
     if (tab === 'control') void refreshControlCenter()
   }, [tab, activeId])
 
@@ -153,54 +153,6 @@ export default function SettingsPage(): React.JSX.Element {
       ?.querySelector<HTMLElement>(`[data-settings-tab="${tab}"]`)
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [tab])
-
-  // 打开迁移页时,默认用当前会话 cwd 或最近项目
-  useEffect(() => {
-    if (tab === 'migrate' && !migrateDir) {
-      const dir = activeSession?.meta.cwd ?? projects[0]?.path ?? ''
-      if (dir) setMigrateDir(dir)
-    }
-  }, [tab, migrateDir, activeSession, projects])
-
-  const runScan = async (dir: string): Promise<void> => {
-    if (!dir.trim()) return
-    setMigrateBusy(true)
-    setMigrateResult('')
-    try {
-      const result = await window.agentDesk.scanMigration(dir.trim())
-      setScan(result)
-      setPicked(new Set(result.assets.map((a) => a.path))) // 默认全选
-    } catch (err) {
-      setMigrateResult(err instanceof Error ? err.message : String(err))
-      setScan(null)
-    } finally {
-      setMigrateBusy(false)
-    }
-  }
-
-  const runImport = async (): Promise<void> => {
-    if (!scan || picked.size === 0) return
-    setMigrateBusy(true)
-    try {
-      const result = await window.agentDesk.importMigrationAssets(scan.cwd, [...picked])
-      if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
-      if (result.ok) await runScan(scan.cwd) // 重扫,已导入项在下次导入时自动跳过
-      setMigrateResult(result.ok ? (result.summary ?? '导入完成') : (result.error ?? '导入失败'))
-    } catch (err) {
-      setMigrateResult(err instanceof Error ? err.message : String(err))
-    } finally {
-      setMigrateBusy(false)
-    }
-  }
-
-  const togglePick = (path: string): void => {
-    setPicked((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
 
   const set = <K extends keyof typeof draft>(key: K, val: (typeof draft)[K]): void =>
     setDraft((d) => ({ ...d, [key]: val }))
@@ -247,11 +199,17 @@ export default function SettingsPage(): React.JSX.Element {
       modelRoutingRules: (d.modelRoutingRules ?? []).filter((rule) => rule.id !== id)
     }))
 
+  const closeSettings = (): void => {
+    void refreshProviders().catch(() => undefined)
+    setShowSettings(false)
+  }
+
   const save = async (): Promise<void> => {
     setSaving(true)
     setSaveError('')
     try {
       await updateSettings(draft)
+      await refreshProviders()
       setShowSettings(false)
     } catch {
       setSaveError(t('settingsSaveFailed'))
@@ -357,6 +315,7 @@ export default function SettingsPage(): React.JSX.Element {
     { id: 'persona', label: t('tabPersona') },
     { id: 'office', label: t('tabOffice') },
     { id: 'providers', label: t('tabProviders') },
+    { id: 'notifications', label: t('tabNotifications') },
     { id: 'plugins', label: t('tabPlugins') },
     { id: 'migrate', label: t('tabMigrate') }
   ]
@@ -369,7 +328,7 @@ export default function SettingsPage(): React.JSX.Element {
           className="settings-page-back no-drag"
           aria-label={t('backToWorkspace')}
           title={t('backToWorkspace')}
-          onClick={() => setShowSettings(false)}
+          onClick={closeSettings}
         >
           ←
         </button>
@@ -468,6 +427,7 @@ export default function SettingsPage(): React.JSX.Element {
                 <p className="settings-hint">
                   {selectedDrive.summary} · ${selectedDrive.budgetUsd}/session · {selectedDrive.toolPolicySummary}
                 </p>
+                <p className="settings-hint">{t('driveModeOrthogonalHint')}</p>
 
                 <label className="field-label">{t('defaultProvider')}</label>
                 <select
@@ -1257,6 +1217,8 @@ export default function SettingsPage(): React.JSX.Element {
               />
             )}
 
+            {tab === 'notifications' && <NotificationConnectorManager />}
+
             {tab === 'plugins' && (
               <>
                 <h3 className="settings-h3">{t('tabPlugins')}</h3>
@@ -1270,77 +1232,7 @@ export default function SettingsPage(): React.JSX.Element {
             )}
 
             {tab === 'migrate' && (
-              <>
-                <h3 className="settings-h3">{t('migrateTitle')}</h3>
-                <p className="settings-hint">{t('migrateHint')}</p>
-
-                <label className="field-label">{t('projectDir')}</label>
-                <div className="field-row">
-                  <input
-                    className="input"
-                    value={migrateDir}
-                    placeholder="/path/to/project"
-                    onChange={(e) => setMigrateDir(e.target.value)}
-                  />
-                  <button
-                    className="btn btn-ghost"
-                    disabled={migrateBusy || !migrateDir.trim()}
-                    onClick={() => void runScan(migrateDir)}
-                  >
-                    {migrateBusy ? t('migrateScanning') : t('migrateScan')}
-                  </button>
-                </div>
-
-                {scan && (
-                  <>
-                    {scan.claudeNative && (
-                      <p className="settings-hint">✓ {t('migrateClaudeNative')}</p>
-                    )}
-                    {scan.assets.length === 0 ? (
-                      <div className="provider-empty">{t('migrateNothing')}</div>
-                    ) : (
-                      <div className="provider-list">
-                        {scan.assets.map((a) => (
-                          <label key={a.path} className="provider-row migrate-row" title={a.preview}>
-                            <input
-                              type="checkbox"
-                              checked={picked.has(a.path)}
-                              onChange={() => togglePick(a.path)}
-                            />
-                            <div className="provider-row-body">
-                              <div className="provider-row-name">
-                                {a.agent} · {a.name}
-                                <span className="migrate-kind">
-                                  {a.kind === 'rules'
-                                    ? t('migrateKindRules')
-                                    : a.kind === 'mcp'
-                                      ? 'MCP'
-                                      : t('migrateKindConfig')}
-                                </span>
-                              </div>
-                              <div className="provider-row-sub">{a.path}</div>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                    {scan.assets.length > 0 && (
-                      <button
-                        className="btn btn-primary"
-                        disabled={migrateBusy || picked.size === 0}
-                        onClick={() => void runImport()}
-                      >
-                        {migrateBusy
-                          ? t('migrateImporting')
-                          : t('migrateImport', { n: picked.size })}
-                      </button>
-                    )}
-                  </>
-                )}
-                {migrateResult && (
-                  <div className="notice notice-info migrate-result">{migrateResult}</div>
-                )}
-              </>
+              <MigrationManager defaultDirectory={activeSession?.meta.cwd ?? projects[0]?.path} />
             )}
               </>
             )}
@@ -1354,7 +1246,7 @@ export default function SettingsPage(): React.JSX.Element {
               {saveError}
             </div>
           )}
-          <button className="btn btn-ghost" disabled={saving} onClick={() => setShowSettings(false)}>
+          <button className="btn btn-ghost" disabled={saving} onClick={closeSettings}>
             {t('cancel')}
           </button>
           <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>

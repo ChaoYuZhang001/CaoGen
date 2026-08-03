@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 const IGNORE_DIRS = new Set([
   'node_modules',
@@ -74,23 +74,32 @@ const MAX_FILE_CHARS = 40_000
  */
 export function readReferencedFiles(cwd: string, relPaths: string[]): string {
   if (relPaths.length === 0) return ''
+  let canonicalRoot: string
+  try {
+    canonicalRoot = realpathSync(cwd)
+    if (!lstatSync(canonicalRoot).isDirectory()) return ''
+  } catch {
+    return ''
+  }
   const blocks: string[] = []
   const seen = new Set<string>()
   for (const rel of relPaths) {
-    if (seen.has(rel)) continue
-    seen.add(rel)
-    const full = join(cwd, rel)
-    // 防目录穿越:必须仍在 cwd 内
-    if (!full.startsWith(cwd)) continue
     try {
-      if (!statSync(full).isFile()) continue
-      let text = readFileSync(full, 'utf8')
+      const requested = resolve(canonicalRoot, rel)
+      if (lstatSync(requested).isSymbolicLink()) continue
+      const canonical = realpathSync(requested)
+      const child = relative(canonicalRoot, canonical)
+      if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) continue
+      if (seen.has(canonical) || !lstatSync(canonical).isFile()) continue
+      seen.add(canonical)
+      let text = readFileSync(canonical, 'utf8')
       let note = ''
       if (text.length > MAX_FILE_CHARS) {
         text = text.slice(0, MAX_FILE_CHARS)
         note = `\n… [截断,文件更长]`
       }
-      blocks.push(`===== ${rel} =====\n${text}${note}`)
+      const displayPath = child.split(sep).join('/')
+      blocks.push(`===== ${displayPath} =====\n${text}${note}`)
     } catch {
       // 读不了就跳过
     }

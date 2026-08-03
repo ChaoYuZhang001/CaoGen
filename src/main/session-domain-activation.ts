@@ -5,6 +5,8 @@ import {
 } from './session-create-lifecycle'
 import type { SessionMeta } from '../shared/types'
 import { createDigitalWorkerSessionBinding, resolveDigitalWorkerSessionScope } from './digital-worker/session-binding'
+import { createProjectWorkspaceCanonicalWriteBoundary } from './project-workspace/canonical-write'
+import { resolveProjectWorkspaceRoot } from './project-workspace/persistence'
 
 type SessionDomainActivationClaim = SessionDomainOwnership & { unassigned?: boolean }
 
@@ -20,8 +22,12 @@ export async function prepareSessionDomainOwnershipForActivation(
   const ownership = await assertPersistedSessionDomainOwnership(claim, rootDir)
   if (!ownership.workspaceId || claim.unassigned === true) return ownership
 
-  await ensureProjectWorkspaceLedgerProjection(ownership.workspaceId, rootDir)
-  return assertPersistedSessionDomainOwnership({ ...claim, ...ownership }, rootDir)
+  const boundary = createProjectWorkspaceCanonicalWriteBoundary(resolveProjectWorkspaceRoot(rootDir))
+  return boundary.withConsistentProjectionRead(async (stableRoot) => {
+    const stableOwnership = await assertPersistedSessionDomainOwnership({ ...claim, ...ownership }, stableRoot)
+    await ensureProjectWorkspaceLedgerProjection(stableOwnership.workspaceId!, stableRoot)
+    return assertPersistedSessionDomainOwnership({ ...claim, ...stableOwnership }, stableRoot)
+  })
 }
 
 export async function prepareSessionIdentityForActivation(

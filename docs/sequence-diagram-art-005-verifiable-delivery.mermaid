@@ -1,0 +1,66 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant Panel as StudioResultPanel
+    participant Hook as useStudioResult
+    participant IPC as window.agentDesk
+    participant Pure as deriveDeliveryVerdict
+    participant Banner as DeliveryVerdictBanner
+    participant Rev as useResultAcceptanceReview
+    participant Row as WorkflowAcceptanceRow
+    participant Art as ArtifactRow
+    participant EV as EvidenceView
+
+    %% ── 主链路:verdict 派生并渲染 ──
+    User->>Panel: 打开结果工作台(result 面板)
+    Panel->>Hook: useStudioResult(sessionId)
+    Hook->>IPC: getStudioResultSnapshot(sessionId)
+    IPC-->>Hook: StudioResultSnapshot
+    Hook-->>Panel: snapshot
+    Panel->>Pure: deriveDeliveryVerdict(snapshot)
+    Pure-->>Panel: DeliveryVerdictDetail(verdict, counts)
+    Panel->>Banner: 渲染 detail(头部下方、Tab 之上)
+    Note over Banner: verifiable→good / not_done→bad<br/>modelReportedDone 仅辅助文案
+
+    %% ── Acceptance 聚合 + 复用行 ──
+    Panel->>Rev: useResultAcceptanceReview(snapshot)
+    Rev->>IPC: listWorkflowLedger(acceptances) + queryWorkflowEvidence
+    IPC-->>Rev: acceptances[] + evidence[]
+    Rev-->>Panel: acceptanceReview
+    Panel->>EV: 渲染 AcceptanceSummary(计数来自 detail)
+    EV->>Row: 逐条渲染(复用 passed/failed/waived/retest)
+    Note over Row: Evidence 必填 / 豁免必填理由校验不变
+
+    %% ── failed → repair 入口 ──
+    User->>Row: 标记失败(failed)
+    Row->>IPC: reviewWorkflowAcceptance(decision=failed)
+    IPC-->>Row: WorkflowAcceptanceReviewResult.repair.workItemId
+    Row-->>Panel: onOpenRepair(workItemId) 回填 repairByAcceptanceId
+    Panel->>Row: 重渲染(传 repairWorkItemId)
+    Row-->>User: 显示「查看返工 WorkItem」入口
+    User->>Row: 点击 repair 入口
+    Row->>IPC: openTool('tasks') / openSubagentPanel(复用)
+
+    %% ── Artifact → Evidence 下钻 ──
+    User->>Panel: 切 artifacts Tab
+    Panel->>Art: 渲染(展示 evidenceIds 数 + 验证状态)
+    User->>Art: 点击「下钻证据」
+    Art->>Panel: onDrillEvidence(artifact)
+    Panel->>Panel: setTab('evidence') + evidenceDrill={artifactId}
+    Panel->>EV: 高亮/滚动到对应 Evidence 与 Acceptance
+
+    %% ── Goal 完成门禁 ──
+    Note over Panel: 任何「标记完成」CTA 必经 canMarkGoalComplete(verdict)
+    alt verdict = not_done
+        Panel-->>User: CTA disabled + title="仍有未通过/未验收的 Acceptance"
+    else verdict = verifiable
+        Panel-->>User: 允许(本棒不新增该 CTA,复用 main done-gate)
+    end
+
+    %% ── 导出标注(P1-2) ──
+    User->>Panel: 点导出
+    Panel->>IPC: saveStudioResultSnapshot(sessionId)(始终可用)
+    IPC-->>Panel: StudioResultSaveResult
+    alt verdict != verifiable
+        Panel-->>User: 显著 notice「含未验收项与缺失 Evidence,详见证据视图」(UI 标注,文件不变)
+    end

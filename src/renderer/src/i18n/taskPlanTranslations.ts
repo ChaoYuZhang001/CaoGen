@@ -1,0 +1,52 @@
+export const TASK_PLAN_TRANSLATIONS = {
+  taskStrategy: { zh: '任务策略', en: 'Task strategy' },
+  taskStrategyView: { zh: '查看', en: 'View' },
+  taskStrategyPlan: { zh: '规划', en: 'Plan' },
+  taskStrategyExecute: { zh: '执行', en: 'Execute' },
+  taskStrategyViewDescription: {
+    zh: '只读取和分析，不修改工作区或外部系统',
+    en: 'Read and analyze without changing the workspace or external systems'
+  },
+  taskStrategyPlanDescription: {
+    zh: '先生成可审查计划，切换到执行前不运行步骤',
+    en: 'Create a reviewable plan without running steps until Execute is selected'
+  },
+  taskStrategyExecuteDescription: {
+    zh: '在权限、预算和 Effect 对账约束下完成任务',
+    en: 'Complete the task under permission, budget, and Effect controls'
+  },
+  taskPlanTitle: { zh: '执行计划', en: 'Execution plan' },
+  taskPlanNotCreated: { zh: '未创建', en: 'Not created' },
+  taskPlanPending: { zh: '待批准', en: 'Pending approval' },
+  taskPlanApproved: { zh: '已批准', en: 'Approved' },
+  taskPlanCanonicalProjection: { zh: '已同步到 Project', en: 'Synced to Project' },
+  taskPlanConversationProjection: {
+    zh: '计划仅保存在对话中 · 未绑定 Project',
+    en: 'Plan saved in conversation only · No Project linked'
+  },
+  taskPlanExpand: { zh: '展开计划', en: 'Expand plan' },
+  taskPlanCollapse: { zh: '收起计划', en: 'Collapse plan' },
+  taskPlanObjective: { zh: '目标', en: 'Objective' },
+  taskPlanSteps: { zh: '步骤', en: 'Steps' },
+  taskPlanAddStep: { zh: '添加步骤', en: 'Add step' },
+  taskPlanRemoveStep: { zh: '删除步骤', en: 'Remove step' },
+  taskPlanStepId: { zh: '步骤 ID', en: 'Step ID' },
+  taskPlanStepTitle: { zh: '步骤标题', en: 'Step title' },
+  taskPlanStepDescription: { zh: '步骤说明', en: 'Step description' },
+  taskPlanDependencies: { zh: '依赖 ID', en: 'Dependency IDs' },
+  taskPlanArtifacts: { zh: '预期产物', en: 'Expected artifacts' },
+  taskPlanDataEgress: { zh: '数据外发', en: 'Data egress' },
+  taskPlanAcceptance: { zh: '验收条件', en: 'Acceptance criteria' },
+  taskPlanRisk: { zh: '风险', en: 'Risk' },
+  taskPlanRiskLow: { zh: '低', en: 'Low' },
+  taskPlanRiskMedium: { zh: '中', en: 'Medium' },
+  taskPlanRiskHigh: { zh: '高', en: 'High' },
+  taskPlanRiskCritical: { zh: '严重', en: 'Critical' },
+  taskPlanCost: { zh: '成本估算 (USD)', en: 'Cost estimate (USD)' },
+  taskPlanChangeReason: { zh: '版本变更原因', en: 'Version change reason' },
+  taskPlanHistory: { zh: '版本历史', en: 'Version history' },
+  taskPlanSaveVersion: { zh: '保存新版本', en: 'Save new version' },
+  taskPlanApprove: { zh: '批准当前版本', en: 'Approve current version' },
+  taskPlanRevoke: { zh: '撤销批准', en: 'Revoke approval' },
+  taskPlanApproveExecute: { zh: '批准并执行', en: 'Approve and execute' }
+}

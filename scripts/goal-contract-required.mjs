@@ -114,7 +114,7 @@ try {
   await runElectronPhase('studio-create-edit-archive', async (page) => {
     await check('Studio creates an isolated ProjectWorkspace for Goal contract acceptance', async () => {
       await page.waitForSelector('.pws-project-empty', { visible: true, timeout: 30_000 })
-      await page.click('[data-studio-action="create-project"]')
+      await page.click('[data-studio-action="create-project-empty"]')
       await page.waitForSelector('[data-studio-form="project"]', { visible: true, timeout: 10_000 })
       await replaceValue(page, '[data-studio-form="project"] [name="projectName"]', PROJECT_NAME)
       await page.select('[data-studio-form="project"] [name="projectKind"]', 'software')

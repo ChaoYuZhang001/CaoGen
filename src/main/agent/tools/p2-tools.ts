@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { listProviders } from '../../providers'
 import { draftSkillFromSummary } from '../../skill/skill-learner'
 import { proposeSkillOptimization, type SkillFeedbackOutcome } from '../../skill/skill-optimizer'
@@ -11,16 +12,36 @@ import {
   buildGiteePullRequestApiRequest,
   buildGiteePullRequestUrl,
 } from './gitee-tools'
-import type { ProviderView, SchedulerStrategy } from '../../../shared/types'
+import type { ProviderView, SchedulerStrategy, SessionMeta, WorkItemActor } from '../../../shared/types'
+import type { EffectTarget } from '../../../shared/types'
+import { executeWebhookMessageEffectTarget } from '../../notification/notification-effect'
 import type { ModelTaskKind } from '../../model/model-profile'
 import type { ToolDefinition } from './tool-types'
+import { DigitalWorkerStore } from '../../digital-worker/domain-store'
+import { openProjectWorkspaceStore } from '../../project-workspace/store'
+import { verifyProductionProjectMutation } from '../../project-aggregate/project-mutation-ingress'
 
-export const P2_TOOL_NAMES = ['draft_skill', 'optimize_skill', 'route_model', 'china_notify', 'gitee_prepare'] as const
+export const P2_TOOL_NAMES = [
+  'draft_skill',
+  'optimize_skill',
+  'route_model',
+  'china_notify',
+  'send_notification',
+  'work_item_comment',
+  'gitee_prepare'
+] as const
 export type P2ToolName = (typeof P2_TOOL_NAMES)[number]
 
 export interface P2ToolResult {
   ok: boolean
   output: string
+}
+
+export interface P2ToolExecutionContext {
+  effectTarget?: EffectTarget
+  sessionMeta?: SessionMeta
+  userDataRoot?: string
+  toolUseId?: string
 }
 
 export const P2_TOOLS: ToolDefinition[] = [
@@ -39,6 +60,51 @@ export const P2_TOOLS: ToolDefinition[] = [
           verification: { type: 'array', items: { type: 'string' } }
         },
         required: ['taskSummary']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_notification',
+      description: '通过 CaoGen 中已保存的飞书、钉钉或企业微信连接器发送消息。无需传 Webhook 或密钥；省略 connectorId 时使用该渠道默认连接器。',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectorId: { type: 'string', description: '可选连接器 ID。' },
+          channel: { type: 'string', enum: ['feishu', 'dingtalk', 'wecom'], description: '使用默认连接器时必填。' },
+          title: { type: 'string' },
+          text: { type: 'string' },
+          linkUrl: { type: 'string' }
+        },
+        required: ['title', 'text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'work_item_comment',
+      description: '以当前数字员工会话的不可变身份，在当前 WorkItem 下发表评论。Project、WorkItem、作者和 Assignment 均由 CaoGen 注入，不能由参数覆盖。',
+      parameters: {
+        type: 'object',
+        properties: {
+          body: { type: 'string', description: '评论正文' },
+          mentions: {
+            type: 'array',
+            description: '可选的同 Project 成员提及',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['human', 'digital_worker'] },
+                id: { type: 'string' },
+                displayName: { type: 'string' }
+              },
+              required: ['type', 'id']
+            }
+          }
+        },
+        required: ['body']
       }
     }
   },
@@ -147,7 +213,12 @@ export function isP2ToolName(name: string): name is P2ToolName {
   return (P2_TOOL_NAMES as readonly string[]).includes(name)
 }
 
-export async function executeP2Tool(name: P2ToolName, args: Record<string, unknown>, _cwd: string): Promise<P2ToolResult> {
+export async function executeP2Tool(
+  name: P2ToolName,
+  args: Record<string, unknown>,
+  _cwd: string,
+  context: P2ToolExecutionContext = {}
+): Promise<P2ToolResult> {
   if (name === 'draft_skill') {
     const draft = draftSkillFromSummary({
       taskSummary: requiredString(args.taskSummary, 'taskSummary'),
@@ -202,7 +273,114 @@ export async function executeP2Tool(name: P2ToolName, args: Record<string, unkno
   }
 
   if (name === 'china_notify') return executeChinaNotifyPreview(args)
+  if (name === 'work_item_comment') return executeWorkItemComment(args, context)
+  if (name === 'send_notification') {
+    if (context.effectTarget?.kind !== 'webhook_message_send') {
+      return { ok: false, output: 'send_notification 缺少冻结的 webhook_message_send EffectTarget，已阻止发送' }
+    }
+    const result = await executeWebhookMessageEffectTarget(context.effectTarget, args)
+    return { ok: result.ok, output: JSON.stringify(result, null, 2) }
+  }
   return executeGiteePreview(args)
+}
+
+async function executeWorkItemComment(
+  args: Record<string, unknown>,
+  context: P2ToolExecutionContext
+): Promise<P2ToolResult> {
+  const meta = context.sessionMeta
+  const root = context.userDataRoot
+  const toolUseId = context.toolUseId
+  const projectId = meta?.workspaceId
+  const workItemId = meta?.workItemId
+  const binding = meta?.digitalWorkerBinding
+  if (!meta || !root || !toolUseId || !projectId || !workItemId || binding?.kind !== 'assigned') {
+    return {
+      ok: false,
+      output: 'work_item_comment 只允许绑定 Project、WorkItem 和 active DigitalWorker Assignment 的会话调用'
+    }
+  }
+  const workforce = new DigitalWorkerStore(root).read()
+  const worker = workforce.workers.find((candidate) =>
+    candidate.id === binding.workerId && candidate.projectId === projectId && candidate.status === 'active')
+  const assignment = workforce.assignments.find((candidate) =>
+    candidate.id === binding.assignmentId && candidate.status === 'active' &&
+    candidate.projectId === projectId && candidate.workItemId === workItemId &&
+    candidate.assigneeKind === 'digital_worker' && candidate.assigneeId === binding.workerId)
+  if (!worker || !assignment) {
+    return { ok: false, output: 'work_item_comment 的 DigitalWorker 或 Assignment 已失效' }
+  }
+
+  const body = requiredString(args.body, 'body')
+  const mentions = commentMentions(args.mentions)
+  const commentId = deterministicCommentId(meta.id, toolUseId)
+  const store = await openProjectWorkspaceStore(root)
+  const existing = await store.getWorkItemComment(commentId)
+  const author: WorkItemActor = {
+    type: 'digital_worker',
+    id: worker.id,
+    displayName: worker.displayName
+  }
+  if (existing) {
+    if (existing.projectId !== projectId || existing.workItemId !== workItemId ||
+        canonicalComment(existing.author, existing.body, existing.mentions) !== canonicalComment(author, body, mentions)) {
+      return { ok: false, output: 'work_item_comment 幂等身份与已有评论冲突' }
+    }
+    return {
+      ok: true,
+      output: JSON.stringify({ id: existing.id, revision: existing.revision, idempotentReplay: true })
+    }
+  }
+  const comment = await store.createWorkItemComment({
+    id: commentId,
+    projectId,
+    workItemId,
+    author,
+    body,
+    mentions
+  })
+  await verifyProductionProjectMutation(root, projectId)
+  return {
+    ok: true,
+    output: JSON.stringify({ id: comment.id, revision: comment.revision, idempotentReplay: false })
+  }
+}
+
+function deterministicCommentId(sessionId: string, toolUseId: string): string {
+  return `agent-comment-${createHash('sha256')
+    .update(`caogen.work-item-comment.v1\0${sessionId}\0${toolUseId}`)
+    .digest('hex')}`
+}
+
+function commentMentions(value: unknown): WorkItemActor[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('mentions 必须是数组')
+  const mentions = value.map((item, index): WorkItemActor => {
+    if (!isRecord(item) || (item.type !== 'human' && item.type !== 'digital_worker')) {
+      throw new Error(`mentions[${index}] 类型无效`)
+    }
+    return {
+      type: item.type,
+      id: requiredString(item.id, `mentions[${index}].id`),
+      displayName: optionalString(item.displayName)
+    }
+  }).sort((left, right) => `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`))
+  const ids = new Set<string>()
+  for (const mention of mentions) {
+    const key = `${mention.type}:${mention.id}`
+    if (ids.has(key)) throw new Error(`mentions 包含重复成员 ${key}`)
+    ids.add(key)
+  }
+  return mentions
+}
+
+function canonicalComment(author: WorkItemActor, body: string, mentions: WorkItemActor[]): string {
+  return JSON.stringify({
+    author,
+    body,
+    mentions: [...mentions].sort((left, right) =>
+      `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`))
+  })
 }
 
 function executeChinaNotifyPreview(args: Record<string, unknown>): P2ToolResult {
@@ -318,11 +496,15 @@ function providerView(value: unknown): ProviderView | undefined {
   const models = stringArray(value.models)
   if (!id || !name || !models) return undefined
   const hasToken = value.hasToken === true
+  const baseUrl = optionalString(value.baseUrl) ?? ''
+  const authMode = value.authMode === 'none' && isLoopbackUrl(baseUrl) ? 'none' : 'api-key'
   return {
     id,
     name,
-    baseUrl: optionalString(value.baseUrl) ?? '',
+    baseUrl,
     models,
+    authMode,
+    ready: authMode === 'none' || hasToken,
     engine: value.engine === 'anthropic' || value.engine === 'claude' ? 'anthropic' : 'openai',
     budgetUsd: optionalNumber(value.budgetUsd) ?? 0,
     customHeaders: optionalString(value.customHeaders),
@@ -332,6 +514,15 @@ function providerView(value: unknown): ProviderView | undefined {
     createdAt: optionalNumber(value.createdAt) ?? Date.now(),
     hasToken,
     credentialStorage: hasToken ? 'encrypted' : 'none'
+  }
+}
+
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' && ['127.0.0.1', 'localhost', '::1'].includes(url.hostname.toLowerCase())
+  } catch {
+    return false
   }
 }
 

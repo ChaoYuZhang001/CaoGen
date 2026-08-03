@@ -8,6 +8,7 @@ const scanWorktree = process.argv.includes('--worktree')
 const repoRoot = process.cwd()
 
 const forbiddenPathRules = [
+  { name: 'caogen-private-config', test: (file) => /(^|\/)\.caogen-private(\/|$)/.test(file) },
   { name: 'dotenv', test: (file) => /^\.env(\..+)?$/.test(path.basename(file)) && path.basename(file) !== '.env.example' },
   { name: 'private-key-or-cert', test: (file) => /\.(pem|p12|pfx|key|mobileprovision|provisionprofile|keystore|jks|crt|cer|p8)$/i.test(file) },
   { name: 'ssh-private-key', test: (file) => /(^|\/)(id_rsa|id_ed25519)(\.|$)/.test(file) },
@@ -20,7 +21,7 @@ const forbiddenPathRules = [
 const secretPatterns = [
   { name: 'openai-or-anthropic-key', regex: /(?<![A-Za-z0-9_])sk-(?:proj-|ant-api03-)?[A-Za-z0-9_-]{20,}/g },
   { name: 'github-token', regex: /(?<![A-Za-z0-9_])(?:ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/g },
-  { name: 'aws-access-key', regex: /(?<![A-Za-z0-9_])AKIA[0-9A-Z]{16}/g },
+  { name: 'aws-access-key', regex: /(?<![A-Za-z0-9_])(?:AKIA|ASIA)[0-9A-Z]{16}/g },
   { name: 'google-api-key', regex: /(?<![A-Za-z0-9_])AIza[0-9A-Za-z_-]{20,}/g },
   { name: 'slack-token', regex: /(?<![A-Za-z0-9_])xox[baprs]-[A-Za-z0-9-]{20,}/g },
   { name: 'private-key-block', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
@@ -33,7 +34,7 @@ const secretPatterns = [
 const historyGrepPatterns = [
   ['openai-or-anthropic-key', '(^|[^A-Za-z0-9_-])sk-(proj-|ant-api03-)?[A-Za-z0-9_-]{20,}'],
   ['github-token', 'ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}'],
-  ['aws-access-key', 'AKIA[0-9A-Z]{16}'],
+  ['aws-access-key', '(AKIA|ASIA)[0-9A-Z]{16}'],
   ['google-api-key', 'AIza[0-9A-Za-z_-]{20,}'],
   ['slack-token', 'xox[baprs]-[A-Za-z0-9-]{20,}'],
   ['private-key-block', 'BEGIN [A-Z ]*PRIVATE KEY'],
@@ -123,7 +124,7 @@ function scanGitHistory() {
     const output = gitGrepHistory(pattern, revisions)
     for (const line of output.split(/\r?\n/).filter(Boolean)) {
       if (allowedSecretLine.test(line)) continue
-      findings.push(`${name} in history: ${line}`)
+      findings.push(`${name} in history: ${safeHistoryLocation(line)}`)
     }
   }
 }
@@ -152,8 +153,7 @@ function scanText(text, file, scope) {
       pattern.regex.lastIndex = 0
       let match
       while ((match = pattern.regex.exec(line))) {
-        const excerpt = line.slice(Math.max(0, match.index - 24), Math.min(line.length, match.index + match[0].length + 24))
-        findings.push(`${file}:${index + 1}: ${pattern.name} in ${scope}: ${excerpt}`)
+        findings.push(`${file}:${index + 1}: ${pattern.name} in ${scope}`)
       }
     }
   }
@@ -207,4 +207,9 @@ function normalizeStatusPath(entry) {
   if (!value) return undefined
   const renamed = value.split(' -> ')
   return renamed[renamed.length - 1]
+}
+
+function safeHistoryLocation(line) {
+  const match = line.match(/^([0-9a-f]{40}):(.+?):([0-9]+):/i)
+  return match ? `${match[1].slice(0, 12)}:${match[2]}:${match[3]}` : 'location unavailable'
 }

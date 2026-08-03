@@ -4,6 +4,8 @@ import path from 'node:path'
 const repoRoot = process.cwd()
 const brokerSource = read('src/main/providerCredentialBroker.ts')
 const providers = read('src/main/providers.ts')
+const providerStoreRepository = read('src/main/provider/providerStoreRepository.ts')
+const providerCredentialHeaders = read('src/main/provider/providerCredentialHeaders.ts')
 const types = read('src/shared/types.ts')
 const editor = read('src/renderer/src/components/ProviderEditor.tsx')
 const settings = read('src/renderer/src/components/SettingsModal.tsx')
@@ -13,6 +15,8 @@ const controlCenter = read('src/renderer/src/controlCenter.ts')
 const openaiEngine = read('src/main/openaiEngine.ts')
 const dagDecomposer = read('src/main/agent/model-dag-decomposer.ts')
 const providerRuntimeAuth = read('src/main/providerRuntimeAuth.ts')
+const providerBaseUrl = read('src/main/provider/providerBaseUrl.ts')
+const providerUpdate = read('src/main/provider/providerUpdate.ts')
 
 assert(!/from\s+['"]electron['"]/.test(brokerSource), 'credential broker must not import Electron')
 assert(!/return\s+[`'"]b64:/.test(brokerSource), 'credential broker must never write b64 records')
@@ -88,13 +92,20 @@ staticAssert(
     /filter\([\s\S]{0,240}sessionOnly/.test(providers),
   'providers.ts must filter session-only credentials out of persisted snapshots'
 )
-staticAssert(providers.includes('renameSync('), 'providers.ts must atomically replace provider storage')
+staticAssert(
+  providerStoreRepository.includes('renameSync('),
+  'Provider Store repository must atomically replace provider storage'
+)
 staticAssert(
   providers.includes('normalizedCustomHeaders') && providers.includes('inspectProviderCustomHeaders'),
   'provider create/update paths must reject sensitive custom headers'
 )
 staticAssert(
-  providers.includes('inspectProviderBaseUrl') && providers.includes('Base URL 不允许包含用户名'),
+  providerBaseUrl.includes('inspectProviderBaseUrl') &&
+    providerBaseUrl.includes('Base URL 不允许包含用户名') &&
+    providers.includes('normalizeBaseUrl(input.baseUrl') &&
+    providers.includes('normalizeBaseUrl,') &&
+    providerUpdate.includes('dependencies.normalizeBaseUrl('),
   'provider create/update paths must reject credentials embedded in Base URLs'
 )
 staticAssert(
@@ -106,19 +117,22 @@ staticAssert(
   'critical provider writes must roll back in-memory credentials when persistence fails'
 )
 staticAssert(
-  providers.includes('export function providerCredentialHeaders'),
+  providers.includes('providerCredentialHeaders')
+    && providerCredentialHeaders.includes('export function providerCredentialHeaders')
+    && providerCredentialHeaders.includes('export function providerCredentialHeaderLines'),
   'providers must inject Broker tokens into managed credential header names'
 )
 staticAssert(
-  providers.includes('names.push(normalized)'),
+  providerCredentialHeaders.includes('names.push(normalized)'),
   'managed credential header names must be case-normalized to avoid duplicate HTTP headers'
 )
 staticAssert(
-  providers.includes('sanitizeLoadedProvidersForRuntime(loadedProviders)'),
+  providers.includes('sanitize: sanitizeLoadedProvidersForRuntime')
+    && providerStoreRepository.includes('this.dependencies.sanitize(loadedProviders)'),
   'failed credential migration writes must fall back to honest legacy runtime state'
 )
 staticAssert(
-  /!firstRun[\s\S]{0,100}chmodSync\(file, 0o600\)/.test(providers),
+  /!firstRun[\s\S]{0,100}chmodSync\(file, 0o600\)/.test(providerStoreRepository),
   'existing provider files must have permissions tightened on load'
 )
 staticAssert(
@@ -166,6 +180,21 @@ staticAssert(
 staticAssert(
   editor.includes('credentialHeaderNamesText') && editor.includes('credentialHeaderNamesLabel'),
   'ProviderEditor must configure managed credential header names without secret values'
+)
+staticAssert(
+  editor.includes('handleAuthModeChange')
+    && editor.includes("setToken('')")
+    && editor.includes('setTokenTouched(false)')
+    && editor.includes("setAdditionalKeysText('')"),
+  'ProviderEditor must clear hidden credential drafts when switching to no-auth mode'
+)
+staticAssert(
+  editor.includes("window.confirm(t('providerAuthModeNoneDeleteKeysConfirm'")
+    && editor.includes("providerAuthModeNoneDeletesKeysHint")
+    && editor.includes('requiresCredentialDeletionConfirmation(provider, authMode, existingCredentialCount)')
+    && editor.includes("if (state.authMode === 'none') return {}")
+    && editor.includes('...buildProviderCredentialPatch(state)'),
+  'ProviderEditor must confirm stored-key deletion and omit credential fields in no-auth mode'
 )
 staticAssert(
   openaiEngine.includes("import { mergeProviderCredentialHeaders } from './providerRuntimeAuth'")
@@ -494,7 +523,7 @@ function runProviderHeaderPolicyChecks({
   for (const name of [
     'x-api-key-sk-live-secret',
     'x-api-key-sk_live_51ABCDEF',
-    'x-api-key-AKIAIOSFODNN7EXAMPLE',
+    `x-api-key-${awsAccessKeyIdCanary('AKIA')}`,
     'x-api-key-0123456789abcdef0123456789abcdef',
     'Proxy-Authorization',
     'X-Custom-Secret'
@@ -507,8 +536,8 @@ function runProviderHeaderPolicyChecks({
   for (const value of [
     'sk_live_51ABCDEF',
     'sk_test_51ABCDEF',
-    'AKIAIOSFODNN7EXAMPLE',
-    'ASIAIOSFODNN7EXAMPLE',
+    awsAccessKeyIdCanary('AKIA'),
+    awsAccessKeyIdCanary('ASIA'),
     'glpat-example-token',
     'npm_example_token',
     'xoxb-example-token',
@@ -531,7 +560,7 @@ function runProviderCustomHeaderChecks(inspectProviderCustomHeaders) {
       'X-Project-Route: sk_live_51ABCDEF',
       'X-License: do-not-persist-under-unknown-name',
       'X-Route-sk_live_51ABCDEF: benign',
-      'X-Project-AKIAIOSFODNN7EXAMPLE: benign',
+      `X-Project-${awsAccessKeyIdCanary('AKIA')}: benign`,
       `X-Route-${String.fromCharCode(0)}: malformed-name`,
       'X-Route- bad: malformed-name',
       `X-Debug-Mode: route${String.fromCharCode(0)}injected`,
@@ -606,7 +635,7 @@ function runProviderBaseUrlChecks(inspectProviderBaseUrl) {
     ['tenant', 'Bearer canary'],
     ['route', ['ey', 'Jcanary'].join('')],
     ['route', 'sk_live_51ABCDEF'],
-    ['region', 'AKIAIOSFODNN7EXAMPLE']
+    ['region', awsAccessKeyIdCanary('AKIA')]
   ]) {
     const queryInspection = inspectProviderBaseUrl(
       `https://example.com/v1?${queryName}=${encodeURIComponent(queryValue)}`
@@ -693,6 +722,10 @@ function xorBuffer(value) {
 
 function credentialCanary(label) {
   return ['sk', label, 'fixture'].join('-')
+}
+
+function awsAccessKeyIdCanary(prefix) {
+  return [prefix, 'TESTONLYCANARY00'].join('')
 }
 
 function formatDiagnostics(ts, diagnostics) {

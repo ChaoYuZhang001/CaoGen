@@ -7,7 +7,9 @@ import type {
   GoalPatch,
   GoalRiskLevel,
   GoalStatus,
+  OutboundDataClass,
   ProjectResource,
+  ProjectResourceEgressPolicy,
   ProjectResourceInput,
   ProjectWorkspaceKind,
   ProjectWorkspaceStatus,
@@ -20,7 +22,7 @@ import type {
 
 export type StudioView = 'list' | 'board'
 export type StudioCreateForm = 'project' | 'goal' | 'workItem' | null
-export type StudioMutationKind = Exclude<StudioCreateForm, null>
+export type StudioMutationKind = Exclude<StudioCreateForm, null> | 'import'
 export type ProjectLifecyclePanel = 'edit' | 'resource' | null
 export type ProjectLifecycleMutation = 'update' | 'resource' | 'archive' | 'restore' | 'export' | 'delete' | 'purge'
 export type ResourceDraftKind = 'directory' | 'file_set' | 'repository' | 'connector'
@@ -59,6 +61,8 @@ export interface ProjectResourceDraft {
   kind: ResourceDraftKind
   label: string
   location: string
+  dataClass: OutboundDataClass
+  egressPolicy: ProjectResourceEgressPolicy
 }
 
 export interface GoalDraft {
@@ -74,6 +78,7 @@ export interface GoalDraft {
   budgetAmount: string
   budgetCurrency: string
   budgetRuns: string
+  budgetConcurrentRuns: string
   budgetTokens: string
 }
 
@@ -103,16 +108,23 @@ export const TEXT = {
   projects: '项目',
   selectProject: '选择项目',
   createProject: '新建项目',
+  importProject: '导入项目',
+  importingProject: '导入中...',
   createGoal: '新建目标',
   createWorkItem: '新建工作项',
   refresh: '刷新',
   refreshing: '刷新中...',
   creating: '创建中...',
+  startGoalTask: '开始',
+  startingGoalTask: '启动中...',
+  goalTaskPlaceholder: '想完成什么？',
+  goalTaskStarted: '任务已启动',
   cancel: '取消',
   closeForm: '关闭创建表单',
   projectName: '项目名称',
   projectKind: '项目类型',
   projectCreated: '项目已创建',
+  projectImported: '项目已导入',
   goalCreated: '目标已创建',
   goalUpdated: '目标契约已更新',
   workItemCreated: '工作项已创建',
@@ -163,6 +175,7 @@ export const TEXT = {
   budgetAmount: '预算金额',
   budgetCurrency: '币种',
   budgetRuns: '最多执行次数',
+  budgetConcurrentRuns: '最大并发 Run',
   budgetTokens: '最多 Token 数',
   workItemTitle: '工作项名称',
   description: '说明',
@@ -202,6 +215,18 @@ export const TEXT = {
   leaseActive: '租约有效',
   leaseMissing: '未持有租约',
   controlFailed: '控制操作失败',
+  transferWorkItem: '转交',
+  transferWorkItemTitle: '转交工作项',
+  transferTargetType: '转交给',
+  transferTargetId: '人员标识',
+  transferTargetName: '显示名称（可选）',
+  transferReason: '转交原因',
+  transferReasonPlaceholder: '说明为什么转交',
+  transferSubmit: '确认转交',
+  transferring: '转交中...',
+  transferFailed: '转交失败',
+  transferNoWorkers: '当前项目没有可用的数字员工',
+  transferWorkerLoading: '正在载入数字员工...',
   acceptanceItems: (count: number) => `${count} 项`,
   itemCount: (count: number) => `${count} 项`,
   projectSummary: (goals: number, workItems: number) => `${goals} 个目标 · ${workItems} 个工作项`,
@@ -218,6 +243,11 @@ export const TEXT = {
   resourceKind: '资源类型',
   resourceLabel: '资源名称（可选）',
   resourceLocation: '路径或地址',
+  resourceDataClass: '数据等级',
+  resourceEgressPolicy: 'Provider 外发',
+  resourceEgressAllow: '允许发送到所选 Provider',
+  resourceEgressLocalOnly: '仅允许本机模型',
+  resourceEgressDeny: '禁止进入任何 Provider 请求',
   resourceDirectory: '本地目录',
   resourceFileSet: '文件集合',
   resourceRepository: '本地仓库',
@@ -229,13 +259,13 @@ export const TEXT = {
   resourceRemoved: '资源已移除',
   archiveProject: '归档',
   restoreProject: '恢复',
-  exportManifest: '导出清单',
-  manifestTitle: '项目导出清单',
+  exportManifest: '导出项目',
+  manifestTitle: '项目完整数据',
   manifestDigest: 'SHA-256 摘要',
   copyManifest: '复制 JSON',
   downloadManifest: '下载 JSON',
-  closeManifest: '关闭清单',
-  manifestCopied: '清单 JSON 已复制',
+  closeManifest: '关闭',
+  manifestCopied: '项目数据 JSON 已复制',
   projectArchived: '项目已归档',
   projectRestored: '项目已恢复',
   deleteProject: '删除项目',
@@ -268,11 +298,63 @@ export const PROJECT_STATUS_LABELS: Record<ProjectWorkspaceStatus, string> = {
   deleted: '已删除'
 }
 
+export const COLLAB_TEXT = {
+  squads: '协作小组',
+  cancel: '取消',
+  newSquad: '新建小组',
+  name: '名称',
+  description: '说明',
+  create: '创建',
+  noSquads: '暂无协作小组',
+  addMember: '添加成员',
+  archive: '归档',
+  restore: '恢复',
+  noMembers: '暂无成员',
+  digitalWorker: '数字员工',
+  human: '人员',
+  removeMember: '移除成员',
+  chooseWorker: '选择数字员工',
+  humanId: '人员标识',
+  displayName: '显示名称',
+  role: '职责',
+  add: '添加',
+  comments: '工作项评论',
+  createWorkItemFirst: '创建工作项后可开始协作',
+  workItem: '工作项',
+  owner: '负责人',
+  unassigned: '未分配',
+  runHistory: '运行历史',
+  noComments: '暂无评论',
+  save: '保存',
+  edit: '编辑',
+  delete: '删除',
+  writeComment: '写评论',
+  mentions: '提及成员',
+  send: '发送'
+} as const
+
 export const PROJECT_RESOURCE_OPTIONS: ReadonlyArray<{ value: ResourceDraftKind; label: string }> = [
   { value: 'directory', label: TEXT.resourceDirectory },
   { value: 'file_set', label: TEXT.resourceFileSet },
   { value: 'repository', label: TEXT.resourceRepository },
   { value: 'connector', label: TEXT.resourceConnector }
+]
+
+export const RESOURCE_DATA_CLASS_OPTIONS: ReadonlyArray<{ value: OutboundDataClass; label: string }> = [
+  { value: 'S0', label: 'S0 · 公开' },
+  { value: 'S1', label: 'S1 · 内部' },
+  { value: 'S2', label: 'S2 · 机密' },
+  { value: 'S3', label: 'S3 · 高敏感' },
+  { value: 'S4', label: 'S4 · 控制与证据' }
+]
+
+export const RESOURCE_EGRESS_OPTIONS: ReadonlyArray<{
+  value: ProjectResourceEgressPolicy
+  label: string
+}> = [
+  { value: 'allow', label: TEXT.resourceEgressAllow },
+  { value: 'local_only', label: TEXT.resourceEgressLocalOnly },
+  { value: 'deny', label: TEXT.resourceEgressDeny }
 ]
 
 export const GOAL_RISK_OPTIONS: ReadonlyArray<{ value: GoalRiskLevel; label: string }> = [
@@ -359,7 +441,8 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStat
 
 export const EMPTY_GOAL_DRAFT: GoalDraft = {
   title: '', objective: '', background: '', constraints: '', successCriteria: '', acceptance: '',
-  forbiddenActions: '', riskLevel: 'medium', dueDate: '', budgetAmount: '', budgetCurrency: 'CNY', budgetRuns: '', budgetTokens: ''
+  forbiddenActions: '', riskLevel: 'medium', dueDate: '', budgetAmount: '', budgetCurrency: 'USD',
+  budgetRuns: '', budgetConcurrentRuns: '', budgetTokens: ''
 }
 
 export const EMPTY_WORK_ITEM_DRAFT: WorkItemDraft = {
@@ -387,8 +470,11 @@ export function goalDraftFromGoal(goal: Goal): GoalDraft {
     riskLevel: goal.riskLevel,
     dueDate: dateInputValue(goal.dueAt),
     budgetAmount: goal.budget?.amount === undefined ? '' : String(goal.budget.amount),
-    budgetCurrency: goal.budget?.currency ?? 'CNY',
+    budgetCurrency: goal.budget?.currency ?? 'USD',
     budgetRuns: goal.budget?.maxRuns === undefined ? '' : String(goal.budget.maxRuns),
+    budgetConcurrentRuns: goal.budget?.maxConcurrentRuns === undefined
+      ? ''
+      : String(goal.budget.maxConcurrentRuns),
     budgetTokens: goal.budget?.maxTokens === undefined ? '' : String(goal.budget.maxTokens)
   }
 }
@@ -403,10 +489,18 @@ export function goalPatchFromDraft(goal: Goal, draft: GoalDraft): GoalPatch {
 function goalContractFromDraft(draft: GoalDraft, existingAcceptance: Goal['acceptance'] = []): NonNullable<GoalInput['contract']> {
   const budgetAmount = optionalNumber(draft.budgetAmount)
   const maxRuns = optionalNumber(draft.budgetRuns)
+  const maxConcurrentRuns = optionalNumber(draft.budgetConcurrentRuns)
   const maxTokens = optionalNumber(draft.budgetTokens)
-  const budget = budgetAmount === undefined && maxRuns === undefined && maxTokens === undefined
+  const budget = budgetAmount === undefined && maxRuns === undefined &&
+      maxConcurrentRuns === undefined && maxTokens === undefined
     ? undefined
-    : { amount: budgetAmount, currency: draft.budgetCurrency.trim() || undefined, maxRuns, maxTokens }
+    : {
+        amount: budgetAmount,
+        currency: draft.budgetCurrency.trim().toUpperCase() || undefined,
+        maxRuns,
+        maxConcurrentRuns,
+        maxTokens
+      }
   return {
     objective: draft.objective.trim(),
     background: optionalText(draft.background),
@@ -473,8 +567,28 @@ export function projectEditDraft(project: {
 export function resourceInputFromDraft(draft: ProjectResourceDraft): ProjectResourceInput {
   const label = optionalText(draft.label)
   const location = draft.location.trim()
-  if (draft.kind === 'connector') return { kind: 'connector', label, uri: location }
-  return { kind: draft.kind, label, path: location }
+  const policy = {
+    dataClass: draft.dataClass,
+    egressPolicy: draft.dataClass === 'S3' ? 'deny' as const : draft.egressPolicy
+  }
+  if (draft.kind === 'connector') return { kind: 'connector', label, uri: location, ...policy }
+  return { kind: draft.kind, label, path: location, ...policy }
+}
+
+export function resourceDataClass(resource: ProjectResource): OutboundDataClass {
+  return resource.dataClass ?? (resource.kind === 'connector' || resource.kind === 'url' ? 'S1' : 'S2')
+}
+
+export function resourceEgressPolicy(resource: ProjectResource): ProjectResourceEgressPolicy {
+  if (resourceDataClass(resource) === 'S3') return 'deny'
+  return resource.egressPolicy ?? 'allow'
+}
+
+export function resourceEgressLabel(resource: ProjectResource): string {
+  const policy = resourceEgressPolicy(resource)
+  if (policy === 'deny') return '禁止外发'
+  if (policy === 'local_only') return '仅本机'
+  return '允许外发'
 }
 
 export function resourceKindLabel(resource: ProjectResource): string {

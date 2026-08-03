@@ -21,6 +21,7 @@ docs/visual-references/reference-office-robot-model-sheet-v2.png
 docs/visual-references/reference-office-robot-model-sheet-v3.png
 
 # 本地凭据与签名材料,绝不入库
+.caogen-private/
 .env
 .env.*
 !.env.example

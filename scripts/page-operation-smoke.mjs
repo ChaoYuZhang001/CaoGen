@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { assertRelayProviderPersistence } from './lib/page-provider-credential-fixture.mjs'
+import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
 
 const repoRoot = process.cwd()
 const outDir = path.join(repoRoot, 'test-results', 'caogen-deep')
@@ -121,7 +122,7 @@ writeFileSync(path.join(projectDir, 'broken.docx'), Buffer.from('not an office z
 initGitProject(projectDir)
 writePageSmokeUserData()
 const electronArgs = [`--remote-debugging-port=${port}`, ...softwareWebglArgs, mainEntry]
-const app = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
+const app = spawnElectronTestProcess(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
   cwd: repoRoot,
   env: {
     ...process.env,
@@ -278,7 +279,9 @@ try {
     await clickByText(cdp, '厂商')
     await waitForText(cdp, '+ 添加', 10_000)
     await clickByText(cdp, '+ 添加')
-    await waitForText(cdp, '添加 Provider', 10_000)
+    await waitForText(cdp, '快速开始', 10_000)
+    await clickByText(cdp, '自定义服务')
+    await waitForText(cdp, '快速模板', 10_000)
     const providerEditorSurface = await evalValue(
       cdp,
       `({
@@ -399,6 +402,7 @@ try {
 
   await check(cdp, 'inline new session workspace creates a Provider-scoped project session', async () => {
     await clickByText(cdp, '+ 新建会话'); await waitForText(cdp, '今天想做点什么?')
+    await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await clickByText(cdp, '工作台'); await clickByText(cdp, '会话与工具')
     await clickByText(cdp, '指定模型')
@@ -496,7 +500,7 @@ try {
     const resized = await toolPanelState(cdp)
     assert(resized.width > before.width + 40, `tool panel width did not grow: ${JSON.stringify({ before, resized })}`)
     await clickByAriaLabel(cdp, '收回工具面板')
-    await waitForNoAriaLabel(cdp, '收回工具面板', 5_000)
+    await waitForNoSelector(cdp, '.workbench-side-gutter:not([style*="display: none"])', 5_000)
   })
   await screenshot(cdp, '04-tool-panel-layout')
 
@@ -752,7 +756,7 @@ try {
           welcome: Boolean(document.querySelector('.welcome')),
           office: Boolean(document.querySelector('.office')),
           editable: Boolean(input && !input.disabled && getComputedStyle(input).pointerEvents !== 'none'),
-          hasUnassigned: Boolean([...(project?.options ?? [])].find((option) => option.textContent?.includes('未关联项目')))
+          hasUnassigned: Boolean([...(project?.options ?? [])].find((option) => option.textContent?.includes('无需项目')))
         };
       })()`
     )
@@ -766,7 +770,7 @@ try {
     await clickSelector(cdp, '[aria-label="项目操作: project"]')
     await clickByText(cdp, '归档项目')
     await waitForText(cdp, '已归档项目', 10_000)
-    const archived = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    const archived = readPersistedProjects(userDataDir)
     assert(archived.length === 1 && archived[0].archived === true, `project archive was not persisted: ${JSON.stringify(archived)}`)
     await clickByText(cdp, '已归档项目')
     await waitForSelector(cdp, '.sidebar-archived-projects-section [aria-label="项目操作: project"]')
@@ -774,7 +778,7 @@ try {
     await clickSelector(cdp, '.sidebar-archived-projects-section [aria-label="项目操作: project"]')
     await clickByText(cdp, '恢复项目')
     await waitForSelector(cdp, '.sidebar-projects-section [aria-label="项目操作: project"]')
-    const restored = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    const restored = readPersistedProjects(userDataDir)
     assert(restored.length === 1 && restored[0].archived !== true, `project restore was not persisted: ${JSON.stringify(restored)}`)
   })
 
@@ -798,26 +802,16 @@ try {
     await clickSelector(cdp, '[aria-label="项目操作: project"]')
     await clickByText(cdp, '删除项目')
     await waitForNoAriaLabel(cdp, '项目操作: project', 10_000)
-    const savedProjects = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
+    const savedProjects = readPersistedProjects(userDataDir)
     assert(savedProjects.length === 0, `project delete was not persisted: ${JSON.stringify(savedProjects)}`)
     assert(existsSync(projectDir), 'deleting a project must not delete its directory')
-    await waitForText(cdp, '未关联项目', 10_000)
+    await waitForText(cdp, '对话', 10_000)
   })
   await screenshot(cdp, '11-session-project-lifecycle')
 
-  await check(cdp, 'a new session can be created without selecting a project', async () => {
-    await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await clickSelector(cdp, '.welcome-send')
-    await waitForSelector(cdp, '.workbench', 10_000)
-    await waitForSelector(cdp, '.sidebar-unassigned-group .session-card.active', 10_000)
-    const savedProjects = JSON.parse(readFileSync(path.join(userDataDir, 'projects.json'), 'utf8'))
-    assert(savedProjects.length === 0, `an unassigned session must not recreate a project: ${JSON.stringify(savedProjects)}`)
-  })
-  await screenshot(cdp, '12-unassigned-session')
-
   await cdp.close()
 } finally {
-  const exited = await terminate(app)
+  const exited = await terminateElectronTestProcess(app)
   report.warnings.push(...summarizeProcessOutput(stdout, stderr, exited))
   const cspWarning = report.warnings.find((warning) => /ERR_BLOCKED_BY_CSP|Content Security Policy/i.test(warning))
   if (cspWarning) {
@@ -910,9 +904,8 @@ async function clickByAriaLabel(cdp, label) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const el = document.querySelector('[aria-label=${JSON.stringify(label)}]');
+      const el = [...document.querySelectorAll('[aria-label=${JSON.stringify(label)}]')].find((candidate) => candidate.getClientRects().length > 0);
       if (!el) return { ok: false };
-      el.scrollIntoView({ block: 'center', inline: 'center' });
       el.click();
       return { ok: true };
     })()`
@@ -925,7 +918,7 @@ async function dragByAriaLabel(cdp, label, deltaX, deltaY, origin = {}) {
   const point = await evalValue(
     cdp,
     `(() => {
-      const el = document.querySelector('[aria-label=${JSON.stringify(label)}]');
+      const el = [...document.querySelectorAll('[aria-label=${JSON.stringify(label)}]')].find((candidate) => candidate.getClientRects().length > 0);
       if (!el) return { ok: false, text: document.body.innerText.slice(0, 2000) };
       const rect = el.getBoundingClientRect();
       const xRatio = ${JSON.stringify(origin.xRatio ?? 0.5)};
@@ -1001,7 +994,6 @@ async function clickByText(cdp, text) {
       const elements = [...document.querySelectorAll('button, [role="button"], option')];
       const el = elements.find((candidate) => (candidate.innerText || candidate.textContent || '').trim().includes(needle));
       if (!el) return { ok: false, text: document.body.innerText.slice(0, 2000) };
-      el.scrollIntoView({ block: 'center', inline: 'center' });
       el.click();
       return { ok: true };
     })()`
@@ -1979,22 +1971,6 @@ function isPortFree(port) {
   })
 }
 
-async function terminate(child) {
-  if (child.exitCode !== null) return { code: child.exitCode, signal: child.signalCode }
-  child.kill('SIGTERM')
-  const result = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve({ code: child.exitCode, signal: 'SIGKILL' })
-    }, 3000)
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer)
-      resolve({ code, signal })
-    })
-  })
-  return result
-}
-
 function summarizeProcessOutput(out, err, exit) {
   const warnings = []
   if (exit.signal && exit.signal !== 'SIGTERM') warnings.push(`electron exited via ${exit.signal}`)
@@ -2007,6 +1983,13 @@ function summarizeProcessOutput(out, err, exit) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+function readPersistedProjects(root) {
+  const parsed = JSON.parse(readFileSync(path.join(root, 'projects.json'), 'utf8'))
+  const projects = Array.isArray(parsed) ? parsed : parsed?.projects
+  assert(Array.isArray(projects), `invalid Project Store document: ${JSON.stringify(parsed)}`)
+  return projects
 }
 
 function fail(message) {

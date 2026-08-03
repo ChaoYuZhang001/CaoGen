@@ -148,6 +148,7 @@ function verifyProjectAggregateRelations(
   const projectId = requiredProjectId(aggregate.projectId)
   const { goals, workItems } = verifyWorkspaceRelations(aggregate, projectId, parity)
   verifyWorkforceRelations(aggregate, projectId, workItems)
+  verifyCollaborationRelations(aggregate, projectId, workItems)
   verifyWorkflowRelations(aggregate, goals, workItems)
   verifyProjectOwnedCollections(aggregate, projectId)
 }
@@ -207,6 +208,36 @@ function verifyWorkforceRelations(
     if (!workItems.has(lease.workItemId)) fail(`lease ${lease.id} references missing WorkItem ${lease.workItemId}`, projectId)
     if (!assignments.has(lease.assignmentId)) fail(`lease ${lease.id} references missing Assignment ${lease.assignmentId}`, projectId)
     if (!workers.has(lease.workerId)) fail(`lease ${lease.id} references missing DigitalWorker ${lease.workerId}`, projectId)
+  }
+}
+
+function verifyCollaborationRelations(
+  aggregate: ProjectAggregateDraft,
+  projectId: string,
+  workItems: Map<string, ProjectAggregateSnapshot['workItems'][number]>
+): void {
+  const squads = uniqueMap(aggregate.squads, 'Squad', projectId)
+  const comments = uniqueMap(aggregate.comments, 'Comment', projectId)
+  const workers = uniqueMap(aggregate.digitalWorkers, 'DigitalWorker', projectId)
+  for (const squad of squads.values()) {
+    assertProject(squad.projectId, projectId, `Squad ${squad.id}`)
+    const members = new Set<string>()
+    for (const member of squad.members) {
+      const key = `${member.type}:${member.id}`
+      if (members.has(key)) fail(`Squad ${squad.id} contains duplicate member ${key}`, projectId)
+      members.add(key)
+      if (member.type === 'digital_worker' && !workers.has(member.id)) {
+        fail(`Squad ${squad.id} references missing DigitalWorker ${member.id}`, projectId)
+      }
+    }
+  }
+  for (const comment of comments.values()) {
+    assertProject(comment.projectId, projectId, `Comment ${comment.id}`)
+    const item = workItems.get(comment.workItemId)
+    if (!item) fail(`Comment ${comment.id} references missing WorkItem ${comment.workItemId}`, projectId)
+    if (comment.status === 'deleted' && (comment.body !== '' || comment.mentions.length !== 0)) {
+      fail(`Deleted Comment ${comment.id} retains message content`, projectId)
+    }
   }
 }
 
@@ -472,6 +503,8 @@ function objectEntries(
     resource: aggregate.resources.map((record) => [record.id, record]),
     goal: aggregate.goals.map((record) => [record.id, record]),
     work_item: aggregate.workItems.map((record) => [record.id, record]),
+    squad: aggregate.squads.map((record) => [record.id, record]),
+    comment: aggregate.comments.map((record) => [record.id, record]),
     digital_worker: aggregate.digitalWorkers.map((record) => [record.id, record]),
     assignment: aggregate.assignments.map((record) => [record.id, record]),
     lease: aggregate.leases.map((record) => [record.id, record]),

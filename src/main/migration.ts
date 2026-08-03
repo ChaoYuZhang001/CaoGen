@@ -1,214 +1,692 @@
+import { randomUUID } from 'node:crypto'
+import { existsSync, lstatSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync, appendFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import type { MigrationAsset, MigrationScan } from '../shared/types'
+import { basename, join, resolve } from 'node:path'
+import { parse as parseToml } from '@iarna/toml'
+import type {
+  MigrationAsset,
+  MigrationAssetConflict,
+  MigrationAssetKind,
+  MigrationAssetRisk,
+  MigrationAssetScope,
+  MigrationDecisionAction,
+  MigrationScan
+} from '../shared/types'
+import {
+  assertNoSymlinkWithin,
+  containsSensitiveText,
+  directoryContainsSensitiveText,
+  errorCode,
+  readSafeDirectory,
+  readSafeFile,
+  safeRulePreview,
+  sha256,
+  targetFingerprint
+} from './migration-safety'
+import { sanitizeMcpConfig } from './migration-mcp'
+import {
+  storeMigrationScan,
+  type InternalMigrationAsset,
+  type JsonObject
+} from './migration-scan-store'
+import { applyMigration as applyMigrationSelection } from './migration-apply'
 
-/**
- * D11 · 迁移向导:检测其他 Agent 的配置资产并一键导入。
- * 红线:只读扫描;导入前逐项确认;绝不修改来源工具的文件;CLAUDE.md 先备份。
- */
+type MigrationDiagnostic = MigrationScan['diagnostics'][number]
 
-const PREVIEW_CHARS = 400
-
-function readPreview(path: string): string {
-  try {
-    const text = readFileSync(path, 'utf8')
-    return text.length > PREVIEW_CHARS ? `${text.slice(0, PREVIEW_CHARS)}…` : text
-  } catch {
-    return ''
-  }
+interface SkillScanContext {
+  agent: string
+  scope: MigrationAssetScope
+  sourceRoot: string
+  cwd: string | undefined
+  home: string
+  assets: InternalMigrationAsset[]
+  diagnostics: MigrationDiagnostic[]
 }
 
-function fileAsset(agent: string, kind: MigrationAsset['kind'], path: string): MigrationAsset | null {
-  try {
-    const st = statSync(path)
-    if (!st.isFile() || st.size === 0 || st.size > 512 * 1024) return null
-    return { agent, kind, path, name: basename(path), preview: readPreview(path) }
-  } catch {
-    return null
+const MAX_SOURCE_FILE_BYTES = 512 * 1024
+const MAX_TARGET_FILE_BYTES = 8 * 1024 * 1024
+const MAX_SKILL_BYTES = 5 * 1024 * 1024
+const MAX_SKILL_FILES = 200
+
+const IMPORT_BEGIN = '<!-- caogen:migration-begin'
+
+export { applyMigration, defaultMigrationBackupRoot, rollbackMigration } from './migration-apply'
+export type { MigrationApplyOptions } from './migration-apply'
+
+export function scanMigration(cwdInput?: string, homeDirectory = homedir()): MigrationScan {
+  const home = resolve(homeDirectory)
+  const cwd = normalizeProjectDirectory(cwdInput)
+  const diagnostics: MigrationDiagnostic[] = []
+  const internalAssets: InternalMigrationAsset[] = []
+
+  if (cwd) scanProjectSources(cwd, home, internalAssets, diagnostics)
+  scanUserSources(cwd, home, internalAssets, diagnostics)
+
+  const nativeAssetCount = countNativeClaudeAssets(cwd, home)
+  const scanId = randomUUID()
+  const result: MigrationScan = {
+    scanId,
+    ...(cwd ? { cwd } : {}),
+    mode: cwd ? 'project' : 'conversation',
+    scannedAt: new Date().toISOString(),
+    assets: internalAssets.map(({ asset }) => asset).sort(compareAssets),
+    claudeNative: nativeAssetCount > 0,
+    nativeAssetCount,
+    diagnostics
   }
+  storeMigrationScan(result, internalAssets)
+  return result
 }
 
-/** 目录下所有小文本文件(rules 目录场景) */
-function dirAssets(agent: string, kind: MigrationAsset['kind'], dir: string): MigrationAsset[] {
-  try {
-    return readdirSync(dir)
-      .filter((n) => !n.startsWith('.'))
-      .map((n) => fileAsset(agent, kind, join(dir, n)))
-      .filter((a): a is MigrationAsset => a !== null)
-      .slice(0, 20)
-  } catch {
-    return []
-  }
-}
-
-/**
- * 扫描项目级 + 用户级的他家 Agent 资产。
- * 规则文件 → 可注入 CLAUDE.md;MCP 配置 → 可合并 .mcp.json。
- */
-export function scanMigration(cwd: string): MigrationScan {
-  const home = homedir()
-  const assets: MigrationAsset[] = []
-  const push = (a: MigrationAsset | null): void => {
-    if (a) assets.push(a)
-  }
-
-  // ---- 项目级规则 ----
-  push(fileAsset('Cursor', 'rules', join(cwd, '.cursorrules')))
-  assets.push(...dirAssets('Cursor', 'rules', join(cwd, '.cursor', 'rules')))
-  assets.push(...dirAssets('Windsurf', 'rules', join(cwd, '.windsurf', 'rules')))
-  push(fileAsset('Windsurf', 'rules', join(cwd, '.windsurfrules')))
-  push(fileAsset('Cline', 'rules', join(cwd, '.clinerules')))
-  assets.push(...dirAssets('Cline', 'rules', join(cwd, '.clinerules')))
-  assets.push(...dirAssets('Cline', 'rules', join(cwd, '.clinerules.d')))
-  // Roo Code:.roo/rules/ 目录 + .roorules 单文件
-  push(fileAsset('Roo Code', 'rules', join(cwd, '.roorules')))
-  assets.push(...dirAssets('Roo Code', 'rules', join(cwd, '.roo', 'rules')))
-  push(fileAsset('Codex', 'rules', join(cwd, 'AGENTS.md')))
-  push(fileAsset('Gemini CLI', 'rules', join(cwd, 'GEMINI.md')))
-  push(fileAsset('GitHub Copilot', 'rules', join(cwd, '.github', 'copilot-instructions.md')))
-  assets.push(...dirAssets('GitHub Copilot', 'rules', join(cwd, '.github', 'instructions')))
-  push(fileAsset('Aider', 'config', join(cwd, '.aider.conf.yml')))
-  // Aider 约定文件:CONVENTIONS.md(其推荐的 rules 载体)
-  push(fileAsset('Aider', 'rules', join(cwd, 'CONVENTIONS.md')))
-  // Continue:项目级 rules 目录
-  assets.push(...dirAssets('Continue', 'rules', join(cwd, '.continue', 'rules')))
-
-  // ---- 项目级 MCP(他家格式) ----
-  push(fileAsset('Cursor', 'mcp', join(cwd, '.cursor', 'mcp.json')))
-  push(fileAsset('Windsurf', 'mcp', join(cwd, '.windsurf', 'mcp.json')))
-  push(fileAsset('Cline', 'mcp', join(cwd, '.cline', 'mcp.json')))
-  push(fileAsset('Roo Code', 'mcp', join(cwd, '.roo', 'mcp.json')))
-
-  // ---- 用户级 ----
-  push(fileAsset('Codex', 'rules', join(home, '.codex', 'AGENTS.md')))
-  push(fileAsset('Codex', 'config', join(home, '.codex', 'config.toml')))
-  push(fileAsset('Cursor', 'mcp', join(home, '.cursor', 'mcp.json')))
-  push(fileAsset('Aider', 'config', join(home, '.aider.conf.yml')))
-  push(fileAsset('Gemini CLI', 'rules', join(home, '.gemini', 'GEMINI.md')))
-  // Continue 用户级配置(YAML/JSON 皆试)
-  push(fileAsset('Continue', 'config', join(home, '.continue', 'config.yaml')))
-  push(fileAsset('Continue', 'config', join(home, '.continue', 'config.json')))
-  // Cline / Roo 的 VS Code 全局 MCP 设置(macOS 路径;只读扫描)
-  push(
-    fileAsset(
-      'Cline',
-      'mcp',
-      join(
-        home,
-        'Library',
-        'Application Support',
-        'Code',
-        'User',
-        'globalStorage',
-        'saoudrizwan.claude-dev',
-        'settings',
-        'cline_mcp_settings.json'
-      )
-    )
-  )
-
-  // Claude Code 本家资产已被引擎原生继承,只作提示不需导入
-  const claudeNative =
-    existsSync(join(cwd, 'CLAUDE.md')) ||
-    existsSync(join(cwd, '.claude')) ||
-    existsSync(join(home, '.claude'))
-
-  return { cwd, assets, claudeNative }
-}
-
-const IMPORT_BEGIN = '<!-- caogen:imported-begin'
-const IMPORT_END = '<!-- caogen:imported-end -->'
-
-/**
- * 把选中的规则资产注入项目 CLAUDE.md(带来源标注区块)。
- * 已有 CLAUDE.md 先备份 .bak;重复导入同一来源(路径相同)会跳过。
- * MCP 资产合并进项目 .mcp.json(同名 server 跳过)。
- * 返回人类可读的结果摘要。
- */
+/** Compatibility bridge for the legacy path-selection UI; replacement still requires the new decision flow. */
 export function importAssets(cwd: string, paths: string[]): string {
+  const requested = new Set(paths)
   const scan = scanMigration(cwd)
-  const chosen = scan.assets.filter((a) => paths.includes(a.path))
-  if (chosen.length === 0) return '未选择任何资产'
-  const done: string[] = []
-  const skipped: string[] = []
+  const decisions = scan.assets
+    .filter((asset) => requested.has(asset.path))
+    .map((asset) => ({
+      assetId: asset.id,
+      action: asset.importable && asset.supportedActions.includes('import')
+        ? 'import' as const
+        : 'skip' as const
+    }))
+  const result = applyMigrationSelection({ scanId: scan.scanId, decisions })
+  if (!result.ok) throw new Error(result.errorCode ?? 'migration_operation_failed')
+  return result.message
+}
 
-  // ---- 规则/配置 → CLAUDE.md 区块 ----
-  const rules = chosen.filter((a) => a.kind === 'rules' || a.kind === 'config')
-  if (rules.length > 0) {
-    const target = join(cwd, 'CLAUDE.md')
-    let existing = ''
-    if (existsSync(target)) {
-      existing = readFileSync(target, 'utf8')
-      const bak = `${target}.bak`
-      if (!existsSync(bak)) copyFileSync(target, bak)
-    }
-    const blocks: string[] = []
-    for (const a of rules) {
-      if (existing.includes(`from:${a.path} `)) {
-        skipped.push(`${a.name}(已导入过)`)
-        continue
-      }
-      let body: string
-      try {
-        body = readFileSync(a.path, 'utf8').trim()
-      } catch {
-        skipped.push(`${a.name}(读取失败)`)
-        continue
-      }
-      blocks.push(
-        `\n${IMPORT_BEGIN} agent:${a.agent} from:${a.path} date:${new Date().toISOString().slice(0, 10)} -->\n` +
-          `## 迁移导入:${a.agent} · ${a.name}\n\n${body}\n${IMPORT_END}\n`
-      )
-      done.push(`${a.name} → CLAUDE.md`)
-    }
-    if (blocks.length > 0) {
-      if (!existing) {
-        writeFileSync(target, `# 项目指引(CaoGen 迁移导入)\n${blocks.join('')}`)
-      } else {
-        appendFileSync(target, blocks.join(''))
-      }
-    }
+function scanProjectSources(
+  cwd: string,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  const ruleFiles: Array<[string, string]> = [
+    ['Cursor', join(cwd, '.cursorrules')],
+    ['Windsurf', join(cwd, '.windsurfrules')],
+    ['Cline', join(cwd, '.clinerules')],
+    ['Roo Code', join(cwd, '.roorules')],
+    ['Codex', join(cwd, 'AGENTS.md')],
+    ['Gemini CLI', join(cwd, 'GEMINI.md')],
+    ['GitHub Copilot', join(cwd, '.github', 'copilot-instructions.md')],
+    ['Aider', join(cwd, 'CONVENTIONS.md')]
+  ]
+  for (const [agent, sourcePath] of ruleFiles) {
+    addRuleAsset(agent, 'project', sourcePath, cwd, cwd, home, assets, diagnostics)
+  }
+  for (const [agent, directory] of [
+    ['Cursor', join(cwd, '.cursor', 'rules')],
+    ['Windsurf', join(cwd, '.windsurf', 'rules')],
+    ['Cline', join(cwd, '.clinerules.d')],
+    ['Roo Code', join(cwd, '.roo', 'rules')],
+    ['GitHub Copilot', join(cwd, '.github', 'instructions')],
+    ['Continue', join(cwd, '.continue', 'rules')]
+  ] as Array<[string, string]>) {
+    addRuleDirectory(agent, 'project', directory, cwd, cwd, home, assets, diagnostics)
   }
 
-  // ---- MCP → .mcp.json 合并 ----
-  const mcps = chosen.filter((a) => a.kind === 'mcp')
-  if (mcps.length > 0) {
-    const target = join(cwd, '.mcp.json')
-    let current: { mcpServers: Record<string, unknown> } = { mcpServers: {} }
+  for (const [agent, sourcePath] of [
+    ['Cursor', join(cwd, '.cursor', 'mcp.json')],
+    ['Windsurf', join(cwd, '.windsurf', 'mcp.json')],
+    ['Cline', join(cwd, '.cline', 'mcp.json')],
+    ['Roo Code', join(cwd, '.roo', 'mcp.json')]
+  ] as Array<[string, string]>) {
+    addJsonMcpAssets(agent, 'project', sourcePath, cwd, cwd, home, assets, diagnostics)
+  }
+
+  addBlockedConfigAsset('Aider', 'project', join(cwd, '.aider.conf.yml'), cwd, assets, diagnostics)
+  addSkillRoot('Codex', 'project', join(cwd, '.codex', 'skills'), cwd, cwd, home, assets, diagnostics)
+}
+
+function scanUserSources(
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  addRuleAsset('Codex', 'user', join(home, '.codex', 'AGENTS.md'), home, cwd, home, assets, diagnostics)
+  addRuleAsset('Gemini CLI', 'user', join(home, '.gemini', 'GEMINI.md'), home, cwd, home, assets, diagnostics)
+  addBlockedConfigAsset('Aider', 'user', join(home, '.aider.conf.yml'), home, assets, diagnostics)
+  addBlockedConfigAsset('Continue', 'user', join(home, '.continue', 'config.yaml'), home, assets, diagnostics)
+  addBlockedConfigAsset('Continue', 'user', join(home, '.continue', 'config.json'), home, assets, diagnostics)
+
+  addCodexConfigAssets(join(home, '.codex', 'config.toml'), home, cwd, home, assets, diagnostics)
+  addJsonMcpAssets('Cursor', 'user', join(home, '.cursor', 'mcp.json'), home, cwd, home, assets, diagnostics)
+  addJsonMcpAssets(
+    'Cline',
+    'user',
+    join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json'),
+    home,
+    cwd,
+    home,
+    assets,
+    diagnostics
+  )
+  addSkillRoot('Codex', 'user', join(home, '.codex', 'skills'), home, cwd, home, assets, diagnostics)
+}
+
+function addRuleDirectory(
+  agent: string,
+  scope: MigrationAssetScope,
+  directory: string,
+  sourceRoot: string,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(directory)) return
+  try {
+    assertNoSymlinkWithin(sourceRoot, directory)
+    const info = lstatSync(directory)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('migration_source_not_directory')
+    for (const entry of readdirSync(directory, { withFileTypes: true, encoding: 'utf8' }).slice(0, 50)) {
+      if (!entry.name.startsWith('.') && entry.isFile()) {
+        addRuleAsset(agent, scope, join(directory, entry.name), sourceRoot, cwd, home, assets, diagnostics)
+      }
+    }
+  } catch (error) {
+    diagnostics.push(diagnostic(error, directory))
+  }
+}
+
+function addRuleAsset(
+  agent: string,
+  scope: MigrationAssetScope,
+  sourcePath: string,
+  sourceRoot: string,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(sourcePath)) return
+  try {
+    assertNoSymlinkWithin(sourceRoot, sourcePath)
+    const source = readSafeFile(sourcePath, MAX_SOURCE_FILE_BYTES)
+    const text = source.bytes.toString('utf8')
+    const targetPath = ruleTarget(scope, cwd, home)
+    const id = assetId(agent, 'rules', scope, sourcePath)
+    const sensitive = containsSensitiveText(text)
+    const target = inspectRuleTarget(targetPath, id, source.digest)
+    const risk = sensitive ? 'blocked' : scope === 'user' ? 'review' : target.blocked ? 'blocked' : 'low'
+    const conflict = target.blocked ? 'unsupported' : target.conflict
+    const importable = !sensitive && !target.blocked && conflict !== 'duplicate'
+    const asset = buildAsset({
+      id,
+      agent,
+      kind: 'rules',
+      scope,
+      sourcePath,
+      source,
+      preview: safeRulePreview(text),
+      targetPath,
+      conflict,
+      conflictDetail: target.detail,
+      risk,
+      riskReasons: [
+        ...(sensitive ? ['检测到疑似凭据,禁止导入'] : []),
+        ...(scope === 'user' ? ['用户级规则会影响所有对话'] : []),
+        ...(target.blocked ? ['目标文件不可安全修改'] : [])
+      ],
+      importable,
+      recommended: importable && risk === 'low' && (conflict === 'none' || conflict === 'merge')
+    })
+    assets.push({
+      asset,
+      sourceRoot,
+      sourcePath,
+      targetRoot: migrationTargetRoot(scope, cwd, home),
+      targetPath,
+      targetFingerprint: target.fingerprint
+    })
+  } catch (error) {
+    diagnostics.push(diagnostic(error, sourcePath))
+  }
+}
+
+function addBlockedConfigAsset(
+  agent: string,
+  scope: MigrationAssetScope,
+  sourcePath: string,
+  sourceRoot: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(sourcePath)) return
+  try {
+    assertNoSymlinkWithin(sourceRoot, sourcePath)
+    const source = readSafeFile(sourcePath, MAX_SOURCE_FILE_BYTES)
+    assets.push({
+      asset: buildAsset({
+        id: assetId(agent, 'config', scope, sourcePath),
+        agent,
+        kind: 'config',
+        scope,
+        sourcePath,
+        source,
+        preview: '检测到配置文件;模型、Provider 和凭据字段不会自动复制。',
+        conflict: 'unsupported',
+        risk: 'blocked',
+        riskReasons: ['通用配置语义不能安全映射'],
+        ignoredFields: ['entire_config'],
+        importable: false,
+        recommended: false
+      }),
+      sourceRoot,
+      sourcePath
+    })
+  } catch (error) {
+    diagnostics.push(diagnostic(error, sourcePath))
+  }
+}
+
+function addCodexConfigAssets(
+  sourcePath: string,
+  sourceRoot: string,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(sourcePath)) return
+  try {
+    assertNoSymlinkWithin(sourceRoot, sourcePath)
+    const source = readSafeFile(sourcePath, MAX_SOURCE_FILE_BYTES)
+    const parsed = parseToml(source.bytes.toString('utf8')) as JsonObject
+    const topLevelIgnored = Object.keys(parsed).filter((key) => key !== 'mcp_servers' && key !== 'notify')
+    assets.push({
+      asset: buildAsset({
+        id: assetId('Codex', 'config', 'user', sourcePath),
+        agent: 'Codex',
+        kind: 'config',
+        scope: 'user',
+        sourcePath,
+        source,
+        preview: 'Codex 配置已结构化读取;Provider、模型、认证与运行策略保持不变。',
+        conflict: 'unsupported',
+        risk: 'blocked',
+        riskReasons: ['只迁移可安全映射的 MCP 与 Skill'],
+        ignoredFields: topLevelIgnored.length > 0 ? topLevelIgnored.map((key) => `config.${key}`) : ['non_mcp_config'],
+        importable: false,
+        recommended: false
+      }),
+      sourceRoot,
+      sourcePath
+    })
+
+    if (Array.isArray(parsed.notify) || typeof parsed.notify === 'string') {
+      assets.push({
+        asset: buildAsset({
+          id: assetId('Codex', 'hook', 'user', sourcePath, 'notify'),
+          agent: 'Codex',
+          kind: 'hook',
+          scope: 'user',
+          sourcePath,
+          source,
+          name: 'notify hook',
+          preview: '检测到 Codex notify Hook;因执行语义和权限边界不同,不会自动启用。',
+          conflict: 'unsupported',
+          risk: 'blocked',
+          riskReasons: ['Hook 可执行本地命令,必须重新授权'],
+          ignoredFields: ['notify.command', 'notify.args', 'notify.env'],
+          importable: false,
+          recommended: false
+        }),
+        sourceRoot,
+        sourcePath
+      })
+    }
+
+    if (isObject(parsed.mcp_servers)) {
+      for (const [name, config] of Object.entries(parsed.mcp_servers)) {
+        addMcpEntry('Codex', 'user', sourcePath, sourceRoot, source, name, config, cwd, home, assets)
+      }
+    }
+  } catch (error) {
+    diagnostics.push(diagnostic(error, sourcePath))
+  }
+}
+
+function addJsonMcpAssets(
+  agent: string,
+  scope: MigrationAssetScope,
+  sourcePath: string,
+  sourceRoot: string,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(sourcePath)) return
+  try {
+    assertNoSymlinkWithin(sourceRoot, sourcePath)
+    const source = readSafeFile(sourcePath, MAX_SOURCE_FILE_BYTES)
+    const parsed = JSON.parse(source.bytes.toString('utf8')) as unknown
+    if (!isObject(parsed)) throw new Error('migration_mcp_root_invalid')
+    const servers = isObject(parsed.mcpServers) ? parsed.mcpServers : isObject(parsed.servers) ? parsed.servers : undefined
+    if (!servers) throw new Error('migration_mcp_servers_missing')
+    for (const [name, config] of Object.entries(servers)) {
+      addMcpEntry(agent, scope, sourcePath, sourceRoot, source, name, config, cwd, home, assets)
+    }
+  } catch (error) {
+    diagnostics.push(diagnostic(error, sourcePath))
+  }
+}
+
+function addMcpEntry(
+  agent: string,
+  scope: MigrationAssetScope,
+  sourcePath: string,
+  sourceRoot: string,
+  source: ReturnType<typeof readSafeFile>,
+  serverName: string,
+  configValue: unknown,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[]
+): void {
+  const targetPath = mcpTarget(scope, cwd, home)
+  const id = assetId(agent, 'mcp', scope, sourcePath, serverName)
+  const sanitized = sanitizeMcpConfig(configValue)
+  const target = inspectMcpTarget(targetPath, serverName)
+  const hasRunnableTarget = typeof sanitized.config.command === 'string' || typeof sanitized.config.url === 'string'
+  const blocked = target.blocked || !hasRunnableTarget
+  const risk: MigrationAssetRisk = blocked ? 'blocked' : sanitized.ignoredFields.length > 0 || scope === 'user' ? 'review' : 'low'
+  const conflict: MigrationAssetConflict = blocked ? 'unsupported' : target.conflict
+  const importable = !blocked && conflict !== 'duplicate'
+  const transport = typeof sanitized.config.command === 'string' ? 'stdio' : 'HTTP'
+  const preview = `${transport} MCP;保留 ${Object.keys(sanitized.config).length} 个安全字段;忽略 ${sanitized.ignoredFields.length} 个凭据或未知字段。`
+  const asset = buildAsset({
+    id,
+    agent,
+    kind: 'mcp',
+    scope,
+    sourcePath,
+    source,
+    name: serverName,
+    preview,
+    targetPath,
+    conflict,
+    conflictDetail: target.detail,
+    risk,
+    riskReasons: [
+      ...(sanitized.ignoredFields.length > 0 ? ['凭据字段不会导入,服务可能需要重新授权'] : []),
+      ...(scope === 'user' ? ['用户级 MCP 会影响所有对话'] : []),
+      ...(blocked ? ['缺少可安全映射的 command 或 url'] : [])
+    ],
+    ignoredFields: sanitized.ignoredFields,
+    importable,
+    recommended: importable && risk === 'low' && conflict === 'none'
+  })
+  assets.push({
+    asset,
+    sourceRoot,
+    sourcePath,
+    targetRoot: migrationTargetRoot(scope, cwd, home),
+    targetPath,
+    targetFingerprint: target.fingerprint,
+    mcpServerName: serverName,
+    mcpConfig: sanitized.config
+  })
+}
+
+function addSkillRoot(
+  agent: string,
+  scope: MigrationAssetScope,
+  skillsRoot: string,
+  sourceRoot: string,
+  cwd: string | undefined,
+  home: string,
+  assets: InternalMigrationAsset[],
+  diagnostics: MigrationDiagnostic[]
+): void {
+  if (!existsSync(skillsRoot)) return
+  const context: SkillScanContext = { agent, scope, sourceRoot, cwd, home, assets, diagnostics }
+  try {
+    assertNoSymlinkWithin(sourceRoot, skillsRoot)
+    const info = lstatSync(skillsRoot)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('migration_source_not_directory')
+    for (const entry of readdirSync(skillsRoot, { withFileTypes: true, encoding: 'utf8' }).slice(0, 100)) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+      addSkillEntry(skillsRoot, entry.name, context)
+    }
+  } catch (error) {
+    diagnostics.push(diagnostic(error, skillsRoot))
+  }
+}
+
+function addSkillEntry(skillsRoot: string, name: string, context: SkillScanContext): void {
+  const sourcePath = join(skillsRoot, name)
+  if (!existsSync(join(sourcePath, 'SKILL.md'))) return
+  try {
+    assertNoSymlinkWithin(context.sourceRoot, sourcePath)
+    const snapshot = readSafeDirectory(sourcePath, {
+      maxFiles: MAX_SKILL_FILES,
+      maxBytes: MAX_SKILL_BYTES,
+      maxDepth: 8
+    })
+    const targetPath = join(skillTargetRoot(context.scope, context.cwd, context.home), safeSingleSegment(name))
+    const fingerprint = targetFingerprint(targetPath)
+    const sensitive = directoryContainsSensitiveText(snapshot)
+    const conflict = skillConflict(fingerprint, snapshot.digest)
+    const targetBlocked = conflict === 'unsupported'
+    const risk: MigrationAssetRisk = sensitive || targetBlocked
+      ? 'blocked'
+      : context.scope === 'user' ? 'review' : 'low'
+    const importable = risk !== 'blocked' && conflict !== 'duplicate'
+    const skillMd = snapshot.files.find((file) => file.relativePath === 'SKILL.md')
+    const preview = sensitive
+      ? 'Skill 内容包含疑似凭据,预览与导入均已阻止。'
+      : safeRulePreview(skillMd?.bytes.toString('utf8') ?? '', 220)
+    const asset = buildAsset({
+      id: assetId(context.agent, 'skill', context.scope, sourcePath),
+      agent: context.agent,
+      kind: 'skill',
+      scope: context.scope,
+      sourcePath,
+      source: { digest: snapshot.digest, sizeBytes: snapshot.sizeBytes },
+      name,
+      preview,
+      targetPath,
+      conflict,
+      risk,
+      riskReasons: [
+        ...(sensitive ? ['Skill 中检测到疑似凭据'] : []),
+        ...(context.scope === 'user' ? ['用户级 Skill 会影响所有对话'] : [])
+      ],
+      importable,
+      recommended: importable && risk === 'low' && conflict === 'none'
+    })
+    context.assets.push({
+      asset,
+      sourceRoot: context.sourceRoot,
+      sourcePath,
+      targetRoot: migrationTargetRoot(context.scope, context.cwd, context.home),
+      targetPath,
+      targetFingerprint: fingerprint
+    })
+  } catch (error) {
+    context.diagnostics.push(diagnostic(error, sourcePath))
+  }
+}
+
+function skillConflict(fingerprint: string, sourceDigest: string): MigrationAssetConflict {
+  if (fingerprint === 'symlink' || fingerprint === 'special') return 'unsupported'
+  if (fingerprint === 'missing') return 'none'
+  if (fingerprint === `dir:${sourceDigest}`) return 'duplicate'
+  return 'replace_required'
+}
+
+function buildAsset(input: {
+  id: string
+  agent: string
+  kind: MigrationAssetKind
+  scope: MigrationAssetScope
+  sourcePath: string
+  source: { digest: string; sizeBytes: number }
+  name?: string
+  preview: string
+  targetPath?: string
+  conflict: MigrationAssetConflict
+  conflictDetail?: string
+  risk: MigrationAssetRisk
+  riskReasons: string[]
+  ignoredFields?: string[]
+  importable: boolean
+  recommended: boolean
+}): MigrationAsset {
+  const supportedActions: MigrationDecisionAction[] = input.importable
+    ? input.conflict === 'replace_required'
+      ? ['replace', 'skip']
+      : ['import', 'skip']
+    : ['skip']
+  return {
+    id: input.id,
+    agent: input.agent,
+    kind: input.kind,
+    scope: input.scope,
+    path: input.sourcePath,
+    name: input.name ?? basename(input.sourcePath),
+    sourceDigest: input.source.digest,
+    sizeBytes: input.source.sizeBytes,
+    preview: input.preview,
+    ...(input.targetPath ? { targetPath: input.targetPath } : {}),
+    conflict: input.conflict,
+    ...(input.conflictDetail ? { conflictDetail: input.conflictDetail } : {}),
+    ignoredFields: [...new Set(input.ignoredFields ?? [])].sort(),
+    risk: input.risk,
+    riskReasons: input.riskReasons,
+    importable: input.importable,
+    recommended: input.recommended,
+    supportedActions
+  }
+}
+
+function inspectRuleTarget(targetPath: string, id: string, digest: string): {
+  fingerprint: string
+  conflict: MigrationAssetConflict
+  detail?: string
+  blocked: boolean
+} {
+  try {
+    const fingerprint = targetFingerprint(targetPath)
+    if (fingerprint === 'missing') return { fingerprint, conflict: 'none', blocked: false }
+    if (!fingerprint.startsWith('file:')) {
+      return { fingerprint, conflict: 'unsupported', detail: '目标不是普通文件', blocked: true }
+    }
+    const text = readSafeFile(targetPath, MAX_TARGET_FILE_BYTES).bytes.toString('utf8')
+    if (text.includes(`${IMPORT_BEGIN} id:${id} digest:${digest}`)) {
+      return { fingerprint, conflict: 'duplicate', detail: '相同版本已导入', blocked: false }
+    }
+    if (text.includes(`${IMPORT_BEGIN} id:${id} `)) {
+      return { fingerprint, conflict: 'replace_required', detail: '已导入旧版本', blocked: false }
+    }
+    return { fingerprint, conflict: 'merge', detail: '将追加独立来源区块', blocked: false }
+  } catch (error) {
+    return { fingerprint: 'unreadable', conflict: 'unsupported', detail: publicMigrationError(error), blocked: true }
+  }
+}
+
+function inspectMcpTarget(targetPath: string, serverName: string): {
+  fingerprint: string
+  conflict: MigrationAssetConflict
+  detail?: string
+  blocked: boolean
+} {
+  try {
+    const fingerprint = targetFingerprint(targetPath)
+    if (fingerprint === 'missing') return { fingerprint, conflict: 'none', blocked: false }
+    if (!fingerprint.startsWith('file:')) {
+      return { fingerprint, conflict: 'unsupported', detail: '目标不是普通 JSON 文件', blocked: true }
+    }
+    const parsed = JSON.parse(readSafeFile(targetPath, MAX_TARGET_FILE_BYTES).bytes.toString('utf8')) as unknown
+    if (!isObject(parsed)) throw new Error('migration_target_json_invalid')
+    const servers = parsed.mcpServers
+    if (servers !== undefined && !isObject(servers)) throw new Error('migration_target_mcp_invalid')
+    if (isObject(servers) && Object.hasOwn(servers, serverName)) {
+      return { fingerprint, conflict: 'replace_required', detail: '目标已有同名 MCP', blocked: false }
+    }
+    return { fingerprint, conflict: 'none', blocked: false }
+  } catch (error) {
+    return { fingerprint: 'unreadable', conflict: 'unsupported', detail: publicMigrationError(error), blocked: true }
+  }
+}
+
+function countNativeClaudeAssets(cwd: string | undefined, home: string): number {
+  const candidates = [
+    ...(cwd ? [join(cwd, 'CLAUDE.md'), join(cwd, '.claude'), join(cwd, '.mcp.json')] : []),
+    join(home, '.claude', 'CLAUDE.md'),
+    join(home, '.claude', 'skills'),
+    join(home, '.claude', 'agents'),
+    join(home, '.claude', 'settings.json')
+  ]
+  return candidates.filter((path) => {
     try {
-      if (existsSync(target)) {
-        const parsed = JSON.parse(readFileSync(target, 'utf8'))
-        if (parsed && typeof parsed === 'object') {
-          current = { mcpServers: { ...(parsed.mcpServers ?? {}) }, ...parsed }
-        }
-      }
+      return !lstatSync(path).isSymbolicLink()
     } catch {
-      skipped.push('.mcp.json 已存在但解析失败,跳过 MCP 合并')
+      return false
     }
-    for (const a of mcps) {
-      try {
-        const src = JSON.parse(readFileSync(a.path, 'utf8'))
-        const servers = (src?.mcpServers ?? src?.servers ?? {}) as Record<string, unknown>
-        let added = 0
-        for (const [name, cfg] of Object.entries(servers)) {
-          if (current.mcpServers[name]) {
-            skipped.push(`MCP ${name}(同名已存在)`)
-            continue
-          }
-          current.mcpServers[name] = cfg
-          added++
-        }
-        if (added > 0) done.push(`${a.name} → .mcp.json(${added} 个 server)`)
-      } catch {
-        skipped.push(`${a.name}(MCP 解析失败)`)
-      }
-    }
-    writeFileSync(target, JSON.stringify(current, null, 2))
-  }
+  }).length
+}
 
-  const parts: string[] = []
-  if (done.length > 0) parts.push(`已导入:${done.join('、')}`)
-  if (skipped.length > 0) parts.push(`跳过:${skipped.join('、')}`)
-  return parts.join('\n') || '没有可导入的内容'
+function ruleTarget(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
+  return scope === 'project' && cwd ? join(cwd, 'CLAUDE.md') : join(home, '.claude', 'CLAUDE.md')
+}
+
+function mcpTarget(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
+  return scope === 'project' && cwd ? join(cwd, '.mcp.json') : join(home, '.claude', 'settings.json')
+}
+
+function skillTargetRoot(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
+  return scope === 'project' && cwd ? join(cwd, '.claude', 'skills') : join(home, '.claude', 'skills')
+}
+
+function migrationTargetRoot(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
+  return scope === 'project' && cwd ? cwd : home
+}
+
+function normalizeProjectDirectory(cwdInput?: string): string | undefined {
+  const trimmed = typeof cwdInput === 'string' ? cwdInput.trim() : ''
+  if (!trimmed) return undefined
+  const cwd = resolve(trimmed)
+  const info = lstatSync(cwd)
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('migration_project_not_directory')
+  return cwd
+}
+
+function assetId(
+  agent: string,
+  kind: MigrationAssetKind,
+  scope: MigrationAssetScope,
+  sourcePath: string,
+  entry = ''
+): string {
+  return `migration-${sha256([agent, kind, scope, resolve(sourcePath), entry].join('\0')).slice(0, 24)}`
+}
+
+function compareAssets(left: MigrationAsset, right: MigrationAsset): number {
+  return left.scope.localeCompare(right.scope) || left.agent.localeCompare(right.agent) || left.kind.localeCompare(right.kind) || left.name.localeCompare(right.name)
+}
+
+function safeSingleSegment(value: string): string {
+  const clean = value.replace(/[^A-Za-z0-9._-]/g, '-').replace(/\.{2,}/g, '-').replace(/^[.-]+/, '').slice(0, 80)
+  if (!clean || clean === '.' || clean === '..') throw new Error('migration_target_name_invalid')
+  return clean
+}
+
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function diagnostic(error: unknown, path: string): MigrationDiagnostic {
+  return { code: publicMigrationError(error), message: '该来源未扫描或未导入。', path }
+}
+
+function publicMigrationError(error: unknown): string {
+  if (error instanceof Error && /^migration_[a-z0-9_]+$/.test(error.message)) return error.message
+  const code = errorCode(error)
+  if (code === 'ENOENT') return 'migration_path_missing'
+  if (code === 'EACCES' || code === 'EPERM') return 'migration_path_unreadable'
+  return 'migration_operation_failed'
 }

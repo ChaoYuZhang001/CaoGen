@@ -1,0 +1,199 @@
+%% WB-P1 类关系图:收编前后对比
+%% 文件:docs/class-diagram-wb-p1.mermaid
+
+classDiagram
+    direction TB
+
+    %% ═══════════════════════════════════════════════════════════
+    %% 收编前(Before)
+    %% ═══════════════════════════════════════════════════════════
+
+    class WorkbenchState_Before {
+        +diffOpen: boolean
+        +worktreeOpen: boolean
+        +terminalOpen: boolean
+        +filesOpen: boolean
+        +browserOpen: boolean
+        +previewOpen: boolean
+        +pluginRegistryOpen: boolean
+        +subagentOpen: boolean
+        +routineOpen: boolean
+        +memoryOpen: boolean
+        ---
+        +diff: WorkspaceDiff
+        +terminal: TerminalInfo
+        +browserState: BrowserViewState
+        +fileEntries: ProjectFileEntry[]
+        +preview: PreparedPreview
+        +routines: Routine[]
+        +...97 fields
+    }
+
+    class AppStore_Before {
+        +openDiffPanel() Promise~void~
+        +closeDiffPanel() void
+        +openTerminalPanel() Promise~void~
+        +closeTerminalPanel() void
+        +openBrowserPanel(url?) Promise~void~
+        +closeBrowserPanel() Promise~void~
+        +openFilesPanel() Promise~void~
+        +closeFilesPanel() void
+        +openPreviewPanel(path?) Promise~void~
+        +closePreviewPanel() void
+        +openWorktreePanel() Promise~void~
+        +closeWorktreePanel() void
+        +openPluginRegistryPanel() Promise~void~
+        +closePluginRegistryPanel() void
+        +openSubagentPanel() void
+        +closeSubagentPanel() void
+        +openRoutinePanel() Promise~void~
+        +closeRoutinePanel() void
+        +openMemoryPanel() void
+        +closeMemoryPanel() void
+        ---
+        +acceptMemorySuggestion() void
+        +refreshDiffPanel() Promise~void~
+        +refreshFilesPanel() Promise~void~
+        +refreshPluginRegistryPanel() Promise~void~
+        +refreshRoutinePanel() Promise~void~
+    }
+
+    class WorkbenchRoot_Before {
+        -resultOpen: boolean
+        -diffOpen: boolean
+        -browserOpen: boolean
+        -...10 *Open selectors
+        ---
+        -closeActiveSidePanel(candidates, fallback) void
+        -collapseSidePanel() void
+        -toggleSummaryPanel() void
+        -useEffect(同步 resultOpen) void
+        ---
+        +render() if/else 链 75 行
+    }
+
+    class closeActiveSidePanel_Before {
+        +candidates: ReadonlyArray~[boolean, fn]~
+        +fallback: fn
+        ---
+        遍历 10 个 [isOpen, closeFn] 元组
+        找到第一个 isOpen=true 的 closeFn 执行
+    }
+
+    %% ═══════════════════════════════════════════════════════════
+    %% 收编后(After)
+    %% ═══════════════════════════════════════════════════════════
+
+    class PanelId {
+        <<union type>>
+        result
+        diff
+        terminal
+        browser
+        files
+        preview
+        worktree
+        pluginRegistry
+        subagent
+        routine
+        memory
+    }
+
+    class PanelDefinition {
+        +id: PanelId
+        +titleKey: string
+        +icon: HeaderIconName
+        +component: React.LazyExoticComponent
+        +keepAlive: boolean
+    }
+
+    class PanelOpenContext {
+        +url?: string
+        +path?: string
+    }
+
+    class PANEL_REGISTRY {
+        <<readonly array>>
+        11 × PanelDefinition
+        ---
+        +PANEL_MAP: Record~PanelId, PanelDefinition~
+    }
+
+    class WorkbenchState_After {
+        +activePanelId: PanelId | null
+        +mountedPanels: Set~PanelId~
+        ---
+        +diff: WorkspaceDiff
+        +terminal: TerminalInfo
+        +browserState: BrowserViewState
+        +fileEntries: ProjectFileEntry[]
+        +preview: PreparedPreview
+        +routines: Routine[]
+        +...数据字段不变
+    }
+
+    class AppStore_After {
+        +openPanel(id, context?) void
+        +closePanel() void
+        +togglePanel(id, context?) void
+        +unmountPanel(id) void
+        ---
+        +openDiffPanel() Promise~void~ @deprecated
+        +closeDiffPanel() void @deprecated
+        +openTerminalPanel() Promise~void~ @deprecated
+        +closeTerminalPanel() void @deprecated
+        +...10 对薄包装
+        ---
+        +panelActivators: Record~PanelId, PanelActivator~
+    }
+
+    class WorkbenchRoot_After {
+        -activePanelId: PanelId | null
+        -mountedPanels: Set~PanelId~
+        ---
+        -collapseSidePanel() → closePanel()
+        -toggleSummaryPanel() → togglePanel('result')
+        -renderPanelContent(id) JSX
+        ---
+        +render() PANEL_REGISTRY.map + display:none/flex
+    }
+
+    class panelActivators {
+        <<Record~PanelId, PanelActivator~>>
+        diff → refreshDiffPanel + refreshGitStatus
+        terminal → startTerminal
+        browser → openBrowser(ctx.url)
+        files → refreshFilesPanel
+        preview → resolvePath + refreshPreviewPanel
+        worktree → resetState + refreshWorktreePanel
+        pluginRegistry → refreshPluginRegistryPanel
+        subagent → clearError/Message
+        routine → refreshRoutinePanel
+        memory → clearInitialForm
+        result → no-op
+    }
+
+    %% ═══════════════════════════════════════════════════════════
+    %% 关系
+    %% ═══════════════════════════════════════════════════════════
+
+    %% 收编前关系
+    WorkbenchRoot_Before --> WorkbenchState_Before: 读取 10 个 *Open
+    WorkbenchRoot_Before --> AppStore_Before: 调用 10 对 open/close
+    WorkbenchRoot_Before --> closeActiveSidePanel_Before: 遍历 10 元组
+    AppStore_Before --> WorkbenchState_Before: 读写 *Open
+
+    %% 收编后关系
+    PANEL_REGISTRY --> PanelDefinition: contains 11
+    PanelDefinition --> PanelId: id
+    panelActivators --> PanelId: keyed by
+    WorkbenchState_After --> PanelId: activePanelId
+    WorkbenchState_After --> PanelId: mountedPanels Set
+    AppStore_After --> WorkbenchState_After: 读写 activePanelId/mountedPanels
+    AppStore_After --> panelActivators: openPanel 调用
+    AppStore_After --> PanelOpenContext: openPanel 参数
+    AppStore_After --> PanelId: openPanel 参数
+    WorkbenchRoot_After --> WorkbenchState_After: 读取 activePanelId/mountedPanels
+    WorkbenchRoot_After --> AppStore_After: 调用 openPanel/closePanel/togglePanel
+    WorkbenchRoot_After --> PANEL_REGISTRY: 遍历渲染
+    WorkbenchRoot_After --> PanelDefinition: 读取 component/keepAlive

@@ -16,12 +16,17 @@ import type {
   SupervisorLeaseOptions,
   SupervisorMutationOptions,
   SupervisorRecoveryResult,
+  SupervisorRunAccountingBase,
   SupervisorRunInput,
+  SupervisorRunObservationInput,
   SupervisorRunRecord,
+  SupervisorRunUsage,
   SupervisorRunStatus,
   SupervisorStateDocument
 } from '../../shared/supervisor-types'
 import { SUPERVISOR_SCHEMA_VERSION } from '../../shared/supervisor-types'
+import type { GoalBudget } from '../../shared/project-workspace-types'
+import type { TaskRunStatus, UsageTotals } from '../../shared/types'
 
 const STORE_FILE_NAME = 'supervisor-state.json'
 const LOCK_SUFFIX = '.lock'
@@ -31,6 +36,7 @@ const LOCK_STALE_MS = 120_000
 const DEFAULT_TTL_MS = 30_000
 const MAX_TTL_MS = 86_400_000
 const TERMINAL = new Set<SupervisorRunStatus>(['failed', 'completed', 'cancelled'])
+const UNCHANGED_MUTATION = Symbol('unchanged-supervisor-mutation')
 
 export type SupervisorStateErrorCode =
   | 'invalid_input'
@@ -48,6 +54,8 @@ export type SupervisorStateErrorCode =
   | 'lease_owner'
   | 'approval_required'
   | 'retry_limit'
+  | 'budget_exhausted'
+  | 'concurrency_exhausted'
   | 'lock_timeout'
 
 export class SupervisorStateError extends Error {
@@ -65,7 +73,12 @@ export interface SupervisorStateStoreOptions {
   now?: () => number
 }
 
-type Mutation<T> = (document: SupervisorStateDocument, now: number) => T
+interface UnchangedMutation<T> {
+  readonly kind: typeof UNCHANGED_MUTATION
+  readonly value: T
+}
+
+type Mutation<T> = (document: SupervisorStateDocument, now: number) => T | UnchangedMutation<T>
 
 /**
  * Durable local Supervisor state. The store deliberately owns only run
@@ -121,25 +134,37 @@ export class SupervisorStateStore {
   async createRun(input: SupervisorRunInput, options: SupervisorMutationOptions = {}): Promise<SupervisorRunRecord> {
     const projectId = requiredId(input.projectId, 'projectId')
     const workItemId = requiredId(input.workItemId, 'workItemId')
+    const goalId = input.goalId === undefined ? undefined : requiredId(input.goalId, 'goalId')
+    const origin = input.origin ?? 'manual'
+    if (origin !== 'manual' && origin !== 'task_run') {
+      throw new SupervisorStateError('invalid_input', `unknown Supervisor Run origin ${String(origin)}`)
+    }
     const id = input.id === undefined ? randomUUID() : requiredId(input.id, 'run id')
     const maxRetries = normalizeMaxRetries(input.maxRetries)
+    const budget = normalizeGoalBudget(input.budget)
+    const accountingBase = normalizeAccountingBase(input.accountingBase)
     return this.mutate(options, (document, now) => {
       assertStoreRevision(document, options)
       if (document.runs.some((run) => run.id === id)) {
         throw new SupervisorStateError('already_exists', `run ${id} already exists`)
       }
+      assertGoalBudgetAllowsNewRun(document, goalId, budget)
       const createdAt = normalizeTimestamp(input.createdAt, now, 'createdAt')
       const run: SupervisorRunRecord = {
         schemaVersion: SUPERVISOR_SCHEMA_VERSION,
         id,
         projectId,
-        ...(input.goalId === undefined ? {} : { goalId: requiredId(input.goalId, 'goalId') }),
+        ...(goalId === undefined ? {} : { goalId }),
         workItemId,
+        origin,
         status: 'queued',
         revision: 1,
         fencingToken: 0,
         retryCount: 0,
         maxRetries,
+        ...(budget ? { budget } : {}),
+        ...(accountingBase ? { accountingBase } : {}),
+        usage: emptyRunUsage(),
         createdAt,
         updatedAt: createdAt
       }
@@ -147,8 +172,83 @@ export class SupervisorStateStore {
       appendEvent(document, run, 'run.created', options.actorId ?? 'system', createdAt, {
         projectId,
         workItemId,
-        maxRetries
+        origin,
+        maxRetries,
+        budget
       })
+      return clone(run)
+    })
+  }
+
+  async authorizeTurn(runId: string): Promise<SupervisorRunRecord> {
+    const id = requiredId(runId, 'run id')
+    const inspect = async (): Promise<SupervisorRunRecord> => withFileLock(
+      this.filePath,
+      this.lockPath,
+      async () => {
+        const document = await readDocument(this.filePath)
+        const run = findRun(document, id)
+        if (run.status !== 'queued' && run.status !== 'running') {
+          throw new SupervisorStateError(
+            'invalid_transition',
+            `run ${run.id} cannot authorize a turn from ${run.status}`
+          )
+        }
+        assertGoalBudgetAllowsTurn(document, run)
+        return clone(run)
+      }
+    )
+    const next = this.queue.then(inspect, inspect)
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  async observeRun(
+    runId: string,
+    input: SupervisorRunObservationInput,
+    options: SupervisorMutationOptions = {}
+  ): Promise<SupervisorRunRecord> {
+    const id = requiredId(runId, 'run id')
+    const sourceEventId = requiredId(input.sourceEventId, 'sourceEventId')
+    const observedAt = normalizeTimestamp(input.observedAt, options.now ?? this.now(), 'observedAt')
+    const observedUsage = normalizeUsageTotals(input.usage, 'observed usage')
+    const observedCostUsd = nonNegativeFinite(input.costUsd, 'observed costUsd')
+    return this.mutate<SupervisorRunRecord>({ ...options, now: observedAt }, (document, now) => {
+      const run = findRun(document, id)
+      if (document.events.some((event) => event.runId === id &&
+          event.payload.sourceEventId === sourceEventId)) return unchangedMutation(clone(run))
+
+      const nextUsage = usageFromObservation(run, observedUsage, observedCostUsd, input.turnCompleted === true)
+      const nextStatus = observedSupervisorStatus(run, input.taskRunStatus)
+      const usageChanged = !sameRunUsage(run.usage, nextUsage)
+      const statusChanged = run.status !== nextStatus
+      const from = run.status
+      if (usageChanged) run.usage = nextUsage
+      if (statusChanged) {
+        run.status = nextStatus
+        if (TERMINAL.has(nextStatus)) run.lease = undefined
+        if (nextStatus !== 'waiting_approval') run.approval = undefined
+      }
+      touch(run, now)
+      if (usageChanged) {
+        appendEvent(document, run, 'run.accounting', options.actorId ?? 'session-runtime', now, {
+          sourceEventId,
+          usage: nextUsage
+        })
+      }
+      if (statusChanged) {
+        appendEvent(document, run, 'run.observed', options.actorId ?? 'session-runtime', now, {
+          sourceEventId,
+          taskRunStatus: input.taskRunStatus
+        }, undefined, from, nextStatus)
+      }
+      if (!usageChanged && !statusChanged) {
+        appendEvent(document, run, 'run.observed', options.actorId ?? 'session-runtime', now, {
+          sourceEventId,
+          taskRunStatus: input.taskRunStatus,
+          observationOnly: true
+        })
+      }
       return clone(run)
     })
   }
@@ -378,6 +478,7 @@ export class SupervisorStateStore {
       if (run.retryCount >= run.maxRetries) {
         throw new SupervisorStateError('retry_limit', `run ${run.id} exhausted ${run.maxRetries} retries`)
       }
+      assertGoalBudgetAllowsRetry(document, run)
       const from = run.status
       run.status = 'queued'
       run.retryCount += 1
@@ -425,11 +526,23 @@ export class SupervisorStateStore {
   }
 
   async recoverExpiredLeases(now = this.now()): Promise<SupervisorRecoveryResult> {
-    return this.mutate({ actorId: 'supervisor', now }, (document) => {
+    return this.recoverExpiredLeasesWhere(now, () => true)
+  }
+
+  /** Renderer recovery is coordination-only; TaskRun recovery belongs to SessionManager startup. */
+  async recoverExpiredManualLeases(now = this.now()): Promise<SupervisorRecoveryResult> {
+    return this.recoverExpiredLeasesWhere(now, (run) => run.origin !== 'task_run')
+  }
+
+  private async recoverExpiredLeasesWhere(
+    now: number,
+    includes: (run: SupervisorRunRecord) => boolean
+  ): Promise<SupervisorRecoveryResult> {
+    return this.mutate<SupervisorRecoveryResult>({ actorId: 'supervisor', now }, (document) => {
       const expiredRunIds: string[] = []
       const blockedRunIds: string[] = []
       for (const run of document.runs) {
-        if (!run.lease || run.lease.expiresAt > now || TERMINAL.has(run.status)) continue
+        if (!includes(run) || !run.lease || run.lease.expiresAt > now || TERMINAL.has(run.status)) continue
         const from = run.status
         const fencingToken = run.lease.fencingToken
         run.lease = undefined
@@ -444,7 +557,31 @@ export class SupervisorStateStore {
           previousStatus: from
         }, fencingToken, from, run.status)
       }
-      return { expiredRunIds, blockedRunIds }
+      const result = { expiredRunIds, blockedRunIds }
+      return expiredRunIds.length > 0 ? result : unchangedMutation(result)
+    })
+  }
+
+  async recoverOrphanedTaskRunReservations(
+    durableTaskRunIds: ReadonlySet<string>,
+    now = this.now()
+  ): Promise<string[]> {
+    return this.mutate<string[]>({ actorId: 'supervisor-startup', now }, (document) => {
+      const blockedRunIds: string[] = []
+      for (const run of document.runs) {
+        if (run.origin !== 'task_run' || durableTaskRunIds.has(run.id) || TERMINAL.has(run.status)) continue
+        const from = run.status
+        run.status = 'blocked'
+        run.lease = undefined
+        run.approval = undefined
+        run.error = 'TaskRun reservation has no durable TaskRun after process restart'
+        touch(run, now)
+        appendEvent(document, run, 'run.blocked', 'supervisor-startup', now, {
+          reason: 'missing_durable_task_run'
+        }, undefined, from, 'blocked')
+        blockedRunIds.push(run.id)
+      }
+      return blockedRunIds.length > 0 ? blockedRunIds : unchangedMutation(blockedRunIds)
     })
   }
 
@@ -470,11 +607,31 @@ export class SupervisorStateStore {
     })
   }
 
+  async purgeProject(projectId: string): Promise<{ runs: number; events: number }> {
+    const id = requiredId(projectId, 'projectId')
+    return this.mutate({ actorId: 'project-deletion' }, (document) => {
+      const runIds = new Set(document.runs
+        .filter((run) => run.projectId === id)
+        .map((run) => run.id))
+      const beforeRuns = document.runs.length
+      const beforeEvents = document.events.length
+      document.runs = document.runs.filter((run) => run.projectId !== id)
+      document.events = document.events
+        .filter((event) => !runIds.has(event.runId))
+        .map((event, index) => ({ ...event, seq: index + 1 }))
+      return {
+        runs: beforeRuns - document.runs.length,
+        events: beforeEvents - document.events.length
+      }
+    })
+  }
+
   private async mutate<T>(options: SupervisorMutationOptions, mutation: Mutation<T>): Promise<T> {
     const run = async (): Promise<T> => withFileLock(this.filePath, this.lockPath, async () => {
       const document = await readDocument(this.filePath)
       const now = options.now ?? this.now()
       const result = mutation(document, now)
+      if (isUnchangedMutation(result)) return result.value
       document.revision += 1
       await writeDocument(this.filePath, document)
       return result
@@ -483,6 +640,15 @@ export class SupervisorStateStore {
     this.queue = next.then(() => undefined, () => undefined)
     return next
   }
+}
+
+function unchangedMutation<T>(value: T): UnchangedMutation<T> {
+  return { kind: UNCHANGED_MUTATION, value }
+}
+
+function isUnchangedMutation<T>(value: T | UnchangedMutation<T>): value is UnchangedMutation<T> {
+  return typeof value === 'object' && value !== null &&
+    'kind' in value && value.kind === UNCHANGED_MUTATION
 }
 
 function allowedTransition(from: SupervisorRunStatus, to: SupervisorRunStatus): boolean {
@@ -603,6 +769,230 @@ function normalizeTtl(value: number | undefined): number {
   return ttl
 }
 
+function normalizeGoalBudget(value: GoalBudget | undefined): GoalBudget | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new SupervisorStateError('invalid_input', 'Goal budget must be an object')
+  }
+  const budget: GoalBudget = {}
+  if (value.amount !== undefined) budget.amount = nonNegativeFinite(value.amount, 'Goal budget amount')
+  if (value.currency !== undefined) budget.currency = requiredText(value.currency, 'Goal budget currency').toUpperCase()
+  if (value.maxTokens !== undefined) budget.maxTokens = positiveLimit(value.maxTokens, 'Goal budget maxTokens')
+  if (value.maxRuns !== undefined) budget.maxRuns = positiveLimit(value.maxRuns, 'Goal budget maxRuns')
+  if (value.maxConcurrentRuns !== undefined) {
+    budget.maxConcurrentRuns = positiveLimit(value.maxConcurrentRuns, 'Goal budget maxConcurrentRuns')
+  }
+  return Object.keys(budget).length > 0 ? budget : undefined
+}
+
+function normalizeAccountingBase(
+  value: SupervisorRunAccountingBase | undefined
+): SupervisorRunAccountingBase | undefined {
+  if (value === undefined) return undefined
+  return {
+    usage: normalizeUsageTotals(value.usage, 'accounting base usage'),
+    costUsd: nonNegativeFinite(value.costUsd, 'accounting base costUsd')
+  }
+}
+
+function normalizeUsageTotals(value: UsageTotals, label: string): UsageTotals {
+  if (!value || typeof value !== 'object') {
+    throw new SupervisorStateError('invalid_input', `${label} must be an object`)
+  }
+  return {
+    input: nonNegativeFinite(value.input, `${label}.input`),
+    output: nonNegativeFinite(value.output, `${label}.output`),
+    cacheRead: nonNegativeFinite(value.cacheRead, `${label}.cacheRead`),
+    cacheCreation: nonNegativeFinite(value.cacheCreation, `${label}.cacheCreation`)
+  }
+}
+
+function nonNegativeFinite(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new SupervisorStateError('invalid_input', `${label} must be a finite non-negative number`)
+  }
+  return value
+}
+
+function positiveLimit(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new SupervisorStateError('invalid_input', `${label} must be a positive integer`)
+  }
+  return value as number
+}
+
+function emptyRunUsage(): SupervisorRunUsage {
+  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd: 0, turns: 0 }
+}
+
+function assertGoalBudgetAllowsNewRun(
+  document: SupervisorStateDocument,
+  goalId: string | undefined,
+  budget: GoalBudget | undefined
+): void {
+  if (!goalId || !budget) return
+  assertSupportedBudgetCurrency(budget)
+  const goalRuns = document.runs.filter((run) => run.goalId === goalId)
+  if (budget.maxRuns !== undefined && goalRuns.length >= budget.maxRuns) {
+    throw new SupervisorStateError(
+      'budget_exhausted',
+      `Goal ${goalId} exhausted maxRuns ${budget.maxRuns}`,
+      { goalId, maxRuns: budget.maxRuns, actualRuns: goalRuns.length }
+    )
+  }
+  if (budget.maxConcurrentRuns !== undefined) {
+    const activeRuns = goalRuns.filter((run) => !TERMINAL.has(run.status)).length
+    if (activeRuns >= budget.maxConcurrentRuns) {
+      throw new SupervisorStateError(
+        'concurrency_exhausted',
+        `Goal ${goalId} reached maxConcurrentRuns ${budget.maxConcurrentRuns}`,
+        { goalId, maxConcurrentRuns: budget.maxConcurrentRuns, activeRuns }
+      )
+    }
+  }
+  assertAggregateUsageAvailable(goalId, budget, aggregateGoalUsage(goalRuns))
+}
+
+function assertGoalBudgetAllowsTurn(
+  document: SupervisorStateDocument,
+  run: SupervisorRunRecord
+): void {
+  const budget = run.budget
+  if (!run.goalId || !budget) return
+  assertSupportedBudgetCurrency(budget)
+  const goalRuns = document.runs.filter((candidate) => candidate.goalId === run.goalId)
+  if (budget.maxConcurrentRuns !== undefined) {
+    const activeRuns = goalRuns.filter((candidate) => !TERMINAL.has(candidate.status)).length
+    if (activeRuns > budget.maxConcurrentRuns) {
+      throw new SupervisorStateError(
+        'concurrency_exhausted',
+        `Goal ${run.goalId} exceeds maxConcurrentRuns ${budget.maxConcurrentRuns}`,
+        { goalId: run.goalId, maxConcurrentRuns: budget.maxConcurrentRuns, activeRuns }
+      )
+    }
+  }
+  assertAggregateUsageAvailable(run.goalId, budget, aggregateGoalUsage(goalRuns))
+}
+
+function assertGoalBudgetAllowsRetry(
+  document: SupervisorStateDocument,
+  run: SupervisorRunRecord
+): void {
+  const budget = run.budget
+  if (!run.goalId || !budget) return
+  assertSupportedBudgetCurrency(budget)
+  const goalRuns = document.runs.filter((candidate) => candidate.goalId === run.goalId)
+  if (budget.maxConcurrentRuns !== undefined) {
+    const activeOtherRuns = goalRuns.filter((candidate) =>
+      candidate.id !== run.id && !TERMINAL.has(candidate.status)).length
+    if (activeOtherRuns >= budget.maxConcurrentRuns) {
+      throw new SupervisorStateError(
+        'concurrency_exhausted',
+        `Goal ${run.goalId} reached maxConcurrentRuns ${budget.maxConcurrentRuns}`,
+        { goalId: run.goalId, maxConcurrentRuns: budget.maxConcurrentRuns, activeRuns: activeOtherRuns }
+      )
+    }
+  }
+  assertAggregateUsageAvailable(run.goalId, budget, aggregateGoalUsage(goalRuns))
+}
+
+function assertSupportedBudgetCurrency(budget: GoalBudget): void {
+  if ((budget.amount ?? 0) <= 0) return
+  const currency = budget.currency?.trim().toUpperCase() || 'USD'
+  if (currency !== 'USD') {
+    throw new SupervisorStateError(
+      'budget_exhausted',
+      `Goal cost budget currency ${currency} cannot be enforced from USD accounting`,
+      { currency }
+    )
+  }
+}
+
+function aggregateGoalUsage(runs: readonly SupervisorRunRecord[]): SupervisorRunUsage {
+  return runs.reduce<SupervisorRunUsage>((total, run) => {
+    const usage = run.usage ?? emptyRunUsage()
+    total.input += usage.input
+    total.output += usage.output
+    total.cacheRead += usage.cacheRead
+    total.cacheCreation += usage.cacheCreation
+    total.costUsd += usage.costUsd
+    total.turns += usage.turns
+    return total
+  }, emptyRunUsage())
+}
+
+function assertAggregateUsageAvailable(
+  goalId: string,
+  budget: GoalBudget,
+  usage: SupervisorRunUsage
+): void {
+  const totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheCreation
+  if (budget.maxTokens !== undefined && totalTokens >= budget.maxTokens) {
+    throw new SupervisorStateError(
+      'budget_exhausted',
+      `Goal ${goalId} exhausted maxTokens ${budget.maxTokens}`,
+      { goalId, maxTokens: budget.maxTokens, actualTokens: totalTokens }
+    )
+  }
+  if ((budget.amount ?? 0) > 0 && usage.costUsd >= budget.amount!) {
+    throw new SupervisorStateError(
+      'budget_exhausted',
+      `Goal ${goalId} exhausted cost budget USD ${budget.amount}`,
+      { goalId, amountUsd: budget.amount, actualCostUsd: usage.costUsd }
+    )
+  }
+}
+
+function usageFromObservation(
+  run: SupervisorRunRecord,
+  observed: UsageTotals,
+  observedCostUsd: number,
+  turnCompleted: boolean
+): SupervisorRunUsage {
+  const base = run.accountingBase ?? { usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, costUsd: 0 }
+  const current = run.usage ?? emptyRunUsage()
+  const nextTurns = current.turns + (turnCompleted ? 1 : 0)
+  if (!Number.isSafeInteger(nextTurns)) {
+    throw new SupervisorStateError('invalid_input', 'run usage.turns exceeds the safe integer range')
+  }
+  return {
+    input: accumulatedTurnUsage(current.input, observed.input, turnCompleted, 'input'),
+    output: accumulatedTurnUsage(current.output, observed.output, turnCompleted, 'output'),
+    cacheRead: accumulatedTurnUsage(current.cacheRead, observed.cacheRead, turnCompleted, 'cacheRead'),
+    cacheCreation: accumulatedTurnUsage(current.cacheCreation, observed.cacheCreation, turnCompleted, 'cacheCreation'),
+    costUsd: Math.max(current.costUsd, observedCostUsd - base.costUsd, 0),
+    turns: nextTurns
+  }
+}
+
+function accumulatedTurnUsage(
+  current: number,
+  observed: number,
+  turnCompleted: boolean,
+  field: keyof UsageTotals
+): number {
+  return nonNegativeFinite(
+    current + (turnCompleted ? observed : 0),
+    `run usage.${field}`
+  )
+}
+
+function sameRunUsage(left: SupervisorRunUsage | undefined, right: SupervisorRunUsage): boolean {
+  const current = left ?? emptyRunUsage()
+  return current.input === right.input && current.output === right.output &&
+    current.cacheRead === right.cacheRead && current.cacheCreation === right.cacheCreation &&
+    current.costUsd === right.costUsd && current.turns === right.turns
+}
+
+function observedSupervisorStatus(run: SupervisorRunRecord, status: TaskRunStatus): SupervisorRunStatus {
+  if (TERMINAL.has(run.status)) return run.status
+  if (status === 'completed' || status === 'failed' || status === 'cancelled') return status
+  if (run.status === 'paused' || run.status === 'blocked') return run.status
+  if (status === 'waiting_approval') return 'waiting_approval'
+  if (status === 'waiting_reconciliation') return 'waiting_reconciliation'
+  return status === 'queued' ? 'queued' : 'running'
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value)
 }
@@ -647,6 +1037,7 @@ function assertRun(value: unknown): asserts value is SupervisorRunRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new SupervisorStateError('corrupt_store', 'run record is invalid')
   const run = value as Partial<SupervisorRunRecord>
   assertRunCoreShape(run)
+  assertRunAccountingShape(run)
   if (run.lease !== undefined) assertLeaseShape(run.lease)
   if (run.approval !== undefined && (!run.approval || typeof run.approval.id !== 'string')) {
     throw new SupervisorStateError('corrupt_store', `run ${run.id} approval is invalid`)
@@ -655,18 +1046,40 @@ function assertRun(value: unknown): asserts value is SupervisorRunRecord {
 
 function assertRunCoreShape(run: Partial<SupervisorRunRecord>): void {
   if (run.schemaVersion !== SUPERVISOR_SCHEMA_VERSION || typeof run.id !== 'string' ||
-      typeof run.projectId !== 'string' || typeof run.workItemId !== 'string' || !isStatus(run.status)) {
+      typeof run.projectId !== 'string' || typeof run.workItemId !== 'string' ||
+      (run.goalId !== undefined && typeof run.goalId !== 'string') || !isStatus(run.status)) {
     invalidRunShape(run)
   }
   if (!isSafeIntegerAtLeast(run.revision, 1) || !isSafeIntegerAtLeast(run.fencingToken, 0) ||
       !isSafeIntegerAtLeast(run.retryCount, 0) || !isSafeIntegerAtLeast(run.maxRetries, 0)) {
     invalidRunShape(run)
   }
-  if (typeof run.createdAt !== 'number' || typeof run.updatedAt !== 'number') invalidRunShape(run)
+  if (!isNonNegativeFinite(run.createdAt) || !isNonNegativeFinite(run.updatedAt) ||
+      (run.error !== undefined && typeof run.error !== 'string') ||
+      (run.origin !== undefined && run.origin !== 'manual' && run.origin !== 'task_run')) invalidRunShape(run)
+}
+
+function assertRunAccountingShape(run: Partial<SupervisorRunRecord>): void {
+  try {
+    if (run.budget !== undefined && normalizeGoalBudget(run.budget) === undefined) invalidRunShape(run)
+    if (run.accountingBase !== undefined) normalizeAccountingBase(run.accountingBase)
+    if (run.usage !== undefined) {
+      normalizeUsageTotals(run.usage, 'run usage')
+      nonNegativeFinite(run.usage.costUsd, 'run usage.costUsd')
+      if (!isSafeIntegerAtLeast(run.usage.turns, 0)) invalidRunShape(run)
+    }
+  } catch (error) {
+    if (error instanceof SupervisorStateError && error.code === 'corrupt_store') throw error
+    invalidRunShape(run)
+  }
 }
 
 function isSafeIntegerAtLeast(value: unknown, minimum: number): value is number {
   return Number.isSafeInteger(value) && (value as number) >= minimum
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
 function invalidRunShape(run: Partial<SupervisorRunRecord>): never {

@@ -4,7 +4,7 @@ import type {
   SupervisorApprovalInput,
   SupervisorLeaseOptions,
   SupervisorMutationOptions,
-  SupervisorRunInput,
+  SupervisorRunCreateInput,
   SupervisorStateApi
 } from '../shared/types'
 
@@ -18,7 +18,7 @@ export const supervisorApi: SupervisorBridgeApi = {
   listSupervisorRuns: (options) => invoke('list', { options }),
   getSupervisorRun: (id) => invoke('get', { id }),
   listSupervisorEvents: (runId) => invoke('events', { runId }),
-  createSupervisorRun: (input: SupervisorRunInput, options?: SupervisorMutationOptions) =>
+  createSupervisorRun: (input: SupervisorRunCreateInput, options?: SupervisorMutationOptions) =>
     invoke('create', { input, options }),
   acquireSupervisorLease: (id: string, options: SupervisorLeaseOptions) =>
     invoke('lease:acquire', { id, options }),

@@ -280,9 +280,10 @@ function assertContractDecision(contract, policy, toolName, toolInput, allowed, 
 
 function exerciseConcurrencyPolicy(runtime, fixture) {
   const { now, assignment, meta } = fixture
-  writeJson(path.join(actionRoot, 'active-sessions.json'), [
-    sessionMeta('session-policy-other', assignment, now, 'running', 'openai')
-  ])
+  writeJson(path.join(actionRoot, 'active-sessions.json'), {
+    schemaVersion: 1,
+    sessions: [sessionMeta('session-policy-other', assignment, now, 'running', 'openai')]
+  })
   const concurrencySnapshot = durableSnapshot(actionRoot)
   assertDenied(runtime.policy.preflightDigitalWorkerAction({
     rootDir: actionRoot,
@@ -297,7 +298,34 @@ function exerciseConcurrencyPolicy(runtime, fixture) {
     action: 'provider_send',
     now
   }), 'concurrency_exhausted', 'fresh process restores active-session concurrency denial')
-  writeJson(path.join(actionRoot, 'active-sessions.json'), [])
+  writeJson(path.join(actionRoot, 'active-sessions.json'), [
+    sessionMeta('session-policy-legacy', assignment, now, 'running', 'openai')
+  ])
+  assertDenied(runPolicyInFreshProcess({
+    rootDir: actionRoot,
+    meta,
+    action: 'provider_send',
+    now
+  }), 'concurrency_exhausted', 'legacy active-session array preserves concurrency denial')
+  writeJson(path.join(actionRoot, 'active-sessions.json'), { schemaVersion: 2, sessions: [] })
+  const futureSnapshot = durableSnapshot(actionRoot)
+  assertDenied(runtime.policy.preflightDigitalWorkerAction({
+    rootDir: actionRoot,
+    meta,
+    action: 'provider_send',
+    now
+  }), 'policy_store_unavailable', 'future active-session schema fails closed')
+  assertEqual(durableSnapshot(actionRoot), futureSnapshot, 'future schema denial has no durable side effect')
+  writeJson(path.join(actionRoot, 'active-sessions.json'), { sessions: [] })
+  const versionlessSnapshot = durableSnapshot(actionRoot)
+  assertDenied(runtime.policy.preflightDigitalWorkerAction({
+    rootDir: actionRoot,
+    meta,
+    action: 'provider_send',
+    now
+  }), 'policy_store_unavailable', 'versionless active-session object fails closed')
+  assertEqual(durableSnapshot(actionRoot), versionlessSnapshot, 'versionless denial has no durable side effect')
+  writeJson(path.join(actionRoot, 'active-sessions.json'), { schemaVersion: 1, sessions: [] })
 }
 
 async function exerciseBudgetPolicy(runtime, fixture) {
@@ -309,16 +337,19 @@ async function exerciseBudgetPolicy(runtime, fixture) {
     now
   }), 'budget_untrackable', 'budgeted worker rejects an engine without reliable cost reporting')
 
-  writeJson(path.join(actionRoot, 'sessions.json'), [{
-    ...sessionMeta('session-policy-budget', assignment, now, 'idle', 'openai'),
-    updatedAt: now,
-    sdkSessionId: 'sdk-policy-budget',
-    title: 'Budget history',
-    model: 'gpt-4.1',
-    providerId: 'provider-policy',
-    permissionMode: 'default',
-    costUsd: 5
-  }])
+  writeJson(path.join(actionRoot, 'sessions.json'), {
+    schemaVersion: 1,
+    entries: [{
+      ...sessionMeta('session-policy-budget', assignment, now, 'idle', 'openai'),
+      updatedAt: now,
+      sdkSessionId: 'sdk-policy-budget',
+      title: 'Budget history',
+      model: 'gpt-4.1',
+      providerId: 'provider-policy',
+      permissionMode: 'default',
+      costUsd: 5
+    }]
+  })
   const restarted = new runtime.worker.DigitalWorkerStore(actionRoot)
   assertEqual((await restarted.getDigitalWorker(worker.id))?.budgetPolicy.monthlyUsd, 5,
     'budget policy survives store restart')
@@ -328,7 +359,7 @@ async function exerciseBudgetPolicy(runtime, fixture) {
     action: 'provider_send',
     now
   }), 'budget_exhausted', 'restarted guard denies exhausted monthly budget')
-  writeJson(path.join(actionRoot, 'sessions.json'), [])
+  writeJson(path.join(actionRoot, 'sessions.json'), { schemaVersion: 1, entries: [] })
 }
 
 function exerciseEscalationPolicy(runtime, fixture) {
@@ -656,8 +687,11 @@ function assertProductionBoundaries() {
     'DigitalWorker send guard runs before TaskRun mutation')
   assertOrder(send, 'digitalWorkerSendPolicyError(', 'session.send(input)',
     'DigitalWorker send guard runs before Provider dispatch')
-  assert(send.includes('digitalWorkerBinding: session.meta.digitalWorkerBinding'),
-    'SessionManager copies immutable DigitalWorker identity into each TaskRun')
+  assert(send.includes('createSessionTaskRun(session.meta)'),
+    'SessionManager creates each TaskRun from the complete immutable Session identity')
+  const taskRun = between(source('src/main/task/task-run.ts'), 'export function createSessionTaskRun(', 'function sessionTaskRunContinuation(')
+  assert(taskRun.includes('digitalWorkerBinding: meta.digitalWorkerBinding'),
+    'Session TaskRun creation copies immutable DigitalWorker identity')
 
   const creation = between(sessionManager, '  private async validatedSessionCreationDraft(', '  private activateSessionCreation(')
   assert(creation.includes('prepareSessionIdentityForActivation('),

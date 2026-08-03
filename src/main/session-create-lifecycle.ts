@@ -6,10 +6,11 @@ import { resolveSessionModelRoute } from './model/session-routing'
 import { getProject, touchProject } from './projects'
 import { getSettings } from './settings'
 import { listHistory } from './history'
-import { decryptProviderToken, getProvider, listProviders, resolveProviderEngine } from './providers'
+import { getProvider, listProviders, providerIsReady, resolveProviderEngine } from './providers'
 import { executeManagedWorktreeCreateEffect } from './ipc/worktree-operation-handlers'
 import { openProjectWorkspaceStore, type ProjectWorkspaceStore } from './project-workspace/store'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
+import { normalizeTaskStrategy, derivePermissionModeFromStrategy, migrateLegacyPermissionMode } from './task/task-strategy'
 import {
   inspectManagedWorktreeIdentity,
   inspectManagedWorktreeRegistryRecord,
@@ -45,26 +46,33 @@ export function prepareSessionCreationDraft(
   input: CreateSessionOptions,
   parentMeta?: SessionMeta
 ): SessionCreationDraft {
-  const resumeHistory = sessionResumeHistory(input)
-  const resumeWorktreeRecord = resumeHistoryWorktreeRecord(resumeHistory)
-  const opts = normalizedSessionCreationOptions(input, resumeHistory)
+  const historySource = sessionConversationHistory(input)
+  const resumeHistory = historySource?.history
+  const forking = historySource?.mode === 'fork'
+  const resumeWorktreeRecord = historySource?.mode === 'resume'
+    ? resumeHistoryWorktreeRecord(resumeHistory)
+    : undefined
+  const opts = normalizedSessionCreationOptions(input, resumeHistory, historySource?.mode)
   const settings = getSettings()
   const driveMode = sessionDriveMode(opts, resumeHistory, settings)
   const drivePolicy = getCaoGenDrivePolicy(driveMode)
   const routingScope = sessionRoutingScope(opts, resumeHistory, parentMeta)
-  const selectedModel = sessionModel(opts, resumeHistory)
-  const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode)
+  const selectedModel = sessionModel(opts, resumeHistory, forking)
+  const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode, forking)
   const provider = explicitSessionProvider(selectedProviderId, selectedModel)
   const unassigned = sessionUnassigned(opts, resumeHistory, parentMeta)
-  const projectId = sessionProjectId(opts, resumeHistory, parentMeta, unassigned)
   const domainOwnership = resolveSessionDomainOwnership(opts, resumeHistory, parentMeta, unassigned)
+  const projectId = sessionProjectId(
+    opts, resumeHistory, parentMeta, unassigned, Boolean(domainOwnership.workspaceId)
+  )
   const baseMeta = createSessionDraftMeta({
-    opts, resumeHistory, resumeWorktreeRecord, driveMode, routingScope, projectId,
+    opts, resumeHistory, resumeWorktreeRecord, historyMode: historySource?.mode, driveMode, routingScope, projectId,
     ...domainOwnership, unassigned,
     selectedModel, selectedProviderId, engine: resolveProviderEngine(provider),
+    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta, forking),
     defaultPermissionMode: drivePolicy.defaultPermissionMode
   })
-  if (resumeHistory && resumeWorktreeRecord) {
+  if (historySource?.mode === 'resume' && resumeHistory && resumeWorktreeRecord) {
     baseMeta.id = resumeHistory.id
     baseMeta.createdAt = resumeHistory.createdAt
   }
@@ -75,6 +83,7 @@ interface SessionDraftMetaInput {
   opts: CreateSessionOptions
   resumeHistory?: HistoryEntry
   resumeWorktreeRecord?: ManagedWorktreeRecord
+  historyMode?: 'resume' | 'fork'
   driveMode: CaoGenDriveMode
   routingScope: SessionRoutingScope
   projectId?: string
@@ -85,14 +94,34 @@ interface SessionDraftMetaInput {
   selectedModel: string
   selectedProviderId: string
   engine: NonNullable<SessionMeta['engine']>
+  taskStrategy: SessionMeta['taskStrategy']
   defaultPermissionMode: SessionMeta['permissionMode']
 }
 
 function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
   const { opts, resumeHistory, resumeWorktreeRecord } = input
+  // P0 收编: permissionMode 由 taskStrategy 派生，不再接受外部直接设置。
+  // 恢复会话时检测旧 bypassPermissions/plan 值并记录迁移标记(P0 仅 console.warn, P1-3 再实现 banner)。
+  const migration = resumeHistory
+    ? migrateLegacyPermissionMode(resumeHistory.permissionMode, input.taskStrategy)
+    : null
+  const derivedPermissionMode = migration
+    ? migration.mode
+    : derivePermissionModeFromStrategy(input.taskStrategy)
+  if (migration?.downgradedFromBypass) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='bypassPermissions' 已降级为派生值 '${derivedPermissionMode}'(taskStrategy=${input.taskStrategy})。` +
+      `如需跳过权限请在 Routine 中配置。`
+    )
+  }
+  if (migration?.migratedFromPlan) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='plan' 已被派生值 '${derivedPermissionMode}' 覆盖(taskStrategy=${input.taskStrategy})。`
+    )
+  }
   const meta = newSessionMeta({
-    ...sessionOwnership(opts, resumeHistory),
-    ...sessionWorktreeIdentity(resumeHistory, resumeWorktreeRecord),
+    ...sessionOwnership(opts, input.historyMode === 'fork' ? undefined : resumeHistory),
+    ...sessionWorktreeIdentity(input.historyMode === 'resume' ? resumeHistory : undefined, resumeWorktreeRecord),
     cwd: opts.cwd,
     driveMode: input.driveMode,
     projectId: input.projectId,
@@ -101,9 +130,12 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     providerId: input.selectedProviderId,
     routingScope: input.routingScope,
     budgetUsd: positiveNumber(opts.budgetUsd),
-    resumeSessionAt: opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt,
+    resumeSessionAt: input.historyMode === 'fork'
+      ? undefined
+      : opts.resumeSessionAt ?? resumeHistory?.resumeSessionAt,
     engine: input.engine,
-    permissionMode: opts.permissionMode ?? resumeHistory?.permissionMode ?? input.defaultPermissionMode,
+    taskStrategy: input.taskStrategy,
+    permissionMode: derivedPermissionMode,
     title: opts.title ?? resumeHistory?.title
   })
   return {
@@ -111,7 +143,10 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     workspaceId: input.workspaceId,
     goalId: input.goalId,
     workItemId: input.workItemId,
-    digitalWorkerBinding: resumeHistory?.digitalWorkerBinding
+    digitalWorkerBinding: input.historyMode === 'resume' ? resumeHistory?.digitalWorkerBinding : undefined,
+    conversationForkSourceSdkSessionId: input.historyMode === 'fork' ? resumeHistory?.sdkSessionId : undefined,
+    conversationForkSourceSessionId: input.historyMode === 'fork' ? resumeHistory?.id : undefined,
+    responsesContext: input.historyMode === 'resume' ? resumeHistory?.responsesContext : undefined
   }
 }
 
@@ -158,9 +193,19 @@ function sessionWorktreeIdentity(history?: HistoryEntry, record?: ManagedWorktre
 
 function normalizedSessionCreationOptions(
   input: CreateSessionOptions,
-  history?: HistoryEntry
+  history?: HistoryEntry,
+  mode?: 'resume' | 'fork'
 ): CreateSessionOptions {
   if (!history) return { ...input, cwd: assertUsableSessionCwd(input.cwd) }
+  if (mode === 'fork') {
+    return {
+      ...input,
+      cwd: assertUsableSessionCwd(history.cwd),
+      isolated: false,
+      resumeSdkSessionId: undefined,
+      resumeSessionAt: undefined
+    }
+  }
   return {
     ...input,
     cwd: assertUsableSessionCwd(history.cwd),
@@ -180,17 +225,18 @@ function sessionDriveMode(
   return opts.driveMode ?? history?.driveMode ?? settings.driveMode
 }
 
-function sessionModel(opts: CreateSessionOptions, history?: HistoryEntry): string {
-  return history?.model ?? opts.model ?? ''
+function sessionModel(opts: CreateSessionOptions, history?: HistoryEntry, forking = false): string {
+  return forking ? opts.model ?? '' : history?.model ?? opts.model ?? ''
 }
 
 function sessionProviderId(
   opts: CreateSessionOptions,
   history: HistoryEntry | undefined,
   settings: AppSettings,
-  driveMode: CaoGenDriveMode
+  driveMode: CaoGenDriveMode,
+  forking = false
 ): string {
-  return history?.providerId ?? initialProviderId(opts, settings, driveMode)
+  return forking ? initialProviderId(opts, settings, driveMode) : history?.providerId ?? initialProviderId(opts, settings, driveMode)
 }
 
 function sessionUnassigned(
@@ -418,7 +464,24 @@ export function sessionMetaForRecovery(meta: SessionMeta): SessionMeta {
   const ownership = assertSessionDomainOwnership(meta)
   const legacyEngine = (meta as unknown as { engine?: string }).engine
   const migratedMeta = legacyEngine === 'claude' ? { ...meta, engine: 'anthropic' as const } : meta
-  return applySessionPlacement({ ...migratedMeta, ...ownership }, recoverySessionPlacement(migratedMeta))
+  return applySessionPlacement({
+    ...migratedMeta,
+    ...ownership,
+    taskStrategy: normalizeTaskStrategy(migratedMeta.taskStrategy)
+  }, recoverySessionPlacement(migratedMeta))
+}
+
+function sessionTaskStrategy(
+  opts: CreateSessionOptions,
+  history?: HistoryEntry,
+  parentMeta?: SessionMeta,
+  forking = false
+): SessionMeta['taskStrategy'] {
+  return normalizeTaskStrategy(
+    forking
+      ? opts.taskStrategy ?? history?.taskStrategy ?? parentMeta?.taskStrategy
+      : history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy
+  )
 }
 
 export function assertTaskSnapshotWorktreeProjection(
@@ -571,13 +634,20 @@ export function assertUsableSessionCwd(rawCwd: string): string {
   return cwd
 }
 
-function sessionResumeHistory(opts: CreateSessionOptions): HistoryEntry | undefined {
-  if (opts.resumeSdkSessionId === undefined) return undefined
-  const sdkSessionId = opts.resumeSdkSessionId.trim()
-  if (!sdkSessionId) throw new Error('历史会话 sdkSessionId 不能为空')
+function sessionConversationHistory(
+  opts: CreateSessionOptions
+): { history: HistoryEntry; mode: 'resume' | 'fork' } | undefined {
+  if (opts.resumeSdkSessionId !== undefined && opts.forkFromSdkSessionId !== undefined) {
+    throw new Error('恢复会话与分叉会话不能同时指定')
+  }
+  const mode = opts.forkFromSdkSessionId !== undefined ? 'fork' : 'resume'
+  const raw = mode === 'fork' ? opts.forkFromSdkSessionId : opts.resumeSdkSessionId
+  if (raw === undefined) return undefined
+  const sdkSessionId = raw.trim()
+  if (!sdkSessionId) throw new Error(`${mode === 'fork' ? '分叉来源' : '历史会话'} sdkSessionId 不能为空`)
   const history = listHistory().find((entry) => entry.sdkSessionId === sdkSessionId)
   if (!history) throw new Error(`未找到 sdkSessionId 对应的历史会话:${sdkSessionId}`)
-  return history
+  return { history, mode }
 }
 
 function sessionRoutingScope(
@@ -636,10 +706,10 @@ function initialProviderId(
 function explicitSessionProvider(providerIdInput: string, model: string) {
   if (!model) throw new Error('请选择模型或显式选择自动调度')
   const providerId = providerIdInput.trim()
-  if (!providerId) throw new Error('请选择已配置 API key 的 Provider')
+  if (!providerId) throw new Error('请选择可用 Provider')
   const provider = getProvider(providerId)
   if (!provider) throw new Error(`Provider 不存在:${providerId}`)
-  if (!decryptProviderToken(provider)) throw new Error(`请先在设置里为 ${provider.name} 填写 API key`)
+  if (!providerIsReady(provider)) throw new Error(`请先在设置里完成 ${provider.name} 的鉴权配置`)
   return provider
 }
 
@@ -647,11 +717,12 @@ function sessionProjectId(
   opts: CreateSessionOptions,
   resumeHistory: HistoryEntry | undefined,
   parentMeta: SessionMeta | undefined,
-  unassigned: boolean
+  unassigned: boolean,
+  canonicalWorkspaceOwned = false
 ): string | undefined {
   const projectId = resumeHistory?.projectId ?? opts.projectId ?? parentMeta?.projectId
   if (projectId && !getProject(projectId)) throw new Error('关联项目不存在，请重新选择项目')
-  if (projectId || unassigned) return projectId
+  if (projectId || unassigned || canonicalWorkspaceOwned) return projectId
   return touchProject(opts.cwd).id
 }
 

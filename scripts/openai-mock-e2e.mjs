@@ -15,6 +15,10 @@ const projectDir = path.join(tempRoot, 'project')
 const projectContextNeedle = `P0_OPENAI_RESPONSES_CONTEXT_${runId}`
 const denyFileName = 'permission-deny.txt'
 const allowFileName = 'permission-allow.txt'
+const denyFilePath = path.join(projectDir, denyFileName)
+const allowFilePath = path.join(projectDir, allowFileName)
+const denyCommand = nodeWriteCommand(denyFilePath, `denied ${runId}`)
+const allowCommand = nodeWriteCommand(allowFilePath, `allowed ${runId}`)
 const electronBin =
   process.platform === 'win32'
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -100,6 +104,7 @@ try {
     await waitForText(cdp, 'CaoGen', 20_000)
     await clickByText(cdp, '+ 新建会话')
     await waitForText(cdp, '新建会话')
+    await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await clickByText(cdp, '工作台')
     await clickByText(cdp, '会话与工具')
@@ -114,7 +119,7 @@ try {
     await clickCreateSession(cdp, projectDir)
     await waitForText(cdp, projectDir, 10_000)
     await waitForText(cdp, '厂商 CaoGen OpenAI Mock', 10_000)
-    await waitForText(cdp, '模型 mock-responses', 10_000)
+    await waitForDomValue(cdp, '[data-session-model-select="true"]', 'mock-responses', 10_000)
   })
 
   await check(cdp, 'real UI send receives streamed OpenAI Responses reply', async () => {
@@ -175,19 +180,19 @@ try {
     }
   })
 
-  await check(cdp, 'default permission can deny OpenAI write_file tool call', async () => {
+  await check(cdp, 'execute strategy can deny OpenAI bash tool call', async () => {
     await focusComposer(cdp)
     await typeText(cdp, `permission deny e2e ${runId}`)
     await press(cdp, 'Enter')
-    await waitForPermissionCard(cdp, 'write_file', 15_000)
-    await clickPermissionAction(cdp, 'deny')
+    await waitForPermissionCard(cdp, 'bash', 15_000)
+    await clickPermissionAction(cdp, 'bash', 'deny')
     await waitForText(cdp, 'Permission deny handled', 15_000)
-    assert(!existsSync(path.join(projectDir, denyFileName)), 'denied write_file should not create file')
+    assert(!existsSync(denyFilePath), 'denied bash command should not create file')
     await waitForAuditRecord((record) =>
-      record.toolName === 'write_file' &&
+      record.toolName === 'bash' &&
       record.action === 'deny' &&
       record.source === 'user' &&
-      String(record.inputSummary ?? '').includes(denyFileName)
+      hasCommandAuditDigest(record)
     )
     assert(
       mock.requests.some((request) => request.kind === 'permission-deny-output'),
@@ -195,26 +200,26 @@ try {
     )
   })
 
-  await check(cdp, 'default permission can allow OpenAI write_file tool call', async () => {
+  await check(cdp, 'execute strategy can allow OpenAI bash tool call', async () => {
     await focusComposer(cdp)
     await typeText(cdp, `permission allow e2e ${runId}`)
     await press(cdp, 'Enter')
-    await waitForPermissionCard(cdp, 'write_file', 15_000)
-    await clickPermissionAction(cdp, 'allow')
+    await waitForPermissionCard(cdp, 'bash', 15_000)
+    await clickPermissionAction(cdp, 'bash', 'allow')
     await waitForText(cdp, 'Permission allow handled', 15_000)
-    await waitForFileContent(path.join(projectDir, allowFileName), `allowed ${runId}`, 10_000)
+    await waitForFileContent(allowFilePath, `allowed ${runId}`, 10_000)
     await waitForAuditRecord((record) =>
-      record.toolName === 'write_file' &&
+      record.toolName === 'bash' &&
       record.action === 'allow' &&
       record.source === 'user' &&
-      String(record.inputSummary ?? '').includes(allowFileName)
+      hasCommandAuditDigest(record)
     )
     await waitForAuditRecord((record) =>
-      record.toolName === 'write_file' &&
+      record.toolName === 'bash' &&
       record.action === 'execute' &&
       record.source === 'local-execution' &&
       record.ok === true &&
-      String(record.inputSummary ?? '').includes(allowFileName)
+      hasCommandAuditDigest(record)
     )
     assert(
       mock.requests.some((request) => request.kind === 'permission-allow-output'),
@@ -338,8 +343,7 @@ async function startOpenAiMock() {
       writeFunctionCallResponse(res, {
         responseId: 'resp_permission_deny_1',
         callId: 'call_permission_deny',
-        path: denyFileName,
-        content: `denied ${runId}`
+        command: denyCommand
       })
       return
     }
@@ -347,8 +351,7 @@ async function startOpenAiMock() {
       writeFunctionCallResponse(res, {
         responseId: 'resp_permission_allow_1',
         callId: 'call_permission_allow',
-        path: allowFileName,
-        content: `allowed ${runId}`
+        command: allowCommand
       })
       return
     }
@@ -408,12 +411,12 @@ function classifyMockRequest(body, prompt) {
   return 'text'
 }
 
-function writeFunctionCallResponse(res, { responseId, callId, path: targetPath, content }) {
+function writeFunctionCallResponse(res, { responseId, callId, command }) {
   const item = {
     type: 'function_call',
     call_id: callId,
-    name: 'write_file',
-    arguments: JSON.stringify({ path: targetPath, content })
+    name: 'bash',
+    arguments: JSON.stringify({ command })
   }
   res.writeHead(200, {
     'content-type': 'text/event-stream',
@@ -634,11 +637,11 @@ async function waitForPermissionCard(cdp, toolName, timeout = 5000) {
   throw new Error(`permission card not found for ${toolName}\nVisible text:\n${body.slice(0, 2200)}`)
 }
 
-async function clickPermissionAction(cdp, action) {
+async function clickPermissionAction(cdp, toolName, action) {
   const result = await evalValue(
     cdp,
     `(() => {
-      const card = [...document.querySelectorAll('.permission-card')].find((item) => (item.innerText || '').includes('write_file'));
+      const card = [...document.querySelectorAll('.permission-card')].find((item) => (item.innerText || '').includes(${JSON.stringify(toolName)}));
       if (!card) return { ok: false, reason: 'missing permission card', text: document.body.innerText.slice(0, 1200) };
       const buttons = [...card.querySelectorAll('button')];
       const button = ${JSON.stringify(action)} === 'allow'
@@ -654,6 +657,16 @@ async function clickPermissionAction(cdp, action) {
   await sleep(500)
 }
 
+function nodeWriteCommand(filePath, content) {
+  const source = `require('node:fs').writeFileSync(${JSON.stringify(filePath)}, ${JSON.stringify(content)})`
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`
+}
+
+function hasCommandAuditDigest(record) {
+  return String(record.inputSummary ?? '').startsWith('command bytes=') &&
+    /^[a-f0-9]{64}$/.test(String(record.inputDigest ?? ''))
+}
+
 async function waitForText(cdp, text, timeout = 5000) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -663,6 +676,23 @@ async function waitForText(cdp, text, timeout = 5000) {
   }
   const body = await visibleText(cdp)
   throw new Error(`text not found: ${text}\nVisible text:\n${body.slice(0, 2200)}`)
+}
+
+async function waitForDomValue(cdp, selector, expected, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const value = await evalValue(
+      cdp,
+      `document.querySelector(${JSON.stringify(selector)})?.value ?? null`
+    )
+    if (value === expected) return
+    await sleep(150)
+  }
+  const actual = await evalValue(
+    cdp,
+    `document.querySelector(${JSON.stringify(selector)})?.value ?? null`
+  )
+  throw new Error(`DOM value mismatch for ${selector}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
 }
 
 async function waitForFileContent(filePath, expected, timeout = 5000) {

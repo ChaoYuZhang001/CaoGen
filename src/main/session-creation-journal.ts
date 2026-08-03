@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import type { CreateSessionOptions, SessionMeta } from '../shared/types'
 import type { SessionCreationDraft } from './session-create-lifecycle'
+import { normalizeTaskStrategy } from './task/task-strategy'
 
 interface PendingSessionCreationRecord {
   schemaVersion: 1
@@ -136,7 +137,11 @@ function cloneDraft(draft: SessionCreationDraft): SessionCreationDraft {
   const { initialPrompt: _initialPrompt, ...opts } = draft.opts
   return {
     opts,
-    baseMeta: { ...draft.baseMeta, usage: { ...draft.baseMeta.usage } }
+    baseMeta: {
+      ...draft.baseMeta,
+      taskStrategy: normalizeTaskStrategy(draft.baseMeta.taskStrategy),
+      usage: { ...draft.baseMeta.usage }
+    }
   }
 }
 

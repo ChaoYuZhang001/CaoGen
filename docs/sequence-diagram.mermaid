@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant U as 用户
+    participant CV as ChatView (UI)
+    participant ST as store.ts (Zustand)
+    participant IPC as IPC Bridge
+    participant AS as AgentSession
+    participant TS as task-strategy.ts
+    participant NR as NativeToolRuntime (gate)
+    participant CF as ClaudeTaskPreflight
+    participant Tool as Tool Executor
+
+    Note over U,Tool: 场景:用户从 plan 切到 execute,然后 Agent 调用 write_file
+
+    U->>CV: 点击"执行"按钮
+    CV->>ST: setTaskStrategy('execute')
+    ST->>IPC: window.agentDesk.setTaskStrategy(id, 'execute')
+    IPC->>AS: setTaskStrategy('execute')
+
+    Note over AS: ① 策略切换 + ② 派生 permissionMode
+    AS->>AS: invalidatePermissionSettlements('任务策略已切换')
+    AS->>TS: derivePermissionModeFromStrategy('execute')
+    TS-->>AS: 'acceptEdits'
+    AS->>AS: meta.taskStrategy = 'execute'
+    AS->>AS: meta.permissionMode = 'acceptEdits'
+    AS-->>IPC: emit({ kind:'meta', meta })
+    IPC-->>ST: meta 更新
+    ST-->>CV: 重新渲染,执行按钮高亮
+
+    Note over U,Tool: Agent 发起 write_file 调用
+
+    Note over NR: OpenAI-compatible 路径
+    NR->>TS: decideTaskStrategyTool('execute', 'write_file', input)
+    TS-->>NR: { allow: true } (execute 全放行)
+    Note over NR: gate 层 permissionMode='acceptEdits'<br/>编辑工具自动放行(无弹窗)
+    NR->>Tool: 执行 write_file
+    Tool-->>NR: 结果
+
+    Note over CF: Claude 路径(同一派生)
+    CF->>TS: decideTaskStrategyTool('execute', 'write_file', input)
+    TS-->>CF: { allow: true }
+    Note over CF: permissionPlanMode 已删除<br/>(不再检查 mode==='plan')
+    CF->>AS: acceptEdits 分支放行编辑工具
+    AS->>Tool: 执行 write_file
+    Tool-->>AS: 结果

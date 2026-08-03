@@ -3,26 +3,30 @@
  * 验证闭环:父会话派发 2 个子代理 → 子代理真实跑完首轮 →
  * 汇总自动回灌父 Agent → 父 Agent 真实产出编排总结。
  *
- * 运行: CHAT_E2E_KEY=<your-api-key> npx electron scripts/orchestration-e2e.cjs
+ * Real calls require CAOGEN_REAL_PROVIDER_E2E=1 and read only
+ * ~/.caogen-private/provider-parity.json. Private values and responses are not printed.
  */
 const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
 const { app, ipcMain } = require('electron')
+const {
+  loadPrivateChatProvider,
+  suppressRuntimeConsole,
+  writePublicLine
+} = require('./lib/private-provider-e2e.cjs')
 
-const repoOut = path.resolve(__dirname, '..', 'out', 'main')
+const repoRoot = path.resolve(__dirname, '..')
+const repoOut = path.join(repoRoot, 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-orch-e2e-'))
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
 
-const BASE_URL = process.env.CHAT_E2E_BASE_URL || 'https://api.deepseek.com'
-const KEY = process.env.CHAT_E2E_KEY || ''
-const MODEL = process.env.CHAT_E2E_MODEL || 'deepseek-chat'
-const TIMEOUT_MS = Number(process.env.CHAT_E2E_TIMEOUT || 180_000)
+const TIMEOUT_MS = Number(process.env.CAOGEN_REAL_PROVIDER_E2E_TIMEOUT || 180_000)
 
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
-  console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${String(detail).slice(0, 140)}` : ''}`)
+  writePublicLine(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` (${detail})` : ''}`)
 }
 
 async function invoke(channel, ...args) {
@@ -32,19 +36,23 @@ async function invoke(channel, ...args) {
 }
 
 async function run() {
-  if (!KEY) {
-    check('CHAT_E2E_KEY 已提供', false)
+  const privateConfig = await loadPrivateChatProvider(repoRoot)
+  if (privateConfig.state === 'skipped') return skip()
+  if (privateConfig.state !== 'ready') {
+    check('私有 Provider 配置可用', false, privateConfig.code)
     return finish(1)
   }
+  suppressRuntimeConsole()
+  const { baseUrl, model, apiKey } = privateConfig.provider
   require(path.join(repoOut, 'index.js'))
   await new Promise((r) => setTimeout(r, 900))
 
   const provider = await invoke('providers:create', {
     name: 'orch-e2e',
-    baseUrl: BASE_URL,
-    models: [MODEL],
+    baseUrl,
+    models: [model],
     openaiProtocol: 'chat',
-    token: KEY
+    token: apiKey
   })
   check('创建 Provider', !!provider.id)
 
@@ -53,7 +61,7 @@ async function run() {
     cwd: tmpUserData,
     engine: 'openai',
     providerId: provider.id,
-    model: MODEL,
+    model,
     isolated: false
   })
   check('创建父会话', !!parent.id)
@@ -66,7 +74,7 @@ async function run() {
       { id: 'math', role: '数学家', prompt: '3+4 等于几?只回复数字。' }
     ]
   })
-  check('派发 2 个子代理', dispatch.children?.length === 2, `orchestrationId=${dispatch.orchestrationId}`)
+  check('派发 2 个子代理', dispatch.children?.length === 2)
 
   // 等父会话出现编排回灌(user-message 含 [子代理编排完成])+ 父 Agent 的总结回复
   const start = Date.now()
@@ -99,9 +107,15 @@ async function run() {
 
 function finish(code) {
   const pass = results.filter((r) => r.ok).length
-  console.log(`\norchestration e2e: ${pass}/${results.length} 通过`)
+  writePublicLine(`orchestration e2e: ${pass}/${results.length} passed`)
   try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
   app.exit(code)
 }
 
-app.whenReady().then(() => run().catch((e) => { console.error(e); finish(1) }))
+function skip() {
+  writePublicLine('orchestration e2e: skipped (explicit opt-in required)')
+  try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
+  app.exit(0)
+}
+
+app.whenReady().then(() => run().catch(() => { check('真实编排 E2E 运行', false, 'runtime_failed'); finish(1) }))

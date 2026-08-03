@@ -1,32 +1,49 @@
 /**
  * Chat Completions 协议真·E2E:在真 Electron 主进程里,
- *   1) 经真实 IPC 创建一个 openaiProtocol='chat' 的 Provider(key 来自环境变量,不落盘明文)
+ *   1) 经真实 IPC 创建一个 openaiProtocol='chat' 的 Provider
  *   2) 以 openai 引擎创建会话
  *   3) 真实发送一条消息,等待流式回复
  *   4) 验证 assistant 文本 + usage + 多轮上下文(第二轮引用第一轮)
  *
- * 运行(key 不入仓库,由调用方注入):
- *   CHAT_E2E_BASE_URL=https://api.deepseek.com CHAT_E2E_KEY=<your-api-key> CHAT_E2E_MODEL=deepseek-chat \
- *     npx electron scripts/chat-protocol-e2e.cjs
+ * Real calls require CAOGEN_REAL_PROVIDER_E2E=1 and read only
+ * ~/.caogen-private/provider-parity.json. Private values and responses are not printed.
  */
+const { spawnSync } = require('node:child_process')
+
+if (!process.versions.electron) {
+  const electronBinary = require('electron')
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawnSync(electronBinary, [__filename], {
+    cwd: process.cwd(),
+    env,
+    stdio: 'inherit'
+  })
+  if (child.error) throw child.error
+  process.exit(child.status ?? 1)
+}
+
 const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
 const { app, ipcMain } = require('electron')
+const {
+  loadPrivateChatProvider,
+  suppressRuntimeConsole,
+  writePublicLine
+} = require('./lib/private-provider-e2e.cjs')
 
-const repoOut = path.resolve(__dirname, '..', 'out', 'main')
+const repoRoot = path.resolve(__dirname, '..')
+const repoOut = path.join(repoRoot, 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-chat-e2e-'))
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
 
-const BASE_URL = process.env.CHAT_E2E_BASE_URL || 'https://api.deepseek.com'
-const KEY = process.env.CHAT_E2E_KEY || ''
-const MODEL = process.env.CHAT_E2E_MODEL || 'deepseek-chat'
-const TIMEOUT_MS = Number(process.env.CHAT_E2E_TIMEOUT || 90_000)
+const TIMEOUT_MS = Number(process.env.CAOGEN_REAL_PROVIDER_E2E_TIMEOUT || 90_000)
 
 const results = []
 function check(name, ok, detail) {
-  results.push({ name, ok: !!ok, detail: (detail || '').slice(0, 200) })
-  console.log(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` — ${String(detail).slice(0, 160)}` : ''}`)
+  results.push({ name, ok: !!ok })
+  writePublicLine(`${ok ? '[PASS]' : '[FAIL]'} ${name}${detail ? ` (${detail})` : ''}`)
 }
 
 async function invoke(channel, ...args) {
@@ -64,15 +81,19 @@ function lastAssistantText(entries) {
 }
 
 async function run() {
-  if (!KEY) {
-    check('CHAT_E2E_KEY 已提供', false, '缺少 key,跳过真实调用')
+  const privateConfig = await loadPrivateChatProvider(repoRoot)
+  if (privateConfig.state === 'skipped') return skip()
+  if (privateConfig.state !== 'ready') {
+    check('私有 Provider 配置可用', false, privateConfig.code)
     return finish(1)
   }
+  suppressRuntimeConsole()
+  const { baseUrl, model, apiKey } = privateConfig.provider
   try {
     require(path.join(repoOut, 'index.js'))
     check('主进程加载', true)
-  } catch (err) {
-    check('主进程加载', false, err.message)
+  } catch {
+    check('主进程加载', false, 'load_failed')
     return finish(1)
   }
   await new Promise((r) => setTimeout(r, 900))
@@ -82,14 +103,15 @@ async function run() {
   try {
     provider = await invoke('providers:create', {
       name: 'chat-e2e',
-      baseUrl: BASE_URL,
-      models: [MODEL],
+      baseUrl,
+      models: [model],
       openaiProtocol: 'chat',
-      token: KEY
+      credentialHeaderNames: ['authorization'],
+      token: apiKey
     })
-    check('创建 chat 协议 Provider', provider && provider.openaiProtocol === 'chat', JSON.stringify({ id: provider.id, protocol: provider.openaiProtocol }))
+    check('创建 chat 协议 Provider', provider && provider.openaiProtocol === 'chat')
   } catch (e) {
-    check('创建 Provider', false, e.message)
+    check('创建 Provider', false, 'create_failed')
     return finish(1)
   }
 
@@ -101,12 +123,12 @@ async function run() {
       cwd: tmpUserData,
       engine: 'openai',
       providerId: provider.id,
-      model: MODEL,
+      model,
       isolated: false
     })
-    check('创建 openai 引擎会话', meta && meta.engine === 'openai', `id=${meta.id} model=${meta.model}`)
+    check('创建 openai 引擎会话', meta && meta.engine === 'openai')
   } catch (e) {
-    check('创建会话', false, e.message)
+    check('创建会话', false, 'create_failed')
     return finish(1)
   }
 
@@ -129,11 +151,11 @@ async function run() {
     }
     const turn = entries.find((e) => e.event.kind === 'turn-result')
     const text = lastAssistantText(entries)
-    check('第一轮流式回复完成', turn && !turn.event.isError, `resultText=${(turn && turn.event.resultText || '').slice(0, 60)}`)
-    check('assistant 文本非空', text.length > 0, text.slice(0, 60))
-    check('usage 上报', turn && turn.event.usage && turn.event.usage.input > 0, JSON.stringify(turn && turn.event.usage))
+    check('第一轮流式回复完成', turn && !turn.event.isError)
+    check('assistant 文本非空', text.length > 0)
+    check('usage 上报', turn && turn.event.usage && turn.event.usage.input > 0)
   } catch (e) {
-    check('第一轮对话', false, e.message)
+    check('第一轮对话', false, 'turn_failed')
     return finish(1)
   }
 
@@ -151,9 +173,9 @@ async function run() {
     }
     const text = lastAssistantText(entries)
     check('第二轮完成', turns.length >= 2 && !turns[1].event.isError)
-    check('多轮上下文生效(回答含「收到」)', /收到/.test(text), text.slice(0, 80))
+    check('多轮上下文生效(回答含「收到」)', /收到/.test(text))
   } catch (e) {
-    check('第二轮对话', false, e.message)
+    check('第二轮对话', false, 'turn_failed')
   }
 
   return finish(results.every((r) => r.ok) ? 0 : 1)
@@ -161,9 +183,15 @@ async function run() {
 
 function finish(code) {
   const pass = results.filter((r) => r.ok).length
-  console.log(`\nchat-protocol e2e: ${pass}/${results.length} 通过`)
+  writePublicLine(`chat-protocol e2e: ${pass}/${results.length} passed`)
   try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
   app.exit(code)
 }
 
-app.whenReady().then(() => run().catch((e) => { console.error(e); finish(1) }))
+function skip() {
+  writePublicLine('chat-protocol e2e: skipped (explicit opt-in required)')
+  try { fs.rmSync(tmpUserData, { recursive: true, force: true }) } catch {}
+  app.exit(0)
+}
+
+app.whenReady().then(() => run().catch(() => { check('真实 Chat E2E 运行', false, 'runtime_failed'); finish(1) }))

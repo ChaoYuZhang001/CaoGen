@@ -10,9 +10,11 @@ const require = createRequire(import.meta.url)
 const { readPackagedReleaseProvenanceFromAsar, releaseProvenanceChecks } = require('./lib/release-provenance.cjs')
 const required = process.argv.includes('--required')
 const configOnly = process.argv.includes('--config-only')
+const previewMode = process.argv.includes('--preview')
+const distributionChannel = previewMode ? 'unsigned_preview' : 'formal'
 const targetArch = argValue('--arch') || 'x64'
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
-const reportRoot = path.join(repoRoot, 'test-results', 'windows-release-audit')
+const reportRoot = path.join(repoRoot, 'test-results', previewMode ? 'windows-preview-audit' : 'windows-release-audit')
 const reportDir = path.join(reportRoot, runId)
 const checks = []
 
@@ -21,7 +23,9 @@ const packageLock = readJson(path.join(repoRoot, 'package-lock.json')) || {}
 const version = typeof packageJson.version === 'string' ? packageJson.version : 'unknown'
 const appDir = resolvePath(argValue('--app-dir') || 'dist/win-unpacked')
 const appExecutable = resolvePath(argValue('--app') || path.join(appDir, 'CaoGen.exe'))
-const installer = resolvePath(argValue('--installer') || `dist/CaoGen Setup ${version}.exe`)
+const installer = resolvePath(argValue('--installer') || (previewMode
+  ? `dist/CaoGen-${version}-windows-x64-unsigned-preview.exe`
+  : `dist/CaoGen Setup ${version}.exe`))
 const installerBlockmap = resolvePath(argValue('--blockmap') || `dist/CaoGen Setup ${version}.exe.blockmap`)
 const updateMetadata = resolvePath(argValue('--metadata') || 'dist/latest.yml')
 const asarPath = path.join(appDir, 'resources', 'app.asar')
@@ -43,6 +47,7 @@ const report = {
   status: failures.length === 0 ? 'passed' : 'failed',
   mode: configOnly ? 'config_only' : 'post_build',
   required,
+  distributionChannel,
   runId,
   reportDir,
   packageVersion: version,
@@ -55,8 +60,8 @@ const report = {
   artifacts: {
     appExecutable: reportPath(appExecutable),
     installer: reportPath(installer),
-    installerBlockmap: reportPath(installerBlockmap),
-    updateMetadata: reportPath(updateMetadata),
+    installerBlockmap: previewMode ? null : reportPath(installerBlockmap),
+    updateMetadata: previewMode ? null : reportPath(updateMetadata),
     architectures
   },
   signing,
@@ -81,7 +86,8 @@ if (required && report.status !== 'passed') process.exitCode = 1
 if (!required && !configOnly && report.status !== 'passed') process.exitCode = 1
 
 function inspectReleaseConfig() {
-  const configPath = path.join(repoRoot, 'electron-builder.release.cjs')
+  const configName = previewMode ? 'electron-builder.windows-preview.cjs' : 'electron-builder.release.cjs'
+  const configPath = path.join(repoRoot, configName)
   const result = {
     path: reportPath(configPath),
     present: existsSync(configPath),
@@ -90,6 +96,9 @@ function inspectReleaseConfig() {
     nsisTarget: false,
     assistedInstaller: false,
     customInstallDirectory: false,
+    artifactName: null,
+    publishDisabled: false,
+    certificateEnvironmentDisabled: false,
     releaseProvenance: null
   }
   check('config', 'package version is stable semver', /^\d+\.\d+\.\d+$/.test(version))
@@ -98,7 +107,7 @@ function inspectReleaseConfig() {
     'package and lock versions match',
     packageLock.version === version && packageLock.packages?.['']?.version === version
   )
-  check('config', 'electron-builder.release.cjs exists', result.present)
+  check('config', `${configName} exists`, result.present)
   if (!result.present) return result
   try {
     delete require.cache[configPath]
@@ -110,18 +119,34 @@ function inspectReleaseConfig() {
     result.nsisTarget = hasTarget(win.target, 'nsis')
     result.assistedInstaller = nsis.oneClick === false
     result.customInstallDirectory = nsis.allowToChangeInstallationDirectory === true
+    result.artifactName = typeof win.artifactName === 'string' ? win.artifactName : null
+    result.publishDisabled = releaseConfig.publish === null
+    result.certificateEnvironmentDisabled =
+      process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'false' &&
+      ['CSC_LINK', 'CSC_KEY_PASSWORD', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD'].every((name) => !process.env[name])
     result.releaseProvenance = releaseConfig.extraMetadata?.caogenReleaseProvenance || null
-    check('config', 'electron-builder.release.cjs exports an object', result.loaded)
-    check('config', 'Windows release requires code signing', result.forceCodeSigning)
-    check('config', 'Windows release includes the NSIS target', result.nsisTarget)
-    check('config', 'Windows release uses the assisted installer', result.assistedInstaller)
-    check('config', 'Windows release allows a custom installation directory', result.customInstallDirectory)
-    check('config', 'Windows release provenance schema is supported', result.releaseProvenance?.schemaVersion === 1)
-    check('config', 'Windows release provenance commit is resolved', /^[0-9a-f]{40}$/i.test(result.releaseProvenance?.gitCommit || ''))
-    check('config', 'Windows release provenance version matches package.json', result.releaseProvenance?.packageVersion === version)
-    check('config', 'Windows release provenance clean state is explicit', typeof result.releaseProvenance?.worktreeClean === 'boolean')
+    check('config', `${configName} exports an object`, result.loaded)
+    if (previewMode) {
+      check('config', 'Windows preview disables mandatory code signing', result.forceCodeSigning === false)
+      check(
+        'config',
+        'Windows preview artifact name explicitly says unsigned preview',
+        result.artifactName === 'CaoGen-${version}-windows-x64-unsigned-preview.${ext}'
+      )
+      check('config', 'Windows preview disables update publication metadata', result.publishDisabled)
+      check('config', 'Windows preview disables certificate discovery and explicit signing credentials', result.certificateEnvironmentDisabled)
+    } else {
+      check('config', 'Windows release requires code signing', result.forceCodeSigning)
+    }
+    check('config', 'Windows distribution includes the NSIS target', result.nsisTarget)
+    check('config', 'Windows distribution uses the assisted installer', result.assistedInstaller)
+    check('config', 'Windows distribution allows a custom installation directory', result.customInstallDirectory)
+    check('config', 'Windows distribution provenance schema is supported', result.releaseProvenance?.schemaVersion === 1)
+    check('config', 'Windows distribution provenance commit is resolved', /^[0-9a-f]{40}$/i.test(result.releaseProvenance?.gitCommit || ''))
+    check('config', 'Windows distribution provenance version matches package.json', result.releaseProvenance?.packageVersion === version)
+    check('config', 'Windows distribution provenance clean state is explicit', typeof result.releaseProvenance?.worktreeClean === 'boolean')
   } catch (error) {
-    check('config', 'electron-builder.release.cjs loads', false, errorMessage(error))
+    check('config', `${configName} loads`, false, errorMessage(error))
   }
   return result
 }
@@ -130,13 +155,17 @@ function inspectArtifacts() {
   check('invocation', 'target architecture is x64', targetArch === 'x64')
   check('platform', 'post-build audit runs on Windows', process.platform === 'win32')
   check('platform', 'post-build audit runs natively on x64', process.arch === 'x64')
-  check('git', 'release audit runs from a clean worktree', git.worktreeClean)
+  check('git', 'distribution audit runs from a clean worktree', git.worktreeClean)
   check('app', 'unpacked application executable exists', isFile(appExecutable), reportPath(appExecutable))
   check('installer', 'NSIS installer exists', isFile(installer), reportPath(installer))
-  check('installer', 'NSIS installer blockmap exists', isFile(installerBlockmap), reportPath(installerBlockmap))
-  check('metadata', 'Windows update metadata exists', isFile(updateMetadata), reportPath(updateMetadata))
+  if (previewMode) {
+    check('metadata', 'unsigned preview does not create stable update metadata', !isFile(updateMetadata), reportPath(updateMetadata))
+  } else {
+    check('installer', 'NSIS installer blockmap exists', isFile(installerBlockmap), reportPath(installerBlockmap))
+    check('metadata', 'Windows update metadata exists', isFile(updateMetadata), reportPath(updateMetadata))
+  }
   check('artifact_set', 'all Windows uploadable assets exist', artifactSet.complete, artifactSet.missing.join(', '))
-  if (isFile(updateMetadata)) {
+  if (!previewMode && isFile(updateMetadata)) {
     const metadata = readFileSync(updateMetadata, 'utf8')
     check('metadata', 'Windows update metadata matches package version', metadata.includes(`version: ${version}`))
   }
@@ -162,15 +191,20 @@ function inspectArtifacts() {
       app: inspectAuthenticode(appExecutable),
       installer: inspectAuthenticode(installer)
     }
-    check('app', 'application Authenticode signature is valid', signing.app.status === 'Valid', signing.app.failure)
-    check('app', 'application Authenticode signature is timestamped', signing.app.timestamped === true)
-    check('installer', 'installer Authenticode signature is valid', signing.installer.status === 'Valid', signing.installer.failure)
-    check('installer', 'installer Authenticode signature is timestamped', signing.installer.timestamped === true)
+    if (previewMode) {
+      check('app', 'preview application is explicitly unsigned', isUnsigned(signing.app), signing.app.failure)
+      check('installer', 'preview installer is explicitly unsigned', isUnsigned(signing.installer), signing.installer.failure)
+    } else {
+      check('app', 'application Authenticode signature is valid', signing.app.status === 'Valid', signing.app.failure)
+      check('app', 'application Authenticode signature is timestamped', signing.app.timestamped === true)
+      check('installer', 'installer Authenticode signature is valid', signing.installer.status === 'Valid', signing.installer.failure)
+      check('installer', 'installer Authenticode signature is timestamped', signing.installer.timestamped === true)
+    }
   }
 }
 
 function inspectArtifactSet() {
-  const files = [installer, installerBlockmap, updateMetadata]
+  const files = previewMode ? [installer] : [installer, installerBlockmap, updateMetadata]
   const missing = files.filter((file) => !isFile(file))
   const digests = Object.fromEntries(files.filter(isFile).map((file) => [reportPath(file), {
     size: statSync(file).size,
@@ -184,6 +218,10 @@ function inspectArtifactSet() {
       ? createHash('sha256').update(JSON.stringify(digests)).digest('hex')
       : null
   }
+}
+
+function isUnsigned(signature) {
+  return signature.status === 'NotSigned' && signature.hasCertificate === false && signature.timestamped === false
 }
 
 function inspectAuthenticode(filePath) {

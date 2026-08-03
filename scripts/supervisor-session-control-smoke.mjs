@@ -106,7 +106,7 @@ try {
   assert.equal(manager.taskRuns.get(first.meta.id).status, 'recovering')
 
   const sendsWhilePaused = firstControl.sendCount
-  assert.equal(manager.send(first.meta.id, 'must not bypass Supervisor pause'), false)
+  assert.equal(await manager.send(first.meta.id, 'must not bypass Supervisor pause'), false)
   assert.equal(firstControl.sendCount, sendsWhilePaused)
 
   const resumeLease = await supervisor.acquireLease(first.run.id, {
@@ -151,10 +151,13 @@ try {
     'failed TaskRun projection'
   )
   await snapshotModule.flushTaskSnapshotMutations(userData)
-  const failedSupervisor = await supervisor.failRun(
-    second.run.id,
-    'fixture provider failure',
-    leaseOptions(secondStarted)
+  const failedSupervisor = await waitFor(
+    async () => {
+      const run = await supervisor.getRun(second.run.id)
+      return run?.status === 'failed' ? run : undefined
+    },
+    4_000,
+    'failed Supervisor projection'
   )
 
   const retried = await manager.controlSupervisorRun(supervisor, {
@@ -168,7 +171,7 @@ try {
   assert.equal(manager.taskRuns.get(second.meta.id).status, 'recovering')
 
   const sendsBeforeRetryResume = secondControl.sendCount
-  assert.equal(manager.send(second.meta.id, 'must wait for retry resume'), false)
+  assert.equal(await manager.send(second.meta.id, 'must wait for retry resume'), false)
   assert.equal(secondControl.sendCount, sendsBeforeRetryResume)
 
   const retryLease = await supervisor.acquireLease(second.run.id, {
@@ -251,10 +254,13 @@ try {
     'retry preflight failed TaskRun projection'
   )
   await snapshotModule.flushTaskSnapshotMutations(userData)
-  const retryPreflightFailed = await supervisor.failRun(
-    retryPreflight.run.id,
-    'fixture retry preflight failure',
-    leaseOptions(retryPreflightStarted)
+  const retryPreflightFailed = await waitFor(
+    async () => {
+      const run = await supervisor.getRun(retryPreflight.run.id)
+      return run?.status === 'failed' ? run : undefined
+    },
+    4_000,
+    'retry preflight failed Supervisor projection'
   )
   await assert.rejects(
     manager.controlSupervisorRun(supervisor, {
@@ -297,7 +303,7 @@ try {
   const blockedAfterResumeFailure = await supervisor.getRun(resumeFailure.run.id)
   assert.equal(blockedAfterResumeFailure.status, 'blocked')
   const sendsAfterResumeFailure = resumeFailureControl.sendCount
-  assert.equal(manager.send(resumeFailure.meta.id, 'must remain gated after failed resume'), false)
+  assert.equal(await manager.send(resumeFailure.meta.id, 'must remain gated after failed resume'), false)
   assert.equal(resumeFailureControl.sendCount, sendsAfterResumeFailure)
   await manager.controlSupervisorRun(supervisor, {
     action: 'cancel',
@@ -317,7 +323,7 @@ try {
   await waitFor(() => manager.get(restartGate.meta.id)?.meta.sdkSessionId, 2_000, 'restart-gated recovery')
   const recoveredControl = controls.get(restartGate.meta.id)
   const sendsBeforeExplicitResume = recoveredControl.sendCount
-  assert.equal(manager.send(restartGate.meta.id, 'must remain gated after process restart'), false)
+  assert.equal(await manager.send(restartGate.meta.id, 'must remain gated after process restart'), false)
   assert.equal(recoveredControl.sendCount, sendsBeforeExplicitResume)
   const restartGateLease = await supervisor.acquireLease(restartGate.run.id, {
     ownerId: 'restart-gate-worker-2',
@@ -344,6 +350,92 @@ try {
   assert.equal(unbound, null)
   assert.equal((await supervisor.getRun(legacy.id)).status, 'queued')
 
+  const missingTaskRunRuntime = await supervisor.createRun({
+    id: 'missing-task-run-runtime',
+    projectId: 'control-project',
+    workItemId: 'missing-task-run-work',
+    origin: 'task_run'
+  })
+  const beforeMissingTaskRunControl = await supervisor.read()
+  await assert.rejects(
+    manager.controlSupervisorRun(supervisor, {
+      action: 'cancel',
+      runId: missingTaskRunRuntime.id,
+      options: { expectedRevision: missingTaskRunRuntime.revision }
+    }),
+    (error) => error?.code === 'invalid_transition' && /TaskRun-owned.*no active canonical session runtime/.test(error.message)
+  )
+  const afterMissingTaskRunControl = await supervisor.read()
+  assert.equal(afterMissingTaskRunControl.revision, beforeMissingTaskRunControl.revision)
+  assert.equal(afterMissingTaskRunControl.events.length, beforeMissingTaskRunControl.events.length)
+  assert.equal((await supervisor.getRun(missingTaskRunRuntime.id)).status, 'queued')
+
+  const tokenBudgetGoal = await workspaceStore.createGoal({
+    id: 'control-token-budget-goal',
+    projectId: project.id,
+    title: 'Token Budget Goal',
+    objective: 'Enforce aggregate token budget',
+    budget: { maxTokens: 100 }
+  })
+  const tokenBudgetWork = await commands.createWorkItem({
+    id: 'control-token-budget-work',
+    projectId: project.id,
+    goalId: tokenBudgetGoal.id,
+    title: 'Token Budget Work'
+  })
+  const tokenBudgetSession = await createBoundSession(
+    'token-budget', tokenBudgetGoal, tokenBudgetWork
+  )
+  const tokenBudgetControl = controls.get(tokenBudgetSession.meta.id)
+  assert.equal(await manager.send(tokenBudgetSession.meta.id, 'token budget turn one'), true)
+  const tokenBudgetRunA = manager.taskRuns.get(tokenBudgetSession.meta.id)
+  tokenBudgetControl.complete(usage(40, 20, 0, 0))
+  await waitFor(async () => (await supervisor.getRun(tokenBudgetRunA.id))?.usage?.turns === 1,
+    4_000, 'first token budget accounting')
+  assert.equal(await manager.send(tokenBudgetSession.meta.id, 'token budget turn two'), true)
+  const tokenBudgetRunB = manager.taskRuns.get(tokenBudgetSession.meta.id)
+  assert.notEqual(tokenBudgetRunB.id, tokenBudgetRunA.id)
+  tokenBudgetControl.complete(usage(40, 20, 0, 0))
+  await waitFor(async () => (await supervisor.getRun(tokenBudgetRunB.id))?.usage?.turns === 1,
+    4_000, 'second token budget accounting')
+  const tokenBudgetRunsBeforeRejection = await supervisor.listRuns({ projectId: project.id })
+  const tokenBudgetWorkBeforeRejection = await readWorkItem(tokenBudgetWork.id)
+  const tokenBudgetSendsBeforeRejection = tokenBudgetControl.sendCount
+  assert.equal(await manager.send(tokenBudgetSession.meta.id, 'must exceed aggregate token budget'), false)
+  assert.equal(tokenBudgetControl.sendCount, tokenBudgetSendsBeforeRejection)
+  assert.equal(manager.taskRuns.get(tokenBudgetSession.meta.id).id, tokenBudgetRunB.id)
+  assert.equal((await supervisor.listRuns({ projectId: project.id })).length,
+    tokenBudgetRunsBeforeRejection.length)
+  assert.deepEqual((await readWorkItem(tokenBudgetWork.id)).runRefs,
+    tokenBudgetWorkBeforeRejection.runRefs)
+
+  const usdBudgetGoal = await workspaceStore.createGoal({
+    id: 'control-usd-budget-goal',
+    projectId: project.id,
+    title: 'USD Budget Goal',
+    objective: 'Reject unauditable cost accounting',
+    budget: { amount: 0.01, currency: 'USD' }
+  })
+  const usdBudgetWork = await commands.createWorkItem({
+    id: 'control-usd-budget-work',
+    projectId: project.id,
+    goalId: usdBudgetGoal.id,
+    title: 'USD Budget Work'
+  })
+  const usdBudgetSession = await createBoundSession('usd-budget', usdBudgetGoal, usdBudgetWork)
+  const usdBudgetControl = controls.get(usdBudgetSession.meta.id)
+  const runsBeforeUsdRejection = (await supervisor.read()).runs.length
+  assert.equal(await manager.send(usdBudgetSession.meta.id, 'must reject unauditable USD budget'), false)
+  assert.equal(usdBudgetControl.sendCount, 0)
+  assert.equal(manager.taskRuns.get(usdBudgetSession.meta.id), undefined)
+  assert.equal((await supervisor.read()).runs.length, runsBeforeUsdRejection)
+  assert.deepEqual((await readWorkItem(usdBudgetWork.id)).runRefs, [])
+  assert(usdBudgetControl.events.some((event) =>
+    event.kind === 'hook-event' && event.event === 'send-rejected' &&
+    /does not report auditable cost/.test(event.detail)))
+
+  await manager.disposeAll()
+
   smokeResult = {
     status: 'PASS',
     lifecycle: {
@@ -367,6 +459,12 @@ try {
       retrySnapshotPreflightPreservedState: retryAfterMissingSnapshot.status === 'failed',
       restartGateRequiredExplicitResume: true,
       providerCompletionClaimed: false
+    },
+    budget: {
+      aggregateTokens: 120,
+      exhaustedSendFailedClosed: true,
+      noDanglingReservation: true,
+      unauditableUsdFailedClosed: true
     }
   }
   console.log(JSON.stringify(smokeResult, null, 2))
@@ -378,6 +476,19 @@ try {
       goalId: goal.id,
       title: `Control Work ${suffix}`
     })
+    const { meta } = await createBoundSession(suffix, goal, workItem)
+    const accepted = await manager.send(meta.id, `execute ${suffix}`)
+    assert(
+      accepted,
+      `${suffix} initial send was rejected: ${JSON.stringify(controls.get(meta.id)?.events.slice(-3))}`
+    )
+    const run = manager.taskRuns.get(meta.id)
+    assert(run, `${suffix} TaskRun was not created`)
+    await waitFor(() => supervisor.getRun(run.id), 4_000, `${suffix} Supervisor binding`)
+    return { meta, run, workItem }
+  }
+
+  async function createBoundSession(suffix, targetGoal, targetWorkItem) {
     const meta = await manager.create({
       cwd: projectDir,
       isolated: false,
@@ -388,15 +499,16 @@ try {
       title: `Supervisor ${suffix}`,
       projectId: project.id,
       workspaceId: project.id,
-      goalId: goal.id,
-      workItemId: workItem.id
+      goalId: targetGoal.id,
+      workItemId: targetWorkItem.id
     })
     await waitFor(() => manager.get(meta.id)?.meta.sdkSessionId, 2_000, `${suffix} session start`)
-    assert(manager.send(meta.id, `execute ${suffix}`), `${suffix} initial send was rejected`)
-    const run = manager.taskRuns.get(meta.id)
-    assert(run, `${suffix} TaskRun was not created`)
-    await waitFor(() => supervisor.getRun(run.id), 4_000, `${suffix} Supervisor binding`)
-    return { meta, run, workItem }
+    return { meta }
+  }
+
+  async function readWorkItem(id) {
+    const reopenedWorkspace = await new workspaceModule.ProjectWorkspaceStore(userData).open()
+    return reopenedWorkspace.getWorkItem(id)
   }
 
   async function startSupervisorRun(id, ownerId) {
@@ -437,10 +549,18 @@ function controlledEngineFactory(controls) {
       const transcript = []
       const events = []
       const push = (event) => {
-        const entry = { seq: ++seq, event }
+        const eventSeq = ++seq
+        const identity = {
+          schemaVersion: 1,
+          streamId: `supervisor-control:${meta.id}`,
+          eventId: `supervisor-control:${meta.id}:${eventSeq}`,
+          seq: eventSeq,
+          occurredAt: Date.now()
+        }
+        const entry = { ...identity, event }
         events.push(event)
         transcript.push(entry)
-        emit(event, entry.seq, entry)
+        emit(event, eventSeq, identity)
       }
       const control = {
         events,
@@ -453,6 +573,12 @@ function controlledEngineFactory(controls) {
           meta.status = 'error'
           push({ kind: 'turn-result', subtype: 'provider_error', isError: true, resultText: message })
           push({ kind: 'status', status: 'error', error: message })
+        },
+        complete(turnUsage) {
+          meta.usage = { ...turnUsage }
+          push({ kind: 'turn-result', subtype: 'success', isError: false, usage: turnUsage })
+          meta.status = 'idle'
+          push({ kind: 'status', status: 'idle' })
         }
       }
       controls.set(meta.id, control)
@@ -509,6 +635,10 @@ function leaseOptions(run) {
     fencingToken: run.lease.fencingToken,
     expectedRevision: run.revision
   }
+}
+
+function usage(input, output, cacheRead, cacheCreation) {
+  return { input, output, cacheRead, cacheCreation }
 }
 
 function compileSources() {

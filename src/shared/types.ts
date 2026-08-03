@@ -8,13 +8,27 @@ import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-ty
 import type { ModelAttemptRecoveryApi } from './model-attempt-types'
 import type { WorkflowLedgerApi } from './workflow-types'
 import type { ProjectWorkspaceApi } from './project-workspace-types'
+import type { OutboundContextManifest } from './project-workspace-types'
 import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
+import type { ProviderProfileApi } from './provider-profile-types'
+import type { TaskPlanApi, TaskStrategy } from './task-plan-types'
+import type { MigrationApi } from './migration-types'
+import type { StudioResultApi } from './studio-result-types'
+import type { ProjectDataLifecycleApi } from './data-lifecycle-types'
 import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 import type { TerminalEffectApi } from './terminal-operation-types'
 import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
+import type { NotificationConnectorInput, NotificationConnectorView } from './notification-connector-types'
 export type { UserMessageAttachmentView } from './attachment-types'
+export type * from './provider-profile-types'
+export type * from './task-plan-types'
+export type * from './migration-types'
+export type * from './studio-result-types'
+export type * from './data-lifecycle-types'
+export type * from './notification-connector-types'
+export type * from './project-aggregate-types'
 export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
 export type * from './digital-worker-types'
@@ -33,28 +47,20 @@ export type {
   FileSystemIdentity,
   InteractiveOperationKind,
   InteractiveOperationSource,
-  MigrationImportOperationResult, TaskRunOperationMetadata,
-  ManagedWorktreeProjectionRecord
+  ManagedWorktreeProjectionRecord,
+  MigrationImportOperationResult,
+  OfficeSourceSnapshot,
+  TaskRunOperationMetadata
 } from './effect-types'
 export type {
-  TaskDagAutoMergeConflict,
-  TaskDagAutoMergeEntry,
-  TaskDagAutoMergeEntryStatus,
-  TaskDagAutoMergeRollback,
-  TaskDagAutoMergeRollbackEntry,
-  TaskDagAutoMergeStatus,
-  TaskDagAutoMergeVerification,
-  TaskDagAutoMergeVerificationStatus,
-  TaskDagAutoMergeView,
-  TaskDagFinalizationPatchPlan,
-  TaskDagFinalizationPhase,
-  TaskDagFinalizationRecord,
-  TaskDagFinalizationResolution,
-  TaskDagFinalizationSummary,
-  TaskDagFinalizationVerification,
-  TaskDagFinalizationView
+  TaskDagAutoMergeConflict, TaskDagAutoMergeEntry, TaskDagAutoMergeEntryStatus, TaskDagAutoMergeRollback,
+  TaskDagAutoMergeRollbackEntry, TaskDagAutoMergeStatus, TaskDagAutoMergeVerification,
+  TaskDagAutoMergeVerificationStatus, TaskDagAutoMergeView, TaskDagFinalizationPatchPlan,
+  TaskDagFinalizationPhase, TaskDagFinalizationRecord, TaskDagFinalizationResolution,
+  TaskDagFinalizationSummary, TaskDagFinalizationVerification, TaskDagFinalizationView
 } from './task-dag-finalization-types'
 export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+/** 用户可理解的任务合同；与 Experience、Drive、Provider 和 permissionMode 正交。 */
 /** 本地执行策略。disabled 仅用于旧严格容器设置的 fail-closed 迁移。 */
 export type SandboxMode = 'disabled' | 'restrictedLocal' | 'loose'
 /** Native command lifecycle outcome; exitCode is meaningful only for exited. */ export type CommandTermination = 'exited' | 'timed_out' | 'aborted' | 'output_limit' | 'spawn_error' | 'not_started'
@@ -73,9 +79,7 @@ export type ModelRoutingTaskKind =
   | 'planning'
   | 'testing'
   | 'documentation'
-
 export type ModelRoutingRiskLevel = 'low' | 'medium' | 'high'
-
 export type ModelRoutingKeywordMode = 'any' | 'all'
 
 export interface ModelRoutingRule {
@@ -109,6 +113,10 @@ export interface CaoGenDrivePolicyView {
   summary: string
   schedulerStrategy: SchedulerStrategy
   defaultModel: string
+  /**
+   * 风险偏好描述，不再设置会话 permissionMode。
+   * 收编后会话 permissionMode 由 taskStrategy 派生；此字段仅供设置页展示和 Routine 创建时参考。
+   */
   defaultPermissionMode: PermissionModeId
   sessionBudgetUsd: number
   validationDepth: CaoGenDriveValidationDepth
@@ -295,6 +303,23 @@ export interface UsageTotals {
 }
 
 export type ContextPressureLevel = 'normal' | 'warning' | 'critical'
+
+/**
+ * OpenAI Responses 服务端上下文的持久投影。
+ *
+ * response id 只能在同一 Provider、模型、协议和凭据链内续用；
+ * 它不是通用的会话身份，恢复时必须做严格匹配，失败则回退本地转录。
+ */
+export interface ResponsesConversationContext {
+  responseId: string
+  providerId: string
+  model: string
+  protocol: 'responses'
+  keyId?: string
+  generation: number
+  updatedAt: number
+}
+
 export interface SessionMeta {
   id: string
   title: string
@@ -348,9 +373,27 @@ export interface SessionMeta {
   resumeSessionAt?: string
   /** Agent 引擎;由会话 Provider 配置自动决定。 */
   engine?: EngineKind
+  /** 查看/规划/执行；决定任务是否可以产生外部或工作区副作用。 */
+  taskStrategy: TaskStrategy
+  /**
+   * 权限模式（派生只读）。
+   * 收编后此字段由 derivePermissionModeFromStrategy(taskStrategy) 派生，
+   * 不再接受用户或模型直接设置。旧值仅用于老会话迁移检测。
+   * 值域不变:'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+   *   - 'plan':保留用于向后兼容，不再被派生给任何 TaskStrategy
+   *   - 'bypassPermissions':仅 Routine 可用，会话内不出现
+   */
   permissionMode: PermissionModeId
   status: SessionStatus
   sdkSessionId?: string
+  /** 显式跨 Provider/模型分叉的直接来源；仅用于本地账本继承，不可作为 SDK resume id。 */
+  conversationForkSourceSdkSessionId?: string
+  /** 分叉来源的 CaoGen Session；用于把新 Run 绑定到明确的前驱，而不复用旧 Session 身份。 */
+  conversationForkSourceSessionId?: string
+  /** 分叉时观察到的 canonical source Run；新 Session 会创建独立 successor Run。 */
+  conversationForkSourceRunId?: string
+  /** OpenAI Responses 服务端上下文；仅在严格身份匹配时恢复。 */
+  responsesContext?: ResponsesConversationContext
   costUsd: number
   usage: UsageTotals
   contextTokens: number
@@ -390,8 +433,16 @@ export interface HistoryEntry {
   providerId: string
   routingScope?: SessionRoutingScope
   engine?: EngineKind
+  /** 旧历史缺失时迁移为 execute。 */
+  taskStrategy?: TaskStrategy
   permissionMode: PermissionModeId
   sdkSessionId: string
+  /** 显式跨 Provider/模型分叉的直接来源；新会话拥有独立 sdkSessionId。 */
+  conversationForkSourceSdkSessionId?: string
+  conversationForkSourceSessionId?: string
+  conversationForkSourceRunId?: string
+  /** OpenAI Responses 服务端上下文；仅在严格身份匹配时恢复。 */
+  responsesContext?: ResponsesConversationContext
   createdAt: number
   updatedAt: number
   costUsd: number
@@ -427,9 +478,17 @@ export interface CreateSessionOptions {
   resumeSessionAt?: string
   /** 兼容旧调用;新会话会忽略此值并从 Provider 解析引擎。 */
   engine?: EngineKind
+  taskStrategy?: TaskStrategy
+  /**
+   * @deprecated 收编后此字段被后端忽略。
+   * permissionMode 由 taskStrategy 派生，不接受外部设置。
+   * 保留字段仅为向后兼容旧调用方(IDE bridge、resumeFromHistory 等)。
+   */
   permissionMode?: PermissionModeId
   /** 传入历史会话的 sdkSessionId 可恢复上下文 */
   resumeSdkSessionId?: string
+  /** 从历史账本创建全新会话；与 resumeSdkSessionId 互斥，不复用任何 Provider 服务端上下文。 */
+  forkFromSdkSessionId?: string
   title?: string
 }
 
@@ -444,7 +503,12 @@ export interface DispatchSubagentTaskInput {
   model?: string
   providerId?: string
   engine?: EngineKind
+  /**
+   * @deprecated 收编后子会话 permissionMode 由 taskStrategy 派生，此字段被忽略。
+   */
   permissionMode?: PermissionModeId
+  /** 新增:子任务策略。未指定时继承父会话 taskStrategy。 */
+  taskStrategy?: TaskStrategy
 }
 
 export interface DispatchSubagentsInput {
@@ -688,6 +752,14 @@ export type TaskRunStatus =
 
 export type TaskStepStatus = TaskRunStatus
 
+export interface TaskRunContinuation {
+  schemaVersion: 1
+  kind: 'conversation_fork'
+  sourceSessionId: string
+  sourceRunId: string
+  sourceSdkSessionId: string
+}
+
 export interface TaskStepRecord {
   id: string
   runId: string
@@ -773,6 +845,8 @@ export interface TaskRunRecord {
   recentEventIds?: string[]
   lastEventKind?: AgentEvent['kind']
   error?: string
+  /** 新会话的逻辑前驱；Run/Session 身份保持独立，业务 WorkItem 继续承接。 */
+  continuation?: TaskRunContinuation
   operation?: TaskRunOperationMetadata
   steps?: TaskStepRecord[]
   toolExecutions?: ToolExecutionRecord[]
@@ -790,6 +864,15 @@ export interface TaskSnapshotSubtaskState {
   worktreePath?: string
 }
 
+export interface ConversationLedgerIntegrityView {
+  schemaVersion: 1
+  valid: boolean
+  mode: 'empty' | 'legacy' | 'sealed'
+  entryCount: number
+  headDigest?: string
+  error?: string
+}
+
 export interface TaskSnapshotRecord {
   id: string
   taskId: string
@@ -805,6 +888,8 @@ export interface TaskSnapshotRecord {
   reason: TaskSnapshotReason
   meta: SessionMeta
   execution: TaskSnapshotExecutionPosition
+  /** Provider 无关会话账本的持久完整性投影；旧快照可缺失。 */
+  conversationLedger?: ConversationLedgerIntegrityView
   run?: TaskRunRecord
   replayCandidate?: TaskSnapshotReplayCandidate
   worktree?: TaskSnapshotWorktreeInfo
@@ -1093,6 +1178,8 @@ export interface Provider {
   activeKeyId?: string
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
+  /** 鉴权方式。旧数据缺省为 api-key；none 只允许本机回环 OpenAI 兼容服务。 */
+  authMode?: ProviderAuthMode
   /** 此 Provider 绑定的执行引擎;会话从 Provider 自动继承。 */
   engine?: EngineKind
   /**
@@ -1153,12 +1240,18 @@ export interface ProviderApiKeyView {
 /** OpenAI 引擎可用的 API 协议 */
 export type OpenAIProtocol = 'responses' | 'chat'
 
+/** Provider 鉴权方式；none 仅用于无需密钥的本机回环服务。 */
+export type ProviderAuthMode = 'api-key' | 'none'
+
 /** 渲染进程可见的 Provider:不含密钥,只标记是否已配置 token */
 export interface ProviderView {
   id: string
   name: string
   baseUrl: string
   models: string[]
+  authMode: ProviderAuthMode
+  /** 已具备可路由条件：无需鉴权，或至少有一把当前可用密钥。 */
+  ready: boolean
   engine: EngineKind
   customHeaders?: string
   credentialHeaderNames?: string[]
@@ -1311,6 +1404,7 @@ export interface ProviderInput {
   name: string
   baseUrl: string
   models: string[]
+  authMode?: ProviderAuthMode
   engine?: EngineKind
   customHeaders?: string
   /** 额外受管鉴权头名称;头值始终取 Broker 中的 Provider token。 */
@@ -1348,6 +1442,7 @@ export interface ProviderModelFetchInput {
   customHeaders?: string
   credentialHeaderNames?: string[]
   openaiProtocol?: OpenAIProtocol
+  authMode?: ProviderAuthMode
 }
 
 export interface ProviderModelFetchError {
@@ -1620,7 +1715,10 @@ export interface Routine extends Record<string, unknown> {
   name: string
   prompt: string
   content?: string
-  projectCwd: string
+  projectId?: string
+  goalTemplateId?: string
+  digitalWorkerId?: string
+  projectCwd?: string
   schedule: string
   frequency?: string
   providerId: string
@@ -1641,7 +1739,10 @@ export type CreateRoutineInput = {
   name: string
   prompt?: string
   content?: string
-  projectCwd: string
+  projectId?: string
+  goalTemplateId?: string
+  digitalWorkerId?: string
+  projectCwd?: string
   schedule?: string
   frequency?: string
   providerId?: string
@@ -1661,6 +1762,9 @@ export type UpdateRoutineInput = {
   name?: string
   prompt?: string
   content?: string
+  projectId?: string | null
+  goalTemplateId?: string | null
+  digitalWorkerId?: string | null
   projectCwd?: string
   schedule?: string
   frequency?: string
@@ -1681,18 +1785,42 @@ export interface MarkRunOptions {
 }
 
 export type RoutineRunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+export type RoutineInboxStatus = 'running' | 'waiting_approval' | 'needs_review' | 'accepted' | 'rejected' | 'failed'
+export type RoutineDispatchState = 'preparing' | 'session_created' | 'prompt_accepted'
+export type RoutineReviewDecision = 'accepted' | 'rejected'
 
 export interface RoutineRunRecord {
   id: string
   routineId: string
   routineName: string
+  projectId?: string
+  goalId?: string
+  workItemId?: string
   projectCwd: string
   startedAt: number
   finishedAt?: number
   status: RoutineRunStatus
+  inboxStatus: RoutineInboxStatus
+  dispatchState: RoutineDispatchState
   sessionId?: string
+  workflowRunId?: string
+  /** Canonical persisted result produced by this automation run. */
+  artifactId?: string
+  /** Immutable Workflow Evidence bound to the result Artifact and creating Run. */
+  evidenceId?: string
+  /** Stable observation timestamp used for idempotent result finalization. */
+  resultObservedAt?: number
   nextRunAt?: number | null
+  resultText?: string
   error?: string
+  reviewDecision?: RoutineReviewDecision
+  reviewNote?: string
+  reviewedAt?: number
+}
+
+export interface RoutineRunReviewInput {
+  decision: 'accept' | 'reject'
+  note?: string
 }
 
 export interface RoutineTemplate {
@@ -2085,24 +2213,6 @@ export interface BrowserObservation {
   networkFailures: string[]
 }
 
-/** D11 迁移向导:检测到的他家 Agent 资产 */
-export interface MigrationAsset {
-  /** 来源 Agent 名(Cursor / Codex / Cline …) */
-  agent: string
-  /** rules = 规则/记忆文件;mcp = MCP 配置;config = 其他配置 */
-  kind: 'rules' | 'mcp' | 'config'
-  path: string
-  name: string
-  preview: string
-}
-
-export interface MigrationScan {
-  cwd: string
-  assets: MigrationAsset[]
-  /** 本机/本项目已有 Claude Code 原生资产(CaoGen 直接继承,无需导入) */
-  claudeNative: boolean
-}
-
 export interface SessionEventPayload {
   sessionId: string
   /** 会话内单调递增;渲染进程用它对"转录回放 + 实时广播"去重 */
@@ -2118,6 +2228,12 @@ export interface SessionEventPayload {
 /** 转录文件(JSONL)中的一行 */
 export interface TranscriptEntry {
   seq: number
+  /** Canonical Conversation Ledger 封链版本；旧 JSONL 缺失时按 legacy 前缀读取。 */
+  ledgerVersion?: 1
+  /** 前一条耐久事件 digest；legacy 前缀后第一条使用 legacy anchor。 */
+  previousDigest?: string
+  /** 当前耐久事件的 SHA-256 canonical digest。 */
+  digest?: string
   /** 可选仅用于兼容旧 JSONL;新写入的转录总是携带身份。 */
   eventId?: string
   occurredAt?: number
@@ -2153,7 +2269,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, TerminalEffectApi, BrowserNavigationEffectApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2197,6 +2313,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   /** OCR 附件图片(Vision/tesseract 降级;无引擎时 ok=false 如实报告) */
   ocrImageAttachment(sessionId: string, imagePath: string): Promise<ImageOcrResult>
   sendMessage(sessionId: string, payload: string | SendMessagePayload): Promise<boolean>
+  previewOutboundContext(sessionId: string, payload: SendMessagePayload): Promise<OutboundContextManifest>
   interrupt(sessionId: string): Promise<void>
   closeSession(sessionId: string): Promise<void>
   respondPermission(
@@ -2217,13 +2334,10 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   deleteHistory(id: string): Promise<void>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
-  listProviders(): Promise<ProviderView[]>
-  createProvider(provider: ProviderInput): Promise<ProviderView>
-  updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
-  deleteProvider(id: string): Promise<void>
-  fetchProviderModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult>
-  listProviderHealth(): Promise<ProviderHealthView[]>
-  listEngines(): Promise<EngineInfo[]>
+  listNotificationConnectors(): Promise<NotificationConnectorView[]>
+  createNotificationConnector(input: NotificationConnectorInput): Promise<NotificationConnectorView>
+  deleteNotificationConnector(id: string): Promise<boolean>
+  setDefaultNotificationConnector(id: string): Promise<NotificationConnectorView>
   scanPluginRegistry(
     sessionId?: string,
     options?: PluginRegistryScanOptions
@@ -2247,6 +2361,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
   runRoutineNow(id: string): Promise<RoutineRunRecord | null>
   listRoutineRuns(routineId?: string): Promise<RoutineRunRecord[]>
+  reviewRoutineRun(runId: string, input: RoutineRunReviewInput): Promise<RoutineRunRecord | null>
   listRoutineTemplates(): Promise<RoutineTemplate[]>
   getStartSuggestions(sessionId: string): Promise<StartSuggestion[]>
   gitStatus(sessionId: string): Promise<GitStatus>
@@ -2291,7 +2406,6 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   ): Promise<BrowserAnnotation>
   observeBrowser(sessionId: string): Promise<BrowserObservation>
   onBrowserEvent(cb: (event: BrowserEvent) => void): () => void
-  scanMigration(cwd: string): Promise<MigrationScan>
   importMigrationAssets(cwd: string, paths: string[]): Promise<MigrationImportOperationResult>
   listProjects(): Promise<Project[]>
   updateProject(id: string, patch: ProjectUpdate): Promise<Project | null>

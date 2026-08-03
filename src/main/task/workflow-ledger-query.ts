@@ -108,6 +108,19 @@ export function readAndVerifyEvents(
     requireProjectionBinding?: boolean
   } = {}
 ): WorkflowEventRecord[] {
+  const rows = readWorkflowEventChain(db)
+  const index = verifyEventReferences(db, rows)
+  if (options.requireTaskEvidenceCoverage !== false) {
+    assertTaskEvidenceEventCoverage(rows, index)
+  }
+  if (options.requireProjectionBinding !== false) {
+    assertProjectionEventBindings(rows, index)
+  }
+  return rows
+}
+
+/** Read and verify only the event hash chain, without dereferencing mutable projections. */
+export function readWorkflowEventChain(db: WorkflowLedgerDatabase): WorkflowEventRecord[] {
   const rows: WorkflowEventRecord[] = []
   const stmt = db.prepare(
     `SELECT seq, event_id, stream_id, entity_type, entity_id, kind,
@@ -121,13 +134,6 @@ export function readAndVerifyEvents(
     stmt.free()
   }
   verifyEventChain(rows)
-  const index = verifyEventReferences(db, rows)
-  if (options.requireTaskEvidenceCoverage !== false) {
-    assertTaskEvidenceEventCoverage(rows, index)
-  }
-  if (options.requireProjectionBinding !== false) {
-    assertProjectionEventBindings(rows, index)
-  }
   return rows
 }
 

@@ -6,6 +6,7 @@ import type {
   RewindResult,
   SendMessagePayload,
   SessionMeta,
+  TaskStrategy,
   TaskRunRecord
 } from '../shared/types'
 import type {
@@ -63,9 +64,15 @@ export function bindEngineToNativeRuntime(
     guard.accept(normalizedEvent, seq, identity)
     input.emit(normalizedEvent, seq, identity)
   }
-  guard.hydrateTranscript(engine.getTranscript().filter((entry) => entry.seq <= initialSeq))
+  guard.hydrateTranscript(engine.getTranscript().filter((entry) =>
+    entry.seq <= initialSeq && (!input.resume || !isSessionRuntimeEvent(entry.event))
+  ))
   for (const entry of buffered) forward(entry.event, entry.seq, entry.identity)
   return new ContractBoundEngine(engine, guard, input.protocolAdapter)
+}
+
+function isSessionRuntimeEvent(event: AgentEvent): boolean {
+  return event.kind === 'init' || event.kind === 'status' || event.kind === 'meta'
 }
 
 function resolveInitialSequence(
@@ -152,6 +159,11 @@ class ContractBoundEngine implements NativeRuntimeBoundEngine {
     this.assertIdentity()
   }
 
+  async setTaskStrategy(strategy: TaskStrategy): Promise<void> {
+    await this.engine.setTaskStrategy(strategy)
+    this.assertIdentity()
+  }
+
   async setModel(model: string): Promise<void> {
     requiredString(model, 'model')
     await this.engine.setModel(model)
@@ -220,7 +232,7 @@ function assertEngineSurface(engine: Engine, meta: SessionMeta): void {
   }
   const methods: Array<keyof Engine> = [
     'start', 'send', 'rejectSend', 'interrupt', 'respondPermission', 'pendingPermissions',
-    'getTranscript', 'setPermissionMode', 'setModel', 'rename', 'dispose'
+    'getTranscript', 'setPermissionMode', 'setTaskStrategy', 'setModel', 'rename', 'dispose'
   ]
   for (const method of methods) {
     if (typeof engine[method] !== 'function') {

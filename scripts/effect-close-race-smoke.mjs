@@ -115,9 +115,17 @@ try {
         releaseInterrupt = resolve
       })
       const push = (event) => {
-        const entry = { seq: ++seq, event }
+        const eventSeq = ++seq
+        const identity = {
+          schemaVersion: 1,
+          streamId: `effect-close-race:${meta.id}`,
+          eventId: `effect-close-race:${meta.id}:${eventSeq}`,
+          seq: eventSeq,
+          occurredAt: Date.now()
+        }
+        const entry = { ...identity, event }
         transcript.push(entry)
-        emit(event, entry.seq, entry)
+        emit(event, eventSeq, identity)
       }
       const control = {
         push,
@@ -179,7 +187,7 @@ try {
   await waitFor(() => manager.get(meta.id)?.meta.sdkSessionId, 2000, 'session start')
   const control = controls.get(meta.id)
   assert(control, 'missing close-race engine control')
-  manager.send(meta.id, 'perform delayed write')
+  assertEqual(await manager.send(meta.id, 'perform delayed write'), true)
   const toolInput = { path: 'state.txt', content: 'after\n' }
   control.push({
     kind: 'assistant-message',
@@ -249,7 +257,7 @@ try {
   await waitFor(() => manager.get(interruptMeta.id)?.meta.sdkSessionId, 2000, 'interrupt session start')
   const interruptControl = controls.get(interruptMeta.id)
   assert(interruptControl, 'missing interrupt-race engine control')
-  manager.send(interruptMeta.id, 'perform interrupted write')
+  assertEqual(await manager.send(interruptMeta.id, 'perform interrupted write'), true)
   interruptControl.push({
     kind: 'assistant-message',
     blocks: [{ type: 'tool_use', id: 'interrupted-write', name: 'write_file', input: toolInput }]
@@ -305,7 +313,7 @@ try {
   await waitFor(() => manager.get(blockedMeta.id)?.meta.sdkSessionId, 2000, 'blocked-send session start')
   const blockedControl = controls.get(blockedMeta.id)
   assert(blockedControl, 'missing blocked-send engine control')
-  manager.send(blockedMeta.id, 'perform unresolved write')
+  assertEqual(await manager.send(blockedMeta.id, 'perform unresolved write'), true)
   const blockedToolInput = { path: 'state.txt', content: 'blocked\n' }
   blockedControl.push({
     kind: 'assistant-message',
@@ -332,7 +340,7 @@ try {
     .getTranscript(blockedMeta.id)
     .filter((entry) => entry.event.kind === 'user-message').length
 
-  manager.send(blockedMeta.id, 'this retry must be blocked')
+  assertEqual(await manager.send(blockedMeta.id, 'this retry must be blocked'), false)
 
   const afterBlockedRun = manager.taskRuns.get(blockedMeta.id)
   const afterBlockedEffect = afterBlockedRun.effects.find((item) => item.toolUseId === 'blocked-send-write')

@@ -37,19 +37,19 @@
   "files": {
     "scripts/chat-protocol-e2e.cjs": {
       "profile": "automation",
-      "lines": 169,
-      "contentHash": "84b1153c22c25962fedea3f232d551f5b1c63617ca5e7b43a3a3fad2ff2174b7",
+      "lines": 181,
+      "contentHash": "a04814e63555d5c70cf413bfc931745ea79b7c7d75448aed86166841b2e3cf54",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 95,
+      "maxFunctionLines": 99,
       "complexFunctionCount": 1,
-      "maxComplexity": 23,
+      "maxComplexity": 21,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "run#1": {
-          "lines": 95,
-          "complexity": 23
+          "lines": 99,
+          "complexity": 21
         }
       }
     },
@@ -78,7 +78,7 @@
     "scripts/china-tool-call-parity.mjs": {
       "profile": "automation",
       "lines": 627,
-      "contentHash": "2f85d23b0b7c43456eaa0edbe436817d065eb0070434bbc20a248c3827005a77",
+      "contentHash": "9fdf000c49f69dc61f77e58e5b86bf8e6706ee993b402a9b91f8145512e645d1",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 31,
       "complexFunctionCount": 1,
@@ -468,7 +468,7 @@
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 226,
       "complexFunctionCount": 0,
-      "maxComplexity": 5,
+      "maxComplexity": 6,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -499,8 +499,8 @@
     },
     "scripts/p2-external-preflight.mjs": {
       "profile": "automation",
-      "lines": 990,
-      "contentHash": "d3a613e044f5709886975e091a42538fcf2b85538fdb666aa853187fd55e80c0",
+      "lines": 997,
+      "contentHash": "d15c63d01017ebfdfb4bd9de3637036e36d0e314b5510347fa4d10ca1a6d40f9",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 79,
       "complexFunctionCount": 4,
@@ -599,19 +599,19 @@
     },
     "scripts/stress-32-agents.cjs": {
       "profile": "automation",
-      "lines": 146,
-      "contentHash": "4ecf552499a55c141f4c433a0b9555ce6333960875c1106a288b286acf878cc4",
+      "lines": 148,
+      "contentHash": "502294d3328989ec10eddf3be4f3f21b91c1c735121b156c3ff77a82629f8b17",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 103,
+      "maxFunctionLines": 95,
       "complexFunctionCount": 1,
-      "maxComplexity": 20,
+      "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "run#1": {
-          "lines": 103,
-          "complexity": 20
+          "lines": 95,
+          "complexity": 17
         }
       }
     },
@@ -918,7 +918,7 @@
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 653,
       "complexFunctionCount": 0,
-      "maxComplexity": 12,
+      "maxComplexity": 13,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -947,24 +947,6 @@
         }
       }
     },
-    "src/main/migration.ts": {
-      "profile": "product",
-      "lines": 214,
-      "contentHash": "f626d11c1b82e2d3432b3c8695f9d52ddcedf6f163a36ed395391b254bd1b96a",
-      "oversizedFunctionCount": 0,
-      "maxFunctionLines": 86,
-      "complexFunctionCount": 1,
-      "maxComplexity": 26,
-      "forbiddenSuppressionCount": 0,
-      "unreasonedSuppressionCount": 0,
-      "malformedDebtMarkerCount": 0,
-      "functionDebt": {
-        "importAssets#1": {
-          "lines": 86,
-          "complexity": 26
-        }
-      }
-    },
     "src/main/model/model-profile.ts": {
       "profile": "product",
       "lines": 444,
@@ -990,7 +972,7 @@
     "src/main/model/session-routing.ts": {
       "profile": "product",
       "lines": 436,
-      "contentHash": "b74b2e3f1caf73a54ddb18c6d9fcbd0874523804603ced67b3b0c1685d5739da",
+      "contentHash": "6600779ddb47b3919064e3f5e230477112c206123da6992bdfe5d9b5e306fab4",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 60,
       "complexFunctionCount": 1,
@@ -1007,10 +989,10 @@
     },
     "src/main/openaiEngine.ts": {
       "profile": "product",
-      "lines": 1477,
-      "contentHash": "4a225e04ab221f6b74a1745fafb2b5e5b8b1968330043d583058af70a17d8f3e",
+      "lines": 1464,
+      "contentHash": "cf1348b11db869b1bac23dddf55f70f2576089042faf4d34ec6076c13af5577d",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 117,
+      "maxFunctionLines": 113,
       "complexFunctionCount": 2,
       "maxComplexity": 38,
       "forbiddenSuppressionCount": 0,
@@ -1032,7 +1014,7 @@
       "lines": 1113,
       "contentHash": "5f5c01432e4e3220bb5f099c90148741e92388054f6463baa25ba0bf984c7b59",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 250,
+      "maxFunctionLines": 249,
       "complexFunctionCount": 1,
       "maxComplexity": 54,
       "forbiddenSuppressionCount": 0,
@@ -1040,15 +1022,15 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "executeCodingTool#1": {
-          "lines": 250,
+          "lines": 249,
           "complexity": 54
         }
       }
     },
     "src/main/permission/audit-log.ts": {
       "profile": "product",
-      "lines": 111,
-      "contentHash": "dd7009e8ad3ef233137dc0921b39dbb6fd6628b13a0cb2cfabf47b48bcdd08d3",
+      "lines": 152,
+      "contentHash": "d28aa66a07c4c67c0d1298d51ce902a9e93df3b3c529258ab6ddf3c9c46f55f9",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 23,
       "complexFunctionCount": 1,
@@ -1206,9 +1188,9 @@
       "lines": 1798,
       "contentHash": "ad2fcbbedabb29a376c1f2a14a31a82afe3a1f86f975cba1b3f034eb3b5777e3",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 64,
-      "complexFunctionCount": 2,
-      "maxComplexity": 24,
+      "maxFunctionLines": 65,
+      "complexFunctionCount": 1,
+      "maxComplexity": 19,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1432,7 +1414,7 @@
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 428,
       "complexFunctionCount": 1,
-      "maxComplexity": 31,
+      "maxComplexity": 29,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1606,7 +1588,7 @@
     "src/renderer/src/components/RoutineEditor.tsx": {
       "profile": "product",
       "lines": 315,
-      "contentHash": "c5e7418fa9199f78d812c21570f6fb07ab06513e1ee2204613fdd30920424a34",
+      "contentHash": "2262b383076b814815864f40678dfcd66f5ad0c0b1d9a237f433660c3e6267fc",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 288,
       "complexFunctionCount": 1,
@@ -1628,7 +1610,7 @@
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 1271,
       "complexFunctionCount": 1,
-      "maxComplexity": 30,
+      "maxComplexity": 22,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1648,16 +1630,16 @@
       "lines": 880,
       "contentHash": "7509eb10f197442a716a708d9992876fb89e8cde07d1bb2ebb9c746435f8dd19",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 771,
+      "maxFunctionLines": 770,
       "complexFunctionCount": 1,
-      "maxComplexity": 37,
+      "maxComplexity": 34,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "Sidebar#1": {
-          "lines": 771,
-          "complexity": 37
+          "lines": 770,
+          "complexity": 34
         }
       }
     },
@@ -2257,12 +2239,12 @@
     },
     "src/renderer/src/controlCenter.ts": {
       "profile": "product",
-      "lines": 456,
-      "contentHash": "4e292daeb747abde6192acd9510fa8468e6d8f1343b86deaa6f7d60c1c17092b",
+      "lines": 461,
+      "contentHash": "0effbb0a98120feec15949c8a6f58cf01932347283d389fa55b39d73b2a22b81",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 96,
       "complexFunctionCount": 3,
-      "maxComplexity": 30,
+      "maxComplexity": 27,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -2276,8 +2258,8 @@
           "complexity": 19
         },
         "buildProviderStatus#1": {
-          "lines": 53,
-          "complexity": 30
+          "lines": 51,
+          "complexity": 27
         }
       }
     },

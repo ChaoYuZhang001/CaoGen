@@ -353,6 +353,8 @@ function crashAfterDurableStart(outDir, root, hits, input) {
 async function createFixture(snapshotStore, root, input) {
   mkdirSync(root, { recursive: true })
   const now = Date.now()
+  const eventId = `model-attempt-crash:${input.sessionId}:1`
+  const streamId = `model-attempt-crash:${input.sessionId}`
   const run = {
     schemaVersion: 1,
     id: input.runId,
@@ -396,8 +398,16 @@ async function createFixture(snapshotStore, root, input) {
       contextTokens: 0,
       createdAt: now
     },
-    transcript: [{ seq: 1, event: { kind: 'user-message', messageId: `message-${input.sessionId}`, text: 'resume fixture' } }],
+    transcript: [{
+      seq: 1,
+      eventId,
+      streamId,
+      occurredAt: now,
+      event: { kind: 'user-message', messageId: `message-${input.sessionId}`, text: 'resume fixture' }
+    }],
     lastSeq: 1,
+    lastEventId: eventId,
+    lastEventKind: 'user-message',
     eventCount: 1,
     reason: 'shutdown',
     run,

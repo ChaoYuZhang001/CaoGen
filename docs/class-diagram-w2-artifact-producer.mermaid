@@ -1,0 +1,105 @@
+classDiagram
+    %% ===== 既有类型（仅标注与本次相关的字段）=====
+    class EffectRecord {
+        +string id
+        +string runId
+        +string toolUseId
+        +EffectStatus status
+        +EffectTarget target
+    }
+    class ArtifactLifecycleRegistrationInput {
+        +string id
+        +string projectId
+        +string goalId
+        +string workItemId
+        +string runId
+        +string lineageId
+        +WorkflowArtifactKind kind
+        +string title
+        +number version
+        +WorkflowProjectionSource provenance
+        +string mediaType
+        +ArtifactContentInput content
+        +ArtifactRetentionPolicy retention
+        +Record~string,unknown~ metadata
+    }
+    class WorkflowArtifactRecord {
+        +string id
+        +WorkflowArtifactKind kind
+        +string title
+        +string digest
+        +string mediaType
+        +string supersedesId
+    }
+    class StudioResultArtifact {
+        +string id
+        +WorkflowArtifactKind kind
+        +string mediaType
+        +string[] evidenceIds
+        +string[] acceptanceIds
+        +StudioResultArtifactLocation[] locations
+    }
+    class WorkflowEvidenceRecord {
+        +string evidenceId
+        +string artifactId
+        +WorkflowEvidenceKind kind
+        +WorkflowEvidenceSource source
+        +boolean contentDigest
+    }
+    class WorkflowAcceptanceRecord {
+        +string id
+        +string goalId
+        +WorkflowAcceptanceStatus status
+        +string[] criteria
+        +string[] evidenceRefs
+    }
+    class DeliveryVerdict {
+        <<renderer 纯函数>>
+        +deriveDeliveryVerdict(snapshot)
+    }
+
+    %% ===== 本次新增 / 扩展 =====
+    class OfficeArtifactEffect {
+        <<EffectTarget 新增分支>>
+        +kind: 'office_artifact'
+        +artifactKind: 'document' | 'spreadsheet'
+        +workspacePath: string
+        +sha256: string
+        +bytes: number
+        +mediaType: string
+        +sourceRefs: string[]
+        +title: string
+    }
+    class OfficeGeneratorTool {
+        <<main 侧新增 agent 工具>>
+        +generate(spec): bytes
+        +writeWorkspace(path): void
+        +recordEffect(): OfficeArtifactEffect
+    }
+    class OfficeProducer {
+        <<artifact-lifecycle-producer 扩展>>
+        +registerConfirmedRunArtifactLifecycles(run)
+        +registerOfficeArtifactLifecycle(run, effect)
+        +attachStructureEvidence(artifact, check)
+        +createOfficeAcceptance(artifact, check)
+    }
+    class OfficeSelfCheck {
+        <<结构/打开性校验>>
+        +parse(bytes): model
+        +assertConsistency(): ok | fail
+    }
+
+    %% ===== 关系 =====
+    EffectRecord "1" *-- "1" OfficeArtifactEffect : target(新增分支)
+    OfficeGeneratorTool ..> OfficeArtifactEffect : 记录 confirmed Effect
+    OfficeGeneratorTool ..> OfficeSelfCheck : 生成前/后校验
+    OfficeProducer ..> OfficeArtifactEffect : 遍历 run.effects 过滤 confirmed
+    OfficeProducer ..> ArtifactLifecycleRegistrationInput : 构造 input
+    ArtifactLifecycleRegistrationInput ..> WorkflowArtifactRecord : registerPersistedArtifactLifecycle 写入
+    WorkflowArtifactRecord ..> StudioResultArtifact : getStudioResultSnapshot 自动汇入
+    OfficeProducer ..> WorkflowEvidenceRecord : createWorkflowEvidence(结构校验)
+    OfficeProducer ..> WorkflowAcceptanceRecord : saveWorkflowAcceptance(自动)
+    WorkflowEvidenceRecord ..> WorkflowAcceptanceRecord : createWorkflowEvidenceLink(verifies)
+    StudioResultArtifact ..> DeliveryVerdict : snapshot.artifacts 供面板
+    WorkflowAcceptanceRecord ..> DeliveryVerdict : snapshot.acceptances(唯一判定源)
+    OfficeSelfCheck ..> WorkflowEvidenceRecord : 校验结果即 Evidence 内容

@@ -44,14 +44,37 @@ async function runParent() {
     writeFileSync(path.join(electronDir, 'index.js'), `export const app = { getPath: () => ${JSON.stringify(userData)} }\n`)
     writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n')
     const compiledPath = findCompiledModule(outDir)
+    const transcript = await import(pathToFileURL(compiledPath).href)
 
     const crashed = await forkWorker('--worker-crash', compiledPath)
     assertEqual(crashed.type, 'receipt-written')
+    assertEqual(crashed.processExited, true)
+    if (process.platform !== 'win32') assertEqual(crashed.exitSignal, 'SIGKILL')
+
+    const transcriptPath = path.join(userData, 'transcripts', 'sdk-crash.jsonl')
+    assert(existsSync(transcriptPath), 'crashed worker must durably persist the Conversation Ledger')
+    const afterCrashTranscript = readFileSync(transcriptPath, 'utf8')
+    assert(afterCrashTranscript.endsWith('\n'), 'crashed transcript must retain complete JSONL framing')
+    const transcriptEntries = transcript.readTranscriptEntriesStrict('sdk-crash')
+    const permissionEntry = transcriptEntries.find((entry) =>
+      entry.event.kind === 'permission-request' && entry.event.request.requestId === 'permission-crash')
+    assert(permissionEntry, 'crashed transcript must retain the permission event')
+    assertEqual(permissionEntry.seq, crashed.seq)
+    assertEqual(permissionEntry.eventId, crashed.eventId)
+    assertEqual(permissionEntry.streamId, crashed.streamId)
+
     const receiptPath = path.join(userData, 'event-receipts', 'sdk-crash.jsonl')
     assert(existsSync(receiptPath), 'crashed worker must synchronously persist the event receipt')
     const afterCrash = readFileSync(receiptPath, 'utf8')
+    assert(afterCrash.endsWith('\n'), 'crashed receipt log must retain complete JSONL framing')
     assert(afterCrash.includes('permission-crash'), 'receipt should retain request identity')
     assert(!afterCrash.includes('DO_NOT_PERSIST'), 'receipt must not persist raw tool input')
+    const crashReceipts = afterCrash.trim().split('\n').map((line) => JSON.parse(line))
+    const permissionReceipt = crashReceipts.find((receipt) => receipt.requestId === 'permission-crash')
+    assert(permissionReceipt, 'crashed receipt log must retain the permission receipt')
+    assertEqual(permissionReceipt.seq, crashed.seq)
+    assertEqual(permissionReceipt.eventId, crashed.eventId)
+    assertEqual(permissionReceipt.streamId, crashed.streamId)
 
     const resumed = await forkWorker('--worker-resume', compiledPath)
     assertEqual(resumed.type, 'resumed')
@@ -115,11 +138,15 @@ function forkWorker(workerMode, compiledPath) {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc']
     })
     let settled = false
-    child.once('error', reject)
-    child.on('message', (message) => {
+    let evidence
+    child.once('error', (error) => {
       if (settled) return
       settled = true
-      resolve(message)
+      reject(error)
+    })
+    child.on('message', (message) => {
+      if (settled || evidence) return
+      evidence = message
       if (workerMode === '--worker-crash') {
         if (process.platform === 'win32') {
           execFileSync('taskkill', ['/pid', String(child.pid), '/f', '/t'], { stdio: 'ignore' })
@@ -127,11 +154,19 @@ function forkWorker(workerMode, compiledPath) {
           child.kill('SIGKILL')
         }
       } else {
+        settled = true
+        resolve(message)
         child.disconnect()
       }
     })
     child.once('exit', (code, signal) => {
-      if (!settled) reject(new Error(`worker exited before evidence: code=${code} signal=${signal}`))
+      if (settled) return
+      settled = true
+      if (!evidence) {
+        reject(new Error(`worker exited before evidence: code=${code} signal=${signal}`))
+        return
+      }
+      resolve({ ...evidence, processExited: true, exitCode: code, exitSignal: signal })
     })
   })
 }

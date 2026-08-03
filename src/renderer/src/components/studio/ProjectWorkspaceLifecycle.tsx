@@ -3,6 +3,9 @@ import type { ProjectResource, ProjectWorkspace } from '../../../../shared/types
 import {
   PROJECT_STATUS_LABELS,
   TEXT,
+  resourceDataClass,
+  resourceEgressLabel,
+  resourceEgressPolicy,
   resourceKindLabel,
   resourceLocation,
   type ProjectLifecyclePanel
@@ -195,9 +198,19 @@ function ProjectResourceRow({
     ? 'repository'
     : resource.kind
   return (
-    <div className="pws-resource-row" role="listitem" data-project-resource-id={resource.id} data-project-resource-kind={kind}>
+    <div
+      className="pws-resource-row"
+      role="listitem"
+      data-project-resource-id={resource.id}
+      data-project-resource-kind={kind}
+      data-resource-data-class={resourceDataClass(resource)}
+      data-resource-egress-policy={resourceEgressPolicy(resource)}
+    >
       <span className="pws-resource-kind">{resourceKindLabel(resource)}</span>
       <span className="pws-resource-copy"><strong>{label}</strong><small>{resourceLocation(resource)}</small></span>
+      <span className={`pws-resource-egress pws-resource-egress-${resourceEgressPolicy(resource)}`}>
+        {resourceDataClass(resource)} · {resourceEgressLabel(resource)}
+      </span>
       {editable && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onRemove(resource.id)} disabled={busy} aria-label={TEXT.removeResource(label)} data-resource-action="remove">移除</button>}
     </div>
   )

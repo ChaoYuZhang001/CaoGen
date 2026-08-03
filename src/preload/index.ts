@@ -9,8 +9,10 @@ import type {
   LayeredMemorySearchInput,
   LayeredMemoryUpdateInput,
   MarkRunOptions,
+  RoutineRunReviewInput,
   MenuCommand,
   MemorySuggestionEvent,
+  NotificationConnectorInput,
   PermissionModeId,
   PreviewAnnotationInput,
   PluginRegistryScanOptions,
@@ -18,6 +20,7 @@ import type {
   ProjectMemoryDraftInput,
   ProviderModelFetchInput,
   ProviderInput,
+  ProviderProfileImportDecision,
   QuickbarClipboardInput,
   QuickbarFileInput,
   QuickbarScreenshotInput,
@@ -35,6 +38,9 @@ import { digitalWorkerApi } from './digital-worker'
 import { modelAttemptRecoveryApi } from './model-attempt-recovery'
 import { learningApi } from './learning'
 import { supervisorApi } from './supervisor'
+import { taskPlanApi } from './task-plan'
+import { migrationApi } from './migration'
+import { studioResultApi } from './studio-result'
 
 const api: AgentDeskApi = {
   listSessions: () => ipcRenderer.invoke('sessions:list'),
@@ -65,6 +71,8 @@ const api: AgentDeskApi = {
   ...modelAttemptRecoveryApi,
   ...learningApi,
   ...supervisorApi,
+  ...taskPlanApi,
+  ...studioResultApi,
   recoverTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:recover', snapshotId),
   resolveTaskEffect: (
@@ -90,6 +98,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('attachments:ocr', sessionId, imagePath),
   sendMessage: (sessionId: string, payload: string | SendMessagePayload) =>
     ipcRenderer.invoke('sessions:send', sessionId, payload),
+  previewOutboundContext: (sessionId: string, payload: SendMessagePayload) =>
+    ipcRenderer.invoke('sessions:outboundContextPreview', sessionId, payload),
   interrupt: (sessionId: string) => ipcRenderer.invoke('sessions:interrupt', sessionId),
   closeSession: (sessionId: string) => ipcRenderer.invoke('sessions:close', sessionId),
   respondPermission: (sessionId: string, requestId: string, allow: boolean, message?: string) =>
@@ -110,14 +120,27 @@ const api: AgentDeskApi = {
   deleteHistory: (id: string) => ipcRenderer.invoke('history:delete', id),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),
+  listNotificationConnectors: () => ipcRenderer.invoke('notificationConnectors:list'),
+  createNotificationConnector: (input: NotificationConnectorInput) =>
+    ipcRenderer.invoke('notificationConnectors:create', input),
+  deleteNotificationConnector: (id: string) => ipcRenderer.invoke('notificationConnectors:delete', id),
+  setDefaultNotificationConnector: (id: string) => ipcRenderer.invoke('notificationConnectors:setDefault', id),
   listProviders: () => ipcRenderer.invoke('providers:list'),
+  activateLocalCompute: () => ipcRenderer.invoke('providers:activateLocalCompute'),
   createProvider: (provider: ProviderInput) => ipcRenderer.invoke('providers:create', provider),
   updateProvider: (id: string, patch: Partial<ProviderInput>) =>
     ipcRenderer.invoke('providers:update', id, patch),
   deleteProvider: (id: string) => ipcRenderer.invoke('providers:delete', id),
   fetchProviderModels: (opts: ProviderModelFetchInput) =>
     ipcRenderer.invoke('providers:fetchModels', opts),
-  listProviderHealth: () => ipcRenderer.invoke('providers:health'),
+  listProviderHealth: () => invokeMain('providers:health'),
+  exportProviderProfile: () => invokeMain('appFeatures:invoke', 'provider-profile', 'export'),
+  previewProviderProfileImport: () => invokeMain('appFeatures:invoke', 'provider-profile', 'preview'),
+  applyProviderProfileImport: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'apply', previewId, decisions),
+  listProviderProfileBackups: () => invokeMain('appFeatures:invoke', 'provider-profile', 'backups'),
+  rollbackProviderProfileBackup: (backupId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'rollback', backupId),
   listEngines: () => ipcRenderer.invoke('engines:list'),
   scanPluginRegistry: (sessionId?: string, options?: PluginRegistryScanOptions) =>
     ipcRenderer.invoke('plugins:scan', sessionId, options),
@@ -139,6 +162,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('routines:markRun', id, options),
   runRoutineNow: (id: string) => ipcRenderer.invoke('routines:runNow', id),
   listRoutineRuns: (routineId?: string) => ipcRenderer.invoke('routines:listRuns', routineId),
+  reviewRoutineRun: (runId: string, input: RoutineRunReviewInput) =>
+    ipcRenderer.invoke('routines:reviewRun', runId, input),
   listRoutineTemplates: () => ipcRenderer.invoke('routines:listTemplates'),
   getStartSuggestions: (sessionId: string) => ipcRenderer.invoke('startSuggestions:get', sessionId),
   gitStatus: (sessionId: string) => ipcRenderer.invoke('git:status', sessionId),
@@ -235,7 +260,7 @@ const api: AgentDeskApi = {
       ipcRenderer.removeListener('terminal:event', listener)
     }
   },
-  scanMigration: (cwd: string) => ipcRenderer.invoke('migration:scan', cwd),
+  ...migrationApi,
   importMigrationAssets: (cwd: string, paths: string[]) =>
     ipcRenderer.invoke('migration:import', cwd, paths),
   listProjects: () => ipcRenderer.invoke('projects:list'),
@@ -303,6 +328,10 @@ const api: AgentDeskApi = {
       ipcRenderer.removeListener('memory:suggestion', listener)
     }
   }
+}
+
+function invokeMain<T>(channel: string, ...args: unknown[]): Promise<T> {
+  return ipcRenderer.invoke(channel, ...args) as Promise<T>
 }
 
 contextBridge.exposeInMainWorld('agentDesk', api)

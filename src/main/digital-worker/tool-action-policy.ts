@@ -1,5 +1,5 @@
 import type { SessionMeta } from '../../shared/types'
-import { writeAuditLog } from '../permission/audit-log'
+import { writeSessionAuditLog } from '../permission/audit-log'
 import type { ToolPermissionDecision } from '../permission/tool-permission'
 import { taskRuntimeRegistry } from '../task/task-runtime-registry'
 import {
@@ -15,7 +15,7 @@ export function digitalWorkerToolPolicyError(
 ): string | null {
   const decision = digitalWorkerToolActionDecision(meta, toolName, toolInput, rootDir)
   if (!('message' in decision)) return null
-  writeAuditLog(meta.cwd, {
+  writeSessionAuditLog(meta, {
     action: 'deny',
     source: 'policy',
     toolName,

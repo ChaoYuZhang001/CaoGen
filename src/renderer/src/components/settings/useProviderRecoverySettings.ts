@@ -12,14 +12,14 @@ export function useProviderRecoverySettings(providers: ProviderView[]) {
   const updateWelcomeDraft = useStore((state) => state.updateWelcomeDraft)
   const [editing, setEditing] = useState<ProviderEditorTarget>(() => {
     if (context !== 'welcome-provider-recovery') return null
-    if (providers.some((provider) => provider.hasToken && provider.models.length > 0)) return null
+    if (providers.some((provider) => provider.ready && provider.models.length > 0)) return null
     return providers[0] ?? 'new'
   })
 
   const closeEditor = (result: ProviderEditorCloseResult): void => {
     setEditing(null)
     if (result.reason !== 'saved' || context !== 'welcome-provider-recovery') return
-    if (!result.provider.hasToken || result.provider.models.length === 0) return
+    if (!result.provider.ready || result.provider.models.length === 0) return
     const routingMode = useStore.getState().welcomeDraft.routingMode
     updateWelcomeDraft({
       providerId: result.provider.id,
