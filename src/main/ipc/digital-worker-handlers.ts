@@ -167,6 +167,7 @@ const DIGITAL_WORKER_ACTION_HANDLERS = {
       currentAssignmentId: input.currentAssignmentId,
       nextInput: input.nextInput,
       expectedRevision: input.expectedRevision,
+      expectedWorkItemRevision: input.expectedWorkItemRevision,
       expectedStoreRevision: input.expectedStoreRevision,
       now: input.now,
       reason: input.reason
@@ -293,6 +294,19 @@ async function assertProjectWorkspaceBoundary(
   if (action === 'acquireDigitalWorkerLease') {
     const input = normalizeAcquireLeaseInput(payload.input)
     await assertProjectWorkItem(input.projectId, input.workItemId)
+    return
+  }
+  if (action === 'deleteDigitalWorker') {
+    const workerId = requiredId(payload.id, 'DigitalWorker id')
+    const worker = await digitalWorkerStore().getDigitalWorker(workerId)
+    if (!worker) return
+    const workspace = await openProjectWorkspaceStore(app.getPath('userData'))
+    const squads = await workspace.listSquads(worker.projectId, { includeArchived: true, includeDeleted: true })
+    const squad = squads.find((candidate) => candidate.members.some((member) =>
+      member.type === 'digital_worker' && member.id === workerId))
+    if (squad) {
+      throw new Error(`DigitalWorker ${workerId} is still referenced by Squad ${squad.id}`)
+    }
   }
 }
 
@@ -572,7 +586,7 @@ function normalizeReleaseOptions(value: unknown): DigitalWorkerReleaseOptions {
 
 function normalizeReassignInput(value: unknown): DigitalWorkerReassignInput {
   const record = requiredRecord(value, 'Assignment reassign input')
-  assertAllowedKeys(record, ['currentAssignmentId', 'nextInput', 'expectedRevision', 'expectedStoreRevision', 'now', 'reason'], 'Assignment reassign input')
+  assertAllowedKeys(record, ['currentAssignmentId', 'nextInput', 'expectedRevision', 'expectedWorkItemRevision', 'expectedStoreRevision', 'now', 'reason'], 'Assignment reassign input')
   const revision = normalizeRevisionOptions({
     expectedRevision: record.expectedRevision,
     expectedStoreRevision: record.expectedStoreRevision
@@ -581,6 +595,9 @@ function normalizeReassignInput(value: unknown): DigitalWorkerReassignInput {
     currentAssignmentId: requiredId(record.currentAssignmentId, 'Assignment id'),
     nextInput: normalizeAssignmentInput(record.nextInput),
     ...revision,
+    ...(record.expectedWorkItemRevision === undefined
+      ? {}
+      : { expectedWorkItemRevision: positiveInteger(record.expectedWorkItemRevision, 'expectedWorkItemRevision') }),
     ...(record.now === undefined ? {} : { now: nonNegativeNumber(record.now, 'release now') }),
     ...(record.reason === undefined ? {} : { reason: requiredContent(record.reason, 'reason', 8_192) })
   }

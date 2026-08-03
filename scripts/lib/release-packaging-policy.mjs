@@ -42,6 +42,7 @@ export function trustedWindowsDistributionChecks({
 }) {
   const provenance = audit?.buildProvenance?.app
   return {
+    distributionChannelMatches: (audit?.distributionChannel || 'formal') === 'formal',
     distributionAuditPassed: audit?.status === 'passed',
     distributionAuditWasRequired: audit?.required === true,
     distributionModeMatches: audit?.mode === 'post_build',
@@ -59,16 +60,57 @@ export function trustedWindowsDistributionChecks({
   }
 }
 
+export function unsignedWindowsPreviewChecks({
+  audit,
+  releaseVersion,
+  gitState,
+  artifactSetSha256,
+  targetArch = 'x64'
+}) {
+  const provenance = audit?.buildProvenance?.app
+  return {
+    previewDistributionChannelMatches: audit?.distributionChannel === 'unsigned_preview',
+    previewDistributionAuditPassed: audit?.status === 'passed',
+    previewDistributionAuditWasRequired: audit?.required === true,
+    previewDistributionModeMatches: audit?.mode === 'post_build',
+    previewDistributionPlatformMatches: audit?.platform === 'win32',
+    previewDistributionVersionMatches: audit?.packageVersion === releaseVersion,
+    previewDistributionTargetArchMatches: audit?.targetArch === targetArch,
+    previewDistributionCommitMatches: audit?.git?.commit === gitState.commit,
+    previewDistributionCleanEvidence: audit?.git?.worktreeClean === true && gitState.worktreeClean,
+    previewDistributionArtifactSetMatches:
+      /^[0-9a-f]{64}$/i.test(artifactSetSha256 || '') && audit?.artifactSetSha256 === artifactSetSha256,
+    previewDistributionBuildCommitMatches: provenance?.gitCommit === gitState.commit,
+    previewDistributionBuildWasClean: provenance?.worktreeClean === true,
+    previewDistributionBuildVersionMatches: provenance?.packageVersion === releaseVersion,
+    previewAppIsUnsigned:
+      audit?.signing?.app?.status === 'NotSigned' &&
+      audit?.signing?.app?.hasCertificate === false &&
+      audit?.signing?.app?.timestamped === false,
+    previewInstallerIsUnsigned:
+      audit?.signing?.installer?.status === 'NotSigned' &&
+      audit?.signing?.installer?.hasCertificate === false &&
+      audit?.signing?.installer?.timestamped === false,
+    previewStableUpdateMetadataAbsent: audit?.artifacts?.updateMetadata === null,
+    previewPublicationMetadataDisabled: audit?.config?.publishDisabled === true,
+    previewCertificateEnvironmentDisabled: audit?.config?.certificateEnvironmentDisabled === true,
+    previewArtifactNameExplicit:
+      audit?.config?.artifactName === 'CaoGen-${version}-windows-x64-unsigned-preview.${ext}'
+  }
+}
+
 export function trustedPackagedLaunchChecks({
   audit,
   releaseVersion,
   gitState,
   platform,
   targetArch,
-  artifactSetSha256
+  artifactSetSha256,
+  distributionChannel = 'formal'
 }) {
   const provenance = audit?.buildProvenance
   return {
+    launchDistributionChannelMatches: (audit?.distributionChannel || 'formal') === distributionChannel,
     launchPassed: audit?.status === 'passed',
     installPassed: audit?.installation?.status === 'passed',
     launchPlatformMatches: audit?.platform === platform,

@@ -106,6 +106,7 @@ function isSessionMeta(value: unknown): value is SessionMeta {
     model: isString,
     providerId: isString,
     status: isSessionStatus,
+    taskStrategy: optional(isString),
     permissionMode: isString,
     usage: isUsageTotals,
     costUsd: isNumber,
@@ -131,6 +132,9 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 export function isTranscriptEntry(value: unknown): value is TranscriptEntry {
   return hasShape(value, {
     seq: isNumber,
+    ledgerVersion: optional((candidate) => candidate === 1),
+    previousDigest: optional(isString),
+    digest: optional(isString),
     eventId: optional(isString),
     occurredAt: optional(isFiniteNumber),
     streamId: optional(isString),
@@ -460,6 +464,17 @@ export function isTaskDagRuntimeSnapshot(value: unknown): value is TaskDagRuntim
   })
 }
 
+function isConversationLedgerIntegrityView(value: unknown): boolean {
+  return hasShape(value, {
+    schemaVersion: (candidate) => candidate === 1,
+    valid: isBoolean,
+    mode: (candidate) => candidate === 'empty' || candidate === 'legacy' || candidate === 'sealed',
+    entryCount: (candidate) => isNumber(candidate) && Number.isInteger(candidate) && candidate >= 0,
+    headDigest: optional(isString),
+    error: optional(isString)
+  })
+}
+
 export function isTaskSnapshotRecord(value: unknown): value is TaskSnapshotRecord {
   const record = asRecord(value)
   return Boolean(
@@ -480,6 +495,7 @@ export function isTaskSnapshotRecord(value: unknown): value is TaskSnapshotRecor
       meta: isSessionMeta,
       run: optional(isTaskRunRecord),
       execution: isExecutionPosition,
+      conversationLedger: optional(isConversationLedgerIntegrityView),
       replayCandidate: optional(isReplayCandidate),
       worktree: optional(isWorktreeInfo),
       transcript: arrayOf(isTranscriptEntry),

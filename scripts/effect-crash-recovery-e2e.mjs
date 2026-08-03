@@ -379,8 +379,13 @@ async function runWorker(workerMode) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, project),
       transcript: [
-        { seq: 1, event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'same process close race' } },
-        { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'tool_use', id: toolUseId, name: 'write_file', input: toolInput }] } }
+        ledgerEntry(sessionId, 1, {
+          kind: 'user-message', messageId: `${sessionId}-message`, text: 'same process close race'
+        }),
+        ledgerEntry(sessionId, 2, {
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: toolUseId, name: 'write_file', input: toolInput }]
+        })
       ],
       lastSeq: 2,
       lastEventKind: 'assistant-message',
@@ -448,8 +453,13 @@ async function runWorker(workerMode) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, project),
       transcript: [
-        { seq: 1, event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'target drift before execution' } },
-        { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }] } }
+        ledgerEntry(sessionId, 1, {
+          kind: 'user-message', messageId: `${sessionId}-message`, text: 'target drift before execution'
+        }),
+        ledgerEntry(sessionId, 2, {
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }]
+        })
       ],
       lastSeq: 2,
       lastEventKind: 'assistant-message',
@@ -504,8 +514,13 @@ async function runWorker(workerMode) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, project),
       transcript: [
-        { seq: 1, event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'commit with empty index' } },
-        { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }] } }
+        ledgerEntry(sessionId, 1, {
+          kind: 'user-message', messageId: `${sessionId}-message`, text: 'commit with empty index'
+        }),
+        ledgerEntry(sessionId, 2, {
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }]
+        })
       ],
       lastSeq: 2,
       lastEventKind: 'assistant-message',
@@ -554,8 +569,15 @@ async function runWorker(workerMode) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, project),
       transcript: [
-        { seq: 1, event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'prepare push then crash before approval' } },
-        { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }] } }
+        ledgerEntry(sessionId, 1, {
+          kind: 'user-message',
+          messageId: `${sessionId}-message`,
+          text: 'prepare push then crash before approval'
+        }),
+        ledgerEntry(sessionId, 2, {
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }]
+        })
       ],
       lastSeq: 2,
       lastEventKind: 'assistant-message',
@@ -915,8 +937,13 @@ async function runWorker(workerMode) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, project),
       transcript: [
-        { seq: 1, event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'crash effect test' } },
-        { seq: 2, event: { kind: 'assistant-message', blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }] } }
+        ledgerEntry(sessionId, 1, {
+          kind: 'user-message', messageId: `${sessionId}-message`, text: 'crash effect test'
+        }),
+        ledgerEntry(sessionId, 2, {
+          kind: 'assistant-message',
+          blocks: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }]
+        })
       ],
       lastSeq: 2,
       lastEventKind: 'assistant-message',
@@ -1091,8 +1118,8 @@ async function seedEffectRun({
   await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
     meta: meta(sessionId, project, engine),
     transcript: [
-      { seq: 1, event: userEvent },
-      { seq: 2, event: assistantEvent }
+      ledgerEntry(sessionId, 1, userEvent),
+      ledgerEntry(sessionId, 2, assistantEvent)
     ],
     lastSeq: 2,
     lastEventKind: 'assistant-message',
@@ -1157,6 +1184,16 @@ function meta(id, cwd, engine = 'openai') {
     costUsd: 0,
     contextTokens: 0,
     createdAt: 1000
+  }
+}
+
+function ledgerEntry(sessionId, seq, event) {
+  return {
+    seq,
+    eventId: `effect-crash:${sessionId}:${seq}`,
+    streamId: `effect-crash:${sessionId}`,
+    occurredAt: 1000 + seq,
+    event
   }
 }
 

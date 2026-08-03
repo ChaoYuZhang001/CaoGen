@@ -172,15 +172,16 @@ function chinaToolCallParityDomain(check) {
     providerCount: numberField(check, 'providerCount') ?? 0,
     baselineCount: numberField(check, 'baselineCount') ?? 0,
     chinaCount: numberField(check, 'chinaCount') ?? 0,
-    providerIds: asStringArray(check.providerIds),
+    protocolCounts: isRecord(check.protocolCounts) ? check.protocolCounts : {},
+    thinkingModeCounts: isRecord(check.thinkingModeCounts) ? check.thinkingModeCounts : {},
+    privateProviderConfigRedacted: check.privateProviderConfigRedacted === true,
     requiredEnvironment: requiredEnv,
-    missingEnvironment: unique(missingEnv.length > 0 ? missingEnv : ['CAOGEN_CHINA_TOOL_CALL_PARITY', 'CAOGEN_CHINA_PARITY_PROVIDERS']),
+    missingEnvironment: unique(missingEnv.length > 0 ? missingEnv : ['~/.caogen-private/provider-parity.json']),
     failures,
     nextActions: check.status === 'ready'
       ? ['Run npm.cmd run test:china-tool-call-parity:required with real baseline and China providers.']
       : [
-          'Set CAOGEN_CHINA_TOOL_CALL_PARITY=1.',
-          'Point CAOGEN_CHINA_PARITY_PROVIDERS at a private provider JSON file or inline JSON.',
+          'Create ~/.caogen-private/provider-parity.json with directory mode 0700 and file mode 0600.',
           'Include at least one baseline provider and one China provider with public HTTPS OpenAI-compatible endpoints.'
         ]
   }

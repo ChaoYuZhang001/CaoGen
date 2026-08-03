@@ -6,7 +6,8 @@ import type {
 } from '../../shared/types'
 import {
   readEventReceipts,
-  readTranscriptEntries,
+  readTranscriptEntriesStrict,
+  verifyConversationLedgerEntries,
   type EventReceipt
 } from '../transcript'
 import {
@@ -29,15 +30,22 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
   const baseSeq = snapshot.execution.cursor?.seq ?? snapshot.execution.lastSeq
   const byEventId = new Map<string, EventReceipt>()
   const transcriptByEventId = new Map<string, TranscriptEntry>()
+  const fullTranscript = readTranscriptEntriesStrict(sdkSessionId)
+  const canonicalEventIds = new Set(
+    fullTranscript.map((entry) => entry.eventId).filter((eventId): eventId is string => Boolean(eventId))
+  )
   for (const receipt of readEventReceipts(sdkSessionId)) {
-    if (receipt.seq > baseSeq) byEventId.set(receipt.eventId, receipt)
+    if (
+      receipt.seq > baseSeq &&
+      (fullTranscript.length === 0 || canonicalEventIds.has(receipt.eventId))
+    ) byEventId.set(receipt.eventId, receipt)
   }
-  const fullTranscript = readTranscriptEntries(sdkSessionId)
   for (const entry of fullTranscript) {
     if (entry.seq <= baseSeq || !entry.eventId || !entry.streamId) continue
     transcriptByEventId.set(entry.eventId, entry)
     const receipt = receiptFromTranscriptEntry(entry, snapshot.updatedAt)
-    byEventId.set(receipt.eventId, { ...receipt, ...(byEventId.get(receipt.eventId) ?? {}) })
+    // The receipt sidecar is a rebuildable projection; canonical transcript identity and outcome always win.
+    byEventId.set(receipt.eventId, receipt)
   }
   const receipts = [...byEventId.values()].sort((left, right) => left.seq - right.seq)
   if (receipts.length === 0) return { snapshot }
@@ -79,6 +87,13 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
   }
 
   const lastReceipt = receipts[receipts.length - 1]
+  const transcript = fullTranscript.length > 0 ? fullTranscript : snapshot.transcript
+  const conversationLedger = verifyConversationLedgerEntries(transcript)
+  if (!conversationLedger.valid) {
+    throw new Error(
+      `Canonical Conversation Ledger 校验失败，已阻止事件回执对账:${conversationLedger.error ?? 'unknown integrity error'}`
+    )
+  }
   const nextSnapshot: TaskSnapshotRecord = {
     ...snapshot,
     updatedAt: Math.max(snapshot.updatedAt, lastReceipt.occurredAt),
@@ -91,7 +106,8 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
       lastEventKind: lastReceipt.kind,
       lastEventAt: lastReceipt.occurredAt
     },
-    transcript: fullTranscript.length > 0 ? fullTranscript : snapshot.transcript,
+    conversationLedger,
+    transcript,
     ...(run ? { run } : {})
   }
   return successfulTerminal && run ? { snapshot: nextSnapshot, terminalRun: run } : { snapshot: nextSnapshot }

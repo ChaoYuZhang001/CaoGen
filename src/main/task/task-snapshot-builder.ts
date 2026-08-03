@@ -19,6 +19,7 @@ import {
   isTaskDagRuntimeSnapshot,
   isTranscriptEntry
 } from './task-snapshot-validation'
+import { verifyConversationLedgerEntries } from '../transcript'
 
 export interface BuildTaskSnapshotInput {
   meta: SessionMeta
@@ -54,6 +55,10 @@ export function buildTaskSnapshot(input: BuildTaskSnapshotInput): TaskSnapshotRe
   const worktree = worktreeFromMeta(input.meta)
   const projectPath = input.meta.sourceCwd ?? input.meta.cwd
   const replayCandidate = replayCandidateFromTranscript(transcript, input.meta.status, now)
+  const conversationLedger = verifyConversationLedgerEntries(transcript)
+  if (!conversationLedger.valid) {
+    throw new Error(`Canonical Conversation Ledger 校验失败:${conversationLedger.error ?? 'unknown integrity error'}`)
+  }
   return {
     id: input.meta.id,
     taskId: input.meta.childTaskId ?? input.meta.id,
@@ -69,6 +74,7 @@ export function buildTaskSnapshot(input: BuildTaskSnapshotInput): TaskSnapshotRe
     reason: input.reason,
     meta: { ...input.meta },
     execution,
+    conversationLedger,
     ...(input.run ? { run: { ...input.run } } : {}),
     ...(replayCandidate ? { replayCandidate } : {}),
     ...(worktree ? { worktree } : {}),

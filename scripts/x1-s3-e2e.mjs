@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +9,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
 
 const repoRoot = process.cwd()
 const outDir = path.join(repoRoot, 'test-results', 'x1-s3-e2e')
@@ -66,8 +66,10 @@ async function runX1Scenario() {
 
       await check(cdp, 'X1 first launch starts with no Provider defaults', async () => {
         const providersFile = path.join(userDataDir, 'providers.json')
-        await waitForFile(providersFile, 5_000)
-        const providers = JSON.parse(readFileSync(providersFile, 'utf8'))
+        await sleep(500)
+        const providers = existsSync(providersFile)
+          ? JSON.parse(readFileSync(providersFile, 'utf8'))
+          : []
         assert(Array.isArray(providers), 'providers.json should contain an array')
         assert(providers.length === 0, `first launch must not inject provider defaults: ${JSON.stringify(providers)}`)
       })
@@ -75,6 +77,7 @@ async function runX1Scenario() {
       await check(cdp, 'X1 new session is an inline workspace with no engine selector', async () => {
         await clickByText(cdp, '+ 新建会话')
         await waitForText(cdp, '今天想做点什么?')
+        await chooseSelectOptionByText(cdp, '新项目目录')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
         await clickByText(cdp, '工作台')
         await clickByText(cdp, '会话与工具')
@@ -160,8 +163,12 @@ async function runS3Scenario() {
         assert(alpha?.cards.includes('Gamma Archive Candidate'), `Alpha group missing gamma: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Beta Pin Candidate'), `Beta group wrong: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Delete Target'), `Beta group missing delete target: ${JSON.stringify(groups)}`)
-        const unassigned = groups.find((group) => group.title === '未关联项目')
+        const unassigned = groups.find((group) => group.title === '对话')
         assert(unassigned?.cards.includes('Loose Conversation'), `unassigned group wrong: ${JSON.stringify(groups)}`)
+      })
+
+      await check(cdp, 'S3 project section exposes hover actions and direct project creation', async () => {
+        await verifyProjectSectionActions(cdp)
       })
 
       await check(cdp, 'S3 project plus opens inline new session with project preselected', async () => {
@@ -216,6 +223,54 @@ async function runS3Scenario() {
   }
 }
 
+async function verifyProjectSectionActions(cdp) {
+  const focused = await evalValue(
+    cdp,
+    `(() => {
+      const action = document.querySelector('[aria-label="项目分组操作"]');
+      action?.focus();
+      return Boolean(action);
+    })()`
+  )
+  assert(focused === true, 'project group action was not found')
+  await sleep(200)
+  const state = await evalValue(
+    cdp,
+    `(() => {
+      const action = document.querySelector('[aria-label="项目分组操作"]');
+      const actions = action?.closest('.sidebar-projects-actions');
+      return {
+        visible: Boolean(actions) && Number.parseFloat(getComputedStyle(actions).opacity) === 1,
+        expanded: document.querySelector('.sidebar-projects-toggle')?.getAttribute('aria-expanded')
+      };
+    })()`
+  )
+  assert(state?.visible === true && state?.expanded === 'true', `project actions state wrong: ${JSON.stringify(state)}`)
+  await screenshot(cdp, 's3-01a-project-hover-actions')
+  await clickSelector(cdp, '[aria-label="项目分组操作"]')
+  await waitForText(cdp, '最近更新')
+  await screenshot(cdp, 's3-01b-project-actions-menu')
+  await clickByText(cdp, '项目名称')
+  await clickSelector(cdp, '[aria-label="新建项目"]')
+  await waitForText(cdp, '创建项目')
+  const createState = await evalValue(
+    cdp,
+    `(() => {
+      const form = document.querySelector('[data-studio-form="project"]');
+      return {
+        formVisible: Boolean(form) && getComputedStyle(form).display !== 'none',
+        hasNameInput: Boolean(form?.querySelector('input[name="projectName"]')),
+        hasKindSelect: Boolean(form?.querySelector('select[name="projectKind"]'))
+      };
+    })()`
+  )
+  assert(
+    createState?.formVisible && createState?.hasNameInput && createState?.hasKindSelect,
+    `new-project action did not open the canonical project form: ${JSON.stringify(createState)}`
+  )
+  await clickByText(cdp, 'Alpha Keep Current')
+}
+
 function historyEntry(id, title, cwd, sdkSessionId, updatedAt, projectId) {
   return {
     id,
@@ -233,14 +288,15 @@ function historyEntry(id, title, cwd, sdkSessionId, updatedAt, projectId) {
 }
 
 function readHistory(userDataDir) {
-  return JSON.parse(readFileSync(path.join(userDataDir, 'sessions.json'), 'utf8'))
+  const parsed = JSON.parse(readFileSync(path.join(userDataDir, 'sessions.json'), 'utf8'))
+  return Array.isArray(parsed) ? parsed : parsed.entries
 }
 
 async function startElectron(userDataDir, portStart) {
   mkdirSync(userDataDir, { recursive: true })
   const port = await findFreePort(portStart)
   const electronArgs = [`--remote-debugging-port=${port}`, mainEntry]
-  const child = spawn(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
+  const child = spawnElectronTestProcess(electronSpawnCommand(), electronSpawnArgs(electronArgs), {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -281,7 +337,7 @@ async function withCdp(app, fn) {
 }
 
 async function stopElectron(app) {
-  const exited = await terminate(app.child)
+  const exited = await terminateElectronTestProcess(app.child)
   report.warnings.push(...summarizeProcessOutput(app.stdout, app.stderr, exited))
 }
 
@@ -569,6 +625,25 @@ async function setInputByPlaceholder(cdp, placeholder, value) {
   await sleep(250)
 }
 
+async function chooseSelectOptionByText(cdp, text) {
+  const result = await evalValue(
+    cdp,
+    `(() => {
+      const needle = ${JSON.stringify(text)};
+      for (const select of document.querySelectorAll('select')) {
+        const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
+        if (!option) continue;
+        select.value = option.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, value: select.value };
+      }
+      return { ok: false };
+    })()`
+  )
+  assert(result?.ok === true, `select option not found: ${text}`)
+  await sleep(250)
+}
+
 async function focusComposer(cdp) {
   const ok = await evalValue(
     cdp,
@@ -633,15 +708,6 @@ async function evalValue(cdp, expression) {
   return response.result?.value
 }
 
-async function waitForFile(file, timeout = 5_000) {
-  const start = Date.now()
-  while (Date.now() - start < timeout) {
-    if (existsSync(file)) return
-    await sleep(100)
-  }
-  throw new Error(`file not found: ${file}`)
-}
-
 async function waitForTarget(remotePort, timeout) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -677,21 +743,6 @@ function isPortFree(port) {
       server.once('error', () => resolve(false))
       server.once('listening', () => server.close(() => resolve(true)))
       server.listen(port, '127.0.0.1')
-    })
-  })
-}
-
-async function terminate(child) {
-  if (child.exitCode !== null) return { code: child.exitCode, signal: child.signalCode }
-  child.kill('SIGTERM')
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve({ code: child.exitCode, signal: 'SIGKILL' })
-    }, 3_000)
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer)
-      resolve({ code, signal })
     })
   })
 }

@@ -56,6 +56,7 @@ import {
   readArtifacts,
   readEvidenceLinks,
   readGoals,
+  readWorkflowEventChain,
   readRuns,
   readWorkItems,
   selectWorkflowAcceptances,
@@ -95,6 +96,7 @@ import {
   verifyWorkflowEvidence
 } from './workflow-evidence-store'
 import { assertWorkflowEvidenceEventCoverage } from './workflow-evidence-event-coverage'
+import { selectTaskEvidence, type TaskEvidenceRecord } from './task-evidence-store'
 
 export type { WorkflowLedgerDatabase } from './workflow-ledger-db'
 export { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
@@ -400,6 +402,124 @@ export function appendWorkflowEvent(
   assertWorkflowEventReferences(db, record)
   insertEvent(db, record)
   return record
+}
+
+export interface WorkflowEventProjectPurgeScope {
+  projectId: string
+  goalIds?: ReadonlySet<string>
+  workItemIds?: ReadonlySet<string>
+  runIds?: ReadonlySet<string>
+  sessionIds?: ReadonlySet<string>
+}
+
+export interface WorkflowEventProjectPurgeResult {
+  removed: number
+  remaining: number
+  lastSeq: number
+  lastDigest: string
+}
+
+/** Remove scoped events and rebuild the global chain before their projections are deleted. */
+export function purgeWorkflowEventsProject(
+  db: WorkflowLedgerDatabase,
+  scope: WorkflowEventProjectPurgeScope
+): WorkflowEventProjectPurgeResult {
+  const projectId = requiredId(scope.projectId, 'project purge projectId')
+  const events = readAndVerifyEvents(db, {
+    requireTaskEvidenceCoverage: false,
+    requireProjectionBinding: false
+  })
+  const removedByScope = (event: WorkflowEventRecord): boolean =>
+    event.projectId === projectId ||
+    Boolean(event.goalId && scope.goalIds?.has(event.goalId)) ||
+    Boolean(event.workItemId && scope.workItemIds?.has(event.workItemId)) ||
+    Boolean(event.runId && scope.runIds?.has(event.runId)) ||
+    Boolean(event.sessionId && scope.sessionIds?.has(event.sessionId))
+  const remaining = events.filter((event) => !removedByScope(event))
+  if (remaining.length === events.length) {
+    const last = events.at(-1)
+    return {
+      removed: 0,
+      remaining: events.length,
+      lastSeq: last?.seq ?? 0,
+      lastDigest: last?.digest ?? '0'.repeat(64)
+    }
+  }
+  db.run('DELETE FROM workflow_events')
+  let previousDigest = '0'.repeat(64)
+  for (let index = 0; index < remaining.length; index += 1) {
+    const { digest: _digest, seq: _seq, prevDigest: _prevDigest, ...immutable } = remaining[index]
+    const withoutDigest = {
+      ...immutable,
+      seq: index + 1,
+      prevDigest: previousDigest
+    }
+    const rebuilt: WorkflowEventRecord = { ...withoutDigest, digest: digest(withoutDigest) }
+    insertEvent(db, rebuilt)
+    previousDigest = rebuilt.digest
+  }
+  const verified = readAndVerifyEvents(db, {
+    requireTaskEvidenceCoverage: false,
+    requireProjectionBinding: false
+  })
+  const last = verified.at(-1)
+  return {
+    removed: events.length - remaining.length,
+    remaining: verified.length,
+    lastSeq: last?.seq ?? 0,
+    lastDigest: last?.digest ?? '0'.repeat(64)
+  }
+}
+
+/** Rebind Evidence event payloads after their global chains have been compacted. */
+export function refreshWorkflowEvidenceEventProjections(db: WorkflowLedgerDatabase): void {
+  const taskEvidence = new Map(selectTaskEvidence(db).map((record) => [record.evidenceId, record]))
+  const workflowEvidence = new Map(readAllWorkflowEvidenceForIntegrity(db).map((record) => [record.evidenceId, record]))
+  const events = readWorkflowEventChain(db)
+  const rebound = events.map((event) => {
+    if (event.kind === 'workflow.effect.evidence') {
+      const evidenceId = typeof event.payload.evidenceId === 'string' ? event.payload.evidenceId : ''
+      const record = taskEvidence.get(evidenceId)
+      if (!record) throw new WorkflowLedgerCorruptionError(`event ${event.eventId} references missing Task evidence`)
+      return { ...event, payload: taskEvidenceEventPayload(record) }
+    }
+    if (event.kind === 'workflow.evidence.recorded') {
+      const prefix = 'workflow:evidence-record:'
+      const record = event.eventId.startsWith(prefix) ? workflowEvidence.get(event.eventId.slice(prefix.length)) : undefined
+      if (!record) throw new WorkflowLedgerCorruptionError(`event ${event.eventId} references missing Workflow evidence`)
+      return { ...event, payload: { ...record } }
+    }
+    return event
+  })
+  db.run('DELETE FROM workflow_events')
+  let previousDigest = '0'.repeat(64)
+  for (let index = 0; index < rebound.length; index += 1) {
+    const { digest: _digest, seq: _seq, prevDigest: _prevDigest, ...immutable } = rebound[index]
+    const withoutDigest = { ...immutable, seq: index + 1, prevDigest: previousDigest }
+    const rebuilt: WorkflowEventRecord = { ...withoutDigest, digest: digest(withoutDigest) }
+    insertEvent(db, rebuilt)
+    previousDigest = rebuilt.digest
+  }
+  readAndVerifyEvents(db, { requireProjectionBinding: false })
+}
+
+function taskEvidenceEventPayload(record: TaskEvidenceRecord): Record<string, unknown> {
+  return {
+    evidenceId: record.evidenceId,
+    evidenceSeq: record.seq,
+    effectId: record.effectId,
+    kind: record.kind,
+    generation: record.generation,
+    observedAt: record.observedAt,
+    verifier: record.verifier,
+    evidenceDigest: record.evidenceDigest,
+    effectKey: record.effectKey,
+    targetDigest: record.targetDigest,
+    taskEvidenceRecordDigest: record.digest,
+    taskEvidencePrevDigest: record.prevDigest,
+    ...(record.operationId ? { operationId: record.operationId } : {}),
+    ...(record.projectId ? { projectId: record.projectId } : {})
+  }
 }
 
 export function verifyWorkflowLedger(db: WorkflowLedgerDatabase): WorkflowLedgerVerification {

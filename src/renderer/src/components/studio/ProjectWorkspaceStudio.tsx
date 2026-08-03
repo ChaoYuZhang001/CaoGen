@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useId, useState } from 'react'
-import type { Goal, GoalPatch, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem } from '../../../../shared/types'
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
+import type { Goal, GoalPatch, ProjectSquad, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem, WorkItemComment, WorkItemOwner } from '../../../../shared/types'
 import {
   GoalCreateForm,
   ProjectCreateForm,
   WorkItemCreateForm
 } from './ProjectWorkspaceStudioForms'
 import { GoalsView, WorkItemsView } from './ProjectWorkspaceStudioViews'
+import { ProjectCollaborationView } from './ProjectCollaborationView'
+import { ProjectInbox } from './ProjectInbox'
 import ProjectWorkspaceLifecycle from './ProjectWorkspaceLifecycle'
 import {
   projectKindLabel,
@@ -18,14 +20,17 @@ import {
 } from './projectWorkspaceStudioModel'
 import {
   useProjectContents,
+  useProjectGoalTaskStart,
   useStudioCreateActions,
   useWorkspaceSelection
 } from './useProjectWorkspaceStudio'
 import './ProjectWorkspaceStudio.css'
 
 export interface ProjectWorkspaceStudioProps {
+  active?: boolean
   className?: string
   initialProjectId?: string
+  newProjectRequest?: number
   onProjectChange?: (project: ProjectWorkspace | null) => void
   onWorkItemsChange?: (workItems: WorkItem[]) => void
   onContextChange?: (context: ProjectWorkspaceStudioContext) => void
@@ -35,15 +40,20 @@ export interface ProjectWorkspaceStudioContext {
   project: ProjectWorkspace | null
   goals: Goal[]
   workItems: WorkItem[]
+  squads: ProjectSquad[]
+  comments: WorkItemComment[]
 }
 
 type WorkspaceSelection = ReturnType<typeof useWorkspaceSelection>
 type ProjectContentsState = ReturnType<typeof useProjectContents>
 type StudioCreateActions = ReturnType<typeof useStudioCreateActions>
+type GoalTaskStarterState = ReturnType<typeof useProjectGoalTaskStart>
 
 export function ProjectWorkspaceStudio({
+  active = true,
   className,
   initialProjectId,
+  newProjectRequest = 0,
   onContextChange,
   onProjectChange,
   onWorkItemsChange
@@ -51,19 +61,23 @@ export function ProjectWorkspaceStudio({
   const titleId = useId()
   const [form, setForm] = useState<StudioCreateForm>(null)
   const [view, setView] = useState<StudioView>(() => readStoredStudioView())
-  const workspace = useWorkspaceSelection(initialProjectId, onProjectChange)
-  const contents = useProjectContents(workspace.selectedProjectId)
+  const workspace = useWorkspaceSelection(active, initialProjectId, onProjectChange)
+  const contents = useProjectContents(active, workspace.selectedProjectId)
   const closeForm = useCallback(() => setForm(null), [])
   const actions = useStudioCreateActions({
     onSuccess: closeForm,
     refreshContents: contents.refreshContents,
     refreshProjects: workspace.refreshProjects
   })
+  const goalTaskStarter = useProjectGoalTaskStart(contents.refreshContents)
   const controls = useStudioEntityActions(contents.refreshContents)
 
   useEffect(() => {
     setForm((current) => current === 'project' ? current : null)
   }, [workspace.selectedProjectId])
+  useEffect(() => {
+    if (newProjectRequest > 0) setForm('project')
+  }, [newProjectRequest])
   useEffect(() => {
     try { window.localStorage.setItem('caogen.project-workspace.work-items.view.v1', view) } catch { /* preference persistence is best effort */ }
   }, [view])
@@ -72,9 +86,19 @@ export function ProjectWorkspaceStudio({
     onContextChange?.({
       project: workspace.selectedProject,
       goals: contents.goals,
-      workItems: contents.workItems
+      workItems: contents.workItems,
+      squads: contents.squads,
+      comments: contents.comments
     })
-  }, [contents.goals, contents.workItems, onContextChange, onWorkItemsChange, workspace.selectedProject])
+  }, [
+    contents.comments,
+    contents.goals,
+    contents.squads,
+    contents.workItems,
+    onContextChange,
+    onWorkItemsChange,
+    workspace.selectedProject
+  ])
 
   const openForm = (next: Exclude<StudioCreateForm, null>): void => {
     actions.clearFeedback()
@@ -91,7 +115,7 @@ export function ProjectWorkspaceStudio({
   }
 
   const rootClassName = ['project-workspace-studio', className].filter(Boolean).join(' ')
-  const loading = workspace.loading || contents.loading || actions.busy !== null
+  const loading = workspace.loading || contents.loading || actions.busy !== null || goalTaskStarter.busy
   return (
     <section className={rootClassName} aria-labelledby={titleId} aria-busy={loading} data-project-workspace-studio>
       <StudioHeader
@@ -102,8 +126,10 @@ export function ProjectWorkspaceStudio({
         goalCount={contents.goals.length}
         workItemCount={contents.workItems.length}
         disabled={loading}
+        importing={actions.busy === 'import'}
         refreshing={workspace.loading || contents.loading}
         onCreate={() => openForm('project')}
+        onImport={actions.importProject}
         onRefresh={() => void refresh()}
         onSelect={workspace.selectProject}
       />
@@ -114,6 +140,7 @@ export function ProjectWorkspaceStudio({
         form={form}
         onCloseForm={closeForm}
         onCreateProject={() => openForm('project')}
+        onImportProject={actions.importProject}
         onRetry={retry}
         workspace={workspace}
       />
@@ -125,6 +152,7 @@ export function ProjectWorkspaceStudio({
         />
       )}
       <ProjectContents
+        active={active}
         actions={actions}
         contents={contents}
         form={form}
@@ -134,8 +162,10 @@ export function ProjectWorkspaceStudio({
         onGoalUpdate={controls.updateGoal}
         onWorkItemControl={controls.controlWorkItem}
         onWorkItemReorder={controls.reorderWorkItem}
+        onWorkItemTransfer={controls.transferWorkItem}
         onViewChange={setView}
         project={workspace.selectedProject}
+        starter={goalTaskStarter}
         view={view}
       />
     </section>
@@ -146,6 +176,7 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
   controlGoal: (goal: Goal, action: GoalControlAction) => Promise<void>
   controlWorkItem: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   reorderWorkItem: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  transferWorkItem: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   updateGoal: (goal: Goal, patch: GoalPatch) => Promise<void>
 } {
   const controlWorkItem = useCallback(async (item: WorkItem, action: WorkItemControlAction): Promise<void> => {
@@ -168,6 +199,21 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
     await window.agentDesk.reorderProjectWorkItem(item.id, targetId, placement, { expectedRevision: item.revision })
     await refreshContents()
   }, [refreshContents])
+  const transferWorkItem = useCallback(async (
+    item: WorkItem,
+    target: WorkItemOwner,
+    reason: string,
+    requestId: string
+  ): Promise<void> => {
+    await window.agentDesk.transferProjectWorkItem({
+      requestId,
+      workItemId: item.id,
+      target,
+      reason,
+      expectedRevision: item.revision
+    })
+    await refreshContents()
+  }, [refreshContents])
   const updateGoal = useCallback(async (goal: Goal, patch: GoalPatch): Promise<void> => {
     await window.agentDesk.updateProjectGoal(goal.id, patch, { expectedRevision: goal.revision })
     await refreshContents()
@@ -182,7 +228,7 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
     }
     await refreshContents()
   }, [refreshContents])
-  return { controlGoal, controlWorkItem, reorderWorkItem, updateGoal }
+  return { controlGoal, controlWorkItem, reorderWorkItem, transferWorkItem, updateGoal }
 }
 
 function WorkspaceStatus({
@@ -191,6 +237,7 @@ function WorkspaceStatus({
   form,
   onCloseForm,
   onCreateProject,
+  onImportProject,
   onRetry,
   workspace
 }: {
@@ -199,12 +246,14 @@ function WorkspaceStatus({
   form: StudioCreateForm
   onCloseForm: () => void
   onCreateProject: () => void
+  onImportProject: (file: File) => Promise<void>
   onRetry: () => void
   workspace: WorkspaceSelection
 }): React.JSX.Element {
   const loadError = workspace.error || contentsError
   const showLoading = workspace.loading && workspace.projects.length === 0
-  const showEmpty = !workspace.loading && !workspace.error && workspace.projects.length === 0 && form !== 'project'
+  const showEmpty = !workspace.loading && !workspace.error && workspace.projects.length === 0 &&
+    form !== 'project' && actions.busy === null
   return (
     <>
       {(loadError || actions.error) && (
@@ -215,12 +264,13 @@ function WorkspaceStatus({
         <ProjectCreateForm busy={actions.busy} onCancel={onCloseForm} onSubmit={actions.createProject} />
       )}
       {showLoading ? <LoadingState message={TEXT.loadingProjects} /> : null}
-      {showEmpty ? <ProjectEmpty onCreate={onCreateProject} /> : null}
+      {showEmpty ? <ProjectEmpty onCreate={onCreateProject} onImport={onImportProject} /> : null}
     </>
   )
 }
 
 function ProjectContents({
+  active,
   actions,
   contents,
   form,
@@ -230,10 +280,13 @@ function ProjectContents({
   onOpenForm,
   onWorkItemControl,
   onWorkItemReorder,
+  onWorkItemTransfer,
   onViewChange,
   project,
+  starter,
   view
 }: {
+  active: boolean
   actions: StudioCreateActions
   contents: ProjectContentsState
   form: StudioCreateForm
@@ -243,8 +296,10 @@ function ProjectContents({
   onOpenForm: (form: Exclude<StudioCreateForm, null>) => void
   onWorkItemControl: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onWorkItemReorder: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
+  onWorkItemTransfer: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   onViewChange: (view: StudioView) => void
   project: ProjectWorkspace | null
+  starter: GoalTaskStarterState
   view: StudioView
 }): React.JSX.Element | null {
   if (!project || project.status !== 'active') return null
@@ -256,6 +311,13 @@ function ProjectContents({
       {waitingForContents && <LoadingState message={TEXT.loadingContents} />}
       {!waitingForContents && !contentsUnavailable && (
         <>
+          <GoalTaskStarter projectId={project.id} state={starter} />
+          <ProjectInbox
+            active={active}
+            projectId={project.id}
+            workItems={contents.workItems}
+            onRefreshProject={contents.refreshContents}
+          />
           {form === 'goal' && (
             <GoalCreateForm projectId={project.id} busy={actions.busy} onCancel={onCloseForm} onSubmit={actions.createGoal} />
           )}
@@ -263,17 +325,61 @@ function ProjectContents({
             <WorkItemCreateForm projectId={project.id} goals={contents.goals.filter((goal) => goal.status !== 'archived')} workItems={contents.workItems} busy={actions.busy} onCancel={onCloseForm} onSubmit={actions.createWorkItem} />
           )}
           <GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} />
-          <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onReorder={onWorkItemReorder} />
+          <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} />
+          <ProjectCollaborationView
+            projectId={project.id}
+            workItems={contents.workItems}
+            squads={contents.squads}
+            comments={contents.comments}
+            onRefresh={contents.refreshContents}
+          />
         </>
       )}
     </div>
   )
 }
 
+function GoalTaskStarter({
+  projectId,
+  state
+}: {
+  projectId: string
+  state: GoalTaskStarterState
+}): React.JSX.Element {
+  const [objective, setObjective] = useState('')
+  const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (await state.start(projectId, objective)) setObjective('')
+  }
+  return (
+    <form className="pws-goal-task-starter" onSubmit={(event) => void submit(event)} data-goal-task-starter>
+      <label className="pws-visually-hidden" htmlFor={`goal-task-${projectId}`}>{TEXT.goalTaskPlaceholder}</label>
+      <input
+        id={`goal-task-${projectId}`}
+        className="input"
+        name="objective"
+        value={objective}
+        maxLength={20_000}
+        placeholder={TEXT.goalTaskPlaceholder}
+        disabled={state.busy}
+        onChange={(event) => setObjective(event.target.value)}
+        data-goal-task-objective
+      />
+      <button type="submit" className="btn btn-primary" disabled={state.busy || !objective.trim()} data-goal-task-start>
+        {state.busy ? TEXT.startingGoalTask : TEXT.startGoalTask}
+      </button>
+      {state.error && <p className="pws-goal-task-error" role="alert">{state.error}</p>}
+      {state.announcement && <p className="pws-goal-task-success" role="status">{state.announcement}</p>}
+    </form>
+  )
+}
+
 function StudioHeader({
   disabled,
   goalCount,
+  importing,
   onCreate,
+  onImport,
   onRefresh,
   onSelect,
   projects,
@@ -285,7 +391,9 @@ function StudioHeader({
 }: {
   disabled: boolean
   goalCount: number
+  importing: boolean
   onCreate: () => void
+  onImport: (file: File) => Promise<void>
   onRefresh: () => void
   onSelect: (id: string) => void
   projects: ProjectWorkspace[]
@@ -296,6 +404,13 @@ function StudioHeader({
   workItemCount: number
 }): React.JSX.Element {
   const selectId = useId()
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const importSelectedFile = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (file) await onImport(file)
+  }
   return (
     <header className="pws-header">
       <div className="pws-heading">
@@ -315,6 +430,23 @@ function StudioHeader({
           ))}
         </select>
         <button type="button" className="btn btn-primary" onClick={onCreate} disabled={disabled} data-studio-action="create-project">{TEXT.createProject}</button>
+        <input
+          ref={importInputRef}
+          className="pws-visually-hidden"
+          type="file"
+          accept="application/json,.json"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => void importSelectedFile(event)}
+          data-studio-import-input
+        />
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => importInputRef.current?.click()}
+          disabled={disabled}
+          data-studio-action="import-project"
+        >{importing ? TEXT.importingProject : TEXT.importProject}</button>
         <button type="button" className="btn btn-ghost" onClick={onRefresh} disabled={disabled} data-studio-action="refresh">{refreshing ? TEXT.refreshing : TEXT.refresh}</button>
       </div>
     </header>
@@ -334,16 +466,47 @@ function LoadingState({ message }: { message: string }): React.JSX.Element {
   return <div className="pws-loading" role="status" aria-live="polite"><span className="pws-loading-mark" aria-hidden="true" />{message}</div>
 }
 
-function ProjectEmpty({ onCreate }: { onCreate: () => void }): React.JSX.Element {
+function ProjectEmpty({
+  onCreate,
+  onImport
+}: {
+  onCreate: () => void
+  onImport: (file: File) => Promise<void>
+}): React.JSX.Element {
+  const importInputRef = useRef<HTMLInputElement>(null)
   return (
     <div className="pws-project-empty">
       <p>{TEXT.noProjects}</p>
-      <button type="button" className="btn btn-primary" onClick={onCreate}>{TEXT.createProject}</button>
+      <div className="pws-project-empty-actions">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onCreate}
+          data-studio-action="create-project-empty"
+        >{TEXT.createProject}</button>
+        <input
+          ref={importInputRef}
+          className="pws-visually-hidden"
+          type="file"
+          accept="application/json,.json"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const input = event.currentTarget
+            const file = input.files?.[0]
+            input.value = ''
+            if (file) void onImport(file)
+          }}
+        />
+        <button type="button" className="btn btn-ghost" onClick={() => importInputRef.current?.click()}>
+          {TEXT.importProject}
+        </button>
+      </div>
     </div>
   )
 }
 
-export default ProjectWorkspaceStudio
+export default memo(ProjectWorkspaceStudio)
 
 function readStoredStudioView(): StudioView {
   try {

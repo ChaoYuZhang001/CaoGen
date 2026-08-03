@@ -6,13 +6,21 @@ import type {
   GoalPatch,
   GoalStatus,
   MutationOptions,
+  ProjectSquad,
+  ProjectSquadInput,
+  ProjectSquadMemberInput,
+  ProjectSquadPatch,
   ProjectWorkspace,
   ProjectWorkspaceInput,
   ProjectWorkspaceManifest,
   ProjectWorkspacePatch,
   ProjectWorkspaceState,
   WorkItem,
+  WorkItemComment,
+  WorkItemCommentInput,
+  WorkItemCommentPatch,
   WorkItemInput,
+  WorkItemOwnerType,
   WorkItemPatch,
   WorkItemReorderPlacement,
   WorkItemStatus
@@ -26,6 +34,8 @@ import type { ProjectWorkspaceBeforeCommit } from './persistence'
 import type { DeleteOptions, LeaseOptions, ListOptions } from './repository-types'
 import { WorkItemRepository } from './work-item-repository'
 import { WorkspaceRepository } from './workspace-repository'
+import { canonicalJson as canonicalProjectJson } from './codec'
+import { ProjectCollaborationRepository } from './collaboration-repository'
 
 export { canonicalJson } from './codec'
 export { ProjectWorkspaceError } from './errors'
@@ -43,6 +53,7 @@ export class ProjectWorkspaceStore {
   private readonly workspaces: WorkspaceRepository
   private readonly goals: GoalRepository
   private readonly workItems: WorkItemRepository
+  private readonly collaboration: ProjectCollaborationRepository
 
   constructor(rootDir?: string) {
     this.persistence = new ProjectWorkspacePersistence(rootDir)
@@ -51,6 +62,7 @@ export class ProjectWorkspaceStore {
     this.workspaces = new WorkspaceRepository(this.persistence)
     this.goals = new GoalRepository(this.persistence)
     this.workItems = new WorkItemRepository(this.persistence)
+    this.collaboration = new ProjectCollaborationRepository(this.persistence)
   }
 
   async open(): Promise<this> {
@@ -64,6 +76,59 @@ export class ProjectWorkspaceStore {
 
   getRevision(): Promise<number> {
     return this.persistence.revision()
+  }
+
+  /**
+   * Merge one already-verified Project aggregate without replaying user-facing
+   * mutations. Import owns the original entity revisions and audit identities;
+   * the containing store still advances exactly once.
+   */
+  importProjectSlice(input: {
+    workspace: ProjectWorkspace
+    goals: Goal[]
+    workItems: WorkItem[]
+    squads: ProjectSquad[]
+    comments: WorkItemComment[]
+    events: ProjectWorkspaceState['events']
+  }): Promise<{ revision: number; projectId: string }> {
+    return this.persistence.read().then((current) => {
+      const projectId = input.workspace.id
+      const existingSlice = projectWorkspaceImportSlice(current, projectId)
+      if (existingSlice.workspace) {
+        if (canonicalProjectJson(existingSlice) === canonicalProjectJson({
+          workspace: input.workspace,
+          goals: input.goals,
+          workItems: input.workItems,
+          squads: input.squads,
+          comments: input.comments,
+          events: input.events
+        })) return { revision: current.revision, projectId }
+        throw new Error(`Project import identity conflict: ${projectId}`)
+      }
+      if (existingSlice.events.some((event) => !isImportablePurgeTombstone(event, projectId))) {
+        throw new Error(`Project import found non-restorable orphan events: ${projectId}`)
+      }
+      const collisions = [
+        ...sameKindConflicts(current.goals, input.goals),
+        ...sameKindConflicts(current.workItems, input.workItems),
+        ...sameKindConflicts(current.squads, input.squads),
+        ...sameKindConflicts(current.comments, input.comments),
+        ...sameKindConflicts(current.events, input.events)
+      ]
+      if (collisions.length > 0) {
+        throw new Error(`Project import identity conflict: ${[...new Set(collisions)].sort().join(', ')}`)
+      }
+      return this.persistence.mutate({ expectedStoreRevision: current.revision }, ({ state, commitRevision }) => {
+        state.events = state.events.filter((event) => !isImportablePurgeTombstone(event, projectId))
+        state.workspaces.push(structuredClone(input.workspace))
+        state.goals.push(...structuredClone(input.goals))
+        state.workItems.push(...structuredClone(input.workItems))
+        state.squads.push(...structuredClone(input.squads))
+        state.comments.push(...structuredClone(input.comments))
+        state.events.push(...structuredClone(input.events))
+        return { revision: commitRevision, projectId }
+      })
+    })
   }
 
   createWorkspace(input: ProjectWorkspaceInput, options?: MutationOptions | number): Promise<ProjectWorkspace> {
@@ -199,9 +264,102 @@ export class ProjectWorkspaceStore {
     return this.workItems.effectiveContract(id)
   }
 
+  listSquads(projectId?: string, options?: ListOptions): Promise<ProjectSquad[]> {
+    return this.collaboration.listSquads(projectId, options)
+  }
+
+  getSquad(id: string): Promise<ProjectSquad | undefined> {
+    return this.collaboration.getSquad(id)
+  }
+
+  createSquad(input: ProjectSquadInput, options?: MutationOptions | number): Promise<ProjectSquad> {
+    return this.collaboration.createSquad(input, options)
+  }
+
+  updateSquad(id: string, patch: ProjectSquadPatch, options?: MutationOptions | number): Promise<ProjectSquad> {
+    return this.collaboration.updateSquad(id, patch, options)
+  }
+
+  archiveSquad(id: string, options?: MutationOptions | number): Promise<ProjectSquad> {
+    return this.collaboration.archiveSquad(id, options)
+  }
+
+  restoreSquad(id: string, options?: MutationOptions | number): Promise<ProjectSquad> {
+    return this.collaboration.restoreSquad(id, options)
+  }
+
+  addSquadMember(id: string, member: ProjectSquadMemberInput, options?: MutationOptions | number): Promise<ProjectSquad> {
+    return this.collaboration.addSquadMember(id, member, options)
+  }
+
+  removeSquadMember(
+    id: string,
+    memberType: WorkItemOwnerType,
+    memberId: string,
+    options?: MutationOptions | number
+  ): Promise<ProjectSquad> {
+    return this.collaboration.removeSquadMember(id, memberType, memberId, options)
+  }
+
+  listWorkItemComments(workItemId: string, options?: ListOptions): Promise<WorkItemComment[]> {
+    return this.collaboration.listComments(workItemId, options)
+  }
+
+  listProjectComments(projectId?: string, options?: ListOptions): Promise<WorkItemComment[]> {
+    return this.collaboration.listProjectComments(projectId, options)
+  }
+
+  getWorkItemComment(id: string): Promise<WorkItemComment | undefined> {
+    return this.collaboration.getComment(id)
+  }
+
+  createWorkItemComment(input: WorkItemCommentInput, options?: MutationOptions | number): Promise<WorkItemComment> {
+    return this.collaboration.createComment(input, options)
+  }
+
+  updateWorkItemComment(
+    id: string,
+    patch: WorkItemCommentPatch,
+    options?: MutationOptions | number
+  ): Promise<WorkItemComment> {
+    return this.collaboration.updateComment(id, patch, options)
+  }
+
+  deleteWorkItemComment(id: string, options?: MutationOptions | number): Promise<WorkItemComment> {
+    return this.collaboration.deleteComment(id, options)
+  }
+
   withBeforeCommit<T>(hook: ProjectWorkspaceBeforeCommit, callback: () => Promise<T>): Promise<T> {
     return this.persistence.withBeforeCommit(hook, callback)
   }
+}
+
+function projectWorkspaceImportSlice(state: ProjectWorkspaceState, projectId: string) {
+  return {
+    workspace: state.workspaces.find((item) => item.id === projectId),
+    goals: state.goals.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    workItems: state.workItems.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    squads: state.squads.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    comments: state.comments.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    events: state.events.filter((item) => item.projectId === projectId).sort((left, right) =>
+      left.occurredAt - right.occurredAt || left.id.localeCompare(right.id))
+  }
+}
+
+function isImportablePurgeTombstone(
+  event: ProjectWorkspaceState['events'][number],
+  projectId: string
+): boolean {
+  return event.projectId === projectId &&
+    event.entityType === 'workspace' &&
+    event.entityId === projectId &&
+    event.kind === 'workspace.purged' &&
+    event.payload?.status === 'purged'
+}
+
+function sameKindConflicts<T extends { id: string }>(existing: readonly T[], incoming: readonly T[]): string[] {
+  const ids = new Set(existing.map((item) => item.id))
+  return incoming.filter((item) => ids.has(item.id)).map((item) => item.id)
 }
 
 const stores = new Map<string, ProjectWorkspaceStore>()

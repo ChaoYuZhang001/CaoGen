@@ -23,6 +23,28 @@ const rendererEntry = path.join(repoRoot, 'out/renderer/index.html')
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-supervisor-ipc-'))
 const userData = path.join(tempRoot, 'user-data')
 const memoryDir = path.join(tempRoot, 'memory')
+const taskRunOwnedId = 'ipc-task-run-owned'
+
+mkdirSync(userData, { recursive: true })
+writeFileSync(path.join(userData, 'supervisor-state.json'), JSON.stringify({
+  schemaVersion: 1,
+  revision: 1,
+  runs: [{
+    schemaVersion: 1,
+    id: taskRunOwnedId,
+    projectId: 'ipc-project',
+    workItemId: 'ipc-task-run-work',
+    origin: 'task_run',
+    status: 'queued',
+    revision: 1,
+    fencingToken: 0,
+    retryCount: 0,
+    maxRetries: 2,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }],
+  events: []
+}), 'utf8')
 
 let child
 let browser
@@ -86,13 +108,48 @@ try {
     } catch (error) {
       forgedError = error instanceof Error ? error.message : String(error)
     }
+    const taskRunBefore = await api.getSupervisorRun('ipc-task-run-owned')
+    const taskRunEventsBefore = (await api.listSupervisorEvents('ipc-task-run-owned')).length
+    let directTaskRunMutationError = ''
+    try {
+      await api.startSupervisorRun('ipc-task-run-owned', {
+        ownerId: 'renderer-worker', expectedRevision: taskRunBefore.revision
+      })
+    } catch (error) {
+      directTaskRunMutationError = error instanceof Error ? error.message : String(error)
+    }
+    let missingRuntimeControlError = ''
+    try {
+      await api.cancelSupervisorRun('ipc-task-run-owned', {
+        expectedRevision: taskRunBefore.revision
+      })
+    } catch (error) {
+      missingRuntimeControlError = error instanceof Error ? error.message : String(error)
+    }
+    const taskRunAfter = await api.getSupervisorRun('ipc-task-run-owned')
+    const taskRunEventsAfter = (await api.listSupervisorEvents('ipc-task-run-owned')).length
     const events = await api.listSupervisorEvents('ipc-run')
-    return { status: completed.status, fencingToken: completed.fencingToken, eventCount: events.length, forgedError }
+    return {
+      status: completed.status,
+      fencingToken: completed.fencingToken,
+      eventCount: events.length,
+      forgedError,
+      directTaskRunMutationError,
+      missingRuntimeControlError,
+      taskRunRevisionBefore: taskRunBefore.revision,
+      taskRunRevisionAfter: taskRunAfter.revision,
+      taskRunEventsBefore,
+      taskRunEventsAfter
+    }
   })
   assert.equal(ipc.status, 'completed')
   assert.equal(ipc.fencingToken, 2)
   assert(ipc.eventCount >= 8)
   assert.match(ipc.forgedError, /unknown field|contains unknown/i)
+  assert.match(ipc.directTaskRunMutationError, /TaskRun-owned.*renderer cannot start/i)
+  assert.match(ipc.missingRuntimeControlError, /TaskRun-owned.*no active canonical session runtime/i)
+  assert.equal(ipc.taskRunRevisionAfter, ipc.taskRunRevisionBefore)
+  assert.equal(ipc.taskRunEventsAfter, ipc.taskRunEventsBefore)
 
   await closeRuntime()
   child = undefined

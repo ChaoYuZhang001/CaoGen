@@ -46,6 +46,7 @@ export type WorkflowArtifactKind =
   | 'document'
   | 'spreadsheet'
   | 'presentation'
+  | 'pdf'
   | 'code'
   | 'patch'
   | 'diff'

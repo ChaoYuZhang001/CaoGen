@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
+import ProviderQuickSetup from './ProviderQuickSetup'
 import type {
   EngineKind,
   OpenAIProtocol,
+  ProviderAuthMode,
   ProviderApiKeyInput,
   ProviderApiKeyUpdateInput,
   ProviderApiKeyView,
   ProviderCredentialStorage,
+  ProviderInput,
   ProviderView
 } from '../../../shared/types'
 import ProviderSavedKeys from './settings/ProviderSavedKeys'
@@ -25,7 +28,47 @@ export type ProviderEditorCloseResult =
   | { reason: 'cancelled' }
   | { reason: 'saved'; provider: ProviderView }
 
-export default function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
+interface ProviderEditorSaveState {
+  provider: ProviderView | null
+  name: string
+  baseUrl: string
+  modelsText: string
+  engine: EngineKind
+  authMode: ProviderAuthMode
+  customHeaders: string
+  credentialHeaderNamesText: string
+  budgetUsd: string
+  openaiProtocol: OpenAIProtocol
+  note: string
+  token: string
+  tokenLabel: string
+  tokenTouched: boolean
+  additionalKeysText: string
+  savedKeys: ProviderApiKeyView[]
+  keyDrafts: Record<string, ProviderKeyDraft>
+  activeKeyId: string
+}
+
+export default function ProviderEditorEntry(props: Props): React.JSX.Element {
+  return props.provider
+    ? <ProviderEditor {...props} />
+    : <NewProviderEditor onClose={props.onClose} />
+}
+
+function NewProviderEditor({ onClose }: Pick<Props, 'onClose'>): React.JSX.Element {
+  const [advanced, setAdvanced] = useState(false)
+  return advanced
+    ? <ProviderEditor provider={null} onClose={onClose} />
+    : (
+        <ProviderQuickSetup
+          onAdvanced={() => setAdvanced(true)}
+          onCancel={() => onClose({ reason: 'cancelled' })}
+          onSaved={(provider) => onClose({ reason: 'saved', provider })}
+        />
+      )
+}
+
+function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
   const t = useT()
   const createProvider = useStore((s) => s.createProvider)
   const updateProvider = useStore((s) => s.updateProvider)
@@ -33,6 +76,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? DEFAULT_PROVIDER_BASE_URL)
   const [modelsText, setModelsText] = useState((provider?.models ?? []).join('\n'))
   const [engine, setEngine] = useState<EngineKind>(provider?.engine ?? 'openai')
+  const [authMode, setAuthMode] = useState<ProviderAuthMode>(provider?.authMode ?? 'api-key')
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
   const [credentialHeaderNamesText, setCredentialHeaderNamesText] = useState(
     (provider?.credentialHeaderNames ?? []).join('\n')
@@ -61,14 +105,29 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
   const [modelSourceKey, setModelSourceKey] = useState(() =>
     provider ? providerModelSourceKey(provider.id, provider.baseUrl, provider.openaiProtocol ?? 'responses') : ''
   )
-
   const isEdit = provider !== null
   const savedKeys = provider?.apiKeys ?? []
+  const existingCredentialCount = countExistingProviderCredentials(provider)
   const currentModelSourceKey = useMemo(
     () => providerModelSourceKey(provider?.id, baseUrl, openaiProtocol),
     [provider?.id, baseUrl, openaiProtocol]
   )
-  const modelsStale = modelsText.trim().length > 0 && modelSourceKey !== '' && modelSourceKey !== currentModelSourceKey
+  const modelsStale = isProviderModelListStale(modelsText, modelSourceKey, currentModelSourceKey)
+
+  const handleAuthModeChange = (mode: ProviderAuthMode): void => {
+    setAuthMode(mode)
+    setError('')
+    if (mode !== 'none') return
+    setToken('')
+    setTokenTouched(false)
+    setTokenLabel('')
+    setAdditionalKeysText('')
+    setActiveKeyId('')
+    setKeyDrafts(Object.fromEntries(savedKeys.map((key) => [
+      key.id,
+      { label: key.label, disabled: key.disabled, remove: false }
+    ])))
+  }
 
   const fetchModels = async (): Promise<void> => {
     setFetching(true)
@@ -81,7 +140,8 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
         providerId: provider?.id,
         customHeaders: customHeaders.trim() || undefined,
         credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
-        openaiProtocol
+        openaiProtocol,
+        authMode
       })
       if (!result.ok) {
         setModelSourceKey('')
@@ -112,67 +172,41 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
     setBaseUrl(preset.baseUrl)
     setModelsText(preset.models.join('\n'))
     setEngine(preset.engine)
+    handleAuthModeChange(preset.key === 'local-openai' ? 'none' : 'api-key')
     setOpenaiProtocol(preset.openaiProtocol ?? 'responses')
     setModelSourceKey(providerModelSourceKey(provider?.id, preset.baseUrl, preset.openaiProtocol ?? 'responses'))
   }
 
   const save = async (): Promise<void> => {
-    const models = modelsText
-      .split('\n')
-      .map((m) => m.trim())
-      .filter(Boolean)
     const additionalTokens = parseAdditionalKeys(additionalKeysText)
-    const validationKey = providerEditorValidationKey(name, provider, token, additionalTokens, models)
+    const validationKey = providerEditorValidationKey(
+      name,
+      provider,
+      authMode,
+      token,
+      additionalTokens,
+      modelsText.split('\n').map((model) => model.trim()).filter(Boolean)
+    )
     if (validationKey) {
       setError(t(validationKey))
       return
     }
-    const budget = Number(budgetUsd)
-    const keyUpdates = buildKeyUpdates(savedKeys, keyDrafts)
-    const removeKeyIds = savedKeys
-      .filter((key) => keyDrafts[key.id]?.remove)
-      .map((key) => key.id)
-    const requestedActiveKeyId = activeKeyId && !removeKeyIds.includes(activeKeyId) ? activeKeyId : undefined
-    const tokenLabelPatch = tokenLabel.trim()
+    if (requiresCredentialDeletionConfirmation(provider, authMode, existingCredentialCount)
+      && !window.confirm(t('providerAuthModeNoneDeleteKeysConfirm', { n: existingCredentialCount }))) {
+      return
+    }
+    const input = buildProviderSaveInput({
+      provider, name, baseUrl, modelsText, engine, authMode, customHeaders,
+      credentialHeaderNamesText, budgetUsd, openaiProtocol, note, token, tokenLabel,
+      tokenTouched, additionalKeysText, savedKeys, keyDrafts, activeKeyId
+    })
     setBusy(true)
     setError('')
     try {
-      if (isEdit) {
-        const savedProvider = await updateProvider(provider.id, {
-          name: name.trim(),
-          baseUrl: baseUrl.trim(),
-          models,
-          engine,
-          customHeaders: customHeaders.trim(),
-          credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
-          budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
-          openaiProtocol,
-          note: note.trim(),
-          // token 未改动则不传,避免清空已存密钥
-          ...(tokenTouched ? { token, tokenLabel: tokenLabelPatch } : tokenLabelPatch ? { tokenLabel: tokenLabelPatch } : {}),
-          ...(additionalTokens.length > 0 ? { additionalTokens } : {}),
-          ...(keyUpdates.length > 0 ? { keyUpdates } : {}),
-          ...(removeKeyIds.length > 0 ? { removeKeyIds } : {}),
-          ...(requestedActiveKeyId ? { activeKeyId: requestedActiveKeyId } : {})
-        })
-        onClose({ reason: 'saved', provider: savedProvider })
-      } else {
-        const savedProvider = await createProvider({
-          name: name.trim(),
-          baseUrl: baseUrl.trim(),
-          models,
-          engine,
-          customHeaders: customHeaders.trim(),
-          credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
-          budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
-          openaiProtocol,
-          note: note.trim(),
-          token,
-          tokenLabel: tokenLabelPatch,
-          ...(additionalTokens.length > 0 ? { additionalTokens } : {})
-        })
-        onClose({ reason: 'saved', provider: savedProvider })
-      }
+      const savedProvider = provider
+        ? await updateProvider(provider.id, input)
+        : await createProvider(input)
+      onClose({ reason: 'saved', provider: savedProvider })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)
@@ -243,51 +277,25 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
           <option value="anthropic">{t('providerEngineAnthropic')}</option>
         </select>
 
-        <ProviderCredentialStorageNotice storage={provider?.credentialStorage} />
-
-        <label className="field-label">
-          {t('apiKeyLabelPrimary')}
-          {isEdit && provider.hasToken && !tokenTouched && (
-            <span className="field-hint">{t('savedKeepEmpty')}</span>
-          )}
-        </label>
-        <input
-          className="input input-block" data-provider-field="api-key"
-          type="password"
-          value={token}
-          placeholder={isEdit && provider.hasToken ? t('tokenPlaceholderSaved') : '<your-api-key>'}
-          onChange={(e) => {
-            setToken(e.target.value)
-            setTokenTouched(true)
-          }}
-        />
-
-        <label className="field-label">{t('apiKeyNameLabel')}</label>
-        <input
-          className="input input-block"
-          value={tokenLabel}
-          placeholder={t('apiKeyNamePlaceholder')}
-          onChange={(e) => setTokenLabel(e.target.value)}
-        />
-
-        <ProviderSavedKeys
+        <ProviderCredentialFields
+          authMode={authMode}
+          onAuthModeChange={handleAuthModeChange}
+          existingCredentialCount={existingCredentialCount}
           provider={provider}
+          isEdit={isEdit}
+          token={token}
+          tokenTouched={tokenTouched}
+          onTokenChange={(value) => { setToken(value); setTokenTouched(true) }}
+          tokenLabel={tokenLabel}
+          onTokenLabelChange={setTokenLabel}
           savedKeys={savedKeys}
           keyDrafts={keyDrafts}
           activeKeyId={activeKeyId}
           onActiveKeyChange={setActiveKeyId}
           onKeyDraftsChange={setKeyDrafts}
+          additionalKeysText={additionalKeysText}
+          onAdditionalKeysTextChange={setAdditionalKeysText}
         />
-
-        <label className="field-label">{t('additionalApiKeysLabel')}</label>
-        <textarea
-          className="input input-block textarea" data-provider-field="additional-api-keys"
-          value={additionalKeysText}
-          rows={3}
-          placeholder={t('additionalApiKeysPlaceholder')}
-          onChange={(e) => setAdditionalKeysText(e.target.value)}
-        />
-        <div className="field-hint">{t('additionalApiKeysHint')}</div>
 
         <div className="field-label-row">
           <label className="field-label">{t('modelListLabel')}</label>
@@ -297,7 +305,7 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
             onClick={() => void fetchModels()}
             title={t('fetchModelsTitle')}
           >
-            {fetching ? t('fetching') : t('fetchWithKey')}
+            {fetching ? t('fetching') : t(authMode === 'none' ? 'fetchModelsNoKey' : 'fetchWithKey')}
           </button>
         </div>
         <textarea
@@ -382,16 +390,174 @@ export default function ProviderEditor({ provider, onClose }: Props): React.JSX.
 function providerEditorValidationKey(
   name: string,
   provider: ProviderView | null,
+  authMode: ProviderAuthMode,
   token: string,
   additionalTokens: ProviderApiKeyInput[],
   models: string[]
 ): string | null {
   if (!name.trim()) return 'errNameRequired'
   if (useStore.getState().settingsContext !== 'welcome-provider-recovery') return null
-  if (!provider?.hasToken && !token.trim() && additionalTokens.length === 0) {
+  if (authMode !== 'none' && !provider?.hasToken && !token.trim() && additionalTokens.length === 0) {
     return 'errProviderKeyRequired'
   }
   return models.length === 0 ? 'errProviderModelRequired' : null
+}
+
+function requiresCredentialDeletionConfirmation(
+  provider: ProviderView | null,
+  authMode: ProviderAuthMode,
+  existingCredentialCount: number
+): boolean {
+  return Boolean(provider && provider.authMode !== 'none' && authMode === 'none' && existingCredentialCount > 0)
+}
+
+function countExistingProviderCredentials(provider: ProviderView | null): number {
+  return Math.max(
+    provider?.apiKeys?.length ?? 0,
+    provider?.keyCount ?? 0,
+    provider?.hasToken ? 1 : 0
+  )
+}
+
+function isProviderModelListStale(modelsText: string, sourceKey: string, currentSourceKey: string): boolean {
+  return modelsText.trim().length > 0 && sourceKey !== '' && sourceKey !== currentSourceKey
+}
+
+function buildProviderSaveInput(state: ProviderEditorSaveState): ProviderInput {
+  const budget = Number(state.budgetUsd)
+  return {
+    name: state.name.trim(),
+    baseUrl: state.baseUrl.trim(),
+    models: state.modelsText.split('\n').map((model) => model.trim()).filter(Boolean),
+    engine: state.engine,
+    authMode: state.authMode,
+    customHeaders: state.customHeaders.trim(),
+    credentialHeaderNames: parseCredentialHeaderNames(state.credentialHeaderNamesText),
+    budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
+    openaiProtocol: state.openaiProtocol,
+    note: state.note.trim(),
+    ...buildProviderCredentialPatch(state)
+  }
+}
+
+function buildProviderCredentialPatch(state: ProviderEditorSaveState): Partial<ProviderInput> {
+  if (state.authMode === 'none') return {}
+  const additionalTokens = parseAdditionalKeys(state.additionalKeysText)
+  const keyUpdates = buildKeyUpdates(state.savedKeys, state.keyDrafts)
+  const removeKeyIds = state.savedKeys
+    .filter((key) => state.keyDrafts[key.id]?.remove)
+    .map((key) => key.id)
+  const activeKeyId = state.activeKeyId && !removeKeyIds.includes(state.activeKeyId)
+    ? state.activeKeyId
+    : undefined
+  const patch: Partial<ProviderInput> = {}
+
+  if (!state.provider || state.tokenTouched) {
+    patch.token = state.token
+    patch.tokenLabel = state.tokenLabel.trim()
+  } else if (state.tokenLabel.trim()) {
+    patch.tokenLabel = state.tokenLabel.trim()
+  }
+  if (additionalTokens.length > 0) patch.additionalTokens = additionalTokens
+  if (keyUpdates.length > 0) patch.keyUpdates = keyUpdates
+  if (removeKeyIds.length > 0) patch.removeKeyIds = removeKeyIds
+  if (activeKeyId) patch.activeKeyId = activeKeyId
+  return patch
+}
+
+function ProviderCredentialFields({
+  authMode,
+  onAuthModeChange,
+  existingCredentialCount,
+  provider,
+  isEdit,
+  token,
+  tokenTouched,
+  onTokenChange,
+  tokenLabel,
+  onTokenLabelChange,
+  savedKeys,
+  keyDrafts,
+  activeKeyId,
+  onActiveKeyChange,
+  onKeyDraftsChange,
+  additionalKeysText,
+  onAdditionalKeysTextChange
+}: {
+  authMode: ProviderAuthMode
+  onAuthModeChange: (mode: ProviderAuthMode) => void
+  existingCredentialCount: number
+  provider: ProviderView | null
+  isEdit: boolean
+  token: string
+  tokenTouched: boolean
+  onTokenChange: (value: string) => void
+  tokenLabel: string
+  onTokenLabelChange: (value: string) => void
+  savedKeys: ProviderApiKeyView[]
+  keyDrafts: Record<string, ProviderKeyDraft>
+  activeKeyId: string
+  onActiveKeyChange: (id: string) => void
+  onKeyDraftsChange: React.Dispatch<React.SetStateAction<Record<string, ProviderKeyDraft>>>
+  additionalKeysText: string
+  onAdditionalKeysTextChange: (value: string) => void
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <>
+      <label className="field-label">{t('providerAuthModeLabel')}</label>
+      <select className="select select-block" value={authMode} onChange={(event) => onAuthModeChange(event.target.value as ProviderAuthMode)}>
+        <option value="api-key">{t('providerAuthModeApiKey')}</option>
+        <option value="none">{t('providerAuthModeNone')}</option>
+      </select>
+      {authMode === 'none' ? (
+        <div className={`notice ${existingCredentialCount > 0 ? 'notice-error' : 'notice-info'}`}>
+          {t(existingCredentialCount > 0
+            ? 'providerAuthModeNoneDeletesKeysHint'
+            : 'providerAuthModeNoneHint', { n: existingCredentialCount })}
+        </div>
+      ) : (
+        <>
+          <ProviderCredentialStorageNotice storage={provider?.credentialStorage} />
+          <label className="field-label">
+            {t('apiKeyLabelPrimary')}
+            {isEdit && provider?.hasToken && !tokenTouched && <span className="field-hint">{t('savedKeepEmpty')}</span>}
+          </label>
+          <input
+            className="input input-block" data-provider-field="api-key"
+            type="password"
+            value={token}
+            placeholder={isEdit && provider?.hasToken ? t('tokenPlaceholderSaved') : '<your-api-key>'}
+            onChange={(event) => onTokenChange(event.target.value)}
+          />
+          <label className="field-label">{t('apiKeyNameLabel')}</label>
+          <input
+            className="input input-block"
+            value={tokenLabel}
+            placeholder={t('apiKeyNamePlaceholder')}
+            onChange={(event) => onTokenLabelChange(event.target.value)}
+          />
+          <ProviderSavedKeys
+            provider={provider}
+            savedKeys={savedKeys}
+            keyDrafts={keyDrafts}
+            activeKeyId={activeKeyId}
+            onActiveKeyChange={onActiveKeyChange}
+            onKeyDraftsChange={onKeyDraftsChange}
+          />
+          <label className="field-label">{t('additionalApiKeysLabel')}</label>
+          <textarea
+            className="input input-block textarea" data-provider-field="additional-api-keys"
+            value={additionalKeysText}
+            rows={3}
+            placeholder={t('additionalApiKeysPlaceholder')}
+            onChange={(event) => onAdditionalKeysTextChange(event.target.value)}
+          />
+          <div className="field-hint">{t('additionalApiKeysHint')}</div>
+        </>
+      )}
+    </>
+  )
 }
 
 function providerCredentialNotice(

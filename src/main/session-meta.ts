@@ -5,6 +5,7 @@ import type {
   PermissionModeId,
   SessionMeta,
   SessionRoutingScope,
+  TaskStrategy,
   UsageTotals
 } from '../shared/types'
 
@@ -39,6 +40,12 @@ export function newSessionMeta(opts: {
   budgetUsd?: number
   resumeSessionAt?: string
   engine?: EngineKind
+  taskStrategy: TaskStrategy
+  /**
+   * 权限模式（派生只读）。
+   * 收编后此字段由 derivePermissionModeFromStrategy(taskStrategy) 派生，
+   * 不再接受用户或模型直接设置。调用方应使用 derivePermissionModeFromStrategy。
+   */
   permissionMode: PermissionModeId
   title?: string
 }): SessionMeta {
@@ -67,6 +74,7 @@ export function newSessionMeta(opts: {
     budgetUsd: normalizeBudget(opts.budgetUsd),
     resumeSessionAt: opts.resumeSessionAt,
     engine: opts.engine,
+    taskStrategy: opts.taskStrategy,
     permissionMode: opts.permissionMode,
     status: 'starting',
     costUsd: 0,

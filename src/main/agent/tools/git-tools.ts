@@ -16,6 +16,7 @@ import {
 import type { EffectTarget, GitOperationResult } from '../../../shared/types'
 import { executeGitIndexEffectTarget } from '../../git/git-index-effect'
 import { executePullRequestEffectTarget } from '../../git/pull-request-effect'
+import { executeIssueEffectTarget } from '../../git/pull-request-effect'
 import {
   formatCodeForgeDeliveryReport,
   runCodeForgeDelivery,
@@ -32,6 +33,7 @@ export const GIT_TOOL_NAMES = [
   'git_commit',
   'git_push',
   'git_create_pr',
+  'git_create_issue',
   'git_merge',
   'code_forge_delivery'
 ] as const
@@ -66,6 +68,23 @@ export const GIT_TOOLS: ToolDefinition[] = [
       parameters: {
         type: 'object',
         properties: {}
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_create_issue',
+      description:
+        '在当前仓库对应的 GitHub/GitLab 项目创建 Issue。使用本机现有 gh/glab 登录，不接受 Token；创建前和恢复时按唯一 marker 对账，避免重复提交。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Issue 标题，不能为空。' },
+          body: { type: 'string', description: 'Issue 正文，可为空。' },
+          labels: { type: 'array', items: { type: 'string' }, description: '可选标签列表。' }
+        },
+        required: ['title']
       }
     }
   },
@@ -217,11 +236,29 @@ export async function executeGitTool(
         cwd,
         context.effectTarget?.kind === 'pull_request_create' ? context.effectTarget : undefined
       )
+    case 'git_create_issue':
+      return executeCreateIssueTool(args, cwd, context.effectTarget)
     case 'git_merge':
       return executeMergeTool(args, cwd, context.effectTarget)
     case 'code_forge_delivery':
       return executeCodeForgeDeliveryTool(args, cwd, context)
   }
+}
+
+async function executeCreateIssueTool(
+  args: Record<string, unknown>,
+  cwd: string,
+  effectTarget: EffectTarget | undefined
+): Promise<ToolExecResult> {
+  if (effectTarget?.kind !== 'issue_create') {
+    return stringifyIssueResult({ ok: false, error: 'git_create_issue 缺少冻结的 issue_create EffectTarget，已阻止执行' })
+  }
+  return stringifyIssueResult(await executeIssueEffectTarget({
+    target: effectTarget,
+    title: requiredString(args.title, 'title'),
+    body: typeof args.body === 'string' ? args.body : '',
+    labels: stringArray(args.labels)
+  }))
 }
 
 function executeGitIndexTool(
@@ -354,6 +391,10 @@ function stringifyCodeForgeResult(result: CodeForgeDeliveryResult): ToolExecResu
   return { ok: result.ok, output: formatCodeForgeDeliveryReport(result) }
 }
 
+function stringifyIssueResult(result: Awaited<ReturnType<typeof executeIssueEffectTarget>>): ToolExecResult {
+  return { ok: result.ok, output: JSON.stringify(result, null, 2) }
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
@@ -361,6 +402,14 @@ function optionalString(value: unknown): string | undefined {
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} 不能为空`)
   return value.trim()
+}
+
+function stringArray(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error('labels 必须是字符串数组')
+  }
+  return value as string[]
 }
 
 function deliveryMode(value: unknown): 'report' | 'patch' | 'commit' | 'pr' | undefined {

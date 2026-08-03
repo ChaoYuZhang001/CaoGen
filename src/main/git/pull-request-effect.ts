@@ -21,6 +21,7 @@ const MAX_GITLAB_RESULTS = 100
 export type PullRequestEffectTarget = Extract<EffectTarget, { kind: 'pull_request_create' }>
 export type PullRequestProvider = PullRequestEffectTarget['provider']
 export type PullRequestTool = 'gh' | 'glab'
+export type IssueEffectTarget = Extract<EffectTarget, { kind: 'issue_create' }>
 
 export interface PullRequestCapability {
   available: boolean
@@ -69,6 +70,32 @@ export type PullRequestEffectExecutionResult =
       tool: PullRequestTool
       branch: string
       base: string
+      url: string
+      existing?: boolean
+    }
+  | { ok: false; error: string; repoRoot?: string; details?: string }
+
+export interface IssueEffectObservation {
+  complete: boolean
+  records: IssueObservationRecord[]
+  error?: string
+}
+
+export interface IssueObservationRecord {
+  id: string
+  url: string
+  state: string
+  title: string
+  body: string
+  labels: string[]
+}
+
+export type IssueEffectExecutionResult =
+  | {
+      ok: true
+      repoRoot: string
+      provider: PullRequestProvider
+      tool: PullRequestTool
       url: string
       existing?: boolean
     }
@@ -136,6 +163,241 @@ export async function buildPullRequestEffectTarget(input: {
     throw new Error(`source branch ${sourceBranch} 已存在其他 PR/MR，已阻止重复创建`)
   }
   return target
+}
+
+export async function buildIssueEffectTarget(input: {
+  cwd: string
+  title: string
+  body: string
+  labels?: string[]
+}): Promise<IssueEffectTarget> {
+  const repo = await inspectRepository(input.cwd)
+  const title = requiredText(input.title, 'Issue 标题')
+  const body = typeof input.body === 'string' ? input.body : ''
+  const labels = normalizeLabels(input.labels)
+  const titleDigest = stableValueDigest(title)
+  const bodyDigest = stableValueDigest(body)
+  const labelsDigest = stableValueDigest(labels)
+  const repositoryDigest = stableValueDigest({
+    provider: repo.provider,
+    host: repo.host,
+    projectPath: repo.projectPath,
+    remoteUrlDigest: repo.remoteUrlDigest
+  })
+  const markerSeed = stableValueDigest({
+    schema: 'caogen-issue-v1',
+    repositoryDigest,
+    titleDigest,
+    bodyDigest,
+    labelsDigest
+  })
+  const markerToken = `caogen-effect-issue-v1-${markerSeed}`
+  const target: IssueEffectTarget = {
+    kind: 'issue_create',
+    provider: repo.provider,
+    repoRoot: repo.repoRoot,
+    repoRootIdentity: fileSystemIdentity(repo.repoRoot),
+    remote: repo.remote,
+    remoteUrlDigest: repo.remoteUrlDigest,
+    host: repo.host,
+    projectPath: repo.projectPath,
+    repositoryDigest,
+    titleDigest,
+    bodyDigest,
+    labels,
+    labelsDigest,
+    markerToken,
+    marker: `<!-- ${markerToken} -->`
+  }
+  const observation = await queryIssueEffectTarget(target)
+  if (!observation.complete) throw new Error(observation.error ?? 'Issue 远端状态查询不完整')
+  const exact = exactIssueMarkerRecords(target, observation.records)
+  if (exact.length > 1) throw new Error('同一 Effect marker 匹配多个 Issue，已阻止继续执行')
+  if (exact.length === 0 && observation.records.length > 0) {
+    throw new Error('Issue marker 搜索返回非精确候选，已阻止重复创建')
+  }
+  return target
+}
+
+export async function queryIssueEffectTarget(
+  target: IssueEffectTarget
+): Promise<IssueEffectObservation> {
+  const tool = toolForProvider(target.provider)
+  if (!commandExists(tool)) {
+    return { complete: false, records: [], error: `本机未检测到 ${tool}，无法对账 Issue` }
+  }
+  const command: PullRequestCliCommand = target.provider === 'github'
+    ? {
+        args: [
+          'issue', 'list',
+          '--repo', repoSelector(target),
+          '--state', 'all',
+          '--search', `${target.markerToken} in:body`,
+          '--limit', String(MAX_GITHUB_RESULTS),
+          '--json', 'number,url,state,title,body,labels'
+        ],
+        env: { GH_PROMPT_DISABLED: '1', ...(target.host !== 'github.com' ? { GH_HOST: target.host } : {}) }
+      }
+    : {
+        args: [
+          'api',
+          '--hostname', target.host,
+          '--method', 'GET',
+          `projects/${encodeURIComponent(target.projectPath)}/issues?scope=all&search=${encodeURIComponent(target.markerToken)}&in=description&per_page=${MAX_GITLAB_RESULTS}`
+        ],
+        env: { GITLAB_HOST: target.host }
+      }
+  const result = await cliRun(tool, command.args, target.repoRoot, command.env)
+  if (!result.ok) return { complete: false, records: [], error: result.error }
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown
+    if (!Array.isArray(parsed)) throw new Error('CLI 未返回 JSON 数组')
+    const limit = target.provider === 'github' ? MAX_GITHUB_RESULTS : MAX_GITLAB_RESULTS
+    const records = parsed.map((item) => parseIssueObservationRecord(target.provider, item))
+    if (records.length >= limit) {
+      return { complete: false, records, error: `Issue 查询达到 ${limit} 条上限，禁止把截断结果用于对账` }
+    }
+    return { complete: true, records }
+  } catch (error) {
+    return { complete: false, records: [], error: `Issue 查询结果无效:${errorText(error)}` }
+  }
+}
+
+export async function executeIssueEffectTarget(input: {
+  target: IssueEffectTarget
+  title: string
+  body: string
+  labels?: string[]
+}): Promise<IssueEffectExecutionResult> {
+  const { target } = input
+  try {
+    const repo = await inspectRepository(target.repoRoot)
+    assertApprovedIssueRepository(repo, target)
+    const title = requiredText(input.title, 'Issue 标题')
+    const body = typeof input.body === 'string' ? input.body : ''
+    const labels = normalizeLabels(input.labels)
+    assertApprovedIssueIntent(target, title, body, labels)
+    const observation = await queryIssueEffectTarget(target)
+    if (!observation.complete) return issueFailure(observation.error ?? 'Issue 前置查询不完整', target.repoRoot)
+    const exact = exactIssueMarkerRecords(target, observation.records)
+    if (exact.length === 1) return existingIssueResult(target, exact[0].url)
+    if (exact.length > 1 || observation.records.length > 0) {
+      return issueFailure('Issue marker 存在其他或重复记录，已阻止创建', target.repoRoot)
+    }
+    return await createIssue(target, title, body, labels)
+  } catch (error) {
+    return issueFailure(errorText(error), target.repoRoot)
+  }
+}
+
+export function exactIssueMarkerRecords(
+  target: IssueEffectTarget,
+  records: IssueObservationRecord[]
+): IssueObservationRecord[] {
+  return records.filter((record) => record.body.includes(target.marker))
+}
+
+function assertApprovedIssueRepository(repo: InspectedRepository, target: IssueEffectTarget): void {
+  const matches = repo.repoRoot === target.repoRoot &&
+    sameFileSystemIdentity(fileSystemIdentity(repo.repoRoot), target.repoRootIdentity) &&
+    repo.remote === target.remote &&
+    repo.remoteUrlDigest === target.remoteUrlDigest &&
+    repo.provider === target.provider &&
+    repo.host === target.host &&
+    repo.projectPath === target.projectPath
+  if (!matches) throw new Error('Git 仓库或 remote 身份已偏离 Issue 审批时状态')
+}
+
+function assertApprovedIssueIntent(
+  target: IssueEffectTarget,
+  title: string,
+  body: string,
+  labels: string[]
+): void {
+  if (
+    stableValueDigest(title) !== target.titleDigest ||
+    stableValueDigest(body) !== target.bodyDigest ||
+    stableValueDigest(labels) !== target.labelsDigest
+  ) {
+    throw new Error('Issue 标题、正文或标签已偏离效果审批时意图')
+  }
+}
+
+async function createIssue(
+  target: IssueEffectTarget,
+  title: string,
+  body: string,
+  labels: string[]
+): Promise<IssueEffectExecutionResult> {
+  const tool = toolForProvider(target.provider)
+  const markedBody = appendMarker(body, target.marker)
+  const labelArgs = labels.length > 0 ? ['--label', labels.join(',')] : []
+  const command: PullRequestCliCommand = target.provider === 'github'
+    ? {
+        args: ['issue', 'create', '--repo', repoSelector(target), '--title', title, '--body', markedBody, ...labelArgs],
+        env: { GH_PROMPT_DISABLED: '1', ...(target.host !== 'github.com' ? { GH_HOST: target.host } : {}) }
+      }
+    : {
+        args: ['issue', 'create', '--repo', `${target.host}/${target.projectPath}`, '--title', title, '--description', markedBody, ...labelArgs, '--yes'],
+        env: { GITLAB_HOST: target.host }
+      }
+  const created = await cliRun(tool, command.args, target.repoRoot, command.env, CLI_TIMEOUT_MS)
+  if (!created.ok) return issueFailure(`${tool} 创建 Issue 失败`, target.repoRoot, created.error)
+  const url = extractUrl(created.stdout) ?? extractUrl(created.stderr)
+  if (!url) return issueFailure(`${tool} 创建完成但未返回 Issue URL`, target.repoRoot)
+  return { ok: true, repoRoot: target.repoRoot, provider: target.provider, tool, url }
+}
+
+function existingIssueResult(target: IssueEffectTarget, url: string): IssueEffectExecutionResult {
+  return {
+    ok: true,
+    repoRoot: target.repoRoot,
+    provider: target.provider,
+    tool: toolForProvider(target.provider),
+    url,
+    existing: true
+  }
+}
+
+function parseIssueObservationRecord(
+  provider: PullRequestProvider,
+  value: unknown
+): IssueObservationRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Issue 记录必须是对象')
+  const record = value as Record<string, unknown>
+  if (provider === 'github') {
+    const rawLabels = Array.isArray(record.labels) ? record.labels : []
+    return {
+      id: requiredScalar(record.number, 'number'),
+      url: requiredText(record.url, 'url'),
+      state: requiredText(record.state, 'state'),
+      title: requiredText(record.title, 'title'),
+      body: typeof record.body === 'string' ? record.body : '',
+      labels: normalizeLabels(rawLabels.map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+        return typeof (item as Record<string, unknown>).name === 'string'
+          ? (item as Record<string, unknown>).name as string
+          : ''
+      }))
+    }
+  }
+  return {
+    id: requiredScalar(record.iid, 'iid'),
+    url: requiredText(record.web_url, 'web_url'),
+    state: requiredText(record.state, 'state'),
+    title: requiredText(record.title, 'title'),
+    body: typeof record.description === 'string' ? record.description : '',
+    labels: normalizeLabels(Array.isArray(record.labels) ? record.labels.filter((item): item is string => typeof item === 'string') : [])
+  }
+}
+
+function normalizeLabels(values: string[] | undefined): string[] {
+  return [...new Set((values ?? []).map((item) => item.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right))
+}
+
+function issueFailure(error: string, repoRoot?: string, details?: string): IssueEffectExecutionResult {
+  return { ok: false, error, ...(repoRoot ? { repoRoot } : {}), ...(details ? { details } : {}) }
 }
 
 export function inspectPullRequestCapability(cwd: string): PullRequestCapability {
@@ -495,7 +757,7 @@ function parseObservationRecord(provider: PullRequestProvider, value: unknown): 
   }
 }
 
-function repoSelector(target: PullRequestEffectTarget): string {
+function repoSelector(target: Pick<PullRequestEffectTarget, 'host' | 'projectPath'>): string {
   return target.host === 'github.com' ? target.projectPath : `${target.host}/${target.projectPath}`
 }
 

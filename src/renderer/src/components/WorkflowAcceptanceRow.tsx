@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type {
   WorkflowAcceptanceRecord,
   WorkflowAcceptanceReviewDecision,
+  WorkflowAcceptanceReviewResult,
   WorkflowEvidenceKind,
   WorkflowEvidenceRecord
 } from '../../../shared/types'
@@ -51,11 +52,20 @@ function useReviewState(acceptance: WorkflowAcceptanceRecord): ReviewState {
 export function WorkflowAcceptanceRow({
   acceptance,
   evidence,
-  onRefresh
+  onRefresh,
+  repairWorkItemId,
+  onOpenRepair,
+  onRepairReported
 }: {
   acceptance: WorkflowAcceptanceRecord
   evidence: WorkflowEvidenceRecord[]
   onRefresh: () => Promise<void>
+  /** ART-005 (T06) additive:来自 reviewWorkflowAcceptance 返回的 repair.workItemId,回填映射提供 */
+  repairWorkItemId?: string
+  /** ART-005 (T06) additive:点击 repair 入口时跳转(openTool('tasks')/openSubagentPanel) */
+  onOpenRepair?: (workItemId: string) => void
+  /** ART-005 (T06) additive:review 成功且有 repair 时上报父层,用于回填 repairByAcceptanceId */
+  onRepairReported?: (repair: NonNullable<WorkflowAcceptanceReviewResult['repair']>) => void
 }): React.JSX.Element {
   const state = useReviewState(acceptance)
   const reviewable = acceptance.status === 'pending' || acceptance.status === 'verifying'
@@ -63,7 +73,7 @@ export function WorkflowAcceptanceRow({
     void addEvidence(event, acceptance, state, onRefresh)
   }
   const onReview = (decision: WorkflowAcceptanceReviewDecision): void => {
-    void reviewAcceptance(decision, acceptance, state, onRefresh)
+    void reviewAcceptance(decision, acceptance, state, onRefresh, onRepairReported)
   }
 
   return (
@@ -84,6 +94,18 @@ export function WorkflowAcceptanceRow({
       )}
       {acceptance.status === 'failed' && (
         <FailedAcceptanceReview state={state} onReview={onReview} />
+      )}
+      {acceptance.status === 'failed' && repairWorkItemId && onOpenRepair && (
+        <div className="workflow-acceptance-repair" data-acceptance-repair-wrap>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            data-acceptance-repair
+            onClick={() => onOpenRepair(repairWorkItemId)}
+          >
+            查看返工 WorkItem
+          </button>
+        </div>
       )}
     </div>
   )
@@ -364,7 +386,8 @@ async function reviewAcceptance(
   decision: WorkflowAcceptanceReviewDecision,
   acceptance: WorkflowAcceptanceRecord,
   state: ReviewState,
-  onRefresh: () => Promise<void>
+  onRefresh: () => Promise<void>,
+  onRepairReported?: (repair: NonNullable<WorkflowAcceptanceReviewResult['repair']>) => void
 ): Promise<void> {
   state.setError('')
   state.setSuccess('')
@@ -382,7 +405,7 @@ async function reviewAcceptance(
   }
   state.setBusy(true)
   try {
-    await window.agentDesk.reviewWorkflowAcceptance({
+    const result = await window.agentDesk.reviewWorkflowAcceptance({
       acceptanceId: acceptance.id,
       criterionEvidence: decision === 'waived' || decision === 'retest' ? [] : criterionEvidence,
       decision,
@@ -392,6 +415,8 @@ async function reviewAcceptance(
     state.setSelectedEvidence({})
     state.setWaiverReason('')
     await onRefresh()
+    // ART-005 (T06):review 成功且产生 repair,上报父层回填 repairByAcceptanceId 映射
+    if (result.repair) onRepairReported?.(result.repair)
   } catch (cause) {
     state.setError(errorMessage(cause))
   } finally {

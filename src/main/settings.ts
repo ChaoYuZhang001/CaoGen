@@ -1,5 +1,16 @@
 import { app } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { normalizeCaoGenDriveMode } from '../shared/types'
 import type {
@@ -16,6 +27,7 @@ const WORKBENCH_SIDE_MIN_WIDTH = 360
 const WORKBENCH_SIDE_MAX_WIDTH = 900
 const CHAT_SCALE_MIN = 0.85
 const CHAT_SCALE_MAX = 1.25
+const SETTINGS_SCHEMA_VERSION = 1
 const MODEL_ROUTING_TASK_KINDS = new Set<ModelRoutingTaskKind>([
   'chat',
   'coding',
@@ -196,11 +208,16 @@ export function getSettings(): AppSettings {
   if (cache) return cache
   try {
     const persisted = JSON.parse(readFileSync(settingsFile(), 'utf8')) as Partial<AppSettings> & {
+      _schemaVersion?: unknown
       sandboxMode?: unknown
       sandboxDockerImage?: unknown
       chinaDockerRegistryMirror?: unknown
     }
+    if (persisted._schemaVersion !== undefined && persisted._schemaVersion !== SETTINGS_SCHEMA_VERSION) {
+      throw new UnsupportedSettingsSchemaError(persisted._schemaVersion)
+    }
     const {
+      _schemaVersion: _schemaVersion,
       sandboxMode,
       sandboxDockerImage: _legacyDockerImage,
       chinaDockerRegistryMirror: _legacyDockerRegistryMirror,
@@ -216,7 +233,8 @@ export function getSettings(): AppSettings {
       office: normalizeOffice(raw.office, DEFAULTS.office),
       layout: normalizeLayout(raw.layout)
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof UnsupportedSettingsSchemaError) throw error
     cache = { ...DEFAULTS, office: { ...DEFAULTS.office }, layout: { ...DEFAULTS.layout } }
   }
   return cache
@@ -239,12 +257,52 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     layout: normalizeLayout({ ...prev.layout, ...(patch.layout ?? {}) })
   }
   try {
-    mkdirSync(dirname(settingsFile()), { recursive: true })
-    writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
+    writeSettingsAtomic(settingsFile(), { _schemaVersion: SETTINGS_SCHEMA_VERSION, ...next })
   } catch (err) {
     console.error('[agent-desk] 保存设置失败:', err)
     throw err
   }
   cache = next
   return next
+}
+
+class UnsupportedSettingsSchemaError extends Error {
+  constructor(version: unknown) {
+    super(`Unsupported settings schema version: ${String(version)}`)
+    this.name = 'UnsupportedSettingsSchemaError'
+  }
+}
+
+function writeSettingsAtomic(file: string, value: Record<string, unknown>): void {
+  const directory = dirname(file)
+  const temporary = join(directory, `.settings.${process.pid}.${randomUUID()}.tmp`)
+  let descriptor: number | undefined
+  try {
+    mkdirSync(directory, { recursive: true })
+    descriptor = openSync(temporary, 'wx', 0o600)
+    writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    fsyncSync(descriptor)
+    closeSync(descriptor)
+    descriptor = undefined
+    renameSync(temporary, file)
+    syncSettingsDirectory(directory)
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { closeSync(descriptor) } catch { /* best effort */ }
+    }
+    if (existsSync(temporary)) {
+      try { unlinkSync(temporary) } catch { /* canonical settings remain authoritative */ }
+    }
+    throw error
+  }
+}
+
+function syncSettingsDirectory(directory: string): void {
+  if (process.platform === 'win32') return
+  try {
+    const descriptor = openSync(directory, 'r')
+    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+  } catch {
+    // The file is fsynced; some filesystems reject directory fsync.
+  }
 }

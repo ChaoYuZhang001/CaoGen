@@ -117,6 +117,26 @@
   font-size: 10.5px;
 }
 
+.pws-resource-egress {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.pws-resource-egress-local_only {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.pws-resource-egress-deny {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .pws-status-active {
   border-color: var(--green);
   color: var(--green);
@@ -229,6 +249,15 @@
 
   .pws-resource-kind {
     flex-basis: 62px;
+  }
+
+  .pws-resource-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .pws-resource-copy {
+    flex-basis: calc(100% - 82px);
   }
 
   .pws-dialog {

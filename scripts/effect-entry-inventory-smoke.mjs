@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -190,23 +190,71 @@ function validateGatewayActions(gateways) {
 function validateIpcEvidence(registrations, policies) {
   for (const registration of registrations) {
     const policy = policies[registration.id]
+    const evidenceSource = registrationEvidenceSource(registration)
     if (policy.effect === 'queryable') {
       assert(
-        registration.body.includes('executeInteractiveOperationEffect') ||
-          (policy.evidence && registration.body.includes(policy.evidence)),
+        evidenceSource.includes('executeInteractiveOperationEffect') ||
+          (policy.evidence && evidenceSource.includes(policy.evidence)),
         `${registration.id} must cross executeInteractiveOperationEffect`
       )
     }
     if (policy.effect === 'opaque') {
       assert(
-        registration.body.includes('executeInteractiveOperationEffect'),
+        evidenceSource.includes('executeInteractiveOperationEffect') ||
+          (policy.evidence && evidenceSource.includes(policy.evidence)),
         `${registration.id} opaque mutation must cross executeInteractiveOperationEffect`
       )
     }
     if (policy.effect === 'delegated') {
-      assert(registration.body.includes(policy.evidence), `${registration.id} delegated boundary drifted: ${policy.evidence}`)
+      assert(evidenceSource.includes(policy.evidence), `${registration.id} delegated boundary drifted: ${policy.evidence}`)
     }
   }
+}
+
+function registrationEvidenceSource(registration) {
+  const absolutePath = path.join(repoRoot, registration.file)
+  const source = parse(absolutePath)
+  let evidence = registration.body
+  const includedFunctions = new Set()
+  let expanded = true
+  while (expanded) {
+    expanded = false
+    for (const statement of source.statements) {
+      if (!ts.isFunctionDeclaration(statement) || !statement.name ||
+          includedFunctions.has(statement.name.text) || !evidence.includes(statement.name.text)) continue
+      includedFunctions.add(statement.name.text)
+      evidence += `\n${source.text.slice(statement.pos, statement.end)}`
+      expanded = true
+    }
+  }
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) ||
+        !statement.moduleSpecifier.text.startsWith('.')) continue
+    const localNames = importLocalNames(statement.importClause)
+    if (!localNames.some((name) => evidence.includes(name))) continue
+    evidence += `\n${readFileSync(resolveLocalModule(absolutePath, statement.moduleSpecifier.text), 'utf8')}`
+  }
+  return evidence
+}
+
+function importLocalNames(clause) {
+  if (!clause) return []
+  const names = clause.name ? [clause.name.text] : []
+  if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+    names.push(clause.namedBindings.name.text)
+  } else if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+    names.push(...clause.namedBindings.elements.map((element) => element.name.text))
+  }
+  return names
+}
+
+function resolveLocalModule(fromFile, specifier) {
+  const base = path.resolve(path.dirname(fromFile), specifier)
+  const extensionless = base.replace(/\.(?:js|mjs|cjs)$/, '')
+  const candidates = [base, `${extensionless}.ts`, `${extensionless}.tsx`, path.join(extensionless, 'index.ts')]
+  const match = candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile())
+  if (!match) throw new Error(`Cannot resolve local IPC boundary module ${specifier} from ${relative(fromFile)}`)
+  return match
 }
 
 function validateRuntimeBoundary(inventory) {

@@ -107,6 +107,7 @@ export class AssignmentReassignOperation {
     if (!workItem || workItem.projectId !== current.projectId) {
       invariant(`Assignment WorkItem is outside its Project: ${current.workItemId}`)
     }
+    assertRevision(workItem.revision, request.expectedWorkItemRevision, `WorkItem ${workItem.id}`)
     if (!ownerMatchesAssignment(workItem, current)) {
       invariant(`WorkItem owner no longer matches Assignment ${current.id}`)
     }

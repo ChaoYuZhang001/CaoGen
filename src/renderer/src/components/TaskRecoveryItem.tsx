@@ -1,4 +1,5 @@
 import type {
+  AgentEvent,
   EffectRecord,
   TaskDagFinalizationResolution,
   TaskDagFinalizationView,
@@ -62,6 +63,8 @@ export function TaskRecoveryItem({
         <div className="task-recovery-meta">{snapshotSubtitle(snapshot)}</div>
         {replay && <div className="task-recovery-meta">续跑: {replay}</div>}
         <div className="task-recovery-meta">{snapshot.reason} · {formatTime(snapshot.updatedAt)}</div>
+        <RecoveryBoundary snapshot={snapshot} />
+        <RecoveryTimeline snapshot={snapshot} />
         {unresolvedEffects.length > 0 && (
           <EffectRecoveryPanel
             snapshot={snapshot}
@@ -104,6 +107,128 @@ export function TaskRecoveryItem({
       </div>
     </div>
   )
+}
+
+function RecoveryBoundary({ snapshot }: { snapshot: TaskSnapshotRecord }): React.JSX.Element {
+  const effects = snapshot.run?.effects ?? []
+  const confirmed = effects.filter((effect) => effect.status === 'confirmed').length
+  const pending = effects.filter((effect) =>
+    effect.status === 'prepared' || effect.status === 'executing' || effect.status === 'waiting_reconciliation'
+  ).length
+  const checkpoint = snapshot.execution.lastCheckpointMessageId
+  const context = snapshot.meta.responsesContext
+  const ledger = snapshot.conversationLedger
+  return (
+    <div className="task-recovery-boundary" aria-label="恢复边界">
+      <div className="task-recovery-section-heading">恢复边界</div>
+      <div className="task-recovery-boundary-grid">
+        <span>本地转录</span>
+        <strong>{snapshot.transcript.length} 条 · seq {snapshot.execution.lastSeq}</strong>
+        <span>账本完整性</span>
+        <strong>
+          {!ledger
+            ? '旧快照 · 恢复时重新校验'
+            : ledger.valid
+              ? `${ledger.mode === 'sealed' ? '已封链' : ledger.mode === 'legacy' ? 'legacy' : '空账本'}${ledger.headDigest ? ` · ${shortId(ledger.headDigest)}` : ''}`
+              : `校验失败 · ${ledger.error ?? '未知错误'}`}
+        </strong>
+        <span>服务端上下文</span>
+        <strong>
+          {context
+            ? `${context.providerId} / ${context.model} · 第 ${context.generation} 代`
+            : '无可安全复用的服务端游标'}
+        </strong>
+        <span>Checkpoint</span>
+        <strong>{checkpoint ? shortId(checkpoint) : '无'}</strong>
+        <span>外部效果</span>
+        <strong>{confirmed} 已确认 · {pending} 待收敛</strong>
+      </div>
+      {effects.length > 0 && (
+        <details className="task-recovery-effect-ledger">
+          <summary>Effect 账本 ({effects.length})</summary>
+          <ul>
+            {effects.slice(-8).map((effect) => {
+              const evidence = effect.evidence[effect.evidence.length - 1]
+              return (
+                <li key={effect.id}>
+                  <strong>{effect.toolName} · {effect.status}</strong>
+                  <span>
+                    第 {effect.generation} 代
+                    {effect.lease ? ` · lease ${shortId(effect.lease.id)} / fence ${effect.lease.fencingToken}` : ' · 无活动 lease'}
+                  </span>
+                  <span>
+                    {evidence
+                      ? `evidence ${evidence.kind} · ${shortId(evidence.digest)}`
+                      : '无 evidence'}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function RecoveryTimeline({ snapshot }: { snapshot: TaskSnapshotRecord }): React.JSX.Element | null {
+  const entries = snapshot.transcript
+    .filter((entry) => ledgerEventLabel(entry.event) !== null)
+    .slice(-10)
+  if (entries.length === 0) return null
+  return (
+    <details className="task-recovery-timeline">
+      <summary>最近事件 ({entries.length})</summary>
+      <ol>
+        {entries.map((entry) => (
+          <li key={entry.eventId ?? `${entry.seq}-${entry.event.kind}`}>
+            <div className="task-recovery-timeline-head">
+              <strong>{ledgerEventLabel(entry.event)}</strong>
+              <span>seq {entry.seq} · {formatTime(entry.occurredAt ?? snapshot.updatedAt)}</span>
+            </div>
+            {(entry.causationId || entry.correlationId) && (
+              <div className="task-recovery-event-links">
+                {entry.causationId && <span title={entry.causationId}>原因 {shortId(entry.causationId)}</span>}
+                {entry.correlationId && <span title={entry.correlationId}>链路 {shortId(entry.correlationId)}</span>}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
+function ledgerEventLabel(event: AgentEvent): string | null {
+  switch (event.kind) {
+    case 'init': return `执行器恢复 · ${event.model || '默认模型'}`
+    case 'status': return `状态 · ${event.status}${event.error ? ' · 错误' : ''}`
+    case 'meta': return event.meta.responsesContext
+      ? `服务端上下文 · 第 ${event.meta.responsesContext.generation} 代`
+      : '会话元数据更新'
+    case 'user-message': return '用户消息'
+    case 'assistant-message': return event.blocks.some((block) => block.type === 'tool_use')
+      ? '模型请求工具' : '模型回复'
+    case 'tool-start': return `工具开始 · ${event.name}`
+    case 'tool-result': return `工具${event.isError ? '失败' : '完成'} · ${shortId(event.toolUseId)}`
+    case 'permission-request': return `等待审批 · ${event.request.toolName}`
+    case 'permission-resolved': return `审批${event.behavior === 'allow' ? '允许' : '拒绝'}`
+    case 'turn-result': return event.isError ? '本轮失败' : '本轮完成'
+    case 'routing': return `路由 · ${event.providerName ?? event.providerId} / ${event.model}`
+    case 'failover': return `Provider 切换 · ${event.fromName} → ${event.toName}`
+    case 'provider-key-failover': return `Key 切换 · ${event.fromKeyLabel} → ${event.toKeyLabel}`
+    case 'checkpoint': return `Checkpoint · ${shortId(event.messageId)}`
+    case 'checkpoint-restore': return `恢复 Checkpoint · ${shortId(event.messageId)}`
+    case 'hook-event': return event.event === 'context-compressed' ? '上下文压缩边界' : `运行事件 · ${event.event}`
+    case 'subagent-result': return `子任务${event.status === 'done' ? '完成' : '失败'}`
+    case 'task-dag-update': return 'DAG 状态更新'
+    case 'text-delta':
+    case 'thinking-delta': return null
+  }
+}
+
+function shortId(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value
 }
 
 function EffectRecoveryPanel({

@@ -16,7 +16,56 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
     return isManagedPluginEffectTarget(value)
   }
   if (value.kind === 'pull_request_create') return isPullRequestTarget(value)
+  if (value.kind === 'issue_create') return isIssueTarget(value)
+  if (value.kind === 'mcp_tool_call') return isMcpToolCallTarget(value)
+  if (value.kind === 'webhook_message_send') return isWebhookMessageTarget(value)
+  if (value.kind === 'office_artifact') return isOfficeArtifactTarget(value)
   return value.kind === 'unsupported' && isString(value.toolName)
+}
+
+function isOfficeArtifactTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.artifactKind === 'document' || record.artifactKind === 'spreadsheet' ||
+      record.artifactKind === 'presentation' || record.artifactKind === 'pdf',
+    isString(record.rootPath),
+    isFileSystemIdentity(record.rootIdentity),
+    isString(record.relativePath),
+    isString(record.workspacePath),
+    isString(record.specDigest),
+    isOptionalOfficeOutputIdentity(
+      record.outputBindingVersion,
+      record.expectedSha256,
+      record.expectedBytes,
+      record.sourceSnapshots
+    ),
+    isString(record.mediaType),
+    isStringArray(record.sourceRefs),
+    record.sourceSnapshots === undefined || isOfficeSourceSnapshots(record.sourceSnapshots, record.sourceRefs),
+    isString(record.title)
+  ].every(Boolean)
+}
+
+function isOptionalOfficeOutputIdentity(
+  version: unknown,
+  sha256: unknown,
+  bytes: unknown,
+  sourceSnapshots: unknown
+): boolean {
+  if (version === undefined && sha256 === undefined && bytes === undefined) return true
+  return version === 1 && isString(sha256) && /^sha256:[a-f0-9]{64}$/.test(sha256) &&
+    isNonNegativeInteger(bytes) && Array.isArray(sourceSnapshots)
+}
+
+function isOfficeSourceSnapshots(value: unknown, sourceRefs: unknown): boolean {
+  if (!Array.isArray(value) || !Array.isArray(sourceRefs) || value.length !== sourceRefs.length) return false
+  return value.every((candidate, index) => {
+    if (!isRecord(candidate)) return false
+    return candidate.path === sourceRefs[index] &&
+      isFileSystemIdentity(candidate.identity) &&
+      isString(candidate.sha256) &&
+      /^sha256:[a-f0-9]{64}$/.test(candidate.sha256) &&
+      isNonNegativeInteger(candidate.bytes)
+  })
 }
 
 function isGitIndexUpdateTarget(record: Record<string, unknown>): boolean {
@@ -267,6 +316,59 @@ function isPullRequestTarget(record: Record<string, unknown>): boolean {
     isString(record.titleDigest),
     isString(record.bodyDigest),
     isString(record.marker)
+  ].every(Boolean)
+}
+
+function isIssueTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.provider === 'github' || record.provider === 'gitlab',
+    isString(record.repoRoot),
+    isFileSystemIdentity(record.repoRootIdentity),
+    isString(record.remote),
+    isString(record.remoteUrlDigest),
+    isString(record.host),
+    isString(record.projectPath),
+    isString(record.repositoryDigest),
+    isString(record.titleDigest),
+    isString(record.bodyDigest),
+    isStringArray(record.labels),
+    isString(record.labelsDigest),
+    isString(record.markerToken),
+    isString(record.marker)
+  ].every(Boolean)
+}
+
+function isMcpToolCallTarget(record: Record<string, unknown>): boolean {
+  return [
+    record.transport === 'stdio' || record.transport === 'http' || record.transport === 'sse',
+    isOptionalString(record.command),
+    record.commandArgs === undefined || isStringArray(record.commandArgs),
+    isOptionalString(record.url),
+    isString(record.serverIdentityDigest),
+    isString(record.discoveryDigest),
+    isString(record.toolName),
+    isString(record.toolArgumentsDigest),
+    isString(record.queryToolName),
+    isRecord(record.queryArguments),
+    isString(record.queryArgumentsDigest),
+    isString(record.jsonPointer),
+    isString(record.expectedValueDigest),
+    record.transport === 'stdio'
+      ? isString(record.command) && record.url === undefined
+      : isString(record.url) && record.command === undefined && record.commandArgs === undefined
+  ].every(Boolean)
+}
+
+function isWebhookMessageTarget(record: Record<string, unknown>): boolean {
+  return [
+    isString(record.connectorId),
+    isNonNegativeInteger(record.connectorRevision),
+    record.channel === 'feishu' || record.channel === 'dingtalk' || record.channel === 'wecom',
+    isString(record.webhookDigest),
+    isString(record.payloadDigest),
+    isString(record.titleDigest),
+    isString(record.textDigest),
+    isOptionalString(record.linkUrlDigest)
   ].every(Boolean)
 }
 

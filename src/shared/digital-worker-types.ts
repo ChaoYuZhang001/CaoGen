@@ -302,6 +302,7 @@ export interface DigitalWorkerReassignInput {
   currentAssignmentId: string
   nextInput: AssignmentInput
   expectedRevision?: number
+  expectedWorkItemRevision?: number
   expectedStoreRevision?: number
   now?: number
   reason?: string

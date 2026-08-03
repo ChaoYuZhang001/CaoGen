@@ -21,23 +21,20 @@ export function createTerminalActions(
       set((state) => ({
         workbench: {
           ...state.workbench,
-          diffOpen: false,
-          worktreeOpen: false,
-          terminalOpen: true,
-          filesOpen: false,
-          browserOpen: false,
-          previewOpen: false,
-          pluginRegistryOpen: false,
-          subagentOpen: false,
-          routineOpen: false,
-          memoryOpen: false
+          activePanelId: 'terminal',
+          mountedPanels: new Set(state.workbench.mountedPanels).add('terminal')
         }
       }))
       await get().startTerminal()
     },
 
     closeTerminalPanel() {
-      set((state) => ({ workbench: { ...state.workbench, terminalOpen: false } }))
+      set((state) => ({
+        workbench: {
+          ...state.workbench,
+          activePanelId: state.workbench.activePanelId === 'terminal' ? null : state.workbench.activePanelId
+        }
+      }))
     },
 
     async startTerminal() {

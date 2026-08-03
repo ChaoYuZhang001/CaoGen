@@ -67,7 +67,7 @@ import {
 } from './ledger-migration-source'
 import type { ProjectWorkspaceState } from '../../shared/project-workspace-types'
 
-const TASK_STORE_VERSION = 8
+const TASK_STORE_VERSION = 9
 const MIGRATION_METADATA_FORMAT = 'caogen.project-workspace-ledger-migration-metadata.v1'
 const SOURCE_SIDECAR = 'project-workspace.source.json'
 const METADATA_SIDECAR = 'project-workspace-migration.json'
@@ -274,7 +274,7 @@ async function prepareBridgeMigration(
   // Faults are injected only after bridge sidecars identify the journal.
   return prepareWorkflowLedgerCanonicalMigration({
     source,
-    migrationPath: 'existing_v8',
+    migrationPath: 'existing_current',
     mode: 'shadow',
     fromVersion: version,
     toVersion: version,

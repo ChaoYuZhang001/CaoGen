@@ -25,9 +25,9 @@ import { buildTaskSnapshot, deleteTaskSnapshot, getTaskSnapshot, saveTaskSnapsho
 import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { createTaskRun, isTaskRunTerminal, transitionTaskRun } from './task-run'
 import { taskRuntimeRegistry } from './task-runtime-registry'
+import { withSessionOperationQueue } from '../session-operation-queue'
 
 const activeOperationScopes = new Set<string>()
-const sourceOperationQueues = new Map<string, Promise<void>>()
 
 export interface InteractiveOperationEffectSpec<T> {
   operationId?: string
@@ -100,7 +100,7 @@ export async function executeInteractiveOperationEffect<T>(
   spec: InteractiveOperationEffectSpec<T>
 ): Promise<InteractiveOperationEffectOutcome<T>> {
   const sourceSessionId = requireText(spec.sourceSessionId, 'sourceSessionId')
-  return withSourceOperationQueue(sourceSessionId, async () => {
+  return withSessionOperationQueue(sourceSessionId, async () => {
     const context = createOperationExecutionContext({ ...spec, sourceSessionId })
     activeOperationScopes.add(context.scopeId)
     try {
@@ -111,17 +111,6 @@ export async function executeInteractiveOperationEffect<T>(
       activeOperationScopes.delete(context.scopeId)
     }
   })
-}
-
-function withSourceOperationQueue<T>(sourceSessionId: string, task: () => Promise<T>): Promise<T> {
-  const previous = sourceOperationQueues.get(sourceSessionId) ?? Promise.resolve()
-  const execution = previous.then(task, task)
-  const released = execution.then(() => undefined, () => undefined)
-  sourceOperationQueues.set(sourceSessionId, released)
-  void released.finally(() => {
-    if (sourceOperationQueues.get(sourceSessionId) === released) sourceOperationQueues.delete(sourceSessionId)
-  })
-  return execution
 }
 
 async function executeActiveInteractiveOperation<T>(
@@ -499,6 +488,7 @@ function operationMeta(
     ...(projectId?.trim() ? { projectId: projectId.trim() } : {}),
     model: '',
     providerId: '',
+    taskStrategy: 'execute',
     permissionMode: 'default',
     status: 'running',
     costUsd: 0,

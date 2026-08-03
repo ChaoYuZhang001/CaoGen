@@ -121,21 +121,23 @@ function verifyBrowserSourceContracts() {
   )
   const workbenchRoot = readFileSync(path.join(repoRoot, 'src/renderer/src/components/workbench/WorkbenchRoot.tsx'), 'utf8')
   assert(
-    workbenchRoot.includes('onSelect: () => void openBrowserPanel()'),
+    workbenchRoot.includes('onSelect: () => void openBrowserPanel()') ||
+      workbenchRoot.includes("onSelect: () => openPanel('browser')"),
     'Workbench browser tool must open the default browser page when no explicit URL is provided'
   )
 }
 
 function verifyOpenAiSourceContracts() {
   const prompt = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+  const endpointBuilder = readFileSync(path.join(repoRoot, 'src/main/provider/openai-provider-utils.ts'), 'utf8')
   verifyOpenAiPromptToolContract(prompt)
   const openaiTools = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
   assert(openaiTools.includes('taskTimeoutMs'), 'DAG OpenAI tools must expose taskTimeoutMs watchdog control')
   const dagScheduler = readFileSync(path.join(repoRoot, 'src/main/agent/dag-scheduler.ts'), 'utf8')
   assert(dagScheduler.includes('onTaskTimeout'), 'DAG scheduler must expose a timeout callback')
   assert(prompt.includes('openAiEndpoint'), 'OpenAIEngine must use a shared endpoint builder')
-  assert(prompt.includes('api\\/v\\d+') || prompt.includes('api/v'), 'OpenAI endpoint builder must recognize /api/vN endpoints')
-  assert(prompt.includes('compatible-mode'), 'OpenAI endpoint builder must recognize DashScope compatible-mode endpoints')
+  assert(endpointBuilder.includes('api\\/v\\d+') || endpointBuilder.includes('api/v'), 'OpenAI endpoint builder must recognize /api/vN endpoints')
+  assert(endpointBuilder.includes('compatible-mode'), 'OpenAI endpoint builder must recognize DashScope compatible-mode endpoints')
 }
 
 function verifyPackageGateContracts() {
@@ -291,7 +293,7 @@ function verifyOpenAiPromptToolContract(prompt) {
 
 function verifyTaskSnapshotFinalizerContract(source) {
   const finalizerStore = readFileSync(path.join(repoRoot, 'src/main/task/task-dag-finalization-store.ts'), 'utf8')
-  assert(source.includes('const STORE_VERSION = 8'), 'task snapshot schema must persist the v8 canonical recovery contract')
+  assert(source.includes('const STORE_VERSION = 9'), 'task snapshot schema must persist the v9 Conversation Ledger recovery contract')
   assert(finalizerStore.includes('CREATE TABLE IF NOT EXISTS dag_finalizers'), 'task snapshot schema must persist DAG finalizer records')
   assert(source.includes('saveTaskDagFinalizationBarrier'), 'terminal DAG and finalizer intent must share a durable barrier')
 }
@@ -314,6 +316,7 @@ function verifyProviderSchedulerWiring(source) {
 
   const delegation = returnedCall(fetchModels.body)
   assertIdentifierCall(delegation, 'discoverProviderModels', 3, 'providers:fetchModels must delegate to model discovery with injected dependencies')
+  assertBoundDiscoveryInput(fetchModels.body)
   assertResolverCallback(delegation.arguments[1])
   assertSchedulerCallback(delegation.arguments[2], 'success', 'recordSuccess', ['providerId', 'latencyMs'])
   assertSchedulerCallback(delegation.arguments[2], 'failure', 'recordFailure', ['providerId', 'message'])
@@ -463,11 +466,36 @@ function assertResolverCallback(callback) {
     'providers:fetchModels must inject its credential resolver into model discovery'
   )
   assert(
-    ts.isPropertyAccessExpression(call.arguments[0]) &&
-      ts.isIdentifier(call.arguments[0].expression) && call.arguments[0].expression.text === 'bound' &&
-      call.arguments[0].name.text === 'input' &&
+    ts.isIdentifier(call.arguments[0]) && call.arguments[0].text === 'input' &&
       ts.isIdentifier(call.arguments[1]) && call.arguments[1].text === 'credentialProvider',
-    'model discovery credential resolution must consume only the bound input and bound credential provider'
+    'model discovery credential resolution must consume only the normalized bound input and bound credential provider'
+  )
+}
+
+function assertBoundDiscoveryInput(body) {
+  const declaration = body.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => [...statement.declarationList.declarations])
+    .find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === 'input')
+  assert(declaration?.initializer && ts.isObjectLiteralExpression(declaration.initializer),
+    'model discovery must build one normalized input from the bound provider configuration')
+  const properties = declaration.initializer.properties
+  assert(properties.some((property) =>
+    ts.isSpreadAssignment(property)
+      && ts.isPropertyAccessExpression(property.expression)
+      && ts.isIdentifier(property.expression.expression)
+      && property.expression.expression.text === 'bound'
+      && property.expression.name.text === 'input'
+  ), 'model discovery normalized input must inherit only bound.input')
+  const authMode = properties.find((property) =>
+    ts.isPropertyAssignment(property) && property.name.getText() === 'authMode'
+  )
+  assert(
+    authMode && ts.isPropertyAssignment(authMode)
+      && ts.isCallExpression(authMode.initializer)
+      && ts.isIdentifier(authMode.initializer.expression)
+      && authMode.initializer.expression.text === 'normalizeProviderAuthMode',
+    'model discovery must validate the bound auth mode before credential resolution or network access'
   )
 }
 

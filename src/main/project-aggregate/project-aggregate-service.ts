@@ -1,7 +1,9 @@
 import { resolve } from 'node:path'
 import type {
   ProjectAggregateAuthorization,
+  ProjectAggregateAutomation,
   ProjectAggregateBudgetRecord,
+  ProjectAggregateDependencies,
   ProjectAggregatePolicyRecord,
   ProjectAggregateQueryOptions,
   ProjectAggregateReference,
@@ -15,8 +17,12 @@ import type { WorkflowLedgerExportSelection } from '../../shared/workflow-types'
 import { DigitalWorkerStore } from '../digital-worker/domain-store'
 import { ProjectWorkspaceStore } from '../project-workspace'
 import { exportPersistedWorkflowLedger } from '../task/workflow-ledger-maintenance'
-import { sanitizeProjectAggregateValue } from './codec'
-import { ProjectAggregateError, requiredProjectId } from './errors'
+import { readRuns } from '../task/workflow-ledger-query'
+import { digest as workflowDigest } from '../task/workflow-ledger-codec'
+import { readTaskSnapshotDatabase } from '../task/task-snapshot'
+import { readProjectRoutineSlice } from '../routines/routine-project-store'
+import { projectAggregateCanonicalJson, sanitizeProjectAggregateValue } from './codec'
+import { aggregateIntegrityError, ProjectAggregateError, requiredProjectId } from './errors'
 import { buildProjectAggregateExport, buildProjectAggregateVerification } from './project-aggregate-export'
 import { ProjectAggregateSealStore } from './project-aggregate-seal-store'
 import {
@@ -31,7 +37,8 @@ import {
   type ProjectAggregateDraft
 } from './project-ownership-verifier'
 
-const LIVE_STABLE_READ_LIMIT = 4
+const LIVE_AGGREGATE_STABILITY_ATTEMPTS = 6
+const LIVE_AGGREGATE_RETRY_BASE_MS = 20
 
 export class ProjectAggregateService {
   readonly roots: ProjectAggregateRoots
@@ -129,7 +136,21 @@ export class ProjectAggregateService {
     options: ProjectAggregateQueryOptions = {}
   ): Promise<ReturnType<typeof buildProjectAggregateExport>> {
     const aggregate = await this.queryProject(projectId, options)
-    return buildProjectAggregateExport(aggregate, this.stableSealFor(aggregate))
+    const firstAutomation = await readProjectRoutineSlice(this.roots.routineRoot, aggregate.projectId)
+    const automation = await readProjectRoutineSlice(this.roots.routineRoot, aggregate.projectId)
+    if (projectAggregateCanonicalJson(firstAutomation) !== projectAggregateCanonicalJson(automation)) {
+      throw new ProjectAggregateError(
+        'REVISION_CONFLICT',
+        `Project automation ${aggregate.projectId} changed during export`,
+        { projectId: aggregate.projectId }
+      )
+    }
+    return buildProjectAggregateExport(
+      aggregate,
+      this.stableSealFor(aggregate),
+      this.collectExportDependencies(aggregate),
+      sanitizeProjectAggregateValue(automation) as ProjectAggregateAutomation
+    )
   }
 
   async authorizeReferences(
@@ -151,14 +172,22 @@ export class ProjectAggregateService {
   /** Validate the current cross-store state without requiring a release seal. */
   async verifyLiveProject(projectId: string): Promise<ProjectAggregateSnapshot> {
     const id = requiredProjectId(projectId)
-    let previous = await this.collectProject(id, false)
-    for (let read = 1; read < LIVE_STABLE_READ_LIMIT; read += 1) {
-      const current = await this.collectProject(id, false)
-      if (isStableAggregateRead(previous, current)) return current
-      if (read === LIVE_STABLE_READ_LIMIT - 1) assertStableAggregateRead(previous, current)
-      previous = current
+    let firstRead = await this.collectProject(id, false)
+    for (let attempt = 0; attempt < LIVE_AGGREGATE_STABILITY_ATTEMPTS; attempt += 1) {
+      const aggregate = await this.collectProject(id, false)
+      try {
+        assertStableAggregateRead(firstRead, aggregate)
+        return aggregate
+      } catch (error) {
+        if (!(error instanceof ProjectAggregateError) || error.code !== 'REVISION_CONFLICT' ||
+            attempt + 1 >= LIVE_AGGREGATE_STABILITY_ATTEMPTS) {
+          throw error
+        }
+        firstRead = aggregate
+        await delay(LIVE_AGGREGATE_RETRY_BASE_MS * (2 ** attempt))
+      }
     }
-    return previous
+    throw new ProjectAggregateError('REVISION_CONFLICT', `Project aggregate ${id} did not stabilize`)
   }
 
   async authorizeLiveReferences(
@@ -193,14 +222,31 @@ export class ProjectAggregateService {
     return seal
   }
 
+  private collectExportDependencies(aggregate: ProjectAggregateSnapshot): ProjectAggregateDependencies {
+    const requiredRoleIds = new Set(aggregate.digitalWorkers.map((worker) => worker.roleTemplateId))
+    const roleTemplates = new DigitalWorkerStore(this.roots.digitalWorkerRoot).read().roleTemplates
+      .filter((role) => requiredRoleIds.has(role.id))
+      .sort(byId)
+    const foundRoleIds = new Set(roleTemplates.map((role) => role.id))
+    const missing = [...requiredRoleIds].filter((id) => !foundRoleIds.has(id)).sort()
+    if (missing.length > 0) {
+      throw aggregateIntegrityError(`Project export is missing RoleTemplate dependencies: ${missing.join(', ')}`, {
+        projectId: aggregate.projectId
+      })
+    }
+    return sanitizeProjectAggregateValue({ roleTemplates }) as ProjectAggregateDependencies
+  }
+
   private async collectProject(projectId: string, enforceCanonicalParity = true): Promise<ProjectAggregateSnapshot> {
     const workspaceStore = new ProjectWorkspaceStore(this.roots.workspaceRoot)
     const workerStore = new DigitalWorkerStore(this.roots.digitalWorkerRoot)
     const legacyRoots = this.roots.legacyLearningRoots?.[projectId] ?? []
-    const [workspaceState, workflowExport, memoryStates] = await Promise.all([
+    const [workspaceState, workflowExport, memoryStates, workflowRuns] = await Promise.all([
       workspaceStore.open().then(() => workspaceStore.getState()),
       exportPersistedWorkflowLedger({ scope: { projectId } }, this.roots.workflowRoot),
-      readProjectMemoryNamespaces(projectId, this.roots.learningRoot, legacyRoots)
+      readProjectMemoryNamespaces(projectId, this.roots.learningRoot, legacyRoots),
+      readTaskSnapshotDatabase(this.roots.workflowRoot, (db) =>
+        readRuns(db).filter((run) => run.projectId === projectId).sort(byId))
     ])
     const workerState = workerStore.read()
     const workspace = workspaceState.workspaces.find((candidate) => candidate.id === projectId)
@@ -210,6 +256,8 @@ export class ProjectAggregateService {
 
     const goals = workspaceState.goals.filter((goal) => goal.projectId === projectId).sort(byId)
     const workItems = workspaceState.workItems.filter((item) => item.projectId === projectId).sort(byId)
+    const squads = workspaceState.squads.filter((squad) => squad.projectId === projectId).sort(byId)
+    const comments = workspaceState.comments.filter((comment) => comment.projectId === projectId).sort(byId)
     const workspaceAudit = workspaceState.events.filter((event) => event.projectId === projectId).sort(byEvent)
     const digitalWorkers = workerState.workers.filter((worker) => worker.projectId === projectId).sort(byId)
     const assignments = workerState.assignments.filter((assignment) => assignment.projectId === projectId).sort(byId)
@@ -220,7 +268,7 @@ export class ProjectAggregateService {
       Date.parse(left.event.at) - Date.parse(right.event.at) || left.id.localeCompare(right.id)
     )
     const ledger = workflowExport.ledger
-    const workflow = workflowSelection(ledger)
+    const workflow = workflowSelection(ledger, workflowRuns)
     const audit = [
       ...workspaceAudit.map((event) => ({
         id: `project-workspace:${event.id}`,
@@ -259,6 +307,8 @@ export class ProjectAggregateService {
       resources: [...workspace.resources].sort(byId),
       goals,
       workItems,
+      squads,
+      comments,
       digitalWorkers,
       assignments,
       leases,
@@ -276,9 +326,26 @@ export class ProjectAggregateService {
   }
 }
 
-function workflowSelection(ledger: WorkflowLedgerExportSelection): ProjectAggregateDraft['workflow'] {
+function workflowSelection(
+  ledger: WorkflowLedgerExportSelection,
+  fullRuns: ProjectAggregateDraft['workflow']['runs']
+): ProjectAggregateDraft['workflow'] {
+  const payloads = new Map(fullRuns.map((run) => [run.id, run]))
+  const runs = ledger.runs.items.map((metadata) => {
+    const full = payloads.get(metadata.id)
+    if (!full || workflowDigest(full.taskRun) !== metadata.taskRunDigest) {
+      throw aggregateIntegrityError(`Run ${metadata.id} restorable payload does not match its export digest`, {
+        projectId: metadata.projectId
+      })
+    }
+    const { taskRunDigest: _taskRunDigest, ...projection } = metadata
+    return { ...projection, taskRun: full.taskRun }
+  })
+  if (runs.length !== fullRuns.length) {
+    throw aggregateIntegrityError('Project Run export is not closed over its restorable payloads')
+  }
   return {
-    runs: [...ledger.runs.items].sort(byId),
+    runs: runs.sort(byId),
     artifacts: [...ledger.artifacts.items].sort(byId),
     artifactEdges: [...ledger.artifactEdges.items].sort(byId),
     artifactLocations: [...ledger.artifactLocations.items].sort(byId),
@@ -359,6 +426,7 @@ function normalizeRoots(roots: ProjectAggregateRoots): ProjectAggregateRoots {
     workspaceRoot: normalizeRoot(roots.workspaceRoot, 'workspaceRoot'),
     workflowRoot: normalizeRoot(roots.workflowRoot, 'workflowRoot'),
     digitalWorkerRoot: normalizeRoot(roots.digitalWorkerRoot, 'digitalWorkerRoot'),
+    routineRoot: normalizeRoot(roots.routineRoot, 'routineRoot'),
     learningRoot: normalizeRoot(roots.learningRoot, 'learningRoot'),
     aggregateRoot: normalizeRoot(roots.aggregateRoot, 'aggregateRoot'),
     legacyLearningRoots: roots.legacyLearningRoots
@@ -420,6 +488,10 @@ function isStableAggregateRead(first: ProjectAggregateSnapshot, second: ProjectA
     first.identityDigest === second.identityDigest &&
     first.projectRevision === second.projectRevision &&
     first.aggregateDigest === second.aggregateDigest
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
 }
 
 function byId<T extends { id: string }>(left: T, right: T): number {

@@ -1,4 +1,4 @@
-import type { CaoGenDriveMode, PermissionModeId } from '../../../shared/types'
+import type { CaoGenDriveMode, PermissionModeId, TaskStrategy } from '../../../shared/types'
 import { loadWelcomeDraft, persistWelcomeDraft } from './welcome-draft-persistence'
 
 export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
@@ -12,6 +12,9 @@ export interface WelcomeDraftState {
   providerId: string | null
   model: string | null
   permissionMode: PermissionModeId | null
+  taskStrategy?: TaskStrategy
+  forkFromSdkSessionId?: string
+  forkSourceTitle?: string
 }
 
 export interface WelcomeDraftSlice {

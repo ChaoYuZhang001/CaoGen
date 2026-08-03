@@ -12,7 +12,10 @@ export { computeNextRun, startRoutineScheduler, stopRoutineScheduler } from '../
 export {
   listRoutineRuns,
   runRoutineWithHistory,
+  setRoutineRunDispatchState,
+  setRoutineRunExecutionBinding,
   type RoutineRunCallback,
+  type RoutineDispatchState,
   type RoutineRunRecord,
   type RoutineRunStatus
 } from './routine-runner'

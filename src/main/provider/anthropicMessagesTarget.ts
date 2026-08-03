@@ -1,14 +1,15 @@
 import type { Provider } from '../../shared/types'
 import {
   getProvider,
-  resolveProviderToken,
-  type ProviderTokenSelection
+  issueProviderCredentialLease,
+  selectProviderCredential,
+  type ProviderCredentialLeaseSelection
 } from '../providers'
 import {
   inspectProviderBaseUrl,
   inspectProviderCustomHeaders
 } from '../providerCredentialBroker'
-import { mergeProviderCredentialHeaders } from '../providerRuntimeAuth'
+import type { ProviderCredentialLeaseScope } from '../providerCredentialBroker'
 
 const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01'
@@ -20,19 +21,30 @@ export interface AnthropicMessagesTarget {
   endpoint: string
   model: string
   headers: Record<string, string>
-  token: string
+  credentialProvider: Pick<
+    Provider,
+    'authMode' | 'baseUrl' | 'credentialMigrationRequired' | 'customHeaders' | 'credentialHeaderNames'
+  >
+  issueCredentialLease(scope: ProviderCredentialLeaseScope): ProviderCredentialLeaseSelection
   keyId?: string
   keyLabel?: string
 }
 
 export interface AnthropicMessagesTargetDependencies {
   getProvider(id: string): Provider | undefined
-  resolveProviderToken(provider: Provider | undefined): ProviderTokenSelection
+  selectProviderCredential(provider: Provider | undefined): ProviderCredentialLeaseSelection
+  issueProviderCredentialLease(
+    provider: Provider,
+    scope: ProviderCredentialLeaseScope,
+    expectedKeyId?: string
+  ): ProviderCredentialLeaseSelection
 }
 
 const DEFAULT_DEPENDENCIES: AnthropicMessagesTargetDependencies = {
   getProvider,
-  resolveProviderToken
+  selectProviderCredential,
+  issueProviderCredentialLease: (provider, scope, expectedKeyId) =>
+    issueProviderCredentialLease(provider, scope, {}, expectedKeyId)
 }
 
 /**
@@ -49,8 +61,10 @@ export function resolveAnthropicMessagesTarget(
   const provider = dependencies.getProvider(providerId)
   if (!provider || provider.id !== providerId) throw new Error(`Provider 不存在:${providerId}`)
 
-  const selection = dependencies.resolveProviderToken(provider)
-  if (!selection.token) throw new Error(`${provider.name} 缺少可用 API Key`)
+  const selection = dependencies.selectProviderCredential(provider)
+  if (selection.authMode !== 'none' && !selection.available) {
+    throw new Error(`${provider.name} 缺少可用 API Key`)
+  }
 
   const baseUrl = savedBaseUrl(provider)
   const model = selectedModel(input.model, provider)
@@ -58,12 +72,12 @@ export function resolveAnthropicMessagesTarget(
   const credentialProvider = provider.credentialHeaderNames?.length
     ? provider
     : { ...provider, credentialHeaderNames: ['x-api-key'] }
-  const headers = mergeProviderCredentialHeaders(credentialProvider, selection.token, {
+  const headers = {
     accept: 'text/event-stream',
     'content-type': 'application/json',
     'anthropic-version': customHeaders['anthropic-version'] || DEFAULT_ANTHROPIC_VERSION,
     ...customHeaders
-  })
+  }
 
   return {
     providerId: provider.id,
@@ -72,7 +86,9 @@ export function resolveAnthropicMessagesTarget(
     endpoint: messagesEndpoint(baseUrl),
     model,
     headers,
-    token: selection.token,
+    credentialProvider,
+    issueCredentialLease: (scope) =>
+      dependencies.issueProviderCredentialLease(provider, scope, selection.keyId),
     keyId: selection.keyId,
     keyLabel: selection.keyLabel
   }

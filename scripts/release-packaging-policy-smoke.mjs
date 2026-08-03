@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   requiresReleasePlatformMatrix,
   requiresTrustedMacDistribution,
   trustedMacDistributionChecks,
   trustedPackagedLaunchChecks,
-  trustedWindowsDistributionChecks
+  trustedWindowsDistributionChecks,
+  unsignedWindowsPreviewChecks
 } from './lib/release-packaging-policy.mjs'
 import {
+  platformScopedReleaseArtifactNames,
+  platformScopedReleaseChecks,
   releasePlatformArtifactNames,
   releasePlatformMatrixChecks
 } from './lib/release-platform-matrix.mjs'
@@ -91,6 +96,55 @@ assertAllPassed(trustedWindowsDistributionChecks({
   gitState
 }))
 
+const passedWindowsPreviewAudit = {
+  ...passedWindowsAudit,
+  distributionChannel: 'unsigned_preview',
+  artifactSet: {
+    complete: true,
+    files: {
+      [`dist/CaoGen-${releaseVersion}-windows-x64-unsigned-preview.exe`]: {
+        size: 1,
+        sha256: artifactSetSha256
+      }
+    }
+  },
+  artifacts: {
+    updateMetadata: null
+  },
+  config: {
+    publishDisabled: true,
+    certificateEnvironmentDisabled: true,
+    artifactName: 'CaoGen-${version}-windows-x64-unsigned-preview.${ext}'
+  },
+  signing: {
+    app: { status: 'NotSigned', hasCertificate: false, timestamped: false },
+    installer: { status: 'NotSigned', hasCertificate: false, timestamped: false }
+  }
+}
+assert.equal(
+  trustedWindowsDistributionChecks({
+    audit: passedWindowsPreviewAudit,
+    releaseVersion,
+    gitState
+  }).distributionChannelMatches,
+  false
+)
+assertAllPassed(unsignedWindowsPreviewChecks({
+  audit: passedWindowsPreviewAudit,
+  releaseVersion,
+  gitState,
+  artifactSetSha256
+}))
+assert.equal(
+  unsignedWindowsPreviewChecks({
+    audit: { ...passedWindowsPreviewAudit, signing: passedWindowsAudit.signing },
+    releaseVersion,
+    gitState,
+    artifactSetSha256
+  }).previewAppIsUnsigned,
+  false
+)
+
 const passedLaunch = {
   status: 'passed',
   installation: { status: 'passed' },
@@ -120,10 +174,33 @@ assert.equal(
   }).launchTargetArchMatches,
   false
 )
-
 const passedArmAudit = { ...passedAudit, targetArch: 'arm64' }
 const passedArmLaunch = { ...passedLaunch, targetArch: 'arm64' }
 const passedWindowsLaunch = { ...passedLaunch, platform: 'win32' }
+const passedWindowsPreviewLaunch = {
+  ...passedWindowsLaunch,
+  distributionChannel: 'unsigned_preview'
+}
+assertAllPassed(trustedPackagedLaunchChecks({
+  audit: passedWindowsPreviewLaunch,
+  releaseVersion,
+  gitState,
+  platform: 'win32',
+  targetArch: 'x64',
+  artifactSetSha256,
+  distributionChannel: 'unsigned_preview'
+}))
+assert.equal(
+  trustedPackagedLaunchChecks({
+    audit: passedWindowsPreviewLaunch,
+    releaseVersion,
+    gitState,
+    platform: 'win32',
+    targetArch: 'x64',
+    artifactSetSha256
+  }).launchDistributionChannelMatches,
+  false
+)
 assertAllPassed(releasePlatformMatrixChecks({
   releaseVersion,
   gitState,
@@ -154,6 +231,31 @@ assert.deepEqual(releasePlatformArtifactNames(releaseVersion, 'windows-x64'), [
   `CaoGen Setup ${releaseVersion}.exe.blockmap`,
   'latest.yml'
 ])
+assert.deepEqual(platformScopedReleaseArtifactNames(releaseVersion).sort(), [
+  `CaoGen-${releaseVersion}-arm64-mac.zip`,
+  `CaoGen-${releaseVersion}-arm64-mac.zip.blockmap`,
+  `CaoGen-${releaseVersion}-arm64.dmg`,
+  `CaoGen-${releaseVersion}-arm64.dmg.blockmap`,
+  `CaoGen-${releaseVersion}-mac.zip`,
+  `CaoGen-${releaseVersion}-mac.zip.blockmap`,
+  `CaoGen-${releaseVersion}-windows-x64-unsigned-preview.exe`,
+  `CaoGen-${releaseVersion}.dmg`,
+  `CaoGen-${releaseVersion}.dmg.blockmap`,
+  'latest-mac.yml'
+].sort())
+assertAllPassed(platformScopedReleaseChecks({
+  releaseVersion,
+  gitState,
+  macosX64ArtifactSetSha256: artifactSetSha256,
+  macosArm64ArtifactSetSha256: artifactSetSha256,
+  windowsPreviewArtifactSetSha256: artifactSetSha256,
+  macosX64Audit: passedAudit,
+  macosArm64Audit: passedArmAudit,
+  windowsPreviewAudit: passedWindowsPreviewAudit,
+  macosX64LaunchAudit: passedLaunch,
+  macosArm64LaunchAudit: passedArmLaunch,
+  windowsPreviewLaunchAudit: passedWindowsPreviewLaunch
+}))
 
 const staleBuild = {
   ...passedAudit,
@@ -186,6 +288,21 @@ assert.equal(releaseConfig.extraMetadata.caogenReleaseProvenance.packageVersion,
 assert.equal(typeof releaseConfig.extraMetadata.caogenReleaseProvenance.worktreeClean, 'boolean')
 assert.equal(releaseConfig.win.forceCodeSigning, true)
 assert.deepEqual(releaseConfig.win.target, ['nsis'])
+const windowsPreviewConfigPath = path.join(repoRoot, 'electron-builder.windows-preview.cjs')
+process.env.CSC_LINK = 'test-only-preview-signing-link'
+process.env.CSC_KEY_PASSWORD = 'test-only-preview-signing-password'
+process.env.WIN_CSC_LINK = 'test-only-preview-win-signing-link'
+process.env.WIN_CSC_KEY_PASSWORD = 'test-only-preview-win-signing-password'
+delete require.cache[windowsPreviewConfigPath]
+const windowsPreviewConfig = require(windowsPreviewConfigPath)
+assert.equal(windowsPreviewConfig.publish, null)
+assert.equal(windowsPreviewConfig.win.forceCodeSigning, false)
+assert.equal(windowsPreviewConfig.win.artifactName, 'CaoGen-${version}-windows-x64-unsigned-preview.${ext}')
+assert.equal(process.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false')
+assert.equal(process.env.CSC_LINK, undefined)
+assert.equal(process.env.CSC_KEY_PASSWORD, undefined)
+assert.equal(process.env.WIN_CSC_LINK, undefined)
+assert.equal(process.env.WIN_CSC_KEY_PASSWORD, undefined)
 assert.equal(releaseConfig.mac.sign, 'scripts/macos-sign-with-retry.cjs')
 assert.equal(timestampRetry.MAX_TIMESTAMP_ATTEMPTS, 5)
 assert.equal(timestampRetry.isTimestampFailure(new Error('A timestamp was expected but was not found.')), true)
@@ -210,9 +327,135 @@ await assert.rejects(
   /keychain/
 )
 assert.equal(keychainAttempts, 1)
+runPlatformScopedFinalNotesFixture()
+runPlatformScopedGitHubAuditFixture()
 
 console.log('release packaging policy smoke: pass')
 
 function assertAllPassed(checks) {
   assert.deepEqual(Object.entries(checks).filter(([, passed]) => !passed), [])
+}
+
+function runPlatformScopedFinalNotesFixture() {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'caogen-platform-notes-'))
+  const doctorPath = path.join(tmpdir(), `caogen-platform-doctor-${process.pid}.json`)
+  const names = platformScopedReleaseArtifactNames(releaseVersion).sort()
+  const files = Object.fromEntries(names.map((name) => [name, {
+    size: 1,
+    sha256: artifactSetSha256
+  }]))
+  const notes = [
+    `# CaoGen ${releaseVersion}`,
+    '',
+    '## Release Decision',
+    '',
+    'GitHub Releases distributes formal macOS artifacts and a Windows unsigned preview.',
+    'Microsoft Defender SmartScreen may show an unrecognized-app prompt.',
+    'Formal cross-platform readiness remains blocked. After commercialization, purchase',
+    'SSL.com IV Code Signing + eSigner before enabling formal Windows signing.',
+    '',
+    '## Uploaded Assets',
+    '',
+    ...names.map((name) => `- \`${name}\``),
+    '',
+    '| Asset | SHA256 |',
+    '|---|---|',
+    ...names.map((name) => `| \`${name}\` | \`${artifactSetSha256}\` |`),
+    '',
+    '## Truth Boundary',
+    '',
+    'Provider access requires user-supplied real keys. Local test-results are excluded.',
+    'The macOS latest*.yml metadata covers only the listed formal macOS assets.',
+    '',
+    '## Known Blockers',
+    '',
+    'Formal cross-platform readiness remains blocked until Windows Authenticode evidence exists.',
+    '',
+    '## Security Statement',
+    '',
+    'No credentials, private keys, signing material, or local evidence are release assets.',
+    '',
+    '## macOS First Open',
+    '',
+    'The listed macOS artifacts are Developer ID signed, notarized, stapled, and Gatekeeper-audited.',
+    ''
+  ].join('\n')
+
+  try {
+    writeFileSync(path.join(fixtureRoot, 'package.json'), `${JSON.stringify({ version: releaseVersion }, null, 2)}\n`)
+    writeFileSync(path.join(fixtureRoot, 'release-notes.md'), notes)
+    execFileSync('git', ['init', '--quiet'], { cwd: fixtureRoot })
+    execFileSync('git', ['add', 'package.json', 'release-notes.md'], { cwd: fixtureRoot })
+    execFileSync('git', [
+      '-c', 'user.name=CaoGen Test',
+      '-c', 'user.email=test-only@example.invalid',
+      'commit', '--quiet', '-m', 'fixture'
+    ], { cwd: fixtureRoot })
+    const fixtureCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixtureRoot, encoding: 'utf8' }).trim()
+    const doctor = {
+      status: 'not_ready',
+      currentPackageVersion: releaseVersion,
+      releaseTarget: { version: releaseVersion },
+      git: { commit: fixtureCommit, worktreeClean: true },
+      refresh: { enabled: true, commands: [{ id: 'fixture', status: 'completed' }] },
+      openDomains: ['packaging_release'],
+      distributionPolicy: {
+        formalCrossPlatform: { status: 'blocked' },
+        platformScopedRelease: {
+          candidateGate: { status: 'ready', failures: [] },
+          artifacts: { complete: true, files, artifactSetSha256 }
+        }
+      }
+    }
+    writeFileSync(doctorPath, `${JSON.stringify(doctor, null, 2)}\n`)
+    execFileSync(process.execPath, [
+      path.join(repoRoot, 'scripts', 'release-notes-audit.mjs'),
+      '--required',
+      '--platform-scoped-final',
+      '--version', releaseVersion,
+      '--notes', path.join(fixtureRoot, 'release-notes.md'),
+      '--doctor', doctorPath
+    ], { cwd: fixtureRoot, stdio: 'pipe' })
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+    rmSync(doctorPath, { force: true })
+  }
+}
+
+function runPlatformScopedGitHubAuditFixture() {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'caogen-platform-github-'))
+  const distDir = path.join(fixtureRoot, 'dist')
+  const names = platformScopedReleaseArtifactNames(releaseVersion).sort()
+  mkdirSync(distDir)
+  const assets = names.map((name) => {
+    const content = name === 'latest-mac.yml' ? `version: ${releaseVersion}\n` : `fixture:${name}\n`
+    writeFileSync(path.join(distDir, name), content)
+    return {
+      name,
+      size: Buffer.byteLength(content),
+      state: 'uploaded',
+      digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+      ...(name === 'latest-mac.yml' ? { textContent: content } : {})
+    }
+  })
+  const releasesPath = path.join(fixtureRoot, 'releases.json')
+  writeFileSync(releasesPath, `${JSON.stringify([{
+    tag_name: `v${releaseVersion}`,
+    name: `CaoGen ${releaseVersion}`,
+    body: 'Formal macOS plus a clearly labeled Windows unsigned preview.',
+    assets
+  }], null, 2)}\n`)
+
+  try {
+    execFileSync(process.execPath, [
+      path.join(repoRoot, 'scripts', 'github-release-audit.mjs'),
+      '--required',
+      '--read-text-assets',
+      '--platform-scoped',
+      '--tag', `v${releaseVersion}`,
+      '--json', releasesPath
+    ], { cwd: fixtureRoot, stdio: 'pipe' })
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
 }

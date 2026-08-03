@@ -1,5 +1,6 @@
 import type {
   OpenAIProtocol,
+  ProviderAuthMode,
   ProviderModelErrorKind,
   ProviderModelFetchInput,
   ProviderModelFetchResult
@@ -8,6 +9,7 @@ import { inspectProviderBaseUrl } from '../providerCredentialBroker'
 
 interface ModelDiscoveryCredentials {
   token: string
+  authMode: ProviderAuthMode
   customHeaderRejections: string[]
   headers: Record<string, string>
 }
@@ -122,7 +124,7 @@ function invalidCredentialResult(
       health
     )
   }
-  return credentials.token
+  return credentials.token || credentials.authMode === 'none'
     ? null
     : failedModelFetchResult(context, 'auth', '请先填写 API 密钥', health)
 }
@@ -152,8 +154,7 @@ async function tryFetchModelsFrom(
   try {
     response = await fetch(url, {
       headers: {
-        'x-api-key': token,
-        authorization: `Bearer ${token}`,
+        ...(token ? { 'x-api-key': token, authorization: `Bearer ${token}` } : {}),
         'anthropic-version': '2023-06-01',
         ...headers
       }

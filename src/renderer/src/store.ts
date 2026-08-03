@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
+// ART-005: store 层派生交付判定(纯函数,唯一真相源;不新增状态字段,不改既有 API)
+export { deriveDeliveryVerdict, canMarkGoalComplete } from './store/delivery-verdict'
+export type { DeliveryVerdict, DeliveryVerdictDetail } from './store/delivery-verdict'
 import type {
   AgentEvent,
   AppSettings,
@@ -65,8 +68,15 @@ import type {
   WorktreeRemoveResult,
   WorktreeSummary
 } from '../../shared/types'
+import { createProviderProfileStoreActions, type ProviderProfileStoreActions } from './store/provider-profile-actions'
 import { createTaskRecoveryActions, requireMcpProbeResults, type TaskRecoveryActions } from './store/task-recovery-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
+import { createTaskPlanSlice, type TaskPlanSlice } from './store/task-plan-slice'
+import {
+  createProjectWorkspaceStoreSlice, nextStudioSessionNonce,
+  type ProjectWorkspaceStoreSlice
+} from './store/project-workspace-actions'
+import type { PanelId, PanelOpenContext } from './components/workbench/panels'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
 import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
@@ -74,7 +84,6 @@ import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
 import { createTerminalActions } from './store/terminal-actions'
 import { createBrowserActions } from './store/browser-actions'
-
 let seq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
@@ -631,7 +640,10 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
 export type AppView = 'list' | 'office'
 
 export interface WorkbenchState {
-  diffOpen: boolean
+  /** 当前活动面板 ID，null 表示无面板打开 */
+  activePanelId: PanelId | null
+  /** 已挂载面板集合（keep-alive）。面板首次激活时加入，closePanel 不移除 */
+  mountedPanels: Set<PanelId>
   diffLoading: boolean
   diff?: WorkspaceDiff
   diffError?: string
@@ -642,7 +654,6 @@ export interface WorkbenchState {
   gitBusy: boolean
   gitMessage?: string
   gitError?: string
-  worktreeOpen: boolean
   worktreeLoading: boolean
   worktree?: WorktreeSummary
   worktreeMergeSummary?: WorktreeMergeSummary
@@ -660,12 +671,10 @@ export interface WorkbenchState {
   worktreeCreatingPr: boolean
   worktreeMessage?: string
   worktreeError?: string
-  terminalOpen: boolean
   terminalLoading: boolean
   terminal?: TerminalInfo
   terminalBuffer: string
   terminalError?: string
-  filesOpen: boolean
   filesLoading: boolean
   fileEntries: ProjectFileEntry[]
   filesRoot?: string
@@ -680,7 +689,6 @@ export interface WorkbenchState {
   currentFileMtimeMs?: number
   fileMessage?: string
   fileError?: string
-  browserOpen: boolean
   browserLoading: boolean
   browserState?: BrowserViewState
   browserUrlDraft: string
@@ -689,7 +697,6 @@ export interface WorkbenchState {
   browserMessage?: string
   /** DOM 圈选进行中(拾取器已注入,等用户点选) */
   browserPicking?: boolean
-  previewOpen: boolean
   previewLoading: boolean
   preview?: PreparedPreview
   previewPath?: string
@@ -698,7 +705,6 @@ export interface WorkbenchState {
   previewVisualLoading: boolean
   previewVisual?: OfficeVisualPreview
   previewVisualError?: string
-  pluginRegistryOpen: boolean
   pluginRegistryLoading: boolean
   pluginRegistry?: PluginRegistryView
   pluginRegistryError?: string
@@ -707,19 +713,16 @@ export interface WorkbenchState {
   /** MCP 运行态探测:id → 结果;probing = 进行中 */
   mcpProbeResults: Record<string, McpProbeResult>
   mcpProbing: boolean
-  subagentOpen: boolean
   subagentBusy: boolean
   subagentError?: string
   subagentMessage?: string
   lastSubagentDispatch?: SubagentDispatchResult
-  routineOpen: boolean
   routineLoading: boolean
   routines: Routine[]
   routineRuns: RoutineRunRecord[]
   routineError?: string
   routineMessage?: string
   selectedRoutineId?: string | null
-  memoryOpen: boolean
   memorySuggestion?: MemorySuggestionEvent
   memoryInitialForm?: { kind: string; title: string; body: string; reason: string }
   startSuggestions: StartSuggestion[]
@@ -736,7 +739,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice {
+export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice, ProviderProfileStoreActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -763,9 +766,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   handleMemorySuggestion(event: MemorySuggestionEvent): void
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
-  createSession(opts: CreateSessionOptions): Promise<void>
+  createSession(opts: CreateSessionOptions): Promise<string>
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
-  startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<void>
+  startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<string>
   recoverTaskSnapshot(snapshotId: string): Promise<void>
   dispatchSubagents(input: DispatchSubagentsInput): Promise<SubagentDispatchResult | undefined>
   decomposeAndDispatchTaskDag(
@@ -773,8 +776,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
     options?: { autoMerge?: boolean; verificationCommand?: string }
   ): Promise<TaskDagDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
+  forkFromHistory(entry: HistoryEntry): void
   selectSession(id: string): void
-  sendMessage(input: string | SendMessagePayload): Promise<void>
+  sendMessage(input: string | SendMessagePayload, sessionId?: string): Promise<void>
   sendQuickbarClipboard(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
   sendQuickbarScreenshot(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
   sendQuickbarFiles(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
@@ -798,7 +802,13 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   openTranscriptSearchHit(result: TranscriptSearchResult): Promise<void>
   updateSettings(patch: Partial<AppSettings>): Promise<void>
   setView(view: AppView): void
+  openPanel(id: PanelId, context?: PanelOpenContext): void
+  closePanel(): void
+  togglePanel(id: PanelId, context?: PanelOpenContext): void
+  unmountPanel(id: PanelId): void
+  /** @deprecated 使用 openPanel('diff') 代替 */
   openDiffPanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeDiffPanel(): void
   refreshDiffPanel(): Promise<void>
   refreshGitStatus(): Promise<void>
@@ -808,7 +818,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   stageAllGitFiles(): Promise<GitOperationResult | undefined>
   unstageGitFiles(paths: string[]): Promise<GitOperationResult | undefined>
   commitGit(message: string): Promise<GitCommitResult | undefined>
+  /** @deprecated 使用 openPanel('worktree') 代替 */
   openWorktreePanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeWorktreePanel(): void
   refreshWorktreePanel(): Promise<void>
   exportWorktreePatch(): Promise<WorktreePatchResult | undefined>
@@ -820,23 +832,31 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   refreshWorktreeMergeReceipt(): Promise<void>
   createWorktreePullRequest(): Promise<WorktreePullRequestResult | undefined>
   removeWorktree(opts?: { deleteBranch?: boolean; force?: boolean }): Promise<WorktreeRemoveResult | undefined>
+  /** @deprecated 使用 openPanel('terminal') 代替 */
   openTerminalPanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeTerminalPanel(): void
   startTerminal(): Promise<void>
   sendTerminalInput(text: string): Promise<void>
   closeTerminal(): Promise<void>
+  /** @deprecated 使用 openPanel('files') 代替 */
   openFilesPanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeFilesPanel(): void
   refreshFilesPanel(): Promise<void>
   openFile(path: string): Promise<void>
   updateFileDraft(content: string): void
   saveOpenFile(): Promise<WriteTextFileResult | undefined>
+  /** @deprecated 使用 openPanel('preview', { path }) 代替 */
   openPreviewPanel(path?: string): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closePreviewPanel(): void
   refreshPreviewPanel(): Promise<void>
   savePreviewAnnotation(note: string, locator?: PreviewAnnotationLocator): Promise<void>
   refreshPreviewAnnotations(): Promise<void>
+  /** @deprecated 使用 openPanel('browser', { url }) 代替 */
   openBrowserPanel(url?: string): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeBrowserPanel(): Promise<void>
   navigateBrowser(url: string): Promise<void>
   browserGoBack(): Promise<void>
@@ -849,7 +869,9 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   pickBrowserElementAnnotation(note: string): Promise<void>
   /** 只读观测当前页面并发给 Agent 复验 */
   observeBrowserForAgent(): Promise<void>
+  /** @deprecated 使用 openPanel('pluginRegistry') 代替 */
   openPluginRegistryPanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closePluginRegistryPanel(): void
   refreshPluginRegistryPanel(): Promise<void>
   /** 探测 MCP server 运行态(真实连接测试) */
@@ -864,10 +886,14 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   togglePluginRegistryItem(item: PluginRegistryItem, enabled: boolean): Promise<void>
   sendPluginRegistryItemToAgent(item: PluginRegistryItem): Promise<void>
   dispatchPluginAgent(item: PluginRegistryItem): Promise<void>
+  /** @deprecated 使用 openPanel('subagent') 代替 */
   openSubagentPanel(): void
+  /** @deprecated 使用 closePanel() 代替 */
   closeSubagentPanel(): void
   dispatchSubagentText(tasksText: string): Promise<SubagentDispatchResult | undefined>
+  /** @deprecated 使用 openPanel('routine') 代替 */
   openRoutinePanel(): Promise<void>
+  /** @deprecated 使用 closePanel() 代替 */
   closeRoutinePanel(): void
   refreshRoutinePanel(): Promise<void>
   selectRoutine(id: string): void
@@ -881,16 +907,71 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   visibleStartSuggestions(): StartSuggestion[]
   refreshTaskSnapshots(): Promise<void>
   deleteTaskSnapshot(snapshotId: string): Promise<void>
+  /** @deprecated 使用 openPanel('memory') 代替 */
   openMemoryPanel(): void
   acceptMemorySuggestion(): void
   dismissMemorySuggestion(): void
+  /** @deprecated 使用 closePanel() 代替 */
   closeMemoryPanel(): void
   openRewindPanel(messageId: string, sourceText?: string, reason?: RewindPanelState['reason']): void
   openLatestRewindPanel(reason?: RewindPanelState['reason']): void
   closeRewindPanel(): void
+  refreshProjects(): Promise<void>
+  archiveProject(id: string, archived: boolean): Promise<void>
+  deleteProject(id: string): Promise<void>
   setShowNewSession(v: boolean, projectId?: string): void
   setShowCommandPalette(v: boolean): void
   setShowTaskRecovery(v: boolean): void
+}
+
+function browserEventMatchesActiveSession(event: BrowserEvent, activeId: string | null): boolean {
+  if (event.kind === 'error') return !event.sessionId || !activeId || event.sessionId === activeId
+  return !activeId || event.sessionId === activeId
+}
+
+function reduceBrowserEvent(state: AppStore, event: BrowserEvent): AppStore {
+  if (!browserEventMatchesActiveSession(event, state.activeId)) return state
+  switch (event.kind) {
+    case 'state':
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          browserState: event.state,
+          browserUrlDraft: event.state.url,
+          browserLoading: event.state.loading,
+          browserError: undefined
+        }
+      }
+    case 'annotation': {
+      const known = new Set(state.workbench.browserAnnotations.map((item) => item.id))
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          browserAnnotations: known.has(event.annotation.id)
+            ? state.workbench.browserAnnotations
+            : [event.annotation, ...state.workbench.browserAnnotations],
+          browserMessage: '已保存网页批注'
+        }
+      }
+    }
+    case 'closed':
+      return {
+        ...state,
+        workbench: {
+          ...state.workbench,
+          activePanelId: state.workbench.activePanelId === 'browser' ? null : state.workbench.activePanelId,
+          browserState: undefined,
+          browserLoading: false
+        }
+      }
+    case 'error':
+      return {
+        ...state,
+        workbench: { ...state.workbench, browserError: event.message, browserLoading: false }
+      }
+  }
 }
 
 export const useStore = create<AppStore>((set, get) => {
@@ -950,6 +1031,143 @@ export const useStore = create<AppStore>((set, get) => {
     streamDeltaBuffers.set(sessionId, buffer)
   }
 
+  type PanelActivator = (context?: PanelOpenContext) => void
+  const panelActivators: Record<PanelId, PanelActivator> = {
+    diff: () => {
+      void get().refreshDiffPanel()
+      void get().refreshGitStatus()
+    },
+    terminal: () => {
+      void get().startTerminal()
+    },
+    browser: (ctx) => {
+      const id = get().activeId
+      if (!id) return
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          browserLoading: true,
+          browserError: undefined,
+          browserMessage: undefined
+        }
+      }))
+      void (async () => {
+        try {
+          const result = await window.agentDesk.openBrowser(id, ctx?.url)
+          if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
+          if (!result.ok) throw new Error(result.error)
+          const state = result.state
+          const annotations = await window.agentDesk
+            .listBrowserAnnotations(id)
+            .catch(() => [])
+          set((s) => ({
+            workbench: {
+              ...s.workbench,
+              browserLoading: state.loading,
+              browserState: state,
+              browserUrlDraft: state.url,
+              browserAnnotations: annotations,
+              browserError: undefined
+            }
+          }))
+        } catch (err) {
+          set((s) => ({
+            workbench: {
+              ...s.workbench,
+              browserLoading: false,
+              browserError: err instanceof Error ? err.message : String(err)
+            }
+          }))
+        }
+      })()
+    },
+    files: () => {
+      void get().refreshFilesPanel()
+    },
+    preview: (ctx) => {
+      const nextPath = ctx?.path ?? get().workbench.previewPath ?? get().workbench.currentFilePath
+      const pathChanged = Boolean(nextPath && nextPath !== get().workbench.previewPath)
+      if (pathChanged) {
+        previewRequestSeq += 1
+        previewVisualRequestSeq += 1
+      }
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          previewPath: nextPath,
+          previewError: undefined,
+          ...(pathChanged
+            ? {
+                preview: undefined,
+                previewAnnotations: [],
+                previewLoading: false,
+                previewVisual: undefined,
+                previewVisualLoading: false,
+                previewVisualError: undefined
+              }
+            : {})
+        }
+      }))
+      void get().refreshPreviewPanel()
+    },
+    worktree: () => {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          worktreeMergeSummary: undefined,
+          worktreeMergePatch: undefined,
+          worktreeApplyCheck: undefined,
+          worktreeApplyResult: undefined,
+          worktreePrResult: undefined,
+          worktreeConflictFiles: undefined,
+          worktreeConflictLoading: false,
+          worktreeLastReceipt: undefined,
+          worktreeMergeInspecting: false,
+          worktreeApplying: false,
+          worktreeCreatingPr: false
+        }
+      }))
+      void get().refreshWorktreePanel()
+    },
+    pluginRegistry: () => {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          pluginRegistryError: undefined,
+          pluginRegistryMessage: undefined
+        }
+      }))
+      void get().refreshPluginRegistryPanel()
+    },
+    subagent: () => {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          subagentError: undefined,
+          subagentMessage: undefined
+        }
+      }))
+    },
+    routine: () => {
+      set((s) => ({
+        workbench: {
+          ...s.workbench,
+          routineError: undefined,
+          routineMessage: undefined
+        }
+      }))
+      void get().refreshRoutinePanel()
+    },
+    memory: () => {
+      set((s) => ({
+        workbench: { ...s.workbench, memoryInitialForm: undefined }
+      }))
+    },
+    result: () => {
+      // StudioResultPanel 内部 useStudioResult 自动拉取数据，无需激活副作用
+    }
+  }
+
   return {
   ready: false,
   hydrated: false,
@@ -960,6 +1178,7 @@ export const useStore = create<AppStore>((set, get) => {
   settings: {
     driveMode: 'core',
     defaultModel: '',
+    /** DriveMode 风险偏好描述,不再作为会话 permissionMode 默认值;会话 permissionMode 由 taskStrategy 派生。 */
     defaultPermissionMode: 'default',
     defaultProviderId: '',
     fallbackProviderId: '',
@@ -1021,6 +1240,9 @@ export const useStore = create<AppStore>((set, get) => {
   taskSnapshotsLoading: false,
   view: 'list',
   ...createExperienceModeSlice((update) => set(update)),
+  ...createProviderProfileStoreActions(set, get),
+  ...createTaskPlanSlice((update) => set(update), () => get()),
+  ...createProjectWorkspaceStoreSlice(set, get),
   ...createSettingsNavigationSlice((update) => set(update)),
   ...createWelcomeDraftSlice((update) => set(update)),
   ...createResourceCatalogSlice((update) => set(update), get),
@@ -1028,46 +1250,38 @@ export const useStore = create<AppStore>((set, get) => {
   transcriptSearchResults: [],
   transcriptSearchLoading: false,
   workbench: {
-    diffOpen: false,
+    activePanelId: null,
+    mountedPanels: new Set<PanelId>(),
     diffLoading: false,
     gitLoading: false,
     gitBusy: false,
-    worktreeOpen: false,
     worktreeLoading: false,
     worktreeConflictLoading: false,
     worktreeMergeInspecting: false,
     worktreeApplying: false,
     worktreeCreatingPr: false,
-    terminalOpen: false,
     terminalLoading: false,
     terminalBuffer: '',
-    filesOpen: false,
     filesLoading: false,
     fileEntries: [],
     fileLoading: false,
     fileSaving: false,
     currentFileContent: '',
     savedFileContent: '',
-    browserOpen: false,
     browserLoading: false,
     browserUrlDraft: '',
     browserAnnotations: [],
-    previewOpen: false,
     previewLoading: false,
     previewAnnotations: [],
     previewVisualLoading: false,
-    pluginRegistryOpen: false,
     pluginRegistryLoading: false,
     mcpProbeResults: {},
     mcpProbing: false,
-    subagentOpen: false,
     subagentBusy: false,
-    routineOpen: false,
     routineLoading: false,
     routines: [],
     routineRuns: [],
     selectedRoutineId: null,
-    memoryOpen: false,
     startSuggestions: [],
     startSuggestionsLoading: false,
     ignoredStartSuggestions: {},
@@ -1141,11 +1355,12 @@ export const useStore = create<AppStore>((set, get) => {
         })
       })
     )
-    const secondaryLabels = ['history', 'providers', 'projects', 'task recovery']
+    const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
       get().refreshProviders(),
       get().refreshProjects(),
+      get().refreshProjectWorkspaces(),
       get().hydrateTaskRecoveryCandidates()
     ])
     secondaryResults.forEach((result, index) => {
@@ -1201,7 +1416,7 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => {
           const session = s.sessions[sessionId]
           if (!session) return s
-          return { sessions: { ...s.sessions, [sessionId]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [sessionId]: replaceTranscript(session, transcript) } }
         })
       })
     }
@@ -1272,50 +1487,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   handleBrowserEvent(event) {
-    set((s) => {
-      const activeId = s.activeId
-      if (event.kind === 'state') {
-        if (activeId && event.sessionId !== activeId) return s
-        return {
-          workbench: {
-            ...s.workbench,
-            browserState: event.state,
-            browserUrlDraft: event.state.url,
-            browserLoading: event.state.loading,
-            browserError: undefined
-          }
-        }
-      }
-      if (event.kind === 'annotation') {
-        if (activeId && event.sessionId !== activeId) return s
-        const known = new Set(s.workbench.browserAnnotations.map((item) => item.id))
-        return {
-          workbench: {
-            ...s.workbench,
-            browserAnnotations: known.has(event.annotation.id)
-              ? s.workbench.browserAnnotations
-              : [event.annotation, ...s.workbench.browserAnnotations],
-            browserMessage: '已保存网页批注'
-          }
-        }
-      }
-      if (event.kind === 'closed') {
-        if (activeId && event.sessionId !== activeId) return s
-        return {
-          workbench: {
-            ...s.workbench,
-            browserOpen: false,
-            browserState: undefined,
-            browserLoading: false
-          }
-        }
-      }
-      if (event.kind === 'error') {
-        if (event.sessionId && activeId && event.sessionId !== activeId) return s
-        return { workbench: { ...s.workbench, browserError: event.message, browserLoading: false } }
-      }
-      return s
-    })
+    set((state) => reduceBrowserEvent(state, event))
   },
 
   async createSession(opts) {
@@ -1333,23 +1505,25 @@ export const useStore = create<AppStore>((set, get) => {
     // M2 缺陷修复:resume 会话的 init 事件先于本 IPC 返回抵达,被 stash 后
     // drain 只做 reduce,不会触发 handleEvent 里的 init→转录回放副作用,
     // 导致恢复的会话聊天记录空白。此处注册完成后主动补拉一次转录。
-    if (opts.resumeSdkSessionId) {
+    if (opts.resumeSdkSessionId || opts.forkFromSdkSessionId) {
       const transcript = await window.agentDesk.getTranscript(meta.id)
       if (transcript.length > 0) {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
         })
       }
     }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
+    return meta.id
   },
 
   async startSessionWithPrompt(opts, prompt) {
-    await get().createSession(opts) // 建完 activeId 已指向新会话
+    const sessionId = await get().createSession(opts)
     const text = prompt.trim()
-    if (text) await get().sendMessage(text)
+    if (text) await get().sendMessage(text, sessionId)
+    return sessionId
   },
 
   async recoverTaskSnapshot(snapshotId) {
@@ -1375,7 +1549,7 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
         })
       }
       const [history, projects, taskSnapshots] = await Promise.all([
@@ -1483,18 +1657,56 @@ export const useStore = create<AppStore>((set, get) => {
       providerId: entry.providerId,
       routingScope: entry.routingScope,
       engine: entry.engine,
-      permissionMode: entry.permissionMode,
+      taskStrategy: entry.taskStrategy,
       resumeSdkSessionId: entry.sdkSessionId,
       resumeSessionAt: entry.resumeSessionAt,
       title: entry.title
     })
   },
 
+  forkFromHistory(entry) {
+    const state = get()
+    const projectExists = Boolean(entry.projectId && state.projects.some((project) => project.id === entry.projectId))
+    const projectChoice = projectExists
+      ? entry.projectId!
+      : entry.unassigned
+        ? '__unassigned__'
+        : '__new_project__'
+    const routingMode = entry.routingScope === 'global' || entry.routingScope === 'provider'
+      ? entry.routingScope
+      : 'fixed'
+    state.updateWelcomeDraft({
+      text: '',
+      projectChoice,
+      cwd: entry.cwd,
+      driveMode: entry.driveMode ?? state.settings.driveMode,
+      routingMode,
+      providerId: entry.providerId,
+      model: entry.model,
+      permissionMode: null,
+      taskStrategy: entry.taskStrategy ?? 'execute',
+      forkFromSdkSessionId: entry.sdkSessionId,
+      forkSourceTitle: entry.title
+    })
+    set((current) => ({
+      showNewSession: true,
+      newSessionProjectId: null,
+      showSettings: false,
+      showTaskRecovery: false,
+      view: 'list',
+      studioSessionNavigationNonce: nextStudioSessionNonce(
+        current.studioSessionNavigationNonce,
+        current.experienceMode,
+        true
+      )
+    }))
+  },
+
   selectSession(id) {
     const previousId = get().activeId
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
     set((s) => ({
-      activeId: id,
+      activeId: id, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode),
       showNewSession: false,
       newSessionProjectId: null,
       workbench:
@@ -1511,8 +1723,16 @@ export const useStore = create<AppStore>((set, get) => {
     }))
   },
 
-  async sendMessage(input) {
-    await sendActiveSessionMessage({ getState: get, setState: set, nextId: genId }, input)
+  async sendMessage(input, sessionId) {
+    const id = sessionId ?? get().activeId
+    await sendActiveSessionMessage({
+      getState: () => {
+        const state = get()
+        return id ? { ...state, activeId: id } : state
+      },
+      setState: set,
+      nextId: genId
+    }, input)
   },
 
   async sendQuickbarClipboard(options) {
@@ -1664,8 +1884,10 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async setPermissionMode(mode) {
-    const id = get().activeId
-    if (id) await window.agentDesk.setPermissionMode(id, mode)
+    // P0 收编: setPermissionMode 已废弃,会话 permissionMode 由 taskStrategy 派生。
+    // 保留为空操作 + console.warn 以防外部插件/扩展调用时报错。
+    console.warn('[deprecated] setPermissionMode is no-op, use setTaskStrategy instead')
+    void mode
   },
 
   async setModel(model) {
@@ -1764,28 +1986,52 @@ export const useStore = create<AppStore>((set, get) => {
     set({ view })
   },
 
-  async openDiffPanel() {
+  openPanel(id, context) {
     closeNativeBrowserView(get().activeId)
     set((s) => ({
       workbench: {
         ...s.workbench,
-        diffOpen: true,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false
+        activePanelId: id,
+        mountedPanels: new Set(s.workbench.mountedPanels).add(id)
       }
     }))
-    await Promise.all([get().refreshDiffPanel(), get().refreshGitStatus()])
+    panelActivators[id]?.(context)
+  },
+
+  closePanel() {
+    closeNativeBrowserView(get().activeId)
+    set((s) => ({ workbench: { ...s.workbench, activePanelId: null } }))
+  },
+
+  togglePanel(id, context) {
+    const current = get().workbench.activePanelId
+    if (current === id) {
+      get().closePanel()
+    } else {
+      get().openPanel(id, context)
+    }
+  },
+
+  unmountPanel(id) {
+    set((s) => {
+      const next = new Set(s.workbench.mountedPanels)
+      next.delete(id)
+      return {
+        workbench: {
+          ...s.workbench,
+          mountedPanels: next,
+          activePanelId: s.workbench.activePanelId === id ? null : s.workbench.activePanelId
+        }
+      }
+    })
+  },
+
+  async openDiffPanel() {
+    get().openPanel('diff')
   },
 
   closeDiffPanel() {
-    set((s) => ({ workbench: { ...s.workbench, diffOpen: false } }))
+    get().closePanel()
   },
 
   async refreshDiffPanel() {
@@ -1797,7 +2043,6 @@ export const useStore = create<AppStore>((set, get) => {
       set((s) => ({
         workbench: {
           ...s.workbench,
-          diffOpen: true,
           diff,
           diffLoading: false,
           diffError: diff.ok ? undefined : diff.error
@@ -1960,38 +2205,11 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async openWorktreePanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: true,
-        worktreeMergeSummary: undefined,
-        worktreeMergePatch: undefined,
-        worktreeApplyCheck: undefined,
-        worktreeApplyResult: undefined,
-        worktreePrResult: undefined,
-        worktreeConflictFiles: undefined,
-        worktreeConflictLoading: false,
-        worktreeLastReceipt: undefined,
-        worktreeMergeInspecting: false,
-        worktreeApplying: false,
-        worktreeCreatingPr: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false
-      }
-    }))
-    await get().refreshWorktreePanel()
+    get().openPanel('worktree')
   },
 
   closeWorktreePanel() {
-    set((s) => ({ workbench: { ...s.workbench, worktreeOpen: false } }))
+    get().closePanel()
   },
 
   async refreshWorktreePanel() {
@@ -2254,27 +2472,11 @@ export const useStore = create<AppStore>((set, get) => {
   ...createTerminalActions(set, get, closeNativeBrowserView),
 
   async openFilesPanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: true,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false
-      }
-    }))
-    await get().refreshFilesPanel()
+    get().openPanel('files')
   },
 
   closeFilesPanel() {
-    set((s) => ({ workbench: { ...s.workbench, filesOpen: false } }))
+    get().closePanel()
   },
 
   async refreshFilesPanel() {
@@ -2293,7 +2495,6 @@ export const useStore = create<AppStore>((set, get) => {
       set((s) => ({
         workbench: {
           ...s.workbench,
-          filesOpen: true,
           filesLoading: false,
           fileEntries: result.ok ? result.entries : s.workbench.fileEntries,
           filesRoot: result.ok ? result.root : s.workbench.filesRoot,
@@ -2318,7 +2519,8 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({
       workbench: {
         ...s.workbench,
-        filesOpen: true,
+        activePanelId: 'files',
+        mountedPanels: new Set(s.workbench.mountedPanels).add('files'),
         fileLoading: true,
         fileError: undefined,
         fileMessage: undefined
@@ -2405,50 +2607,16 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async openPreviewPanel(path) {
-    closeNativeBrowserView(get().activeId)
-    const nextPath = path ?? get().workbench.previewPath ?? get().workbench.currentFilePath
-    const pathChanged = Boolean(nextPath && nextPath !== get().workbench.previewPath)
-    if (pathChanged) {
-      previewRequestSeq += 1
-      previewVisualRequestSeq += 1
-    }
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: true,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false,
-        previewPath: nextPath,
-        previewError: undefined,
-        ...(pathChanged
-          ? {
-              preview: undefined,
-              previewAnnotations: [],
-              previewLoading: false,
-              previewVisual: undefined,
-              previewVisualLoading: false,
-              previewVisualError: undefined
-            }
-          : {})
-      }
-    }))
-    await get().refreshPreviewPanel()
+    get().openPanel('preview', path ? { path } : undefined)
   },
 
   closePreviewPanel() {
     previewRequestSeq += 1
     previewVisualRequestSeq += 1
+    get().closePanel()
     set((s) => ({
       workbench: {
         ...s.workbench,
-        previewOpen: false,
         previewLoading: false,
         previewVisualLoading: false
       }
@@ -2485,7 +2653,6 @@ export const useStore = create<AppStore>((set, get) => {
       set((s) => ({
         workbench: {
           ...s.workbench,
-          previewOpen: true,
           preview,
           previewLoading: false,
           previewError: preview.ok ? undefined : preview.error,
@@ -2715,29 +2882,11 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async openPluginRegistryPanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: true,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: false,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined
-      }
-    }))
-    await get().refreshPluginRegistryPanel()
+    get().openPanel('pluginRegistry')
   },
 
   closePluginRegistryPanel() {
-    set((s) => ({ workbench: { ...s.workbench, pluginRegistryOpen: false } }))
+    get().closePanel()
   },
 
   async refreshPluginRegistryPanel() {
@@ -2745,7 +2894,6 @@ export const useStore = create<AppStore>((set, get) => {
     set((s) => ({
       workbench: {
         ...s.workbench,
-        pluginRegistryOpen: true,
         pluginRegistryLoading: true,
         pluginRegistryError: undefined,
         pluginRegistryMessage: undefined
@@ -3084,28 +3232,11 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   openSubagentPanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: true,
-        routineOpen: false,
-        memoryOpen: false,
-        subagentError: undefined,
-        subagentMessage: undefined
-      }
-    }))
+    get().openPanel('subagent')
   },
 
   closeSubagentPanel() {
-    set((s) => ({ workbench: { ...s.workbench, subagentOpen: false } }))
+    get().closePanel()
   },
 
   async dispatchSubagentText(tasksText) {
@@ -3149,36 +3280,17 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async openRoutinePanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: true,
-        memoryOpen: false,
-        routineError: undefined,
-        routineMessage: undefined
-      }
-    }))
-    await get().refreshRoutinePanel()
+    get().openPanel('routine')
   },
 
   closeRoutinePanel() {
-    set((s) => ({ workbench: { ...s.workbench, routineOpen: false } }))
+    get().closePanel()
   },
 
   async refreshRoutinePanel() {
     set((s) => ({
       workbench: {
         ...s.workbench,
-        routineOpen: true,
         routineLoading: true,
         routineError: undefined,
         routineMessage: undefined
@@ -3421,23 +3533,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   openMemoryPanel() {
-    closeNativeBrowserView(get().activeId)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: true,
-        memoryInitialForm: undefined
-      }
-    }))
+    get().openPanel('memory')
   },
 
   acceptMemorySuggestion() {
@@ -3450,16 +3546,8 @@ export const useStore = create<AppStore>((set, get) => {
       activeId: suggestion.sessionId,
       workbench: {
         ...s.workbench,
-        diffOpen: false,
-        worktreeOpen: false,
-        terminalOpen: false,
-        filesOpen: false,
-        browserOpen: false,
-        previewOpen: false,
-        pluginRegistryOpen: false,
-        subagentOpen: false,
-        routineOpen: false,
-        memoryOpen: true,
+        activePanelId: 'memory',
+        mountedPanels: new Set(s.workbench.mountedPanels).add('memory'),
         memorySuggestion: undefined,
         memoryInitialForm: {
           kind: 'convention',
@@ -3476,7 +3564,8 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   closeMemoryPanel() {
-    set((s) => ({ workbench: { ...s.workbench, memoryOpen: false, memoryInitialForm: undefined } }))
+    get().closePanel()
+    set((s) => ({ workbench: { ...s.workbench, memoryInitialForm: undefined } }))
   },
 
   openRewindPanel(messageId, sourceText, reason = 'button') {
@@ -3518,8 +3607,14 @@ export const useStore = create<AppStore>((set, get) => {
     set({ rewindPanel: { open: false } })
   },
   setShowNewSession(v, projectId) {
+    if (v) {
+      get().updateWelcomeDraft({
+        forkFromSdkSessionId: undefined,
+        forkSourceTitle: undefined
+      })
+    }
     set((s) => ({
-      showNewSession: v,
+      showNewSession: v, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode, v),
       newSessionProjectId: v ? projectId ?? null : null,
       showSettings: v ? false : s.showSettings,
       settingsContext: v ? null : s.settingsContext,
@@ -3583,6 +3678,7 @@ export const STRATEGY_OPTIONS: Array<{ value: SchedulerStrategy; label: string }
   { value: 'cost', label: '成本优先' }
 ]
 
+/** 仅供 RoutineEditor 使用,会话控制面不再引用。收编后会话 permissionMode 由 taskStrategy 派生。 */
 export const PERMISSION_OPTIONS: Array<{ value: PermissionModeId; label: string }> = [
   { value: 'default', label: '默认(询问)' },
   { value: 'acceptEdits', label: '自动接受编辑' },

@@ -167,6 +167,7 @@ function hasJournalEnvelope(item: Partial<WorkflowLedgerCanonicalMigrationJourna
     item.migrationKind === WORKFLOW_LEDGER_MIGRATION_KIND && item.migrationVersion === WORKFLOW_LEDGER_MIGRATION_VERSION &&
     isNonEmptyString(item.migrationId) &&
     (item.migrationPath === 'existing_v7' || item.migrationPath === 'existing_v8' ||
+      item.migrationPath === 'existing_current' ||
       item.migrationPath === 'legacy_upgrade' || item.migrationPath === 'canonical_upgrade') &&
     (item.mode === 'shadow' || item.mode === 'canonical') &&
     isMigrationState(item.state)

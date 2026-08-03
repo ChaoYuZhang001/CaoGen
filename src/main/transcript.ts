@@ -1,9 +1,12 @@
 import { app } from 'electron'
 import {
   appendFileSync,
-  copyFileSync,
+  closeSync,
+  constants,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -11,27 +14,88 @@ import {
   writeFileSync
 } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
-import type { AgentEvent, AgentEventIdentity, TranscriptEntry } from '../shared/types'
+import { dirname, join } from 'node:path'
+import type {
+  AgentEvent,
+  AgentEventIdentity,
+  ConversationLedgerIntegrityView,
+  TranscriptEntry
+} from '../shared/types'
 import { applyTranscriptRestorePlan, planTranscriptRestore } from './checkpointRestorePlan'
 import type { TranscriptRestorePlan } from './checkpointRestorePlan'
 
-/** 只持久化构成对话内容的"耐久事件";deltas/status 是瞬态,meta 可从历史重建 */
+/**
+ * Provider 无关的耐久会话事件。
+ * 流式 delta 仍是瞬态；其余会影响恢复、审批、路由或上下文边界的语义事件进入同一 JSONL。
+ */
 const PERSIST_KINDS = new Set<AgentEvent['kind']>([
+  'init',
+  'status',
+  'meta',
   'user-message',
   'assistant-message',
+  'tool-start',
   'tool-result',
+  'permission-request',
+  'permission-resolved',
   'turn-result',
   'routing',
   'failover',
+  'provider-key-failover',
   'checkpoint',
   'checkpoint-restore',
   'subagent-result',
-  'task-dag-update'
+  'task-dag-update',
+  'hook-event'
 ])
+const SESSION_RUNTIME_KINDS = new Set<AgentEvent['kind']>(['init', 'status', 'meta'])
 
 /** 回放上限:超长会话只回填最近这么多条,避免打开即卡死 */
 const MAX_REPLAY_ENTRIES = 1000
+const CONVERSATION_LEDGER_VERSION = 1 as const
+
+export class ConversationLedgerIntegrityError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConversationLedgerIntegrityError'
+  }
+}
+
+export class ConversationLedgerPersistenceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConversationLedgerPersistenceError'
+  }
+}
+
+export type ConversationLedgerFileReplacer = (temp: string, target: string) => void
+
+export type ConversationLedgerSyncKind = 'file' | 'directory'
+
+export interface ConversationLedgerFileOperations {
+  open(path: string, flags: number, mode?: number): number
+  append(descriptor: number, data: string, target: string): void
+  write(descriptor: number, data: string | Uint8Array, target: string): void
+  fsync(descriptor: number, target: string, kind: ConversationLedgerSyncKind): void
+  close(descriptor: number, target: string): void
+  rename(temp: string, target: string): void
+}
+
+const NODE_FILE_OPERATIONS: ConversationLedgerFileOperations = Object.freeze({
+  open: (path: string, flags: number, mode?: number) => openSync(path, flags, mode),
+  append: (descriptor: number, data: string) => appendFileSync(descriptor, data, 'utf8'),
+  write: (descriptor: number, data: string | Uint8Array) => writeFileSync(descriptor, data),
+  fsync: (descriptor: number) => fsyncSync(descriptor),
+  close: (descriptor: number) => closeSync(descriptor),
+  rename: (temp: string, target: string) => renameSync(temp, target)
+})
+
+/** Fault-injection tests wrap the same low-level operations used by production. */
+export function createConversationLedgerFileOperations(
+  overrides: Partial<ConversationLedgerFileOperations> = {}
+): ConversationLedgerFileOperations {
+  return Object.freeze({ ...NODE_FILE_OPERATIONS, ...overrides })
+}
 
 export interface EventReceipt extends AgentEventIdentity {
   kind: AgentEvent['kind']
@@ -51,7 +115,7 @@ function eventReceiptsDir(): string {
   return join(app.getPath('userData'), 'event-receipts')
 }
 
-function fileFor(sdkSessionId: string): string {
+export function transcriptFile(sdkSessionId: string): string {
   return join(transcriptsDir(), `${sdkSessionId}.jsonl`)
 }
 
@@ -75,26 +139,181 @@ function normalizeEntry(path: string, entry: TranscriptEntry): TranscriptEntry {
   }
 }
 
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalValue(value))
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (!value || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(record).sort()) {
+    if (record[key] !== undefined) out[key] = canonicalValue(record[key])
+  }
+  return out
+}
+
+function unsealedEntry(entry: TranscriptEntry): TranscriptEntry {
+  const { ledgerVersion: _version, previousDigest: _previous, digest: _digest, ...rest } = entry
+  return rest
+}
+
+function digestForEntry(entry: TranscriptEntry, previousDigest?: string): string {
+  return createHash('sha256').update(canonicalJson({
+    ledgerVersion: CONVERSATION_LEDGER_VERSION,
+    previousDigest: previousDigest ?? null,
+    entry: unsealedEntry(entry)
+  })).digest('hex')
+}
+
+function legacyAnchor(entries: TranscriptEntry[]): string | undefined {
+  if (entries.length === 0) return undefined
+  return `legacy:${createHash('sha256')
+    .update(canonicalJson(entries.map(unsealedEntry)))
+    .digest('hex')}`
+}
+
+function sealEntry(entry: TranscriptEntry, previousDigest?: string): TranscriptEntry {
+  const base = unsealedEntry(entry)
+  return {
+    ...base,
+    ledgerVersion: CONVERSATION_LEDGER_VERSION,
+    ...(previousDigest ? { previousDigest } : {}),
+    digest: digestForEntry(base, previousDigest)
+  }
+}
+
+function sealEntries(path: string, entries: TranscriptEntry[]): TranscriptEntry[] {
+  let previousDigest: string | undefined
+  return entries.map((entry) => {
+    const sealed = sealEntry(normalizeEntry(path, entry), previousDigest)
+    previousDigest = sealed.digest
+    return sealed
+  })
+}
+
+export function verifyConversationLedgerEntries(entries: TranscriptEntry[]): ConversationLedgerIntegrityView {
+  if (entries.length === 0) {
+    return { schemaVersion: 1, valid: true, mode: 'empty', entryCount: 0 }
+  }
+  let previousSeq = 0
+  let sealed = false
+  let expectedPrevious: string | undefined
+  const legacyEntries: TranscriptEntry[] = []
+  for (const entry of entries) {
+    if (!Number.isInteger(entry.seq) || entry.seq <= previousSeq) {
+      return ledgerFailure(entries, `event seq is not strictly increasing at ${entry.seq}`)
+    }
+    previousSeq = entry.seq
+    if (!entry.eventId?.trim() || !entry.streamId?.trim() || !entry.event) {
+      return ledgerFailure(entries, `event identity is incomplete at seq ${entry.seq}`)
+    }
+    if (entry.ledgerVersion === undefined && entry.digest === undefined && entry.previousDigest === undefined) {
+      if (sealed) return ledgerFailure(entries, `legacy event appears after sealed suffix at seq ${entry.seq}`)
+      legacyEntries.push(entry)
+      continue
+    }
+    if (entry.ledgerVersion !== CONVERSATION_LEDGER_VERSION || !entry.digest?.trim()) {
+      return ledgerFailure(entries, `ledger seal is invalid at seq ${entry.seq}`)
+    }
+    if (!sealed) {
+      sealed = true
+      expectedPrevious = legacyAnchor(legacyEntries)
+    }
+    if ((entry.previousDigest ?? undefined) !== expectedPrevious) {
+      return ledgerFailure(entries, `previous digest mismatch at seq ${entry.seq}`)
+    }
+    const expectedDigest = digestForEntry(entry, expectedPrevious)
+    if (entry.digest !== expectedDigest) {
+      return ledgerFailure(entries, `digest mismatch at seq ${entry.seq}`)
+    }
+    expectedPrevious = entry.digest
+  }
+  return {
+    schemaVersion: 1,
+    valid: true,
+    mode: sealed ? 'sealed' : 'legacy',
+    entryCount: entries.length,
+    ...(sealed && expectedPrevious ? { headDigest: expectedPrevious } : {})
+  }
+}
+
+function ledgerFailure(entries: TranscriptEntry[], error: string): ConversationLedgerIntegrityView {
+  return { schemaVersion: 1, valid: false, mode: 'sealed', entryCount: entries.length, error }
+}
+
+function readEntriesStrict(path: string): TranscriptEntry[] {
+  let raw: string
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  const out: TranscriptEntry[] = []
+  const lines = raw.split('\n')
+  const lastContentIndex = lines.reduce((last, line, index) => line.trim() ? index : last, -1)
+  for (let index = 0; index <= lastContentIndex; index += 1) {
+    const line = lines[index]
+    if (!line.trim()) continue
+    try {
+      const parsed = JSON.parse(line) as TranscriptEntry
+      if (typeof parsed?.seq !== 'number' || !parsed.event) {
+        throw new ConversationLedgerIntegrityError(`invalid transcript entry at line ${index + 1}`)
+      }
+      out.push(normalizeEntry(path, parsed))
+    } catch (error) {
+      // 仅容忍 EOF 且没有换行的最后半行；完整坏行会改变事件因果链，必须 fail closed。
+      if (
+        index === lastContentIndex &&
+        !raw.endsWith('\n') &&
+        !(error instanceof ConversationLedgerIntegrityError)
+      ) break
+      throw error
+    }
+  }
+  const verification = verifyConversationLedgerEntries(out)
+  if (!verification.valid) {
+    throw new ConversationLedgerIntegrityError(verification.error ?? 'conversation ledger verification failed')
+  }
+  return out
+}
+
 function readEntries(path: string): TranscriptEntry[] {
   try {
-    const out: TranscriptEntry[] = []
-    for (const line of readFileSync(path, 'utf8').split('\n')) {
-      if (!line.trim()) continue
-      try {
-        const parsed = JSON.parse(line) as TranscriptEntry
-        if (typeof parsed?.seq === 'number' && parsed.event) out.push(normalizeEntry(path, parsed))
-      } catch {
-        // 尾行可能因异常退出而截断,跳过
-      }
-    }
-    return out
-  } catch {
+    return readEntriesStrict(path)
+  } catch (error) {
+    console.error('[agent-desk] 会话账本读取失败:', error)
     return []
   }
 }
 
+function repairAppendBoundary(
+  path: string,
+  entries: TranscriptEntry[],
+  operations: ConversationLedgerFileOperations,
+  replaceFile: ConversationLedgerFileReplacer
+): void {
+  if (!existsSync(path)) return
+  const raw = readFileSync(path, 'utf8')
+  if (!raw || raw.endsWith('\n')) return
+  const temp = `${path}.${process.pid}.${randomUUID()}.tail.tmp`
+  const body = entries.map((entry) => JSON.stringify(entry)).join('\n')
+  durableAtomicReplace(temp, path, body ? `${body}\n` : '', operations, replaceFile)
+}
+
 export function readTranscriptEntries(sdkSessionId: string): TranscriptEntry[] {
-  return readEntries(fileFor(sdkSessionId))
+  return readEntries(transcriptFile(sdkSessionId))
+}
+
+/** Canonical archive/recovery paths must surface corruption instead of returning an empty conversation. */
+export function readTranscriptEntriesStrict(sdkSessionId: string): TranscriptEntry[] {
+  return readEntriesStrict(transcriptFile(sdkSessionId))
+}
+
+export function shouldPersistConversationLedgerEvent(kind: AgentEvent['kind']): boolean {
+  return PERSIST_KINDS.has(kind)
 }
 
 function readReceipts(path: string): EventReceipt[] {
@@ -128,6 +347,25 @@ export function readEventReceipts(sdkSessionId: string): EventReceipt[] {
   return readReceipts(eventReceiptsFile(sdkSessionId))
 }
 
+function repairReceiptAppendBoundary(
+  path: string,
+  operations: ConversationLedgerFileOperations,
+  replaceFile: ConversationLedgerFileReplacer
+): void {
+  if (!existsSync(path)) return
+  const raw = readFileSync(path, 'utf8')
+  if (!raw || raw.endsWith('\n')) return
+  const receipts = readReceipts(path)
+  const body = receipts.map((receipt) => JSON.stringify(receipt)).join('\n')
+  durableAtomicReplace(
+    `${path}.${process.pid}.${randomUUID()}.tail.tmp`,
+    path,
+    body ? `${body}\n` : '',
+    operations,
+    replaceFile
+  )
+}
+
 function receiptFor(entry: TranscriptEntry & AgentEventIdentity): EventReceipt {
   const event = entry.event
   const receipt: EventReceipt = {
@@ -155,23 +393,27 @@ function receiptFor(entry: TranscriptEntry & AgentEventIdentity): EventReceipt {
   return receipt
 }
 
-export function restoreTranscriptIfMissing(sdkSessionId: string | undefined, entries: TranscriptEntry[]): void {
+export function restoreTranscriptIfMissing(
+  sdkSessionId: string | undefined,
+  entries: TranscriptEntry[],
+  operations: ConversationLedgerFileOperations = NODE_FILE_OPERATIONS
+): void {
   if (!sdkSessionId || entries.length === 0) return
-  if (readEntries(fileFor(sdkSessionId)).length > 0) return
-  const target = fileFor(sdkSessionId)
+  const target = transcriptFile(sdkSessionId)
+  if (readEntriesStrict(target).length > 0) return
   const temp = `${target}.${process.pid}.${randomUUID()}.tmp`
   try {
-    mkdirSync(transcriptsDir(), { recursive: true })
-    const body = entries.map((entry) => JSON.stringify(normalizeEntry(target, entry))).join('\n')
-    writeFileSync(temp, body ? `${body}\n` : '')
-    replaceFileWithRetry(temp, target)
+    ensureDirectory(transcriptsDir(), operations)
+    const body = sealEntries(target, entries).map((entry) => JSON.stringify(entry)).join('\n')
+    durableAtomicReplace(
+      temp,
+      target,
+      body ? `${body}\n` : '',
+      operations,
+      (source, destination) => replaceFileWithRetry(source, destination, operations)
+    )
   } catch (err) {
-    try {
-      unlinkSync(temp)
-    } catch {
-      // ignore temp cleanup failure
-    }
-    console.error('[agent-desk] 从任务快照恢复转录失败:', err)
+    throw conversationLedgerPersistenceError('从任务快照恢复转录失败', err)
   }
 }
 
@@ -188,12 +430,43 @@ export class TranscriptWriter {
   private receiptBuffer: EventReceipt[] = []
   private currentCorrelationId?: string
   private lastEventId?: string
+  private lastLedgerDigest?: string
+  private ledgerAppendBlocked = false
   private readonly toolEventIds = new Map<string, string>()
   private readonly requestEventIds = new Map<string, string>()
+  private readonly replaceFile: ConversationLedgerFileReplacer
+  private readonly fileOperations: ConversationLedgerFileOperations
 
-  constructor(resumeSdkSessionId?: string, initialSeq = 0) {
+  constructor(
+    resumeSdkSessionId?: string,
+    initialSeq = 0,
+    replaceFile?: ConversationLedgerFileReplacer,
+    fileOperations: ConversationLedgerFileOperations = NODE_FILE_OPERATIONS
+  ) {
+    this.fileOperations = fileOperations
+    this.replaceFile = replaceFile ?? ((temp, target) =>
+      replaceFileWithRetry(temp, target, this.fileOperations))
     this.seq = Math.max(0, Math.floor(initialSeq))
     if (resumeSdkSessionId) this.bind(resumeSdkSessionId)
+  }
+
+  /** Seed a new conversation ledger without binding or resuming the source Provider session. */
+  seedFrom(sourceSdkSessionId: string): void {
+    const source = sourceSdkSessionId.trim()
+    if (!source) throw new Error('分叉来源 sdkSessionId 不能为空')
+    if (this.sdkSessionId || this.buffer.length > 0 || this.receiptBuffer.length > 0) {
+      throw new Error('会话账本仅可在绑定前分叉一次')
+    }
+    const sourceEntries = readEntriesStrict(transcriptFile(source)).map(unsealedEntry)
+    if (sourceEntries.length === 0) {
+      throw new Error('分叉来源没有可移植的 CaoGen 会话账本，不能伪装恢复隐藏 Provider 上下文')
+    }
+    const inheritedEntries = sourceEntries.filter((entry) => !SESSION_RUNTIME_KINDS.has(entry.event.kind))
+    this.buffer = inheritedEntries
+    // A fork inherits observed history, not source-side runtime identity or effect receipts.
+    this.receiptBuffer = []
+    this.seq = Math.max(this.seq, sourceEntries.reduce((max, entry) => Math.max(max, entry.seq), 0))
+    for (const entry of inheritedEntries) this.rememberLinks(entry.event, { eventId: entry.eventId! })
   }
 
   /** 为事件分配 seq;耐久事件同时落盘(或缓冲) */
@@ -230,8 +503,12 @@ export class TranscriptWriter {
 
   /** 完整转录,用于回溯规划/写回;不要用于首屏回放。 */
   readAll(): TranscriptEntry[] {
-    const persisted = this.sdkSessionId ? readEntries(fileFor(this.sdkSessionId)) : []
-    return [...persisted, ...this.buffer]
+    const persisted = this.sdkSessionId ? readEntries(transcriptFile(this.sdkSessionId)) : []
+    const persistedEventIds = new Set(persisted.map((entry) => entry.eventId).filter(Boolean))
+    return [
+      ...persisted,
+      ...this.buffer.filter((entry) => !entry.eventId || !persistedEventIds.has(entry.eventId))
+    ]
   }
 
   planRestore(checkpointId: string): TranscriptRestorePlan {
@@ -246,17 +523,20 @@ export class TranscriptWriter {
     const plan = planTranscriptRestore(current, checkpointId)
     if (!plan.ok) return { plan, entries: current }
     const restored = applyTranscriptRestorePlan(current, plan)
+    let auditEntry: TranscriptEntry & AgentEventIdentity | undefined
     if (restoreEvent) {
       const maxSeq = current.reduce((max, entry) => Math.max(max, entry.seq), 0)
       const event = typeof restoreEvent === 'function' ? restoreEvent(plan) : restoreEvent
       const identity = this.identityFor(event, randomUUID(), maxSeq + 1, Date.now())
-      const entry: TranscriptEntry & AgentEventIdentity = { ...identity, event }
-      restored.push(entry)
-      if (this.sdkSessionId) this.appendReceipt(receiptFor(entry))
-      else this.receiptBuffer.push(receiptFor(entry))
-      this.rememberLinks(event, entry)
+      auditEntry = { ...identity, event }
+      restored.push(auditEntry)
     }
     this.replace(restored)
+    if (auditEntry) {
+      if (this.sdkSessionId) this.appendReceipt(receiptFor(auditEntry))
+      else this.receiptBuffer.push(receiptFor(auditEntry))
+      this.rememberLinks(auditEntry.event, auditEntry)
+    }
     return { plan, entries: restored }
   }
 
@@ -264,21 +544,61 @@ export class TranscriptWriter {
     if (this.sdkSessionId === sdkSessionId) return
     const prev = this.sdkSessionId
     const prevStreamId = this.streamId
+    const prevLedgerDigest = this.lastLedgerDigest
+    const prevAppendBlocked = this.ledgerAppendBlocked
     this.sdkSessionId = sdkSessionId
     try {
-      mkdirSync(transcriptsDir(), { recursive: true })
-      mkdirSync(eventReceiptsDir(), { recursive: true })
+      ensureDirectory(transcriptsDir(), this.fileOperations)
+      ensureDirectory(eventReceiptsDir(), this.fileOperations)
       // resume 分叉出新 sdkSessionId 时,把旧转录复制过来延续对话
-      if (prev && existsSync(fileFor(prev)) && !existsSync(fileFor(sdkSessionId))) {
-        const inherited = readEntries(fileFor(prev))
+      if (prev && existsSync(transcriptFile(prev)) && !existsSync(transcriptFile(sdkSessionId))) {
+        const inherited = readEntriesStrict(transcriptFile(prev))
         const body = inherited.map((entry) => JSON.stringify(entry)).join('\n')
-        writeFileSync(fileFor(sdkSessionId), body ? `${body}\n` : '')
+        const target = transcriptFile(sdkSessionId)
+        durableAtomicReplace(
+          `${target}.${process.pid}.${randomUUID()}.copy.tmp`,
+          target,
+          body ? `${body}\n` : '',
+          this.fileOperations,
+          this.replaceFile
+        )
       }
       if (prev && existsSync(eventReceiptsFile(prev)) && !existsSync(eventReceiptsFile(sdkSessionId))) {
-        copyFileSync(eventReceiptsFile(prev), eventReceiptsFile(sdkSessionId))
+        const target = eventReceiptsFile(sdkSessionId)
+        durableAtomicReplace(
+          `${target}.${process.pid}.${randomUUID()}.copy.tmp`,
+          target,
+          readFileSync(eventReceiptsFile(prev)),
+          this.fileOperations,
+          this.replaceFile
+        )
       }
-      const existing = readEntries(fileFor(sdkSessionId))
-      const receipts = readReceipts(eventReceiptsFile(sdkSessionId))
+      const existing = readEntriesStrict(transcriptFile(sdkSessionId))
+      const verification = verifyConversationLedgerEntries(existing)
+      if (!verification.valid) {
+        throw new ConversationLedgerIntegrityError(verification.error ?? 'conversation ledger verification failed')
+      }
+      repairAppendBoundary(
+        transcriptFile(sdkSessionId),
+        existing,
+        this.fileOperations,
+        this.replaceFile
+      )
+      this.lastLedgerDigest = verification.headDigest ?? legacyAnchor(existing)
+      this.ledgerAppendBlocked = false
+      repairReceiptAppendBoundary(
+        eventReceiptsFile(sdkSessionId),
+        this.fileOperations,
+        this.replaceFile
+      )
+      const allReceipts = readReceipts(eventReceiptsFile(sdkSessionId))
+      const canonicalEventIds = new Set(existing.map((entry) => entry.eventId).filter(Boolean))
+      const receipts = existing.length > 0
+        ? allReceipts.filter((receipt) => canonicalEventIds.has(receipt.eventId))
+        : allReceipts
+      const receiptEventIds = new Set(receipts.map((receipt) => receipt.eventId))
+      this.buffer = this.buffer.filter((entry) => !entry.eventId || !canonicalEventIds.has(entry.eventId))
+      this.receiptBuffer = this.receiptBuffer.filter((receipt) => !receiptEventIds.has(receipt.eventId))
       const existingMax = Math.max(
         existing.reduce((max, entry) => Math.max(max, entry.seq), 0),
         receipts.reduce((max, receipt) => Math.max(max, receipt.seq), 0)
@@ -296,58 +616,90 @@ export class TranscriptWriter {
     } catch (err) {
       this.sdkSessionId = prev
       this.streamId = prevStreamId
-      console.error('[agent-desk] 绑定转录文件失败:', err)
+      this.lastLedgerDigest = prevLedgerDigest
+      this.ledgerAppendBlocked = prevAppendBlocked
+      throw conversationLedgerPersistenceError('绑定转录文件失败', err)
     }
   }
 
   private append(entry: TranscriptEntry): void {
     if (!this.sdkSessionId) return
+    if (this.ledgerAppendBlocked) {
+      if (!this.buffer.some((candidate) => candidate.eventId === entry.eventId && candidate.seq === entry.seq)) {
+        this.buffer.push(entry)
+      }
+      throw new ConversationLedgerPersistenceError('会话账本此前写入失败，已阻止继续追加未持久化事件')
+    }
     try {
-      mkdirSync(transcriptsDir(), { recursive: true })
-      appendFileSync(fileFor(this.sdkSessionId), `${JSON.stringify(entry)}\n`)
+      ensureDirectory(transcriptsDir(), this.fileOperations)
+      const target = transcriptFile(this.sdkSessionId)
+      const current = readEntriesStrict(target)
+      repairAppendBoundary(target, current, this.fileOperations, this.replaceFile)
+      const currentHead = verifyConversationLedgerEntries(current).headDigest ?? legacyAnchor(current)
+      if (currentHead !== this.lastLedgerDigest) {
+        throw new ConversationLedgerIntegrityError('会话账本写入头已被其他 writer 改变')
+      }
+      const sealed = sealEntry(entry, this.lastLedgerDigest)
+      durableAppend(target, `${JSON.stringify(sealed)}\n`, this.fileOperations)
+      this.lastLedgerDigest = sealed.digest
     } catch (err) {
       if (!this.buffer.some((candidate) => candidate.eventId === entry.eventId && candidate.seq === entry.seq)) {
         this.buffer.push(entry)
       }
-      console.error('[agent-desk] 写入转录失败:', err)
+      this.ledgerAppendBlocked = true
+      throw conversationLedgerPersistenceError('写入转录失败', err)
     }
   }
 
   private appendReceipt(receipt: EventReceipt): void {
     if (!this.sdkSessionId) return
     try {
-      mkdirSync(eventReceiptsDir(), { recursive: true })
-      appendFileSync(eventReceiptsFile(this.sdkSessionId), `${JSON.stringify(receipt)}\n`)
+      ensureDirectory(eventReceiptsDir(), this.fileOperations)
+      const target = eventReceiptsFile(this.sdkSessionId)
+      repairReceiptAppendBoundary(target, this.fileOperations, this.replaceFile)
+      if (readReceipts(target).some((existing) => existing.eventId === receipt.eventId)) {
+        this.receiptBuffer = this.receiptBuffer.filter((candidate) => candidate.eventId !== receipt.eventId)
+        return
+      }
+      durableAppend(target, `${JSON.stringify(receipt)}\n`, this.fileOperations)
+      this.receiptBuffer = this.receiptBuffer.filter((candidate) => candidate.eventId !== receipt.eventId)
     } catch (err) {
       if (!this.receiptBuffer.some((candidate) => candidate.eventId === receipt.eventId)) {
         this.receiptBuffer.push(receipt)
       }
-      console.error('[agent-desk] 写入事件回执失败:', err)
+      // Receipt 是 canonical transcript 的可重建投影，失败不能把已提交事件报告成未提交。
+      console.error('[agent-desk] 写入事件回执投影失败:', conversationLedgerPersistenceError('写入事件回执失败', err))
     }
   }
 
   private replace(entries: TranscriptEntry[]): void {
     if (!this.sdkSessionId) {
       this.buffer = [...entries]
+      this.lastLedgerDigest = undefined
+      this.ledgerAppendBlocked = false
       this.seq = Math.max(this.seq, entries.reduce((max, entry) => Math.max(max, entry.seq), 0))
       return
     }
-    const target = fileFor(this.sdkSessionId)
+    const target = transcriptFile(this.sdkSessionId)
     const temp = `${target}.${process.pid}.${randomUUID()}.tmp`
     try {
-      mkdirSync(transcriptsDir(), { recursive: true })
-      const body = entries.map((entry) => JSON.stringify(entry)).join('\n')
-      writeFileSync(temp, body ? `${body}\n` : '')
-      replaceFileWithRetry(temp, target)
+      ensureDirectory(transcriptsDir(), this.fileOperations)
+      const sealed = sealEntries(target, entries)
+      const body = sealed.map((entry) => JSON.stringify(entry)).join('\n')
+      durableAtomicReplace(
+        temp,
+        target,
+        body ? `${body}\n` : '',
+        this.fileOperations,
+        this.replaceFile
+      )
       this.buffer = []
+      this.lastLedgerDigest = sealed[sealed.length - 1]?.digest
+      this.ledgerAppendBlocked = false
       this.seq = Math.max(this.seq, entries.reduce((max, entry) => Math.max(max, entry.seq), 0))
     } catch (err) {
-      try {
-        unlinkSync(temp)
-      } catch {
-        // ignore temp cleanup failure
-      }
-      console.error('[agent-desk] 替换转录失败:', err)
+      this.ledgerAppendBlocked = true
+      throw conversationLedgerPersistenceError('替换转录失败', err)
     }
   }
 
@@ -390,7 +742,7 @@ export class TranscriptWriter {
     }
   }
 
-  private rememberLinks(event: AgentEvent, identity: AgentEventIdentity): void {
+  private rememberLinks(event: AgentEvent, identity: Pick<AgentEventIdentity, 'eventId'>): void {
     if (event.kind === 'user-message') this.currentCorrelationId = identity.eventId
     if (event.kind === 'assistant-message') {
       for (const block of event.blocks) {
@@ -424,13 +776,173 @@ export function cleanupTranscripts(keepSdkSessionIds: Set<string>): void {
   }
 }
 
-function replaceFileWithRetry(temp: string, target: string): void {
+function ensureDirectory(
+  directory: string,
+  operations: ConversationLedgerFileOperations = NODE_FILE_OPERATIONS
+): void {
+  const missing: string[] = []
+  let cursor = directory
+  while (!existsSync(cursor)) {
+    missing.push(cursor)
+    const parent = dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 })
+  for (const created of missing) {
+    syncDirectory(created, operations)
+    const parent = dirname(created)
+    if (parent !== created) syncDirectory(parent, operations)
+  }
+}
+
+function durableAppend(
+  target: string,
+  data: string,
+  operations: ConversationLedgerFileOperations
+): void {
+  let created = false
+  withDescriptor(
+    target,
+    () => {
+      const opened = openAppendDescriptor(target, operations)
+      created = opened.created
+      return opened.descriptor
+    },
+    operations,
+    (descriptor) => {
+      operations.append(descriptor, data, target)
+      operations.fsync(descriptor, target, 'file')
+    }
+  )
+  if (created) syncDirectoryAndParent(dirname(target), operations)
+}
+
+function openAppendDescriptor(
+  target: string,
+  operations: ConversationLedgerFileOperations
+): { descriptor: number; created: boolean } {
+  const defensive = noFollowFlag()
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
-      if (process.platform === 'win32') {
-        unlinkIfExists(target)
+      return {
+        descriptor: operations.open(
+          target,
+          constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | defensive,
+          0o600
+        ),
+        created: true
       }
-      renameSync(temp, target)
+    } catch (error) {
+      if (!isRecord(error) || error.code !== 'EEXIST') throw error
+    }
+    try {
+      return {
+        descriptor: operations.open(target, constants.O_WRONLY | constants.O_APPEND | defensive),
+        created: false
+      }
+    } catch (error) {
+      if (!isRecord(error) || error.code !== 'ENOENT' || attempt === 7) throw error
+    }
+  }
+  throw new Error(`无法打开 append ledger:${target}`)
+}
+
+function durableAtomicReplace(
+  temp: string,
+  target: string,
+  data: string | Uint8Array,
+  operations: ConversationLedgerFileOperations,
+  replaceFile: ConversationLedgerFileReplacer
+): void {
+  let published = false
+  try {
+    withDescriptor(
+      temp,
+      () => operations.open(
+        temp,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+        0o600
+      ),
+      operations,
+      (descriptor) => {
+        operations.write(descriptor, data, temp)
+        operations.fsync(descriptor, temp, 'file')
+      }
+    )
+    replaceFile(temp, target)
+    published = true
+    syncDirectoryAndParent(dirname(target), operations)
+  } catch (error) {
+    if (!published) unlinkIfExists(temp)
+    throw error
+  }
+}
+
+function withDescriptor(
+  target: string,
+  openDescriptor: () => number,
+  operations: ConversationLedgerFileOperations,
+  action: (descriptor: number) => void
+): void {
+  let descriptor: number | undefined
+  let failure: unknown
+  let failed = false
+  try {
+    descriptor = openDescriptor()
+    action(descriptor)
+  } catch (error) {
+    failed = true
+    failure = error
+  }
+  if (descriptor !== undefined) {
+    try {
+      operations.close(descriptor, target)
+    } catch (error) {
+      if (!failed) {
+        failed = true
+        failure = error
+      }
+    }
+  }
+  if (failed) throw failure
+}
+
+function syncDirectoryAndParent(
+  directory: string,
+  operations: ConversationLedgerFileOperations
+): void {
+  syncDirectory(directory, operations)
+  const parent = dirname(directory)
+  if (parent !== directory) syncDirectory(parent, operations)
+}
+
+function syncDirectory(directory: string, operations: ConversationLedgerFileOperations): void {
+  // Node does not expose a durable directory flush primitive on Windows; keep that platform unverified.
+  if (process.platform === 'win32') return
+  withDescriptor(
+    directory,
+    () => operations.open(
+      directory,
+      constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | noFollowFlag()
+    ),
+    operations,
+    (descriptor) => operations.fsync(descriptor, directory, 'directory')
+  )
+}
+
+function noFollowFlag(): number {
+  return process.platform === 'win32' ? 0 : (constants.O_NOFOLLOW ?? 0)
+}
+
+function replaceFileWithRetry(
+  temp: string,
+  target: string,
+  operations: ConversationLedgerFileOperations = NODE_FILE_OPERATIONS
+): void {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      operations.rename(temp, target)
       return
     } catch (err) {
       if (!isRetryableFileReplaceError(err) || attempt === 7) throw err
@@ -453,6 +965,12 @@ function isRetryableFileReplaceError(err: unknown): boolean {
 
 function isRecord(value: unknown): value is { code?: unknown } {
   return typeof value === 'object' && value !== null
+}
+
+function conversationLedgerPersistenceError(action: string, error: unknown): ConversationLedgerPersistenceError {
+  if (error instanceof ConversationLedgerPersistenceError) return error
+  const detail = error instanceof Error ? error.message : String(error)
+  return new ConversationLedgerPersistenceError(`${action}: ${detail}`)
 }
 
 function sleepSync(ms: number): void {

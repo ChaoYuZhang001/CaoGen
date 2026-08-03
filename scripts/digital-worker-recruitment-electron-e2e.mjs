@@ -377,7 +377,13 @@ async function runPhase(name, execute) {
 
 async function launchRuntime(phase) {
   const port = await findFreePort(9960)
-  const child = spawn(electronBin, [`--remote-debugging-port=${port}`, mainEntry], {
+  const child = spawn(electronBin, [
+    `--remote-debugging-port=${port}`,
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    mainEntry
+  ], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -412,6 +418,7 @@ async function launchRuntime(phase) {
     })
     page.on('pageerror', (error) => report.warnings.push(`${phase} pageerror: ${error.message}`))
     await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
+    await page.bringToFront()
     return { browser, child, output, page, phase }
   } catch (error) {
     await terminate(child)

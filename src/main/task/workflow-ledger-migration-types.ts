@@ -1,6 +1,8 @@
 import type { WorkflowLedgerVerification } from '../../shared/workflow-types'
 import type { TaskEvidenceVerification } from './task-evidence-store'
 import type { WorkflowLedgerReadMode, WorkflowRecoveryVerification } from './workflow-ledger-recovery'
+import type { WorkflowLedgerAuthorizedPurgeVerification } from './workflow-ledger-authorized-purge'
+import type { ConversationLedgerArchiveVerification } from './conversation-ledger-store'
 
 export const WORKFLOW_LEDGER_READINESS_FORMAT = 'caogen.workflow-ledger.canonical-readiness.v1' as const
 export const WORKFLOW_LEDGER_MIGRATION_JOURNAL_FORMAT = 'caogen.workflow-ledger.canonical-migration-journal.v1' as const
@@ -8,7 +10,12 @@ export const WORKFLOW_LEDGER_MIGRATION_KIND = 'workflow-ledger-canonical-readine
 export const WORKFLOW_LEDGER_MIGRATION_VERSION = 1 as const
 
 export type WorkflowLedgerMigrationSourceKind = 'sqlite' | 'legacy_json' | 'empty'
-export type WorkflowLedgerMigrationPath = 'existing_v7' | 'existing_v8' | 'legacy_upgrade' | 'canonical_upgrade'
+export type WorkflowLedgerMigrationPath =
+  | 'existing_v7'
+  | 'existing_v8'
+  | 'existing_current'
+  | 'legacy_upgrade'
+  | 'canonical_upgrade'
 /** Candidate acceptance policy persisted so crash recovery uses the original source semantics. */
 export type WorkflowLedgerMigrationMode = 'shadow' | 'canonical'
 export type WorkflowLedgerMigrationState =
@@ -67,11 +74,16 @@ export interface WorkflowLedgerCanonicalReadinessReport {
     activeRunsWithoutSnapshot: number
     terminalRunsWithoutSnapshot: number
     matchingRuns: number
+    conversationStreams: number
+    conversationGenerations: number
+    conversationEvents: number
+    currentConversationEvents: number
   }
   digests: {
     taskRuns: string
     workflowRuns: string
     taskSnapshots: string
+    conversationLedger: string
   }
   verification?: {
     workflowLedger: WorkflowLedgerVerification
@@ -81,7 +93,9 @@ export interface WorkflowLedgerCanonicalReadinessReport {
       count: number
     }
     workflowRecovery: WorkflowRecoveryVerification
+    conversationLedger: ConversationLedgerArchiveVerification
   }
+  authorizedPurges?: WorkflowLedgerAuthorizedPurgeVerification
   diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]
   reportDigest: string
 }
@@ -137,7 +151,7 @@ export interface PreparedWorkflowLedgerMigration {
 }
 
 export interface WorkflowLedgerTaskStoreReadiness {
-  disposition: 'ready_existing_v8' | 'migrated' | 'blocked'
+  disposition: 'ready_existing_v8' | 'ready_existing_current' | 'migrated' | 'blocked'
   report: WorkflowLedgerCanonicalReadinessReport
   migration?: PreparedWorkflowLedgerMigration
 }

@@ -17,12 +17,19 @@ import { disposeProjectIndexers } from './indexer'
 import { disposeOfficeVisualPreviews } from './previewVisual'
 import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
 import { executeRoutine } from './routines/routine-executor'
+import {
+  disposeRoutineSessionLifecycle,
+  initializeRoutineSessionLifecycle,
+  reconcileRoutineRunsAtStartup
+} from './routines/routine-session-lifecycle'
 import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { initAutoUpdater } from './updater'
 import { configureQuickbar, disposeQuickbar, registerQuickbarGlobalShortcut } from './quickbar'
 import { listProjects } from './projects'
 import { ensureProjectSkillReadiness } from './learning/learning-lifecycle'
 import { configureLearningUserDataRoot } from './learning/learning-store'
+import { configurePermissionAuditUserDataRoot } from './permission/audit-log'
+import { reconcileProviderProfileOperations } from './provider/providerProfileService'
 import type { Routine } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -34,6 +41,7 @@ let unsubscribeTraySessionEvents: (() => void) | null = null
 
 process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
 configureLearningUserDataRoot(app.getPath('userData'))
+configurePermissionAuditUserDataRoot(app.getPath('userData'))
 const singleInstanceOwner = app.requestSingleInstanceLock()
 if (!singleInstanceOwner) {
   app.quit()
@@ -266,8 +274,20 @@ async function recoverLearningMaterializationAtStartup(): Promise<void> {
 
 void app.whenReady().then(async () => {
   if (!singleInstanceOwner) return
+  try {
+    reconcileProviderProfileOperations()
+  } catch (error) {
+    console.error('[caogen] Provider Profile operation recovery failed:', error)
+    app.quit()
+    return
+  }
   await recoverLearningMaterializationAtStartup()
   await sessionManager.init()
+  const routineRoot = join(app.getPath('userData'), 'routines')
+  initializeRoutineSessionLifecycle(routineRoot, app.getPath('userData'))
+  await reconcileRoutineRunsAtStartup(routineRoot, app.getPath('userData')).catch((error) => {
+    console.error('[caogen] routine startup reconciliation failed:', error)
+  })
   registerIpc()
   createWindow()
   configureQuickbar({ getMainWindow: () => mainWindow, showMainWindow })
@@ -297,6 +317,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  disposeRoutineSessionLifecycle()
   disposeQuickbar()
 })
 

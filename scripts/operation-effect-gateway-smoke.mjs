@@ -10,7 +10,18 @@ const mcpProbeIpcSource = read('src/main/ipc/mcp-probe-ipc.ts')
 const pluginInstallIpcSource = read('src/main/ipc/plugin-install-ipc.ts')
 const terminalMutationIpcSource = read('src/main/ipc/terminal-mutation-ipc.ts')
 const browserMutationIpcSource = read('src/main/ipc/browser-mutation-ipc.ts')
-const ipcSources = [ipcSource, attachmentMutationIpcSource, projectContextMutationIpcSource, mcpProbeIpcSource, pluginInstallIpcSource, terminalMutationIpcSource, browserMutationIpcSource]
+const interactiveMutationSource = read('src/main/ipc/interactive-mutation-handlers.ts')
+const unassignedSessionSource = read('src/main/ipc/unassigned-session.ts')
+const ipcSources = [
+  ipcSource,
+  interactiveMutationSource,
+  attachmentMutationIpcSource,
+  projectContextMutationIpcSource,
+  mcpProbeIpcSource,
+  pluginInstallIpcSource,
+  terminalMutationIpcSource,
+  browserMutationIpcSource
+]
 const rendererMutationSource = read('src/main/ipc/renderer-mutation-handlers.ts')
 const attachmentEffectSource = read('src/main/attachmentEffect.ts')
 const projectContextEffectSource = read('src/main/projectContextEffect.ts')
@@ -54,7 +65,8 @@ const settingsModalSource = read('src/renderer/src/components/SettingsModal.tsx'
 const taskRecoveryActionsSource = read('src/renderer/src/store/task-recovery-actions.ts')
 
 assert(
-  ipcSource.includes("from './task/operation-effect-gateway'"),
+  ipcSource.includes("from './ipc/interactive-mutation-handlers'") &&
+    interactiveMutationSource.includes("from '../task/operation-effect-gateway'"),
   'Renderer delivery operations must import the durable Operation Effect Gateway'
 )
 assertHandlerUsesGateway('worktrees:applyPatch')
@@ -279,10 +291,12 @@ assert(
 )
 assertManagedSessionCreateBarrier()
 assert(
-  ipcSource.includes('return await sessionManager.createManaged(opts)') &&
+  ipcSource.includes('return sessionManager.createManaged({ ...opts, cwd })') &&
+    ipcSource.includes('return sessionManager.createManaged(opts)') &&
+    unassignedSessionSource.includes('return sessionManager.createManaged({ ...options, cwd, isolated: false, unassigned: true })') &&
     ideBridgeManagerSource.includes('sessionManager.createManaged(options)') &&
     ideBridgeSource.includes('const meta = await this.sessionPort.createSession(options)') &&
-    routineExecutorSource.includes('await sessionManager.createManaged({') &&
+    routineExecutorSource.includes('await sessionManager.createManaged(') &&
     openaiToolsSource.includes('const result = await manager.dispatchTaskDag(') &&
     openaiToolsSource.includes('const dispatch = await manager.dispatchTaskDag('),
   'IPC, IDE, Routine and OpenAI DAG entrypoints must await managed session creation transitively'
@@ -353,7 +367,7 @@ function assertManagedSessionCreateBarrier() {
   const method = sessionManagerSource.slice(start, end)
   const journal = method.indexOf('savePendingSessionCreation(draft)')
   const placement = method.indexOf('placement = await managedSessionPlacement(draft)')
-  const activation = method.indexOf('await this.activateManagedSessionCreation(draft, placement)')
+  const activation = method.indexOf('await this.activateManagedSessionCreation(draft, placement, lifecycle)')
   assert(
     journal >= 0 && placement > journal && activation > placement,
     'SessionManager must journal, await managed placement, then durably activate in order'

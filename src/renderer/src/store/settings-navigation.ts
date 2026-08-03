@@ -6,6 +6,7 @@ export type SettingsTab =
   | 'persona'
   | 'office'
   | 'providers'
+  | 'notifications'
   | 'plugins'
   | 'migrate'
 

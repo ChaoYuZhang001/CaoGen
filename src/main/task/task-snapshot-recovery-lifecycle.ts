@@ -4,6 +4,7 @@ import type {
   ModelAttemptReconciliationView
 } from '../../shared/model-attempt-types'
 import type { TaskRunRecord, TaskSnapshotRecord } from '../../shared/types'
+import { verifyConversationLedgerEntries } from '../transcript'
 import { prepareSessionDomainOwnershipForActivation } from '../session-domain-activation'
 import {
   bindAndValidateTaskRun,
@@ -65,6 +66,7 @@ export async function prepareTaskSnapshotRecovery(
   rootDir: string,
   hasIncompleteFinalization: FinalizationRecoveryProbe
 ): Promise<PreparedTaskSnapshotRecovery> {
+  assertConversationLedgerRecoveryIntegrity(stored)
   await assertNoStartedModelAttemptReconciliation(stored, rootDir)
   const reconciled = reconcileSnapshotWithReceipts(stored)
   await settleTerminalRecoverySnapshot(stored, reconciled, hasIncompleteFinalization)
@@ -90,6 +92,22 @@ export async function prepareTaskSnapshotRecovery(
   const finalizerRecovery = hasIncompleteFinalization(snapshot.sessionId)
   assertTaskSnapshotRecoverable(snapshot, finalizerRecovery)
   return { snapshot, recoveredRun: recoveredTaskRun(snapshot, finalizerRecovery) }
+}
+
+function assertConversationLedgerRecoveryIntegrity(snapshot: TaskSnapshotRecord): void {
+  const actual = verifyConversationLedgerEntries(snapshot.transcript)
+  if (!actual.valid) {
+    throw new Error(`Canonical Conversation Ledger 校验失败，已阻止恢复:${actual.error ?? 'unknown integrity error'}`)
+  }
+  const persisted = snapshot.conversationLedger
+  if (!persisted) return
+  const mismatch = persisted.valid !== actual.valid ||
+    persisted.mode !== actual.mode ||
+    persisted.entryCount !== actual.entryCount ||
+    (persisted.headDigest ?? '') !== (actual.headDigest ?? '')
+  if (mismatch) {
+    throw new Error('Canonical Conversation Ledger 完整性投影与任务快照不一致，已阻止恢复。')
+  }
 }
 
 export async function assertNoStartedModelAttemptReconciliation(

@@ -1,14 +1,16 @@
 import type { KeyboardEvent } from 'react'
 
-export type StudioProjectionSurface = 'workspace' | 'session'
+export type StudioProjectionSurface = 'workspace' | 'result' | 'session'
 
-const SURFACES: StudioProjectionSurface[] = ['workspace', 'session']
+const SURFACES: StudioProjectionSurface[] = ['workspace', 'result', 'session']
 export const STUDIO_PROJECTION_TAB_IDS: Record<StudioProjectionSurface, string> = {
   workspace: 'studio-projection-tab-workspace',
+  result: 'studio-projection-tab-result',
   session: 'studio-projection-tab-session'
 }
 export const STUDIO_PROJECTION_PANEL_IDS: Record<StudioProjectionSurface, string> = {
   workspace: 'studio-projection-panel-workspace',
+  result: 'studio-projection-panel-result',
   session: 'studio-projection-panel-session'
 }
 
@@ -24,8 +26,8 @@ export default function StudioProjectionTabs({
   surface: StudioProjectionSurface
 }): React.JSX.Element {
   const labels = language === 'zh'
-    ? { navigation: '工作台区域', workspace: '项目工作台', session: '会话与工具' }
-    : { navigation: 'Studio area', workspace: 'Project workspace', session: 'Session and tools' }
+    ? { navigation: '工作台区域', workspace: '项目工作台', result: '结果', session: '会话与工具' }
+    : { navigation: 'Studio area', workspace: 'Project workspace', result: 'Results', session: 'Session and tools' }
   return (
     <nav className="studio-projection-tabs" role="tablist" aria-label={labels.navigation} data-studio-projection-tabs hidden={hidden}>
       {SURFACES.map((option) => (

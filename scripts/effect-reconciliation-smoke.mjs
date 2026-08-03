@@ -1969,7 +1969,13 @@ function effectSnapshot(snapshotStore, run, cwd, now) {
       contextTokens: 0,
       createdAt: run.createdAt
     },
-    transcript: [{ seq: 1, event: { kind: 'user-message', messageId, text: 'effect resource lock smoke' } }],
+    transcript: [{
+      seq: 1,
+      eventId: `effect-reconciliation:${run.sessionId}:1`,
+      streamId: `effect-reconciliation:${run.sessionId}`,
+      occurredAt: now,
+      event: { kind: 'user-message', messageId, text: 'effect resource lock smoke' }
+    }],
     lastSeq: 1,
     lastEventKind: 'user-message',
     eventCount: 1,
