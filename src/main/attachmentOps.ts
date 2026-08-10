@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { TextDecoder } from 'node:util'
 
 export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+export const DEFAULT_MAX_DOCUMENT_BYTES = 1024 * 1024
 
 const IMAGE_MIME_BY_EXTENSION = {
   '.png': 'image/png',
@@ -55,6 +57,30 @@ export interface PreparedImageAttachment {
   mime: string
   bytes: number
 }
+
+export interface PreparedDocumentAttachment {
+  data: Buffer
+  hash: string
+  name: string
+  mime: 'text/plain; charset=utf-8'
+  bytes: number
+  dataClass: 'S2' | 'S3'
+}
+
+export interface DocumentAttachmentReference {
+  id: string
+  hash: string
+  path: string
+  name: string
+  mime: 'text/plain; charset=utf-8'
+  bytes: number
+  createdAt: string
+  dataClass: 'S2' | 'S3'
+}
+
+export type DocumentAttachmentSuccess = DocumentAttachmentReference & { ok: true }
+export type DocumentAttachmentFailure = AttachmentFailure
+export type CopyDocumentAttachmentResult = DocumentAttachmentSuccess | DocumentAttachmentFailure
 
 /**
  * Copies a user-selected image into the app attachment root using a content-hash filename.
@@ -108,6 +134,137 @@ export async function prepareImageAttachmentFile(
   }
   if (!matchesImageSignature(buffer, extension)) throw new Error('文件内容不是支持的图片格式')
   return preparedImageAttachment(buffer, extension)
+}
+
+/** Freezes a regular UTF-8 file from the current workspace before it can enter Provider context. */
+export async function prepareDocumentAttachmentFile(
+  sourcePath: string,
+  workspaceRoot: string,
+  maxBytes = DEFAULT_MAX_DOCUMENT_BYTES
+): Promise<PreparedDocumentAttachment> {
+  if (!sourcePath.trim() || sourcePath.includes('\0')) throw new Error('文档路径无效')
+  if (!workspaceRoot.trim() || workspaceRoot.includes('\0')) throw new Error('工作区路径无效')
+  const root = await realpath(path.resolve(workspaceRoot))
+  if (!(await stat(root)).isDirectory()) throw new Error('当前工作区不存在或不是目录')
+  const requested = path.resolve(sourcePath)
+  const requestedInfo = await lstat(requested)
+  if (requestedInfo.isSymbolicLink() || !requestedInfo.isFile()) throw new Error('仅支持普通文本文件')
+  const source = await realpath(requested)
+  ensureInsideRoot(root, source)
+  const info = await stat(source)
+  if (!info.isFile()) throw new Error('仅支持普通文本文件')
+  if (info.size <= 0) throw new Error('不能添加空文档')
+  if (info.size > maxBytes) throw new Error(`文档过大，上限 ${formatByteLimit(maxBytes)}`)
+  const data = await readFile(source)
+  if (data.byteLength > maxBytes) throw new Error(`文档过大，上限 ${formatByteLimit(maxBytes)}`)
+  const text = decodeUtf8Document(data)
+  if (text.includes('\0')) throw new Error('暂不支持二进制文档，请选择 UTF-8 文本、代码或配置文件')
+  const name = path.relative(root, source).split(path.sep).join('/')
+  return {
+    data,
+    hash: sha256(data),
+    name,
+    mime: 'text/plain; charset=utf-8',
+    bytes: data.byteLength,
+    dataClass: classifyDocumentAttachment(name)
+  }
+}
+
+export async function persistPreparedDocumentAttachment(
+  prepared: PreparedDocumentAttachment,
+  attachmentsRoot: string
+): Promise<CopyDocumentAttachmentResult> {
+  let tmpPath: string | null = null
+  try {
+    if (
+      !Number.isSafeInteger(prepared.bytes) ||
+      prepared.bytes <= 0 ||
+      prepared.bytes > DEFAULT_MAX_DOCUMENT_BYTES
+    ) throw new Error(`文档写入大小无效或超过上限 ${formatByteLimit(DEFAULT_MAX_DOCUMENT_BYTES)}`)
+    const data = Buffer.from(prepared.data)
+    if (data.byteLength !== prepared.bytes || sha256(data) !== prepared.hash) {
+      throw new Error('文档写入内容与已冻结摘要不匹配')
+    }
+    decodeUtf8Document(data)
+    const root = await normalizeAttachmentsRoot(attachmentsRoot)
+    const documentsRoot = path.join(root, 'documents')
+    await mkdir(documentsRoot, { recursive: true })
+    const canonicalDocumentsRoot = await realpath(documentsRoot)
+    ensureInsideRoot(root, canonicalDocumentsRoot)
+    const classRoot = path.join(canonicalDocumentsRoot, prepared.dataClass)
+    await mkdir(classRoot, { recursive: true })
+    const canonicalClassRoot = await realpath(classRoot)
+    ensureInsideRoot(canonicalDocumentsRoot, canonicalClassRoot)
+    const targetPath = path.join(canonicalClassRoot, `${prepared.hash}.txt`)
+    ensureInsideRoot(canonicalClassRoot, targetPath)
+    const existing = await lstat(targetPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (existing) {
+      if (existing.isSymbolicLink() || !existing.isFile()) throw new Error('文档附件目标不是普通文件')
+      await ensureExistingFileMatchesHash(targetPath, prepared.hash)
+    } else {
+      tmpPath = path.join(canonicalClassRoot, `.${prepared.hash}.${process.pid}.${randomUUID()}.tmp`)
+      ensureInsideRoot(canonicalClassRoot, tmpPath)
+      await writeFile(tmpPath, data, { flag: 'wx' })
+      await rename(tmpPath, targetPath)
+      tmpPath = null
+    }
+    const targetInfo = await stat(targetPath)
+    return {
+      ok: true,
+      id: prepared.hash,
+      hash: prepared.hash,
+      path: targetPath,
+      name: prepared.name,
+      mime: prepared.mime,
+      bytes: targetInfo.size,
+      createdAt: createdAtIso(targetInfo),
+      dataClass: prepared.dataClass
+    }
+  } catch (error) {
+    if (tmpPath) await rm(tmpPath, { force: true }).catch(() => undefined)
+    return failure(errorMessage(error))
+  }
+}
+
+/** Revalidates content-addressed document snapshots and builds the exact Provider prompt block. */
+export function documentAttachmentsToPrompt(
+  references: readonly DocumentAttachmentReference[],
+  attachmentsRoot: string
+): string {
+  if (references.length === 0) return ''
+  const root = realpathSync(path.resolve(attachmentsRoot))
+  const documentsRoot = realpathSync(path.join(root, 'documents'))
+  ensureInsideRoot(root, documentsRoot)
+  const blocks: string[] = []
+  const seen = new Set<string>()
+  for (const reference of references) {
+    if (!/^[a-f0-9]{64}$/.test(reference.hash) || reference.id !== reference.hash) {
+      throw new Error('文档附件缺少有效内容摘要')
+    }
+    if (reference.mime !== 'text/plain; charset=utf-8') throw new Error('文档附件 MIME 无效')
+    if (!Number.isSafeInteger(reference.bytes) || reference.bytes <= 0 || reference.bytes > DEFAULT_MAX_DOCUMENT_BYTES) {
+      throw new Error('文档附件大小无效或超过上限')
+    }
+    const requested = path.resolve(reference.path)
+    const expected = path.join(documentsRoot, reference.dataClass, `${reference.hash}.txt`)
+    if (requested !== expected) throw new Error('文档附件路径与分类或摘要不匹配')
+    ensureInsideRoot(documentsRoot, requested)
+    const requestedInfo = lstatSync(requested)
+    if (requestedInfo.isSymbolicLink() || !requestedInfo.isFile()) throw new Error('文档附件必须是普通文件')
+    const target = realpathSync(requested)
+    ensureInsideRoot(documentsRoot, target)
+    if (seen.has(target)) continue
+    const data = readFileSync(target)
+    if (data.byteLength !== reference.bytes || sha256(data) !== reference.hash) {
+      throw new Error('文档附件内容与已冻结摘要不匹配')
+    }
+    seen.add(target)
+    blocks.push(`===== ${safeDocumentLabel(reference.name)} =====\n${decodeUtf8Document(data)}`)
+  }
+  return blocks.length > 0 ? `## Attached workspace documents\n\n${blocks.join('\n\n')}` : ''
 }
 
 /** Decodes and validates renderer bytes before they cross the durable mutation barrier. */
@@ -452,6 +609,47 @@ function createdAtIso(info: { birthtimeMs: number; ctimeMs: number }): string {
 
 function failure(error: string): AttachmentFailure {
   return { ok: false, error }
+}
+
+function decodeUtf8Document(data: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(data)
+  } catch {
+    throw new Error('暂不支持二进制文档，请选择 UTF-8 文本、代码或配置文件')
+  }
+}
+
+function classifyDocumentAttachment(name: string): 'S2' | 'S3' {
+  const normalized = name.toLowerCase().replace(/\\/g, '/')
+  const base = normalized.split('/').pop() ?? normalized
+  return (
+    base === '.env' ||
+    base.startsWith('.env.') ||
+    base === '.npmrc' ||
+    base === '.pypirc' ||
+    base === 'id_rsa' ||
+    base === 'id_ed25519' ||
+    /(?:secret|credential|private[-_.]?key|service[-_.]?account)/.test(base) ||
+    /\.(?:pem|key|p12|pfx)$/.test(base)
+  ) ? 'S3' : 'S2'
+}
+
+function safeDocumentLabel(name: string): string {
+  const normalized = name.replace(/\\/g, '/').replace(/[\r\n]/g, ' ').trim()
+  const segments = normalized.split('/')
+  if (
+    !normalized ||
+    normalized.length > 1024 ||
+    path.isAbsolute(name) ||
+    name.includes('\0') ||
+    /[\r\n]/.test(name) ||
+    segments.some((segment) => segment === '..')
+  ) throw new Error('文档附件名称必须是工作区内的安全相对路径')
+  return normalized
+}
+
+function formatByteLimit(bytes: number): string {
+  return bytes % (1024 * 1024) === 0 ? `${bytes / (1024 * 1024)} MiB` : `${bytes} bytes`
 }
 
 function errorMessage(err: unknown): string {

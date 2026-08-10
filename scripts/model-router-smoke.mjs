@@ -750,7 +750,8 @@ try {
   })
   assert(openaiChatRoute.kind === 'routed', 'OpenAI routing should accept OpenAI/chat providers')
 
-  for (let index = 0; index < 3; index += 1) providerHealth.recordFailure('premium', 'HTTP 503 unavailable')
+  for (let index = 0; index < 4; index += 1) providerHealth.recordFailure('premium', 'HTTP 503 unavailable')
+  providerHealth.recordProbeSuccess('premium', 25)
   const healthyProviderRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,
     currentModel: 'auto',
@@ -768,7 +769,7 @@ try {
     'routing decision should disclose excluded unhealthy providers'
   )
 
-  for (let index = 0; index < 3; index += 1) providerHealth.recordFailure('deepseek-official', 'HTTP 503 unavailable')
+  for (let index = 0; index < 4; index += 1) providerHealth.recordFailure('deepseek-official', 'HTTP 503 unavailable')
   const allUnhealthyRoute = sessionRouting.resolveSessionModelRoute({
     enabled: true,
     currentModel: 'auto',

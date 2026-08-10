@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { FileScan, RotateCcw, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
+import CodexNativeConfigWorkspace from './CodexNativeConfigWorkspace'
+import CcSwitchImportPanel from './CcSwitchImportPanel'
 import type {
   ProviderProfileBackupView,
+  ProviderProfileBackupPreview,
   ProviderProfileImportAction,
   ProviderProfileImportDecision,
   ProviderProfileImportPreview,
+  ProviderNativeImportBackupView,
+  ProviderNativeImportPreview,
   ProviderView
 } from '../../../../shared/types'
 
-type ProfileBusyState = 'import' | 'export' | 'apply' | 'rollback' | ''
+type ProfileBusyState = 'import' | 'export' | 'apply' | 'backup-preview' | 'rollback' | 'native-scan' | 'native-apply' | 'native-rollback' | ''
 
 interface Props {
   providers: ProviderView[]
@@ -19,12 +25,15 @@ interface Props {
 
 export default function ProviderProfileManager({ providers, onAdd, children }: Props): React.JSX.Element {
   const t = useT()
-  const profile = useProviderProfileManager()
+  const profile = useProviderProfileManager(providers)
   return (
     <>
       <div className="settings-section-head">
         <h3 className="settings-h3">{t('tabProviders')}</h3>
         <div className="provider-profile-actions">
+          <button className="btn btn-ghost btn-sm" data-provider-native-scan disabled={Boolean(profile.busy)} onClick={() => void profile.scanCodex()}>
+            <FileScan size={14} aria-hidden="true" /> {t('providerNativeCodexScan')}
+          </button>
           <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.chooseImport()}>
             {t('providerProfileImport')}
           </button>
@@ -35,37 +44,95 @@ export default function ProviderProfileManager({ providers, onAdd, children }: P
           >
             {t('providerProfileExport')}
           </button>
-          <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={onAdd}>
+          <button className="btn btn-ghost btn-sm" data-provider-add disabled={Boolean(profile.busy)} onClick={onAdd}>
             {t('addProvider')}
           </button>
         </div>
       </div>
       <p className="settings-hint provider-profile-hint">{t('providerProfileSafetyHint')}</p>
+      <CcSwitchImportPanel />
+      <CodexNativeConfigWorkspace />
       {profile.message && <div className="notice notice-info provider-profile-notice">{profile.message}</div>}
       {profile.error && <div className="notice notice-error provider-profile-notice">{profile.error}</div>}
+      {profile.nativePreview && <ProviderNativeCodexPreview profile={profile} />}
       {profile.preview && <ProviderProfilePreviewPanel profile={profile} />}
+      {profile.backupPreview && <ProviderProfileBackupPreviewPanel profile={profile} />}
       {children}
+      {profile.nativeBackups.length > 0 && <ProviderNativeBackups profile={profile} />}
       {profile.backups.length > 0 && <ProviderProfileBackups profile={profile} />}
     </>
   )
 }
 
-function useProviderProfileManager() {
+function useProviderProfileManager(providers: ProviderView[]) {
   const t = useT()
   const applyProviderProfileImport = useStore((state) => state.applyProviderProfileImport)
-  const rollbackProviderProfileBackup = useStore((state) => state.rollbackProviderProfileBackup)
+  const refreshProviders = useStore((state) => state.refreshProviders)
   const [preview, setPreview] = useState<ProviderProfileImportPreview | null>(null)
   const [decisions, setDecisions] = useState<Record<string, ProviderProfileImportAction>>({})
   const [backups, setBackups] = useState<ProviderProfileBackupView[]>([])
+  const [backupPreview, setBackupPreview] = useState<ProviderProfileBackupPreview | null>(null)
+  const [nativePreview, setNativePreview] = useState<ProviderNativeImportPreview | null>(null)
+  const [nativeAction, setNativeAction] = useState<ProviderProfileImportAction>('skip')
+  const [nativeBackups, setNativeBackups] = useState<ProviderNativeImportBackupView[]>([])
   const [busy, setBusy] = useState<ProfileBusyState>('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const selectedCounts = useMemo(() => importActionCounts(preview, decisions), [preview, decisions])
 
-  useEffect(() => { void refreshBackups() }, [])
+  useEffect(() => { void refreshBackups(); void refreshNativeBackups() }, [providers])
 
   async function refreshBackups(): Promise<void> {
     setBackups(await window.agentDesk.listProviderProfileBackups().catch(() => []))
+  }
+
+  async function refreshNativeBackups(): Promise<void> {
+    setNativeBackups(await window.agentDesk.listProviderNativeImportBackups().catch(() => []))
+  }
+
+  async function scanCodex(): Promise<void> {
+    setBusy('native-scan'); setError(''); setMessage('')
+    try {
+      const next = await window.agentDesk.previewCodexNativeProviderImport()
+      setNativePreview(next)
+      setNativeAction(next.defaultAction)
+      setPreview(null); setDecisions({})
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function applyNativeImport(): Promise<void> {
+    if (!nativePreview || nativeAction === 'skip') return
+    setBusy('native-apply'); setError(''); setMessage('')
+    try {
+      const result = await window.agentDesk.applyCodexNativeProviderImport(nativePreview.previewId, nativeAction)
+      setNativePreview(null); setNativeAction('skip')
+      await refreshProviders()
+      await refreshNativeBackups()
+      setMessage(t('providerNativeCodexApplied', { name: result.provider.name }))
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function rollbackNativeImport(backup: ProviderNativeImportBackupView): Promise<void> {
+    if (!window.confirm(t('providerNativeCodexRollbackConfirm', { name: backup.providerName }))) return
+    setBusy('native-rollback'); setError(''); setMessage('')
+    try {
+      await window.agentDesk.rollbackProviderNativeImportBackup(backup.id)
+      await refreshProviders()
+      await refreshNativeBackups()
+      setMessage(t('providerNativeCodexRolledBack', { name: backup.providerName }))
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
   }
 
   async function exportProfile(): Promise<void> {
@@ -117,13 +184,29 @@ function useProviderProfileManager() {
     }
   }
 
-  async function rollback(backup: ProviderProfileBackupView): Promise<void> {
-    if (!window.confirm(t('providerProfileRollbackConfirm', { time: formattedTime(backup.createdAt) }))) return
+  async function previewBackup(backup: ProviderProfileBackupView): Promise<void> {
+    setBusy('backup-preview'); setError(''); setMessage('')
+    try {
+      setBackupPreview(await window.agentDesk.previewProviderProfileBackup(backup.id))
+      setPreview(null); setDecisions({})
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function rollback(): Promise<void> {
+    if (!backupPreview) return
+    if (!window.confirm(t('providerProfileRollbackConfirm', {
+      time: formattedTime(backupPreview.backup.createdAt)
+    }))) return
     setBusy('rollback'); setError(''); setMessage('')
     try {
-      const result = await rollbackProviderProfileBackup(backup.id)
-      setPreview(null); setDecisions({})
+      const result = await window.agentDesk.applyProviderProfileBackupPreview(backupPreview.previewId)
+      setBackupPreview(null)
       setMessage(t('providerProfileRolledBack', { n: result.providers.length }))
+      await refreshProviders()
       await refreshBackups()
     } catch (caught) {
       setError(errorMessage(caught))
@@ -137,13 +220,116 @@ function useProviderProfileManager() {
     setDecisions({})
   }
 
+  function closeBackupPreview(): void {
+    setBackupPreview(null)
+  }
+
+  function closeNativePreview(): void {
+    setNativePreview(null)
+    setNativeAction('skip')
+  }
+
   return {
-    preview, decisions, backups, busy, message, error, selectedCounts,
-    setDecisions, exportProfile, chooseImport, applyImport, rollback, closePreview
+    preview, decisions, backups, backupPreview, nativePreview, nativeAction, nativeBackups, busy, message, error, selectedCounts,
+    setDecisions, setNativeAction, exportProfile, chooseImport, applyImport, previewBackup, rollback, closePreview, closeBackupPreview,
+    scanCodex, applyNativeImport, rollbackNativeImport, closeNativePreview
   }
 }
 
 type ProfileController = ReturnType<typeof useProviderProfileManager>
+
+function ProviderNativeCodexPreview({ profile }: { profile: ProfileController }): React.JSX.Element {
+  const t = useT()
+  const preview = profile.nativePreview
+  if (!preview) throw new Error('Codex native import preview is required')
+  return (
+    <section className="provider-native-preview" aria-label={t('providerNativeCodexPreviewTitle')} data-provider-native-preview>
+      <div className="provider-native-preview-head">
+        <div>
+          <h4>{t('providerNativeCodexPreviewTitle')}</h4>
+          <p>{t('providerNativeCodexSource', {
+            source: preview.source === 'CODEX_HOME' ? 'CODEX_HOME' : t('providerNativeCodexUserProfile'),
+            config: preview.configPresent ? 'config.toml' : '-',
+            auth: preview.authPresent ? 'auth.json' : '-'
+          })}</p>
+        </div>
+        <button type="button" className="btn btn-ghost btn-icon-sm" title={t('cancel')} aria-label={t('cancel')} onClick={profile.closeNativePreview}>
+          <X size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="provider-native-summary">
+        <NativeFact label={t('providerNativeCodexTarget')} value={preview.targetProviderName || t('providerNativeCodexNewProvider')} />
+        <NativeFact label={t('providerNativeCodexProtocol')} value={preview.protocol === 'responses' ? 'OpenAI Responses' : 'Chat Completions'} />
+        <NativeFact label={t('providerNativeCodexCredential')} value={nativeCredentialLabel(preview, t)} />
+        <NativeFact label={t('providerNativeCodexModels')} value={preview.models.join(', ') || '-'} />
+      </div>
+      {preview.warnings.map((warning) => (
+        <div key={warning} className="provider-profile-warning">{t(`providerNativeWarning_${warning}`)}</div>
+      ))}
+      {preview.diffs.length > 0 && (
+        <div className="provider-native-diffs" role="table" aria-label={t('providerNativeCodexDiffs')}>
+          <div className="provider-native-diff provider-native-diff-head" role="row">
+            <span>{t('providerNativeCodexField')}</span><span>{t('providerNativeCodexCurrent')}</span><span>{t('providerNativeCodexIncoming')}</span>
+          </div>
+          {preview.diffs.map((diff) => (
+            <div className="provider-native-diff" role="row" key={diff.field}>
+              <strong>{t(`providerNativeField_${diff.field}`)}</strong>
+              <span>{diff.current ?? '-'}</span>
+              <span>{diff.incoming}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {preview.ignoredSections.length > 0 && (
+        <div className="provider-native-ignored">
+          <strong>{t('providerNativeCodexIgnored')}</strong>
+          <span>{preview.ignoredSections.join(', ')}</span>
+        </div>
+      )}
+      <div className="provider-profile-preview-footer">
+        <span>{t('providerNativeCodexSafety')}</span>
+        <div className="provider-native-apply-actions">
+          <select className="select" value={profile.nativeAction} disabled={profile.busy === 'native-apply'} onChange={(event) => profile.setNativeAction(event.target.value as ProviderProfileImportAction)}>
+            {preview.allowedActions.map((action) => <option key={action} value={action}>{t(`providerProfileAction_${action}`)}</option>)}
+          </select>
+          <button className="btn btn-primary btn-sm" disabled={profile.busy === 'native-apply' || profile.nativeAction === 'skip'} onClick={() => void profile.applyNativeImport()}>
+            {profile.busy === 'native-apply' ? t('providerProfileApplying') : t('providerNativeCodexApply')}
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function NativeFact({ label, value }: { label: string; value: string }): React.JSX.Element {
+  return <div><span>{label}</span><strong>{value}</strong></div>
+}
+
+function nativeCredentialLabel(preview: ProviderNativeImportPreview, t: ReturnType<typeof useT>): string {
+  const kind = t(`providerNativeCredential_${preview.credentialKind}`)
+  if (!preview.credentialImportable) return kind
+  return `${kind} · ${t('providerNativeCredentialImportable')}`
+}
+
+function ProviderNativeBackups({ profile }: { profile: ProfileController }): React.JSX.Element {
+  const t = useT()
+  return (
+    <section className="provider-native-backups" aria-label={t('providerNativeCodexBackups')}>
+      <h4>{t('providerNativeCodexBackups')}</h4>
+      {profile.nativeBackups.slice(0, 3).map((backup) => (
+        <div className="provider-profile-backup-row" key={backup.id}>
+          <div>
+            <strong>{backup.providerName}</strong>
+            <span>{formattedTime(backup.createdAt)} · {t(`providerProfileAction_${backup.action}`)}</span>
+          </div>
+          <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.rollbackNativeImport(backup)}>
+            <RotateCcw size={14} aria-hidden="true" /> {t('providerProfileRollback')}
+          </button>
+        </div>
+      ))}
+    </section>
+  )
+}
 
 function ProviderProfilePreviewPanel({ profile }: { profile: ProfileController }): React.JSX.Element {
   const t = useT()
@@ -259,11 +445,11 @@ function ProviderProfileBackups({ profile }: { profile: ProfileController }): Re
   return (
     <section className="provider-profile-backups" aria-label={t('providerProfileBackupsTitle')}>
       <h4>{t('providerProfileBackupsTitle')}</h4>
-      {profile.backups.slice(0, 3).map((backup) => (
+      {profile.backups.map((backup) => (
         <div key={backup.id} className="provider-profile-backup-row">
           <div>
             <strong>{formattedTime(backup.createdAt)}</strong>
-            <span>{t('providerProfileBackupSummary', { n: backup.providerCount })}</span>
+            <span>{t('providerProfileBackupSummary', { n: backup.providerCount })} · {backupReasonLabel(backup.reason, t)}</span>
             {backup.nonPersistentCredentialCount > 0 && (
               <span className="provider-profile-warning">
                 {t('providerProfileSessionKeyWarning', { n: backup.nonPersistentCredentialCount })}
@@ -275,13 +461,64 @@ function ProviderProfileBackups({ profile }: { profile: ProfileController }): Re
               </span>
             )}
           </div>
-          <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.rollback(backup)}>
-            {t('providerProfileRollback')}
+          <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.previewBackup(backup)}>
+            {t('providerProfilePreviewVersion')}
           </button>
         </div>
       ))}
     </section>
   )
+}
+
+function ProviderProfileBackupPreviewPanel({ profile }: { profile: ProfileController }): React.JSX.Element {
+  const t = useT()
+  const preview = profile.backupPreview
+  if (!preview) return <></>
+  return (
+    <section className="provider-profile-preview provider-profile-version-preview" aria-label={t('providerProfileVersionPreviewTitle')}>
+      <div className="provider-profile-preview-head">
+        <div>
+          <h4>{t('providerProfileVersionPreviewTitle')}</h4>
+          <p>{formattedTime(preview.backup.createdAt)} · {t('providerProfileVersionCounts', {
+            create: preview.createCount,
+            update: preview.updateCount,
+            delete: preview.deleteCount,
+            unchanged: preview.unchangedCount
+          })}</p>
+        </div>
+        <button className="btn btn-icon btn-sm" aria-label={t('close')} onClick={profile.closeBackupPreview}>
+          <X size={14} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="provider-profile-version-list">
+        {preview.items.map((item) => (
+          <div className="provider-profile-version-row" key={`${item.action}-${item.id}`}>
+            <strong>{item.providerName}</strong>
+            <span>{t(`providerProfileVersionAction_${item.action}`)}</span>
+            {item.changedFields.length > 0 && (
+              <span>{t('providerProfileChangedFields', { fields: item.changedFields.join(', ') })}</span>
+            )}
+          </div>
+        ))}
+      </div>
+      {preview.credentialReentryCount > 0 && (
+        <p className="provider-profile-warning">
+          {t('providerProfileCredentialReentryWarning', { n: preview.credentialReentryCount })}
+        </p>
+      )}
+      <div className="provider-profile-preview-footer">
+        <span>{t('providerProfileVersionDriftHint')}</span>
+        <button className="btn btn-primary btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.rollback()}>
+          <RotateCcw size={14} aria-hidden="true" />
+          {profile.busy === 'rollback' ? t('providerProfileRollingBack') : t('providerProfileRollback')}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function backupReasonLabel(reason: ProviderProfileBackupView['reason'], t: ReturnType<typeof useT>): string {
+  return t(`providerProfileBackupReason_${reason}`)
 }
 
 function importActionCounts(
@@ -305,6 +542,7 @@ function profileConflictLabel(
 
 function providerProtocolLabel(item: ProviderProfileImportPreview['items'][number]): string {
   if (item.engine === 'anthropic') return 'Anthropic Messages'
+  if (item.engine === 'gemini') return 'Google Generative Language'
   return item.openaiProtocol === 'responses' ? 'OpenAI Responses' : 'OpenAI Chat Completions'
 }
 

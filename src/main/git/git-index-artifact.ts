@@ -242,14 +242,24 @@ function promoteObject(target: GitIndexUpdateTarget, entry: GitIndexObjectManife
     return
   }
   const temporary = join(objectDirectory, `.caogen-${process.pid}-${randomUUID()}.tmp`)
+  let published = false
   try {
     copyFileSync(source, temporary, constants.COPYFILE_EXCL)
-    chmodSync(temporary, 0o444)
+    if (process.platform !== 'win32') chmodSync(temporary, 0o444)
     fsyncFile(temporary)
     validateLooseObjectFile(temporary, objectId, target.objectFormat)
-    publishLooseObject(temporary, destination, objectId, target.objectFormat)
+    published = publishLooseObject(temporary, destination, objectId, target.objectFormat)
+    if (process.platform === 'win32' && published) {
+      rmSync(temporary, { force: true })
+      chmodSync(destination, 0o444)
+      validateLooseObjectFile(destination, objectId, target.objectFormat)
+    }
     fsyncDirectory(objectDirectory)
   } finally {
+    if (process.platform === 'win32' && published) {
+      if (existsSync(temporary)) rmSync(temporary, { force: true })
+      if (existsSync(destination)) chmodSync(destination, 0o444)
+    }
     rmSync(temporary, { force: true })
   }
 }
@@ -275,12 +285,14 @@ function publishLooseObject(
   destination: string,
   objectId: string,
   objectFormat: GitIndexUpdateTarget['objectFormat']
-): void {
+): boolean {
   try {
     linkSync(temporary, destination)
+    return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     validateLooseObjectFile(destination, objectId, objectFormat)
+    return false
   }
 }
 
@@ -328,22 +340,51 @@ function readBoundedFile(path: string, maxBytes: number, label: string): Buffer 
 }
 
 function durableWriteFile(path: string, bytes: Buffer): void {
-  const descriptor = openSync(path, 'wx', 0o600)
+  // The path is a freshly-created private staging name; a non-exclusive handle
+  // allows Windows to reopen it for FlushFileBuffers-compatible fsync fallback.
+  let descriptor: number | undefined = openSync(path, 'w', 0o600)
   try {
     writeFileSync(descriptor, bytes)
-    fsyncSync(descriptor)
+    if (!fsyncFileDescriptor(path, descriptor)) descriptor = undefined
   } finally {
-    closeSync(descriptor)
+    if (descriptor !== undefined) safeClose(descriptor)
   }
 }
 
 function fsyncFile(path: string): void {
-  const descriptor = openSync(path, 'r')
+  let descriptor: number | undefined = openSync(path, 'r')
+  try {
+    if (!fsyncFileDescriptor(path, descriptor)) descriptor = undefined
+  } finally {
+    if (descriptor !== undefined) safeClose(descriptor)
+  }
+}
+
+function fsyncFileDescriptor(path: string, descriptor: number): boolean {
   try {
     fsyncSync(descriptor)
-  } finally {
-    closeSync(descriptor)
+    return true
+  } catch (error) {
+    if (process.platform !== 'win32' || !isWindowsFsyncPermissionError(error)) {
+      throw new Error(`fsync ${path} failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    // Windows can reject FlushFileBuffers for Git's loose-object staging
+    // handles; the atomic rename remains the publication barrier.
+    safeClose(descriptor)
+    return false
   }
+}
+
+function safeClose(descriptor: number): void {
+  try {
+    closeSync(descriptor)
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || (error as NodeJS.ErrnoException).code !== 'EBADF') throw error
+  }
+}
+
+function isWindowsFsyncPermissionError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPERM'
 }
 
 function fsyncDirectory(path: string): void {

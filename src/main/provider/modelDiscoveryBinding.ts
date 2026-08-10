@@ -29,6 +29,7 @@ export function bindProviderModelDiscoveryInput(
       providerId: provider.id,
       customHeaders: provider.customHeaders,
       credentialHeaderNames: provider.credentialHeaderNames,
+      engine: provider.engine,
       openaiProtocol: provider.openaiProtocol,
       authMode: provider.authMode
     },
@@ -40,6 +41,12 @@ function assertSavedProviderBinding(input: ProviderModelFetchInput, provider: Pr
   const requestedBaseUrl = canonicalBaseUrl(input.baseUrl)
   const savedBaseUrl = canonicalBaseUrl(provider.baseUrl)
   if (requestedBaseUrl === null || savedBaseUrl === null || requestedBaseUrl !== savedBaseUrl) {
+    throw bindingError()
+  }
+  if (
+    input.engine !== undefined
+    && input.engine !== provider.engine
+  ) {
     throw bindingError()
   }
   if (

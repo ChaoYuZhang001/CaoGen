@@ -203,7 +203,6 @@ const commandDefinitions = [
   { name: 'chinaModelProvider smoke', command: 'node', args: ['scripts/china-model-provider-smoke.mjs'], category: 'smoke' },
   { name: 'chinaRealNetwork smoke', command: 'node', args: ['scripts/china-real-network-smoke.mjs'], category: 'smoke', statusReporter: 'scripts/china-real-network-smoke.mjs' },
   { name: 'chinaToolCallParity smoke', command: 'node', args: ['scripts/china-tool-call-parity.mjs'], category: 'smoke', statusReporter: 'scripts/china-tool-call-parity.mjs' },
-  { name: 'ideBridge smoke', command: 'node', args: ['scripts/ide-bridge-smoke.mjs'], category: 'smoke' },
   { name: 'openai P2 tools smoke', command: 'node', args: ['scripts/openai-p2-tools-smoke.mjs'], category: 'smoke' },
   { name: 'responses tools e2e', ...commandSpec('npx', ['electron', 'scripts/responses-tools-e2e.cjs']), category: 'system' },
   { name: 'history compress e2e', ...commandSpec('npx', ['electron', 'scripts/history-compress-e2e.cjs']), category: 'system' },

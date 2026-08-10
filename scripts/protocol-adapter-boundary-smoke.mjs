@@ -89,9 +89,9 @@ try {
 
 function verifyFactoryBindings(engineModule, boundModule) {
   const adapters = engineModule.listProtocolAdapters()
-  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'openai'])
+  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'gemini', 'openai'])
   assert.deepEqual(adapters.map((adapter) => adapter.protocol), [
-    'anthropic.messages', 'openai.compatible'
+    'anthropic.messages', 'google.generative-language', 'openai.compatible'
   ])
   for (const adapter of adapters) {
     assert.equal(Object.isFrozen(adapter), true)

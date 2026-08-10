@@ -275,6 +275,11 @@ export const DURABLE_WRITE_REGISTRY = [
     'caogen.project-aggregate-seals', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists digest-sealed Project aggregate revisions and object counts.'
   ),
+  audit(
+    'src/main/projectTestRunner.ts',
+    'caogen-project-test-evidence', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists bounded, redacted test outcomes without raw workspace paths or full command output.'
+  ),
   exempt(
     'src/main/project-workspace/ledger-shadow-lock.ts', 'ephemeral_runtime', 'ephemeral',
     'Persists a versioned exclusive lock owner only for cross-process serialization.',
@@ -294,10 +299,59 @@ export const DURABLE_WRITE_REGISTRY = [
     'src/main/projects.ts', 'ProjectStoreDocument', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists the versioned recent and archived Project list used by the application shell.'
   ),
+  implemented(
+    'src/main/provider/codexNativeConfigService.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Publishes Codex native configuration and encrypted rollback backups through fsynced atomic replacement.'
+  ),
+  domain(
+    'src/main/provider/ccSwitchProviderImport.ts',
+    'caogen-cc-switch-provider-import-backup', '2', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists digest-bound CC Switch Provider batch apply and rollback state with the shared Provider operation identity.'
+  ),
+  domain(
+    'src/main/provider/providerAuthorizationStore.ts',
+    'ProviderAuthorizationAccount', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists versioned Provider authorization accounts, encrypted credentials, and non-secret quota observations with atomic replacement.'
+  ),
+  domain(
+    'src/main/provider/providerBillingStore.ts',
+    'ProviderBillingStoreDocument', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists digest-bound external billing statements without credentials, response bodies, source files, or remote URLs.'
+  ),
+  domain(
+    'src/main/provider/providerGatewayStore.ts',
+    'ProviderGatewayDocument and ProviderGatewayUsageDocument', '1',
+    'atomic_fsync_rename', 'implemented_unverified',
+    'Persists encrypted loopback gateway configuration and bounded non-content usage records with symlink rejection.'
+  ),
+  implemented(
+    'src/main/provider/providerNativeConfigImport.ts', 'migration_backup', 'atomic_fsync_rename',
+    'Publishes digest-bound native Provider import backups through fsynced atomic replacement.'
+  ),
   domain(
     'src/main/provider/providerProfileService.ts',
     'caogen.provider-profile and backup', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Publishes Provider profile exports and digest-bound rollback backups atomically.'
+  ),
+  domain(
+    'src/main/provider/providerProfileBackupWriter.ts',
+    'caogen-provider-profile-backup', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Publishes credential-free automatic Provider configuration versions before ordinary create, update, and delete mutations.'
+  ),
+  domain(
+    'src/main/provider/providerProfileSync.ts',
+    'caogen-provider-profile-sync envelope and local state', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Publishes credential-free, digest-bound sync revisions and reconciles interrupted local state updates by exact profile equality.'
+  ),
+  domain(
+    'src/main/provider/providerProfileWebDavSync.ts',
+    'caogen-provider-profile-webdav-config', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists an OS-encrypted WebDAV credential reference, ancestor digest, auto-sync policy, and bounded status.'
+  ),
+  domain(
+    'src/main/provider/providerProfileS3Sync.ts',
+    'caogen-provider-profile-s3-config', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists OS-encrypted S3 credential references, ancestor digest, auto-sync policy, and bounded status.'
   ),
   journal(
     'src/main/provider/providerProfileOperationJournal.ts',

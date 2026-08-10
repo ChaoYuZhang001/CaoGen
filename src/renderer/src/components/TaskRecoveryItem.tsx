@@ -200,6 +200,8 @@ function RecoveryTimeline({ snapshot }: { snapshot: TaskSnapshotRecord }): React
 }
 
 function ledgerEventLabel(event: AgentEvent): string | null {
+  const routingLabel = routingLedgerEventLabel(event)
+  if (routingLabel) return routingLabel
   switch (event.kind) {
     case 'init': return `执行器恢复 · ${event.model || '默认模型'}`
     case 'status': return `状态 · ${event.status}${event.error ? ' · 错误' : ''}`
@@ -214,9 +216,6 @@ function ledgerEventLabel(event: AgentEvent): string | null {
     case 'permission-request': return `等待审批 · ${event.request.toolName}`
     case 'permission-resolved': return `审批${event.behavior === 'allow' ? '允许' : '拒绝'}`
     case 'turn-result': return event.isError ? '本轮失败' : '本轮完成'
-    case 'routing': return `路由 · ${event.providerName ?? event.providerId} / ${event.model}`
-    case 'failover': return `Provider 切换 · ${event.fromName} → ${event.toName}`
-    case 'provider-key-failover': return `Key 切换 · ${event.fromKeyLabel} → ${event.toKeyLabel}`
     case 'checkpoint': return `Checkpoint · ${shortId(event.messageId)}`
     case 'checkpoint-restore': return `恢复 Checkpoint · ${shortId(event.messageId)}`
     case 'hook-event': return event.event === 'context-compressed' ? '上下文压缩边界' : `运行事件 · ${event.event}`
@@ -224,6 +223,19 @@ function ledgerEventLabel(event: AgentEvent): string | null {
     case 'task-dag-update': return 'DAG 状态更新'
     case 'text-delta':
     case 'thinking-delta': return null
+    default: return null
+  }
+}
+
+function routingLedgerEventLabel(event: AgentEvent): string | undefined {
+  switch (event.kind) {
+    case 'routing': return `路由 · ${event.providerName ?? event.providerId} / ${event.model}`
+    case 'failover': return `Provider 切换 · ${event.fromName} → ${event.toName}`
+    case 'provider-key-failover': return `Key 切换 · ${event.fromKeyLabel} → ${event.toKeyLabel}`
+    case 'provider-model-failover': return `模型切换 · ${event.fromModel} → ${event.toModel}`
+    case 'provider-protocol-failover': return `协议降级 · Responses → Chat Completions`
+    case 'provider-recovery-exhausted': return `等待人工接管 · ${event.providerName} / ${event.model}`
+    default: return undefined
   }
 }
 

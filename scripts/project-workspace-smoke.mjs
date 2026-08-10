@@ -25,6 +25,12 @@ try {
   const first = new api.ProjectWorkspaceStore(userData)
   await first.open()
 
+  // Windows can report EPERM/EACCES rather than EEXIST when another handle
+  // owns the lock file. Concurrent store startup must treat that as contention.
+  const concurrentStores = Array.from({ length: 12 }, () => new api.ProjectWorkspaceStore(userData))
+  await Promise.all(concurrentStores.map((store) => store.open()))
+  assertEqual(concurrentStores.length, 12, 'concurrent workspace stores must open without a Windows lock error')
+
   // PROJ-001/002: no-directory workspace and optional resources. The source
   // path is only a resource link and is never owned by the store.
   const emptyWorkspace = await first.createWorkspace({ name: 'Directory-free workspace', kind: 'research' })

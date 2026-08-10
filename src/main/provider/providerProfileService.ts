@@ -20,6 +20,8 @@ import { basename, dirname, join } from 'node:path'
 import type {
   Provider,
   ProviderProfileApplyResult,
+  ProviderProfileBackupChange,
+  ProviderProfileBackupPreview,
   ProviderProfileBackupView,
   ProviderProfileImportDecision,
   ProviderProfileImportPreview,
@@ -57,6 +59,7 @@ const BACKUP_KIND = 'caogen-provider-profile-backup'
 const BACKUP_VERSION = 1
 const PREVIEW_TTL_MS = 15 * 60 * 1_000
 const MAX_PENDING_PREVIEWS = 20
+const MAX_LOCAL_BACKUPS = 50
 const BACKUP_ID = /^[0-9TZ-]{19,40}-[0-9a-f-]{36}$/i
 
 interface PendingProviderProfileImport {
@@ -90,12 +93,22 @@ interface ProviderProfileOperationBackupBindings {
 }
 
 export interface ProviderProfileOperationTestOptions {
+  operationId?: string
   faultAt?: 'after_prepare' | 'after_store_commit'
   onCheckpoint?: (checkpoint: 'after_prepare' | 'after_store_commit', operationId: string) => void
   onFault?: (checkpoint: 'after_prepare' | 'after_store_commit', operationId: string) => void
 }
 
+interface PendingProviderProfileBackup {
+  createdAt: number
+  backupId: string
+  backupDigest: string
+  providerConfigurationDigest: string
+  preview: ProviderProfileBackupPreview
+}
+
 const pendingImports = new Map<string, PendingProviderProfileImport>()
+const pendingBackups = new Map<string, PendingProviderProfileBackup>()
 
 export function exportProviderProfileToFile(filePath: string): { fileName: string; providerCount: number } {
   reconcileProviderProfileOperations()
@@ -106,13 +119,18 @@ export function exportProviderProfileToFile(filePath: string): { fileName: strin
 
 export function previewProviderProfileFile(filePath: string): ProviderProfileImportPreview {
   reconcileProviderProfileOperations()
-  const parsed = parseProviderProfile(readRegularFile(filePath))
+  return previewProviderProfileDocument(readRegularFile(filePath), basename(filePath))
+}
+
+export function previewProviderProfileDocument(raw: string, fileName: string): ProviderProfileImportPreview {
+  reconcileProviderProfileOperations()
+  const parsed = parseProviderProfile(raw)
   const providers = listProviders()
   const items = planProviderProfileImport(parsed.entries, providers)
   const previewId = randomUUID()
   const preview: ProviderProfileImportPreview = {
     previewId,
-    fileName: basename(filePath),
+    fileName,
     profileCount: items.length,
     createCount: items.filter((item) => item.view.defaultAction === 'create').length,
     updateCount: items.filter((item) => item.view.defaultAction === 'update').length,
@@ -192,6 +210,73 @@ export function listProviderProfileBackups(): ProviderProfileBackupView[] {
       }
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, MAX_LOCAL_BACKUPS)
+}
+
+export function previewProviderProfileBackup(backupId: string): ProviderProfileBackupPreview {
+  reconcileProviderProfileOperations()
+  const normalizedId = normalizedBackupId(backupId)
+  const backup = readBackup(join(backupRoot(), `${normalizedId}.json`))
+  const providers = listProviders()
+  const items = backupChangeItems(backup.providers, providers)
+  const previewId = randomUUID()
+  const preview: ProviderProfileBackupPreview = {
+    previewId,
+    backup: backupView(backup),
+    createCount: items.filter((item) => item.action === 'create').length,
+    updateCount: items.filter((item) => item.action === 'update').length,
+    deleteCount: items.filter((item) => item.action === 'delete').length,
+    unchangedCount: items.filter((item) => item.action === 'unchanged').length,
+    credentialReentryCount: backup.excludedCredentialCount,
+    items
+  }
+  prunePendingBackups()
+  pendingBackups.set(previewId, {
+    createdAt: Date.now(),
+    backupId: backup.id,
+    backupDigest: backup.payloadDigest,
+    providerConfigurationDigest: providerConfigurationDigest(providers),
+    preview
+  })
+  return preview
+}
+
+export function applyProviderProfileBackupPreview(
+  previewId: string,
+  operationOptions: ProviderProfileOperationTestOptions = {}
+): ProviderProfileRollbackResult {
+  reconcileProviderProfileOperations()
+  const pending = requirePendingBackup(previewId)
+  const committed = withProviderStoreMutationLock(app.getPath('userData'), () => {
+    if (providerConfigurationDigest(listProviders()) !== pending.providerConfigurationDigest) {
+      pendingBackups.delete(previewId)
+      throw new Error('Provider configuration changed after preview; preview the version again before rollback')
+    }
+    const backup = readBackup(join(backupRoot(), `${pending.backupId}.json`))
+    if (backup.payloadDigest !== pending.backupDigest) {
+      pendingBackups.delete(previewId)
+      throw new Error('Provider Profile backup changed after preview')
+    }
+    const safetyBackup = createProviderProfileBackup('manual')
+    const safetyBinding = readBackupBinding(safetyBackup.id)
+    return executeProviderProfileStoreOperation(
+      'rollback',
+      prepareProviderStoreBackupRestore(backup.providers),
+      {
+        safetyBackupId: safetyBinding.id,
+        safetyBackupDigest: safetyBinding.digest,
+        sourceBackupId: backup.id,
+        sourceBackupDigest: backup.payloadDigest
+      },
+      operationOptions
+    )
+  })
+  pendingBackups.delete(previewId)
+  return {
+    operationId: committed.operationId,
+    providers: committed.providers,
+    restoredBackupId: pending.backupId
+  }
 }
 
 export function rollbackProviderProfileBackup(
@@ -224,6 +309,33 @@ export function rollbackProviderProfileBackup(
   }
 }
 
+export function commitPreparedProviderStoreOperation(
+  operation: ProviderProfileOperationKind,
+  prepared: PreparedProviderProfileStoreMutation,
+  operationOptions: ProviderProfileOperationTestOptions = {}
+): { operationId: string; providers: ProviderProfileApplyResult['providers'] } {
+  reconcileProviderProfileOperations()
+  return withProviderStoreMutationLock(app.getPath('userData'), () => {
+    const safetyBackup = createProviderProfileBackup(operation === 'import' ? 'import' : 'manual')
+    const safetyBinding = readBackupBinding(safetyBackup.id)
+    const sourceBinding = operation === 'rollback'
+      ? readBackupBinding(createProviderProfileBackup('manual').id)
+      : undefined
+    return executeProviderProfileStoreOperation(
+      operation,
+      prepared,
+      {
+        safetyBackupId: safetyBinding.id,
+        safetyBackupDigest: safetyBinding.digest,
+        ...(sourceBinding
+          ? { sourceBackupId: sourceBinding.id, sourceBackupDigest: sourceBinding.digest }
+          : {})
+      },
+      operationOptions
+    )
+  })
+}
+
 export function reconcileProviderProfileOperations(): ProviderProfileOperationReconciliation[] {
   return withProviderStoreMutationLock(app.getPath('userData'), () => {
     scrubProviderProfileBackups()
@@ -251,6 +363,7 @@ function executeProviderProfileStoreOperation(
 ): { operationId: string; providers: ProviderProfileApplyResult['providers'] } {
   const journal = providerProfileOperationJournal()
   const entry = journal.prepare({
+    operationId: options.operationId,
     operation,
     beforeSnapshotDigest: prepared.beforeSnapshotDigest,
     desiredSnapshotDigest: prepared.desiredSnapshotDigest,
@@ -331,6 +444,85 @@ function prunePendingImports(): void {
   }
 }
 
+function requirePendingBackup(previewId: string): PendingProviderProfileBackup {
+  prunePendingBackups()
+  const pending = pendingBackups.get(previewId.trim())
+  if (!pending) throw new Error('Provider Profile backup preview expired; preview the version again')
+  return pending
+}
+
+function prunePendingBackups(): void {
+  const expiredBefore = Date.now() - PREVIEW_TTL_MS
+  for (const [id, pending] of pendingBackups) {
+    if (pending.createdAt < expiredBefore) pendingBackups.delete(id)
+  }
+  while (pendingBackups.size >= MAX_PENDING_PREVIEWS) {
+    const oldest = pendingBackups.keys().next().value as string | undefined
+    if (!oldest) break
+    pendingBackups.delete(oldest)
+  }
+}
+
+function normalizedBackupId(backupId: string): string {
+  const normalizedId = backupId.trim()
+  if (!BACKUP_ID.test(normalizedId)) throw new Error('Provider Profile backup ID is invalid')
+  return normalizedId
+}
+
+function backupChangeItems(
+  backupProviders: Provider[],
+  currentProviders: ReturnType<typeof listProviders>
+): ProviderProfileBackupChange[] {
+  const currentById = new Map(currentProviders.map((provider) => [provider.id, provider]))
+  const backupIds = new Set(backupProviders.map((provider) => provider.id))
+  const items: ProviderProfileBackupChange[] = backupProviders.map((provider) => {
+    const current = currentById.get(provider.id)
+    if (!current) {
+      return { id: provider.id, providerName: provider.name, action: 'create', changedFields: [] }
+    }
+    const changedFields = providerBackupChangedFields(provider, current)
+    return {
+      id: provider.id,
+      providerName: provider.name,
+      action: changedFields.length > 0 ? 'update' : 'unchanged',
+      changedFields
+    }
+  })
+  for (const provider of currentProviders) {
+    if (backupIds.has(provider.id)) continue
+    items.push({ id: provider.id, providerName: provider.name, action: 'delete', changedFields: [] })
+  }
+  return items.sort((left, right) => {
+    const actionOrder = { create: 0, update: 1, delete: 2, unchanged: 3 }
+    return actionOrder[left.action] - actionOrder[right.action]
+      || left.providerName.localeCompare(right.providerName)
+  })
+}
+
+function providerBackupChangedFields(
+  backup: Provider,
+  current: ReturnType<typeof listProviders>[number]
+): string[] {
+  const fields: Array<[string, unknown, unknown]> = [
+    ['name', backup.name, current.name],
+    ['baseUrl', backup.baseUrl, current.baseUrl],
+    ['models', backup.models, current.models],
+    ['authMode', backup.authMode, current.authMode],
+    ['engine', backup.engine, current.engine],
+    ['customHeaders', backup.customHeaders ?? '', current.customHeaders ?? ''],
+    ['credentialHeaderNames', backup.credentialHeaderNames ?? [], current.credentialHeaderNames ?? []],
+    ['credentialRoutingMode', backup.credentialRoutingMode ?? 'preferred', current.credentialRoutingMode ?? 'preferred'],
+    ['budgetUsd', backup.budgetUsd ?? 0, current.budgetUsd ?? 0],
+    ['openaiProtocol', backup.openaiProtocol ?? '', current.openaiProtocol ?? ''],
+    ['note', backup.note ?? '', current.note ?? ''],
+    ['authorization', backup.authorization ?? null, current.authorization ?? null],
+    ['advancedConfig', backup.advancedConfig ?? null, current.advancedConfig ?? null]
+  ]
+  return fields
+    .filter(([, before, now]) => JSON.stringify(before) !== JSON.stringify(now))
+    .map(([field]) => field)
+}
+
 function createProviderProfileBackup(reason: ProviderProfileBackupView['reason']): ProviderProfileBackupView {
   const snapshot = snapshotProviderStoreForBackup()
   const createdAt = new Date().toISOString()
@@ -392,7 +584,13 @@ function hasValidBackupIdentity(document: Partial<ProviderProfileBackupDocument>
     && typeof document.id === 'string'
     && BACKUP_ID.test(document.id)
     && typeof document.createdAt === 'string'
-    && (document.reason === 'import' || document.reason === 'manual')
+    && [
+      'import',
+      'manual',
+      'provider-create',
+      'provider-update',
+      'provider-delete'
+    ].includes(String(document.reason))
 }
 
 function hasValidBackupCounts(document: Partial<ProviderProfileBackupDocument>): boolean {
@@ -489,9 +687,15 @@ function providerConfigurationDigest(providers: ReturnType<typeof listProviders>
       engine: provider.engine,
       customHeaders: provider.customHeaders,
       credentialHeaderNames: provider.credentialHeaderNames,
+      credentialRoutingMode: provider.credentialRoutingMode,
       budgetUsd: provider.budgetUsd,
       openaiProtocol: provider.openaiProtocol,
-      note: provider.note
+      note: provider.note,
+      authorization: provider.authorization,
+      advancedConfig: provider.advancedConfig,
+      keyCount: provider.keyCount,
+      activeKeyId: provider.activeKeyId,
+      credentialMigrationRequired: provider.credentialMigrationRequired
     }))
   return createHash('sha256').update(JSON.stringify(configuration)).digest('hex')
 }

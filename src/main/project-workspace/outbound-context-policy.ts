@@ -36,7 +36,7 @@ export interface PreparedOutboundContext {
 interface PrepareOutboundContextInput {
   meta: Pick<SessionMeta, 'id' | 'projectId' | 'workspaceId' | 'providerId' | 'model' | 'engine' | 'routingScope'>
   rootDir: string
-  payload: Pick<SendMessagePayload, 'text' | 'images'>
+  payload: Pick<SendMessagePayload, 'text' | 'images' | 'documents'>
   providerId?: string
   model?: string
   additionalItems?: OutboundContextItemView[]
@@ -99,7 +99,7 @@ export async function prepareOutboundContext(
 export async function previewOutboundContext(
   meta: PrepareOutboundContextInput['meta'],
   rootDir: string,
-  payload: Pick<SendMessagePayload, 'text' | 'images'>
+  payload: Pick<SendMessagePayload, 'text' | 'images' | 'documents'>
 ): Promise<OutboundContextManifest> {
   return (await prepareOutboundContext({ meta, rootDir, payload })).manifest
 }
@@ -225,7 +225,7 @@ function assertManifestDigest(manifest: OutboundContextManifest): void {
 }
 
 function messageContextItems(
-  payload: Pick<SendMessagePayload, 'text' | 'images'>
+  payload: Pick<SendMessagePayload, 'text' | 'images' | 'documents'>
 ): OutboundContextItemView[] {
   const items: OutboundContextItemView[] = []
   if (payload.text.trim()) {
@@ -251,6 +251,18 @@ function messageContextItems(
       digest: image.hash ? `sha256:${image.hash}` : undefined
     })
   }
+  for (const [index, document] of (payload.documents ?? []).entries()) {
+    items.push({
+      id: `message:document:${document.id}`,
+      kind: 'document_attachment',
+      label: `Document attachment ${index + 1}`,
+      dataClass: document.dataClass,
+      egressPolicy: document.dataClass === 'S3' ? 'deny' : 'allow',
+      decision: 'included',
+      bytes: document.bytes,
+      digest: document.hash ? `sha256:${document.hash}` : undefined
+    })
+  }
   return items
 }
 
@@ -266,6 +278,7 @@ function endpointOriginForProvider(provider: ProviderView): string {
 
 function defaultEndpointOrigin(engine: SessionMeta['engine'] | undefined): string {
   if (engine === 'anthropic') return 'https://api.anthropic.com'
+  if (engine === 'gemini') return 'https://generativelanguage.googleapis.com'
   if (engine === 'openai') return 'https://api.openai.com'
   return 'unknown'
 }

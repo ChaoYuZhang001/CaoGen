@@ -652,9 +652,12 @@ async function verifyOneInputGoalTask(page) {
     `directory-free Session did not use app-owned Workspace root: ${session.cwd}`)
   assert(started.legacyProjects.length === 0,
     `one-input startup created ${started.legacyProjects.length} hidden legacy Projects`)
-  const transcript = await page.evaluate((id) => window.agentDesk.getTranscript(id), session.id)
-  assert(transcript.some((entry) => entry.event?.kind === 'user-message' && entry.event.text === objective),
-    'first objective was not accepted into the Session transcript')
+  const transcript = await waitForValue(
+    () => page.evaluate((id) => window.agentDesk.getTranscript(id), session.id),
+    (entries) => entries.some((entry) => entry.event?.kind === 'user-message' && entry.event.text === objective),
+    15_000,
+    'waiting for first objective transcript'
+  )
   state.goalTaskGoalId = goal.id
   state.goalTaskWorkItemId = workItem.id
   state.goalTaskSessionId = session.id

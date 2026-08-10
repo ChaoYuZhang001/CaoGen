@@ -429,6 +429,7 @@ function firstExisting(candidates) {
 
 function initRepo(cwd, fileName, content) {
   git(cwd, ['init'])
+  git(cwd, ['config', 'core.autocrlf', 'false'])
   git(cwd, ['config', 'user.email', 'smoke@example.test'])
   git(cwd, ['config', 'user.name', 'Worktree Merge Smoke'])
   writeFileSync(path.join(cwd, fileName), content, 'utf8')

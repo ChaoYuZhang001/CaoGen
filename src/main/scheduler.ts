@@ -1,13 +1,20 @@
 import type { SchedulerStrategy } from '../shared/types'
 import { reliabilityScore } from './modelStats'
-import { getHealth as readProviderHealth } from './providerHealth'
+import { isProviderAvailable } from './providerHealth'
+import type { FailureClass } from './providerHealth'
 
 export {
+  acquireProviderRequest,
   classifyFailure,
+  configureProviderCircuitBreaker,
   configureProviderHealthDir,
   getHealth,
+  isProviderAvailable,
   listHealth,
   recordFailure,
+  recordProbeFailure,
+  recordProbeSuccess,
+  releaseProviderRequest,
   recordSuccess
 } from './providerHealth'
 export type { FailureClass, ProviderFailureRecord, ProviderHealth } from './providerHealth'
@@ -165,7 +172,7 @@ export function pickModelAcrossProviders(opts: {
   }
   const pool: Entry[] = []
   for (const c of opts.candidates) {
-    if (!readProviderHealth(c.id).healthy) continue // 跳过不健康厂商(连续失败≥3)
+    if (!isProviderAvailable(c.id)) continue
     for (const model of c.models) {
       if (!model) continue
       pool.push({
@@ -252,6 +259,55 @@ export interface FailoverTarget {
   preference?: string
 }
 
+export interface ProviderModelFailoverTarget {
+  model: string
+  preference?: string
+}
+
+const PROVIDER_MODEL_FAILOVER_FAILURES = new Set<FailureClass['kind']>([
+  'model_unavailable',
+  'rate_limit',
+  'quota',
+  'forbidden',
+  'server'
+])
+
+/** Pick another model on the current Provider before crossing a Provider boundary. */
+export function pickProviderModelFailoverTarget(opts: {
+  providerId: string
+  models: string[]
+  desiredModel: string
+  exclude: ReadonlySet<string>
+  fallbackModel?: string
+  failure: FailureClass
+}): ProviderModelFailoverTarget | null {
+  if (!opts.failure.switchable || !PROVIDER_MODEL_FAILOVER_FAILURES.has(opts.failure.kind)) return null
+  if (!isProviderAvailable(opts.providerId)) return null
+
+  const desiredModel = opts.desiredModel.trim()
+  const candidates = [...new Set(opts.models.map((model) => model.trim()).filter(Boolean))]
+    .filter((model) => model !== desiredModel && !opts.exclude.has(model))
+  if (candidates.length === 0) return null
+
+  const fallbackModel = opts.fallbackModel?.trim()
+  if (fallbackModel && candidates.includes(fallbackModel)) {
+    return { model: fallbackModel, preference: 'Configured fallback model' }
+  }
+
+  const desiredCap = capOf(desiredModel || 'sonnet')
+  candidates.sort((left, right) => {
+    const leftCap = capOf(left)
+    const rightCap = capOf(right)
+    const qualityDistance = Math.abs(leftCap.quality - desiredCap.quality) -
+      Math.abs(rightCap.quality - desiredCap.quality)
+    if (qualityDistance !== 0) return qualityDistance
+    if (leftCap.cost !== rightCap.cost) return leftCap.cost - rightCap.cost
+    if (leftCap.speed !== rightCap.speed) return rightCap.speed - leftCap.speed
+    return left < right ? -1 : left > right ? 1 : 0
+  })
+  return { model: candidates[0], preference: 'Same-provider model recovery' }
+}
+
 /**
  * 挑选故障切换目标:排除已试过的厂商,跳过不健康厂商,
  * 在剩余候选里选"有与期望模型能力档最接近的模型"的一家(打平选成本低)。
@@ -270,7 +326,7 @@ export function pickFailoverTarget(opts: {
   let best: { c: FailoverCandidate; model?: string; dist: number } | null = null
   for (const c of opts.candidates) {
     if (opts.exclude.has(c.id)) continue
-    if (!readProviderHealth(c.id).healthy) continue
+    if (!isProviderAvailable(c.id)) continue
     let model: string | undefined
     let dist = 1 // 无模型列表:能力未知,给轻微劣势
     if (c.models.length > 0) {
@@ -305,7 +361,7 @@ function pickPreferredFailoverTarget(opts: {
   const fallbackModel = opts.fallbackModel?.trim()
   if (!fallbackProviderId && !fallbackModel) return null
 
-  const healthyCandidates = opts.candidates.filter((c) => !opts.exclude.has(c.id) && readProviderHealth(c.id).healthy)
+  const healthyCandidates = opts.candidates.filter((c) => !opts.exclude.has(c.id) && isProviderAvailable(c.id))
   let preferredCandidates = healthyCandidates
   if (fallbackProviderId) {
     preferredCandidates = healthyCandidates.filter((c) => c.id === fallbackProviderId)

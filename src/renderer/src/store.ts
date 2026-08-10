@@ -1,5 +1,12 @@
 import { create } from 'zustand'
 import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
+import {
+  reduceProviderFailover,
+  type ProviderKeyFailoverChatItem,
+  type ProviderModelFailoverChatItem,
+  type ProviderProtocolFailoverChatItem,
+  type ProviderRecoveryExhaustedChatItem
+} from './store/provider-failover'
 // ART-005: store 层派生交付判定(纯函数,唯一真相源;不新增状态字段,不改既有 API)
 export { deriveDeliveryVerdict, canMarkGoalComplete } from './store/delivery-verdict'
 export type { DeliveryVerdict, DeliveryVerdictDetail } from './store/delivery-verdict'
@@ -34,6 +41,8 @@ import type {
   PluginRegistryItem,
   PluginRegistryView,
   ProjectFileEntry,
+  ProjectDiagnostic,
+  ProjectTextSearchMatch,
   PermissionRequestInfo,
   OfficeVisualPreview,
   PreparedPreview,
@@ -84,7 +93,23 @@ import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
 import { createTerminalActions } from './store/terminal-actions'
 import { createBrowserActions } from './store/browser-actions'
+import {
+  activeFileTab,
+  closeFileTabState,
+  cycleFileTabState,
+  markFileTabSaved,
+  selectFileTab,
+  tabsForSession,
+  updateFileTabDraft,
+  upsertFileTab,
+  type FileEditorTab,
+  type FileEditorTabsState
+} from './store/file-editor-tabs'
 let seq = 0
+let fileRequestSeq = 0
+let filesRequestSeq = 0
+let fileSearchRequestSeq = 0
+let fileDiagnosticsRequestSeq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
@@ -272,6 +297,7 @@ export type ChatItem =
       /** 主进程回传的权威消息 id;乐观追加时为空,user-message 事件到达后补上 */
       messageId?: string
       checkpointId?: string
+      checkpointScope?: 'chat' | 'both'
       attachments?: UserMessageAttachmentView[]
     }
   | { id: string; kind: 'assistant'; blocks: AssistantBlock[] }
@@ -303,14 +329,10 @@ export type ChatItem =
       model?: string
       reason: string
     }
-  | {
-      id: string
-      kind: 'provider-key-failover'
-      providerName: string
-      fromKeyLabel: string
-      toKeyLabel: string
-      reason: string
-    }
+  | ProviderKeyFailoverChatItem
+  | ProviderModelFailoverChatItem
+  | ProviderProtocolFailoverChatItem
+  | ProviderRecoveryExhaustedChatItem
   | {
       id: string
       kind: 'workspace'
@@ -354,6 +376,8 @@ function newSessionState(meta: SessionMeta): SessionState {
 }
 
 function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
+  const providerFailover = reduceProviderFailover(s, ev, genId)
+  if (providerFailover) return providerFailover
   switch (ev.kind) {
     case 'user-message': {
       // 去重:sendMessage 已乐观追加一条 user 项(pending);此事件是主进程回传的
@@ -396,20 +420,26 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
         const idx = items.findIndex((it) => it.kind === 'user' && it.id === ev.userMessageId)
         if (idx >= 0) {
           const it = items[idx]
-          if (it.kind === 'user') items[idx] = { ...it, checkpointId: ev.messageId }
+          if (it.kind === 'user') {
+            items[idx] = { ...it, checkpointId: ev.messageId, checkpointScope: ev.scope }
+          }
           return { ...s, items }
         }
       }
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i]
         if (it.kind === 'user' && !it.checkpointId) {
-          items[i] = { ...it, checkpointId: ev.messageId }
+          items[i] = { ...it, checkpointId: ev.messageId, checkpointScope: ev.scope }
           break
         }
       }
       return { ...s, items }
     }
     case 'checkpoint-restore': {
+      // Editing or regenerating a chat turn uses the same durable checkpoint
+      // mechanism as code rewind. Chat-only restores are already visible in the
+      // replaced transcript, so surfacing an empty file-rewind notice is noise.
+      if (ev.mode === 'chat') return s
       const count = ev.filesChanged.length
       return {
         ...s,
@@ -470,24 +500,6 @@ function reduceSession(s: SessionState, ev: AgentEvent): SessionState {
             fromName: ev.fromName,
             toName: ev.toName,
             model: ev.model,
-            reason: ev.reason
-          }
-        ]
-      }
-    case 'provider-key-failover':
-      return {
-        ...s,
-        streamText: '',
-        streamThinking: '',
-        runningTools: {},
-        items: [
-          ...s.items,
-          {
-            id: genId(),
-            kind: 'provider-key-failover',
-            providerName: ev.providerName,
-            fromKeyLabel: ev.fromKeyLabel,
-            toKeyLabel: ev.toKeyLabel,
             reason: ev.reason
           }
         ]
@@ -680,8 +692,24 @@ export interface WorkbenchState {
   filesRoot?: string
   filesTruncated?: boolean
   filesError?: string
+  fileSearchLoading: boolean
+  fileSearchQuery: string
+  fileSearchMatches: ProjectTextSearchMatch[]
+  fileSearchFilesScanned?: number
+  fileSearchFilesMatched?: number
+  fileSearchTruncated?: boolean
+  fileSearchError?: string
+  fileDiagnosticsLoading: boolean
+  fileDiagnostics: ProjectDiagnostic[]
+  fileDiagnosticsAnalyzedFiles?: number
+  fileDiagnosticsSupportedFiles?: number
+  fileDiagnosticsTruncated?: boolean
+  fileDiagnosticsError?: string
   fileLoading: boolean
   fileSaving: boolean
+  fileSessionId?: string
+  fileTabs: FileEditorTab[]
+  activeFileTabBySession: Record<string, string>
   currentFilePath?: string
   currentFileContent: string
   savedFileContent: string
@@ -732,6 +760,24 @@ export interface WorkbenchState {
   laterStartSuggestions: Record<string, number>
 }
 
+function projectActiveFileTab(
+  workbench: WorkbenchState,
+  tabsState: FileEditorTabsState,
+  sessionId: string
+): WorkbenchState {
+  const tab = activeFileTab(tabsState, sessionId)
+  return {
+    ...workbench,
+    ...tabsState,
+    fileSessionId: sessionId,
+    currentFilePath: tab?.path,
+    currentFileContent: tab?.content ?? '',
+    savedFileContent: tab?.savedContent ?? '',
+    currentFileBytes: tab?.bytes,
+    currentFileMtimeMs: tab?.mtimeMs
+  }
+}
+
 export interface RewindPanelState {
   open: boolean
   messageId?: string
@@ -777,6 +823,7 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   ): Promise<TaskDagDispatchResult | undefined>
   resumeFromHistory(entry: HistoryEntry): Promise<void>
   forkFromHistory(entry: HistoryEntry): void
+  forkFromCheckpoint(checkpointId: string, sourceText: string): void
   selectSession(id: string): void
   sendMessage(input: string | SendMessagePayload, sessionId?: string): Promise<void>
   sendQuickbarClipboard(options: QuickbarDispatchOptions): Promise<QuickbarDispatchResult | undefined>
@@ -844,7 +891,13 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   /** @deprecated 使用 closePanel() 代替 */
   closeFilesPanel(): void
   refreshFilesPanel(): Promise<void>
+  searchProjectFiles(query: string): Promise<void>
+  clearProjectFileSearch(): void
+  refreshProjectDiagnostics(): Promise<void>
   openFile(path: string): Promise<void>
+  activateFileTab(path: string): void
+  closeFileTab(path: string): void
+  cycleFileTab(direction: -1 | 1): void
   updateFileDraft(content: string): void
   saveOpenFile(): Promise<WriteTextFileResult | undefined>
   /** @deprecated 使用 openPanel('preview', { path }) 代替 */
@@ -1206,8 +1259,15 @@ export const useStore = create<AppStore>((set, get) => {
     budgetUsdPerSession: 0,
     budgetUsdPerMonth: 0,
     failoverEnabled: true,
+    providerCircuitBreaker: {
+      failureThreshold: 4,
+      successThreshold: 2,
+      timeoutSeconds: 60,
+      errorRateThreshold: 0.6,
+      minRequests: 10
+    },
     language: 'zh',
-    theme: 'dark',
+    theme: 'light',
     persona: '',
     allowedTools: '',
     disallowedTools: '',
@@ -1218,20 +1278,20 @@ export const useStore = create<AppStore>((set, get) => {
     permissionAllowlist: '',
     permissionDenylist: '',
     permissionTemporaryAllowlist: '',
+    permissionRulesVersion: 2,
+    permissionRules: [],
     guiAutomationEnabled: false,
     guiAutomationTemporaryGrantUntil: 0,
     notificationsEnabled: true,
     preventDisplaySleep: true,
-    ideBridgeEnabled: false,
-    ideBridgeHost: '127.0.0.1',
-    ideBridgePort: 17365,
-    ideBridgeToken: '',
     autoSkillLearningEnabled: false,
     office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
     layout: {
+      sidebarDesignVersion: 2,
       sidebarCollapsed: false,
-      sidebarWidth: 264,
-      workbenchSideWidth: 560,
+      sidebarWidth: 228,
+      workbenchSideWidth: 400,
+      workbenchDockHeight: 340,
       chatScale: 1,
       chatDensity: 'comfortable'
     }
@@ -1264,8 +1324,15 @@ export const useStore = create<AppStore>((set, get) => {
     terminalBuffer: '',
     filesLoading: false,
     fileEntries: [],
+    fileSearchLoading: false,
+    fileSearchQuery: '',
+    fileSearchMatches: [],
+    fileDiagnosticsLoading: false,
+    fileDiagnostics: [],
     fileLoading: false,
     fileSaving: false,
+    fileTabs: [],
+    activeFileTabBySession: {},
     currentFileContent: '',
     savedFileContent: '',
     browserLoading: false,
@@ -1680,12 +1747,14 @@ export const useStore = create<AppStore>((set, get) => {
       projectChoice,
       cwd: entry.cwd,
       driveMode: entry.driveMode ?? state.settings.driveMode,
+      computeSelectionSource: 'user',
       routingMode,
       providerId: entry.providerId,
       model: entry.model,
       permissionMode: null,
       taskStrategy: entry.taskStrategy ?? 'execute',
       forkFromSdkSessionId: entry.sdkSessionId,
+      forkCheckpointId: undefined,
       forkSourceTitle: entry.title
     })
     set((current) => ({
@@ -1863,10 +1932,52 @@ export const useStore = create<AppStore>((set, get) => {
 
   async respondPermission(sessionId, requestId, allow, message) {
     await window.agentDesk.respondPermission(sessionId, requestId, allow, message)
-    if (message === 'gui-temporary-grant:5m') {
-      const settings = await window.agentDesk.getSettings()
-      set({ settings })
-    }
+  },
+
+  forkFromCheckpoint(checkpointId, sourceText) {
+    const state = get()
+    const session = state.activeId ? state.sessions[state.activeId] : undefined
+    const sourceSdkSessionId = session?.meta.sdkSessionId?.trim()
+    const normalizedCheckpointId = checkpointId.trim()
+    if (!session || !sourceSdkSessionId || !normalizedCheckpointId) return
+    const projectExists = Boolean(
+      session.meta.projectId && state.projects.some((project) => project.id === session.meta.projectId)
+    )
+    const projectChoice = projectExists
+      ? session.meta.projectId!
+      : session.meta.unassigned
+        ? '__unassigned__'
+        : '__new_project__'
+    const routingMode = session.meta.routingScope === 'global' || session.meta.routingScope === 'provider'
+      ? session.meta.routingScope
+      : 'fixed'
+    state.updateWelcomeDraft({
+      text: sourceText,
+      projectChoice,
+      cwd: session.meta.cwd,
+      driveMode: session.meta.driveMode ?? state.settings.driveMode,
+      computeSelectionSource: 'user',
+      routingMode,
+      providerId: session.meta.providerId,
+      model: session.meta.model,
+      permissionMode: null,
+      taskStrategy: session.meta.taskStrategy,
+      forkFromSdkSessionId: sourceSdkSessionId,
+      forkCheckpointId: normalizedCheckpointId,
+      forkSourceTitle: session.meta.title
+    })
+    set((current) => ({
+      showNewSession: true,
+      newSessionProjectId: null,
+      showSettings: false,
+      showTaskRecovery: false,
+      view: 'list',
+      studioSessionNavigationNonce: nextStudioSessionNonce(
+        current.studioSessionNavigationNonce,
+        current.experienceMode,
+        true
+      )
+    }))
   },
 
   async restoreCheckpoint(messageId, mode, dryRun) {
@@ -2482,43 +2593,153 @@ export const useStore = create<AppStore>((set, get) => {
   async refreshFilesPanel() {
     const id = get().activeId
     if (!id) return
+    const requestId = ++filesRequestSeq
+    fileRequestSeq += 1
     set((s) => ({
       workbench: {
-        ...s.workbench,
+        ...projectActiveFileTab(s.workbench, s.workbench, id),
         filesLoading: true,
+        fileLoading: false,
+        fileSaving: false,
         filesError: undefined,
         fileMessage: undefined
       }
     }))
     try {
       const result = await window.agentDesk.listProjectFiles(id)
-      set((s) => ({
+      set((s) => requestId === filesRequestSeq && s.activeId === id ? ({
         workbench: {
-          ...s.workbench,
+          ...projectActiveFileTab(s.workbench, s.workbench, id),
           filesLoading: false,
           fileEntries: result.ok ? result.entries : s.workbench.fileEntries,
           filesRoot: result.ok ? result.root : s.workbench.filesRoot,
           filesTruncated: result.truncated,
           filesError: result.ok ? undefined : result.error
         }
-      }))
+      }) : s)
     } catch (err) {
-      set((s) => ({
+      set((s) => requestId === filesRequestSeq && s.activeId === id ? ({
         workbench: {
           ...s.workbench,
           filesLoading: false,
           filesError: err instanceof Error ? err.message : String(err)
         }
-      }))
+      }) : s)
+    }
+  },
+
+  async searchProjectFiles(queryValue) {
+    const id = get().activeId
+    const query = queryValue.trim()
+    if (!id || !query) {
+      get().clearProjectFileSearch()
+      return
+    }
+    const requestId = ++fileSearchRequestSeq
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        fileSearchLoading: true,
+        fileSearchQuery: query,
+        fileSearchMatches: [],
+        fileSearchFilesScanned: undefined,
+        fileSearchFilesMatched: undefined,
+        fileSearchTruncated: undefined,
+        fileSearchError: undefined
+      }
+    }))
+    try {
+      const result = await window.agentDesk.searchProjectText(id, query)
+      set((s) => requestId === fileSearchRequestSeq && s.activeId === id ? ({
+        workbench: {
+          ...s.workbench,
+          fileSearchLoading: false,
+          fileSearchQuery: query,
+          fileSearchMatches: result.ok ? result.matches : [],
+          fileSearchFilesScanned: result.filesScanned,
+          fileSearchFilesMatched: result.filesMatched,
+          fileSearchTruncated: result.truncated,
+          fileSearchError: result.ok ? undefined : result.error
+        }
+      }) : s)
+    } catch (err) {
+      set((s) => requestId === fileSearchRequestSeq && s.activeId === id ? ({
+        workbench: {
+          ...s.workbench,
+          fileSearchLoading: false,
+          fileSearchMatches: [],
+          fileSearchError: err instanceof Error ? err.message : String(err)
+        }
+      }) : s)
+    }
+  },
+
+  clearProjectFileSearch() {
+    fileSearchRequestSeq += 1
+    set((s) => ({
+      workbench: {
+        ...s.workbench,
+        fileSearchLoading: false,
+        fileSearchQuery: '',
+        fileSearchMatches: [],
+        fileSearchFilesScanned: undefined,
+        fileSearchFilesMatched: undefined,
+        fileSearchTruncated: undefined,
+        fileSearchError: undefined
+      }
+    }))
+  },
+
+  async refreshProjectDiagnostics() {
+    const id = get().activeId
+    if (!id) return
+    const requestId = ++fileDiagnosticsRequestSeq
+    set((s) => ({ workbench: { ...s.workbench, fileDiagnosticsLoading: true, fileDiagnosticsError: undefined } }))
+    try {
+      const result = await window.agentDesk.listProjectDiagnostics(id)
+      set((s) => requestId === fileDiagnosticsRequestSeq && s.activeId === id ? ({
+        workbench: {
+          ...s.workbench,
+          fileDiagnosticsLoading: false,
+          fileDiagnostics: result.ok ? result.diagnostics : [],
+          fileDiagnosticsAnalyzedFiles: result.analyzedFiles,
+          fileDiagnosticsSupportedFiles: result.supportedFiles,
+          fileDiagnosticsTruncated: result.truncated,
+          fileDiagnosticsError: result.ok ? undefined : result.error
+        }
+      }) : s)
+    } catch (err) {
+      set((s) => requestId === fileDiagnosticsRequestSeq && s.activeId === id ? ({
+        workbench: {
+          ...s.workbench,
+          fileDiagnosticsLoading: false,
+          fileDiagnostics: [],
+          fileDiagnosticsError: err instanceof Error ? err.message : String(err)
+        }
+      }) : s)
     }
   },
 
   async openFile(path) {
     const id = get().activeId
     if (!id) return
+    const existing = tabsForSession(get().workbench, id).find((tab) => tab.path === path)
+    if (existing) {
+      set((s) => ({
+        workbench: {
+          ...projectActiveFileTab(s.workbench, selectFileTab(s.workbench, id, path), id),
+          activePanelId: 'files',
+          mountedPanels: new Set(s.workbench.mountedPanels).add('files'),
+          fileError: undefined,
+          fileMessage: undefined
+        }
+      }))
+      return
+    }
+    const requestId = ++fileRequestSeq
     set((s) => ({
       workbench: {
-        ...s.workbench,
+        ...projectActiveFileTab(s.workbench, s.workbench, id),
         activePanelId: 'files',
         mountedPanels: new Set(s.workbench.mountedPanels).add('files'),
         fileLoading: true,
@@ -2528,37 +2749,80 @@ export const useStore = create<AppStore>((set, get) => {
     }))
     try {
       const result = await window.agentDesk.readTextFile(id, path)
-      set((s) => ({
-        workbench: result.ok
-          ? {
-              ...s.workbench,
-              fileLoading: false,
-              currentFilePath: result.path,
-              currentFileContent: result.content ?? '',
-              savedFileContent: result.content ?? '',
-              currentFileBytes: result.bytes,
-              currentFileMtimeMs: result.mtimeMs,
-              fileError: undefined
-            }
-          : {
-              ...s.workbench,
-              fileLoading: false,
-              fileError: result.error
-            }
-      }))
+      set((s) => {
+        if (requestId !== fileRequestSeq || s.activeId !== id) return s
+        if (!result.ok || !result.path) {
+          return { workbench: { ...s.workbench, fileLoading: false, fileError: result.error } }
+        }
+        const tabsState = upsertFileTab(s.workbench, {
+          sessionId: id,
+          path: result.path,
+          content: result.content ?? '',
+          savedContent: result.content ?? '',
+          bytes: result.bytes,
+          mtimeMs: result.mtimeMs
+        })
+        return {
+          workbench: {
+            ...projectActiveFileTab(s.workbench, tabsState, id),
+            fileLoading: false,
+            fileError: undefined
+          }
+        }
+      })
     } catch (err) {
-      set((s) => ({
+      set((s) => requestId === fileRequestSeq && s.activeId === id ? ({
         workbench: {
           ...s.workbench,
           fileLoading: false,
           fileError: err instanceof Error ? err.message : String(err)
         }
-      }))
+      }) : s)
     }
   },
 
+  activateFileTab(path) {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: projectActiveFileTab(s.workbench, selectFileTab(s.workbench, id, path), id)
+    }))
+  },
+
+  closeFileTab(path) {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: {
+        ...projectActiveFileTab(s.workbench, closeFileTabState(s.workbench, id, path), id),
+        fileMessage: undefined,
+        fileError: undefined
+      }
+    }))
+  },
+
+  cycleFileTab(direction) {
+    const id = get().activeId
+    if (!id) return
+    set((s) => ({
+      workbench: projectActiveFileTab(s.workbench, cycleFileTabState(s.workbench, id, direction), id)
+    }))
+  },
+
   updateFileDraft(content) {
-    set((s) => ({ workbench: { ...s.workbench, currentFileContent: content, fileMessage: undefined } }))
+    const id = get().activeId
+    const path = get().workbench.currentFilePath
+    if (!id || !path) return
+    set((s) => ({
+      workbench: {
+        ...projectActiveFileTab(
+          s.workbench,
+          updateFileTabDraft(s.workbench, id, path, content),
+          id
+        ),
+        fileMessage: undefined
+      }
+    }))
   },
 
   async saveOpenFile() {
@@ -2575,24 +2839,34 @@ export const useStore = create<AppStore>((set, get) => {
     }))
     try {
       const result = await window.agentDesk.writeTextFile(id, currentFilePath, currentFileContent)
-      set((s) => ({
-        workbench: result.ok
-          ? {
-              ...s.workbench,
-              fileSaving: false,
-              savedFileContent: currentFileContent,
-              currentFileBytes: result.bytes,
-              currentFileMtimeMs: result.mtimeMs,
-              fileMessage: `已保存 ${result.path ?? currentFilePath}`,
-              fileError: undefined
-            }
-          : {
-              ...s.workbench,
-              fileSaving: false,
-              fileError: result.error
-            }
-      }))
-      if (result.ok) void get().refreshFilesPanel()
+      set((s) => {
+        if (!result.ok) {
+          return s.activeId === id
+            ? { workbench: { ...s.workbench, fileSaving: false, fileError: result.error } }
+            : s
+        }
+        const tabsState = markFileTabSaved(
+          s.workbench,
+          id,
+          currentFilePath,
+          currentFileContent,
+          result.bytes,
+          result.mtimeMs
+        )
+        const viewSessionId = s.workbench.fileSessionId ?? s.activeId ?? id
+        return {
+          workbench: {
+            ...projectActiveFileTab(s.workbench, tabsState, viewSessionId),
+            fileSaving: false,
+            fileMessage: s.activeId === id ? `已保存 ${result.path ?? currentFilePath}` : s.workbench.fileMessage,
+            fileError: undefined
+          }
+        }
+      })
+      if (result.ok && get().activeId === id) {
+        void get().refreshFilesPanel()
+        if (get().workbench.fileDiagnosticsSupportedFiles !== undefined) void get().refreshProjectDiagnostics()
+      }
       return result
     } catch (err) {
       set((s) => ({
@@ -3610,6 +3884,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (v) {
       get().updateWelcomeDraft({
         forkFromSdkSessionId: undefined,
+        forkCheckpointId: undefined,
         forkSourceTitle: undefined
       })
     }
@@ -3699,6 +3974,13 @@ export interface ProviderPreset {
   hint: string
   /** 该预设推荐的 OpenAI 引擎协议(undefined = responses) */
   openaiProtocol?: OpenAIProtocol
+  /** Descriptive metadata used by the searchable provider catalog. */
+  vendor?: string
+  category?: 'official' | 'aggregator' | 'gateway' | 'local'
+  region?: 'global' | 'china' | 'local'
+  billing?: 'metered' | 'subscription' | 'free-tier' | 'local'
+  auth?: 'api-key' | 'oauth' | 'none'
+  searchTerms?: string[]
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -3718,6 +4000,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     models: ['claude-opus-4', 'claude-sonnet-4', 'claude-haiku-4'],
     engine: 'anthropic',
     hint: '直连 Anthropic 官方 Messages API;填入自己的 Anthropic API Key。'
+  },
+  {
+    key: 'gemini',
+    label: 'Google Gemini（原生 API）',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+    engine: 'gemini',
+    hint: '直连 Google Generative Language API；使用 x-goog-api-key 受管凭据头。模型清单以 Google API 实际返回为准。'
   },
   {
     key: 'openai',
@@ -3820,6 +4110,86 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     models: ['gpt-4o', 'claude-3-5-sonnet', 'gemini/gemini-1.5-pro'],
     engine: 'anthropic',
     hint: 'LiteLLM 以 /v1/messages 暴露 Anthropic 兼容端点,后端可接 OpenAI/Azure/Bedrock 等。'
+  },
+  {
+    key: 'openrouter',
+    label: 'OpenRouter (多模型聚合)',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet', 'google/gemini-2.5-flash'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: '统一 OpenAI-compatible 入口，可在 OpenRouter 控制台管理模型、余额和路由。',
+    vendor: 'OpenRouter', category: 'aggregator', region: 'global', billing: 'metered', auth: 'api-key',
+    searchTerms: ['router', 'aggregator', 'openai compatible', '聚合', '路由']
+  },
+  {
+    key: 'groq',
+    label: 'Groq (高速推理)',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Groq OpenAI-compatible API，适合低延迟推理。',
+    vendor: 'Groq', category: 'official', region: 'global', billing: 'free-tier', auth: 'api-key',
+    searchTerms: ['llama', '高速', 'low latency']
+  },
+  {
+    key: 'mistral',
+    label: 'Mistral AI (官方)',
+    baseUrl: 'https://api.mistral.ai/v1',
+    models: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Mistral 官方 OpenAI-compatible Chat Completions 入口。',
+    vendor: 'Mistral', category: 'official', region: 'global', billing: 'free-tier', auth: 'api-key',
+    searchTerms: ['codestral', 'mistral']
+  },
+  {
+    key: 'together',
+    label: 'Together AI (开源模型平台)',
+    baseUrl: 'https://api.together.xyz/v1',
+    models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'Qwen/Qwen2.5-72B-Instruct-Turbo'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Together AI OpenAI-compatible 入口，支持多种开源模型。',
+    vendor: 'Together AI', category: 'aggregator', region: 'global', billing: 'metered', auth: 'api-key',
+    searchTerms: ['open source', '开源', 'llama', 'qwen']
+  },
+  {
+    key: 'fireworks',
+    label: 'Fireworks AI (开源模型平台)',
+    baseUrl: 'https://api.fireworks.ai/inference/v1',
+    models: ['accounts/fireworks/models/llama-v3p1-70b-instruct', 'accounts/fireworks/models/deepseek-v3'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Fireworks AI OpenAI-compatible 推理入口，适合开源模型部署。',
+    vendor: 'Fireworks AI', category: 'aggregator', region: 'global', billing: 'metered', auth: 'api-key',
+    searchTerms: ['open source', 'serverless', '部署']
+  },
+  {
+    key: 'perplexity',
+    label: 'Perplexity (联网搜索模型)',
+    baseUrl: 'https://api.perplexity.ai',
+    models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Perplexity Sonar OpenAI-compatible 入口，模型自带联网搜索能力。',
+    vendor: 'Perplexity', category: 'official', region: 'global', billing: 'metered', auth: 'api-key',
+    searchTerms: ['search', '联网', 'sonar']
+  },
+  {
+    key: 'siliconflow',
+    label: 'SiliconFlow 硅基流动',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B', 'THUDM/GLM-Z1-32B-0414'],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: '硅基流动 OpenAI-compatible 聚合入口，支持国内网络和多家开源模型。',
+    vendor: 'SiliconFlow', category: 'aggregator', region: 'china', billing: 'free-tier', auth: 'api-key',
+    searchTerms: ['国内', '硅基', 'deepseek', 'qwen', 'glm']
+  },
+  {
+    key: 'azure-openai',
+    label: 'Azure OpenAI (企业部署)',
+    baseUrl: 'https://{resource}.openai.azure.com/openai',
+    models: [],
+    engine: 'openai', openaiProtocol: 'chat',
+    hint: 'Azure OpenAI 使用资源专属 endpoint 和 api-key；模型名应填写 deployment name。',
+    vendor: 'Microsoft Azure', category: 'official', region: 'global', billing: 'metered', auth: 'api-key',
+    searchTerms: ['azure', 'enterprise', 'deployment', '企业']
   },
   {
     key: 'custom',

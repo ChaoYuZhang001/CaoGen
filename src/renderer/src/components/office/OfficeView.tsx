@@ -25,8 +25,13 @@ import {
 } from './kit/RobotModelAsset'
 import { buildOfficeModel } from './model'
 import type { OfficeSessionActivity } from './model'
+import OfficeFailoverSignals from './OfficeFailoverSignals'
 import type { OfficeContactShadowMode } from './quality'
 import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
+import {
+  resolveWatercolorRole,
+  type WatercolorCharacterRole
+} from '../../../../shared/watercolor-character'
 
 /**
  * 把会话按网格铺开在房间中央空地(OfficeScene 家具占外围:
@@ -262,6 +267,7 @@ export default function OfficeView(): React.JSX.Element {
   const detailUpgradeTimerRef = useRef<number | null>(null)
   const officeHitRef = useRef({ seq: 0, kind: '', id: '' })
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
+  const [watercolorRoleByWorkerId, setWatercolorRoleByWorkerId] = useState<Record<string, WatercolorCharacterRole>>({})
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
 
@@ -302,10 +308,38 @@ export default function OfficeView(): React.JSX.Element {
 
   // 办公区场景色随主题切换
   const isLight = themePref === 'light' || (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
-  const scene = isLight ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' } : { bg: '#10151b', floor: '#202832', grid1: '#34404c', grid2: '#26313a', ground: '#1d252d' }
+  const scene = isLight ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' } : { bg: '#1c2024', floor: '#2a3036', grid1: '#4a565d', grid2: '#363e43', ground: '#272c31' }
 
   const ids = order.filter((id) => sessions[id])
   const idsKey = ids.join('\0')
+  const assignedWorkerIdsKey = ids
+    .map((id) => sessions[id]?.meta.digitalWorkerBinding)
+    .filter((binding) => binding?.kind === 'assigned')
+    .map((binding) => binding.workerId)
+    .sort()
+    .join('\0')
+  useEffect(() => {
+    if (typeof window.agentDesk === 'undefined' || !assignedWorkerIdsKey) {
+      setWatercolorRoleByWorkerId({})
+      return
+    }
+    let cancelled = false
+    void Promise.all([
+      window.agentDesk.listDigitalWorkers({ includeRetired: true }),
+      window.agentDesk.listDigitalWorkerRoleTemplates()
+    ]).then(([workers, roles]) => {
+      if (cancelled) return
+      const roleById = new Map(roles.map((role) => [role.id, role]))
+      const next: Record<string, WatercolorCharacterRole> = {}
+      for (const worker of workers) {
+        next[worker.id] = resolveWatercolorRole(worker, roleById.get(worker.roleTemplateId)).role
+      }
+      setWatercolorRoleByWorkerId(next)
+    }).catch((error) => {
+      if (!cancelled) console.error('[agent-desk] Failed to load watercolor DigitalWorker identities', error)
+    })
+    return () => { cancelled = true }
+  }, [assignedWorkerIdsKey])
   const positions = gridPositions(ids.length)
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
@@ -347,6 +381,8 @@ export default function OfficeView(): React.JSX.Element {
     return Boolean(
       signal?.routing ||
       signal?.failover ||
+      signal?.keyFailover ||
+      signal?.modelFailover ||
       signal?.workspace.gitOk !== undefined ||
       signal?.workspace.isolated ||
       signal?.workspace.changedFiles ||
@@ -870,22 +906,7 @@ export default function OfficeView(): React.JSX.Element {
                       )}
                     </>
                   )}
-                  {activeOfficeSignal.failover && (
-                    <div>
-                      <span>{t('officeFailover')}</span>
-                      <strong>
-                        {activeOfficeSignal.failover.fromName} → {activeOfficeSignal.failover.toName}
-                      </strong>
-                    </div>
-                  )}
-                  {activeOfficeSignal.keyFailover && (
-                    <div>
-                      <span>{t('officeKeyFailover')}</span>
-                      <strong title={activeOfficeSignal.keyFailover.reason}>
-                        {activeOfficeSignal.keyFailover.fromKeyLabel} → {activeOfficeSignal.keyFailover.toKeyLabel}
-                      </strong>
-                    </div>
-                  )}
+                  <OfficeFailoverSignals signal={activeOfficeSignal} />
                   <div>
                     <span>{t('officeBudget')}</span>
                     <strong>
@@ -942,7 +963,7 @@ export default function OfficeView(): React.JSX.Element {
           <OfficePerformanceProbe />
           <OfficeFrameDriver active={renderQuality.renderActive} onFrame={handleOfficeFrame} />
           <fog attach="fog" args={[scene.bg, 18, 42]} />
-          <ambientLight intensity={isLight ? 0.98 : 1.05} />
+          <ambientLight intensity={isLight ? 0.98 : 1.16} />
           <directionalLight
             position={[5.5, 10, 7.5]}
             intensity={isLight ? 1.45 : 1.72}
@@ -964,7 +985,7 @@ export default function OfficeView(): React.JSX.Element {
           <pointLight position={[0, 4.5, 0]} intensity={isLight ? 0.36 : 1.02} distance={26} color={isLight ? '#f3f5f6' : '#dce7f2'} />
           <hemisphereLight args={[isLight ? '#f3f5f6' : '#aebfd0', '#303843', isLight ? 0.48 : 0.7]} />
           {/* 不可见工位补光:只提亮机器人/桌面,不增加任何会挡镜头的实体灯具。 */}
-          <pointLight position={[0, 2.8, 1.8]} intensity={isLight ? 0.46 : 1.42} distance={15} color={isLight ? '#f3f5f6' : '#eef6ff'} />
+          <pointLight position={[0, 2.8, 1.8]} intensity={isLight ? 0.46 : 1.62} distance={15} color={isLight ? '#f3f5f6' : '#eef6ff'} />
           {/* 补一盏跟随状态色调的点光,增强氛围 */}
           <pointLight position={[0, 3, 4]} intensity={isLight ? 0.22 : 0.34} color={isLight ? '#f3f5f6' : '#3c4658'} />
 
@@ -1007,6 +1028,12 @@ export default function OfficeView(): React.JSX.Element {
                     liveliness={office.liveliness}
                     catEars={office.catEars}
                     loadRobotAssets={robotAssetsEnabled}
+                    watercolorRole={
+                      sessions[id].meta.digitalWorkerBinding?.kind === 'assigned'
+                        ? watercolorRoleByWorkerId[sessions[id].meta.digitalWorkerBinding.workerId]
+                        : undefined
+                    }
+                    watercolorState={officeModel.sessions[id]?.characterState}
                     operatorAway={awaySessionIds.has(id)}
                     currentTask={officeModel.sessions[id]?.currentTask}
                     taskStats={officeModel.sessions[id]?.taskStats}

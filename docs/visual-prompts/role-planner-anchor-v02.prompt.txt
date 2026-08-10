@@ -1,0 +1,7 @@
+Use case: precise-object-edit
+Asset type: CaoGen canonical character anchor correction
+Input images: Image 1 is role-planner-anchor-v01.png and is the edit target. Image 2 is the approved cropped Planner identity reference. Image 3 is STYLE-A and is used only to preserve the existing watercolor medium.
+Primary request: Change only the large folded plan sheet held in the character's lower hand so its entire paper surface is completely blank cool off-white watercolor paper.
+Identity invariants: keep the exact face, short asymmetrical hair, earrings, body proportions, expression, pose, hands, cinnabar cropped blazer, black blouse and trousers, belt, shoes, three blank cards, paper shape, fold geometry, lighting, background, composition, line weight, pigment behavior and all other details from Image 1 unchanged.
+Constraints: remove every line, diagram, mark, glyph and pseudo-text from the large plan sheet. Preserve the physical fold edges and outer paper outline only. Do not change any other pixel-level design decision. Exactly one complete character; no additions.
+Avoid: text, pseudo-text, maps, diagrams, letters, numbers, code, logos, signatures, watermarks, extra people, duplicate props, altered face, altered clothing, altered pose, cropped anatomy or style drift.

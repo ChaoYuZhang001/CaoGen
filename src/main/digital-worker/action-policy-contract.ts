@@ -1,12 +1,9 @@
 import type { DigitalWorker, JsonObject, JsonValue } from '../../shared/digital-worker-types'
-import { isReadOnlyToolCall, normalizeToolName } from '../task/tool-idempotency'
+import type { ToolSemanticCapability } from '../../shared/types'
+import { normalizeToolName } from '../task/tool-idempotency'
+import { classifyToolCapabilities, TOOL_SEMANTIC_CAPABILITIES } from '../permission/tool-capabilities'
 
-export type DigitalWorkerToolCapability =
-  | 'workspaceRead'
-  | 'workspaceWrite'
-  | 'terminal'
-  | 'browser'
-  | 'network'
+export type DigitalWorkerToolCapability = ToolSemanticCapability
 
 export interface DigitalWorkerPolicyContract {
   monthlyBudgetUsd?: number
@@ -21,58 +18,7 @@ export type DigitalWorkerToolPolicyDecision =
   | { allowed: true; capabilities: DigitalWorkerToolCapability[] }
   | { allowed: false; capabilities: DigitalWorkerToolCapability[]; reason: string }
 
-const TOOL_POLICY_FIELDS = new Set<DigitalWorkerToolCapability>([
-  'workspaceRead',
-  'workspaceWrite',
-  'terminal',
-  'browser',
-  'network'
-])
-
-const COMPOSITE_TOOL_CAPABILITIES: DigitalWorkerToolCapability[] = [
-  'workspaceRead',
-  'workspaceWrite',
-  'terminal',
-  'browser',
-  'network'
-]
-
-const INTERACTIVE_GUI_TOOLS = new Set([
-  'gui_activate_window',
-  'gui_click',
-  'gui_type',
-  'gui_scroll',
-  'gui_hotkey'
-])
-
-const NETWORK_TOOLS = new Set([
-  'web_fetch',
-  'web_search',
-  'mcp_discover',
-  'mcp_builtin_servers',
-  'mcp_import_claude_desktop',
-  'china_notify',
-  'gitee_prepare',
-  'git_push',
-  'git_create_pr',
-  'git_create_issue',
-  'send_notification'
-])
-
-const WORKSPACE_WRITE_TOOLS = new Set([
-  'write_file',
-  'edit_file',
-  'memory_add',
-  'optimize_skill',
-  'git_stage',
-  'git_stage_all',
-  'git_commit',
-  'git_merge',
-  'code_forge_delivery',
-  'task_dispatch_dag',
-  'task_decompose_and_dispatch_dag',
-  'genesis_orchestrate'
-])
+const TOOL_POLICY_FIELDS = new Set<DigitalWorkerToolCapability>(TOOL_SEMANTIC_CAPABILITIES)
 
 export function digitalWorkerPolicyContract(
   worker: Pick<DigitalWorker, 'toolPolicy' | 'budgetPolicy' | 'concurrencyLimit' | 'escalationPolicy'>
@@ -105,7 +51,7 @@ export function evaluateDigitalWorkerToolPolicy(
   toolInput: Record<string, unknown>
 ): DigitalWorkerToolPolicyDecision {
   const normalized = normalizeToolName(toolName)
-  const capabilities = toolCapabilities(normalized, toolInput)
+  const capabilities = classifyToolCapabilities(normalized, toolInput)
   if (capabilities.length === 0) {
     return {
       allowed: false,
@@ -122,25 +68,6 @@ export function evaluateDigitalWorkerToolPolicy(
     }
   }
   return { allowed: true, capabilities }
-}
-
-function toolCapabilities(
-  toolName: string,
-  toolInput: Record<string, unknown>
-): DigitalWorkerToolCapability[] {
-  if (toolName === 'bash' || toolName === 'mcp_call_tool') return [...COMPOSITE_TOOL_CAPABILITIES]
-  if (toolName.startsWith('browser_')) return ['browser', 'network']
-  if (toolName === 'gui_list_windows') return ['browser']
-  if (toolName === 'gui_screenshot') return ['browser', 'workspaceWrite']
-  if (INTERACTIVE_GUI_TOOLS.has(toolName)) return [...COMPOSITE_TOOL_CAPABILITIES]
-  if (toolName.startsWith('gui_')) return []
-  if (NETWORK_TOOLS.has(toolName)) return ['network']
-  if (toolName === 'search_replace') {
-    return isReadOnlyToolCall(toolName, toolInput) ? ['workspaceRead'] : ['workspaceWrite']
-  }
-  if (WORKSPACE_WRITE_TOOLS.has(toolName)) return ['workspaceWrite']
-  if (isReadOnlyToolCall(toolName, toolInput)) return ['workspaceRead']
-  return []
 }
 
 function assertToolPolicy(policy: JsonObject): void {

@@ -1,4 +1,6 @@
 import { app } from 'electron'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * 自动更新骨架。
@@ -82,6 +84,11 @@ export function initAutoUpdater(): void {
   // dev / 未打包 下 electron-updater 会因缺少 app-update.yml 报错,直接降级。
   if (!app.isPackaged) {
     emit({ kind: 'disabled', reason: '未打包环境,自动更新不可用' })
+    return
+  }
+
+  if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) {
+    emit({ kind: 'disabled', reason: '当前安装包未配置更新通道' })
     return
   }
 

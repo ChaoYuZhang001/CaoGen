@@ -319,7 +319,7 @@ function verifyRuntimeWiring() {
   assert(dagWrapper >= 0 && dagFetch > dagWrapper && dagParse > dagFetch, 'DAG fetch and parse must stay contained')
   assert.match(openai, /setRouteReason\(smart\.reason\)/, 'smart router reason must reach the Attempt ledger')
   assert.match(openai, /setRouteReason\(decision\.reason\)/, 'legacy router reason must reach the Attempt ledger')
-  assert.match(openai, /setRouteReason\(routeReason\)/, 'provider failover reason must reach the Attempt ledger')
+  assert.match(openai, /setRouteReason\((?:target|recovery)\.routeReason\)/, 'provider failover reason must reach the Attempt ledger')
   assert.match(openai, /setRouteReason\(`Provider key failover:/, 'key failover reason must reach the Attempt ledger')
   assert.match(
     openai,

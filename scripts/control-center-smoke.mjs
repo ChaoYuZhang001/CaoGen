@@ -88,10 +88,6 @@ try {
     notificationsEnabled: true,
     preventDisplaySleep: true,
     sdkAgentsEnabled: false,
-    ideBridgeEnabled: false,
-    ideBridgeHost: '127.0.0.1',
-    ideBridgePort: 17365,
-    ideBridgeToken: '',
     hookPostEditCommand: '',
     hookTurnEndCommand: '',
     autoSkillLearningEnabled: false,
@@ -106,6 +102,9 @@ try {
       budgetUsd: 0,
       createdAt: Date.now(),
       hasToken: true,
+      ready: true,
+      authMode: 'api-key',
+      engine: 'anthropic',
       keyCount: 2,
       activeKeyLabel: 'primary',
       apiKeys: [
@@ -122,6 +121,9 @@ try {
       budgetUsd: 5,
       createdAt: Date.now(),
       hasToken: false,
+      ready: false,
+      authMode: 'api-key',
+      engine: 'openai',
       keyCount: 0,
       apiKeys: []
     }
@@ -235,6 +237,7 @@ try {
     health,
     engines: [
       { kind: 'anthropic', label: 'Anthropic Messages API', available: true, configured: true },
+      { kind: 'gemini', label: 'Google Generative Language API', available: true, configured: true },
       { kind: 'openai', label: 'OpenAI-compatible', available: true }
     ],
     pluginRegistry,
@@ -277,13 +280,13 @@ try {
   assert(view.mcp.status === 'available', 'reachable enabled MCP should be available')
   assert(view.mcp.ok === 1, 'MCP ok count should be surfaced')
   assert(
-    new Set(view.engines.map((engine) => engine.kind)).size === 2 &&
-      ['anthropic', 'openai'].every((kind) => view.engines.some((engine) => engine.kind === kind)),
-    'both native engines should be exposed'
+    new Set(view.engines.map((engine) => engine.kind)).size === 3 &&
+      ['anthropic', 'gemini', 'openai'].every((kind) => view.engines.some((engine) => engine.kind === kind)),
+    'all three native engines should be exposed'
   )
   assert(view.engines.find((engine) => engine.kind === 'anthropic')?.status === 'available', 'configured Anthropic Messages must be available')
   assert(
-    view.capabilities.find((capability) => capability.title === 'Agent engines')?.detail === 'Anthropic Messages API, OpenAI-compatible',
+    view.capabilities.find((capability) => capability.title === 'Agent engines')?.detail === 'Anthropic Messages API, Google Generative Language API, OpenAI-compatible',
     'Agent engine capability must list configured non-optional engines'
   )
   assert(view.capabilities.some((capability) => capability.title === 'Model routing' && capability.status === 'available'), 'model routing should connect Drive/provider state')

@@ -1,13 +1,13 @@
-import { ipcRenderer } from 'electron'
 import type {
   TaskPlanApi,
   TaskPlanApprovalInput,
   TaskPlanDraftInput,
   TaskStrategy
 } from '../shared/types'
+import { invokeAppFeature } from './app-feature'
 
 function invoke<T>(action: string, sessionId: string, payload?: unknown): Promise<T> {
-  return ipcRenderer.invoke('appFeatures:invoke', 'task-plan', action, sessionId, payload) as Promise<T>
+  return invokeAppFeature('task-plan', action, sessionId, payload)
 }
 
 export const taskPlanApi: TaskPlanApi = {

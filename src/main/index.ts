@@ -14,6 +14,9 @@ import { join } from 'node:path'
 import { registerIpc } from './ipc'
 import { sessionManager } from './sessionManager'
 import { disposeProjectIndexers } from './indexer'
+import { disposeTypeScriptLanguageServers } from './typescriptLanguageServer'
+import { disposeProjectTestRuns } from './projectTestRunner'
+import { disposeProjectDebuggers } from './projectDebugger'
 import { disposeOfficeVisualPreviews } from './previewVisual'
 import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
 import { executeRoutine } from './routines/routine-executor'
@@ -22,7 +25,6 @@ import {
   initializeRoutineSessionLifecycle,
   reconcileRoutineRunsAtStartup
 } from './routines/routine-session-lifecycle'
-import { stopIdeBridge, syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { initAutoUpdater } from './updater'
 import { configureQuickbar, disposeQuickbar, registerQuickbarGlobalShortcut } from './quickbar'
 import { listProjects } from './projects'
@@ -30,6 +32,18 @@ import { ensureProjectSkillReadiness } from './learning/learning-lifecycle'
 import { configureLearningUserDataRoot } from './learning/learning-store'
 import { configurePermissionAuditUserDataRoot } from './permission/audit-log'
 import { reconcileProviderProfileOperations } from './provider/providerProfileService'
+import { reconcileProviderProfileSyncAtStartup } from './provider/providerProfileSync'
+import {
+  startProviderProfileWebDavAutoSync,
+  stopProviderProfileWebDavAutoSync
+} from './provider/providerProfileWebDavSync'
+import {
+  startProviderProfileS3AutoSync,
+  stopProviderProfileS3AutoSync
+} from './provider/providerProfileS3Sync'
+import { reconcileCcSwitchProviderImportOperations } from './provider/ccSwitchProviderImport'
+import { refreshProviderCredentialMetrics } from './provider/providerCredentialMetrics'
+import { initializeProviderGateway, stopProviderGateway } from './provider/providerGatewayService'
 import type { Routine } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -38,6 +52,12 @@ let quitting = false
 let quitCleanupStarted = false
 let trayRunningCount: number | null = null
 let unsubscribeTraySessionEvents: (() => void) | null = null
+let shellInstalled = false
+
+// GPU incompatibility fallback: disable hardware acceleration to avoid black screen
+if (process.argv.includes('--disable-gpu') || process.env.CAOGEN_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration()
+}
 
 process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
 configureLearningUserDataRoot(app.getPath('userData'))
@@ -77,7 +97,7 @@ function createWindow(): BrowserWindow {
     minWidth: 360,
     minHeight: 520,
     title: 'CaoGen',
-    backgroundColor: '#0d0d0d',
+    backgroundColor: '#1a1a2e',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     ...(icon ? { icon } : {}),
     webPreferences: {
@@ -94,11 +114,44 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  // Diagnostic: renderer load failure
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    console.error('[caogen] renderer did-fail-load:', errorCode, errorDescription, validatedURL)
+  })
+
+  // Diagnostic: renderer process crash
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[caogen] render-process-gone:', details.reason, details.exitCode)
+  })
+
+  // Diagnostic: forward renderer console to main process
+  win.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    console.log(`[renderer] ${message} (${sourceId}:${line})`)
+  })
+
+  const loadRenderer = process.env.ELECTRON_RENDERER_URL
+    ? win.loadURL(process.env.ELECTRON_RENDERER_URL)
+    : win.loadFile(join(__dirname, '../renderer/index.html'))
+  void loadRenderer.catch((error) => {
+    console.error('[caogen] renderer load failed:', error)
+  })
+
+  // Loading timeout: if renderer hasn't finished in 10s, show error overlay
+  const loadTimeout = setTimeout(() => {
+    if (!win.isDestroyed() && win.webContents.isLoading()) {
+      console.error('[caogen] renderer load timeout (10s)')
+      win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+        '<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;padding:40px">' +
+        '<h2>CaoGen - Loading Timeout</h2>' +
+        '<p>The renderer process did not finish loading within 10 seconds.</p>' +
+        '<p>Try restarting with --disable-gpu flag.</p>' +
+        '</body></html>'
+      ))
+    }
+  }, 10000)
+  win.webContents.once('did-finish-load', () => clearTimeout(loadTimeout))
+
   mainWindow = win
   win.on('close', (event) => {
     if (quitting || !hasRunningSessions()) return
@@ -166,6 +219,14 @@ function sendMenuCommand(channel: string, value?: unknown): void {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   if (!win || win.isDestroyed()) return
   win.webContents.send(channel, value)
+}
+
+function ensureApplicationShell(): void {
+  if (shellInstalled) return
+  registerIpc()
+  createWindow()
+  installApplicationMenu()
+  shellInstalled = true
 }
 
 function installApplicationMenu(): void {
@@ -274,42 +335,63 @@ async function recoverLearningMaterializationAtStartup(): Promise<void> {
 
 void app.whenReady().then(async () => {
   if (!singleInstanceOwner) return
+
+  // Create the shell before recovery/migration work. A damaged or slow durable
+  // store must never leave the user with a process and no diagnosable window.
+  // IPC handlers are safe to register before session hydration; they expose the
+  // current (possibly empty) session set until recovery completes.
+  ensureApplicationShell()
+
   try {
     reconcileProviderProfileOperations()
   } catch (error) {
     console.error('[caogen] Provider Profile operation recovery failed:', error)
-    app.quit()
-    return
   }
-  await recoverLearningMaterializationAtStartup()
-  await sessionManager.init()
+  reconcileProviderProfileSyncAtStartup()
+  startProviderProfileWebDavAutoSync()
+  startProviderProfileS3AutoSync()
+  try {
+    reconcileCcSwitchProviderImportOperations()
+  } catch (error) {
+    console.error('[caogen] CC Switch Provider import recovery failed:', error)
+  }
+  void refreshProviderCredentialMetrics().catch((error) => {
+    console.error('[caogen] Provider credential usage refresh failed:', error)
+  })
+  try { await initializeProviderGateway() } catch (e) { console.error('[caogen] Local Provider Gateway startup failed:', e) }
+  try { await recoverLearningMaterializationAtStartup() } catch (e) { console.error('[caogen] learning recovery failed:', e) }
+  try { await sessionManager.whenInitialized() } catch (e) { console.error('[caogen] session init failed:', e) }
   const routineRoot = join(app.getPath('userData'), 'routines')
-  initializeRoutineSessionLifecycle(routineRoot, app.getPath('userData'))
-  await reconcileRoutineRunsAtStartup(routineRoot, app.getPath('userData')).catch((error) => {
-    console.error('[caogen] routine startup reconciliation failed:', error)
-  })
-  registerIpc()
-  createWindow()
-  configureQuickbar({ getMainWindow: () => mainWindow, showMainWindow })
-  const quickbarState = registerQuickbarGlobalShortcut()
-  if (!quickbarState.registered) {
-    console.warn('[caogen] quickbar shortcut unavailable:', quickbarState.registrationError)
-  }
-  installTray()
-  installApplicationMenu()
-  await syncIdeBridgeFromSettings().catch((error) => {
-    console.error('[caogen] IDE bridge start failed:', error)
-  })
+  try { initializeRoutineSessionLifecycle(routineRoot, app.getPath('userData')) } catch (e) { console.error('[caogen] routine lifecycle init failed:', e) }
+  try { await reconcileRoutineRunsAtStartup(routineRoot, app.getPath('userData')) } catch (e) { console.error('[caogen] routine reconciliation failed:', e) }
+  try { configureQuickbar({ getMainWindow: () => mainWindow, showMainWindow }) } catch (e) { console.error('[caogen] quickbar config failed:', e) }
+  try {
+    const quickbarState = registerQuickbarGlobalShortcut()
+    if (!quickbarState.registered) {
+      console.warn('[caogen] quickbar shortcut unavailable:', quickbarState.registrationError)
+    }
+  } catch (e) { console.error('[caogen] quickbar shortcut failed:', e) }
+  try { installTray() } catch (e) { console.error('[caogen] tray install failed:', e) }
   // Routine 定时调度:每 30s 轮询,到点起会话执行(补齐"定时自动执行"承诺)
-  startRoutineScheduler({
-    rootDir: join(app.getPath('userData'), 'routines'),
-    onTrigger: runRoutine
-  })
+  try {
+    startRoutineScheduler({
+      rootDir: join(app.getPath('userData'), 'routines'),
+      onTrigger: runRoutine
+    })
+  } catch (e) { console.error('[caogen] routine scheduler start failed:', e) }
   // 自动更新(打包环境查更新只通知不静默下载;dev/未装依赖降级 no-op)
-  initAutoUpdater()
+  try { initAutoUpdater() } catch (e) { console.error('[caogen] auto updater init failed:', e) }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch((error) => {
+  // Keep the shell alive when a newly added startup task rejects outside its
+  // local recovery guard. The error remains in the main-process log, while the
+  // user can still inspect settings and choose a recovery path.
+  console.error('[caogen] startup failed:', error)
+  if (singleInstanceOwner && BrowserWindow.getAllWindows().length === 0) {
+    ensureApplicationShell()
+  }
 })
 
 app.on('window-all-closed', () => {
@@ -330,12 +412,19 @@ app.on('before-quit', (event) => {
   unsubscribeTraySessionEvents?.()
   unsubscribeTraySessionEvents = null
   stopRoutineScheduler()
+  stopProviderProfileWebDavAutoSync()
+  stopProviderProfileS3AutoSync()
   disposeOfficeVisualPreviews()
+  disposeProjectTestRuns()
+  disposeProjectDebuggers()
   // 退出前等待任务快照落盘,再释放项目索引 watcher/SQLite 句柄。
   void (async () => {
     await sessionManager.disposeAll()
-    await stopIdeBridge()
-    await disposeProjectIndexers()
+    await Promise.all([
+      disposeProjectIndexers(),
+      disposeTypeScriptLanguageServers(),
+      stopProviderGateway()
+    ])
   })()
     .catch((error) => {
       console.error('[caogen] quit cleanup failed:', error)

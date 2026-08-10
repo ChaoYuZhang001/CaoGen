@@ -13,6 +13,18 @@ import {
 export const ANTHROPIC_MESSAGES_PROTOCOL = 'anthropic.messages'
 export const ANTHROPIC_MESSAGES_ADAPTER_VERSION = 'anthropic-messages-v1'
 
+interface ModelAttemptIdentity {
+  protocol: string
+  adapterVersion: string
+  label: string
+}
+
+const ANTHROPIC_IDENTITY: ModelAttemptIdentity = {
+  protocol: ANTHROPIC_MESSAGES_PROTOCOL,
+  adapterVersion: ANTHROPIC_MESSAGES_ADAPTER_VERSION,
+  label: 'Anthropic Messages'
+}
+
 export interface AnthropicModelAttemptAuth {
   /** Legacy test-only identity input; production request paths use key metadata and a scoped lease. */
   token?: string
@@ -41,7 +53,8 @@ export class AnthropicModelAttemptTracker {
   private sequence = 0
 
   constructor(
-    private readonly dependencies?: Partial<RuntimeModelAttemptDependencies>
+    private readonly dependencies?: Partial<RuntimeModelAttemptDependencies>,
+    private readonly identity: ModelAttemptIdentity = ANTHROPIC_IDENTITY
   ) {}
 
   startTurn(messageId: string): void {
@@ -81,7 +94,7 @@ export class AnthropicModelAttemptTracker {
         'start',
         false,
         undefined,
-        new Error('active TaskRun is missing for Anthropic Messages request')
+        new Error(`active TaskRun is missing for ${this.identity.label} request`)
       )
     }
     const steps = run.steps ?? []
@@ -94,7 +107,7 @@ export class AnthropicModelAttemptTracker {
         'start',
         false,
         undefined,
-        new Error('Anthropic failover successor requires both requestId and failoverFromAttemptId')
+        new Error(`${this.identity.label} failover successor requires both requestId and failoverFromAttemptId`)
       )
     }
     const requestId = explicitRequestId ??
@@ -105,15 +118,15 @@ export class AnthropicModelAttemptTracker {
       stepId,
       providerId: input.providerId,
       model: input.model,
-      protocol: ANTHROPIC_MESSAGES_PROTOCOL,
-      adapterVersion: ANTHROPIC_MESSAGES_ADAPTER_VERSION,
+      protocol: this.identity.protocol,
+      adapterVersion: this.identity.adapterVersion,
       context: {
         endpoint: input.endpoint,
         method: input.method ?? 'POST',
         body: input.body
       },
       routeReason: input.routeReason?.trim() ||
-        'Session uses the saved Provider target with the native Anthropic Messages adapter',
+        `Session uses the saved Provider target with the native ${this.identity.label} adapter`,
       keyIdentity: { providerId: input.providerId, ...input.auth },
       ...(predecessorAttemptId ? { failoverFromAttemptId: predecessorAttemptId } : {})
     }

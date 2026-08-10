@@ -173,7 +173,7 @@ function applyChanges(
 function preflightSelectedAssets(selected: Array<{ internal: InternalMigrationAsset; action: MigrationDecisionAction }>): void {
   const targets = new Map<string, string>()
   for (const { internal, action } of selected) {
-    assertNoSymlinkWithin(internal.sourceRoot, internal.sourcePath)
+    if (!internal.readSourceDigest) assertNoSymlinkWithin(internal.sourceRoot, internal.sourcePath)
     const sourceDigest = readCurrentSourceDigest(internal)
     if (sourceDigest !== internal.asset.sourceDigest) throw new Error('migration_source_changed')
     if (!internal.targetRoot || !internal.targetPath || internal.targetFingerprint === undefined) {
@@ -191,6 +191,7 @@ function preflightSelectedAssets(selected: Array<{ internal: InternalMigrationAs
 }
 
 function readCurrentSourceDigest(internal: InternalMigrationAsset): string {
+  if (internal.readSourceDigest) return internal.readSourceDigest()
   return internal.asset.kind === 'skill'
     ? readSkillSnapshot(internal.sourcePath).digest
     : readSafeFile(internal.sourcePath, MAX_SOURCE_FILE_BYTES).digest
@@ -217,10 +218,18 @@ function buildTargetChanges(selected: Array<{ internal: InternalMigrationAsset; 
     targetRoots.set(targetPath, targetRoot)
     if (asset.kind === 'rules') addRuleChange(files, internal, action)
     else if (asset.kind === 'mcp') addMcpChange(files, internal, action)
-    else if (asset.kind === 'skill') addSkillChange(directories, internal)
+    else if (asset.kind === 'usage') addVirtualFileChange(files, internal)
+    else if (asset.kind === 'skill' || asset.kind === 'prompt') addSkillChange(directories, internal)
     else throw new Error('migration_asset_not_importable')
   }
   return { files, directories, targetRoots }
+}
+
+function addVirtualFileChange(files: Map<string, Buffer>, internal: InternalMigrationAsset): void {
+  if (!internal.targetPath || !internal.targetBytes) throw new Error('migration_virtual_file_invalid')
+  const text = internal.targetBytes.toString('utf8')
+  if (containsSensitiveText(text)) throw new Error('migration_source_contains_secret')
+  files.set(internal.targetPath, internal.targetBytes)
 }
 
 function addRuleChange(
@@ -255,8 +264,10 @@ function addMcpChange(
 
 function addSkillChange(directories: Map<string, SafeDirectorySnapshot>, internal: InternalMigrationAsset): void {
   if (!internal.targetPath) throw new Error('migration_target_missing')
-  const snapshot = readSkillSnapshot(internal.sourcePath)
-  if (snapshot.digest !== internal.asset.sourceDigest) throw new Error('migration_source_changed')
+  const snapshot = internal.sourceDirectorySnapshot ?? readSkillSnapshot(internal.sourcePath)
+  if (!internal.sourceDirectorySnapshot && snapshot.digest !== internal.asset.sourceDigest) {
+    throw new Error('migration_source_changed')
+  }
   if (directoryContainsSensitiveText(snapshot)) throw new Error('migration_source_contains_secret')
   directories.set(internal.targetPath, snapshot)
 }

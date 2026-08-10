@@ -12,9 +12,11 @@ export async function sendActiveSessionMessage(
   if (!id) return
   const payload: SendMessagePayload = typeof input === 'string'
     ? { text: input.trim() }
-    : { text: input.text.trim(), images: input.images }
-  const displayText = payload.text || (payload.images?.length ? `图片输入 (${payload.images.length} 张)` : '')
-  if (!displayText && !payload.images?.length) return
+    : { text: input.text.trim(), images: input.images, documents: input.documents }
+  const displayText = payload.text ||
+    (payload.images?.length ? `图片输入 (${payload.images.length} 张)` : '') ||
+    (payload.documents?.length ? `文档输入 (${payload.documents.length} 个)` : '')
+  if (!displayText && !payload.images?.length && !payload.documents?.length) return
   const previousStatus = store.getState().sessions[id]?.meta.status
   if (!previousStatus) return
   const optimisticId = store.nextId()

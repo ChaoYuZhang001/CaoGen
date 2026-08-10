@@ -5,6 +5,8 @@ import type {
   ProviderApiKey,
   ProviderInput
 } from '../../shared/types'
+import { resolvedProviderCredentialHeaderNames } from './providerCredentialHeaders'
+import { normalizeProviderCredentialRoutingMode } from '../providerKeyRouting'
 
 interface ProviderPatchFields {
   baseUrl: string
@@ -92,8 +94,12 @@ export function mergeProviderPatch(
       : patch.note ?? previous.note,
     encryptedToken: activeKey?.encryptedToken ?? '',
     apiKeys,
-    activeKeyId
+    activeKeyId,
+    credentialRoutingMode: normalizeProviderCredentialRoutingMode(
+      patch.credentialRoutingMode ?? previous.credentialRoutingMode
+    )
   }
+  next.credentialHeaderNames = resolvedProviderCredentialHeaderNames(next)
   next.credentialMigrationRequired = resolveCredentialMigrationRequired(
     previous,
     next,
@@ -139,8 +145,6 @@ function providerCredentialBindingIdentity(
     engine: resolveProviderEngine(provider),
     openaiProtocol: provider.openaiProtocol ?? '',
     customHeaders: provider.customHeaders?.trim() ?? '',
-    credentialHeaderNames: [...new Set((provider.credentialHeaderNames ?? [])
-      .map((name) => name.trim().toLowerCase())
-      .filter(Boolean))].sort()
+    credentialHeaderNames: resolvedProviderCredentialHeaderNames(provider).sort()
   })
 }

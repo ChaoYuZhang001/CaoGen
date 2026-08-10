@@ -42,7 +42,7 @@ async function verifySequentialReplay(Coordinator) {
     emit: (sessionId, event) => events.push({ sessionId, event })
   })
   const options = { modelAttemptRecoveryReplay: true }
-  assertEqual(coordinator.start('sequential', ['one', 'two', 'three'], options), true)
+  assertEqual(await coordinator.start('sequential', ['one', 'two', 'three'], options), true)
   assertPrompts(sent, ['one'])
   assertEqual(coordinator.blocksOrdinarySend('sequential', {}), true)
   assertEqual(coordinator.blocksOrdinarySend('sequential', options), false)
@@ -72,7 +72,7 @@ async function verifySequentialReplay(Coordinator) {
 
 async function verifyFailureStopsReplay(Coordinator) {
   const harness = createHarness(Coordinator, () => true)
-  harness.coordinator.start('failed', ['one', 'two'])
+  await harness.coordinator.start('failed', ['one', 'two'])
   harness.coordinator.handleEvent('failed', turnResult(true, 'provider failed'), Promise.resolve(true))
   harness.coordinator.handleEvent('failed', status('error', 'provider failed'), Promise.resolve(true))
   assertPrompts(harness.sent, ['one'])
@@ -81,7 +81,7 @@ async function verifyFailureStopsReplay(Coordinator) {
 
 async function verifyInitialRejection(Coordinator) {
   const harness = createHarness(Coordinator, () => false)
-  assertEqual(harness.coordinator.start('initial-rejection', ['one', 'two']), false)
+  assertEqual(await harness.coordinator.start('initial-rejection', ['one', 'two']), false)
   assertPrompts(harness.sent, ['one'])
   assertEvent(harness.events, 'task-snapshot-replay-rejected', '1/2')
 }
@@ -92,7 +92,7 @@ async function verifyRejectedReplay(Coordinator) {
     attempts += 1
     return attempts === 1
   })
-  harness.coordinator.start('rejected', ['one', 'two', 'three'])
+  await harness.coordinator.start('rejected', ['one', 'two', 'three'])
   harness.coordinator.handleEvent('rejected', turnResult(false), Promise.resolve(true))
   harness.coordinator.handleEvent('rejected', status('idle'), Promise.resolve(true))
   await flushPromises()
@@ -110,7 +110,7 @@ async function verifySynchronousEngineError(Coordinator) {
     },
     emit: (_sessionId, event) => events.push(event)
   })
-  assertEqual(coordinator.start('sync-error', ['one', 'two']), false)
+  assertEqual(await coordinator.start('sync-error', ['one', 'two']), false)
   assertEvent(events.map((event) => ({ event })), 'task-snapshot-replay-rejected', '1/2')
 }
 
@@ -120,13 +120,13 @@ async function verifyThrownSendReason(Coordinator) {
     send: () => { throw new Error('fixture send failure') },
     emit: (_sessionId, event) => events.push({ event })
   })
-  assertThrows(() => coordinator.start('thrown-send', ['one']), 'fixture send failure')
+  assertEqual(await coordinator.start('thrown-send', ['one']), false)
   assertEvent(events, 'task-snapshot-replay-rejected', 'fixture send failure')
 }
 
 async function verifyRecoveryRefreshFailure(Coordinator) {
   const harness = createHarness(Coordinator, () => true)
-  harness.coordinator.start('gate-failure', ['one', 'two'])
+  await harness.coordinator.start('gate-failure', ['one', 'two'])
   harness.coordinator.handleEvent('gate-failure', turnResult(false), Promise.resolve(true))
   harness.coordinator.handleEvent('gate-failure', status('idle'), Promise.reject(new Error('gate refresh failed')))
   await flushPromises()
@@ -136,7 +136,7 @@ async function verifyRecoveryRefreshFailure(Coordinator) {
 
 async function verifyClosedSessionClearsReplay(Coordinator) {
   const harness = createHarness(Coordinator, () => true)
-  harness.coordinator.start('closed', ['one', 'two'])
+  await harness.coordinator.start('closed', ['one', 'two'])
   harness.coordinator.handleEvent('closed', status('closed'), Promise.resolve(true))
   harness.coordinator.handleEvent('closed', turnResult(false), Promise.resolve(true))
   harness.coordinator.handleEvent('closed', status('idle'), Promise.resolve(true))
@@ -192,14 +192,4 @@ function assertEvent(events, name, detail) {
 
 function assertEqual(actual, expected) {
   if (actual !== expected) throw new Error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
-}
-
-function assertThrows(callback, expected) {
-  try {
-    callback()
-  } catch (error) {
-    if (error instanceof Error && error.message.includes(expected)) return
-    throw error
-  }
-  throw new Error(`expected error containing ${expected}`)
 }

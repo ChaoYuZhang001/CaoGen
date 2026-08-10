@@ -334,9 +334,17 @@ function exerciseStudioPolicyModel({ React, ReactDomServer, studioForms, studioM
     onCancel: () => undefined,
     onSubmit: async () => true
   }))
-  for (const label of ['允许的数据类', '禁止的数据类', '允许的 Resource ID', '最少 Evidence 数', '验收需用户确认']) {
+  for (const label of ['水墨岗位形象', '允许的数据类', '禁止的数据类', '允许的 Resource ID', '最少 Evidence 数', '验收需用户确认']) {
     assert(markup.includes(label), `rendered recruitment form must expose ${label}`)
   }
+  const formsSource = readFileSync(
+    path.join(repoRoot, 'src', 'renderer', 'src', 'components', 'studio', 'DigitalWorkerForms.tsx'),
+    'utf8'
+  )
+  assert(
+    formsSource.includes('avatarProfile: { watercolorRole: values.watercolorRole }'),
+    'recruitment must persist the selected watercolor role in the provider-neutral avatar profile'
+  )
   return ['studio-policy-model-and-form-render']
 }
 

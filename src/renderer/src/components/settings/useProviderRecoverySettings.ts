@@ -22,6 +22,7 @@ export function useProviderRecoverySettings(providers: ProviderView[]) {
     if (!result.provider.ready || result.provider.models.length === 0) return
     const routingMode = useStore.getState().welcomeDraft.routingMode
     updateWelcomeDraft({
+      computeSelectionSource: 'user',
       providerId: result.provider.id,
       model: routingMode === 'fixed' ? result.provider.models[0] : AUTO_MODEL
     })

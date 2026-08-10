@@ -1,15 +1,18 @@
 import { AnthropicEngine } from './anthropicEngine'
 import { registerEngine } from './engine'
 import { openAIEngineFactory } from './openaiEngine'
+import { GoogleGenAiRuntime } from './googleGenAiRuntime'
 import { listProviders } from './providers'
 import type { Engine, EngineEmit } from './engine'
 import type { SessionMeta } from '../shared/types'
 import {
   ANTHROPIC_NATIVE_RUNTIME_ADAPTER,
+  GOOGLE_NATIVE_RUNTIME_ADAPTER,
   OPENAI_NATIVE_RUNTIME_ADAPTER
 } from './native-runtime-contract'
 import { ANTHROPIC_MESSAGES_PROTOCOL_ADAPTER } from './protocol-adapters/anthropic-messages'
 import { OPENAI_COMPATIBLE_PROTOCOL_ADAPTER } from './protocol-adapters/openai-compatible'
+import { GOOGLE_GENERATIVE_LANGUAGE_PROTOCOL_ADAPTER } from './protocol-adapters/google-generative-language'
 
 /**
  * M6 · 引擎注册。
@@ -34,6 +37,23 @@ export function registerBuiltinEngines(): void {
       resumeSdkSessionId?: string,
       initialEventSeq?: number
     ): Engine => new AnthropicEngine(meta, emit, resumeSdkSessionId, initialEventSeq)
+  })
+
+  registerEngine({
+    kind: 'gemini',
+    label: 'Google Generative Language API',
+    available: () => true,
+    nativeRuntime: GOOGLE_NATIVE_RUNTIME_ADAPTER,
+    protocolAdapter: GOOGLE_GENERATIVE_LANGUAGE_PROTOCOL_ADAPTER,
+    configured: () => listProviders().some(
+      (provider) => provider.engine === 'gemini' && provider.hasToken
+    ),
+    create: (
+      meta: SessionMeta,
+      emit: EngineEmit,
+      resumeSdkSessionId?: string,
+      initialEventSeq?: number
+    ): Engine => new GoogleGenAiRuntime(meta, emit, resumeSdkSessionId, initialEventSeq)
   })
 
   registerEngine({

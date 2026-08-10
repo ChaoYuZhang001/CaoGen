@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Operations anchor and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Operations specialist actively using the real status tools in the tool-running state.
+Action: the larger hard case is securely supported against the left hip by the left hand; the smaller status-instrument case rests physically on top of it with its lid open, revealing only three solid amber indicator dots and one plain round control; the right hand adjusts the control while the gaze checks the three dots. Add only two short restrained directional ink strokes near the control hand, not a floating interface.
+State readability: active operations work must remain distinguishable at 96 pixels through the open status case, three-dot display, adjusting hand and stable posture, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, tied-back hair, age, sturdy proportions, pine-green civilian overshirt and trousers, off-white shirt, shoes, both case designs, amber details, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and opening of the existing status case required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, letters, numbers, radios, antennas, labels, logos or watermark.
+Avoid: redesign, extra people, duplicate cases, floating props, military or emergency-services styling, holograms, decorative UI, glow, cyberpunk, tactical gear, malformed hands, cropped anatomy or style drift.

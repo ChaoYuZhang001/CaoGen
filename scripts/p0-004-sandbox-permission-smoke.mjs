@@ -322,9 +322,16 @@ async function verifyCommandTermination(localExecution) {
   assert(abortedCommand.commandTermination === 'aborted', 'pre-aborted command must be classified as aborted')
   const timedOutCommand = await localExecution.runLocalCommand({
     command: nodeCommand('setTimeout(() => {}, 1000)'), cwd: projectDir, mode: 'restrictedLocal',
-    timeoutMs: 20, maxBufferBytes: 1024
+    timeoutMs: 250, maxBufferBytes: 1024
   })
-  assert(timedOutCommand.commandTermination === 'timed_out', 'timed-out command must retain its termination cause')
+  assert(
+    timedOutCommand.commandTermination === 'timed_out',
+    `timed-out command must retain its termination cause: ${JSON.stringify({
+      ok: timedOutCommand.ok,
+      exitCode: timedOutCommand.exitCode,
+      commandTermination: timedOutCommand.commandTermination
+    })}`
+  )
   const outputLimitedCommand = await localExecution.runLocalCommand({
     command: nodeCommand("process.stdout.write('x'.repeat(4096)); setTimeout(() => {}, 1000)"),
     cwd: projectDir, mode: 'restrictedLocal', timeoutMs: 10_000, maxBufferBytes: 32
@@ -392,6 +399,8 @@ function verifyPermission(permission) {
 
   const destructive = permission.classifyToolRisk('bash', { command: 'rm -rf /' }, projectDir)
   assert(destructive.level === 'critical', `destructive bash should be critical, got ${destructive.level}`)
+  assert(destructive.capabilities.length === 5 && destructive.capabilities.includes('network'),
+    'bash must expose the complete composite capability set')
 
   const escape = permission.classifyToolRisk('read_file', { path: '../secret.txt' }, projectDir)
   assert(escape.level === 'critical', `path escape should be critical, got ${escape.level}`)
@@ -409,7 +418,7 @@ function verifyPermission(permission) {
     settings({ permissionAllowlist: 'tool=bash risk<=low' }),
     { toolName: 'bash', input: { command: 'echo safe' }, cwd: projectDir }
   )
-  assert(allow.kind === 'allow', `allowlist should allow low risk bash, got ${allow.kind}`)
+  assert(allow.kind === 'neutral', `legacy allowlist must not silently allow composite bash, got ${allow.kind}`)
 
   const pathAllow = permission.evaluateToolPermission(
     settings({ permissionAllowlist: 'tool=write_file path=src/**' }),
@@ -421,13 +430,309 @@ function verifyPermission(permission) {
     settings({ permissionTemporaryAllowlist: `tool=bash risk<=low until=${Date.now() + 60_000}` }),
     { toolName: 'bash', input: { command: 'echo temp' }, cwd: projectDir }
   )
-  assert(temporary.kind === 'allow', `temporary allow should pass, got ${temporary.kind}`)
+  assert(temporary.kind === 'neutral', `legacy temporary allow must not silently allow composite bash, got ${temporary.kind}`)
 
   const expired = permission.evaluateToolPermission(
     settings({ permissionTemporaryAllowlist: `tool=bash risk<=low until=${Date.now() - 1}` }),
     { toolName: 'bash', input: { command: 'echo temp' }, cwd: projectDir }
   )
   assert(expired.kind === 'neutral', `expired temporary allow should be neutral, got ${expired.kind}`)
+
+  const structuredAllow = permission.evaluateToolPermission(
+    settings({
+      permissionRules: [{
+        id: 'allow-src-write', enabled: true, effect: 'allow', toolPattern: 'write_*',
+        pathPattern: 'src/**', capabilityScope: ['workspaceWrite'], riskLevel: 'medium', riskOperator: 'exact'
+      }]
+    }),
+    { toolName: 'write_file', input: { path: 'src/structured.ts' }, cwd: projectDir }
+  )
+  assert(structuredAllow.kind === 'allow', `structured rule should allow exact scoped write, got ${structuredAllow.kind}`)
+  assert(structuredAllow.matchedRule === '规则 allow-src-write', 'structured decision must identify the matching rule')
+
+  const structuredDeny = permission.evaluateToolPermission(
+    settings({
+      permissionRules: [
+        {
+          id: 'allow-shell', enabled: true, effect: 'allow', toolPattern: 'bash', pathPattern: '',
+          riskLevel: 'low', riskOperator: 'atMost'
+        },
+        {
+          id: 'deny-all-shell', enabled: true, effect: 'deny', toolPattern: 'bash', pathPattern: '',
+          riskOperator: 'exact'
+        }
+      ]
+    }),
+    { toolName: 'bash', input: { command: 'echo structured' }, cwd: projectDir }
+  )
+  assert(structuredDeny.kind === 'deny', 'structured deny must take precedence over structured allow')
+
+  const structuredExpired = permission.evaluateToolPermission(
+    settings({
+      permissionRules: [{
+        id: 'expired-shell', enabled: true, effect: 'allow', toolPattern: 'bash', pathPattern: '',
+        riskOperator: 'exact', expiresAt: 9_999
+      }]
+    }),
+    { toolName: 'bash', input: { command: 'echo expired' }, cwd: projectDir, now: 10_000 }
+  )
+  assert(structuredExpired.kind === 'neutral', 'structured rule must expire at the exact boundary')
+
+  const invalidRules = permission.validatePermissionRules([{
+    id: 'typo-rule', enabled: true, effect: 'allow', toolPattern: 'write_file', pathPattern: '',
+    riskOperator: 'exact', toolPatern: 'bash'
+  }])
+  assert(!invalidRules.ok, 'unknown structured fields must fail validation instead of being ignored')
+  assert(invalidRules.issues.some((issue) => issue.message.includes('toolPatern')), 'validation must name the unknown field')
+  let emptyRuleError = ''
+  try {
+    permission.normalizePermissionRules([{
+      id: 'empty', enabled: true, effect: 'allow', toolPattern: '', pathPattern: '', riskOperator: 'exact'
+    }])
+  } catch (error) {
+    emptyRuleError = error instanceof Error ? error.message : String(error)
+  }
+  assert(
+    emptyRuleError.includes('至少选择工具、路径、语义范围或风险条件之一'),
+    `selector-free structured rule must fail closed: ${emptyRuleError}`
+  )
+
+  const semanticBashRule = {
+    id: 'allow-test-command', enabled: true, effect: 'allow', toolPattern: 'bash', pathPattern: '',
+    commandPattern: 'npm test*', networkHostPattern: '', guiApplicationPattern: '', guiWindowPattern: '',
+    mcpToolPattern: '', capabilityScope: ['workspaceRead', 'workspaceWrite', 'terminal', 'browser', 'network'],
+    requirePostcondition: false, riskLevel: 'medium', riskOperator: 'atMost'
+  }
+  const semanticBashAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [semanticBashRule] }),
+    { toolName: 'bash', input: { command: 'npm test -- --runInBand' }, cwd: projectDir }
+  )
+  assert(semanticBashAllow.kind === 'allow', 'command semantic rule must match the complete command scope')
+  const semanticBashMismatch = permission.evaluateToolPermission(
+    settings({ permissionRules: [semanticBashRule] }),
+    { toolName: 'bash', input: { command: 'npm publish' }, cwd: projectDir }
+  )
+  assert(semanticBashMismatch.kind === 'neutral', 'command drift must not match a semantic allow rule')
+  const terminalOnlyBash = permission.evaluateToolPermission(
+    settings({ permissionRules: [{ ...semanticBashRule, id: 'terminal-only-bash', capabilityScope: ['terminal'] }] }),
+    { toolName: 'bash', input: { command: 'npm test -- --runInBand' }, cwd: projectDir }
+  )
+  assert(terminalOnlyBash.kind === 'neutral', 'terminal-only scope must not allow composite bash')
+
+  const networkRule = {
+    id: 'allow-doc-host', enabled: true, effect: 'allow', toolPattern: 'browser_navigate', pathPattern: '',
+    commandPattern: '', networkHostPattern: '*.example.com', guiApplicationPattern: '', guiWindowPattern: '',
+    mcpToolPattern: '', capabilityScope: ['browser', 'network'], requirePostcondition: false, riskOperator: 'exact'
+  }
+  const networkAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [networkRule] }),
+    { toolName: 'browser_navigate', input: { url: 'https://docs.example.com/guide?token=not-inspected' }, cwd: projectDir }
+  )
+  assert(networkAllow.kind === 'allow', 'network rule must match the normalized hostname without URL secrets')
+  const networkMismatch = permission.evaluateToolPermission(
+    settings({ permissionRules: [networkRule] }),
+    { toolName: 'browser_navigate', input: { url: 'https://example.net/guide' }, cwd: projectDir }
+  )
+  assert(networkMismatch.kind === 'neutral', 'network host drift must not match')
+
+  const guiRule = {
+    id: 'allow-editor-save', enabled: true, effect: 'allow', toolPattern: 'gui_click', pathPattern: '',
+    commandPattern: '', networkHostPattern: '', guiApplicationPattern: 'editor.exe', guiWindowPattern: '*Settings*',
+    mcpToolPattern: '', capabilityScope: ['workspaceRead', 'workspaceWrite', 'terminal', 'browser', 'network'],
+    requirePostcondition: true, riskLevel: 'high', riskOperator: 'exact'
+  }
+  const guiInput = {
+    processName: 'editor.exe', title: 'Editor Settings', automationId: 'save',
+    postcondition: { kind: 'window', state: 'exists', processName: 'editor.exe', title: 'Editor Settings' }
+  }
+  const guiAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [guiRule] }),
+    { toolName: 'gui_click', input: guiInput, cwd: projectDir }
+  )
+  assert(guiAllow.kind === 'allow', 'GUI rule must match app window and a valid bounded postcondition')
+  const guiVisualAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [guiRule] }),
+    {
+      toolName: 'gui_click',
+      input: {
+        ...guiInput,
+        postcondition: {
+          kind: 'visual', state: 'changed', processName: 'editor.exe', title: 'Editor Settings',
+          minimumChangedRatio: 0.0001, pixelDifferenceThreshold: 16
+        }
+      },
+      cwd: projectDir
+    }
+  )
+  assert(guiVisualAllow.kind === 'allow', 'GUI rule must accept a same-target bounded visual postcondition')
+  for (const [label, input] of [
+    ['application', { ...guiInput, processName: 'other.exe' }],
+    ['window', { ...guiInput, title: 'Other window' }],
+    ['postcondition', { ...guiInput, postcondition: undefined }],
+    ['invalid postcondition', { ...guiInput, postcondition: { kind: 'window', state: 'exists' } }],
+    ['different postcondition target', {
+      ...guiInput,
+      postcondition: { kind: 'window', state: 'exists', processName: 'other.exe', title: 'Other window' }
+    }],
+    ['coordinate precedence', { ...guiInput, automationId: undefined, x: 10, y: 20 }]
+  ]) {
+    const decision = permission.evaluateToolPermission(
+      settings({ permissionRules: [guiRule] }),
+      { toolName: 'gui_click', input, cwd: projectDir }
+    )
+    assert(decision.kind === 'neutral', `${label} drift must not match the GUI semantic rule`)
+  }
+
+  const mcpRule = {
+    id: 'allow-mcp-read', enabled: true, effect: 'allow', toolPattern: 'mcp_call_tool', pathPattern: '',
+    commandPattern: '', networkHostPattern: 'mcp.example.com', guiApplicationPattern: '', guiWindowPattern: '',
+    mcpToolPattern: 'read_*', mcpArgumentPointer: '/scope/project', mcpArgumentPattern: 'alpha-*',
+    capabilityScope: ['workspaceRead', 'workspaceWrite', 'terminal', 'browser', 'network'],
+    requirePostcondition: false, riskLevel: 'high', riskOperator: 'exact'
+  }
+  const mcpAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [mcpRule] }),
+    {
+      toolName: 'mcp_call_tool',
+      input: {
+        url: 'https://mcp.example.com/rpc', toolName: 'read_state',
+        arguments: { scope: { project: 'alpha-one' } }
+      },
+      cwd: projectDir
+    }
+  )
+  assert(mcpAllow.kind === 'allow', 'MCP rule must bind endpoint host, tool name, and argument scope')
+  const mcpMismatch = permission.evaluateToolPermission(
+    settings({ permissionRules: [mcpRule] }),
+    {
+      toolName: 'mcp_call_tool',
+      input: {
+        url: 'https://mcp.example.com/rpc', toolName: 'write_state',
+        arguments: { scope: { project: 'alpha-one' } }
+      },
+      cwd: projectDir
+    }
+  )
+  assert(mcpMismatch.kind === 'neutral', 'MCP tool drift must not match')
+  const mcpArgumentMismatch = permission.evaluateToolPermission(
+    settings({ permissionRules: [mcpRule] }),
+    {
+      toolName: 'mcp_call_tool',
+      input: {
+        url: 'https://mcp.example.com/rpc', toolName: 'read_state',
+        arguments: { scope: { project: 'beta-one' } }
+      },
+      cwd: projectDir
+    }
+  )
+  assert(mcpArgumentMismatch.kind === 'neutral', 'MCP argument drift must not match')
+
+  const dynamicMcpRule = {
+    ...mcpRule,
+    id: 'allow-dynamic-mcp-read',
+    toolPattern: 'mcp__*',
+    networkHostPattern: '',
+    mcpToolPattern: 'mcp__demo__read_*'
+  }
+  const dynamicMcpInput = { scope: { project: 'alpha-two' } }
+  const dynamicMcpAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [dynamicMcpRule] }),
+    { toolName: 'mcp__demo__read_state', input: dynamicMcpInput, cwd: projectDir }
+  )
+  assert(dynamicMcpAllow.kind === 'allow', 'dynamic MCP rule must bind canonical tool name and direct arguments')
+  assert(dynamicMcpAllow.risk.level === 'high', 'dynamic MCP tools must remain high risk')
+  assert(dynamicMcpAllow.risk.capabilities.length === 5,
+    'dynamic MCP tools must expose the complete composite capability set')
+  const malformedDynamicMcp = permission.evaluateToolPermission(
+    settings({ permissionRules: [dynamicMcpRule] }),
+    { toolName: 'mcp__malformed', input: dynamicMcpInput, cwd: projectDir }
+  )
+  assert(malformedDynamicMcp.kind === 'neutral', 'malformed MCP names must not match semantic rules')
+  assert(malformedDynamicMcp.risk.level === 'high', 'malformed MCP namespace names must not downgrade risk')
+  for (const [toolName, input] of [
+    ['mcp__other__read_state', dynamicMcpInput],
+    ['mcp__demo__read_state', { scope: { project: 'beta-two' } }]
+  ]) {
+    const decision = permission.evaluateToolPermission(
+      settings({ permissionRules: [dynamicMcpRule] }),
+      { toolName, input, cwd: projectDir }
+    )
+    assert(decision.kind === 'neutral', 'dynamic MCP tool or argument drift must not match')
+    assert(decision.risk.level === 'high', 'dynamic MCP drift must not reduce risk')
+  }
+
+  const invalidSemanticRules = permission.validatePermissionRules([{
+    id: 'invalid-host', enabled: true, effect: 'allow', toolPattern: '', pathPattern: '',
+    networkHostPattern: 'https://example.com/path', riskOperator: 'exact'
+  }])
+  assert(!invalidSemanticRules.ok, 'network host selector must reject URLs and paths')
+  const invalidPostconditionType = permission.validatePermissionRules([{
+    id: 'invalid-postcondition', enabled: true, effect: 'allow', toolPattern: 'gui_*', pathPattern: '',
+    requirePostcondition: 'yes', riskOperator: 'exact'
+  }])
+  assert(!invalidPostconditionType.ok, 'postcondition selector must reject non-boolean values')
+  const incompleteMcpArgumentRule = permission.validatePermissionRules([{
+    id: 'incomplete-mcp-argument', enabled: true, effect: 'allow', toolPattern: 'mcp__*', pathPattern: '',
+    mcpArgumentPointer: '/scope/project', riskOperator: 'exact'
+  }])
+  assert(!incompleteMcpArgumentRule.ok, 'MCP argument pointer and pattern must be required as a pair')
+  const sensitiveMcpPointerRule = permission.validatePermissionRules([{
+    id: 'sensitive-mcp-argument', enabled: true, effect: 'allow', toolPattern: 'mcp__*', pathPattern: '',
+    mcpArgumentPointer: '/auth/apiKey', mcpArgumentPattern: '*', riskOperator: 'exact'
+  }])
+  assert(!sensitiveMcpPointerRule.ok, 'MCP argument rules must reject sensitive pointer segments')
+  const invalidCapabilityRule = permission.validatePermissionRules([{
+    id: 'invalid-capability', enabled: true, effect: 'allow', toolPattern: 'write_file', pathPattern: '',
+    capabilityScope: ['workspaceWrite', 'rootAccess'], riskOperator: 'exact'
+  }])
+  assert(!invalidCapabilityRule.ok, 'capability scope must reject unknown capabilities')
+  const duplicateCapabilityRule = permission.validatePermissionRules([{
+    id: 'duplicate-capability', enabled: true, effect: 'deny', toolPattern: '', pathPattern: '',
+    capabilityScope: ['network', 'network'], riskOperator: 'exact'
+  }])
+  assert(!duplicateCapabilityRule.ok, 'capability scope must reject duplicate capabilities')
+
+  const denyNetwork = {
+    id: 'deny-network-capability', enabled: true, effect: 'deny', toolPattern: '', pathPattern: '',
+    capabilityScope: ['network'], riskOperator: 'exact'
+  }
+  for (const [toolName, input] of [
+    ['bash', { command: 'echo composite' }],
+    ['mcp_call_tool', { toolName: 'read_state', arguments: {} }],
+    ['mcp__demo__read_state', {}],
+    ['gui_click', { processName: 'editor.exe', title: 'Editor' }]
+  ]) {
+    const decision = permission.evaluateToolPermission(
+      settings({ permissionRules: [denyNetwork] }),
+      { toolName, input, cwd: projectDir }
+    )
+    assert(decision.kind === 'deny', `network deny scope must block composite tool ${toolName}`)
+  }
+
+  const legacyV1CompositeAllow = permission.evaluateToolPermission(
+    settings({ permissionRules: [{
+      id: 'legacy-v1-bash', enabled: true, effect: 'allow', toolPattern: 'bash', pathPattern: '',
+      riskOperator: 'exact'
+    }] }),
+    { toolName: 'bash', input: { command: 'echo legacy' }, cwd: projectDir }
+  )
+  assert(legacyV1CompositeAllow.kind === 'neutral', 'v1 composite allow without capability scope must fail closed')
+
+  const migrated = permission.migrateLegacyPermissionRules({
+    permissionDenylist: 'tool=bash risk>=high',
+    permissionAllowlist: 'tool=write_file path=src/**',
+    permissionTemporaryAllowlist: 'tool=git_commit until=20000'
+  }, 10_000)
+  assert(migrated.length === 3, `legacy migration should preserve three active rules, got ${migrated.length}`)
+  assert(migrated[0].effect === 'deny' && migrated[0].riskOperator === 'atLeast', 'legacy deny risk comparison changed')
+  assert(migrated[1].expiresAt === 20_000, 'legacy temporary expiry changed')
+  assert(migrated[2].pathPattern === 'src/**', 'legacy path scope changed')
+  assert(
+    migrated.every((rule) => rule.commandPattern === '' && rule.networkHostPattern === '' &&
+      rule.guiApplicationPattern === '' && rule.guiWindowPattern === '' &&
+      rule.mcpToolPattern === '' && rule.capabilityScope.length === 0 && rule.requirePostcondition === false),
+    'legacy rules must migrate with neutral semantic selectors'
+  )
 }
 
 function verifyAudit(audit) {
@@ -447,6 +752,7 @@ function verifyAudit(audit) {
     toolName: 'bash',
     riskLevel: 'low',
     riskReasons: ['smoke'],
+    capabilities: ['workspaceRead', 'workspaceWrite', 'terminal', 'browser', 'network'],
     input: { command: 'echo audit' },
     ok: true,
     sandboxMode: 'restrictedLocal',
@@ -464,6 +770,8 @@ function verifyAudit(audit) {
   assert(record.schemaVersion === 1, 'execute audit record must declare schemaVersion 1')
   assert(record.toolName === 'bash', 'audit record toolName mismatch')
   assert(record.action === 'execute', 'audit record action mismatch')
+  assert(record.capabilities.length === 5 && record.capabilities.includes('network'),
+    'audit record must retain the main-process capability set')
   assert(record.input === undefined, 'audit record must never persist raw input')
   assert(record.inputSummary.startsWith('command bytes='), 'audit record should store only command metadata')
   assert(record.inputDigest && !record.inputSummary.includes('echo audit'), 'audit command summary must use a digest')
@@ -613,7 +921,10 @@ function verifyLocalExecutionBoundary() {
 }
 
 function nodeCommand(source) {
-  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`
+  const encodedSource = Buffer.from(source, 'utf8').toString('base64')
+  const bootstrap = `eval(Buffer.from('${encodedSource}','base64').toString())`
+  if (process.platform === 'win32') return `"${process.execPath}" -e "${bootstrap}"`
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(bootstrap)}`
 }
 
 function verifySecuritySettingsUi() {
@@ -622,11 +933,25 @@ function verifySecuritySettingsUi() {
     'localExecutionLabel',
     'legacyDockerMigrationWarning',
     "set('sandboxMode', 'restrictedLocal')",
-    'permissionAllowlist',
-    'permissionDenylist',
-    'permissionTemporaryAllowlist'
+    'permissionRulesTitle',
+    'addPermissionRule',
+    'updatePermissionRule',
+    'commandPattern',
+    'networkHostPattern',
+    'guiApplicationPattern',
+    'guiWindowPattern',
+    'mcpToolPattern',
+    'mcpArgumentPointer',
+    'mcpArgumentPattern',
+    'capabilityScope',
+    'permissionRuleCapabilities',
+    'requirePostcondition',
+    'permissionRuleMissingSelector'
   ]) {
     assert(text.includes(marker), `settings UI missing ${marker}`)
+  }
+  for (const legacyField of ['permissionAllowlist', 'permissionDenylist', 'permissionTemporaryAllowlist', 'allowedTools', 'disallowedTools']) {
+    assert(!text.includes(`value={draft.${legacyField}}`), `settings UI must not expose raw legacy field ${legacyField}`)
   }
   assert(!text.includes(['strict', 'Docker'].join('')), 'settings UI must not expose the removed strict mode')
 }
@@ -638,6 +963,8 @@ function settings(patch = {}) {
     permissionAllowlist: '',
     permissionDenylist: '',
     permissionTemporaryAllowlist: '',
+    permissionRulesVersion: 2,
+    permissionRules: [],
     ...patch
   }
 }

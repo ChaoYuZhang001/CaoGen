@@ -285,9 +285,13 @@ function buildProviderStatus(
   const latency = health?.latencyEmaMs ?? health?.lastLatencyMs
   const latestFailure = health?.recentFailures?.[0]
   const healthLabel = health
-    ? health.healthy
-      ? `healthy · ${successRate ?? '-'}%${latency ? ` · ${Math.round(latency)}ms EMA` : ''}`
-      : `failing · ${health.consecutiveFailures} consecutive${latestFailure ? ` · ${latestFailure.label}` : ''}`
+    ? health.circuitState === 'open'
+      ? `circuit open${latestFailure ? ` · ${latestFailure.label}` : ''}`
+      : health.circuitState === 'half_open'
+        ? `half-open recovery · ${health.halfOpenSuccesses} probe successes`
+        : health.healthy
+          ? `healthy · ${successRate ?? '-'}%${latency ? ` · ${Math.round(latency)}ms EMA` : ''}`
+          : `failing · ${health.consecutiveFailures} consecutive${latestFailure ? ` · ${latestFailure.label}` : ''}`
     : 'not probed'
   const missingModels = provider.models.length === 0
   const status: ControlCenterStatus = !provider.ready

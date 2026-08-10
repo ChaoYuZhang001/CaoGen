@@ -1,0 +1,23 @@
+export const PROJECT_REFACTOR_TRANSLATIONS = {
+  deskRefactor: { zh: '重构', en: 'Refactor' },
+  projectRefactorTitle: { zh: '项目重构', en: 'Project refactor' },
+  projectRefactorSubtitle: { zh: '预览、应用并回滚 TypeScript 跨文件重命名', en: 'Preview, apply, and roll back cross-file TypeScript renames' },
+  projectRefactorClear: { zh: '清空重构状态', en: 'Clear refactor state' },
+  projectRefactorPath: { zh: '项目内文件', en: 'Project file' },
+  projectRefactorLine: { zh: '行', en: 'Line' },
+  projectRefactorColumn: { zh: '列', en: 'Column' },
+  projectRefactorNewName: { zh: '新名称', en: 'New name' },
+  projectRefactorPreview: { zh: '生成预览', en: 'Preview' },
+  projectRefactorWorking: { zh: '处理中', en: 'Working' },
+  projectRefactorNoSession: { zh: '选择一个项目会话后开始重构。', en: 'Select a project session to start refactoring.' },
+  projectRefactorIdle: { zh: '指定符号位置和新名称，生成跨文件变更预览。', en: 'Choose a symbol location and new name to preview cross-file changes.' },
+  projectRefactorPreviewReady: { zh: '重构预览已就绪', en: 'Refactor preview ready' },
+  projectRefactorSummary: { zh: '{files} 个文件，{edits} 处编辑', en: '{files} files, {edits} edits' },
+  projectRefactorEditCount: { zh: '{edits} 处', en: '{edits} edits' },
+  projectRefactorApply: { zh: '应用重构', en: 'Apply refactor' },
+  projectRefactorApplied: { zh: '重构已应用', en: 'Refactor applied' },
+  projectRefactorFilesChanged: { zh: '已更新 {files} 个文件；文件变化后将拒绝回滚。', en: 'Updated {files} files; rollback will be refused after further file changes.' },
+  projectRefactorRollback: { zh: '回滚重构', en: 'Roll back refactor' },
+  projectRefactorRolledBack: { zh: '重构已回滚', en: 'Refactor rolled back' },
+  projectRefactorFilesRestored: { zh: '已恢复 {files} 个文件。', en: 'Restored {files} files.' }
+} as const

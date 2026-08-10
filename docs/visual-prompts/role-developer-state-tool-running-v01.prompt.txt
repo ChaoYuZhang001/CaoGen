@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Developer anchor and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Developer actively using the real development tools in the tool-running state.
+Action: reconfigure only the existing folding keyboard and slim slate into their natural connected work position, with the slate upright on its small physical hinge and the keyboard supported against the forearms; both hands actively type on blank unmarked keys while the gaze focuses on the completely blank dark screen. Add only two short restrained directional ink strokes near the typing hands, not a floating interface.
+State readability: active development must remain distinguishable at 96 pixels through the two-handed typing posture and keyboard-slate relationship, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, hair, age, body proportions, deep-blue jacket, bamboo-green shirt, charcoal trousers, shoes, keyboard design, slate design, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and the physical folding relationship of the existing two tools required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, letters, numbers, code, terminal lines, labels, logos or watermark. Screen and keys remain blank.
+Avoid: redesign, extra people, duplicate keyboard or slate, floating devices, headphones, holograms, decorative UI, glow, cyberpunk, tactical styling, malformed hands, cropped anatomy or style drift.

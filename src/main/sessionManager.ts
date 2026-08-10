@@ -10,12 +10,14 @@ import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import { checkpointRestoreEffectBoundary } from './checkpoint-effect-boundary'
+import { normalizeStableMessagePayload } from './stable-message-payload'
 import { withSessionOperationQueue } from './session-operation-queue'
 import {
   cleanupTranscripts,
   readTranscriptEntries,
   restoreTranscriptIfMissing,
-  shouldPersistConversationLedgerEvent
+  shouldPersistConversationLedgerEvent,
+  transcriptForkSeedEntries
 } from './transcript'
 import { touchProject } from './projects'
 import { managedWorktreeRecordForSession } from './worktrees'
@@ -151,7 +153,6 @@ type CheckpointOperationAttempt<T extends { error?: string }> = {
   phase: 'preflight' | 'executed'
   value: T
 }
-
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
   private readonly taskPlans = new TaskPlanSessionCoordinator(
@@ -222,6 +223,7 @@ class SessionManager {
   private readonly enginePowerBlockers = new Map<string, number>()
   private preservingSnapshotsOnDispose = false
   private readonly effectRecoveryPreservedSessions = new Set<string>()
+  private initialization: Promise<void> | undefined
   private readonly closingSessions = new Map<string, Promise<void>>()
   private readonly recoveredPendingSessions = new Map<string, SessionCreationDraft>()
   private readonly blockedPendingDagSessions = new Map<string, SessionCreationDraft>()
@@ -241,7 +243,6 @@ class SessionManager {
   }
 
   list(): SessionMeta[] { return [...this.sessions.values()].map((s) => ({ ...s.meta })) }
-
   get(id: string): Engine | undefined { return this.sessions.get(id) }
 
   async rewindFiles(id: string, messageId: string, dryRun: boolean): Promise<RewindResult> {
@@ -509,6 +510,14 @@ class SessionManager {
         ? [sourceSnapshot.run]
         : await listPersistedTaskRuns(baseMeta.conversationForkSourceSessionId)
       const sourceRun = sourceRuns.sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      if (baseMeta.conversationForkCheckpointId) {
+        transcriptForkSeedEntries(
+          baseMeta.conversationForkSourceSdkSessionId!,
+          baseMeta.conversationForkCheckpointId
+        )
+        const boundary = checkpointRestoreEffectBoundary(sourceRun, false)
+        if (!boundary.allowed) throw new Error(boundary.reason)
+      }
       if (sourceRun) baseMeta = { ...baseMeta, conversationForkSourceRunId: sourceRun.id }
     }
     return { ...draft, baseMeta }
@@ -577,7 +586,10 @@ class SessionManager {
     const meta = sessionMetaForPlacement(draft, worktree)
     resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
     const initialEventSeq = meta.conversationForkSourceSdkSessionId
-      ? readTranscriptEntries(meta.conversationForkSourceSdkSessionId)
+      ? transcriptForkSeedEntries(
+        meta.conversationForkSourceSdkSessionId,
+        meta.conversationForkCheckpointId
+      )
         .reduce((max, entry) => Math.max(max, entry.seq), 0)
       : 0
     const session = createEngine(
@@ -676,7 +688,8 @@ class SessionManager {
     }
     if (nextRun !== currentRun) this.taskRuns.set(id, nextRun)
     try {
-      session.send(input)
+      const payload = normalizeStableMessagePayload(input)
+      session.send({ ...payload, messageId: payload.messageId ?? randomUUID() })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (options.supervisorControlReplay === true) {
@@ -1430,11 +1443,12 @@ class SessionManager {
   }
 
   /** 启动时:补全 GUI 启动缺失的 PATH → 注册内置引擎 → 清理不可达转录文件 */
+  whenInitialized(): Promise<void> { return this.initialization ??= this.init() }
   async init(): Promise<void> {
     // Dock 启动的应用 PATH 极简,先补全以便后续工具调用找到用户安装的 CLI。
     fixPathForGuiLaunch()
     configureModelStatsDir(app.getPath('userData'))
-    configureProviderHealthDir(app.getPath('userData'))
+    configureProviderHealthDir(app.getPath('userData'), getSettings().providerCircuitBreaker)
     registerBuiltinEngines()
     await resumeProjectDeletions(app.getPath('userData'))
     await this.modelAttemptRecoveryGate.initialize(app.getPath('userData'))
@@ -2084,6 +2098,7 @@ class SessionManager {
       permissionMode: meta.permissionMode,
       sdkSessionId: meta.sdkSessionId,
       conversationForkSourceSdkSessionId: meta.conversationForkSourceSdkSessionId,
+      conversationForkCheckpointId: meta.conversationForkCheckpointId,
       conversationForkSourceSessionId: meta.conversationForkSourceSessionId,
       conversationForkSourceRunId: meta.conversationForkSourceRunId,
       responsesContext: meta.responsesContext,

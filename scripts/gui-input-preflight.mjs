@@ -30,6 +30,8 @@ async function main() {
   }
 
   checks.push(await checkWindowsEnumeration())
+  checks.push(await checkNotepadPostconditionVerification())
+  checks.push(checkNotepadVisualPostcondition())
   checks.push(await checkNotepadSyntheticInput())
 
   const failures = checks.filter((item) => item.status !== 'pass')
@@ -53,6 +55,46 @@ async function main() {
   writeReport(report)
   console.log(JSON.stringify(report, null, 2))
   if (required && failures.length > 0) process.exitCode = 1
+}
+
+function checkNotepadVisualPostcondition() {
+  const electronPath = path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+  if (!existsSync(electronPath)) {
+    return { name: 'notepad_visual_changed_postcondition', status: 'fail', error: 'Electron runtime is missing' }
+  }
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const run = spawnSync(electronPath, [path.join(repoRoot, 'scripts', 'gui-visual-postcondition-worker.cjs')], {
+    cwd: repoRoot,
+    env,
+    encoding: 'utf8',
+    timeout: 45_000,
+    maxBuffer: 4 * 1024 * 1024,
+    windowsHide: false
+  })
+  if (run.error) {
+    return { name: 'notepad_visual_changed_postcondition', status: 'fail', error: run.error.message }
+  }
+  const marker = `${run.stdout}\n${run.stderr}`
+    .split(/\r?\n/)
+    .reverse()
+    .find((line) => line.startsWith('CAOGEN_VISUAL_RESULT:'))
+  if (!marker) {
+    return {
+      name: 'notepad_visual_changed_postcondition',
+      status: 'fail',
+      error: `Electron visual worker exited ${run.status} without a result marker`
+    }
+  }
+  try {
+    return JSON.parse(marker.slice('CAOGEN_VISUAL_RESULT:'.length))
+  } catch (error) {
+    return {
+      name: 'notepad_visual_changed_postcondition',
+      status: 'fail',
+      error: `Electron visual result was invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
 }
 
 async function checkWindowsEnumeration() {
@@ -137,6 +179,99 @@ async function checkNotepadSyntheticInput() {
     try {
       await closeStaleInputTestWindows(evaluateWindowsController())
     } catch {}
+    rmSync(targetPath, { force: true })
+  }
+}
+
+async function checkNotepadPostconditionVerification() {
+  const targetPath = path.join(tmpdir(), `caogen-gui-postcondition-${process.pid}-${Date.now()}.txt`)
+  const controller = evaluateWindowsController()
+  const postconditions = evaluateGuiPostcondition()
+  writeFileSync(targetPath, '', 'utf8')
+  await closeStaleInputTestWindows(controller)
+  const child = spawn('notepad.exe', [targetPath], {
+    cwd: tmpdir(),
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false
+  })
+  child.unref()
+  const pid = child.pid
+  let action
+  let windowVerification
+  let elementVerification
+  let absentVerification
+  try {
+    const windowInfo = await waitForWindow(
+      controller,
+      (item) =>
+        item.pid === pid ||
+        (item.processName.toLowerCase().includes('notepad') &&
+          item.title.toLowerCase().includes(path.basename(targetPath).toLowerCase())),
+      'Notepad postcondition window',
+      20_000
+    )
+    windowVerification = await postconditions.verifyGuiPostcondition(
+      (input) => controller.windowsListWindows(input),
+      postconditions.normalizeGuiPostcondition({
+        kind: 'window',
+        state: 'exists',
+        windowId: windowInfo.id,
+        timeoutMs: 2_000,
+        intervalMs: 100
+      })
+    )
+    const editable = await findEditableElement(controller, windowInfo.id)
+    if (!editable) throw new Error('Notepad editable UI Automation element was not found')
+    elementVerification = await postconditions.verifyGuiPostcondition(
+      (input) => controller.windowsListWindows(input),
+      postconditions.normalizeGuiPostcondition({
+        kind: 'element',
+        state: 'visible',
+        windowId: windowInfo.id,
+        elementId: editable.id,
+        maxElements: 80,
+        timeoutMs: 2_000,
+        intervalMs: 100
+      })
+    )
+    action = await sendWindowBoundHotkeyWithRetry(controller, windowInfo, ['alt', 'f4'])
+    if (!action.ok) throw new Error(action.error ?? 'window-bound close hotkey failed')
+    absentVerification = await postconditions.verifyGuiPostcondition(
+      (input) => controller.windowsListWindows(input),
+      postconditions.normalizeGuiPostcondition({
+        kind: 'window',
+        state: 'absent',
+        windowId: windowInfo.id,
+        timeoutMs: 5_000,
+        intervalMs: 100
+      })
+    )
+    const passed = [windowVerification, elementVerification, absentVerification]
+      .every((item) => item.status === 'passed')
+    return {
+      name: 'notepad_observe_act_verify',
+      status: passed ? 'pass' : 'fail',
+      windowExists: verificationSummary(windowVerification),
+      elementVisible: verificationSummary(elementVerification),
+      closeActionOk: action.ok === true,
+      closeActionAttempts: action.attempts,
+      windowAbsent: verificationSummary(absentVerification),
+      error: passed ? undefined : absentVerification.error ?? elementVerification.error ?? windowVerification.error
+    }
+  } catch (error) {
+    return {
+      name: 'notepad_observe_act_verify',
+      status: 'fail',
+      windowExists: verificationSummary(windowVerification),
+      elementVisible: verificationSummary(elementVerification),
+      closeActionOk: action?.ok === true,
+      closeActionAttempts: action?.attempts,
+      windowAbsent: verificationSummary(absentVerification),
+      error: error instanceof Error ? error.message : String(error)
+    }
+  } finally {
+    if (pid) spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
     rmSync(targetPath, { force: true })
   }
 }
@@ -372,6 +507,24 @@ async function hotkeyIntoWindow(controller, windowInfo, keys) {
   return fallback.ok ? fallback : strict
 }
 
+async function sendWindowBoundHotkeyWithRetry(controller, windowInfo, keys) {
+  let lastResult = { ok: false, error: 'window-bound hotkey was not attempted' }
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const activation = await controller.windowsActivateWindow({ windowId: windowInfo.id })
+    if (activation.ok) {
+      await sleep(250)
+      await clickWindowCenter(controller, windowInfo)
+      await sleep(250)
+      lastResult = await controller.windowsHotkey({ windowId: windowInfo.id, keys })
+      if (lastResult.ok) return { ...lastResult, attempts: attempt }
+    } else {
+      lastResult = activation
+    }
+    await sleep(500)
+  }
+  return { ...lastResult, attempts: 3 }
+}
+
 async function findEditableElement(controller, windowId) {
   const result = await controller.windowsListWindows({ windowId, includeElements: true, maxElements: 80 })
   if (!result.ok) throw new Error(result.error ?? 'windowsListWindows(includeElements) failed')
@@ -433,6 +586,21 @@ function evaluateWindowsController() {
     process,
     Buffer
   )
+  return module.exports
+}
+
+function evaluateGuiPostcondition() {
+  const input = readFileSync(path.join(repoRoot, 'src/main/gui/gui-postcondition.ts'), 'utf8')
+  const output = ts.transpileModule(input, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true
+    }
+  }).outputText
+
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', output)(require, module, module.exports)
   return module.exports
 }
 
@@ -503,6 +671,19 @@ function stringValue(value) {
 
 function numberValue(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function verificationSummary(value) {
+  if (!value) return undefined
+  return {
+    status: value.status,
+    state: value.state,
+    attempts: value.attempts,
+    durationMs: value.durationMs,
+    observedWindowCount: value.observed?.windowCount,
+    observedElementCount: value.observed?.elementCount,
+    error: value.error
+  }
 }
 
 function normalizeNewlines(value) {

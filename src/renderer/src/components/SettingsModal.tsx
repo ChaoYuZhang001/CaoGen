@@ -1,4 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowLeft,
+  Bell,
+  Blocks,
+  Database,
+  FolderCog,
+  LayoutDashboard,
+  Palette,
+  Plug,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  X
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { DRIVE_MODE_OPTIONS, modelOptionsForProvider, PERMISSION_OPTIONS, STRATEGY_OPTIONS, useStore } from '../store'
 import type { SettingsTab } from '../store/settings-navigation'
 import { useT } from '../i18n'
@@ -8,17 +24,24 @@ import type {
   AppTheme,
   CaoGenDriveMode,
   EngineInfo,
+  GuiAutomationGrantView,
   McpProbeResult,
   ModelRoutingRule,
   ModelRoutingTaskKind,
   OfficeQualityMode,
+  PermissionRuleConfig,
+  PermissionRuleRiskOperator,
   PermissionModeId,
   PluginRegistryItem,
   PluginRegistryView,
   ProviderHealthView,
+  ProviderModelFetchError,
   ProviderView,
   SchedulerStrategy,
-  SessionMeta
+  SessionMeta,
+  ToolCapabilityGrantView,
+  ToolRiskLevel,
+  ToolSemanticCapability
 } from '../../../shared/types'
 import ProviderEditor from './ProviderEditor'
 import ControlCenter from './ControlCenterWithWorkflow'
@@ -28,6 +51,9 @@ import ProjectSettings from '../pages/ProjectSettings'
 import MigrationManager from './settings/MigrationManager'
 import { requireMcpProbeResults } from '../store/task-recovery-actions'
 import NotificationConnectorManager from './settings/NotificationConnectorManager'
+import ProviderUsageDashboard from './settings/ProviderUsageDashboard'
+import ProviderGatewayPanel from './settings/ProviderGatewayPanel'
+type ProviderSettingsSurface = 'configuration' | 'gateway' | 'usage'
 const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
 const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
   { value: 'auto', labelKey: 'officeQualityAuto' },
@@ -47,6 +73,15 @@ const ROUTING_RULE_TASK_OPTIONS: Array<{ value: ModelRoutingTaskKind; labelKey: 
   { value: 'vision', labelKey: 'routingTaskVision' },
   { value: 'longContext', labelKey: 'routingTaskLongContext' }
 ]
+const PERMISSION_CAPABILITY_OPTIONS: Array<{ value: ToolSemanticCapability; labelKey: string }> = [
+  { value: 'workspaceRead', labelKey: 'permissionCapabilityWorkspaceRead' },
+  { value: 'workspaceWrite', labelKey: 'permissionCapabilityWorkspaceWrite' },
+  { value: 'terminal', labelKey: 'permissionCapabilityTerminal' },
+  { value: 'browser', labelKey: 'permissionCapabilityBrowser' },
+  { value: 'network', labelKey: 'permissionCapabilityNetwork' }
+]
+
+const PERMISSION_RISK_LEVELS: ToolRiskLevel[] = ['low', 'medium', 'high', 'critical']
 
 const TASK_MODEL_ROLE_OPTIONS = [
   { labelKey: 'modelRoleResearch', providerKey: 'researchProviderId', modelKey: 'researchModel' },
@@ -109,12 +144,21 @@ export default function SettingsPage(): React.JSX.Element {
   const { closeEditor, editing, setEditing } = useProviderRecoverySettings(providers)
   const settingsTab = useStore((s) => s.settingsTab)
   const [tab, setTab] = useState<SettingsTab>(() => settingsTab)
+  const [settingsSearch, setSettingsSearch] = useState('')
+  const [providerSurface, setProviderSurface] = useState<ProviderSettingsSurface>('configuration')
   const tabsRef = useRef<HTMLElement>(null)
   // 本地草稿,保存时统一提交
   const [draft, setDraft] = useState(settings)
   const [health, setHealth] = useState<ProviderHealthView[]>([])
+  const [guiGrants, setGuiGrants] = useState<GuiAutomationGrantView[]>([])
+  const [toolGrants, setToolGrants] = useState<ToolCapabilityGrantView[]>([])
   const [checkingProviderId, setCheckingProviderId] = useState('')
-  const [providerProbe, setProviderProbe] = useState<{ providerId: string; ok: boolean; message: string } | null>(null)
+  const [providerProbe, setProviderProbe] = useState<{
+    providerId: string
+    ok: boolean
+    message: string
+    error?: ProviderModelFetchError
+  } | null>(null)
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [pluginRegistry, setPluginRegistry] = useState<PluginRegistryView | undefined>(undefined)
   const [mcpProbeResults, setMcpProbeResults] = useState<Record<string, McpProbeResult>>({})
@@ -135,6 +179,10 @@ export default function SettingsPage(): React.JSX.Element {
     }),
     [sessionOrder, sessions]
   )
+  const permissionGrants = useMemo(
+    () => [...guiGrants, ...toolGrants].sort((left, right) => left.expiresAt - right.expiresAt),
+    [guiGrants, toolGrants]
+  )
 
   useEffect(() => {
     void window.agentDesk.listProviderHealth().then(setHealth)
@@ -147,6 +195,18 @@ export default function SettingsPage(): React.JSX.Element {
   useEffect(() => {
     if (tab === 'control') void refreshControlCenter()
   }, [tab, activeId])
+
+  useEffect(() => {
+    if (tab === 'permissions') {
+      void Promise.all([
+        window.agentDesk.listGuiAutomationGrants(),
+        window.agentDesk.listToolCapabilityGrants()
+      ]).then(([gui, tools]) => {
+        setGuiGrants(gui)
+        setToolGrants(tools)
+      })
+    }
+  }, [tab])
 
   useEffect(() => {
     tabsRef.current
@@ -170,6 +230,11 @@ export default function SettingsPage(): React.JSX.Element {
     setDraft((d) => ({ ...d, office: { ...(d.office ?? DEFAULT_OFFICE_SETTINGS), ...patch } }))
   const setLayout = (patch: Partial<typeof draft.layout>): void =>
     setDraft((d) => ({ ...d, layout: { ...d.layout, ...patch } }))
+  const setProviderCircuitBreaker = (patch: Partial<typeof draft.providerCircuitBreaker>): void =>
+    setDraft((d) => ({
+      ...d,
+      providerCircuitBreaker: { ...d.providerCircuitBreaker, ...patch }
+    }))
   const updateRoutingRule = (id: string, patch: Partial<ModelRoutingRule>): void =>
     setDraft((d) => ({
       ...d,
@@ -198,6 +263,18 @@ export default function SettingsPage(): React.JSX.Element {
       ...d,
       modelRoutingRules: (d.modelRoutingRules ?? []).filter((rule) => rule.id !== id)
     }))
+  const updatePermissionRule = (id: string, patch: Partial<PermissionRuleConfig>): void =>
+    setDraft((d) => ({
+      ...d,
+      permissionRules: d.permissionRules.map((rule) => rule.id === id ? { ...rule, ...patch } : rule)
+    }))
+  const addPermissionRule = (): void =>
+    setDraft((d) => ({ ...d, permissionRules: [...d.permissionRules, createPermissionRule()] }))
+  const deletePermissionRule = (id: string): void =>
+    setDraft((d) => ({
+      ...d,
+      permissionRules: d.permissionRules.filter((rule) => rule.id !== id)
+    }))
 
   const closeSettings = (): void => {
     void refreshProviders().catch(() => undefined)
@@ -205,14 +282,24 @@ export default function SettingsPage(): React.JSX.Element {
   }
 
   const save = async (): Promise<void> => {
+    if (draft.permissionRules.some((rule) =>
+      !rule.toolPattern.trim() && !rule.pathPattern.trim() && !rule.commandPattern.trim() &&
+      !rule.networkHostPattern.trim() && !rule.guiApplicationPattern.trim() &&
+      !rule.guiWindowPattern.trim() && !rule.mcpToolPattern.trim() &&
+      !rule.mcpArgumentPointer.trim() && !rule.mcpArgumentPattern.trim() &&
+      !rule.requirePostcondition && !rule.riskLevel
+    )) {
+      setSaveError(t('permissionRuleMissingSelector'))
+      return
+    }
     setSaving(true)
     setSaveError('')
     try {
       await updateSettings(draft)
       await refreshProviders()
       setShowSettings(false)
-    } catch {
-      setSaveError(t('settingsSaveFailed'))
+    } catch (error) {
+      setSaveError(error instanceof Error && error.message ? error.message : t('settingsSaveFailed'))
     } finally {
       setSaving(false)
     }
@@ -271,6 +358,7 @@ export default function SettingsPage(): React.JSX.Element {
       const result = await window.agentDesk.fetchProviderModels({
         baseUrl: p.baseUrl,
         providerId: p.id,
+        engine: p.engine,
         openaiProtocol: p.openaiProtocol
       })
       if (result.ok) {
@@ -291,7 +379,8 @@ export default function SettingsPage(): React.JSX.Element {
         setProviderProbe({
           providerId: p.id,
           ok: false,
-          message: t('providerProbeFailed', { message: result.error?.message ?? t('fetchModelsFailed') })
+          message: t('providerProbeFailed', { message: result.error?.message ?? t('fetchModelsFailed') }),
+          error: result.error
         })
       }
     } catch (err) {
@@ -307,18 +396,39 @@ export default function SettingsPage(): React.JSX.Element {
     }
   }
 
-  const TABS: Array<{ id: SettingsTab; label: string }> = [
-    { id: 'control', label: t('tabControlCenter') },
-    { id: 'general', label: t('tabGeneral') },
-    { id: 'permissions', label: t('tabPermissions') },
-    { id: 'project', label: t('tabProject') },
-    { id: 'persona', label: t('tabPersona') },
-    { id: 'office', label: t('tabOffice') },
-    { id: 'providers', label: t('tabProviders') },
-    { id: 'notifications', label: t('tabNotifications') },
-    { id: 'plugins', label: t('tabPlugins') },
-    { id: 'migrate', label: t('tabMigrate') }
+  const TABS: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
+    { id: 'control', label: t('tabControlCenter'), icon: LayoutDashboard },
+    { id: 'general', label: t('tabGeneral'), icon: Settings2 },
+    { id: 'permissions', label: t('tabPermissions'), icon: ShieldCheck },
+    { id: 'project', label: t('tabProject'), icon: FolderCog },
+    { id: 'persona', label: t('tabPersona'), icon: Sparkles },
+    { id: 'office', label: t('tabOffice'), icon: Palette },
+    { id: 'providers', label: t('tabProviders'), icon: Plug },
+    { id: 'notifications', label: t('tabNotifications'), icon: Bell },
+    { id: 'plugins', label: t('tabPlugins'), icon: Blocks },
+    { id: 'migrate', label: t('tabMigrate'), icon: Database }
   ]
+  const TAB_GROUPS: Array<{ label: string; ids: SettingsTab[] }> = [
+    { label: t('settingsGroupWorkspace'), ids: ['control', 'general', 'permissions', 'project'] },
+    { label: t('settingsGroupPersonalization'), ids: ['persona', 'office'] },
+    { label: t('settingsGroupIntegrations'), ids: ['providers', 'notifications', 'plugins'] },
+    { label: t('settingsGroupData'), ids: ['migrate'] }
+  ]
+  const searchTerm = settingsSearch.trim().toLocaleLowerCase()
+  const searchTerms: Partial<Record<SettingsTab, string>> = {
+    control: 'model routing provider health usage control center',
+    general: 'language theme startup layout',
+    permissions: 'permission access terminal browser workspace',
+    project: 'project rules workspace',
+    persona: 'instructions prompt persona',
+    office: 'appearance control room animation',
+    providers: 'provider model api key oauth pricing billing usage balance',
+    notifications: 'notification message webhook',
+    plugins: 'plugin skill mcp',
+    migrate: 'migration import export data'
+  }
+  const tabMatches = (item: { id: SettingsTab; label: string }): boolean =>
+    !searchTerm || `${item.label} ${searchTerms[item.id] ?? ''}`.toLocaleLowerCase().includes(searchTerm)
 
   return (
     <section className="settings-page" aria-label={t('settingsTitle')}>
@@ -330,28 +440,60 @@ export default function SettingsPage(): React.JSX.Element {
           title={t('backToWorkspace')}
           onClick={closeSettings}
         >
-          ←
+          <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <h1 className="settings-page-title">{t('settingsTitle')}</h1>
       </header>
 
       <div className="settings-body">
           <nav ref={tabsRef} className="settings-tabs" aria-label={t('settingsNavigation')}>
-            {TABS.map((tb) => (
-              <button
-                type="button"
-                key={tb.id}
-                data-settings-tab={tb.id}
-                className={`settings-tab ${tab === tb.id ? 'active' : ''}`}
-                aria-current={tab === tb.id ? 'page' : undefined}
-                onClick={() => {
-                  setEditing(null)
-                  setTab(tb.id)
-                }}
-              >
-                {tb.label}
-              </button>
-            ))}
+            <div className="settings-search">
+              <Search size={14} aria-hidden="true" />
+              <input
+                className="settings-search-input"
+                aria-label={t('settingsSearchPlaceholder')}
+                placeholder={t('settingsSearchPlaceholder')}
+                value={settingsSearch}
+                onChange={(event) => setSettingsSearch(event.target.value)}
+              />
+              {settingsSearch && (
+                <button
+                  type="button"
+                  className="settings-search-clear"
+                  aria-label={t('clearSearch')}
+                  title={t('clearSearch')}
+                  onClick={() => setSettingsSearch('')}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+            {TAB_GROUPS.map((group) => {
+              const items = TABS.filter((item) => group.ids.includes(item.id) && tabMatches(item))
+              if (items.length === 0) return null
+              return (
+                <div className="settings-tab-group" key={group.label}>
+                  <span className="settings-tab-group-label">{group.label}</span>
+                  {items.map((tb) => (
+                    <button
+                      type="button"
+                      key={tb.id}
+                      data-settings-tab={tb.id}
+                      className={`settings-tab ${tab === tb.id ? 'active' : ''}`}
+                      aria-current={tab === tb.id ? 'page' : undefined}
+                      onClick={() => {
+                        setEditing(null)
+                        setTab(tb.id)
+                      }}
+                    >
+                      <tb.icon size={14} aria-hidden="true" />
+                      <span>{tb.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+            {TABS.every((item) => !tabMatches(item)) && <div className="settings-search-empty">{t('settingsSearchEmpty')}</div>}
           </nav>
 
           <main className="settings-pane">
@@ -359,6 +501,9 @@ export default function SettingsPage(): React.JSX.Element {
             {editing ? (
               <ProviderEditor
                 provider={editing === 'new' ? null : editing}
+                initialDiagnostic={editing !== 'new' && providerProbe?.providerId === editing.id
+                  ? providerProbe.error
+                  : undefined}
                 onClose={closeEditor}
               />
             ) : (
@@ -838,6 +983,73 @@ export default function SettingsPage(): React.JSX.Element {
                   {t('failoverEnabled')}
                 </label>
                 <p className="settings-hint">{t('failoverHint')}</p>
+                <details className="settings-section">
+                  <summary className="settings-h3">{t('providerCircuitSettings')}</summary>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('providerCircuitFailureThreshold')}
+                      <input
+                        className="input input-block"
+                        type="number"
+                        min={1}
+                        max={20}
+                        disabled={!draft.failoverEnabled}
+                        value={draft.providerCircuitBreaker.failureThreshold}
+                        onChange={(e) => setProviderCircuitBreaker({ failureThreshold: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="field-label">
+                      {t('providerCircuitSuccessThreshold')}
+                      <input
+                        className="input input-block"
+                        type="number"
+                        min={1}
+                        max={10}
+                        disabled={!draft.failoverEnabled}
+                        value={draft.providerCircuitBreaker.successThreshold}
+                        onChange={(e) => setProviderCircuitBreaker({ successThreshold: Number(e.target.value) })}
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('providerCircuitTimeout')}
+                      <input
+                        className="input input-block"
+                        type="number"
+                        min={0}
+                        max={300}
+                        disabled={!draft.failoverEnabled}
+                        value={draft.providerCircuitBreaker.timeoutSeconds}
+                        onChange={(e) => setProviderCircuitBreaker({ timeoutSeconds: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="field-label">
+                      {t('providerCircuitErrorRate')}
+                      <input
+                        className="input input-block"
+                        type="number"
+                        min={1}
+                        max={100}
+                        disabled={!draft.failoverEnabled}
+                        value={Math.round(draft.providerCircuitBreaker.errorRateThreshold * 100)}
+                        onChange={(e) => setProviderCircuitBreaker({ errorRateThreshold: Number(e.target.value) / 100 })}
+                      />
+                    </label>
+                  </div>
+                  <label className="field-label">
+                    {t('providerCircuitMinRequests')}
+                    <input
+                      className="input input-block"
+                      type="number"
+                      min={1}
+                      max={100}
+                      disabled={!draft.failoverEnabled}
+                      value={draft.providerCircuitBreaker.minRequests}
+                      onChange={(e) => setProviderCircuitBreaker({ minRequests: Number(e.target.value) })}
+                    />
+                  </label>
+                </details>
 
                 <label className="settings-check">
                   <input
@@ -902,47 +1114,6 @@ export default function SettingsPage(): React.JSX.Element {
                   默认关闭。开启后成功任务会后台复盘并验证 Skill，下次同类任务会注入匹配 Skill。
                 </p>
 
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={draft.ideBridgeEnabled}
-                    onChange={(e) => set('ideBridgeEnabled', e.target.checked)}
-                  />
-                  IDE Bridge
-                </label>
-                <p className="settings-hint">
-                  默认关闭。开启后 VS Code/JetBrains 插件可连接本机 WebSocket。
-                </p>
-                <div className="settings-grid-2">
-                  <label>
-                    <span className="field-label">IDE Bridge Host</span>
-                    <input
-                      className="input input-block"
-                      value={draft.ideBridgeHost}
-                      placeholder="127.0.0.1"
-                      onChange={(e) => set('ideBridgeHost', e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    <span className="field-label">IDE Bridge Port</span>
-                    <input
-                      className="input input-block"
-                      type="number"
-                      min="0"
-                      max="65535"
-                      value={draft.ideBridgePort}
-                      onChange={(e) => set('ideBridgePort', Number(e.target.value) || 17365)}
-                    />
-                  </label>
-                </div>
-                <label className="field-label">IDE Bridge Token</label>
-                <input
-                  className="input input-block"
-                  value={draft.ideBridgeToken}
-                  placeholder="可选；为空表示本机免 token"
-                  onChange={(e) => set('ideBridgeToken', e.target.value)}
-                />
-
                 <label className="field-label">单会话预算上限 ($)</label>
                 <input
                   className="input input-block"
@@ -1001,50 +1172,272 @@ export default function SettingsPage(): React.JSX.Element {
                   <p className="settings-hint">{t('localExecutionHint')}</p>
                 )}
 
-                <label className="field-label">{t('allowedTools')}</label>
-                <textarea
-                  className="input input-block textarea"
-                  rows={3}
-                  value={draft.allowedTools}
-                  placeholder={'Read\nGlob\nGrep'}
-                  onChange={(e) => set('allowedTools', e.target.value)}
-                />
-
-                <label className="field-label">{t('disallowedTools')}</label>
-                <textarea
-                  className="input input-block textarea"
-                  rows={3}
-                  value={draft.disallowedTools}
-                  placeholder={'Bash\nWrite'}
-                  onChange={(e) => set('disallowedTools', e.target.value)}
-                />
-
-                <label className="field-label">权限白名单规则</label>
-                <textarea
-                  className="input input-block textarea"
-                  rows={3}
-                  value={draft.permissionAllowlist}
-                  placeholder={'tool=read_file\nrisk<=low\ntool=write_file path=src/**'}
-                  onChange={(e) => set('permissionAllowlist', e.target.value)}
-                />
-
-                <label className="field-label">权限黑名单规则</label>
-                <textarea
-                  className="input input-block textarea"
-                  rows={3}
-                  value={draft.permissionDenylist}
-                  placeholder={'tool=bash risk>=high\npath=**/.ssh/**'}
-                  onChange={(e) => set('permissionDenylist', e.target.value)}
-                />
-
-                <label className="field-label">临时允许规则</label>
-                <textarea
-                  className="input input-block textarea"
-                  rows={3}
-                  value={draft.permissionTemporaryAllowlist}
-                  placeholder={`tool=bash risk<=low until=${Date.now() + 3600000}`}
-                  onChange={(e) => set('permissionTemporaryAllowlist', e.target.value)}
-                />
+                <div className="settings-section permission-rule-section">
+                  <div className="settings-section-head">
+                    <h3 className="settings-h3">{t('permissionRulesTitle')}</h3>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={addPermissionRule}>
+                      {t('permissionRuleAdd')}
+                    </button>
+                  </div>
+                  <p className="settings-hint">{t('permissionRulesHint')}</p>
+                  {draft.permissionRules.length === 0 ? (
+                    <div className="permission-rule-empty">{t('permissionRulesEmpty')}</div>
+                  ) : (
+                    <div className="permission-rule-list">
+                      {draft.permissionRules.map((rule) => {
+                        const missingSelector = !rule.toolPattern.trim() &&
+                          !rule.pathPattern.trim() && !rule.commandPattern.trim() &&
+                          !rule.networkHostPattern.trim() && !rule.guiApplicationPattern.trim() &&
+                          !rule.guiWindowPattern.trim() && !rule.mcpToolPattern.trim() &&
+                          !rule.mcpArgumentPointer.trim() && !rule.mcpArgumentPattern.trim() &&
+                          rule.capabilityScope.length === 0 && !rule.requirePostcondition && !rule.riskLevel
+                        return (
+                          <div key={rule.id} className="permission-rule-card" data-permission-rule-id={rule.id}>
+                            <div className="permission-rule-head">
+                              <label className="settings-check permission-rule-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={rule.enabled}
+                                  onChange={(event) => updatePermissionRule(rule.id, { enabled: event.target.checked })}
+                                />
+                                {t('permissionRuleEnabled')}
+                              </label>
+                              <select
+                                className={`select permission-rule-effect ${rule.effect}`}
+                                value={rule.effect}
+                                aria-label={t('permissionRuleEffect')}
+                                onChange={(event) => updatePermissionRule(rule.id, {
+                                  effect: event.target.value === 'allow' ? 'allow' : 'deny'
+                                })}
+                              >
+                                <option value="deny">{t('permissionRuleDeny')}</option>
+                                <option value="allow">{t('permissionRuleAllow')}</option>
+                              </select>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm permission-rule-delete"
+                                title={t('permissionRuleDelete')}
+                                aria-label={t('permissionRuleDelete')}
+                                onClick={() => deletePermissionRule(rule.id)}
+                              >
+                                ×
+                              </button>
+                            </div>
+                            <div className="settings-grid-2 permission-rule-targets">
+                              <label className="field-label">
+                                {t('permissionRuleTool')}
+                                <input
+                                  className="input input-block"
+                                  value={rule.toolPattern}
+                                  placeholder="write_file / gui_*"
+                                  onChange={(event) => updatePermissionRule(rule.id, {
+                                    toolPattern: event.target.value
+                                  })}
+                                />
+                              </label>
+                              <label className="field-label">
+                                {t('permissionRulePath')}
+                                <input
+                                  className="input input-block"
+                                  value={rule.pathPattern}
+                                  placeholder="src/**"
+                                  onChange={(event) => updatePermissionRule(rule.id, {
+                                    pathPattern: event.target.value
+                                  })}
+                                />
+                              </label>
+                            </div>
+                            <details className="permission-rule-semantics">
+                              <summary>{t('permissionRuleSemanticScope')}</summary>
+                              <div className="permission-rule-capability-scope">
+                                <div className="field-label">{t('permissionRuleCapabilities')}</div>
+                                <div className="permission-rule-capability-grid">
+                                  {PERMISSION_CAPABILITY_OPTIONS.map((option) => (
+                                    <label key={option.value} className="settings-check">
+                                      <input
+                                        type="checkbox"
+                                        data-permission-capability={option.value}
+                                        checked={rule.capabilityScope.includes(option.value)}
+                                        onChange={(event) => updatePermissionRule(rule.id, {
+                                          capabilityScope: event.target.checked
+                                            ? PERMISSION_CAPABILITY_OPTIONS
+                                              .map((candidate) => candidate.value)
+                                              .filter((capability) => capability === option.value ||
+                                                rule.capabilityScope.includes(capability))
+                                            : rule.capabilityScope.filter((capability) => capability !== option.value)
+                                        })}
+                                      />
+                                      {t(option.labelKey)}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="settings-grid-2 permission-rule-semantic-grid">
+                                <label className="field-label">
+                                  {t('permissionRuleCommand')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.commandPattern}
+                                    placeholder="npm test*"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      commandPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleNetworkHost')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.networkHostPattern}
+                                    placeholder="*.example.com"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      networkHostPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleGuiApplication')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.guiApplicationPattern}
+                                    placeholder="Code.exe"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      guiApplicationPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleGuiWindow')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.guiWindowPattern}
+                                    placeholder="*Settings*"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      guiWindowPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleMcpTool')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.mcpToolPattern}
+                                    placeholder="read_*"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      mcpToolPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleMcpArgumentPointer')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.mcpArgumentPointer}
+                                    placeholder="/scope/project"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      mcpArgumentPointer: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="field-label">
+                                  {t('permissionRuleMcpArgumentPattern')}
+                                  <input
+                                    className="input input-block"
+                                    value={rule.mcpArgumentPattern}
+                                    placeholder="project-*"
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      mcpArgumentPattern: event.target.value
+                                    })}
+                                  />
+                                </label>
+                                <label className="settings-check permission-rule-postcondition">
+                                  <input
+                                    type="checkbox"
+                                    checked={rule.requirePostcondition}
+                                    onChange={(event) => updatePermissionRule(rule.id, {
+                                      requirePostcondition: event.target.checked
+                                    })}
+                                  />
+                                  {t('permissionRuleRequirePostcondition')}
+                                </label>
+                              </div>
+                            </details>
+                            <div className="permission-rule-conditions">
+                              <label className="field-label">
+                                {t('permissionRuleRisk')}
+                                <select
+                                  className="select select-block"
+                                  value={rule.riskLevel ? rule.riskOperator : 'none'}
+                                  onChange={(event) => {
+                                    const value = event.target.value
+                                    updatePermissionRule(rule.id, value === 'none'
+                                      ? { riskLevel: undefined }
+                                      : {
+                                          riskLevel: rule.riskLevel ?? 'medium',
+                                          riskOperator: value as PermissionRuleRiskOperator
+                                        })
+                                  }}
+                                >
+                                  <option value="none">{t('permissionRuleRiskAny')}</option>
+                                  <option value="exact">{t('permissionRuleRiskExact')}</option>
+                                  <option value="atLeast">{t('permissionRuleRiskAtLeast')}</option>
+                                  <option value="atMost">{t('permissionRuleRiskAtMost')}</option>
+                                </select>
+                              </label>
+                              <label className="field-label">
+                                {t('permissionRuleLevel')}
+                                <select
+                                  className="select select-block"
+                                  value={rule.riskLevel ?? 'medium'}
+                                  disabled={!rule.riskLevel}
+                                  onChange={(event) => updatePermissionRule(rule.id, {
+                                    riskLevel: event.target.value as ToolRiskLevel
+                                  })}
+                                >
+                                  {PERMISSION_RISK_LEVELS.map((level) => (
+                                    <option key={level} value={level}>{level}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="field-label">
+                                {t('permissionRuleExpiry')}
+                                <select
+                                  className="select select-block"
+                                  value={rule.expiresAt ? 'timed' : 'permanent'}
+                                  onChange={(event) => updatePermissionRule(rule.id, {
+                                    expiresAt: event.target.value === 'timed' ? Date.now() + 60 * 60 * 1000 : undefined
+                                  })}
+                                >
+                                  <option value="permanent">{t('permissionRulePermanent')}</option>
+                                  <option value="timed">{t('permissionRuleTimed')}</option>
+                                </select>
+                              </label>
+                            </div>
+                            {rule.expiresAt && (
+                              <label className="field-label permission-rule-expiry-value">
+                                {t('permissionRuleExpiresAt')}
+                                <input
+                                  className="input input-block"
+                                  type="datetime-local"
+                                  value={permissionRuleExpiryValue(rule.expiresAt)}
+                                  onChange={(event) => {
+                                    const expiresAt = new Date(event.target.value).getTime()
+                                    updatePermissionRule(rule.id, {
+                                      expiresAt: Number.isFinite(expiresAt) ? expiresAt : rule.expiresAt
+                                    })
+                                  }}
+                                />
+                              </label>
+                            )}
+                            {missingSelector && (
+                              <p className="permission-rule-error">{t('permissionRuleMissingSelector')}</p>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
 
                 <label className="settings-check">
                   <input
@@ -1063,6 +1456,50 @@ export default function SettingsPage(): React.JSX.Element {
                   {t('guiAutomationEnabled')}
                 </label>
                 <p className="settings-hint">{t('guiAutomationHint')}</p>
+                {permissionGrants.length > 0 && (
+                  <div className="gui-grant-section">
+                    <div className="gui-grant-heading">
+                      <span>{t('guiActiveGrants')}</span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => void Promise.all([
+                          window.agentDesk.revokeAllGuiAutomationGrants(),
+                          window.agentDesk.revokeAllToolCapabilityGrants()
+                        ]).then(() => {
+                          setGuiGrants([])
+                          setToolGrants([])
+                        })}
+                      >
+                        {t('guiGrantRevokeAll')}
+                      </button>
+                    </div>
+                    <div className="gui-grant-list">
+                      {permissionGrants.map((grant) => (
+                        <div key={grant.id} className="gui-grant-row">
+                          <div>
+                            <strong>{grant.toolName}</strong>
+                            <span>{grant.scopeLabel}</span>
+                            <small>{new Date(grant.expiresAt).toLocaleTimeString()}</small>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void (grant.kind === 'gui'
+                              ? window.agentDesk.revokeGuiAutomationGrant(grant.id).then((revoked) => {
+                                  if (revoked) setGuiGrants((current) => current.filter((item) => item.id !== grant.id))
+                                })
+                              : window.agentDesk.revokeToolCapabilityGrant(grant.id).then((revoked) => {
+                                  if (revoked) setToolGrants((current) => current.filter((item) => item.id !== grant.id))
+                                }))}
+                          >
+                            {t('guiGrantRevoke')}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -1114,8 +1551,8 @@ export default function SettingsPage(): React.JSX.Element {
                       <input
                         type="range"
                         className="input-block"
-                        min={360}
-                        max={900}
+                        min={320}
+                        max={720}
                         step={8}
                         value={draft.layout.workbenchSideWidth}
                         onChange={(e) => setLayout({ workbenchSideWidth: Number(e.target.value) })}
@@ -1123,6 +1560,18 @@ export default function SettingsPage(): React.JSX.Element {
                     </label>
                   </div>
                   <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('layoutTerminalDockHeight')} · {draft.layout.workbenchDockHeight}px
+                      <input
+                        type="range"
+                        className="input-block"
+                        min={220}
+                        max={520}
+                        step={8}
+                        value={draft.layout.workbenchDockHeight}
+                        onChange={(e) => setLayout({ workbenchDockHeight: Number(e.target.value) })}
+                      />
+                    </label>
                     <label className="field-label">
                       {t('layoutChatScale')} · {Math.round(draft.layout.chatScale * 100)}%
                       <input
@@ -1205,16 +1654,40 @@ export default function SettingsPage(): React.JSX.Element {
             )}
 
             {tab === 'providers' && (
-              <ProviderList
-                providers={providers}
-                health={health}
-                providerProbe={providerProbe}
-                checkingProviderId={checkingProviderId}
-                onAdd={() => openProviderEditor('new')}
-                onProbe={(provider) => void probeProvider(provider)}
-                onEdit={openProviderEditor}
-                onRemove={(provider) => void remove(provider)}
-              />
+              <>
+                <nav className="provider-settings-surfaces" aria-label={t('providerSettingsViews')}>
+                  {([
+                    ['configuration', t('providerSettingsConfiguration')],
+                    ['gateway', t('providerSettingsGateway')],
+                    ['usage', t('providerSettingsUsage')]
+                  ] as Array<[ProviderSettingsSurface, string]>).map(([surface, label]) => (
+                    <button
+                      type="button"
+                      key={surface}
+                      className={providerSurface === surface ? 'active' : ''}
+                      aria-current={providerSurface === surface ? 'page' : undefined}
+                      data-provider-surface={surface}
+                      onClick={() => setProviderSurface(surface)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </nav>
+                {providerSurface === 'configuration' && (
+                  <ProviderList
+                    providers={providers}
+                    health={health}
+                    providerProbe={providerProbe}
+                    checkingProviderId={checkingProviderId}
+                    onAdd={() => openProviderEditor('new')}
+                    onProbe={(provider) => void probeProvider(provider)}
+                    onEdit={openProviderEditor}
+                    onRemove={(provider) => void remove(provider)}
+                  />
+                )}
+                {providerSurface === 'usage' && <ProviderUsageDashboard providers={providers} />}
+                {providerSurface === 'gateway' && <ProviderGatewayPanel />}
+              </>
             )}
 
             {tab === 'notifications' && <NotificationConnectorManager />}
@@ -1255,4 +1728,34 @@ export default function SettingsPage(): React.JSX.Element {
         </footer>}
     </section>
   )
+}
+
+function createPermissionRule(): PermissionRuleConfig {
+  const suffix =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return {
+    id: `permission-${suffix}`,
+    enabled: true,
+    effect: 'deny',
+    toolPattern: '',
+    pathPattern: '',
+    commandPattern: '',
+    networkHostPattern: '',
+    guiApplicationPattern: '',
+    guiWindowPattern: '',
+    mcpToolPattern: '',
+    mcpArgumentPointer: '',
+    mcpArgumentPattern: '',
+    capabilityScope: [],
+    requirePostcondition: false,
+    riskOperator: 'exact'
+  }
+}
+
+function permissionRuleExpiryValue(expiresAt: number | undefined): string {
+  if (!expiresAt) return ''
+  const value = new Date(expiresAt)
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }

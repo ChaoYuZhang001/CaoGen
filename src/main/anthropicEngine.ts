@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { app } from 'electron'
-import { imageAttachmentRefToContentBlock, sessionImageAttachmentsRoot } from './attachmentOps'
+import {
+  documentAttachmentsToPrompt,
+  imageAttachmentRefToContentBlock,
+  sessionImageAttachmentsRoot
+} from './attachmentOps'
 import {
   aggregateAnthropicUsage,
   appendMissingSuffix,
@@ -12,9 +16,11 @@ import {
   durableImageReferences,
   finalStopFailure,
   rebuildAnthropicHistory,
-  rebuildPortableAnthropicHistory
+  rebuildPortableAnthropicHistory,
+  type AnthropicImageResolver
 } from './anthropic-history'
 import {
+  buildAnthropicMessagesWireBody,
   streamAnthropicMessage,
   type AnthropicMessagesContentBlock,
   type AnthropicMessagesMessage,
@@ -24,6 +30,8 @@ import {
   type AnthropicMessagesToolInputSchema,
   type AnthropicMessagesToolUseBlock
 } from './anthropicMessagesAdapter'
+import { anthropicRuntimeRequiresThinkingSignature, applyAnthropicRuntimeToRequest } from './anthropicMessagesRequest'
+import { anthropicAdditionalContextItems } from './anthropic-outbound-context'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
 import { augmentNativePayloadWithLayeredMemory } from './native-layered-prompt'
 import { OPENAI_CODING_TOOLS } from './openaiTools'
@@ -36,7 +44,13 @@ import { resolveAnthropicMessagesTarget, type AnthropicMessagesTarget } from './
 import { getSettings } from './settings'
 import { listHistory } from './history'
 import {
-  classifyFailure, pickFailoverTarget, recordFailure, recordSuccess, type FailureClass
+  acquireProviderRequest,
+  classifyFailure,
+  pickFailoverTarget,
+  pickProviderModelFailoverTarget,
+  recordFailure,
+  recordSuccess,
+  releaseProviderRequest
 } from './scheduler'
 import { normalizeStableMessagePayload, type StableMessagePayload } from './stable-message-payload'
 import { AnthropicModelAttemptTracker, type AnthropicModelAttemptInput } from './task/anthropic-model-attempt-runtime'
@@ -50,8 +64,7 @@ import { buildWorkflowStageHandoffPrompt } from './task/workflow-stage-handoff'
 import {
   assertOutboundContextAllowed,
   OutboundContextPolicyError,
-  prepareOutboundContext,
-  providerAllowedByOutboundContext
+  prepareOutboundContext
 } from './project-workspace/outbound-context-policy'
 import { effectiveSessionModel } from './provider/engine-provider-utils'
 import { redactProviderCredentials } from './providerCredentialRuntime'
@@ -64,14 +77,27 @@ import {
   isDigitalWorkerProviderDispatchDeniedError
 } from './digital-worker/session-action-policy'
 import { TranscriptWriter } from './transcript'
+import {
+  providerChatCheckpointId,
+  restoreProviderChatCheckpoint
+} from './provider-chat-checkpoint'
+import {
+  createAnthropicRecoveryState,
+  isAnthropicRecoveryEnabled,
+  recoverAnthropicTarget,
+  rememberAnthropicRecoveryTarget
+} from './provider/anthropicRecovery'
 import { AUTO_MODEL } from '../shared/types'
 import type { Engine, EngineEmit } from './engine'
 import type {
   AgentEvent,
-  OutboundContextItemView,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
+  EngineKind,
   OutboundContextManifest,
   PermissionModeId,
   PermissionRequestInfo,
+  ProviderRuntimeConfig,
   SendMessagePayload,
   SessionMeta,
   TaskRunRecord,
@@ -117,11 +143,22 @@ export interface AnthropicEngineDependencies {
   canRotateProviderKey: typeof canRotateProviderKey
   rotateProviderKey: typeof rotateProviderKey
   pickFailoverTarget: typeof pickFailoverTarget
+  pickProviderModelFailoverTarget: typeof pickProviderModelFailoverTarget
   markProviderKeyUsed: typeof markProviderKeyUsed
   recordProviderKeySuccess: typeof recordProviderKeySuccess
+  acquireProviderRequest: typeof acquireProviderRequest
   recordFailure: typeof recordFailure
+  releaseProviderRequest: typeof releaseProviderRequest
   recordSuccess: typeof recordSuccess
   resolveImageAttachment(reference: UserMessageAttachmentView): AnthropicMessagesContentBlock
+  sessionIdPrefix: string
+  recoveryEngineKind: EngineKind
+  requiresThinkingSignature(target: AnthropicMessagesTarget): boolean
+  applyRuntimeToRequest(
+    request: AnthropicMessagesRequest,
+    runtime: ProviderRuntimeConfig | undefined
+  ): AnthropicMessagesRequest
+  buildWireBody(request: Parameters<typeof buildAnthropicMessagesWireBody>[0]): unknown
 }
 
 /** Native Anthropic Messages engine registered under the distinct `anthropic` kind. */
@@ -131,19 +168,24 @@ export class AnthropicEngine implements Engine {
   private readonly emitRaw: (event: AgentEvent) => void
   private readonly dependencies: AnthropicEngineDependencies
   private readonly nativeToolRuntime: NativeToolRuntime
+  private readonly historyImageResolver: AnthropicImageResolver
+  private readonly portableHistory: boolean
   private abort: AbortController | null = null
   private activeTurn: Promise<void> | null = null
   private activeOutboundContext?: OutboundContextManifest
   private disposePromise: Promise<void> | null = null
   private disposed = false
   private turnStartedAt = 0
+  private activeMessageId?: string
+  private turnRevisionEligible = false
+  private turnHadToolEvents = false
   private assistantText = ''
   private thinkingText = ''
   private turnUsage: UsageTotals | undefined
   private history: AnthropicMessagesMessage[] = []
   private resolvedModel?: string
-  private triedProviders = new Set<string>()
-  private triedProviderKeys = new Map<string, Set<string>>()
+  private recoveryState = createAnthropicRecoveryState()
+  private recoveryExhaustedEmitted = false
   private forkBoundaryPending = false
 
   constructor(
@@ -156,7 +198,7 @@ export class AnthropicEngine implements Engine {
     this.meta = meta
     this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
     if (!resumeSdkSessionId && meta.conversationForkSourceSdkSessionId) {
-      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId)
+      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId, meta.conversationForkCheckpointId)
       this.forkBoundaryPending = true
     }
     this.emitRaw = (event) => {
@@ -174,10 +216,19 @@ export class AnthropicEngine implements Engine {
       canRotateProviderKey,
       rotateProviderKey,
       pickFailoverTarget,
+      pickProviderModelFailoverTarget,
       markProviderKeyUsed,
       recordProviderKeySuccess,
+      acquireProviderRequest,
       recordFailure,
+      releaseProviderRequest,
       recordSuccess,
+      sessionIdPrefix: 'anthropic',
+      recoveryEngineKind: 'anthropic',
+      requiresThinkingSignature: (target) =>
+        anthropicRuntimeRequiresThinkingSignature(target.credentialProvider.advancedConfig?.runtime),
+      applyRuntimeToRequest: applyAnthropicRuntimeToRequest,
+      buildWireBody: buildAnthropicMessagesWireBody,
       resolveImageAttachment: (reference) => imageAttachmentRefToContentBlock(
         reference,
         sessionImageAttachmentsRoot(app.getPath('userData'), meta.id)
@@ -188,15 +239,16 @@ export class AnthropicEngine implements Engine {
     const sourceSessionId = meta.conversationForkSourceSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === meta.conversationForkSourceSdkSessionId)?.id
       : undefined
-    const historyImageResolver = dependencies.resolveImageAttachment ?? ((reference: UserMessageAttachmentView) =>
+    this.historyImageResolver = dependencies.resolveImageAttachment ?? ((reference: UserMessageAttachmentView) =>
       imageAttachmentRefToContentBlock(
         reference,
         sessionImageAttachmentsRoot(app.getPath('userData'), sourceSessionId ?? meta.id)
       ) as AnthropicMessagesContentBlock
     )
-    this.history = meta.conversationForkSourceSdkSessionId
+    this.portableHistory = Boolean(meta.conversationForkSourceSdkSessionId)
+    this.history = this.portableHistory
       ? rebuildPortableAnthropicHistory(this.transcript.readAll())
-      : rebuildAnthropicHistory(this.transcript.readAll(), historyImageResolver)
+      : rebuildAnthropicHistory(this.transcript.readAll(), this.historyImageResolver)
     if (resumeSdkSessionId) {
       this.meta.sdkSessionId = resumeSdkSessionId
       this.emit({ kind: 'init', sdkSessionId: resumeSdkSessionId, model: effectiveSessionModel(this.meta, this.resolvedModel) })
@@ -213,7 +265,7 @@ export class AnthropicEngine implements Engine {
       })
       this.resolvedModel = target.model
       if (!this.meta.sdkSessionId) {
-        this.meta.sdkSessionId = `anthropic-${randomUUID()}`
+        this.meta.sdkSessionId = `${this.dependencies.sessionIdPrefix}-${randomUUID()}`
         this.emit({ kind: 'init', sdkSessionId: this.meta.sdkSessionId, model: target.model })
       }
       if (this.forkBoundaryPending) {
@@ -237,8 +289,11 @@ export class AnthropicEngine implements Engine {
       return
     }
     const payload = normalizeStableMessagePayload(input)
-    if (!payload.text && payload.images.length === 0) return
+    if (!payload.text && payload.images.length === 0 && payload.documents.length === 0) return
     const messageId = payload.messageId || randomUUID()
+    this.activeMessageId = messageId
+    this.turnRevisionEligible = payload.images.length === 0 && payload.documents.length === 0
+    this.turnHadToolEvents = false
     this.dependencies.modelAttempts.startTurn(messageId)
     let attachments: UserMessageAttachmentView[]
     try {
@@ -262,8 +317,8 @@ export class AnthropicEngine implements Engine {
     this.thinkingText = ''
     this.turnUsage = undefined
     this.turnStartedAt = Date.now()
-    this.triedProviders = new Set([this.meta.providerId])
-    this.triedProviderKeys = new Map()
+    this.recoveryExhaustedEmitted = false
+    this.recoveryState = createAnthropicRecoveryState(this.meta.providerId)
     const controller = new AbortController()
     this.abort = controller
     this.setStatus('running')
@@ -296,6 +351,32 @@ export class AnthropicEngine implements Engine {
 
   getTranscript(): TranscriptEntry[] {
     return this.transcript.read()
+  }
+
+  async restoreCheckpoint(
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult> {
+    if (this.abort) {
+      return { mode, checkpointId: messageId, canRewind: false, applied: false, error: '会话仍在运行' }
+    }
+    const result = restoreProviderChatCheckpoint(this.transcript, messageId, mode, dryRun, (entries) => {
+      this.history = this.portableHistory
+        ? rebuildPortableAnthropicHistory(entries)
+        : rebuildAnthropicHistory(entries, this.historyImageResolver)
+    })
+    if (result.applied) {
+      this.emit({
+        kind: 'checkpoint-restore',
+        messageId,
+        mode: 'chat',
+        filesChanged: [],
+        chatRemovedEntries: result.chatRemovedEntries,
+        note: '已恢复到所选消息之前的聊天状态'
+      })
+    }
+    return result
   }
 
   emitSyntheticEvent(event: AgentEvent): void {
@@ -337,7 +418,7 @@ export class AnthropicEngine implements Engine {
         providerId: this.meta.providerId,
         model: this.meta.model
       })
-      this.rememberTarget(target)
+      rememberAnthropicRecoveryTarget(this.recoveryState, target)
       this.resolvedModel = target.model
       const layeredPayload = await augmentNativePayloadWithLayeredMemory(payload, this.meta)
       const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
@@ -355,10 +436,14 @@ export class AnthropicEngine implements Engine {
       })
       this.activeOutboundContext = outbound.manifest
       const projectResources = outbound.resourceContext.prompt
-      const enrichedPayload = handoff || projectResources
+      const documentPrompt = documentAttachmentsToPrompt(
+        payload.documents,
+        sessionImageAttachmentsRoot(app.getPath('userData'), this.meta.id)
+      )
+      const enrichedPayload = handoff || projectResources || documentPrompt
         ? {
             ...payload,
-            text: [projectResources, handoff, '## Current User Request', layeredPayload.text]
+            text: [projectResources, handoff, documentPrompt, '## Current User Request', layeredPayload.text]
               .filter(Boolean)
               .join('\n\n')
           }
@@ -385,6 +470,7 @@ export class AnthropicEngine implements Engine {
       activeTarget = response.target
       const finished = await this.handleMessageResult(
         response.result,
+        response.target,
         requestIndex,
         turnMessages,
         controller
@@ -404,6 +490,13 @@ export class AnthropicEngine implements Engine {
     let activeTarget = target
     let lineage: AnthropicAttemptLineage | undefined
     while (true) {
+      if (!this.dependencies.acquireProviderRequest(activeTarget.providerId)) {
+        const recovery = this.recoverTarget(activeTarget, 'Provider circuit is open')
+        if (!recovery) throw new Error('Provider circuit is open')
+        activeTarget = recovery.target
+        lineage = undefined
+        continue
+      }
       const attemptStartedAt = Date.now()
       try {
         const result = await this.executeMessageAttempt(
@@ -417,7 +510,10 @@ export class AnthropicEngine implements Engine {
         this.recordUsage(result)
         return { result, target: activeTarget }
       } catch (error) {
-        if (!isModelAttemptOperationError(error)) throw error
+        if (!isModelAttemptOperationError(error)) {
+          this.dependencies.releaseProviderRequest(activeTarget.providerId)
+          throw error
+        }
         const operationError = error.operationError
         const failureText = anthropicErrorText(operationError)
         this.dependencies.recordFailure(
@@ -444,14 +540,15 @@ export class AnthropicEngine implements Engine {
     lineage?: AnthropicAttemptLineage
   ): Promise<AnthropicMessagesResult> {
     const projectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)
-    const request: AnthropicMessagesRequest = {
+    const request = this.dependencies.applyRuntimeToRequest({
       model: target.model,
       maxTokens: DEFAULT_MAX_TOKENS,
       system: taskStrategySystemAppend(this.meta.taskStrategy, projectContext),
       messages: [...this.history, ...turnMessages],
-      tools: ANTHROPIC_CODING_TOOLS
-    }
-    this.rememberTarget(target)
+      tools: ANTHROPIC_CODING_TOOLS,
+      extraBody: target.credentialProvider.advancedConfig?.request?.body
+    }, target.credentialProvider.advancedConfig?.runtime)
+    rememberAnthropicRecoveryTarget(this.recoveryState, target)
     if (target.keyId) this.dependencies.markProviderKeyUsed(target.providerId, target.keyId)
     return this.dependencies.modelAttempts.execute({
       run: this.dependencies.getRun(this.meta.id),
@@ -459,7 +556,7 @@ export class AnthropicEngine implements Engine {
       model: target.model,
       endpoint: target.endpoint,
       method: 'POST',
-      body: request,
+      body: this.dependencies.buildWireBody(request),
       signal: controller.signal,
       auth: { keyId: target.keyId, keyLabel: target.keyLabel },
       preflight: async () => {
@@ -483,6 +580,7 @@ export class AnthropicEngine implements Engine {
       operation: (operationId) => this.dependencies.streamMessage({
         endpoint: target.endpoint,
         headers: target.headers,
+        timeouts: target.timeouts,
         request,
         signal: controller.signal,
         onText: (text) => this.appendText(text),
@@ -521,100 +619,43 @@ export class AnthropicEngine implements Engine {
     current: AnthropicMessagesTarget,
     failureText: string
   ): AnthropicRecoveryTarget | undefined {
-    if (!this.dependencies.getSettings().failoverEnabled) return undefined
     const failure = this.dependencies.classifyFailure(failureText)
-    const keyTarget = this.tryProviderKeyRecovery(current, failure)
-    if (keyTarget) return keyTarget
-    return this.tryProviderRecovery(current, failure)
-  }
-
-  private tryProviderKeyRecovery(
-    current: AnthropicMessagesTarget,
-    failure: FailureClass
-  ): AnthropicRecoveryTarget | undefined {
-    if (!current.keyId || !this.dependencies.canRotateProviderKey(failure)) return undefined
-    const triedKeyIds = this.providerKeyIds(current.providerId)
-    const rotation = this.dependencies.rotateProviderKey({
-      providerId: current.providerId,
-      failedKeyId: current.keyId,
-      excludedKeyIds: triedKeyIds,
-      reason: failure.label
-    })
-    if (!rotation || triedKeyIds.has(rotation.toKeyId)) return undefined
-    let target: AnthropicMessagesTarget
-    try {
-      target = this.dependencies.resolveTarget({ providerId: current.providerId, model: current.model })
-    } catch {
-      triedKeyIds.add(rotation.toKeyId)
-      return undefined
-    }
-    if (target.keyId !== rotation.toKeyId) {
-      triedKeyIds.add(rotation.toKeyId)
-      return undefined
-    }
-    this.rememberTarget(target)
-    const routeReason = `Provider key failover: ${failure.label}`
-    this.emit({
-      kind: 'provider-key-failover',
-      providerId: rotation.providerId,
-      providerName: rotation.providerName,
-      fromKeyId: rotation.fromKeyId,
-      fromKeyLabel: rotation.fromKeyLabel,
-      toKeyId: rotation.toKeyId,
-      toKeyLabel: rotation.toKeyLabel,
-      reason: failure.label
-    })
-    return { target, routeReason }
-  }
-
-  private tryProviderRecovery(
-    current: AnthropicMessagesTarget,
-    failure: FailureClass
-  ): AnthropicRecoveryTarget | undefined {
-    if (!failure.switchable) return undefined
     const settings = this.dependencies.getSettings()
-    const candidates = this.dependencies.listProviders()
-      .filter((provider) => provider.engine === 'anthropic' && provider.hasToken)
-      .filter((provider) => providerAllowedByOutboundContext(
-        this.activeOutboundContext,
-        provider,
-        current.model
-      ))
-      .map((provider) => ({ id: provider.id, name: provider.name, models: provider.models }))
-    const selected = this.dependencies.pickFailoverTarget({
-      candidates,
-      exclude: this.triedProviders,
-      desiredModel: current.model,
-      fallbackProviderId: settings.fallbackProviderId,
-      fallbackModel: settings.fallbackModel
+    const providers = this.dependencies.listProviders()
+    const recovery = recoverAnthropicTarget({
+      current,
+      failure,
+      settings,
+      providers,
+      meta: this.meta,
+      outboundContext: this.activeOutboundContext,
+      state: this.recoveryState,
+      resolveTarget: this.dependencies.resolveTarget,
+      canRotateProviderKey: this.dependencies.canRotateProviderKey,
+      rotateProviderKey: this.dependencies.rotateProviderKey,
+      pickFailoverTarget: this.dependencies.pickFailoverTarget,
+      pickProviderModelFailoverTarget: this.dependencies.pickProviderModelFailoverTarget,
+      engineKind: this.dependencies.recoveryEngineKind
     })
-    if (!selected || this.triedProviders.has(selected.providerId)) return undefined
-    this.triedProviders.add(selected.providerId)
-    let target: AnthropicMessagesTarget
-    try {
-      target = this.dependencies.resolveTarget({
-        providerId: selected.providerId,
-        model: selected.model
-      })
-    } catch {
+    if (!recovery) {
+      if (!this.recoveryExhaustedEmitted
+        && isAnthropicRecoveryEnabled(current.providerId, settings.failoverEnabled, providers) && failure.switchable) {
+        this.recoveryExhaustedEmitted = true
+        this.emit({
+          kind: 'provider-recovery-exhausted',
+          engine: this.dependencies.recoveryEngineKind,
+          providerId: current.providerId,
+          providerName: current.providerName,
+          model: current.model,
+          reason: failure.label
+        })
+      }
       return undefined
     }
-    this.meta.providerId = target.providerId
-    if (this.meta.model !== AUTO_MODEL) this.meta.model = target.model
-    this.resolvedModel = target.model
-    this.rememberTarget(target)
-    const routeReason = [failure.label, selected.preference].filter(Boolean).join(' · ')
-    this.emit({
-      kind: 'failover',
-      fromProviderId: current.providerId,
-      toProviderId: target.providerId,
-      fromName: current.providerName,
-      toName: target.providerName,
-      model: target.model,
-      reason: routeReason
-    })
-    this.emit({ kind: 'meta', meta: { ...this.meta } })
-    return { target, routeReason }
+    this.resolvedModel = recovery.target.model
+    this.emit(recovery.event)
+    if (recovery.metaChanged) this.emit({ kind: 'meta', meta: { ...this.meta } })
+    return { target: recovery.target, routeReason: recovery.routeReason }
   }
 
   private recordAttemptSuccess(target: AnthropicMessagesTarget, latencyMs: number): void {
@@ -622,26 +663,14 @@ export class AnthropicEngine implements Engine {
     this.dependencies.recordSuccess(target.providerId, latencyMs)
   }
 
-  private rememberTarget(target: AnthropicMessagesTarget): void {
-    if (target.keyId) this.providerKeyIds(target.providerId).add(target.keyId)
-  }
-
-  private providerKeyIds(providerId: string): Set<string> {
-    let ids = this.triedProviderKeys.get(providerId)
-    if (!ids) {
-      ids = new Set()
-      this.triedProviderKeys.set(providerId, ids)
-    }
-    return ids
-  }
-
   private async handleMessageResult(
     result: AnthropicMessagesResult,
+    target: AnthropicMessagesTarget,
     requestIndex: number,
     turnMessages: AnthropicMessagesMessage[],
     controller: AbortController
   ): Promise<boolean> {
-    const assistantContent = assistantHistoryContent(result)
+    const assistantContent = assistantHistoryContent(result, this.dependencies.requiresThinkingSignature(target))
     const toolUses = assistantContent.filter(
       (block): block is AnthropicMessagesToolUseBlock => block.type === 'tool_use'
     )
@@ -865,11 +894,26 @@ export class AnthropicEngine implements Engine {
       resultText: isError ? resultText : this.assistantText.trim() || resultText,
       usage: this.turnUsage
     })
+    if (this.activeMessageId && this.turnRevisionEligible && !this.turnHadToolEvents) {
+      this.emit({
+        kind: 'checkpoint',
+        messageId: providerChatCheckpointId(this.activeMessageId),
+        userMessageId: this.activeMessageId,
+        scope: 'chat'
+      })
+    }
+    this.activeMessageId = undefined
+    this.turnRevisionEligible = false
+    this.turnHadToolEvents = false
     if (isError) this.setStatus('error', resultText)
     else this.setStatus('idle')
   }
 
   private emit(event: AgentEvent): void {
+    if (event.kind === 'tool-start' || event.kind === 'tool-result' ||
+        event.kind === 'permission-request' || event.kind === 'permission-resolved') {
+      this.turnHadToolEvents = true
+    }
     this.emitRaw(event)
   }
 
@@ -888,32 +932,4 @@ export class AnthropicEngine implements Engine {
     this.abort = null
     this.setStatus('closed')
   }
-}
-
-function anthropicAdditionalContextItems(
-  handoff: string,
-  hasConversationContext: boolean
-): OutboundContextItemView[] {
-  const items: OutboundContextItemView[] = []
-  if (handoff.trim()) {
-    items.push({
-      id: 'context:workflow',
-      kind: 'workflow_context',
-      label: 'Workflow handoff',
-      dataClass: 'S4',
-      egressPolicy: 'allow',
-      decision: 'included'
-    })
-  }
-  if (hasConversationContext) {
-    items.push({
-      id: 'context:conversation',
-      kind: 'conversation_context',
-      label: 'Conversation history',
-      dataClass: 'S2',
-      egressPolicy: 'allow',
-      decision: 'included'
-    })
-  }
-  return items
 }

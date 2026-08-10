@@ -1,5 +1,6 @@
 import type { SessionMeta } from '../../shared/types'
 import { writeSessionAuditLog } from '../permission/audit-log'
+import { classifyToolCapabilities } from '../permission/tool-capabilities'
 import type { ToolPermissionDecision } from '../permission/tool-permission'
 import { taskRuntimeRegistry } from '../task/task-runtime-registry'
 import {
@@ -20,6 +21,7 @@ export function digitalWorkerToolPolicyError(
     source: 'policy',
     toolName,
     input: toolInput,
+    capabilities: classifyToolCapabilities(toolName, toolInput),
     message: decision.message
   })
   return decision.message
@@ -37,7 +39,11 @@ export function digitalWorkerToolPermissionDecision(
   return {
     kind: 'deny',
     reason: decision.message,
-    risk: { level: 'high', reasons: ['DigitalWorker action policy denied the tool'] },
+    risk: {
+      level: 'high',
+      reasons: ['DigitalWorker action policy denied the tool'],
+      capabilities: classifyToolCapabilities(toolName, toolInput)
+    },
     matchedRule: 'digital-worker-action-policy'
   }
 }

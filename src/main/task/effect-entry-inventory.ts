@@ -39,14 +39,15 @@ const DIRECT_USER: EffectEntryPolicy = {
   impact: 'external', effect: 'direct_user', replay: 'never'
 }
 
-export const EFFECT_ENTRY_INVENTORY_VERSION = 8
+export const EFFECT_ENTRY_INVENTORY_VERSION = 14
 
 export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
     'attachments:ocr',
     'browser:listAnnotations', 'browser:observe', 'browser:pickElement',
     'engines:list',
-    'files:list', 'files:read',
+    'files:definition', 'files:diagnostics', 'files:list', 'files:read', 'files:search', 'files:symbols',
+    'files:typescriptCompletions', 'files:typescriptDefinitions', 'files:typescriptDiagnostics', 'files:typescriptHover',
     'git:status',
     'history:list',
     'learning:list',
@@ -58,7 +59,11 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'preview:listAnnotations', 'preview:prepare', 'preview:prepareVisual',
     'projectContext:read', 'projectContext:template',
     'projects:list',
-    'providers:fetchModels', 'providers:health', 'providers:list',
+    'permissions:gui-grants:list', 'permissions:tool-grants:list',
+    'providers:authorization:accounts', 'providers:balance:capability',
+    'providers:billing:capability', 'providers:billing:list', 'providers:billing:reconcile',
+    'providers:fetchModels', 'providers:fetchPricingCatalog', 'providers:gateway:models',
+    'providers:gateway:status', 'providers:health', 'providers:list', 'providers:usage',
     'quickbar:getState', 'quickbar:getWindowContext', 'quickbar:readClipboard',
     'routines:list', 'routines:listRuns', 'routines:listTemplates',
     'sessions:decomposeTask', 'sessions:list', 'sessions:outboundContextPreview', 'sessions:pendingPermissions',
@@ -90,11 +95,15 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'modelAttempts:resolveReconciliation',
     'notificationConnectors:create', 'notificationConnectors:delete',
     'notificationConnectors:setDefault',
+    'permissions:gui-grants:revoke', 'permissions:gui-grants:revoke-all',
+    'permissions:tool-grants:revoke', 'permissions:tool-grants:revoke-all',
     'plugins:setEnabled',
     'preview:saveAnnotation',
     'projects:delete', 'projects:update',
     'projectWorkspace:invoke',
-    'providers:activateLocalCompute', 'providers:create', 'providers:delete', 'providers:update',
+    'providers:activateLocalCompute', 'providers:authorization:revoke',
+    'providers:billing:remove', 'providers:billing:save',
+    'providers:create', 'providers:delete', 'providers:gateway:update', 'providers:update',
     'quickbar:setVisible',
     'routines:create', 'routines:delete', 'routines:markRun', 'routines:reviewRun', 'routines:update',
     'sessions:close', 'sessions:interrupt', 'sessions:permission', 'sessions:rename',
@@ -122,7 +131,7 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     ...QUERYABLE, evidence: 'uninstallPluginWithEffect'
   }),
   policyGroup([
-    'attachments:copyImage', 'attachments:saveImageBytes',
+    'attachments:copyDocument', 'attachments:copyImage', 'attachments:saveImageBytes',
     'browser:back', 'browser:forward', 'browser:navigate', 'browser:open', 'browser:reload',
     'plugins:probeMcp',
     'terminals:close', 'terminals:resize', 'terminals:start', 'terminals:write'
@@ -130,10 +139,20 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup(['migration:import'], {
     ...OPAQUE, evidence: 'executeMigrationImportEffect'
   }),
+  policyGroup([
+    'providers:authorization:start', 'providers:authorization:quick-start',
+    'providers:authorization:quick-poll', 'providers:authorization:poll',
+    'providers:authorization:bind', 'providers:authorization:refresh',
+    'providers:authorization:quota', 'providers:balance:query', 'providers:billing:sync',
+    'providers:probeGeneration'
+  ], {
+    ...OPAQUE, evidence: 'executeProviderOperationEffect'
+  }),
   policyGroup(['browser:bounds', 'browser:close'], LOCAL),
   policyGroup([
     'dialog:pickDirectory',
     'plugins:reveal',
+    'providers:gateway:copy-token',
     'quickbar:captureScreenshot', 'quickbar:pickFiles', 'quickbar:prepareFiles',
     'sessions:restoreCheckpoint', 'sessions:rewindFiles'
   ], DIRECT_USER),
@@ -162,11 +181,13 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'git_push', 'git_stage', 'git_stage_all', 'write_file'
   ], QUERYABLE),
   policyGroup(['work_item_comment'], LOCAL),
-  policyGroup(['code_forge_delivery', 'search_replace'], CONDITIONAL),
+  policyGroup([
+    'code_forge_delivery', 'search_replace',
+    'gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type'
+  ], CONDITIONAL),
   policyGroup([
     'bash',
     'browser_click', 'browser_evaluate', 'browser_navigate', 'browser_type',
-    'gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type',
     'mcp_builtin_servers', 'mcp_call_tool', 'mcp_discover', 'mcp_import_claude_desktop',
     'memory_add', 'optimize_skill', 'send_notification',
     'task_decompose_and_dispatch_dag', 'task_dispatch_dag'

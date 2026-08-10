@@ -13,6 +13,10 @@ for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'WIN_CSC_LINK', 'WIN_CSC_KEY
 
 module.exports = {
   ...baseBuild,
+  // The preview package ships the verified N-API prebuilds from node-pty.
+  // Do not require a local Visual Studio toolchain just to recompile them;
+  // release builds keep the default native rebuild path.
+  npmRebuild: false,
   publish: null,
   extraMetadata: {
     ...(baseBuild.extraMetadata || {}),

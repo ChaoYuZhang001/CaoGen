@@ -32,6 +32,7 @@ import {
   isManagedPluginEffectToolName
 } from '../plugin/plugin-directory-effect'
 import { normalizeToolName } from './tool-idempotency'
+import { buildGuiPostconditionEffectTarget } from '../gui/gui-effect'
 
 export interface EffectTargetObservationOptions {
   beforeRead?: (filePath: string) => Promise<void> | void
@@ -135,6 +136,8 @@ async function buildRepositoryEffectTarget(
   context: EffectTargetBuilderContext,
   operationContext: OperationEffectReconcilerContext
 ): Promise<EffectTarget> {
+  const guiTarget = await buildGuiPostconditionEffectTarget(toolName, input.toolInput)
+  if (guiTarget) return guiTarget
   if (isGitIndexEffectToolName(toolName)) return buildGitIndexEffectTarget({ ...input, toolName })
   if (toolName === 'git_commit') return context.gitCommitTarget(input.cwd, input.toolInput)
   if (toolName === 'git_merge') return context.gitMergeTarget(input.cwd, input.toolInput)

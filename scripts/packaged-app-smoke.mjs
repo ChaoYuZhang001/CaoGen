@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -9,6 +10,7 @@ import path from 'node:path'
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
 const { readPackagedReleaseProvenanceFromAsar, releaseProvenanceChecks } = require('./lib/release-provenance.cjs')
+const puppeteer = require('puppeteer-core')
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'packaged-app-smoke')
@@ -18,8 +20,13 @@ const targetPlatform = requestedPlatform === 'macos' ? 'darwin' : requestedPlatf
 const targetArch = argValue('--arch') || process.arch
 const unsignedBuild = process.argv.includes('--unsigned')
 const previewMode = process.argv.includes('--preview')
+const allowDirtyPreview = previewMode && process.argv.includes('--allow-dirty')
+const interactiveInstaller = process.argv.includes('--interactive-installer')
+const ciUnattendedInstaller = process.argv.includes('--ci-unattended-installer')
 const distributionChannel = previewMode || unsignedBuild ? 'unsigned_preview' : 'formal'
-const sourceArtifact = releaseArtifactPath(targetPlatform, targetArch, packageJson.version, previewMode)
+const sourceArtifact = argValue('--artifact')
+  ? path.resolve(repoRoot, argValue('--artifact'))
+  : releaseArtifactPath(targetPlatform, targetArch, packageJson.version, previewMode)
 const releaseAudit = readReleaseAudit(targetPlatform, targetArch)
 const userDataDir = mkdtempSync(path.join(tmpdir(), 'caogen-packaged-app-smoke-'))
 const installRoot = mkdtempSync(path.join(tmpdir(), 'caogen-installed-app-smoke-'))
@@ -37,8 +44,17 @@ let cleanupFailure
 const installation = {
   sourceArtifact: path.relative(repoRoot, sourceArtifact),
   method: targetPlatform === 'darwin' ? 'dmg-copy-to-isolated-directory' : 'nsis-silent-isolated-directory',
+  interactiveInstaller,
+  ciUnattendedInstaller,
+  existingInstallations: [],
   status: 'failed',
-  failure: null
+  failure: null,
+  uninstall: {
+    status: targetPlatform === 'win32' ? 'not_run' : 'not_applicable',
+    installRootRemoved: null,
+    residualInstallations: [],
+    failure: null
+  }
 }
 
 try {
@@ -52,12 +68,40 @@ try {
   if (unsignedBuild && previewMode) throw new Error('use either --unsigned or --preview, not both')
   if (unsignedBuild && targetPlatform !== 'win32') throw new Error('unsigned packaged app smoke is Windows-only')
   if (previewMode && targetPlatform !== 'win32') throw new Error('preview packaged app smoke is Windows-only')
+  if (interactiveInstaller && ciUnattendedInstaller) {
+    throw new Error('use either --interactive-installer or --ci-unattended-installer, not both')
+  }
+  if (ciUnattendedInstaller && process.env.GITHUB_ACTIONS !== 'true') {
+    throw new Error('--ci-unattended-installer is restricted to GitHub Actions')
+  }
   if (process.arch !== targetArch) {
     throw new Error(`native packaged app smoke for ${targetArch} must run on ${targetArch}, got ${process.arch}`)
   }
-  if (!unsignedBuild) assertReleaseAuditBinding(releaseAudit)
   if (!existsSync(sourceArtifact)) {
     throw new Error(`release installer is missing: ${path.relative(repoRoot, sourceArtifact)}`)
+  }
+  if (!unsignedBuild) assertReleaseAuditBinding(releaseAudit, sourceArtifact, allowDirtyPreview)
+  if (targetPlatform === 'win32') {
+    installation.existingInstallations = inspectExistingWindowsInstallations()
+    if (installation.existingInstallations.length > 0) {
+      installation.status = 'blocked'
+      throw new Error(
+        'existing CaoGen installation detected; NSIS upgrade handling can invoke the old uninstaller even when /D ' +
+        'points at an isolated directory; run packaged smoke on a clean disposable Windows environment'
+      )
+    }
+  }
+  if (
+    targetPlatform === 'win32' &&
+    (previewMode || unsignedBuild) &&
+    !interactiveInstaller &&
+    !ciUnattendedInstaller
+  ) {
+    installation.status = 'blocked'
+    throw new Error(
+      'unsigned Windows installer smoke requires an interactive desktop for SmartScreen/elevation confirmation; ' +
+      'rerun with --interactive-installer under Owner supervision, or use the GitHub-Actions-only unattended path'
+    )
   }
   if (unsignedBuild) {
     signing = { installer: inspectAuthenticode(sourceArtifact), app: null }
@@ -83,7 +127,7 @@ try {
     const provenanceFailures = Object.entries(releaseProvenanceChecks(buildProvenance, {
       gitCommit: git.commit,
       packageVersion: packageJson.version
-    })).filter(([, passed]) => !passed)
+    })).filter(([name, passed]) => !(allowDirtyPreview && name === 'worktreeWasClean') && !passed)
     if (provenanceFailures.length > 0) {
       throw new Error(`packaged release provenance failed: ${provenanceFailures.map(([name]) => name).join(', ')}`)
     }
@@ -113,9 +157,14 @@ try {
   await stopChild(child)
   const cleanupErrors = []
   try {
-    cleanupInstalledCandidate()
+    await cleanupInstalledCandidate()
   } catch (error) {
-    cleanupErrors.push(error instanceof Error ? error.message : String(error))
+    const cleanupError = error instanceof Error ? error.message : String(error)
+    if (targetPlatform === 'win32') {
+      installation.uninstall.status = 'failed'
+      installation.uninstall.failure = cleanupError
+    }
+    cleanupErrors.push(cleanupError)
   }
   try {
     await removeDirectoryWhenQuiescent(installRoot, 15_000)
@@ -141,6 +190,7 @@ const report = {
   packageVersion: packageJson.version,
   platform: targetPlatform,
   targetArch,
+  allowDirtyPreview,
   appExecutable: appExecutable ? 'isolated-install/CaoGen' : null,
   git,
   artifactSetSha256: unsignedBuild ? null : releaseAudit.data?.artifactSetSha256 || null,
@@ -174,29 +224,64 @@ if (failure) process.exitCode = 1
 
 async function waitForRenderer(processHandle, port, timeoutMs) {
   let exit
+  let browser
+  let lastObservation
+  let lastError
   processHandle.once('exit', (code, signal) => {
     exit = { code, signal }
   })
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (exit) throw new Error(`packaged app exited before creating a renderer: ${JSON.stringify(exit)}`)
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-        signal: AbortSignal.timeout(2_000)
-      })
-      if (response.ok) {
-        const targets = await response.json()
-        const page = Array.isArray(targets)
-          ? targets.find((item) => item?.type === 'page' && item?.title === 'CaoGen' && /out\/renderer\/index\.html$/.test(item?.url || ''))
-          : undefined
-        if (page) return { type: page.type, title: page.title, url: page.url }
+  try {
+    while (Date.now() < deadline) {
+      if (exit) throw new Error(`packaged app exited before creating a renderer: ${JSON.stringify(exit)}`)
+      try {
+        browser ??= await puppeteer.connect({
+          browserURL: `http://127.0.0.1:${port}`,
+          defaultViewport: null
+        })
+        const page = (await browser.pages()).find((candidate) => /out\/renderer\/index\.html$/.test(candidate.url()))
+        if (page) {
+          lastObservation = await page.evaluate(() => ({
+            documentTitle: document.title,
+            readyState: document.readyState,
+            rootChildCount: document.querySelector('#root')?.children.length ?? 0,
+            bodyTextLength: document.body?.innerText.trim().length ?? 0,
+            preloadReady: typeof window.agentDesk === 'object'
+          }))
+          if (
+            lastObservation.documentTitle === 'CaoGen' &&
+            lastObservation.rootChildCount > 0 &&
+            lastObservation.bodyTextLength > 0 &&
+            lastObservation.preloadReady
+          ) {
+            return {
+              type: 'page',
+              title: lastObservation.documentTitle,
+              url: page.url(),
+              readyState: lastObservation.readyState,
+              rootChildCount: lastObservation.rootChildCount,
+              bodyTextLength: lastObservation.bodyTextLength,
+              preloadReady: lastObservation.preloadReady
+            }
+          }
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error)
+        if (browser) {
+          await browser.disconnect().catch(() => undefined)
+          browser = undefined
+        }
       }
-    } catch {
-      // The debugging endpoint is unavailable while Electron initializes.
+      await delay(250)
     }
-    await delay(250)
+  } finally {
+    if (browser) await browser.disconnect().catch(() => undefined)
   }
-  throw new Error('packaged app did not create the CaoGen renderer within 30 seconds')
+  throw new Error(
+    `packaged app did not create an interactive CaoGen renderer within ${timeoutMs}ms` +
+    `; last observation=${JSON.stringify(lastObservation || null)}` +
+    (lastError ? `; last error=${lastError}` : '')
+  )
 }
 
 async function availablePort() {
@@ -299,17 +384,20 @@ function installCandidate() {
   const result = spawnSync(sourceArtifact, ['/S', `/D=${installRoot}`], {
     cwd: repoRoot,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // NSIS elevation/security children can inherit pipes and keep spawnSync
+    // blocked after the launcher has already exited. Silent installers do not
+    // have useful stdout/stderr, so avoid those inherited handles entirely.
+    stdio: 'ignore',
     windowsHide: true,
     timeout: 120_000
   })
   if (result.status !== 0) {
-    throw new Error(`NSIS installer failed: ${commandFailure(result)}`)
+    throw new Error(`NSIS installer failed: ${nsisCommandFailure(result)}`)
   }
   return { appRoot: installRoot, mountedDmg: null }
 }
 
-function cleanupInstalledCandidate() {
+async function cleanupInstalledCandidate() {
   if (targetPlatform === 'darwin' && mountedDmg) {
     detachMountedDmg(mountedDmg)
     mountedDmg = undefined
@@ -319,16 +407,36 @@ function cleanupInstalledCandidate() {
   const uninstallers = ['Uninstall CaoGen.exe', 'Uninstall.exe']
     .map((name) => path.join(installRoot, name))
     .filter(existsSync)
-  if (uninstallers[0]) {
-    const result = spawnSync(uninstallers[0], ['/S'], {
-      cwd: installRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      timeout: 120_000
-    })
-    if (result.status !== 0) throw new Error(`NSIS uninstaller failed: ${commandFailure(result)}`)
+  if (!uninstallers[0]) {
+    if (installation.status === 'passed') throw new Error('installed NSIS uninstaller is missing')
+    return
   }
+  installation.uninstall.status = 'running'
+  const result = spawnSync(uninstallers[0], ['/S'], {
+    cwd: installRoot,
+    encoding: 'utf8',
+    stdio: 'ignore',
+    windowsHide: true,
+    timeout: 120_000
+  })
+  if (result.status !== 0) throw new Error(`NSIS uninstaller failed: ${nsisCommandFailure(result)}`)
+
+  await waitForPathAbsent(installRoot, 45_000)
+  installation.uninstall.installRootRemoved = true
+  installation.uninstall.residualInstallations = inspectExistingWindowsInstallations()
+  if (installation.uninstall.residualInstallations.length > 0) {
+    throw new Error('NSIS uninstaller left a CaoGen uninstall registry entry')
+  }
+  installation.uninstall.status = 'passed'
+}
+
+async function waitForPathAbsent(targetPath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!existsSync(targetPath)) return
+    await delay(250)
+  }
+  throw new Error(`NSIS uninstaller left the isolated installation directory after ${timeoutMs}ms`)
 }
 
 function detachMountedDmg(mountPoint) {
@@ -359,11 +467,25 @@ function runChecked(command, args) {
 }
 
 function commandFailure(result) {
-  return String(result.stderr || result.stdout || `exit ${result.status}`)
+  const fallback = result.error?.code === 'ETIMEDOUT'
+    ? `timed out; signal ${result.signal || 'unknown'}`
+    : result.status !== null && result.status !== undefined
+      ? `exit ${result.status}`
+      : result.signal
+        ? `signal ${result.signal}`
+        : 'unknown process failure'
+  return String(result.stderr || result.stdout || fallback)
     .split(/\r?\n/)
     .filter(Boolean)
     .slice(0, 3)
     .join(' | ')
+}
+
+function nsisCommandFailure(result) {
+  if (result.status === 1223) {
+    return 'Windows security/elevation confirmation was cancelled or unavailable (exit 1223)'
+  }
+  return commandFailure(result)
 }
 
 function packagedExecutable(appRootPath, platform) {
@@ -393,19 +515,30 @@ function readReleaseAudit(platform, arch) {
   }
 }
 
-function assertReleaseAuditBinding(audit) {
+function assertReleaseAuditBinding(audit, artifactPath, allowDirty = false) {
   if (audit.error) throw new Error(`release audit is invalid JSON: ${audit.error}`)
   if (!audit.data) throw new Error(`release audit is missing: ${audit.relativePath}`)
   const failures = []
   if (audit.data.status !== 'passed') failures.push('status')
-  if (audit.data.required !== true) failures.push('required')
+  if (!allowDirty && audit.data.required !== true) failures.push('required')
   if (audit.data.mode !== 'post_build') failures.push('mode')
   if (audit.data.packageVersion !== packageJson.version) failures.push('packageVersion')
   if (audit.data.targetArch !== targetArch) failures.push('targetArch')
   if (!auditPlatformMatches(audit.data)) failures.push('platformChannel')
   if (audit.data.git?.commit !== git.commit) failures.push('gitCommit')
-  if (audit.data.git?.worktreeClean !== true || !git.worktreeClean) failures.push('cleanGit')
+  if (!allowDirty && (audit.data.git?.worktreeClean !== true || !git.worktreeClean)) failures.push('cleanGit')
+  if (allowDirty && audit.data.allowDirtyPreview !== true) failures.push('allowDirtyPreview')
   if (!/^[0-9a-f]{64}$/i.test(audit.data.artifactSetSha256 || '')) failures.push('artifactSetSha256')
+  const auditedArtifact = Object.entries(audit.data.artifactSet?.files || {})
+    .find(([relativePath]) => path.resolve(repoRoot, relativePath) === path.resolve(artifactPath))?.[1]
+  if (!auditedArtifact) {
+    failures.push('sourceArtifactPath')
+  } else {
+    const bytes = readFileSync(artifactPath)
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    if (auditedArtifact.size !== bytes.length) failures.push('sourceArtifactSize')
+    if (auditedArtifact.sha256 !== digest) failures.push('sourceArtifactSha256')
+  }
   if (failures.length > 0) throw new Error(`release audit binding failed: ${failures.join(', ')}`)
 }
 
@@ -445,6 +578,62 @@ $Signature = Get-AuthenticodeSignature -LiteralPath ${powerShellLiteral(filePath
     }
   } catch (error) {
     throw new Error(`Authenticode inspection returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function inspectExistingWindowsInstallations() {
+  const script = `
+$ErrorActionPreference = 'Stop'
+$Locations = @(
+  @{ Scope = 'current-user'; Path = 'Registry::HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' },
+  @{ Scope = 'all-users'; Path = 'Registry::HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' },
+  @{ Scope = 'all-users-wow64'; Path = 'Registry::HKEY_LOCAL_MACHINE\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' }
+)
+$Rows = foreach ($Location in $Locations) {
+  Get-ItemProperty -Path $Location.Path -ErrorAction SilentlyContinue |
+    Where-Object { [string]$_.DisplayName -like 'CaoGen*' } |
+    ForEach-Object {
+      @{
+        Scope = $Location.Scope
+        RegistryKey = [string]$_.PSChildName
+        DisplayName = [string]$_.DisplayName
+        DisplayVersion = [string]$_.DisplayVersion
+        HasUninstallCommand = -not [string]::IsNullOrWhiteSpace([string]$_.UninstallString)
+      }
+    }
+}
+@($Rows) | ConvertTo-Json -Compress
+`
+  const result = spawnSync(powerShellExecutable(), [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')
+  ], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 1024 * 1024
+  })
+  if (result.status !== 0) {
+    throw new Error(`existing CaoGen installation inspection failed: ${commandFailure(result)}`)
+  }
+  try {
+    const data = JSON.parse(String(result.stdout || '[]').trim() || '[]')
+    return (Array.isArray(data) ? data : [data]).map((item) => ({
+      scope: String(item.Scope || ''),
+      registryKey: String(item.RegistryKey || ''),
+      displayName: String(item.DisplayName || ''),
+      displayVersion: String(item.DisplayVersion || ''),
+      hasUninstallCommand: item.HasUninstallCommand === true
+    }))
+  } catch (error) {
+    throw new Error(
+      `existing CaoGen installation inspection returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+    )
   }
 }
 

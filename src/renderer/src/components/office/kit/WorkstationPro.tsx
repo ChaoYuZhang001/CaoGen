@@ -16,6 +16,10 @@ import { providerLogoFor } from './ProviderLogos'
 import type { ProviderLogoSpec } from './ProviderLogos'
 import { applyMonitoring, applyTyping, applyTalking, applyThinking } from './AvatarAnimations'
 import { officeActivityOf, type OfficeSessionActivity, type OfficeSessionSignal, type OfficeTask, type OfficeTaskStats } from '../model'
+import { hasOfficeFailoverSignal } from '../providerModelFailover'
+import type { WatercolorCharacterRole, WatercolorCharacterState } from '../../../../../shared/watercolor-character'
+import { hasWatercolorCharacterAsset } from '../watercolor-character-assets'
+import WatercolorCharacterRig from './WatercolorCharacterRig'
 import type { Group, MeshStandardMaterial } from 'three'
 
 export type WorkstationActivity = OfficeSessionActivity
@@ -38,6 +42,8 @@ export interface WorkstationProProps {
   liveliness?: number
   catEars?: boolean
   loadRobotAssets?: boolean
+  watercolorRole?: WatercolorCharacterRole
+  watercolorState?: WatercolorCharacterState
   operatorAway?: boolean
   currentTask?: OfficeTask
   taskStats?: OfficeTaskStats
@@ -593,10 +599,10 @@ function RoutingBudgetStack({
   screenColor: string
 }): React.JSX.Element | null {
   if (!signal) return null
+  const failoverActive = hasOfficeFailoverSignal(signal)
   if (
     !signal.routing &&
-    !signal.failover &&
-    !signal.keyFailover &&
+    !failoverActive &&
     !signal.workspace.isolated &&
     signal.workspace.changedFiles === 0 &&
     signal.budget.costUsd === 0 &&
@@ -604,7 +610,6 @@ function RoutingBudgetStack({
   ) return null
   const budgetProgress = signal.budget.ratio ?? Math.min(1, Math.log10(signal.budget.costUsd * 1000 + 1) / 4)
   const routingActive = Boolean(signal.routing)
-  const failoverActive = Boolean(signal.failover || signal.keyFailover)
   const workspaceActive = Boolean(signal.workspace.isolated || signal.workspace.changedFiles)
   const budgetColor = signal.budget.overBudget ? FAULT_COLOR : screenColor
 
@@ -690,6 +695,8 @@ export default function WorkstationPro({
   liveliness = 1,
   catEars = false,
   loadRobotAssets = true,
+  watercolorRole,
+  watercolorState,
   operatorAway = false,
   currentTask,
   taskStats,
@@ -720,6 +727,9 @@ export default function WorkstationPro({
             ? 1
             : 0.08
   const showOperator = !operatorAway
+  const watercolorOperator = hasWatercolorCharacterAsset(watercolorRole, watercolorState) && watercolorState
+    ? { role: watercolorRole, state: watercolorState }
+    : undefined
   const resolvedDetail: WorkstationDetail = active ? 'full' : (detail ?? 'compact')
 
   // AvatarRig 在挂载后把各关节写入该句柄;useFrame 内读取并驱动动画。
@@ -801,21 +811,25 @@ export default function WorkstationPro({
               name="desk-right-hand-ik-target"
               position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
             />
-            <ProgressiveAvatarRig
-              ref={rigRef}
-              loadModel={loadRobotAssets}
-              sessionId={sessionId}
-              position={[0, 0, 0.52]}
-              rotation={[0, Math.PI, 0]}
-              scale={1.2}
-              bodyColor={skin.bodyColor}
-              skinColor={skin.shellColor}
-              accentColor={stationAccent}
-              emblem={skin.emblem}
-              providerLogo={providerLogo}
-              catEars={catEars}
-              detailLevel="low"
-            />
+            {watercolorOperator ? (
+              <WatercolorCharacterRig role={watercolorOperator.role} state={watercolorOperator.state} compact scale={0.9} />
+            ) : (
+              <ProgressiveAvatarRig
+                ref={rigRef}
+                loadModel={loadRobotAssets}
+                sessionId={sessionId}
+                position={[0, 0, 0.52]}
+                rotation={[0, Math.PI, 0]}
+                scale={1.2}
+                bodyColor={skin.bodyColor}
+                skinColor={skin.shellColor}
+                accentColor={stationAccent}
+                emblem={skin.emblem}
+                providerLogo={providerLogo}
+                catEars={catEars}
+                detailLevel="low"
+              />
+            )}
           </>
         )}
 
@@ -974,21 +988,25 @@ export default function WorkstationPro({
           />
 
           {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
-          <ProgressiveAvatarRig
-            ref={rigRef}
-            loadModel={loadRobotAssets}
-            sessionId={sessionId}
-            position={[0, 0, 0.52]}
-            rotation={[0, Math.PI, 0]}
-            scale={1.2}
-            bodyColor={skin.bodyColor}
-            skinColor={skin.shellColor}
-            accentColor={stationAccent}
-            emblem={skin.emblem}
-            providerLogo={providerLogo}
-            catEars={catEars}
-            detailLevel="full"
-          />
+          {watercolorOperator ? (
+            <WatercolorCharacterRig role={watercolorOperator.role} state={watercolorOperator.state} />
+          ) : (
+            <ProgressiveAvatarRig
+              ref={rigRef}
+              loadModel={loadRobotAssets}
+              sessionId={sessionId}
+              position={[0, 0, 0.52]}
+              rotation={[0, Math.PI, 0]}
+              scale={1.2}
+              bodyColor={skin.bodyColor}
+              skinColor={skin.shellColor}
+              accentColor={stationAccent}
+              emblem={skin.emblem}
+              providerLogo={providerLogo}
+              catEars={catEars}
+              detailLevel="full"
+            />
+          )}
           <OperatorContactLinks accent={stationAccent} activity={activity} />
           <OperatorFocusLinks accent={stationAccent} activity={activity} />
         </>

@@ -97,6 +97,11 @@ async function runOfficeDeliveryGate() {
   const workflowApi = await importCompiled('main/task/workflow-ledger-api.js')
   const handoffApi = await importCompiled('main/task/workflow-stage-handoff.js')
 
+  const defaultLifecycleRoots = lifecycleApi.resolveLifecycleRoots({ workflowRoot: userData })
+  assertEqual(defaultLifecycleRoots.workflowRoot, userData, 'Artifact lifecycle workflow root')
+  assertEqual(defaultLifecycleRoots.workspaceRoot, userData, 'Artifact lifecycle default ProjectWorkspace root')
+  check('Artifact lifecycle defaults ProjectWorkspace ownership to the active workflow user-data root')
+
   const fixture = await seedCanonicalRun(workspaceApi, workspaceCommands, snapshotApi)
   runtimeRegistry.taskRuntimeRegistry.set(fixture.run.sessionId, fixture.run)
   check('canonical Project, Goal, WorkItem, Session, and Run are persisted before Office execution')
@@ -118,6 +123,31 @@ async function runOfficeDeliveryGate() {
       workflowApi
     }))
   }
+  const replayTarget = await officeApi.describeOfficeArtifactReplayTarget(
+    deliveries[0].specification.input,
+    workspaceRoot
+  )
+  assertEqual(replayTarget.kind, deliveries[0].handle.target.kind, 'Office replay target kind')
+  assertEqual(
+    JSON.stringify(replayTarget.rootIdentity),
+    JSON.stringify(deliveries[0].handle.target.rootIdentity),
+    'Office replay root identity'
+  )
+  assertEqual(
+    replayTarget.relativePath,
+    deliveries[0].handle.target.relativePath,
+    'Office replay relative path'
+  )
+  check('existing Office outputs retain the same replay resource identity without permitting overwrite')
+  await verifyLegacyProjectOfficeDelivery({
+    effectRuntime,
+    lifecycleApi,
+    officeApi,
+    runtimeRegistry,
+    snapshotApi,
+    workflowApi,
+    workspaceApi
+  })
   assert(
     deliveries.every(({ handle, generated }) =>
       handle.target.expectedSha256 === generated.sha256 && handle.target.expectedBytes === generated.bytes),
@@ -190,6 +220,106 @@ async function runOfficeDeliveryGate() {
     stageHandoff: 'passed',
     runtimeOnlyProvenance: deliveries.filter((item) => item.specification.input.source_refs === undefined).length
   }
+}
+
+async function verifyLegacyProjectOfficeDelivery(input) {
+  const {
+    effectRuntime,
+    lifecycleApi,
+    officeApi,
+    runtimeRegistry,
+    snapshotApi,
+    workflowApi,
+    workspaceApi
+  } = input
+  const projectId = 'project-legacy-office'
+  const sessionId = 'session-legacy-office'
+  const run = {
+    schemaVersion: 1,
+    id: 'run-legacy-office',
+    sessionId,
+    taskId: sessionId,
+    status: 'executing',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 2_000,
+    updatedAt: 2_001,
+    steps: [],
+    toolExecutions: [],
+    effects: []
+  }
+  const legacyRoot = path.join(workspaceRoot, 'legacy-project')
+  mkdirSync(legacyRoot, { recursive: true })
+  const snapshot = snapshotApi.buildTaskSnapshot({
+    meta: {
+      id: sessionId,
+      title: 'Legacy local Project Office delivery',
+      cwd: legacyRoot,
+      projectId,
+      model: 'synthetic-office-model',
+      providerId: 'synthetic-office-provider',
+      permissionMode: 'default',
+      status: 'running',
+      sdkSessionId: 'sdk-legacy-office-required',
+      costUsd: 0,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      contextTokens: 0,
+      createdAt: run.createdAt
+    },
+    transcript: [],
+    lastSeq: 0,
+    eventCount: 0,
+    reason: 'created',
+    run,
+    now: run.updatedAt
+  })
+  const persisted = await snapshotApi.saveTaskSnapshot(snapshot, userData)
+  assert(persisted.run, 'legacy Project Office Run must persist')
+  runtimeRegistry.taskRuntimeRegistry.set(sessionId, persisted.run)
+  const execution = {
+    sessionId,
+    cwd: legacyRoot,
+    toolUseId: 'office-legacy-project-document',
+    toolName: 'create_document',
+    toolInput: {
+      path: 'deliverables/legacy-project.docx',
+      title: 'Legacy Project Office Delivery',
+      paragraphs: ['A normal local Project can deliver Office output without a ProjectWorkspace record.']
+    }
+  }
+  const handle = await effectRuntime.prepareEffectExecution(execution)
+  assert(handle?.target.kind === 'office_artifact', 'legacy Project must freeze an Office target')
+  await effectRuntime.markEffectExecutionStarted(handle, execution)
+  const generated = await officeApi.executeOfficeArtifactTool(
+    execution.toolName,
+    execution.toolInput,
+    legacyRoot,
+    handle.target
+  )
+  const effect = await effectRuntime.completeEffectExecution(handle, {
+    ok: true,
+    output: JSON.stringify(generated)
+  })
+  assertEqual(effect?.status, 'confirmed', 'legacy Project Office Effect status')
+  const lifecycle = await lifecycleApi.getPersistedArtifactLifecycle(
+    `artifact:office:${effect.id}`,
+    userData
+  )
+  assert(lifecycle, 'legacy Project Office Artifact lifecycle')
+  assertEqual(lifecycle.provenance, 'legacy-derived', 'legacy Project Artifact provenance')
+  assertEqual(lifecycle.projectRevision, 0, 'legacy Project Artifact revision sentinel')
+  const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId, limit: 100 }, userData)
+  assertEqual(
+    ledger.acceptances.items.find((candidate) => candidate.id === `acceptance:office:${effect.id}`)?.status,
+    'passed',
+    'legacy Project Office Acceptance status'
+  )
+  const workspaceStore = new workspaceApi.ProjectWorkspaceStore(userData)
+  await workspaceStore.open()
+  assertEqual(await workspaceStore.getWorkspace(projectId), undefined, 'legacy ProjectWorkspace remains absent')
+  await lifecycleApi.verifyPersistedArtifactLifecycle(userData)
+  check('legacy local Project crosses confirmed Office Effect into Artifact, Evidence, and passed Acceptance')
 }
 
 async function verifyPreExecutionGuards({ fixture, effectRuntime, officeApi }) {
@@ -781,6 +911,22 @@ async function verifyCanonicalDeliveryChain(input) {
   )
   check('all four canonical Artifacts are attached to the producing WorkItem')
   check('failed Office Artifact remains auditable but is excluded from WorkItem handoff', 'negative')
+
+  const defaultRootArtifact = deliveries[0].lifecycle
+  const previousUserDataOverride = process.env.CAOGEN_USER_DATA
+  process.env.CAOGEN_USER_DATA = path.join(tempRoot, 'wrong-project-workspace-default')
+  try {
+    await handoffApi.attachProducedArtifactToStage({
+      artifactId: defaultRootArtifact.artifactId,
+      projectId: defaultRootArtifact.projectId,
+      workItemId: defaultRootArtifact.workItemId,
+      runId: defaultRootArtifact.runId
+    })
+  } finally {
+    if (previousUserDataOverride === undefined) delete process.env.CAOGEN_USER_DATA
+    else process.env.CAOGEN_USER_DATA = previousUserDataOverride
+  }
+  check('installed-style Artifact handoff defaults to the active workflow user-data root')
 
   const localAcceptedDelivery = await commands.setWorkItemAcceptance(delivery.id, {
     status: 'passed',

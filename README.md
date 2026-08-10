@@ -39,7 +39,7 @@ CaoGen 面向需要完成真实任务的用户，把多模型、多项目、多�
 
 ## 当前进展
 
-截至 2026-07-31，PRD 64 个 P0 中 21 个已验证、43 个仍开放。最近一次 clean/public 快照把开放项分为 19 个部分完成、23 个立项目标和 1 个仅达到基础；较新的 dirty-worktree 结构投影为 30 个部分完成、12 个立项目标和 1 个仅达到基础。两者都不是版本完成率，也不构成发布绑定；已发布的 `v0.1.7` 是 macOS Intel 签名楔子版，不是 1.0 stable，正式跨平台 Release Gate 仍为 blocked。精确边界见 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md) 与 [STATUS.md](./STATUS.md)。
+截至 2026-08-07，当前结构投影为：PRD 64 个 P0 = 21 个已验证 + 30 个部分完成 + 12 个立项目标 + 1 个仅达到基础。它不是版本完成率，也不构成发布绑定；已发布的 `v0.1.7` 是 macOS Intel 签名楔子版，不是 1.0 stable，正式跨平台 Release Gate 仍为 blocked。精确边界见 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md) 与 [STATUS.md](./STATUS.md)。
 
 > **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
 

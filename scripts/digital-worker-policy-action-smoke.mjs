@@ -154,7 +154,8 @@ function exerciseCompositeCapabilityMatrix(contract) {
     ['gui_type', { text: 'touch escaped.txt' }],
     ['gui_scroll', { deltaY: 100 }],
     ['gui_hotkey', { keys: ['cmd', 's'] }],
-    ['mcp_call_tool', { transport: 'stdio', command: 'node', toolName: 'arbitrary', arguments: {} }]
+    ['mcp_call_tool', { transport: 'stdio', command: 'node', toolName: 'arbitrary', arguments: {} }],
+    ['mcp__demo__read_state', { scope: { project: 'alpha' } }]
   ]
   for (const [toolName, toolInput] of compositeCalls) {
     assertContractDecision(contract, onlyAmbient, toolName, toolInput, false, composite,
@@ -685,7 +686,7 @@ function assertProductionBoundaries() {
   const send = between(sessionManager, '  send(', '  async controlSupervisorRun(')
   assertOrder(send, 'digitalWorkerSendPolicyError(', 'this.taskRuns.set(',
     'DigitalWorker send guard runs before TaskRun mutation')
-  assertOrder(send, 'digitalWorkerSendPolicyError(', 'session.send(input)',
+  assertOrder(send, 'digitalWorkerSendPolicyError(', 'session.send({ ...payload',
     'DigitalWorker send guard runs before Provider dispatch')
   assert(send.includes('createSessionTaskRun(session.meta)'),
     'SessionManager creates each TaskRun from the complete immutable Session identity')

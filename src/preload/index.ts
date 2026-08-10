@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
   AgentDeskApi,
   AppSettings,
@@ -18,6 +18,7 @@ import type {
   PluginRegistryScanOptions,
   ProjectUpdate,
   ProjectMemoryDraftInput,
+  ProviderGenerationProbeInput,
   ProviderModelFetchInput,
   ProviderInput,
   ProviderProfileImportDecision,
@@ -34,6 +35,9 @@ import type {
 import { resolveTaskDagFinalization } from './task-dag-finalization'
 import { workflowLedgerApi } from './workflow-ledger'
 import { projectWorkspaceApi } from './project-workspace'
+import { projectTestApi } from './project-test'
+import { projectDebugApi } from './project-debug'
+import { projectRefactorApi } from './project-refactor'
 import { digitalWorkerApi } from './digital-worker'
 import { modelAttemptRecoveryApi } from './model-attempt-recovery'
 import { learningApi } from './learning'
@@ -67,6 +71,9 @@ const api: AgentDeskApi = {
   listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
   ...workflowLedgerApi,
   ...projectWorkspaceApi,
+  ...projectTestApi,
+  ...projectDebugApi,
+  ...projectRefactorApi,
   ...digitalWorkerApi,
   ...modelAttemptRecoveryApi,
   ...learningApi,
@@ -92,6 +99,8 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('taskSnapshots:delete', snapshotId),
   copyImageAttachment: (sessionId: string, sourcePath: string) =>
     ipcRenderer.invoke('attachments:copyImage', sessionId, sourcePath),
+  copyDocumentAttachment: (sessionId: string, sourcePath: string) =>
+    ipcRenderer.invoke('attachments:copyDocument', sessionId, sourcePath),
   saveImageAttachmentBytes: (sessionId: string, input: SaveImageAttachmentBytesInput) =>
     ipcRenderer.invoke('attachments:saveImageBytes', sessionId, input),
   ocrImageAttachment: (sessionId: string, imagePath: string) =>
@@ -120,27 +129,153 @@ const api: AgentDeskApi = {
   deleteHistory: (id: string) => ipcRenderer.invoke('history:delete', id),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),
+  listGuiAutomationGrants: () => ipcRenderer.invoke('permissions:gui-grants:list'),
+  revokeGuiAutomationGrant: (grantId) => ipcRenderer.invoke('permissions:gui-grants:revoke', grantId),
+  revokeAllGuiAutomationGrants: () => ipcRenderer.invoke('permissions:gui-grants:revoke-all'),
+  listToolCapabilityGrants: () => ipcRenderer.invoke('permissions:tool-grants:list'),
+  revokeToolCapabilityGrant: (grantId) => ipcRenderer.invoke('permissions:tool-grants:revoke', grantId),
+  revokeAllToolCapabilityGrants: () => ipcRenderer.invoke('permissions:tool-grants:revoke-all'),
+  queryProviderUsage: (query) => ipcRenderer.invoke('providers:usage', query ?? {}),
+  getProviderGatewayStatus: () => ipcRenderer.invoke('providers:gateway:status'),
+  updateProviderGateway: (input) => ipcRenderer.invoke('providers:gateway:update', input),
+  listProviderGatewayModels: () => ipcRenderer.invoke('providers:gateway:models'),
+  copyProviderGatewayToken: () => ipcRenderer.invoke('providers:gateway:copy-token'),
+  listProviderBillingStatements: (providerId) => ipcRenderer.invoke('providers:billing:list', providerId),
+  saveProviderBillingStatement: (input) => ipcRenderer.invoke('providers:billing:save', input),
+  removeProviderBillingStatement: (providerId, statementId) =>
+    ipcRenderer.invoke('providers:billing:remove', providerId, statementId),
+  reconcileProviderBilling: (providerId) => ipcRenderer.invoke('providers:billing:reconcile', providerId),
+  inspectProviderBillingQuery: (providerId) =>
+    ipcRenderer.invoke('providers:billing:capability', providerId),
+  syncProviderBillingStatement: (input) =>
+    ipcRenderer.invoke('providers:billing:sync', input),
+  startProviderAuthorization: (providerId, service) =>
+    ipcRenderer.invoke('providers:authorization:start', providerId, service),
+  startQuickProviderAuthorization: (service) =>
+    ipcRenderer.invoke('providers:authorization:quick-start', service),
+  pollQuickProviderAuthorization: (flowId) =>
+    ipcRenderer.invoke('providers:authorization:quick-poll', flowId),
+  pollProviderAuthorization: (providerId, flowId) =>
+    ipcRenderer.invoke('providers:authorization:poll', providerId, flowId),
+  listProviderAuthorizationAccounts: (providerId) =>
+    ipcRenderer.invoke('providers:authorization:accounts', providerId),
+  bindProviderAuthorizationAccount: (providerId, accountId, mutation) =>
+    ipcRenderer.invoke('providers:authorization:bind', providerId, accountId, mutation),
+  refreshProviderAuthorization: (providerId) =>
+    ipcRenderer.invoke('providers:authorization:refresh', providerId),
+  revokeProviderAuthorization: (providerId, accountId) =>
+    ipcRenderer.invoke('providers:authorization:revoke', providerId, accountId),
+  queryProviderAuthorizationQuota: (providerId, accountId) =>
+    ipcRenderer.invoke('providers:authorization:quota', providerId, accountId),
+  inspectProviderBalance: (providerId) =>
+    ipcRenderer.invoke('providers:balance:capability', providerId),
+  queryProviderBalance: (providerId) =>
+    ipcRenderer.invoke('providers:balance:query', providerId),
   listNotificationConnectors: () => ipcRenderer.invoke('notificationConnectors:list'),
   createNotificationConnector: (input: NotificationConnectorInput) =>
     ipcRenderer.invoke('notificationConnectors:create', input),
   deleteNotificationConnector: (id: string) => ipcRenderer.invoke('notificationConnectors:delete', id),
   setDefaultNotificationConnector: (id: string) => ipcRenderer.invoke('notificationConnectors:setDefault', id),
   listProviders: () => ipcRenderer.invoke('providers:list'),
-  activateLocalCompute: () => ipcRenderer.invoke('providers:activateLocalCompute'),
+  activateLocalCompute: (options) => ipcRenderer.invoke('providers:activateLocalCompute', options),
   createProvider: (provider: ProviderInput) => ipcRenderer.invoke('providers:create', provider),
   updateProvider: (id: string, patch: Partial<ProviderInput>) =>
     ipcRenderer.invoke('providers:update', id, patch),
   deleteProvider: (id: string) => ipcRenderer.invoke('providers:delete', id),
   fetchProviderModels: (opts: ProviderModelFetchInput) =>
     ipcRenderer.invoke('providers:fetchModels', opts),
+  probeProviderGeneration: (opts: ProviderGenerationProbeInput) =>
+    ipcRenderer.invoke('providers:probeGeneration', opts),
+  fetchProviderPricingCatalog: (models: string[]) =>
+    ipcRenderer.invoke('providers:fetchPricingCatalog', models),
   listProviderHealth: () => invokeMain('providers:health'),
   exportProviderProfile: () => invokeMain('appFeatures:invoke', 'provider-profile', 'export'),
   previewProviderProfileImport: () => invokeMain('appFeatures:invoke', 'provider-profile', 'preview'),
   applyProviderProfileImport: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
     invokeMain('appFeatures:invoke', 'provider-profile', 'apply', previewId, decisions),
   listProviderProfileBackups: () => invokeMain('appFeatures:invoke', 'provider-profile', 'backups'),
+  previewProviderProfileBackup: (backupId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'backup-preview', backupId),
+  applyProviderProfileBackupPreview: (previewId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'backup-apply', previewId),
   rollbackProviderProfileBackup: (backupId: string) =>
     invokeMain('appFeatures:invoke', 'provider-profile', 'rollback', backupId),
+  getProviderProfileSyncStatus: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'status'),
+  chooseProviderProfileSyncDirectory: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'choose-directory'),
+  disconnectProviderProfileSync: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'disconnect'),
+  previewProviderProfileSync: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'preview'),
+  publishProviderProfileSync: (previewId: string, allowDiverged: boolean) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'publish', previewId, allowDiverged),
+  applyProviderProfileSync: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'apply', previewId, decisions),
+  getProviderProfileWebDavConfig: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-config'),
+  saveProviderProfileWebDavConfig: (input) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-save', input),
+  removeProviderProfileWebDavConfig: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-remove'),
+  testProviderProfileWebDavConnection: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-test'),
+  previewProviderProfileWebDavSync: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-preview'),
+  publishProviderProfileWebDavSync: (previewId: string, allowDiverged: boolean) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-publish', previewId, allowDiverged),
+  applyProviderProfileWebDavSync: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-apply', previewId, decisions),
+  listProviderProfileWebDavHistory: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-history-list'),
+  previewProviderProfileWebDavHistory: (revisionId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-history-preview', revisionId),
+  applyProviderProfileWebDavHistory: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 'webdav-history-apply', previewId, decisions),
+  getProviderProfileS3Config: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-config'),
+  saveProviderProfileS3Config: (input) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-save', input),
+  removeProviderProfileS3Config: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-remove'),
+  testProviderProfileS3Connection: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-test'),
+  previewProviderProfileS3Sync: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-preview'),
+  publishProviderProfileS3Sync: (previewId: string, allowDiverged: boolean) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-publish', previewId, allowDiverged),
+  applyProviderProfileS3Sync: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-apply', previewId, decisions),
+  listProviderProfileS3History: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-history-list'),
+  previewProviderProfileS3History: (revisionId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-history-preview', revisionId),
+  applyProviderProfileS3History: (previewId: string, decisions: ProviderProfileImportDecision[]) =>
+    invokeMain('appFeatures:invoke', 'provider-profile-sync', 's3-history-apply', previewId, decisions),
+  previewCodexNativeProviderImport: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-codex-preview'),
+  applyCodexNativeProviderImport: (previewId, action) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-codex-apply', previewId, action),
+  listProviderNativeImportBackups: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-backups'),
+  rollbackProviderNativeImportBackup: (backupId) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-rollback', backupId),
+  previewCcSwitchProviderImport: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'cc-switch-preview'),
+  applyCcSwitchProviderImport: (previewId, decisions) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'cc-switch-apply', previewId, decisions),
+  listCcSwitchProviderImportBackups: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'cc-switch-backups'),
+  rollbackCcSwitchProviderImportBackup: (backupId) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'cc-switch-rollback', backupId),
+  previewCodexNativeConfig: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-config-preview'),
+  applyCodexNativeConfig: (previewId, editedText) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-config-apply', previewId, editedText),
+  listCodexNativeConfigBackups: () =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-config-backups'),
+  rollbackCodexNativeConfigBackup: (backupId) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'native-config-rollback', backupId),
   listEngines: () => ipcRenderer.invoke('engines:list'),
   scanPluginRegistry: (sessionId?: string, options?: PluginRegistryScanOptions) =>
     ipcRenderer.invoke('plugins:scan', sessionId, options),
@@ -190,6 +325,14 @@ const api: AgentDeskApi = {
   removeWorktree: (sessionId: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
     ipcRenderer.invoke('worktrees:remove', sessionId, opts),
   listProjectFiles: (sessionId: string) => ipcRenderer.invoke('files:list', sessionId),
+  searchProjectText: (sessionId: string, query: string) => ipcRenderer.invoke('files:search', sessionId, query),
+  listProjectDiagnostics: (sessionId: string) => ipcRenderer.invoke('files:diagnostics', sessionId),
+  searchProjectSymbols: (sessionId: string, query: string, limit?: number) => ipcRenderer.invoke('files:symbols', sessionId, query, limit),
+  resolveProjectDefinition: (sessionId: string, path: string, symbol: string) => ipcRenderer.invoke('files:definition', sessionId, path, symbol),
+  getTypeScriptCompletions: (sessionId, input) => ipcRenderer.invoke('files:typescriptCompletions', sessionId, input),
+  getTypeScriptHover: (sessionId, input) => ipcRenderer.invoke('files:typescriptHover', sessionId, input),
+  getTypeScriptDefinitions: (sessionId, input) => ipcRenderer.invoke('files:typescriptDefinitions', sessionId, input),
+  getTypeScriptDiagnostics: (sessionId, input) => ipcRenderer.invoke('files:typescriptDiagnostics', sessionId, input),
   readTextFile: (sessionId: string, path: string) => ipcRenderer.invoke('files:read', sessionId, path),
   writeTextFile: (sessionId: string, path: string, content: string) =>
     ipcRenderer.invoke('files:write', sessionId, path, content),
@@ -290,6 +433,7 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('memory:layeredUpdate', entryId, input),
   deleteLayeredMemory: (entryId: string) => ipcRenderer.invoke('memory:layeredDelete', entryId),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
   quickbarGetState: () => ipcRenderer.invoke('quickbar:getState'),
   quickbarSetVisible: (visible: boolean) => ipcRenderer.invoke('quickbar:setVisible', visible),
   quickbarGetWindowContext: (cwd?: string, sourceId?: string) =>

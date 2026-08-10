@@ -21,6 +21,7 @@ import {
   withSafeMergeGitConfig
 } from './safe-git'
 import type { FileSystemIdentity } from '../../shared/types'
+import { hasMeaningfulWorktreeChanges } from './git-worktree-state'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_BUFFER = 16 * 1024 * 1024
@@ -844,9 +845,8 @@ function safeMergeWorktreeState(
   })
   const worktree = runBoundGit(
     repoRoot,
-    ['diff-files', '--quiet', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty', '--'],
-    env,
-    { allowExitCodes: [0, 1] }
+    ['status', '--porcelain=v2', '--untracked-files=all', '--ignore-submodules=dirty', '--'],
+    env
   )
   const untracked = runBoundGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.'], env)
   const unmerged = runBoundGit(repoRoot, ['ls-files', '--unmerged', '-z'], env)
@@ -857,8 +857,8 @@ function safeMergeWorktreeState(
   const hiddenIndexPaths = indexVisibilityFlagPaths(hiddenIndex.stdout)
   const reasons: string[] = []
   if (staged.status === 1) reasons.push('staged changes')
-  if (worktree.status === 1) reasons.push('worktree changes')
-  if (untracked.stdout.length > 0) reasons.push('untracked files')
+  if (hasMeaningfulWorktreeChanges(worktree.stdout)) reasons.push('worktree changes')
+  if (!worktree.ok || !untracked.ok) return failure('无法确认 merge 前工作区状态', repoRoot, worktree.error || untracked.error)
   if (unmerged.stdout.length > 0) reasons.push('unmerged index entries')
   if (hiddenIndexPaths.length > 0) {
     reasons.push(`assume-unchanged paths: ${hiddenIndexPaths.slice(0, 8).join(', ')}`)

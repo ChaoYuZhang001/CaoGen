@@ -1,0 +1,42 @@
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import { readComposerDraft, writeComposerDraft } from '../../store/composer-draft-persistence'
+
+interface SessionDraftState {
+  sessionId: string | null
+  text: string
+}
+
+export function useSessionComposerDraft(sessionId: string | null): [string, Dispatch<SetStateAction<string>>] {
+  const storage = browserStorage()
+  const [draft, setDraft] = useState<SessionDraftState>(() => ({
+    sessionId,
+    text: readComposerDraft(storage, sessionId)
+  }))
+  const text = draft.sessionId === sessionId ? draft.text : readComposerDraft(storage, sessionId)
+
+  useEffect(() => {
+    if (draft.sessionId === sessionId) return
+    setDraft({ sessionId, text: readComposerDraft(storage, sessionId) })
+  }, [draft.sessionId, sessionId, storage])
+
+  const setText = useCallback<Dispatch<SetStateAction<string>>>((action) => {
+    setDraft((current) => {
+      const base = current.sessionId === sessionId
+        ? current.text
+        : readComposerDraft(storage, sessionId)
+      const next = typeof action === 'function' ? action(base) : action
+      writeComposerDraft(storage, sessionId, next)
+      return { sessionId, text: next }
+    })
+  }, [sessionId, storage])
+
+  return [text, setText]
+}
+
+function browserStorage(): Storage | undefined {
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
+}

@@ -145,6 +145,62 @@ try {
   assert(!forkEntries.some((entry) => entry.event.kind === 'meta'), 'fork must not inherit parent Session identity')
   assertEqual(forkWriter.nextEntry({ kind: 'status', status: 'starting' }).seq, 6)
 
+  const checkpointSource = new TranscriptWriter()
+  checkpointSource.next({ kind: 'init', sdkSessionId: 'sdk-checkpoint-fork-parent' })
+  checkpointSource.next(user('fork-turn-1', 'first retained turn'))
+  checkpointSource.next(checkpoint('fork-cp-1', 'fork-turn-1'))
+  checkpointSource.next(assistant('first retained answer'))
+  checkpointSource.next({
+    kind: 'permission-request',
+    request: {
+      requestId: 'fork-permission',
+      toolName: 'fixture-tool',
+      input: {},
+      capabilities: []
+    }
+  })
+  checkpointSource.next({
+    kind: 'permission-resolved',
+    requestId: 'fork-permission',
+    behavior: 'allow'
+  })
+  checkpointSource.next(user('fork-turn-2', 'replace this turn'))
+  checkpointSource.next(checkpoint('fork-cp-2', 'fork-turn-2'))
+  checkpointSource.next(assistant('must not be inherited'))
+  const checkpointSourceFile = path.join(userData, 'transcripts', 'sdk-checkpoint-fork-parent.jsonl')
+  const checkpointSourceBytes = readFileSync(checkpointSourceFile)
+  const checkpointFork = new TranscriptWriter()
+  checkpointFork.seedFrom('sdk-checkpoint-fork-parent', 'fork-cp-2')
+  const checkpointForkEntries = checkpointFork.readAll()
+  assertEqual(
+    checkpointForkEntries.map((entry) => entry.event.kind).join(','),
+    'user-message,checkpoint,assistant-message'
+  )
+  assertEqual(
+    checkpointForkEntries.filter((entry) => entry.event.kind === 'user-message').map((entry) => entry.event.text).join(','),
+    'first retained turn'
+  )
+  assert(
+    !checkpointForkEntries.some((entry) => entry.event.kind.startsWith('permission-')),
+    'checkpoint fork must not inherit permission state'
+  )
+  assertEqual(checkpointFork.nextEntry({ kind: 'status', status: 'starting' }).seq, 5)
+  assert(
+    checkpointSourceBytes.equals(readFileSync(checkpointSourceFile)),
+    'checkpoint fork must leave the source JSONL byte-for-byte unchanged'
+  )
+  let missingCheckpointError
+  try {
+    new TranscriptWriter().seedFrom('sdk-checkpoint-fork-parent', 'missing-checkpoint')
+  } catch (error) {
+    missingCheckpointError = error
+  }
+  assert(
+    missingCheckpointError instanceof Error
+      && /找不到对应 checkpoint|找不到分叉 checkpoint/.test(missingCheckpointError.message),
+    'unknown checkpoint must fail closed'
+  )
+
   const tornSessionId = 'sdk-torn-tail-repair'
   const tornWriter = new TranscriptWriter()
   tornWriter.next({ kind: 'init', sdkSessionId: tornSessionId })

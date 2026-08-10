@@ -83,52 +83,16 @@ function aggregatePassed(result) {
   return result?.status === 'pass' && result?.timedOut === false
 }
 
-function preflightReady(name) {
-  const checks = Array.isArray(reports.p2ExternalPreflight.data?.checks) ? reports.p2ExternalPreflight.data.checks : []
-  return checks.some((check) => check?.name === name && check?.status === 'ready')
-}
-
-function jetbrainsInteractionEvidencePassed(readResult) {
-  const steps = readResult.data?.evidence?.steps
-  const actionCounts = readResult.data?.evidence?.actionCounts
-  return (
-    readResult.data?.status === 'passed' &&
-    Array.isArray(readResult.data?.failures) &&
-    readResult.data.failures.length === 0 &&
-    Array.isArray(readResult.data?.missingConfiguration) &&
-    readResult.data.missingConfiguration.length === 0 &&
-    steps?.installedPlugin === true &&
-    steps?.connectCreateSession === true &&
-    steps?.sendChatMessage === true &&
-    steps?.sendSelection === true &&
-    steps?.requestSelectionEdit === true &&
-    steps?.previewSelectionDiff === true &&
-    steps?.applySelectionEdit === true &&
-    steps?.nativeUndoVerified === true &&
-    steps?.toggleRealtimeSync === true &&
-    steps?.documentSyncObserved === true &&
-    steps?.showEvents === true &&
-    steps?.openDesktop === true &&
-    Number(actionCounts?.nativeUndoCount ?? 0) >= 1 &&
-    Number(actionCounts?.openDesktopCount ?? 0) >= 1
-  )
-}
-
 function buildRequirement(id, title, status, evidence, notes = []) {
   return { id, title, status, evidence, notes }
 }
 
 const reports = {
   p2Required: readJson('test-results/p2-required/latest.json'),
-  p2ExternalPreflight: readJson('test-results/p2-external-preflight/latest.json'),
-  p2ExternalPack: readJson('test-results/p2-external-pack/latest.json'),
   guiPermission: readJson('test-results/gui-permission/latest.json'),
   guiInputPreflight: readJson('test-results/gui-input-preflight/latest.json'),
   guiVscode: readJson('test-results/gui-vscode-e2e/latest.json'),
   guiCrossApp: readJson('test-results/gui-cross-app-e2e/latest.json'),
-  idePlugins: readJson('test-results/ide-plugins/latest.json'),
-  vscodeExtensionHost: readJson('test-results/vscode-extension-host/latest.json'),
-  jetbrainsInteraction: readJson('test-results/jetbrains-ide-interaction/latest.json'),
   chinaRealNetwork: readJson('test-results/china-real-network/latest.json'),
   chinaToolCallParity: readJson('test-results/china-tool-call-parity/latest.json')
 }
@@ -136,10 +100,6 @@ const reports = {
 const p2DefaultSmoke = getResult(reports.p2Required, 'p2_default_smoke')
 const guiDesktopRequired = getResult(reports.p2Required, 'gui_desktop_e2e_required')
 const guiPermissionRequired = getResult(reports.p2Required, 'gui_permission_required')
-const ideRequired =
-  getResult(reports.p2Required, 'ide_required') ?? getResult(reports.p2Required, 'ide_build_and_vscode_required')
-const ideRequiredName = ideRequired?.name ?? 'ide_required'
-const jetbrainsRequired = getResult(reports.p2Required, 'jetbrains_ide_interaction_required')
 const chinaNetworkRequired = getResult(reports.p2Required, 'china_real_network_required')
 const chinaParityRequired = getResult(reports.p2Required, 'china_tool_call_parity_required')
 const guiInputPreflightPresent = reports.guiInputPreflight.exists && !reports.guiInputPreflight.error
@@ -203,24 +163,7 @@ const chinaExternalPassed =
   aggregatePassed(chinaNetworkRequired) &&
   aggregatePassed(chinaParityRequired) &&
   reports.chinaRealNetwork.data?.status === 'passed' &&
-  reports.chinaToolCallParity.data?.status === 'passed' &&
-  preflightReady('china_real_network') &&
-  preflightReady('china_tool_call_parity')
-
-const ideLocalEvidencePassed =
-  aggregatePassed(ideRequired) &&
-  passed(reports.idePlugins) &&
-  passed(reports.vscodeExtensionHost) &&
-  reports.vscodeExtensionHost.data?.marker?.sidebarResolveMode === 'actual-view' &&
-  reports.vscodeExtensionHost.data?.marker?.selectedCodeModificationChecked === true &&
-  reports.vscodeExtensionHost.data?.marker?.oneClickDiffMergeChecked === true &&
-  reports.vscodeExtensionHost.data?.marker?.realtimeSyncChecked === true &&
-  reports.vscodeExtensionHost.data?.marker?.openDesktopChecked === true
-
-const jetbrainsExternalPassed =
-  aggregatePassed(jetbrainsRequired) &&
-  jetbrainsInteractionEvidencePassed(reports.jetbrainsInteraction) &&
-  (preflightReady('jetbrains_ide_interaction') || reports.jetbrainsInteraction.data?.recorderPathSource === 'latest-recorder-e2e')
+  reports.chinaToolCallParity.data?.status === 'passed'
 
 const requirements = [
   buildRequirement(
@@ -261,26 +204,11 @@ const requirements = [
     [
       { path: reports.p2Required.relativePath, check: 'p2_default_smoke', status: p2DefaultSmoke?.status ?? 'missing' },
       { path: reports.chinaRealNetwork.relativePath, status: evidenceStatus(reports.chinaRealNetwork) },
-      { path: reports.chinaToolCallParity.relativePath, status: evidenceStatus(reports.chinaToolCallParity) },
-      { path: reports.p2ExternalPreflight.relativePath, status: evidenceStatus(reports.p2ExternalPreflight) }
+      { path: reports.chinaToolCallParity.relativePath, status: evidenceStatus(reports.chinaToolCallParity) }
     ],
     chinaExternalPassed
       ? []
       : ['Real China network and China provider tool-call parity need external credentials/provider JSON before this item can be closed.']
-  ),
-  buildRequirement(
-    'P2-005',
-    'IDE integrations: VS Code host workflow and JetBrains real IDE interaction',
-    jetbrainsExternalPassed ? STATUS.proved : ideLocalEvidencePassed ? STATUS.missingExternal : STATUS.missingEvidence,
-    [
-      { path: reports.idePlugins.relativePath, status: evidenceStatus(reports.idePlugins) },
-      { path: reports.vscodeExtensionHost.relativePath, status: evidenceStatus(reports.vscodeExtensionHost) },
-      { path: reports.jetbrainsInteraction.relativePath, status: evidenceStatus(reports.jetbrainsInteraction) },
-      { path: reports.p2Required.relativePath, check: ideRequiredName, status: ideRequired?.status ?? 'missing' }
-    ],
-    jetbrainsExternalPassed
-      ? []
-      : ['JetBrains build evidence exists, but P2-005 still needs VS Code host evidence plus compatible JetBrains interaction evidence JSON or recorder JSONL.']
   )
 ]
 

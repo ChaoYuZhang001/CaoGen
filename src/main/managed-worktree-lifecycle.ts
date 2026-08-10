@@ -705,7 +705,7 @@ function repoRootFor(cwd: string): string | null {
   if (!cwd) return null
   try {
     if (git(cwd, ['rev-parse', '--is-inside-work-tree']) !== 'true') return null
-    return git(cwd, ['rev-parse', '--show-toplevel'])
+    return realpathSync(resolve(git(cwd, ['rev-parse', '--show-toplevel'])))
   } catch {
     return null
   }

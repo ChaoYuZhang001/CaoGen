@@ -101,15 +101,51 @@ function loadOfficeModel() {
   }).outputText
   const module = { exports: {} }
   const localRequire = (specifier) => {
+    if (specifier.endsWith('/workflow-repair')) return loadWorkflowRepairModel()
     throw new Error(`unexpected runtime require from office model: ${specifier}`)
   }
   new Function('require', 'module', 'exports', output)(localRequire, module, module.exports)
   return module.exports
 }
 
-function session({ status = 'idle', pendingPermissions = [], items = [], runningTools = {}, toolResults = {} } = {}) {
+function loadWorkflowRepairModel() {
+  const input = source('src/shared/workflow-repair.ts')
+  const output = ts.transpileModule(input, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true
+    }
+  }).outputText
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', output)(
+    (specifier) => { throw new Error(`unexpected runtime require from workflow repair model: ${specifier}`) },
+    module,
+    module.exports
+  )
+  return module.exports
+}
+
+function loadWatercolorCharacterModel() {
+  const input = source('src/shared/watercolor-character.ts')
+  const output = ts.transpileModule(input, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true
+    }
+  }).outputText
+  const module = { exports: {} }
+  const localRequire = (specifier) => {
+    throw new Error(`unexpected runtime require from watercolor character model: ${specifier}`)
+  }
+  new Function('require', 'module', 'exports', output)(localRequire, module, module.exports)
+  return module.exports
+}
+
+function session({ status = 'idle', pendingPermissions = [], items = [], runningTools = {}, toolResults = {}, workItemId } = {}) {
   return {
-    meta: { id: `s-${Math.random()}`, status, title: 'Session', costUsd: 0 },
+    meta: { id: `s-${Math.random()}`, status, title: 'Session', costUsd: 0, ...(workItemId ? { workItemId } : {}) },
     items,
     streamText: '',
     streamThinking: '',
@@ -122,6 +158,7 @@ function session({ status = 'idle', pendingPermissions = [], items = [], running
 }
 
 const officeModel = loadOfficeModel()
+const watercolorCharacterModel = loadWatercolorCharacterModel()
 
 check('officeActivityOf covers idle/running/waiting approval/completed/failed', () => {
   const cases = [
@@ -138,6 +175,111 @@ check('officeActivityOf covers idle/running/waiting approval/completed/failed', 
   }
 })
 
+check('watercolor character state uses only real session execution signals', () => {
+  const cases = [
+    ['idle', session(), 'idle'],
+    ['thinking', session({ status: 'running' }), 'thinking'],
+    ['tool running', session({ status: 'running', runningTools: { tool_1: true } }), 'tool-running'],
+    ['canonical repair', session({ status: 'running', workItemId: `workflow-repair:${'a'.repeat(64)}` }), 'repairing'],
+    ['repair lookalike', session({ status: 'running', workItemId: 'workflow-repair:not-a-digest' }), 'thinking'],
+    [
+      'awaiting approval',
+      session({ pendingPermissions: [{ requestId: 'approval-1', toolName: 'bash', input: {}, toolUseId: 'tool-1' }] }),
+      'awaiting-approval'
+    ],
+    ['blocked meta', session({ status: 'error' }), 'blocked'],
+    [
+      'blocked repair',
+      session({ status: 'error', workItemId: `workflow-repair:${'b'.repeat(64)}` }),
+      'blocked'
+    ],
+    ['blocked turn', session({ items: [{ id: 'turn-error', kind: 'turn-result', subtype: 'error', isError: true }] }), 'blocked'],
+    ['delivering', session({ items: [{ id: 'turn-ok', kind: 'turn-result', subtype: 'success', isError: false }] }), 'delivering']
+  ]
+  for (const [label, value, expected] of cases) {
+    const actual = officeModel.officeWatercolorStateOf(value)
+    assert(actual === expected, `${label}: expected ${expected}, got ${actual}`)
+  }
+  assert(
+    watercolorCharacterModel.WATERCOLOR_CHARACTER_STATES.join(',') ===
+      'idle,thinking,tool-running,awaiting-approval,blocked,repairing,delivering',
+    'the runtime contract must retain all seven approved visual states'
+  )
+})
+
+check('watercolor role identity prefers explicit worker data and stays deterministic', () => {
+  const explicit = watercolorCharacterModel.resolveWatercolorRole(
+    { id: 'worker-explicit', avatarProfile: { watercolorRole: 'designer' } },
+    { name: 'Developer', purpose: 'coding' }
+  )
+  assert(explicit.role === 'designer' && explicit.source === 'avatar-profile', `explicit role lost: ${JSON.stringify(explicit)}`)
+
+  const semantic = watercolorCharacterModel.resolveWatercolorRole(
+    { id: 'worker-semantic', avatarProfile: {} },
+    { name: '发布审查', purpose: '质量测试与验收' }
+  )
+  assert(semantic.role === 'review-test' && semantic.source === 'role-template', `semantic role lost: ${JSON.stringify(semantic)}`)
+
+  const fallbackA = watercolorCharacterModel.resolveWatercolorRole({ id: 'worker-stable', avatarProfile: {} })
+  const fallbackB = watercolorCharacterModel.resolveWatercolorRole({ id: 'worker-stable', avatarProfile: {} })
+  assert(fallbackA.role === fallbackB.role, 'fallback role must remain stable for the same DigitalWorker id')
+  assert(fallbackA.source === 'stable-fallback', `fallback source missing: ${JSON.stringify(fallbackA)}`)
+  assert(
+    watercolorCharacterModel.watercolorCharacterAssetFilename('review-test', 'awaiting-approval') ===
+      'role-review-test-state-awaiting-approval-v01.png',
+    'asset filename must match the frozen production naming convention'
+  )
+})
+
+check('digital worker studio persists and exposes the provider-neutral watercolor identity', () => {
+  const forms = source('src/renderer/src/components/studio/DigitalWorkerForms.tsx')
+  const cards = source('src/renderer/src/components/studio/DigitalWorkerCards.tsx')
+  const model = source('src/renderer/src/components/studio/digital-worker-studio-model.ts')
+  assert(forms.includes('水墨岗位形象'), 'recruitment form must expose the seven-role watercolor identity selector')
+  assert(
+    forms.includes('avatarProfile: { watercolorRole: values.watercolorRole }'),
+    'recruitment must persist watercolor identity in DigitalWorker.avatarProfile'
+  )
+  assert(cards.includes('data-watercolor-role={watercolorRole.role}'), 'worker cards must expose the resolved role')
+  assert(cards.includes('data-watercolor-role-source={watercolorRole.source}'), 'worker cards must expose identity provenance')
+  assert(model.includes('resolveWatercolorRole(worker, role)'), 'Studio must use the shared resolver instead of provider/model data')
+})
+
+check('watercolor Office runtime is alpha-gated and falls back without verified assets', () => {
+  const assets = source('src/renderer/src/components/office/watercolor-character-assets.ts')
+  const rig = source('src/renderer/src/components/office/kit/WatercolorCharacterRig.tsx')
+  const workstation = source('src/renderer/src/components/office/kit/WorkstationPro.tsx')
+  const view = source('src/renderer/src/components/office/OfficeView.tsx')
+  assert(
+    assets.includes('VERIFIED_WATERCOLOR_CHARACTER_FILES') &&
+      assets.includes('VERIFIED_FILE_SET.has(filename)'),
+    'runtime must require an explicit post-QC asset registration'
+  )
+  assert(
+    assets.includes("../../assets/watercolor-characters/*.png") &&
+      !assets.includes('output/imagegen/caogen-watercolor-v1'),
+    'runtime assets must come from the transparent renderer directory, never opaque production masters'
+  )
+  assert(
+    rig.includes('<sprite') && rig.includes('transparent') && rig.includes('alphaTest={0.045}') &&
+      rig.includes('depthWrite={false}') && rig.includes("prefers-reduced-motion: reduce"),
+    'watercolor rig must render an unframed alpha sprite and honor reduced motion'
+  )
+  assert(
+    workstation.includes('hasWatercolorCharacterAsset') &&
+      workstation.includes('watercolorOperator ?') &&
+      workstation.includes('<ProgressiveAvatarRig'),
+    'workstations must keep the robot fallback until a role/state asset passes the gate'
+  )
+  assert(
+    view.includes('listDigitalWorkers({ includeRetired: true })') &&
+      view.includes('listDigitalWorkerRoleTemplates()') &&
+      view.includes('resolveWatercolorRole(worker, roleById.get(worker.roleTemplateId)).role') &&
+      view.includes('watercolorState={officeModel.sessions[id]?.characterState}'),
+    'Office must resolve provider-neutral DigitalWorker identity and pass the real runtime state'
+  )
+})
+
 check('buildOfficeModel maps three sessions to three workstations', () => {
   const sessions = {
     a: session(),
@@ -147,6 +289,8 @@ check('buildOfficeModel maps three sessions to three workstations', () => {
   const model = officeModel.buildOfficeModel(['a', 'b', 'c'], sessions)
   assert(Object.keys(model.sessions).length === 3, `expected 3 sessions, got ${Object.keys(model.sessions).length}`)
   assert(model.sessions.c.currentTask?.status === 'awaiting', `approval task not surfaced: ${JSON.stringify(model.sessions.c)}`)
+  assert(model.sessions.b.characterState === 'thinking', `running session character state missing: ${JSON.stringify(model.sessions.b)}`)
+  assert(model.sessions.c.characterState === 'awaiting-approval', `approval character state missing: ${JSON.stringify(model.sessions.c)}`)
   return `sessions=${Object.keys(model.sessions).length}`
 })
 
@@ -413,7 +557,10 @@ check('clicking a workstation selects in office and double-click opens the sessi
   const text = source('src/renderer/src/components/office/OfficeView.tsx')
   assert(text.includes('selectSession(id)'), 'focus() must call selectSession(id)')
   assert(text.includes("setView('list')"), 'focus() must return to list view after selecting')
-  assert(text.includes('onSelect={() => selectOfficeSession(id)}'), 'WorkstationPro single-click must select inside office')
+  assert(
+    text.includes("onSelect={() => selectOfficeSession(id, 'workstation')}"),
+    'WorkstationPro single-click must select inside office and preserve its interaction source'
+  )
   assert(text.includes('onOpen={() => focus(id)}'), 'WorkstationPro double-click must open the matching session')
 })
 

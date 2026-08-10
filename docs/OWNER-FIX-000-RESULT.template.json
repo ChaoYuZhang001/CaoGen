@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "gateId": "fix_000_owner_retest",
+  "artifact": {
+    "size": 229172133,
+    "sha256": "938bc5c13ead77cb4dc592cbfa66ad3a4e93c44dbca7758c48f820815d4619c2",
+    "artifactSetSha256": "898e778c976e1f2552854b244b4197b2b5d68123785718bf967acd4d0722bb13"
+  },
+  "environment": {
+    "platform": "windows-x64",
+    "cleanPreflightPassed": false,
+    "portableSmokePassed": false,
+    "portableSmokeRecordSha256": "",
+    "interactiveDesktop": false,
+    "existingInstallCount": 0
+  },
+  "startedAt": "",
+  "finishedAt": "",
+  "result": "not_run",
+  "steps": [
+    { "id": "artifact_preflight", "status": "not_run" },
+    { "id": "install", "status": "not_run" },
+    { "id": "first_launch", "status": "not_run" },
+    { "id": "provider", "status": "not_run" },
+    { "id": "project", "status": "not_run" },
+    { "id": "read_only_task", "status": "not_run" },
+    { "id": "studio_recruitment", "status": "not_run" },
+    { "id": "task_status", "status": "not_run" },
+    { "id": "office_artifact", "status": "not_run" },
+    { "id": "restart", "status": "not_run" },
+    { "id": "uninstall_cancel", "status": "not_run" },
+    { "id": "uninstall_confirm", "status": "not_run" }
+  ],
+  "assertions": {
+    "firstLaunchUsable": false,
+    "firstLaunchTimeMs": null,
+    "providerEncryptedAtRest": false,
+    "readOnlyGitUnchanged": false,
+    "officeArtifactExists": false,
+    "officeArtifactNonEmpty": false,
+    "officeArtifactSha256": "",
+    "restartUsable": false,
+    "restartLanguageStable": false,
+    "restartTimeMs": null,
+    "uninstallPromptCountOnCancelRun": 0,
+    "uninstallDefaultChoice": "unknown",
+    "cancelLeavesAppLaunchable": false,
+    "confirmedInstallDirAbsent": false,
+    "confirmedRegistryAbsent": false,
+    "userDataPreserved": false
+  },
+  "privacy": {
+    "redactionReviewCompleted": false,
+    "noApiKeyRecorded": false,
+    "noProviderUrlRecorded": false,
+    "noProjectPathPublished": false,
+    "noOfficePathPublished": false
+  },
+  "evidenceFiles": [
+    { "role": "artifact_preflight", "path": "" },
+    { "role": "install", "path": "" },
+    { "role": "first_launch", "path": "" },
+    { "role": "provider", "path": "" },
+    { "role": "project", "path": "" },
+    { "role": "read_only_task", "path": "" },
+    { "role": "studio_recruitment", "path": "" },
+    { "role": "task_status", "path": "" },
+    { "role": "office_artifact", "path": "" },
+    { "role": "restart", "path": "" },
+    { "role": "uninstall_cancel", "path": "" },
+    { "role": "uninstall_confirm", "path": "" }
+  ],
+  "findings": []
+}

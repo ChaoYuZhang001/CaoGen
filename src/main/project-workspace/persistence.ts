@@ -146,6 +146,21 @@ async function removeStaleLock(lockPath: string): Promise<void> {
   }
 }
 
+async function isLockContention(error: unknown, lockPath: string): Promise<boolean> {
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (code === 'EEXIST') return true
+  if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EACCES')) return false
+
+  try {
+    await stat(lockPath)
+    return true
+  } catch {
+    // Windows can deny both exclusive create and stat while another handle is
+    // closing or deleting the lock. Keep that transient inside the bounded loop.
+    return true
+  }
+}
+
 async function acquireLock(filePath: string): Promise<{ path: string; handle: FileHandle; owner: string }> {
   const lockPath = `${filePath}${LOCK_FILE_SUFFIX}`
   await mkdir(dirname(filePath), { recursive: true })
@@ -158,7 +173,7 @@ async function acquireLock(filePath: string): Promise<{ path: string; handle: Fi
       await handle.sync()
       return { path: lockPath, handle, owner }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error
+      if (!(await isLockContention(error, lockPath))) throw error
       await removeStaleLock(lockPath)
       await sleep(LOCK_WAIT_MS)
     }

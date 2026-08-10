@@ -97,16 +97,22 @@ async function createMemoryDraft(lifecycle, token, logicalId, extra = {}) {
 async function captureOpenAISendPayload(OpenAIEngine, protocol) {
   const engine = Object.create(OpenAIEngine.prototype)
   engine.meta = sessionMeta(`openai-${protocol}-memory-smoke`, 'openai')
+  engine.chatHistory = []
   engine.turnStartedAt = Date.now()
+  engine.triedProviders = new Set()
   engine.triedProviderKeys = new Set()
   engine.authConfig = () => ({
+    available: true,
+    authMode: 'api_key',
     baseUrl: 'https://required-smoke.invalid',
     token: 'synthetic-required-smoke-token',
     headers: {}
   })
   engine.protocol = () => protocol
   engine.effectiveModel = () => 'required-smoke-model'
-  engine.finishTurn = () => undefined
+  engine.finishTurn = (isError, message) => {
+    if (isError) throw new Error(String(message || 'OpenAI send boundary failed'))
+  }
 
   let captured
   engine.runChatCompletion = async (payload) => {

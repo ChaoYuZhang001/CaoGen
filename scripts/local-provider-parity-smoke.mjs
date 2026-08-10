@@ -19,7 +19,13 @@ try {
   const router = await import(pathToFileURL(findCompiled(buildDir, 'model-router.js')).href)
   const sessionRouting = await import(pathToFileURL(findCompiled(buildDir, 'session-routing.js')).href)
   stats.configureModelStatsDir(path.join(dataDir, 'model-stats'))
-  health.configureProviderHealthDir(path.join(dataDir, 'provider-health'))
+  health.configureProviderHealthDir(path.join(dataDir, 'provider-health'), {
+    failureThreshold: 3,
+    successThreshold: 1,
+    timeoutSeconds: 60,
+    errorRateThreshold: 0.6,
+    minRequests: 10
+  })
 
   const local = provider({
     id: 'a-local-compatible',

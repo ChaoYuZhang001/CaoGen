@@ -47,8 +47,6 @@ const sessionManagerSupportSource = read('src/main/session-manager-support.ts')
 const sessionCreateLifecycleSource = read('src/main/session-create-lifecycle.ts')
 const sessionCreationJournalSource = read('src/main/session-creation-journal.ts')
 const dagSchedulerSource = read('src/main/agent/dag-scheduler.ts')
-const ideBridgeSource = read('src/main/ide/ide-bridge.ts')
-const ideBridgeManagerSource = read('src/main/ide/ide-bridge-manager.ts')
 const routineExecutorSource = read('src/main/routines/routine-executor.ts')
 const openaiToolsSource = read('src/main/openaiTools.ts')
 const rendererStoreSource = read('src/renderer/src/store.ts')
@@ -175,6 +173,7 @@ assert(
 )
 assert(
   attachmentEffectSource.includes("toolName = source === 'user_file' ? 'attachment_copy_image' : 'attachment_save_image_bytes'") &&
+    attachmentEffectSource.includes("const toolName = 'attachment_copy_document'") &&
     attachmentEffectSource.includes("kind: 'attachment_write'") &&
     attachmentEffectSource.includes("effect.target.kind !== 'unsupported'") &&
     attachmentEffectSource.includes('contentSha256: prepared.hash') &&
@@ -183,11 +182,14 @@ assert(
   'attachment writes must use opaque Effects with digest-only persisted input'
 )
 assert(
-  rendererMutationSource.indexOf('prepareImageAttachmentFile(sourcePath)') <
+  rendererMutationSource.indexOf('prepareImageAttachmentFile(') <
     rendererMutationSource.indexOf("'user_file',") &&
+    rendererMutationSource.includes('prepareDocumentAttachmentFile(') &&
+    rendererMutationSource.includes('isAbsolute(sourcePath) ? sourcePath : resolve(context.cwd, sourcePath)') &&
     rendererMutationSource.indexOf('prepareImageAttachmentBytes(data, { mime })') <
     rendererMutationSource.indexOf("'renderer_bytes',") &&
     attachmentOpsSource.includes('sha256(buffer) !== prepared.hash') &&
+    attachmentOpsSource.includes('sha256(data) !== prepared.hash') &&
     attachmentOpsSource.includes('Buffer.from(new Uint8Array(input))'),
   'attachment payloads must be frozen and digest-checked before the durable mutation callback'
 )
@@ -291,15 +293,13 @@ assert(
 )
 assertManagedSessionCreateBarrier()
 assert(
-  ipcSource.includes('return sessionManager.createManaged({ ...opts, cwd })') &&
+    ipcSource.includes('return sessionManager.createManaged({ ...opts, cwd })') &&
     ipcSource.includes('return sessionManager.createManaged(opts)') &&
     unassignedSessionSource.includes('return sessionManager.createManaged({ ...options, cwd, isolated: false, unassigned: true })') &&
-    ideBridgeManagerSource.includes('sessionManager.createManaged(options)') &&
-    ideBridgeSource.includes('const meta = await this.sessionPort.createSession(options)') &&
     routineExecutorSource.includes('await sessionManager.createManaged(') &&
     openaiToolsSource.includes('const result = await manager.dispatchTaskDag(') &&
     openaiToolsSource.includes('const dispatch = await manager.dispatchTaskDag('),
-  'IPC, IDE, Routine and OpenAI DAG entrypoints must await managed session creation transitively'
+  'IPC, Routine and OpenAI DAG entrypoints must await managed session creation transitively'
 )
 assert(
   dagSchedulerSource.includes('const run = await this.callbacks.runTask(state.task, context)') &&
@@ -325,7 +325,7 @@ assert(
     taskRunSource.includes("record.source === 'dag'") &&
     taskRunSource.includes("record.source === 'session_lifecycle'") &&
     effectRuntimeSource.includes('usesPreExecutionNativeToolGate(engine) || run.operation !== undefined') &&
-    effectRuntimeSource.includes("return engine === 'openai' || engine === 'anthropic'"),
+    effectRuntimeSource.includes("return engine === 'openai' || engine === 'anthropic' || engine === 'gemini'"),
   'all operation sources and managed worktree kinds must survive validation and the prepared barrier'
 )
 assert(
@@ -378,6 +378,15 @@ function assertManagedSessionCreateBarrier() {
   assert(
     execute >= 0 && rejectUnknown > execute && returnConfirmed > rejectUnknown,
     'managed placement must reject unknown outcomes before returning a worktree placement'
+  )
+  assert(
+    sessionCreateLifecycleSource.includes('workspaceId: baseMeta.workspaceId') &&
+      sessionCreateLifecycleSource.includes('goalId: baseMeta.goalId') &&
+      sessionCreateLifecycleSource.includes('workItemId: baseMeta.workItemId') &&
+      worktreeOperationSource.includes('...canonicalOwnership') &&
+      operationGatewaySource.includes('...(workspaceId ? { workspaceId } : {})') &&
+      operationGatewaySource.includes('...(workItemId ? { workItemId } : {})'),
+    'managed worktree operation Runs must inherit canonical Workspace/Goal/WorkItem ownership'
   )
   assert(
     sessionManagerSource.includes('const meta = await this.createManaged({'),

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -77,7 +77,7 @@ function readPrivateJsonFile(file) {
   } catch {
     throw new PrivateProviderConfigError('provider_config_unreadable')
   }
-  if (!info.isFile() || info.isSymbolicLink()) {
+  if (!samePath(realpathSync.native(file), path.resolve(file)) || !info.isFile() || info.isSymbolicLink()) {
     throw new PrivateProviderConfigError('provider_config_not_regular')
   }
   if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
@@ -91,4 +91,12 @@ function readPrivateJsonFile(file) {
   } catch {
     throw new PrivateProviderConfigError('provider_config_unreadable')
   }
+}
+
+function samePath(left, right) {
+  const normalizedLeft = path.normalize(left)
+  const normalizedRight = path.normalize(right)
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
 }

@@ -55,7 +55,12 @@ const APP_FEATURE_ACTION_SPECS = [
     feature: 'provider-profile',
     file: 'src/main/ipc/provider-profile-handlers.ts',
     typeAlias: 'ProviderProfileAction',
-    readOnlyActions: ['preview', 'backups']
+    readOnlyActions: [
+      'preview', 'backups',
+      'cc-switch-preview', 'cc-switch-backups',
+      'native-codex-preview', 'native-backups',
+      'native-config-preview', 'native-config-backups'
+    ]
   }
 ]
 

@@ -8,6 +8,7 @@ export function assertRelayProviderPersistence({
   providerListText,
   userDataDir,
   legacyProviderId,
+  expectedBaseUrl,
   assert
 }) {
   assert(settingsAfter.defaultProviderId === settingsBefore.defaultProviderId, 'relay template save should not set a default provider')
@@ -16,7 +17,7 @@ export function assertRelayProviderPersistence({
   const relay = providers.find((provider) => provider.name === 'CaoGen Relay UI Smoke')
   assert(relay, 'saved relay provider not found')
   assert(relay.id !== 'caogen-relay', 'preset key must not be persisted as a hidden provider id')
-  assert(relay.baseUrl === 'https://ciyuan2api.com', `unexpected relay baseUrl: ${relay.baseUrl}`)
+  assert(relay.baseUrl === expectedBaseUrl, `unexpected relay baseUrl: ${relay.baseUrl}`)
   assert(relay.openaiProtocol === 'chat', `unexpected relay protocol: ${relay.openaiProtocol}`)
   assert(
     JSON.stringify(relay.credentialHeaderNames) === JSON.stringify(['api-key', 'ocp-apim-subscription-key']),

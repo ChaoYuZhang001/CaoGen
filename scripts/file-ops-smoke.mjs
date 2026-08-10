@@ -46,6 +46,33 @@ try {
   assertOk(listResult, 'listProjectFiles should list project files')
   assert(listResult.entries.some((entry) => entry.path === 'src/hello.txt' && entry.kind === 'file'))
 
+  writeFileSync(path.join(projectDir, 'src/search.ts'), [
+    'const first = "Hello from search"',
+    'const second = "hello again"',
+    'const long = "' + 'x'.repeat(180) + ' hello ' + 'y'.repeat(180) + '"'
+  ].join('\n'))
+  mkdirSync(path.join(projectDir, 'node_modules', 'ignored'), { recursive: true })
+  writeFileSync(path.join(projectDir, 'node_modules', 'ignored', 'secret.txt'), 'hello should not be searched')
+  writeFileSync(path.join(projectDir, 'binary.dat'), Buffer.from([0, 1, 2, 3, 104, 101, 108, 108, 111]))
+
+  const searchResult = await fileOps.searchProjectText(projectDir, 'HELLO')
+  assertOk(searchResult, 'searchProjectText should search UTF-8 project files')
+  assertEqual(searchResult.matches.length, 4)
+  assertEqual(searchResult.filesMatched, 2)
+  assert(searchResult.matches.every((match) => !match.path.includes('node_modules')))
+  assert(searchResult.matches.every((match) => match.path !== 'binary.dat'))
+  assert(searchResult.matches.every((match) => match.snippet.length <= 240))
+  assert(searchResult.matches.some((match) => match.path === 'src/search.ts' && match.line === 2 && match.column === 17))
+
+  const boundedSearch = await fileOps.searchProjectText(projectDir, 'hello', { maxResults: 2, maxSnippetChars: 40 })
+  assertOk(boundedSearch, 'bounded search should succeed')
+  assertEqual(boundedSearch.matches.length, 2)
+  assert(boundedSearch.truncated, 'bounded search should report truncated results')
+  assert(boundedSearch.matches.every((match) => match.snippet.length <= 40))
+
+  const invalidSearch = await fileOps.searchProjectText(projectDir, '\n')
+  assert(!invalidSearch.ok, 'searchProjectText should reject an empty single-line query')
+
   const outsideRead = await fileOps.readTextFile(projectDir, '../outside.txt')
   assert(!outsideRead.ok, 'readTextFile should reject parent traversal')
 

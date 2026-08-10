@@ -1,4 +1,5 @@
 import { desktopCapturer, systemPreferences } from 'electron'
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { ocrImage, type OcrResult } from '../imageOcr'
@@ -54,6 +55,19 @@ interface ScreenshotInput {
   includeOcr?: boolean
 }
 
+export interface VisualCaptureInput extends WindowSelector {
+  sourceId?: string
+  maxWidth?: number
+}
+
+export interface GuiVisualCapture extends GuiBaseResult {
+  sourceId?: string
+  width?: number
+  height?: number
+  digest?: string
+  pixels?: Uint8Array
+}
+
 interface ClickInput extends ElementSelector {
   x?: number
   y?: number
@@ -69,6 +83,10 @@ interface ScrollInput extends ElementSelector {
   y?: number
   deltaX?: number
   deltaY?: number
+}
+
+interface HotkeyInput extends WindowSelector {
+  keys: string[]
 }
 
 interface GuiBaseResult {
@@ -116,10 +134,11 @@ export interface GuiController {
   listWindows(input?: ListWindowsInput): Promise<GuiListWindowsResult>
   activateWindow(input: WindowSelector): Promise<GuiActionResult>
   screenshot(input: ScreenshotInput): Promise<GuiScreenshotResult>
+  captureVisual(input: VisualCaptureInput): Promise<GuiVisualCapture>
   click(input: ClickInput): Promise<GuiActionResult>
   typeText(input: TypeTextInput): Promise<GuiActionResult>
   scroll(input: ScrollInput): Promise<GuiActionResult>
-  hotkey(keys: string[]): Promise<GuiActionResult>
+  hotkey(input: HotkeyInput): Promise<GuiActionResult>
 }
 
 function inside(root: string, target: string): boolean {
@@ -189,6 +208,86 @@ function preferNativeWindows(windows: GuiWindowInfo[]): GuiWindowInfo[] {
 function screenCapturePermissionStatus(): ScreenCapturePermissionStatus | undefined {
   if (process.platform !== 'darwin') return undefined
   return systemPreferences.getMediaAccessStatus('screen')
+}
+
+function sourceIdFromNativeWindowId(windowId: string | undefined): string | undefined {
+  if (!windowId) return undefined
+  const match = /^win32:(\d+)$/.exec(windowId)
+  return match ? `window:${match[1]}:` : undefined
+}
+
+function matchingWindowSources(
+  all: Electron.DesktopCapturerSource[],
+  input: VisualCaptureInput,
+  nativeWindowId?: string
+): Electron.DesktopCapturerSource[] {
+  let windows = all.filter((item) => sourceKind(item) === 'window')
+  if (input.sourceId) windows = windows.filter((item) => item.id === input.sourceId)
+  const idPrefix = sourceIdFromNativeWindowId(input.windowId ?? nativeWindowId)
+  if (idPrefix) windows = windows.filter((item) => item.id.startsWith(idPrefix))
+  if (input.title) {
+    const title = input.title.toLocaleLowerCase()
+    windows = windows.filter((item) => item.name.toLocaleLowerCase().includes(title))
+  }
+  return input.sourceId || idPrefix || input.title ? windows : []
+}
+
+async function resolveVisualSource(
+  all: Electron.DesktopCapturerSource[],
+  input: VisualCaptureInput
+): Promise<{ source?: Electron.DesktopCapturerSource; error?: string }> {
+  let nativeWindowId: string | undefined
+  if (input.processName || input.pid !== undefined) {
+    if (process.platform === 'win32') {
+      const native = await windowsListWindows(input)
+      if (!native.ok) return { error: native.error ?? '无法解析视觉断言的 Windows 窗口' }
+      if (native.windows.length !== 1) {
+        return { error: `视觉断言必须唯一匹配一个窗口，当前匹配 ${native.windows.length} 个` }
+      }
+      nativeWindowId = native.windows[0].id
+    } else if (process.platform === 'darwin') {
+      const native = await macosListWindows(input)
+      if (!native.ok) return { error: native.error ?? '无法解析视觉断言的 macOS 窗口' }
+      if (native.windows.length !== 1) {
+        return { error: `视觉断言必须唯一匹配一个窗口，当前匹配 ${native.windows.length} 个` }
+      }
+      nativeWindowId = native.windows[0].id
+      if (!input.title) {
+        return { error: 'macOS 视觉断言使用 processName/pid 时必须同时绑定可唯一匹配的 title' }
+      }
+    }
+  }
+  const matches = matchingWindowSources(all, input, nativeWindowId)
+  if (matches.length !== 1) {
+    return { error: `视觉断言必须唯一匹配一个截图源，当前匹配 ${matches.length} 个` }
+  }
+  return { source: matches[0] }
+}
+
+function captureSourceVisual(
+  source: Electron.DesktopCapturerSource,
+  maxWidth: number | undefined
+): GuiVisualCapture {
+  if (nativeImageIsEmpty(source.thumbnail)) {
+    return { ok: false, sourceId: source.id, error: '视觉断言截图为空' }
+  }
+  const image = source.thumbnail.resize({ width: normalizeMaxWidth(maxWidth) })
+  if (nativeImageIsEmpty(image)) {
+    return { ok: false, sourceId: source.id, error: '视觉断言截图缩放后为空' }
+  }
+  const size = image.getSize()
+  const pixels = new Uint8Array(image.toBitmap())
+  if (size.width <= 0 || size.height <= 0 || pixels.length !== size.width * size.height * 4) {
+    return { ok: false, sourceId: source.id, error: '视觉断言截图像素缓冲区无效' }
+  }
+  return {
+    ok: true,
+    sourceId: source.id,
+    width: size.width,
+    height: size.height,
+    digest: createHash('sha256').update(pixels).digest('hex'),
+    pixels
+  }
 }
 
 export function createGuiController(cwd: string): GuiController {
@@ -326,6 +425,17 @@ export function createGuiController(cwd: string): GuiController {
       }
     },
 
+    async captureVisual(input: VisualCaptureInput): Promise<GuiVisualCapture> {
+      try {
+        const all = await sources()
+        const resolved = await resolveVisualSource(all, input)
+        if (!resolved.source) return { ok: false, error: resolved.error ?? '未找到视觉断言截图源' }
+        return captureSourceVisual(resolved.source, input.maxWidth)
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+
     async click(input: ClickInput): Promise<GuiActionResult> {
       if (process.platform === 'win32') {
         const native = await windowsClick(input)
@@ -371,18 +481,29 @@ export function createGuiController(cwd: string): GuiController {
       return ok ? { ok: true } : { ok: false, error: 'GUI 滚动需要 Windows/macOS 主路径可用，或安装支持滚轮的 nut.js 可选依赖' }
     },
 
-    async hotkey(keys: string[]): Promise<GuiActionResult> {
+    async hotkey(input: HotkeyInput): Promise<GuiActionResult> {
       if (process.platform === 'win32') {
-        const native = await windowsHotkey(keys)
+        const native = await windowsHotkey(input)
         if (native.ok) return { ok: true, detail: native.detail }
       }
       if (process.platform === 'darwin') {
-        const native = await macosHotkey(keys)
+        if (hasWindowSelector(input)) {
+          const activated = await macosActivateWindow(input)
+          if (!activated.ok) return { ok: false, error: activated.error }
+        }
+        const native = await macosHotkey(input.keys)
         if (native.ok) return { ok: true, detail: native.detail }
       }
 
-      const ok = await nutHotkey(keys)
+      if (hasWindowSelector(input)) {
+        return { ok: false, error: '当前平台不能安全绑定快捷键目标窗口，已阻止发送' }
+      }
+      const ok = await nutHotkey(input.keys)
       return ok ? { ok: true } : { ok: false, error: 'GUI 快捷键需要 Windows 主路径可用，或安装 nut.js 可选依赖' }
     }
   }
+}
+
+function hasWindowSelector(input: WindowSelector): boolean {
+  return Boolean(input.windowId || input.title || input.processName || typeof input.pid === 'number')
 }

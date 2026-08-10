@@ -54,7 +54,8 @@ export type ManagedWorktreeCreateEffectResult = WorktreePrepareResult & {
 export async function executeManagedWorktreeCreateEffect(
   plan: ManagedWorktreeCreateEffectPlan,
   projectId: string | undefined,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  canonicalOwnership?: { workspaceId?: string; goalId?: string; workItemId?: string }
 ): Promise<ManagedWorktreeCreateEffectResult> {
   const outcome = await runOperation({
     source: 'session_lifecycle',
@@ -62,6 +63,7 @@ export async function executeManagedWorktreeCreateEffect(
     title: '创建 managed worktree',
     sourceSessionId: plan.record.sessionId,
     projectId,
+    ...canonicalOwnership,
     cwd: plan.record.sourceCwd,
     toolName: 'managed_worktree_create',
     toolInput: { ...plan.toolInput },

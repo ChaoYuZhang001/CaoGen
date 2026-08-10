@@ -129,7 +129,7 @@ await check('gui controller routes macOS before nut.js fallback', () => {
     'macosClick(input)',
     'macosTypeText(input)',
     'macosScroll(input)',
-    'macosHotkey(keys)'
+    'macosHotkey(input.keys)'
   ]) {
     assert(text.includes(marker), `missing macOS route ${marker}`)
   }

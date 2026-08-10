@@ -68,6 +68,8 @@ function migrationKindCounts(assets: MigrationAsset[]): Record<MigrationAsset['k
     mcp: 0,
     config: 0,
     skill: 0,
+    prompt: 0,
+    usage: 0,
     hook: 0
   }
   for (const asset of assets) counts[asset.kind] += 1

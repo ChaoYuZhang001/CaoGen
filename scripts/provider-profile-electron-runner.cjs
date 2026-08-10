@@ -1,6 +1,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const { execFileSync } = require('node:child_process')
 const { app, BrowserWindow, dialog, ipcMain } = require('electron')
+const { runProviderAnthropicRuntimeUiE2E } = require('./lib/provider-anthropic-runtime-ui-e2e.cjs')
 
 const repoRoot = path.resolve(__dirname, '..')
 const outMain = path.join(repoRoot, 'out', 'main', 'index.js')
@@ -55,6 +57,12 @@ async function run() {
   if (phase === 'apply') await runApplyPhase()
   else if (phase === 'rollback') await runRollbackPhase()
   else if (phase === 'ui') await runUiPhase()
+  else if (phase === 'pricing') await runPricingPhase()
+  else if (phase === 'anthropic-runtime') await runProviderAnthropicRuntimeUiE2E({
+    invoke, openProviderProfileSettings, openProviderEditor, rendererValue, waitForRenderer,
+    settleRenderer, captureUiScreenshot, clickProviderEditorSave, clickProviderEditorCancel, check, checks,
+    screenshotDir, statePath
+  })
   else throw new Error('unknown provider profile phase')
   finish(0)
 }
@@ -160,11 +168,12 @@ async function applyPortableProfile(initial) {
     preview.items.find((item) => item.name === 'New Portable Profile')?.authMode === 'none')
 
   await invoke('providers:update', initial.id, { models: ['alpha-preview-drift'] })
+  const backupsBeforeStaleApply = await invokeProfile('backups')
   const stalePreviewError = await rejectedMessage(() => invokeProfile('apply', preview.previewId, []))
   check('apply rejects Provider configuration drift after preview', /预览后已变化|重新预览/.test(stalePreviewError))
   const afterStaleApply = await invoke('providers:list')
   check('stale preview creates no backup and preserves concurrent state',
-    (await invokeProfile('backups')).length === 0
+    (await invokeProfile('backups')).length === backupsBeforeStaleApply.length
       && afterStaleApply.length === 1
       && afterStaleApply[0]?.models.join(',') === 'alpha-preview-drift')
   const consumedPreviewError = await rejectedMessage(() => invokeProfile('apply', preview.previewId, []))
@@ -183,7 +192,8 @@ async function applyPortableProfile(initial) {
 
 async function verifyCredentialFreeBackup(initial, applied) {
   const backups = await invokeProfile('backups')
-  check('backup metadata is available without contents', backups.length === 1 && backups[0].id === applied.backup.id)
+  check('backup metadata is available without contents',
+    backups.some((backup) => backup.id === applied.backup.id))
   verifyCredentialFreeBackupFile(initial, applied)
 }
 
@@ -242,6 +252,7 @@ async function runRollbackPhase() {
     check('session-only credential stays non-persistent', alphaBefore?.hasToken === false)
   }
 
+  const backupCountBeforeRollback = (await invokeProfile('backups')).length
   const rolledBack = await invokeProfile('rollback', state.backupId)
   const alpha = rolledBack.providers.find((provider) => provider.id === state.initialProviderId)
   check('rollback restores original provider set', rolledBack.providers.length === 1 && Boolean(alpha))
@@ -258,7 +269,7 @@ async function runRollbackPhase() {
       alpha?.credentialMigrationRequired === true)
   }
   const backups = await invokeProfile('backups')
-  check('rollback is itself reversible', backups.length === 2)
+  check('rollback is itself reversible', backups.length === backupCountBeforeRollback + 1)
 
   check('rollback report contains zero credential canary material',
     !JSON.stringify([...state.checks, ...checks]).includes(primaryCredentialCanary))
@@ -281,6 +292,9 @@ async function runUiPhase() {
   const previewKeyLabel = await seedPreviewKey(alpha.id)
   const urlCanary = writeUnsafeUiProfileImport()
   const win = await openProviderProfileSettings()
+  await verifyLocalVersionHistoryUi(win)
+  await verifyProviderSyncSurface(win)
+  await verifyProviderPricingCatalogUi(win, alpha.id)
   await verifyUnsafeUiProfileRejected(win, urlCanary)
   writePortableUiProfileImport()
   await verifyUiProfilePreview(win, previewKeyLabel)
@@ -288,6 +302,156 @@ async function runUiPhase() {
   await verifyNoAuthCredentialDeletionUi(win, alpha.id)
   await captureUiScreenshot(win, 'provider-no-auth-confirmed.png')
   persistUiState(previous)
+}
+
+async function verifyLocalVersionHistoryUi(win) {
+  const opened = await rendererValue(win, `(() => {
+    const button = [...document.querySelectorAll('.provider-profile-backup-row button')]
+      .find((candidate) => candidate.textContent.trim() === '查看变更');
+    button?.click();
+    return Boolean(button);
+  })()`)
+  check('local Provider version history exposes a diff-first action', opened)
+  await waitForRenderer(win, `Boolean(document.querySelector('.provider-profile-version-preview'))`)
+  const preview = await rendererValue(win, `(() => {
+    const panel = document.querySelector('.provider-profile-version-preview');
+    const text = panel?.innerText || '';
+    return {
+      apiReady: typeof window.agentDesk.previewProviderProfileBackup === 'function'
+        && typeof window.agentDesk.applyProviderProfileBackupPreview === 'function',
+      rows: panel?.querySelectorAll('.provider-profile-version-row').length || 0,
+      hasCounts: text.includes('恢复') && text.includes('更新') && text.includes('删除'),
+      hasEndpoint: /https?:\\/\\//i.test(text),
+      hasCanary: text.includes(${JSON.stringify(primaryCredentialCanary)})
+    };
+  })()`)
+  check('local Provider version preview shows a complete sanitized change plan',
+    preview.apiReady && preview.rows > 0 && preview.hasCounts && !preview.hasEndpoint && !preview.hasCanary,
+    JSON.stringify(preview))
+  win.setSize(760, 700)
+  await settleRenderer(win)
+  const compact = await rendererValue(win, `(() => {
+    const panel = document.querySelector('.provider-profile-version-preview');
+    panel?.scrollIntoView({ block: 'start' });
+    const viewportWidth = document.documentElement.clientWidth;
+    const controls = [...(panel?.querySelectorAll('button') || [])];
+    return {
+      overflow: document.documentElement.scrollWidth > viewportWidth,
+      contained: controls.every((control) => {
+        const rect = control.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= viewportWidth + 1;
+      })
+    };
+  })()`)
+  check('local Provider version preview remains usable at 760x700',
+    compact.overflow === false && compact.contained === true,
+    JSON.stringify(compact))
+  await captureUiScreenshot(win, 'provider-profile-local-version-preview.png')
+  await rendererValue(win, `document.querySelector('.provider-profile-version-preview .btn-icon')?.click()`)
+  await waitForRenderer(win, `!document.querySelector('.provider-profile-version-preview')`)
+}
+
+async function verifyProviderSyncSurface(win) {
+  await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-sync]'))`)
+  await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-webdav]'))`)
+  await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-s3]'))`)
+  const result = await rendererValue(win, `(async () => {
+    const api = window.agentDesk;
+    const status = await api.getProviderProfileSyncStatus();
+    const webdav = await api.getProviderProfileWebDavConfig();
+    const s3 = await api.getProviderProfileS3Config();
+    const panel = document.querySelector('[data-provider-webdav]');
+    const s3Panel = document.querySelector('[data-provider-s3]');
+    s3Panel?.scrollIntoView({ block: 'center' });
+    return {
+      relation: status.relation,
+      configured: status.configured,
+      apiReady: typeof api.chooseProviderProfileSyncDirectory === 'function'
+        && typeof api.previewProviderProfileSync === 'function'
+        && typeof api.publishProviderProfileSync === 'function'
+        && typeof api.applyProviderProfileSync === 'function',
+      webdavReady: typeof api.saveProviderProfileWebDavConfig === 'function'
+        && typeof api.testProviderProfileWebDavConnection === 'function'
+        && typeof api.previewProviderProfileWebDavSync === 'function'
+        && typeof api.publishProviderProfileWebDavSync === 'function'
+        && typeof api.applyProviderProfileWebDavSync === 'function'
+        && typeof api.listProviderProfileWebDavHistory === 'function'
+        && typeof api.previewProviderProfileWebDavHistory === 'function'
+        && typeof api.applyProviderProfileWebDavHistory === 'function',
+      webdavConfigured: webdav.configured,
+      webdavControls: panel?.querySelectorAll('input').length || 0,
+      s3Ready: typeof api.saveProviderProfileS3Config === 'function'
+        && typeof api.testProviderProfileS3Connection === 'function'
+        && typeof api.previewProviderProfileS3Sync === 'function'
+        && typeof api.publishProviderProfileS3Sync === 'function'
+        && typeof api.applyProviderProfileS3Sync === 'function'
+        && typeof api.listProviderProfileS3History === 'function'
+        && typeof api.previewProviderProfileS3History === 'function'
+        && typeof api.applyProviderProfileS3History === 'function',
+      s3Configured: s3.configured,
+      s3Controls: s3Panel?.querySelectorAll('input').length || 0
+    };
+  })()`)
+  check('Provider sync surface reaches the dedicated IPC route',
+    result.apiReady && result.configured === false && result.relation === 'unconfigured')
+  check('WebDAV sync surface exposes configuration and dedicated IPC',
+    result.webdavReady && result.webdavConfigured === false && result.webdavControls >= 7)
+  check('S3 sync surface exposes configuration and dedicated IPC',
+    result.s3Ready && result.s3Configured === false && result.s3Controls >= 11)
+  await settleRenderer(win)
+  await captureUiScreenshot(win, 'provider-profile-sync.png')
+  win.setSize(760, 700)
+  await settleRenderer(win)
+  const compact = await rendererValue(win, `(() => {
+    const panel = document.querySelector('[data-provider-s3]');
+    panel?.scrollIntoView({ block: 'start' });
+    const viewportWidth = document.documentElement.clientWidth;
+    const controls = [...(panel?.querySelectorAll('input, button') || [])];
+    return {
+      overflow: document.documentElement.scrollWidth > viewportWidth,
+      controlsFit: controls.every((control) => {
+        const rect = control.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= viewportWidth + 1;
+      }),
+      buttonTextFits: [...(panel?.querySelectorAll('button') || [])]
+        .every((button) => button.scrollWidth <= button.clientWidth + 1)
+    };
+  })()`)
+  check('S3 sync remains usable at 760x700',
+    !compact.overflow && compact.controlsFit && compact.buttonTextFits,
+    compact)
+  await captureUiScreenshot(win, 'provider-profile-s3-compact.png')
+  win.setSize(1200, 800)
+  await settleRenderer(win)
+}
+
+async function runPricingPhase() {
+  const provider = await invoke('providers:create', {
+    name: 'Pricing Catalog Provider',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    models: ['seed-model'],
+    engine: 'openai',
+    authMode: 'none',
+    openaiProtocol: 'chat'
+  })
+  check('isolated pricing Provider is created without credentials', provider.hasToken === false && provider.ready === true)
+  fs.mkdirSync(screenshotDir, { recursive: true })
+  const win = await openProviderProfileSettings(false)
+  await verifyProviderPricingCatalogUi(win, provider.id)
+  const report = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    pass: checks.length,
+    total: checks.length,
+    screenshots: [
+      path.join(screenshotDir, 'provider-pricing-catalog.png'),
+      path.join(screenshotDir, 'provider-pricing-catalog-compact.png'),
+      path.join(screenshotDir, 'provider-reliability-compact.png'),
+      path.join(screenshotDir, 'provider-credential-routing.png')
+    ],
+    checks
+  }
+  fs.writeFileSync(statePath, `${JSON.stringify(report, null, 2)}\n`)
 }
 
 async function seedPreviewKey(providerId) {
@@ -319,21 +483,229 @@ function writeUnsafeUiProfileImport() {
   return urlCanary
 }
 
-async function openProviderProfileSettings() {
+async function openProviderProfileSettings(requireBackup = true) {
   const win = await waitForWindow()
   await waitForRenderer(win, `document.body.innerText.includes('CaoGen')`)
   await clickRendererText(win, '设置')
   await waitForRenderer(win, `Boolean(document.querySelector('.settings-page'))`)
   await rendererValue(win, `document.querySelector('[data-settings-tab="providers"]')?.click()`)
   await waitForRenderer(win, `document.body.innerText.includes('Profile 只迁移 Provider')`)
-  await waitForRenderer(win, `Boolean(document.querySelector('.provider-profile-backup-row'))`)
+  if (requireBackup) await waitForRenderer(win, `Boolean(document.querySelector('.provider-profile-backup-row'))`)
   const initialUi = await rendererValue(win, `({
     hasImport: [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '导入'),
     hasExport: [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '导出'),
     hasRollback: document.body.innerText.includes('回滚')
   })`)
-  check('Provider settings expose import/export and rollback', initialUi.hasImport && initialUi.hasExport && initialUi.hasRollback)
+  check('Provider settings expose import/export and rollback',
+    initialUi.hasImport && initialUi.hasExport && (!requireBackup || initialUi.hasRollback))
   return win
+}
+
+async function verifyProviderPricingCatalogUi(win, providerId) {
+  let editorSaved = false
+  const provider = (await invoke('providers:list')).find((candidate) => candidate.id === providerId)
+  check('pricing catalog UI target Provider exists', Boolean(provider))
+  const opened = await openProviderEditor(win, provider.name)
+  check('pricing catalog UI opens the Provider editor', opened)
+  await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-model-catalog]'))`)
+  const modelsSet = await setProviderEditorField(win, '[data-provider-field="models"]', 'gpt-4o\nspecial-model')
+  check('pricing catalog UI accepts the discovered model list', modelsSet)
+
+  await clickRendererText(win, '同步模型')
+  await waitForRenderer(win, `document.querySelectorAll('.provider-advanced-model').length === 2`)
+  const syncedUi = await rendererValue(win, `({
+    profiles: document.querySelectorAll('.provider-advanced-model').length,
+    privacy: document.querySelector('.provider-model-catalog-note')?.textContent || '',
+    modelIds: [...document.querySelectorAll('.provider-advanced-model input[aria-label="模型 ID"]')].map((input) => input.value)
+  })`)
+  check('sync turns discovered models into editable profiles',
+    syncedUi.profiles === 2
+      && syncedUi.modelIds.join(',') === 'gpt-4o,special-model'
+      && syncedUi.privacy.includes('不发送 Provider 凭据'),
+    JSON.stringify(syncedUi))
+
+  const originalFetch = global.fetch
+  const catalogCalls = []
+  global.fetch = async (url, init = {}) => {
+    if (String(url) !== 'https://models.dev/api.json') return originalFetch(url, init)
+    catalogCalls.push({ url: String(url), init })
+    return new Response(JSON.stringify({
+      openai: {
+        name: 'OpenAI',
+        models: {
+          'gpt-4o': {
+            name: 'GPT-4o',
+            modalities: { output: ['text'] },
+            cost: { input: 2.5, output: 10, cache_read: 1.25, cache_write: 2.5 }
+          }
+        }
+      },
+      vendor: {
+        name: 'Vendor',
+        models: {
+          'special-model': {
+            name: 'Special Model',
+            modalities: { output: ['text'] },
+            cost: { input: 0.2, output: 0.8, cache_read: 0.1, cache_write: 0.2 }
+          }
+        }
+      }
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  try {
+    await clickRendererText(win, '导入定价')
+    await waitForRenderer(win, `document.body.innerText.includes('已导入 2 个定价')`)
+    const importedUi = await rendererValue(win, `(() => {
+      const cards = [...document.querySelectorAll('.provider-advanced-model')];
+      return {
+        sources: cards.map((card) => card.querySelector('.provider-pricing-source')?.textContent.trim()),
+        values: cards.map((card) => [...card.querySelectorAll('.provider-advanced-pricing input')].map((input) => input.value)),
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+      };
+    })()`)
+    check('catalog import fills four prices and exposes catalog provenance',
+      importedUi.sources.join(',') === '目录,目录'
+        && importedUi.values[0].join(',') === '2.5,10,1.25,2.5'
+        && importedUi.values[1].join(',') === '0.2,0.8,0.1,0.2'
+        && !importedUi.overflow,
+      JSON.stringify(importedUi))
+    check('catalog IPC sends no Provider credentials or endpoint configuration',
+      catalogCalls.length === 1
+        && Object.keys(catalogCalls[0].init).sort().join(',') === 'method,redirect,signal'
+        && catalogCalls[0].init.method === 'GET')
+
+    const edited = await rendererValue(win, `(() => {
+      const input = document.querySelector('.provider-advanced-model .provider-advanced-pricing input');
+      if (!input) return false;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '99');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return input.value === '99';
+    })()`)
+    check('pricing catalog UI accepts a manual price edit', edited)
+    await waitForRenderer(win, `document.querySelector('.provider-pricing-source')?.textContent.trim() === '手工'`)
+    await clickRendererText(win, '导入定价')
+    await waitForRenderer(win, `document.body.innerText.includes('保护 1 个手工定价')`)
+    const protectedUi = await rendererValue(win, `({
+      value: document.querySelector('.provider-advanced-model .provider-advanced-pricing input')?.value,
+      source: document.querySelector('.provider-pricing-source')?.textContent.trim()
+    })`)
+    check('reimport never overwrites a manual price', protectedUi.value === '99' && protectedUi.source === '手工')
+
+    await rendererValue(win, `document.querySelector('[data-provider-model-catalog]')?.scrollIntoView({ block: 'start' })`)
+    await captureUiScreenshot(win, 'provider-pricing-catalog.png')
+    win.setSize(760, 700)
+    await rendererValue(win, `document.querySelector('[data-provider-model-catalog]')?.scrollIntoView({ block: 'start' })`)
+    await settleRenderer(win)
+    const compactUi = await rendererValue(win, `({
+      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      actionsFit: [...document.querySelectorAll('.provider-model-actions button')]
+        .every((button) => button.scrollWidth <= button.clientWidth + 1),
+      pricingInputsFit: [...document.querySelectorAll('.provider-advanced-model')].every((card) => {
+        const inputs = [...card.querySelectorAll('.provider-advanced-pricing input')].map((input) => input.getBoundingClientRect());
+        return inputs.every((rect) => rect.left >= 0 && rect.right <= window.innerWidth)
+          && inputs.every((left, index) => inputs.slice(index + 1).every((right) =>
+            left.right <= right.left || right.right <= left.left || left.bottom <= right.top || right.bottom <= left.top));
+      })
+    })`)
+    check('pricing catalog remains usable at 760x700',
+      !compactUi.overflow && compactUi.actionsFit && compactUi.pricingInputsFit,
+      JSON.stringify(compactUi))
+    await captureUiScreenshot(win, 'provider-pricing-catalog-compact.png')
+    win.setSize(1200, 800)
+
+    const reliabilityConfigured = await rendererValue(win, `(() => {
+      const root = document.querySelector('[data-provider-reliability-config]');
+      if (!root) return false;
+      const select = root.querySelector('select');
+      const inputs = [...root.querySelectorAll('.provider-reliability-grid:not(.provider-circuit-grid) input')];
+      if (!select || inputs.length !== 4) return false;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, 'false');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      ['3', '45', '90', '300'].forEach((value, index) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(inputs[index], value);
+        inputs[index].dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      root.querySelector('.provider-reliability-toggle input')?.click();
+      return true;
+    })()`)
+    check('visual reliability controls accept failover, retry, and timeout overrides', reliabilityConfigured)
+    await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-circuit-config]'))`)
+    const circuitConfigured = await rendererValue(win, `(() => {
+      const inputs = [...document.querySelectorAll('[data-provider-circuit-config] input')];
+      if (inputs.length !== 5) return false;
+      ['5', '2', '75', '65', '12'].forEach((value, index) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(inputs[index], value);
+        inputs[index].dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      return true;
+    })()`)
+    check('visual circuit-breaker controls accept bounded thresholds', circuitConfigured)
+
+    const endpointConfigured = await rendererValue(win, `(() => {
+      const root = document.querySelector('[data-provider-endpoint-config]');
+      const add = root?.querySelector('.provider-advanced-section-title button');
+      add?.click();
+      return Boolean(add);
+    })()`)
+    check('visual endpoint editor can add a prioritized endpoint', endpointConfigured)
+    await waitForRenderer(win, `document.querySelectorAll('[data-provider-endpoint-config] .provider-advanced-row').length === 1`)
+    const endpointIdEdited = await setProviderEditorField(win, '[data-provider-endpoint-config] .provider-advanced-row > input:nth-of-type(1)', 'primary')
+    const endpointUrlEdited = await setProviderEditorField(win, '[data-provider-endpoint-config] .provider-advanced-row > input:nth-of-type(2)', 'https://primary.example.test/v1')
+    const endpointPriorityEdited = await setProviderEditorField(win, '[data-provider-endpoint-config] .provider-advanced-row > input:nth-of-type(3)', '2')
+    check('endpoint ID, URL, and priority are editable', endpointIdEdited && endpointUrlEdited && endpointPriorityEdited)
+
+    await clickProviderEditorSave(win)
+    await waitForRenderer(win, `!document.querySelector('.provider-editor')`)
+    editorSaved = true
+    const persisted = (await invoke('providers:list')).find((candidate) => candidate.id === providerId)?.advancedConfig
+    check('reliability and endpoint overrides persist through the production Provider save path',
+      persisted?.reliability?.failoverEnabled === false
+        && persisted?.reliability?.maxRetries === 3
+        && persisted?.reliability?.streamingFirstByteTimeoutSeconds === 45
+        && persisted?.reliability?.streamingIdleTimeoutSeconds === 90
+        && persisted?.reliability?.requestTimeoutSeconds === 300
+        && persisted?.reliability?.circuitBreaker?.failureThreshold === 5
+        && persisted?.reliability?.circuitBreaker?.errorRateThreshold === 0.65
+        && persisted?.endpoints?.[0]?.id === 'primary'
+        && persisted?.endpoints?.[0]?.priority === 2,
+      JSON.stringify({ reliability: persisted?.reliability, endpoint: persisted?.endpoints?.[0] }))
+
+    const reopened = await openProviderEditor(win, provider.name)
+    check('saved reliability configuration can be reopened', reopened)
+    await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-circuit-config]'))`)
+    win.setSize(760, 700)
+    await rendererValue(win, `document.querySelector('[data-provider-reliability-config]')?.scrollIntoView({ block: 'start' })`)
+    await settleRenderer(win)
+    const reliabilityUi = await rendererValue(win, `(() => {
+      const root = document.querySelector('[data-provider-reliability-config]');
+      const base = [...root.querySelectorAll('.provider-reliability-grid:not(.provider-circuit-grid) input')].map((input) => input.value);
+      const circuit = [...root.querySelectorAll('[data-provider-circuit-config] input')].map((input) => input.value);
+      const rect = root.getBoundingClientRect();
+      return {
+        base,
+        circuit,
+        contained: rect.left >= 0 && rect.right <= window.innerWidth,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+      };
+    })()`)
+    check('saved reliability controls round-trip and fit at 760x700',
+      reliabilityUi.base.join(',') === '3,45,90,300'
+        && reliabilityUi.circuit.join(',') === '5,2,75,65,12'
+        && reliabilityUi.contained
+        && !reliabilityUi.overflow,
+      JSON.stringify(reliabilityUi))
+    await captureUiScreenshot(win, 'provider-reliability-compact.png')
+    win.setSize(1200, 800)
+  } finally {
+    global.fetch = originalFetch
+    if (await rendererValue(win, `Boolean(document.querySelector('.provider-editor'))`)) {
+      await clickProviderEditorCancel(win)
+      await waitForRenderer(win, `!document.querySelector('.provider-editor')`)
+    } else if (!editorSaved) {
+      throw new Error('Provider editor closed before the reliability configuration was saved')
+    }
+  }
 }
 
 async function verifyUnsafeUiProfileRejected(win, urlCanary) {
@@ -390,7 +762,8 @@ async function verifyUiProfilePreview(win, previewKeyLabel) {
       && previewUi.overflow === false)
   check('UI preview shows the active Key label and preserved target binding',
     previewUi.text.includes(`当前 Key：${previewKeyLabel}（共 1 个）`)
-      && previewUi.text.includes('目标绑定不变，将继续使用'))
+      && previewUi.text.includes('目标绑定不变，将继续使用'),
+    previewUi.text)
   fs.mkdirSync(screenshotDir, { recursive: true })
   await captureUiScreenshot(win, 'provider-profile-import-preview.png')
   await captureCompactPreview(win)
@@ -425,9 +798,13 @@ function persistUiState(previous) {
     pass: allChecks.length,
     total: allChecks.length,
     screenshots: [
+      path.join(screenshotDir, 'provider-pricing-catalog.png'),
+      path.join(screenshotDir, 'provider-pricing-catalog-compact.png'),
       path.join(screenshotDir, 'provider-profile-import-preview.png'),
       path.join(screenshotDir, 'provider-profile-import-preview-compact.png'),
       path.join(screenshotDir, 'provider-profile-applied.png'),
+      path.join(screenshotDir, 'provider-profile-sync.png'),
+      path.join(screenshotDir, 'provider-credential-routing.png'),
       path.join(screenshotDir, 'provider-no-auth-confirmed.png')
     ],
     checks: allChecks
@@ -442,11 +819,12 @@ async function verifyNoAuthCredentialDeletionUi(win, providerId) {
     additional: ['provider', 'ui', 'backup', 'draft'].join('-')
   }
   const afterSeed = await seedKeyedProvider(win, providerId)
+  const afterRouting = await verifyCredentialRoutingUi(win, providerId)
   const observation = observeProviderUpdates()
   try {
     await openSeededProviderEditor(win)
     await draftNoAuthConversion(win, drafts)
-    await cancelNoAuthDeletion(win, providerId, afterSeed, observation.updates)
+    await cancelNoAuthDeletion(win, providerId, afterRouting, observation.updates)
     await verifyClearedDraftsAfterCancel(win)
     const afterConfirmedSave = await confirmNoAuthDeletion(win, providerId, drafts, observation.updates)
     await verifyExplicitCredentialReentry(win, providerId, afterConfirmedSave)
@@ -454,6 +832,45 @@ async function verifyNoAuthCredentialDeletionUi(win, providerId) {
     observation.restore()
     await restoreRendererConfirm(win)
   }
+}
+
+async function verifyCredentialRoutingUi(win, providerId) {
+  await openSeededProviderEditor(win)
+  const changed = await rendererValue(win, `(() => {
+    const editor = document.querySelector('.provider-editor');
+    const mode = editor?.querySelector('[data-provider-credential-routing-mode]');
+    const values = ['7', '25', '3', '15'];
+    const fields = [...(editor?.querySelectorAll('.provider-key-policy-grid input[type="number"]') || [])];
+    if (!mode || fields.length !== 4) return false;
+    const setValue = (element, value) => {
+      Object.getOwnPropertyDescriptor(element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value').set.call(element, value);
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    setValue(mode, 'automatic');
+    fields.forEach((field, index) => setValue(field, values[index]));
+    return mode.value === 'automatic' && fields.map((field) => field.value).join(',') === values.join(',');
+  })()`)
+  check('credential routing UI exposes mode and four policy controls', changed)
+  await settleRenderer(win)
+  await rendererValue(win, `(() => {
+    document.querySelector('.provider-key-panel')?.scrollIntoView({ block: 'center' });
+    return true;
+  })()`)
+  await settleRenderer(win)
+  await captureUiScreenshot(win, 'provider-credential-routing.png')
+  await clickProviderEditorSave(win)
+  await waitForRenderer(win, `!document.querySelector('.provider-editor')`)
+  const saved = (await invoke('providers:list')).find((provider) => provider.id === providerId)
+  const policy = saved?.apiKeys?.[0]?.policy
+  check('credential routing policy saves through real renderer IPC',
+    saved?.credentialRoutingMode === 'automatic'
+      && policy?.priority === 7
+      && policy?.monthlyBudgetUsd === 25
+      && policy?.minimumBalanceUsd === 3
+      && policy?.failureCooldownMinutes === 15,
+    JSON.stringify({ mode: saved?.credentialRoutingMode, policy }))
+  return saved
 }
 
 async function seedKeyedProvider(win, providerId) {
@@ -774,7 +1191,23 @@ async function settleRenderer(win) {
 
 function checkPrivateMode(name, target, expected) {
   if (process.platform === 'win32') {
-    throw new Error(`${name}: Windows ACL verification is not implemented`)
+    const acl = JSON.parse(execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$acl = Get-Acl -LiteralPath $env:CAOGEN_ACL_TARGET; [pscustomobject]@{ Owner = [string]$acl.Owner; Access = @($acl.Access | ForEach-Object { $sid = try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { '' }; [pscustomobject]@{ Sid = $sid; Rights = [string]$_.FileSystemRights; Type = [string]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress`
+    ], {
+      encoding: 'utf8',
+      env: { ...process.env, CAOGEN_ACL_TARGET: target },
+      windowsHide: true
+    }))
+    const broadPrincipals = new Set(['S-1-1-0', 'S-1-5-11', 'S-1-5-32-545', 'S-1-5-32-546'])
+    const broadWrite = (Array.isArray(acl.Access) ? acl.Access : [acl.Access]).filter(Boolean).some((entry) =>
+      entry.Type === 'Allow'
+        && broadPrincipals.has(entry.Sid)
+        && /Write|Modify|FullControl|Create|Delete|TakeOwnership|ChangePermissions/i.test(entry.Rights))
+    check(name, Boolean(acl.Owner) && !broadWrite)
+    return
   }
   check(name, (fs.statSync(target).mode & 0o777) === expected)
 }

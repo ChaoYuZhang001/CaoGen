@@ -36,6 +36,7 @@ try {
   )
 
   const providerHealth = await import(pathToFileURL(findCompiled(buildDir, 'providerHealth.js')).href)
+  const providerUtils = await import(pathToFileURL(findCompiled(buildDir, 'openai-provider-utils.js')).href)
   providerHealth.configureProviderHealthDir(dataDir)
 
   check('success samples produce latest and EMA latency', () => {
@@ -49,31 +50,70 @@ try {
 
   check('failure history is classified, redacted, bounded, and marks provider unhealthy', () => {
     const secret = ['sk', 'super-secret-value', '123456789'].join('-')
+    const providerUrl = 'https://secret-provider.example/v1'
     for (let index = 0; index < 14; index += 1) {
-      providerHealth.recordFailure('provider-a', `HTTP 401 invalid api key: ${secret} attempt=${index}`)
+      providerHealth.recordFailure('provider-a', `HTTP 401 invalid api key: ${secret} baseUrl: ${providerUrl} attempt=${index}`)
     }
     const health = providerHealth.getHealth('provider-a')
     assert(!health.healthy, 'three consecutive failures should mark provider unhealthy')
     assert(health.recentFailures.length === 12, `history should be bounded to 12, got ${health.recentFailures.length}`)
     assert(health.recentFailures[0].label === '鉴权失败', 'latest failure should be classified')
     assert(!JSON.stringify(health).includes(secret), 'failure history must redact API keys')
+    assert(!JSON.stringify(health).includes(providerUrl), 'failure history must redact Provider URLs')
+    assert(JSON.stringify(health).includes('[provider-url-redacted]'), 'failure history should retain a URL redaction marker')
     assert(health.lastFailureAt === health.recentFailures[0].at, 'last failure timestamp should match latest history record')
   })
 
-  check('successful recovery clears active error but preserves history', () => {
-    providerHealth.recordSuccess('provider-a', 220)
+  check('user-visible Provider diagnostics never expose the configured URL', () => {
+    const providerUrl = 'https://user:secret@private-provider.example/v1?api_key=secret'
+    assert(
+      providerUtils.redactProviderBaseUrl(providerUrl) === '[provider-url-redacted]',
+      'Provider error context must replace the entire configured URL'
+    )
+    assert(
+      !providerUtils.redactProviderErrorText(`upstream failed at ${providerUrl}`).includes('private-provider.example'),
+      'upstream error text must not expose a Provider hostname'
+    )
+  })
+
+  check('model-list probe telemetry cannot reset or poison generation health', () => {
+    const before = providerHealth.getHealth('provider-a')
+    providerHealth.recordProbeSuccess('provider-a', 45)
+    providerHealth.recordProbeFailure('provider-a', 'HTTP 404 model endpoint unavailable')
     const health = providerHealth.getHealth('provider-a')
-    assert(health.healthy, 'success should restore provider health')
-    assert(health.consecutiveFailures === 0, 'success should reset consecutive failures')
-    assert(health.lastError === undefined, 'success should clear active lastError')
-    assert(health.recentFailures.length === 12, 'success should preserve bounded failure history')
+    assert(!health.healthy, 'probe success must not revive a generation-unhealthy provider')
+    assert(health.consecutiveFailures === before.consecutiveFailures, 'probe outcomes must not reset consecutive generation failures')
+    assert(health.successes === before.successes && health.failures === before.failures, 'probe outcomes must not change generation counters')
+    assert(health.probeSuccesses === 1 && health.probeFailures === 1, 'probe counters should be tracked independently')
+    assert(health.lastProbeLatencyMs === 45, 'probe latency should be retained independently')
+    assert(health.lastError === before.lastError, 'probe outcomes must preserve the active generation error')
+  })
+
+  check('half-open recovery requires the configured success threshold', () => {
+    providerHealth.configureProviderCircuitBreaker({
+      failureThreshold: 4,
+      successThreshold: 2,
+      timeoutSeconds: 0,
+      errorRateThreshold: 0.6,
+      minRequests: 10
+    })
+    providerHealth.recordSuccess('provider-a', 220)
+    const halfOpen = providerHealth.getHealth('provider-a')
+    assert(halfOpen.circuitState === 'half_open', 'first recovery success should remain half-open')
+    providerHealth.recordSuccess('provider-a', 180)
+    const closed = providerHealth.getHealth('provider-a')
+    assert(closed.circuitState === 'closed' && closed.healthy, 'success threshold should close the circuit')
+    assert(closed.consecutiveFailures === 0, 'success should reset consecutive failures')
+    assert(closed.lastError === undefined, 'success should clear active lastError')
+    assert(closed.recentFailures.length === 12, 'success should preserve bounded failure history')
   })
 
   check('health state survives cache reset and reload', () => {
     providerHealth._resetProviderHealthCacheForTest()
     const reloaded = providerHealth.getHealth('provider-a')
-    assert(reloaded.successes === 3, `persisted success count mismatch: ${reloaded.successes}`)
+    assert(reloaded.successes === 4, `persisted success count mismatch: ${reloaded.successes}`)
     assert(reloaded.failures === 14, `persisted failure count mismatch: ${reloaded.failures}`)
+    assert(reloaded.probeSuccesses === 1 && reloaded.probeFailures === 1, 'persisted probe counters mismatch')
     assert(reloaded.recentFailures.length === 12, 'persisted failure history should reload')
     const raw = readFileSync(path.join(dataDir, 'provider-health.json'), 'utf8')
     assert(!raw.includes('sk-super-secret'), 'persisted health file must not contain the raw API key')
@@ -91,6 +131,8 @@ try {
     assert(viewSource.includes('successRateLabel'), 'Control Center view should expose provider success rate')
     assert(viewSource.includes('latencyLabel'), 'Control Center view should expose provider latency EMA')
     assert(viewSource.includes('recentFailures'), 'Control Center view should preserve recent failures')
+    assert(viewSource.includes("health.circuitState === 'open'"), 'Control Center should expose open circuit state')
+    assert(viewSource.includes("health.circuitState === 'half_open'"), 'Control Center should expose half-open recovery')
     assert(componentSource.includes('control-provider-failures'), 'Control Center should render expandable failure history')
     assert(componentSource.includes('failure.switchable'), 'failure history should explain whether failover can help')
   })

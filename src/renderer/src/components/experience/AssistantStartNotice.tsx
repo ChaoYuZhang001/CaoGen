@@ -1,7 +1,9 @@
 import { useT } from '../../i18n'
+import type { LocalComputeUnavailableReason } from '../../../../shared/types'
 
 interface AssistantStartNoticeProps {
   busy: boolean
+  computeReason: LocalComputeUnavailableReason | null
   error: string
   recoveryKind: 'compute' | 'provider' | null
   onOpenSettings: () => void
@@ -10,6 +12,7 @@ interface AssistantStartNoticeProps {
 
 export default function AssistantStartNotice({
   busy,
+  computeReason,
   error,
   onOpenSettings,
   onRetry,
@@ -24,12 +27,18 @@ export default function AssistantStartNotice({
   const retryLabel = recoveryKind === 'provider'
     ? busy ? t('welcomeRefreshingProviders') : t('welcomeRetryProviders')
     : busy ? t('assistantCheckingCompute') : t('assistantRetryCompute')
+  const localHelp = recoveryKind === 'compute' && computeReason === 'runtime-missing'
+    ? { href: 'https://ollama.com/download', label: t('assistantInstallOllama') }
+    : recoveryKind === 'compute' && computeReason === 'model-missing'
+      ? { href: 'https://ollama.com/library', label: t('assistantBrowseOllamaModels') }
+      : null
   return (
     <div
       className="notice notice-error welcome-error assistant-start-notice"
       role="alert"
       data-assistant-start-state={recoveryKind ? `${recoveryKind}-unavailable` : 'error'}
       data-welcome-recovery-state={recoveryKind ?? 'error'}
+      data-local-compute-reason={computeReason ?? undefined}
     >
       <span>{error}</span>
       {recoverable && (
@@ -53,6 +62,17 @@ export default function AssistantStartNotice({
           >
             {retryLabel}
           </button>
+          {localHelp && (
+            <a
+              className="btn btn-ghost btn-sm"
+              data-assistant-start-action="local-help"
+              href={localHelp.href}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {localHelp.label}
+            </a>
+          )}
         </div>
       )}
     </div>

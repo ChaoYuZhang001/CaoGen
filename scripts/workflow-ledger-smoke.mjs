@@ -619,6 +619,51 @@ try {
   const newerItem = (await workflowApi.listPersistedWorkflowLedger({ workItemId: 'workflow-newer-item' }, userData)).workItems.items[0]
   assertEqual(newerItem.currentRunId, newerRun.id, 'older Run backfill must not take over newer WorkItem currentRun')
   assertEqual(newerItem.revision, 4, 'older Run backfill must not regress WorkItem revision')
+
+  const repeatedTaskId = 'legacy-repeated-task'
+  const firstTurnRun = {
+    ...buildRun('legacy-first-turn', 'legacy-repeated-session', repeatedTaskId, 20, 800),
+    createdAt: 700
+  }
+  const followUpRun = {
+    ...buildRun('legacy-follow-up-turn', 'legacy-repeated-session', repeatedTaskId, 1, 900),
+    createdAt: 850
+  }
+  await snapshotStore.mutateTaskSnapshotDatabase(userData, (db) => {
+    workflowStore.projectTaskRun(db, firstTurnRun, {
+      projectId: 'project-legacy-repeated',
+      source: 'legacy-derived'
+    })
+    workflowStore.projectTaskRun(db, followUpRun, {
+      projectId: 'project-legacy-repeated',
+      source: 'legacy-derived'
+    })
+  })
+  const repeatedWorkItemId = workflowStore.deriveWorkItemId(followUpRun, {
+    projectId: 'project-legacy-repeated'
+  })
+  let repeatedItem = (await workflowApi.listPersistedWorkflowLedger({
+    workItemId: repeatedWorkItemId
+  }, userData)).workItems.items[0]
+  assertEqual(repeatedItem.currentRunId, followUpRun.id,
+    'follow-up Run must become the repeated legacy WorkItem owner despite restarting at revision 1')
+  assertEqual(repeatedItem.runIds.length, 2,
+    'repeated legacy WorkItem must retain both Run ownership links')
+  assert(repeatedItem.runIds.includes(firstTurnRun.id) && repeatedItem.runIds.includes(followUpRun.id),
+    'repeated legacy WorkItem must own the first and follow-up Runs')
+
+  await snapshotStore.mutateTaskSnapshotDatabase(userData, (db) => workflowStore.projectTaskRun(
+    db,
+    { ...firstTurnRun, revision: 21, updatedAt: 950 },
+    { projectId: 'project-legacy-repeated', source: 'legacy-derived' }
+  ))
+  repeatedItem = (await workflowApi.listPersistedWorkflowLedger({
+    workItemId: repeatedWorkItemId
+  }, userData)).workItems.items[0]
+  assertEqual(repeatedItem.currentRunId, followUpRun.id,
+    'late backfill of an older Run must not retake repeated legacy WorkItem ownership')
+  assertEqual(repeatedItem.runIds.length, 2,
+    'late backfill must preserve both repeated legacy Run ownership links')
   assertEqual((await workflowApi.verifyPersistedWorkflowLedger(userData)).valid, true, 'recovered orphan/newer boundaries must verify')
 
   const page = await workflowApi.listPersistedWorkflowLedger({ limit: 1 }, userData)

@@ -118,7 +118,7 @@ try {
   assert.match(record.transcriptSha256, /^sha256:[0-9a-f]{64}$/)
   assert.match(record.artifactSha256, /^sha256:[0-9a-f]{64}$/)
   assert.match(record.recoverySha256, /^sha256:[0-9a-f]{64}$/)
-  assert.equal(statSync(recordFile).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(recordFile).mode & 0o777, 0o600)
   assert.equal(requests.length, 2)
   assert.deepEqual(requests.map((item) => item.authorizationPresent), [true, true])
 
@@ -154,7 +154,7 @@ try {
   const realRecordParent = path.join(tempRoot, 'real-record-parent')
   const symlinkRecordParent = path.join(tempRoot, 'symlink-record-parent')
   mkdirSync(realRecordParent, { mode: 0o700 })
-  symlinkSync(realRecordParent, symlinkRecordParent, 'dir')
+  symlinkSync(realRecordParent, symlinkRecordParent, process.platform === 'win32' ? 'junction' : 'dir')
   const rejected = await runProcess(process.execPath, [
     path.join(repoRoot, 'scripts', 'real-provider-release-runner.mjs'),
     '--providers', providerFile,

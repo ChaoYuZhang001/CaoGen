@@ -257,7 +257,7 @@ function runStrongKillScenario(operation, checkpoint) {
     }),
     encoding: 'utf8'
   })
-  assert.equal(crash.signal, 'SIGKILL', `${scenarioName} worker must receive SIGKILL`)
+  assert.ok(process.platform === 'win32' ? crash.signal === null && crash.status !== 0 : crash.signal === 'SIGKILL', `${scenarioName} worker must receive a strong kill`)
   assert.equal(existsSync(activeLockPath), true, `${scenarioName} must strand the killed writer lock`)
 
   const afterKillStore = readFileSync(storePath, 'utf8')
@@ -646,7 +646,7 @@ function prepareKilledImportScenario(scenarioName, checkpoint = 'after_prepare')
     }),
     encoding: 'utf8'
   })
-  assert.equal(crash.signal, 'SIGKILL', `${scenarioName} worker must receive SIGKILL`)
+  assert.ok(process.platform === 'win32' ? crash.signal === null && crash.status !== 0 : crash.signal === 'SIGKILL', `${scenarioName} worker must receive a strong kill`)
   const storePath = path.join(userDataDir, 'providers.json')
   const journalPath = path.join(userDataDir, 'provider-profile-operations', 'journal.json')
   const backupRoot = path.join(userDataDir, 'provider-profile-backups')
@@ -679,7 +679,7 @@ function prepareKilledRollbackScenario(scenarioName) {
     }),
     encoding: 'utf8'
   })
-  assert.equal(crash.signal, 'SIGKILL', `${scenarioName} worker must receive SIGKILL`)
+  assert.ok(process.platform === 'win32' ? crash.signal === null && crash.status !== 0 : crash.signal === 'SIGKILL', `${scenarioName} worker must receive a strong kill`)
   const storePath = path.join(userDataDir, 'providers.json')
   const journalPath = path.join(userDataDir, 'provider-profile-operations', 'journal.json')
   const backupRoot = path.join(userDataDir, 'provider-profile-backups')

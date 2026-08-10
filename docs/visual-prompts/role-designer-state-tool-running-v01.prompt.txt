@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Designer anchor and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Designer actively using the real design tools in the tool-running state.
+Action: the left hand opens and securely holds the same fan of five solid-color swatches; the right hand uses the same stylus to precisely touch one selected swatch; the gaze compares the selected color with calm concentration. Add only two short restrained directional ink strokes beside the stylus hand, not a floating interface.
+State readability: active design must remain distinguishable at 96 pixels through the stylus-to-swatch contact, wide sleeve silhouette and both-hand action, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, tied hair, earrings, age, body proportions, muted-magenta overshirt, turquoise inner sleeves, white trousers, shoes, stylus, five swatches, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and restrained focused expression required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, labels, logos or watermark. Swatches remain solid colors without marks.
+Avoid: redesign, extra people, duplicate stylus or swatches, floating color wheel, holograms, decorative UI, glow, cyberpunk, malformed hands, cropped anatomy or style drift.

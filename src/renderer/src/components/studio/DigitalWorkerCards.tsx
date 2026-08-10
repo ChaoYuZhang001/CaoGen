@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { DigitalWorker, DigitalWorkerAssignment, RoleTemplate } from '../../../../shared/types'
 import type { DigitalWorkerStudioWorkItem } from './digital-worker-studio-model'
 import {
+  WATERCOLOR_ROLE_LABELS,
   WORKER_STATUS_LABELS,
   acceptancePolicyLabels,
   assignmentsForWorker,
@@ -11,6 +12,7 @@ import {
   escalationPolicyLabels,
   permissionsFor,
   roleForWorker,
+  watercolorRoleForWorker,
   workerInitials,
   workItemTitle
 } from './digital-worker-studio-model'
@@ -63,6 +65,7 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
   } = props
   const [confirmRetire, setConfirmRetire] = useState(false)
   const role = roleForWorker(worker, roles)
+  const watercolorRole = watercolorRoleForWorker(worker, role)
   const permissions = permissionsFor(worker)
   const activeAssignments = assignmentsForWorker(worker.id, assignments)
   const busy = busyKey !== null
@@ -74,12 +77,14 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
       aria-labelledby={`dws-worker-${worker.id}`}
       data-digital-worker-id={worker.id}
       data-digital-worker-status={worker.status}
+      data-watercolor-role={watercolorRole.role}
+      data-watercolor-role-source={watercolorRole.source}
     >
       <header className="dws-worker-head">
         <div className="dws-avatar" aria-hidden="true">{workerInitials(worker.displayName)}</div>
         <div className="dws-worker-identity">
           <h3 id={`dws-worker-${worker.id}`}>{worker.displayName}</h3>
-          <span>{role?.name || '岗位模板不可用'} · v{worker.roleTemplateVersion}</span>
+          <span>{role?.name || '岗位模板不可用'} · v{worker.roleTemplateVersion} · {WATERCOLOR_ROLE_LABELS[watercolorRole.role]}</span>
         </div>
         <span className={`dws-status dws-status-${worker.status}`}>
           <span className="dws-status-dot" aria-hidden="true" />

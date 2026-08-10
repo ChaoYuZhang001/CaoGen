@@ -3,21 +3,39 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { homedir } from 'node:os'
 import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { sessionManager } from './sessionManager'
+import { sessionReadyHandler } from './ipc/session-ready-handler'
 import { previewOutboundContext } from './project-workspace/outbound-context-policy'
 import { applySessionModelSwitch } from './ipc/session-model-switch-handler'
 import { createUnassignedSession } from './ipc/unassigned-session'
 import { resolveWorkspaceSessionCwd } from './project-workspace/workspace-session-cwd'
 import { activateLocalCompute } from './provider/localCompute'
+import { configureProviderCircuitBreaker } from './providerHealth'
+import { queryProviderUsage } from './provider/providerUsage'
+import { removeProviderAuthorizations } from './provider/providerAuthorizationService'
+import { registerProviderAuthorizationIpc } from './ipc/provider-authorization-handlers'
+import { registerProviderBillingIpc } from './ipc/provider-billing-handlers'
+import { registerProviderGatewayIpc } from './ipc/provider-gateway-handlers'
+import { inspectProviderBalance, queryProviderBalance } from './provider/providerBalanceService'
+import { fetchProviderPricingCatalog } from './provider/providerPricingCatalog'
 import { registerInteractiveMutationIpc } from './ipc/interactive-mutation-handlers'
 import { registerAppFeatureIpc } from './ipc/app-feature-handlers'
 import { getSettings, updateSettings } from './settings'
+import {
+  listGuiAutomationGrants,
+  listToolCapabilityGrants,
+  revokeAllGuiAutomationGrants,
+  revokeAllToolCapabilityGrants,
+  revokeGuiAutomationGrant,
+  revokeGuiAutomationGrantsForSession,
+  revokeToolCapabilityGrant,
+  revokeToolCapabilityGrantsForSession
+} from './permission/permission-manager'
 import {
   createNotificationConnector,
   deleteNotificationConnector,
   listNotificationConnectors,
   setDefaultNotificationConnector
 } from './notification/notification-connector-store'
-import { syncIdeBridgeFromSettings } from './ide/ide-bridge-manager'
 import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
 import { searchTranscripts } from './transcriptSearch'
 import {
@@ -25,7 +43,8 @@ import {
   createProvider,
   updateProvider,
   deleteProvider,
-  fetchModels
+  fetchModels,
+  probeProviderGeneration
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
@@ -51,7 +70,18 @@ import {
 import { writeExtractedMemory } from './memory/memory-writer'
 import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
-import { listProjectFiles, readTextFile } from './fileOps'
+import { listProjectFiles, readTextFile, searchProjectText } from './fileOps'
+import { collectProjectDiagnostics } from './projectDiagnostics'
+import { resolveProjectDefinition, searchProjectSymbols } from './projectLanguageIntelligence'
+import {
+  getTypeScriptCompletions,
+  getTypeScriptDefinitions,
+  getTypeScriptDiagnostics,
+  getTypeScriptHover
+} from './typescriptLanguageServer'
+import type {
+  TypeScriptLanguageInput
+} from '../shared/types'
 import { preparePreview } from './previewOps'
 import { prepareOfficeVisualPreview } from './previewVisual'
 import { listPreviewAnnotations, savePreviewAnnotation } from './previewAnnotations'
@@ -78,6 +108,7 @@ import { registerPluginInstallIpc } from './ipc/plugin-install-ipc'
 import { registerTerminalMutationIpc } from './ipc/terminal-mutation-ipc'
 import { registerBrowserMutationIpc } from './ipc/browser-mutation-ipc'
 import { executeInteractiveOperationEffect } from './task/operation-effect-gateway'
+import { executeProviderOperationEffect } from './provider/providerOperationEffect'
 import { terminalManager } from './terminal'
 import { browserViewManager } from './browserView'
 import { sessionImageAttachmentsRoot } from './attachmentOps'
@@ -103,6 +134,7 @@ import type {
   CreateSessionOptions,
   NotificationConnectorInput,
   DispatchSubagentsInput,
+  DocumentAttachmentView,
   EffectRecord,
   ImageAttachmentView,
   RoutineRunReviewInput,
@@ -113,6 +145,7 @@ import type {
   PluginRegistryScanOptions,
   MigrationApplyInput,
   ProviderInput,
+  ProviderGenerationProbeInput,
   ProviderModelFetchInput,
   SendMessagePayload,
   TaskDagDispatchInput,
@@ -125,6 +158,20 @@ let terminalEventsRegistered = false
 let browserEventsRegistered = false
 const MEMORY_SUGGESTION_COOLDOWN_MS = 30_000
 const MEMORY_SUGGESTION_MAX_RECENT = 500
+
+function typeScriptLanguageInput(value: unknown): TypeScriptLanguageInput | null {
+  if (!value || typeof value !== 'object') return null
+  const input = value as Record<string, unknown>
+  if (typeof input.path !== 'string' || input.path.length === 0 || input.path.length > 4_096) return null
+  if (typeof input.content !== 'string') return null
+  if (!Number.isSafeInteger(input.line) || !Number.isSafeInteger(input.column)) return null
+  return {
+    path: input.path,
+    content: input.content,
+    line: input.line as number,
+    column: input.column as number
+  }
+}
 const recentMemorySuggestions = new Map<string, number>()
 
 function shouldEmitMemorySuggestion(sessionId: string, text: string, now = Date.now()): boolean {
@@ -159,8 +206,18 @@ function normalizeSendPayload(sessionId: string, raw: unknown): SendMessagePaylo
         return isImageAttachmentView(image) && isInsideAttachmentRoot(sessionId, image.path)
       })
     : undefined
-  if (!text && (!images || images.length === 0)) return null
-  return { text, ...(images && images.length > 0 ? { images } : {}) }
+  const documents = Array.isArray(record.documents)
+    ? record.documents.filter((document): document is DocumentAttachmentView => {
+        return isDocumentAttachmentView(document) &&
+          isExpectedDocumentAttachmentPath(sessionId, document)
+      })
+    : undefined
+  if (!text && (!images || images.length === 0) && (!documents || documents.length === 0)) return null
+  return {
+    text,
+    ...(images && images.length > 0 ? { images } : {}),
+    ...(documents && documents.length > 0 ? { documents } : {})
+  }
 }
 
 function isInsideAttachmentRoot(sessionId: string, fullPath: string): boolean {
@@ -340,7 +397,7 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 }
 
 export function registerIpc(): void {
-  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc, registerInteractiveMutationIpc, registerAppFeatureIpc]) register()
+  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc, registerInteractiveMutationIpc, registerAppFeatureIpc, registerProviderGatewayIpc]) register()
   registerAttachmentMutationIpc(attachmentRoot)
   registerProjectContextMutationIpc()
   registerMcpProbeIpc({
@@ -433,6 +490,58 @@ export function registerIpc(): void {
     return listProjectFiles(cwd)
   })
 
+  ipcMain.handle('files:search', (_e, id: string, query: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, matches: [], error: '会话不存在' }
+    return searchProjectText(cwd, typeof query === 'string' ? query : '')
+  })
+
+  ipcMain.handle('files:diagnostics', (_e, id: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, diagnostics: [], analyzedFiles: 0, supportedFiles: 0, truncated: false, error: '会话不存在' }
+    return collectProjectDiagnostics(cwd)
+  })
+
+  ipcMain.handle('files:symbols', (_e, id: string, query: string, limit?: number) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, symbols: [], error: '会话不存在' }
+    return searchProjectSymbols(cwd, typeof query === 'string' ? query : '', typeof limit === 'number' ? limit : undefined)
+  })
+
+  ipcMain.handle('files:definition', (_e, id: string, relPath: string, symbol: string) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    if (!cwd) return { ok: false, symbols: [], error: '会话不存在' }
+    return resolveProjectDefinition(cwd, typeof relPath === 'string' ? relPath : '', typeof symbol === 'string' ? symbol : '')
+  })
+
+  ipcMain.handle('files:typescriptCompletions', (_e, id: string, value: unknown) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    const input = typeScriptLanguageInput(value)
+    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', items: [], error: !cwd ? '会话不存在' : '语言请求无效' }
+    return getTypeScriptCompletions(cwd, input)
+  })
+
+  ipcMain.handle('files:typescriptHover', (_e, id: string, value: unknown) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    const input = typeScriptLanguageInput(value)
+    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', markdown: '', error: !cwd ? '会话不存在' : '语言请求无效' }
+    return getTypeScriptHover(cwd, input)
+  })
+
+  ipcMain.handle('files:typescriptDefinitions', (_e, id: string, value: unknown) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    const input = typeScriptLanguageInput(value)
+    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', locations: [], error: !cwd ? '会话不存在' : '语言请求无效' }
+    return getTypeScriptDefinitions(cwd, input)
+  })
+
+  ipcMain.handle('files:typescriptDiagnostics', (_e, id: string, value: unknown) => {
+    const cwd = sessionManager.get(id)?.meta.cwd
+    const input = typeScriptLanguageInput(value)
+    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', diagnostics: [], error: !cwd ? '会话不存在' : '语言请求无效' }
+    return getTypeScriptDiagnostics(cwd, input)
+  })
+
   ipcMain.handle('files:read', (_e, id: string, relPath: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
     if (!cwd) return { ok: false, error: '会话不存在' }
@@ -504,8 +613,7 @@ export function registerIpc(): void {
   }
 
   ipcMain.handle('terminals:list', () => terminalManager.list())
-
-  ipcMain.handle('sessions:create', async (_e, opts: CreateSessionOptions) => {
+  ipcMain.handle('sessions:create', sessionReadyHandler(async (_e, opts: CreateSessionOptions) => {
     if (!opts || typeof opts.cwd !== 'string') {
       throw new Error('创建会话参数无效')
     }
@@ -515,17 +623,17 @@ export function registerIpc(): void {
       return sessionManager.createManaged({ ...opts, cwd })
     }
     return sessionManager.createManaged(opts)
-  })
+  }))
 
-  ipcMain.handle('sessions:dispatchSubagents', (_e, parentSessionId: string, input: DispatchSubagentsInput) => {
+  ipcMain.handle('sessions:dispatchSubagents', sessionReadyHandler((_e, parentSessionId: string, input: DispatchSubagentsInput) => {
     if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
       throw new Error('必须指定父会话')
     }
     if (!input || !Array.isArray(input.tasks)) throw new Error('必须提供子代理任务列表')
     return sessionManager.dispatchSubagents(parentSessionId, input)
-  })
+  }))
 
-  ipcMain.handle('sessions:decomposeTask', (_e, parentSessionId: string, input: TaskDecomposeInput) => {
+  ipcMain.handle('sessions:decomposeTask', sessionReadyHandler((_e, parentSessionId: string, input: TaskDecomposeInput) => {
     if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
       throw new Error('必须指定父会话')
     }
@@ -533,15 +641,15 @@ export function registerIpc(): void {
       throw new Error('必须提供需求文本')
     }
     return sessionManager.decomposeTask(parentSessionId, input)
-  })
+  }))
 
-  ipcMain.handle('sessions:dispatchTaskDag', (_e, parentSessionId: string, input: TaskDagDispatchInput) => {
+  ipcMain.handle('sessions:dispatchTaskDag', sessionReadyHandler((_e, parentSessionId: string, input: TaskDagDispatchInput) => {
     if (typeof parentSessionId !== 'string' || parentSessionId.trim().length === 0) {
       throw new Error('必须指定父会话')
     }
     if (!input?.dag || !Array.isArray(input.dag.tasks)) throw new Error('必须提供 DAG 任务')
     return sessionManager.dispatchTaskDag(parentSessionId, input)
-  })
+  }))
 
   // OCR:提取附件图片文字(Vision/tesseract 逐级降级;路径必须在会话附件区内)
   ipcMain.handle('attachments:ocr', async (_e, id: string, imagePath: string) => {
@@ -552,7 +660,7 @@ export function registerIpc(): void {
     return ocrImage(imagePath)
   })
 
-  ipcMain.handle('sessions:send', async (_e, id: string, raw: unknown) => {
+  ipcMain.handle('sessions:send', sessionReadyHandler(async (_e, id: string, raw: unknown) => {
     const payload = normalizeSendPayload(id, raw)
     if (!payload) return false
     const accepted = await sessionManager.send(id, payload)
@@ -579,20 +687,24 @@ export function registerIpc(): void {
       })
     }
     return true
-  })
+  }))
 
-  ipcMain.handle('sessions:outboundContextPreview', async (_e, id: string, raw: unknown) => {
+  ipcMain.handle('sessions:outboundContextPreview', sessionReadyHandler(async (_e, id: string, raw: unknown) => {
     const meta = sessionManager.get(id)?.meta
     if (!meta) throw new Error('会话不存在')
     const payload = normalizeSendPayload(id, raw) ?? { text: '' }
     return previewOutboundContext(meta, app.getPath('userData'), payload)
-  })
+  }))
 
-  ipcMain.handle('sessions:interrupt', async (_e, id: string) => {
+  ipcMain.handle('sessions:interrupt', sessionReadyHandler(async (_e, id: string) => {
     await sessionManager.interrupt(id)
-  })
+  }))
 
-  ipcMain.handle('sessions:close', (_e, id: string) => sessionManager.close(id))
+  ipcMain.handle('sessions:close', sessionReadyHandler(async (_e, id: string) => {
+    revokeGuiAutomationGrantsForSession(id)
+    revokeToolCapabilityGrantsForSession(id)
+    await sessionManager.close(id)
+  }))
 
   ipcMain.handle(
     'sessions:permission',
@@ -601,9 +713,9 @@ export function registerIpc(): void {
     }
   )
 
-  ipcMain.handle('sessions:setPermissionMode', async (_e, id: string, mode: PermissionModeId) => {
+  ipcMain.handle('sessions:setPermissionMode', sessionReadyHandler(async (_e, id: string, mode: PermissionModeId) => {
     await sessionManager.get(id)?.setPermissionMode(mode)
-  })
+  }))
 
   ipcMain.handle('sessions:setModel', (_e, id: string, model: string) =>
     applySessionModelSwitch(sessionManager.get(id), model))
@@ -640,9 +752,21 @@ export function registerIpc(): void {
 
   ipcMain.handle('settings:get', () => getSettings())
 
+  ipcMain.handle('permissions:gui-grants:list', () => listGuiAutomationGrants())
+  ipcMain.handle('permissions:gui-grants:revoke', (_event, grantId: string) =>
+    revokeGuiAutomationGrant(typeof grantId === 'string' ? grantId : '')
+  )
+  ipcMain.handle('permissions:gui-grants:revoke-all', () => revokeAllGuiAutomationGrants())
+  ipcMain.handle('permissions:tool-grants:list', () => listToolCapabilityGrants())
+  ipcMain.handle('permissions:tool-grants:revoke', (_event, grantId: string) =>
+    revokeToolCapabilityGrant(typeof grantId === 'string' ? grantId : '')
+  )
+  ipcMain.handle('permissions:tool-grants:revoke-all', () => revokeAllToolCapabilityGrants())
+
   ipcMain.handle('settings:update', async (_e, patch: Partial<AppSettings>) => {
     const next = updateSettings(patch ?? {})
-    await syncIdeBridgeFromSettings()
+    if (!next.guiAutomationEnabled) revokeAllGuiAutomationGrants()
+    configureProviderCircuitBreaker(next.providerCircuitBreaker)
     return next
   })
 
@@ -658,7 +782,21 @@ export function registerIpc(): void {
   )
 
   ipcMain.handle('providers:list', () => listProviders())
-  ipcMain.handle('providers:activateLocalCompute', () => activateLocalCompute())
+  ipcMain.handle('providers:usage', (_e, query) => queryProviderUsage(query ?? {}))
+  registerProviderAuthorizationIpc()
+  registerProviderBillingIpc()
+  ipcMain.handle('providers:balance:capability', (_e, providerId: string) =>
+    inspectProviderBalance(typeof providerId === 'string' ? providerId : ''))
+  ipcMain.handle('providers:balance:query', (_e, providerId: string) => {
+    const normalizedProviderId = typeof providerId === 'string' ? providerId : ''
+    return executeProviderOperationEffect(
+      'provider_balance_query',
+      'Query Provider balance',
+      { providerId: normalizedProviderId },
+      () => queryProviderBalance(normalizedProviderId)
+    )
+  })
+  ipcMain.handle('providers:activateLocalCompute', (_event, options) => activateLocalCompute(options))
 
   ipcMain.handle('providers:create', (_e, input: ProviderInput) => {
     if (!input || typeof input.name !== 'string' || input.name.trim().length === 0) {
@@ -673,6 +811,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('providers:delete', (_e, id: string) => {
     deleteProvider(id)
+    removeProviderAuthorizations(id)
   })
 
   ipcMain.handle('providers:health', () => listHealth())
@@ -936,6 +1075,22 @@ export function registerIpc(): void {
     'providers:fetchModels',
     (_e, opts: ProviderModelFetchInput) => fetchModels(opts ?? {})
   )
+  ipcMain.handle(
+    'providers:probeGeneration',
+    (_e, opts: ProviderGenerationProbeInput) => {
+      const input = opts ?? { baseUrl: '', model: '' }
+      return executeProviderOperationEffect(
+        'provider_generation_probe',
+        'Test Provider generation request',
+        { providerId: input.providerId ?? '', baseUrl: input.baseUrl, model: input.model },
+        () => probeProviderGeneration(input)
+      )
+    }
+  )
+  ipcMain.handle(
+    'providers:fetchPricingCatalog',
+    (_e, models: string[]) => fetchProviderPricingCatalog(Array.isArray(models) ? models : [])
+  )
   ipcMain.handle('dialog:pickDirectory', async (e) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     const result = win
@@ -943,4 +1098,41 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
   })
+}
+
+function isDocumentAttachmentView(value: unknown): value is DocumentAttachmentView {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.hash === 'string' &&
+    record.id === record.hash &&
+    /^[a-f0-9]{64}$/.test(record.hash) &&
+    typeof record.path === 'string' &&
+    typeof record.name === 'string' &&
+    isSafeDocumentAttachmentName(record.name) &&
+    record.mime === 'text/plain; charset=utf-8' &&
+    typeof record.bytes === 'number' &&
+    Number.isFinite(record.bytes) &&
+    typeof record.createdAt === 'string' &&
+    (record.dataClass === 'S2' || record.dataClass === 'S3')
+  )
+}
+
+function isSafeDocumentAttachmentName(name: string): boolean {
+  const normalized = name.replace(/\\/g, '/')
+  return name.length > 0 &&
+    name.length <= 1024 &&
+    !isAbsolute(name) &&
+    !name.includes('\0') &&
+    !/[\r\n]/.test(name) &&
+    !normalized.split('/').some((segment) => segment === '..')
+}
+
+function isExpectedDocumentAttachmentPath(
+  sessionId: string,
+  document: DocumentAttachmentView
+): boolean {
+  const expected = resolve(attachmentRoot(sessionId), 'documents', document.dataClass, `${document.hash}.txt`)
+  return resolve(document.path) === expected
 }

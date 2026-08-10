@@ -45,7 +45,30 @@ try {
     {
       ...provider('alpha', 'Alpha Gateway', 'https://alpha.example/v1', ['alpha-old']),
       keyCount: 1,
-      activeKeyLabel: 'primary'
+      activeKeyLabel: 'primary',
+      authorization: {
+        schemaVersion: 1,
+        method: 'oauth',
+        status: 'authorized',
+        accountId: 'acct-alpha',
+        accountLabel: 'Alpha account'
+      },
+      advancedConfig: {
+        schemaVersion: 1,
+        modelProfiles: [{
+          model: 'alpha-old',
+          aliases: ['alpha-latest'],
+          pricing: {
+            currency: 'USD',
+            inputPerMillion: 1,
+            outputPerMillion: 2,
+            source: 'provider'
+          }
+        }],
+        appBindings: {
+          claude: { modelMap: { sonnet: 'alpha-old' } }
+        }
+      }
     },
     provider('target-owner', 'Target Owner', 'https://shared.example/v1', ['shared-model']),
     provider('name-owner', 'Name Collision', 'https://name.example/v1', ['name-model'])
@@ -56,6 +79,11 @@ try {
   assert(!/(?:apiKeys|encryptedToken|activeKeyId|tokenLabel)/.test(exported), 'export must not contain credential fields')
   const parsedExport = profile.parseProviderProfile(exported)
   equal(parsedExport.entries.length, existing.length, 'exported provider count')
+  equal(parsedExport.entries[0].authorization?.status, 'authorized', 'authorization metadata must round-trip')
+  equal(parsedExport.entries[0].advancedConfig?.modelProfiles?.[0]?.pricing?.outputPerMillion, 2,
+    'model pricing must round-trip')
+  equal(parsedExport.entries[0].advancedConfig?.appBindings?.claude?.modelMap?.sonnet, 'alpha-old',
+    'app binding model map must round-trip')
 
   const ignoredCredential = ['ignored', 'fixture'].join('-')
   const imported = profile.parseProviderProfile(JSON.stringify({
@@ -82,6 +110,16 @@ try {
   }))
   equal(imported.credentialFieldsIgnored, 1, 'credential field count')
   assert(!JSON.stringify(imported.entries).includes(ignoredCredential), 'ignored credential must not enter parsed entries')
+
+  assertThrows(() => profile.parseProviderProfile(JSON.stringify({
+    providers: [{
+      name: 'Credential-like advanced config',
+      baseUrl: 'https://advanced.example/v1',
+      engine: 'openai',
+      models: ['advanced-model'],
+      advancedConfig: { request: { headers: { authorization: 'must-not-enter' } } }
+    }]
+  })), 'advanced config must reject credential headers')
 
   const plan = profile.planProviderProfileImport(imported.entries, existing)
   equal(plan[0].view.defaultAction, 'update', 'matching provider should update')
@@ -354,10 +392,10 @@ try {
   }]).find((provider) => provider.id === snapshotFixture.id)
   assert(
     snapshotApplied?.customHeaders === undefined
-      && snapshotApplied.credentialHeaderNames?.length === 0
+      && snapshotApplied.credentialHeaderNames?.join(',') === 'authorization'
       && snapshotApplied.budgetUsd === 0
       && snapshotApplied.note === undefined,
-    'authoritative snapshot apply must clear every optional field shown as changed'
+    'authoritative snapshot apply must clear optional fields and restore the safe credential-header default'
   )
   const protocolCleared = profileStore.applyProviderProfileMutations([{
     action: 'update',
@@ -409,13 +447,23 @@ try {
   equal(preview.updateCount, 1, 'service preview update count')
   equal(preview.createCount, 1, 'service preview create count')
   providersApi.updateProvider(created[0].id, { models: ['concurrent-change'] })
+  const automaticBackups = profileService.listProviderProfileBackups()
+  assert(automaticBackups.some((backup) => backup.reason === 'provider-create'),
+    'ordinary Provider creation must create an automatic configuration version')
+  assert(automaticBackups.some((backup) => backup.reason === 'provider-update'),
+    'ordinary Provider update must create an automatic configuration version')
+  const automaticBackupCount = automaticBackups.length
+  providersApi.updateProvider(created[0].id, {})
+  equal(profileService.listProviderProfileBackups().length, automaticBackupCount,
+    'no-op Provider update must not create an automatic configuration version')
   const afterConcurrentMutation = readFileSync(providersPath, 'utf8')
+  const backupsBeforeStaleApply = profileService.listProviderProfileBackups().length
   const staleApplyError = captureError(() => profileService.applyProviderProfilePreview(preview.previewId, []))
   assert(/\u9884\u89c8\u540e\u5df2\u53d8\u5316|\u91cd\u65b0\u9884\u89c8/.test(staleApplyError),
     'apply must reject provider configuration drift after preview')
   equal(readFileSync(providersPath, 'utf8'), afterConcurrentMutation,
     'stale apply must preserve the concurrently updated provider store')
-  equal(profileService.listProviderProfileBackups().length, 0,
+  equal(profileService.listProviderProfileBackups().length, backupsBeforeStaleApply,
     'stale apply must not create a misleading backup')
   assert(/\u9884\u89c8\u5df2\u5931\u6548/.test(captureError(
     () => profileService.applyProviderProfilePreview(preview.previewId, [])
@@ -425,7 +473,7 @@ try {
   const applied = profileService.applyProviderProfilePreview(reboundPreview.previewId, [])
   equal(applied.updated, 1, 're-preview apply update count')
   equal(applied.created, 1, 're-preview apply create count')
-  equal(profileService.listProviderProfileBackups().length, 1,
+  equal(profileService.listProviderProfileBackups().length, backupsBeforeStaleApply + 1,
     'successful apply must create one rollback backup')
   const appliedLocal = applied.providers.find((provider) => provider.id === created[0].id)
   const appliedSecond = applied.providers.find((provider) => provider.name === 'Second Local Runtime')
@@ -485,6 +533,33 @@ try {
   try {
     const localBaseUrl = 'http://127.0.0.1:11438/v1'
     const noAuthCredentialCanary = ['local', 'credential', 'canary'].join('-')
+    const defaultHeaderDiscovery = await providersApi.fetchModels({
+      baseUrl: localBaseUrl,
+      token: noAuthCredentialCanary,
+      authMode: 'api-key',
+      openaiProtocol: 'chat'
+    })
+    assert(defaultHeaderDiscovery.ok && discoveryRequests.length > 0,
+      'unsaved API-key model discovery must work without manually configuring a credential header')
+    assert(discoveryRequests.every((headers) =>
+      headers.get('authorization') === `Bearer ${noAuthCredentialCanary}` && !headers.has('x-api-key')),
+    'unsaved OpenAI-compatible model discovery must inject the key as Authorization Bearer by default')
+
+    discoveryRequests.length = 0
+    const explicitHeaderDiscovery = await providersApi.fetchModels({
+      baseUrl: localBaseUrl,
+      token: noAuthCredentialCanary,
+      authMode: 'api-key',
+      openaiProtocol: 'chat',
+      credentialHeaderNames: ['x-api-key']
+    })
+    assert(explicitHeaderDiscovery.ok && discoveryRequests.length > 0,
+      'explicit managed credential headers must remain supported during model discovery')
+    assert(discoveryRequests.every((headers) =>
+      headers.get('x-api-key') === noAuthCredentialCanary && !headers.has('authorization')),
+    'explicit x-api-key model discovery must not leak the credential into Authorization')
+
+    discoveryRequests.length = 0
     const keyedLocal = providersApi.createProvider({
       name: 'Keyed local before no-auth',
       baseUrl: localBaseUrl,
@@ -555,6 +630,12 @@ try {
       models: ['direct-local-model'],
       token: directCredentialCanary
     })
+    assert(directKeyed.credentialHeaderNames?.join(',') === 'authorization',
+      'new OpenAI-compatible Providers must persist the Authorization default')
+    assert(providersApi.providerCredentialHeaders(
+      providersApi.getProvider(directKeyed.id), directCredentialCanary
+    ).authorization === `Bearer ${directCredentialCanary}`,
+    'new OpenAI-compatible Providers must inject their saved key without extra header configuration')
     const directNoAuth = providersApi.updateProvider(directKeyed.id, { authMode: 'none' })
     const directNoAuthStored = providersApi.getProvider(directKeyed.id)
     assert(directNoAuth.authMode === 'none' && directNoAuth.hasToken === false && directNoAuth.ready === true,
@@ -813,6 +894,46 @@ try {
   assert(!containsSensitiveMarker(backupCorpus, backupSensitiveMarkers),
     'all Provider Profile backup files must contain zero credential canary material')
 
+  const deletionFixture = providersApi.createProvider({
+    name: 'Automatic history deletion fixture',
+    baseUrl: 'http://127.0.0.1:11438/v1',
+    engine: 'openai',
+    authMode: 'none',
+    openaiProtocol: 'chat',
+    models: ['history-fixture']
+  })
+  providersApi.deleteProvider(deletionFixture.id)
+  assert(profileService.listProviderProfileBackups().some((backup) => backup.reason === 'provider-delete'),
+    'ordinary Provider deletion must create an automatic configuration version')
+
+  const versionBackup = profileService.listProviderProfileBackups().find(
+    (backup) => backup.reason === 'provider-update'
+  )
+  assert(versionBackup, 'automatic update history must remain available for preview')
+  const versionPreview = profileService.previewProviderProfileBackup(versionBackup.id)
+  assert(versionPreview.items.length > 0
+    && versionPreview.createCount + versionPreview.updateCount
+      + versionPreview.deleteCount + versionPreview.unchangedCount === versionPreview.items.length,
+  'local version preview must provide a complete create/update/delete/unchanged plan')
+  const serializedVersionPreview = JSON.stringify(versionPreview)
+  assert(!serializedVersionPreview.includes('https://')
+    && !serializedVersionPreview.includes('http://')
+    && !containsSensitiveMarker(serializedVersionPreview, backupSensitiveMarkers),
+  'local version preview must expose neither Provider endpoint values nor credential canaries')
+
+  const driftTarget = providersApi.listProviders()[0]
+  providersApi.updateProvider(driftTarget.id, { note: 'version-preview-drift-fixture' })
+  assert(/changed after preview|preview the version again/i.test(captureError(
+    () => profileService.applyProviderProfileBackupPreview(versionPreview.previewId)
+  )), 'local version apply must reject Provider configuration drift after preview')
+  const freshVersionPreview = profileService.previewProviderProfileBackup(versionBackup.id)
+  const backupCountBeforeVersionApply = profileService.listProviderProfileBackups().length
+  const versionRollback = profileService.applyProviderProfileBackupPreview(freshVersionPreview.previewId)
+  equal(versionRollback.restoredBackupId, versionBackup.id,
+    'local version apply must restore the exact previewed backup')
+  assert(profileService.listProviderProfileBackups().length === backupCountBeforeVersionApply + 1,
+    'local version apply must create a reverse safety backup before rollback')
+
   const remoteDiscoveryError = await captureAsyncError(() => providersApi.fetchModels({
     baseUrl: 'https://remote-no-auth.example/v1',
     authMode: 'none',
@@ -909,6 +1030,44 @@ try {
   const persistedSanitizedLoad = JSON.parse(readFileSync(providersPath, 'utf8'))
   equal(persistedSanitizedLoad[0].authMode, 'api-key',
     'fresh process downgrade must be persisted')
+
+  writeFileSync(providersPath, JSON.stringify([
+    {
+      id: 'legacy-openai-default-header',
+      name: 'Legacy OpenAI header fixture',
+      baseUrl: 'https://legacy-openai.example/v1',
+      encryptedToken: '',
+      apiKeys: [],
+      models: ['legacy-openai-model'],
+      authMode: 'api-key',
+      engine: 'openai',
+      openaiProtocol: 'chat',
+      budgetUsd: 0,
+      createdAt: 1
+    },
+    {
+      id: 'legacy-anthropic-default-header',
+      name: 'Legacy Anthropic header fixture',
+      baseUrl: 'https://legacy-anthropic.example',
+      encryptedToken: '',
+      apiKeys: [],
+      models: ['legacy-anthropic-model'],
+      authMode: 'api-key',
+      engine: 'anthropic',
+      budgetUsd: 0,
+      createdAt: 1
+    }
+  ], null, 2), { mode: 0o600 })
+  const migratedDefaultHeaders = loadProvidersInFreshProcess(findCompiled(outDir, 'providers.js'))
+  equal(migratedDefaultHeaders[0].credentialHeaderNames?.join(','), 'authorization',
+    'legacy OpenAI-compatible Providers must migrate to Authorization')
+  equal(migratedDefaultHeaders[1].credentialHeaderNames?.join(','), 'x-api-key',
+    'legacy Anthropic Providers must migrate to x-api-key')
+  const persistedDefaultHeaders = JSON.parse(readFileSync(providersPath, 'utf8'))
+  equal(persistedDefaultHeaders[0].credentialHeaderNames?.join(','), 'authorization',
+    'OpenAI credential-header migration must be persisted')
+  equal(persistedDefaultHeaders[1].credentialHeaderNames?.join(','), 'x-api-key',
+    'Anthropic credential-header migration must be persisted')
 
   mkdirSync(reportDir, { recursive: true })
   assert(!containsSensitiveMarker(JSON.stringify(checks), backupSensitiveMarkers),

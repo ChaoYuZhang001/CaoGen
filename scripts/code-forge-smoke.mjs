@@ -290,6 +290,7 @@ try {
     rmSync(attributesPath, { force: true })
   }
 
+  if (process.platform !== 'win32') {
   const unsafeLinkPath = path.join(worktreeDir, 'unsafe-link.txt')
   symlinkSync('app.txt', unsafeLinkPath)
   const linkedUntrackedReport = delivery.runCodeForgeDelivery({
@@ -305,6 +306,7 @@ try {
     'untracked symlink must block Code Forge descriptor'
   )
   rmSync(unsafeLinkPath, { force: true })
+  }
 
   if (process.platform !== 'win32') {
     const fifoPath = path.join(worktreeDir, 'unsafe-fifo')
@@ -433,11 +435,13 @@ try {
   assert.equal(tampered.kind, 'unresolved', 'mismatched content-addressed artifact must fail closed')
   writeFileSync(patchArtifactPath, frozenPatch)
 
-  rmSync(patchArtifactPath, { force: true })
-  symlinkSync(path.join(worktreeDir, 'app.txt'), patchArtifactPath)
-  const linkedArtifact = await reconciler.reconcileEffect(effect)
-  assert.equal(linkedArtifact.kind, 'unresolved', 'symlink patch artifact must fail closed')
-  rmSync(patchArtifactPath, { force: true })
+  if (process.platform !== 'win32') {
+    rmSync(patchArtifactPath, { force: true })
+    symlinkSync(path.join(worktreeDir, 'app.txt'), patchArtifactPath)
+    const linkedArtifact = await reconciler.reconcileEffect(effect)
+    assert.equal(linkedArtifact.kind, 'unresolved', 'symlink patch artifact must fail closed')
+    rmSync(patchArtifactPath, { force: true })
+  }
   writeFileSync(patchArtifactPath, frozenPatch)
 
   const blockedCommit = await gitTools.executeGitTool(
@@ -580,6 +584,7 @@ function effectRecord(descriptor, input) {
 function initRepo(dir) {
   mkdirSync(dir, { recursive: true })
   git(dir, ['init', '-b', 'main'])
+  git(dir, ['config', 'core.autocrlf', 'false'])
   git(dir, ['config', 'user.email', 'smoke@example.test'])
   git(dir, ['config', 'user.name', 'CaoGen Smoke'])
 }

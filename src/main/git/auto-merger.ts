@@ -582,14 +582,19 @@ function runConfiguredVerification(
   if (!command) return { status: 'skipped', cwd: repoRoot, error: '未在 caogen.md 中找到验收命令' }
 
   const shell = process.platform === 'win32'
-    ? { command: 'cmd', args: ['/c', command] }
-    : { command: '/bin/sh', args: ['-c', command] }
+    ? {
+        command: process.env.ComSpec || 'cmd.exe',
+        args: ['/d', '/s', '/c', `"${command}"`],
+        windowsVerbatimArguments: true
+      }
+    : { command: '/bin/sh', args: ['-c', command], windowsVerbatimArguments: false }
   const result = spawnSync(shell.command, shell.args, {
     cwd: repoRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: timeoutMs,
-    maxBuffer: 1024 * 1024
+    maxBuffer: 1024 * 1024,
+    windowsVerbatimArguments: shell.windowsVerbatimArguments
   })
   const output = capOutput([result.stdout, result.stderr].filter((item): item is string => typeof item === 'string').join('\n'))
   if (result.error) {

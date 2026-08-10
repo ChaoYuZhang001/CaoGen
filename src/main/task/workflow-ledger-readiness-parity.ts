@@ -1,6 +1,6 @@
 import type { TaskRunRecord, TaskSnapshotRecord } from '../../shared/types'
 import type { WorkflowRunRecord } from '../../shared/workflow-types'
-import { isTaskRunTerminal } from './task-run'
+import { isTaskRunTerminal, taskRunRequiresRecoverySnapshot } from './task-run'
 import { taskSnapshotTaskIdMatchesRun } from './task-snapshot-identity'
 import type { TaskEvidenceRecord } from './task-evidence-store'
 import { digest } from './workflow-ledger-codec'
@@ -38,13 +38,21 @@ function diagnoseSnapshotCoverage(
 ): CompatibilityCounts {
   const snapshotRunIds = new Set(snapshots.flatMap((snapshot) => snapshot.run ? [snapshot.run.id] : []))
   const runsWithoutSnapshot = taskRuns.filter((run) => !snapshotRunIds.has(run.id))
-  const activeRuns = runsWithoutSnapshot.filter((run) => !isTaskRunTerminal(run.status))
+  const nonTerminalRuns = runsWithoutSnapshot.filter((run) => !isTaskRunTerminal(run.status))
+  const activeRuns = nonTerminalRuns.filter((run) => taskRunRequiresRecoverySnapshot(run.status))
+  const quarantinedRuns = nonTerminalRuns.filter((run) => !taskRunRequiresRecoverySnapshot(run.status))
   const terminalRuns = runsWithoutSnapshot.filter((run) => isTaskRunTerminal(run.status))
   const snapshotsWithoutRun = snapshots.filter((snapshot) => !snapshot.run).length
-  addSnapshotCompatibilityDiagnostics(snapshotsWithoutRun, activeRuns, terminalRuns, diagnostics)
+  addSnapshotCompatibilityDiagnostics(
+    snapshotsWithoutRun,
+    activeRuns,
+    quarantinedRuns,
+    terminalRuns,
+    diagnostics
+  )
   return {
     snapshotsWithoutRun,
-    activeRunsWithoutSnapshot: activeRuns.length,
+    activeRunsWithoutSnapshot: nonTerminalRuns.length,
     terminalRunsWithoutSnapshot: terminalRuns.length
   }
 }
@@ -52,6 +60,7 @@ function diagnoseSnapshotCoverage(
 function addSnapshotCompatibilityDiagnostics(
   snapshotsWithoutRun: number,
   activeRuns: readonly TaskRunRecord[],
+  quarantinedRuns: readonly TaskRunRecord[],
   terminalRuns: readonly TaskRunRecord[],
   diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]
 ): void {
@@ -64,6 +73,12 @@ function addSnapshotCompatibilityDiagnostics(
   for (const run of activeRuns) {
     addDiagnostic(diagnostics, 'active_run_without_snapshot', 'corruption',
       `Active TaskRun ${run.id} has no durable recovery Snapshot`, {
+        entityId: run.id, table: 'task_runs', scope: 'legacy'
+      })
+  }
+  for (const run of quarantinedRuns) {
+    addDiagnostic(diagnostics, 'quarantined_run_without_snapshot', 'canonical_compatibility',
+      `Quarantined TaskRun ${run.id} is retained without an automatic replay Snapshot`, {
         entityId: run.id, table: 'task_runs', scope: 'legacy'
       })
   }

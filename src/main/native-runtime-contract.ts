@@ -50,6 +50,11 @@ export const OPENAI_NATIVE_RUNTIME_ADAPTER = defineNativeRuntimeAdapter(
   'openai.compatible'
 )
 
+export const GOOGLE_NATIVE_RUNTIME_ADAPTER = defineNativeRuntimeAdapter(
+  'gemini',
+  'google.generative-language'
+)
+
 export class NativeRuntimeContractError extends Error {
   readonly code: string
 
@@ -147,7 +152,7 @@ function sameStrings(left: readonly unknown[], right: readonly string[]): boolea
 }
 
 function isEngineKind(value: unknown): value is EngineKind {
-  return value === 'anthropic' || value === 'openai'
+  return value === 'anthropic' || value === 'gemini' || value === 'openai'
 }
 
 function fail(code: string, message: string): never {

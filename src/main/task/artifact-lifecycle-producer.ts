@@ -1,5 +1,9 @@
 import type { EffectRecord, TaskRunRecord } from '../../shared/types'
-import type { WorkflowAcceptanceStatus, WorkflowRunRecord } from '../../shared/workflow-types'
+import type {
+  WorkflowAcceptanceStatus,
+  WorkflowProjectionSource,
+  WorkflowRunRecord
+} from '../../shared/workflow-types'
 import {
   getPersistedArtifactLifecycle,
   registerPersistedArtifactLifecycle
@@ -7,7 +11,11 @@ import {
 import { assertSha256Digest } from './artifact-lifecycle-content'
 import type { ArtifactLifecycleRecord } from './artifact-lifecycle-types'
 import { readTaskSnapshotDatabase } from './task-snapshot'
-import { findWorkflowAcceptance, findWorkflowRun } from './workflow-ledger-store'
+import {
+  findWorkflowAcceptance,
+  findWorkflowRun,
+  findWorkflowWorkItem
+} from './workflow-ledger-store'
 import { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
 import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { attachProducedArtifactToStage } from './workflow-stage-handoff'
@@ -27,8 +35,21 @@ export async function registerConfirmedRunArtifactLifecycles(
     isConfirmedCodeForgePatchEffect(effect) || isConfirmedOfficeArtifactEffect(effect)
   )
   if (effects.length === 0) return []
-  const workflowRun = await readTaskSnapshotDatabase(rootDir, (db) => findWorkflowRun(db, run.id))
+  const { workflowRun, projectionSource } = await readTaskSnapshotDatabase(rootDir, (db) => {
+    const workflowRun = findWorkflowRun(db, run.id)
+    return {
+      workflowRun,
+      projectionSource: workflowRun
+        ? findWorkflowWorkItem(db, workflowRun.workItemId)?.source
+        : undefined
+    }
+  })
   assertCanonicalProducerRun(run, workflowRun)
+  if (!projectionSource) {
+    throw new WorkflowLedgerCorruptionError(
+      `confirmed Artifact producer lacks its canonical WorkItem projection: ${run.id}`
+    )
+  }
   const records: ArtifactLifecycleRecord[] = []
   for (const effect of effects) {
     assertCanonicalProducerEffect(effect, workflowRun)
@@ -37,7 +58,13 @@ export async function registerConfirmedRunArtifactLifecycles(
       continue
     }
     if (isConfirmedOfficeArtifactEffect(effect)) {
-      records.push(await registerOfficeArtifactLifecycle(run, effect, workflowRun, rootDir))
+      records.push(await registerOfficeArtifactLifecycle(
+        run,
+        effect,
+        workflowRun,
+        projectionSource,
+        rootDir
+      ))
     }
   }
   return records
@@ -168,6 +195,7 @@ async function registerOfficeArtifactLifecycle(
   run: TaskRunRecord,
   effect: OfficeArtifactEffect,
   workflowRun: WorkflowRunRecord & { projectId: string },
+  provenance: WorkflowProjectionSource,
   rootDir?: string
 ): Promise<ArtifactLifecycleRecord> {
   assertOfficeEffectOwnership(run, effect)
@@ -196,7 +224,7 @@ async function registerOfficeArtifactLifecycle(
     kind: effect.target.artifactKind,
     title: effect.target.title,
     version: 1,
-    provenance: 'explicit',
+    provenance,
     mediaType: effect.target.mediaType,
     retention: { mode: 'retain' },
     content: {
@@ -234,6 +262,7 @@ async function attachOfficeArtifactToStage(
   lifecycle: ArtifactLifecycleRecord,
   rootDir?: string
 ): Promise<void> {
+  if (lifecycle.provenance === 'legacy-derived') return
   await attachProducedArtifactToStage({
     artifactId: lifecycle.artifactId,
     projectId: lifecycle.projectId,

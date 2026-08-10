@@ -237,7 +237,10 @@ try {
     assertRuntimeSnapshotStable(before, duplicate, 'duplicate send rejection')
     assert(duplicate.meta.lastError === duplicateSendError, `duplicate rejection diagnostic changed: ${duplicate.meta.lastError}`)
     assert(duplicate.liveEventCount === before.liveEventCount + 1, 'duplicate send emitted unexpected session events')
-    assert(duplicate.transcriptCount === before.transcriptCount, 'duplicate send mutated the durable transcript')
+    assert(duplicate.transcriptCount === before.transcriptCount + 1 &&
+      JSON.stringify(duplicate.transcriptSummary.slice(0, -1)) === JSON.stringify(before.transcriptSummary) &&
+      duplicate.transcriptSummary.at(-1) === `status:running:${duplicateSendError}`,
+    `duplicate send emitted unexpected durable events: ${JSON.stringify({ before: before.transcriptSummary, after: duplicate.transcriptSummary })}`)
     assert(mock.requests.length === 1, `duplicate send created ${mock.requests.length} model requests`)
     await page.waitForFunction(
       (message) => Array.from(document.querySelectorAll('.notice-error')).some((element) => element.textContent?.includes(message)),
@@ -460,6 +463,9 @@ async function readRuntimeSnapshot(targetPage, id) {
         lastError: meta.lastError
       } : null,
       transcriptCount: transcript.length,
+      transcriptSummary: transcript.map((entry) => entry.event.kind === 'status'
+        ? `${entry.event.kind}:${entry.event.status}:${entry.event.error ?? ''}`
+        : entry.event.kind),
       liveEventCount: liveEntries.length,
       initCount: liveEvents.filter((event) => event.kind === 'init').length,
       metaCount: liveEvents.filter((event) => event.kind === 'meta').length,

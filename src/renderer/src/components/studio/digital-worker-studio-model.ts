@@ -6,6 +6,12 @@ import type {
   JsonValue,
   RoleTemplate
 } from '../../../../shared/types'
+import {
+  WATERCOLOR_CHARACTER_ROLES,
+  resolveWatercolorRole,
+  type WatercolorCharacterRole,
+  type WatercolorRoleResolution
+} from '../../../../shared/watercolor-character'
 
 export interface DigitalWorkerStudioWorkItem {
   id: string
@@ -38,6 +44,21 @@ export const WORKER_STATUS_LABELS: Record<DigitalWorkerStatus, string> = {
   retired: '已退休'
 }
 
+export const WATERCOLOR_ROLE_LABELS: Record<WatercolorCharacterRole, string> = {
+  researcher: '研究',
+  planner: '策划',
+  writer: '写作',
+  designer: '设计',
+  developer: '开发',
+  'review-test': '审查/测试',
+  operations: '运营'
+}
+
+export const WATERCOLOR_ROLE_OPTIONS = WATERCOLOR_CHARACTER_ROLES.map((value) => ({
+  value,
+  label: WATERCOLOR_ROLE_LABELS[value]
+}))
+
 export function splitList(value: string): string[] {
   return [...new Set(value.split(/[\n,，]/).map((item) => item.trim()).filter(Boolean))]
 }
@@ -48,6 +69,21 @@ export function workerInitials(name: string): string {
 
 export function roleForWorker(worker: DigitalWorker, roles: readonly RoleTemplate[]): RoleTemplate | undefined {
   return roles.find((role) => role.id === worker.roleTemplateId)
+}
+
+export function watercolorRoleForWorker(
+  worker: Pick<DigitalWorker, 'id' | 'avatarProfile'>,
+  role?: Pick<RoleTemplate, 'name' | 'purpose'>
+): WatercolorRoleResolution {
+  return resolveWatercolorRole(worker, role)
+}
+
+export function suggestedWatercolorRole(
+  roleId: string,
+  roles: readonly RoleTemplate[]
+): WatercolorCharacterRole {
+  const role = roles.find((entry) => entry.id === roleId)
+  return resolveWatercolorRole({ id: roleId || 'new-worker', avatarProfile: {} }, role).role
 }
 
 export function projectOptions(

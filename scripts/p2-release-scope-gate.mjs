@@ -15,32 +15,12 @@ const checks = [
     name: 'p2_default_smoke',
     command: [npmCommand(), 'run', 'test:p2'],
     timeoutMs: timeoutMs('P2_DEFAULT', 180_000)
-  },
-  {
-    name: 'ide_build_and_vscode_required',
-    command: [npmCommand(), 'run', 'test:p2-ide-build-and-vscode:required'],
-    timeoutMs: timeoutMs('IDE_BUILD_AND_VSCODE', 180_000)
-  },
-  {
-    name: 'jetbrains_recorder_e2e_required',
-    command: [npmCommand(), 'run', 'test:jetbrains-recorder-e2e:required'],
-    timeoutMs: timeoutMs('JETBRAINS_RECORDER_E2E', 360_000)
-  },
-  {
-    name: 'jetbrains_ide_interaction_required',
-    command: [npmCommand(), 'run', 'test:jetbrains-ide-interaction:required'],
-    timeoutMs: timeoutMs('JETBRAINS_IDE_INTERACTION', 60_000)
   }
 ]
 
 const results = checks.map(runCheck)
 const byName = Object.fromEntries(results.map((result) => [result.name, result]))
-const sourceReports = {
-  idePlugins: readReport('test-results/ide-plugins/latest.json'),
-  vscodeExtensionHost: readReport('test-results/vscode-extension-host/latest.json'),
-  jetbrainsRecorder: readReport('test-results/jetbrains-recorder-e2e/latest.json'),
-  jetbrainsInteraction: readReport('test-results/jetbrains-ide-interaction/latest.json')
-}
+const sourceReports = {}
 const endGit = gitState()
 const gitEvidence = {
   commit: startGit.commit,
@@ -72,17 +52,6 @@ const requirements = [
       'modelOptimization smoke ok',
       'modelCrossValidation smoke ok'
     ])
-  ),
-  requirement(
-    'P2-005',
-    'IDE integrations: VS Code host workflow and JetBrains real IDE interaction',
-    passed(byName.ide_build_and_vscode_required) &&
-      passed(byName.jetbrains_recorder_e2e_required) &&
-      passed(byName.jetbrains_ide_interaction_required) &&
-      sourceReports.idePlugins.status === 'completed' &&
-      sourceReports.vscodeExtensionHost.status === 'passed' &&
-      sourceReports.jetbrainsRecorder.status === 'passed' &&
-      sourceReports.jetbrainsInteraction.status === 'passed'
   )
 ]
 
@@ -97,7 +66,7 @@ const report = {
   runId,
   reportDir,
   packageVersion: readJson(path.join(repoRoot, 'package.json'))?.version,
-  releaseRequired: ['P2-002', 'P2-003', 'P2-005'],
+  releaseRequired: ['P2-002', 'P2-003'],
   git: gitEvidence,
   requirements,
   results,

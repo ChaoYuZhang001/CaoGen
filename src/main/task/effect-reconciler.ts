@@ -7,7 +7,11 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { EffectRecord, EffectTarget, FileSystemIdentity } from '../../shared/types'
 import { reconcileMcpEffectTarget } from '../mcp/mcp-effect'
 import { reconcileWebhookMessageEffectTarget } from '../notification/notification-effect'
-import { reconcileOfficeArtifactEffectTarget } from '../agent/tools/office-artifact'
+import {
+  reconcileOfficeArtifactEffectTarget,
+  type OfficeArtifactReplayTarget
+} from '../agent/tools/office-artifact'
+import { reconcileGuiPostconditionEffectTarget } from '../gui/gui-effect'
 import {
   gitAlternateObjectDirectories,
   isolatedLocalGitEnv,
@@ -67,6 +71,18 @@ export interface EffectDescriptor {
   intentDigest: string
   inputDigest: string
   reconcilability: EffectRecord['reconcilability']
+}
+
+/** Stable external resource identity used only to suppress confirmed failover replays. */
+export function effectReplayTargetDigest(target: EffectTarget | OfficeArtifactReplayTarget): string {
+  if (target.kind === 'office_artifact') {
+    return stableValueDigest({
+      kind: target.kind,
+      rootIdentity: target.rootIdentity,
+      relativePath: target.relativePath
+    })
+  }
+  return stableValueDigest(target)
 }
 export interface EffectFileObservationOptions {
   beforeRead?: (filePath: string) => Promise<void> | void
@@ -131,6 +147,7 @@ export async function reconcileEffect(
       return unresolved({ kind: 'integrity_error', reason: 'EffectRecord 摘要校验失败，禁止读取或重放目标' })
     }
     if (effect.target.kind === 'file_content') return await reconcileFileContent(effect.target, observationOptions)
+    if (effect.target.kind === 'gui_postcondition') return await reconcileGuiPostconditionEffectTarget(effect.target)
     if (effect.target.kind === 'git_commit') return await reconcileGitCommit(effect.target)
     if (effect.target.kind === 'git_merge') return await reconcileGitMerge(effect.target)
     if (effect.target.kind === 'git_push') return await reconcileGitPush(effect.target)

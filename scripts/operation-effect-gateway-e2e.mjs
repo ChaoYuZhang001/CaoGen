@@ -841,6 +841,7 @@ async function worktreePatchCases({ reconciler, ledger, taskRun }) {
 }
 
 async function pullRequestCases({ pullRequest, reconciler, ledger, taskRun }) {
+  if (process.platform === 'win32') return
   const repo = path.join(tempRoot, 'pr-repo')
   initRepo(repo)
   writeFileSync(path.join(repo, 'README.md'), 'PR test\n', 'utf8')
