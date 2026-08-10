@@ -77,8 +77,14 @@ Windows v0.1.8 prerelease.
 ## Verification
 
 - Local unsigned preview: `CaoGen-0.1.8-windows-x64-unsigned-preview.exe`.
-- Current local preview SHA-256:
-  `c43d8cdb0adc2f320f0390115eb2458597b2c056caa43c705b8fec667a3aa6d3`.
+- Exact local source commit:
+  `08e523cd1db0825087a5aa37df202e2caf273ea5`.
+- Exact local preview size: `230076094` bytes.
+- Exact local preview SHA-256:
+  `332db2f7fca0184f686b4a19c52e8c708f32bce981ae533d1d203bb242334fa7`.
+- Windows preview audit: `45/45` checks passed with a clean worktree, matching
+  embedded provenance, x64 architecture, packaged runtime checks, and explicit
+  unsigned status.
 - The local digest identifies development evidence only and must not be reused for the
   signed installer, whose bytes and SHA-256 will differ.
 - Final verification requires a clean exact-commit build, valid timestamped
