@@ -17,6 +17,7 @@ import { disposeProjectIndexers } from './indexer'
 import { disposeTypeScriptLanguageServers } from './typescriptLanguageServer'
 import { disposeProjectTestRuns } from './projectTestRunner'
 import { disposeProjectDebuggers } from './projectDebugger'
+import { configureProjectRefactorRecovery, reconcileProjectRefactorsAtStartup } from './projectRefactor'
 import { disposeOfficeVisualPreviews } from './previewVisual'
 import { startRoutineScheduler, stopRoutineScheduler } from './routineScheduler'
 import { executeRoutine } from './routines/routine-executor'
@@ -62,6 +63,7 @@ if (process.argv.includes('--disable-gpu') || process.env.CAOGEN_DISABLE_GPU ===
 process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
 configureLearningUserDataRoot(app.getPath('userData'))
 configurePermissionAuditUserDataRoot(app.getPath('userData'))
+configureProjectRefactorRecovery(app.getPath('userData'))
 const singleInstanceOwner = app.requestSingleInstanceLock()
 if (!singleInstanceOwner) {
   app.quit()
@@ -346,6 +348,14 @@ void app.whenReady().then(async () => {
     reconcileProviderProfileOperations()
   } catch (error) {
     console.error('[caogen] Provider Profile operation recovery failed:', error)
+  }
+  try {
+    const recovery = await reconcileProjectRefactorsAtStartup()
+    if (recovery.recovered > 0 || recovery.blocked > 0 || recovery.superseded > 0 || recovery.corrupt > 0) {
+      console.warn('[caogen] Project refactor recovery:', recovery)
+    }
+  } catch (error) {
+    console.error('[caogen] Project refactor recovery failed:', error instanceof Error ? error.name : 'UnknownError')
   }
   reconcileProviderProfileSyncAtStartup()
   startProviderProfileWebDavAutoSync()

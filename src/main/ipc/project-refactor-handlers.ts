@@ -1,10 +1,16 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import type { ProjectRefactorInput } from '../../shared/types'
-import { applyProjectRefactor, previewTypeScriptRename, rollbackProjectRefactor } from '../projectRefactor'
+import {
+  applyProjectRefactor,
+  dismissProjectRefactorRecovery,
+  getProjectRefactorRecovery,
+  previewTypeScriptRename,
+  rollbackProjectRefactor
+} from '../projectRefactor'
 import { sessionManager } from '../sessionManager'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 
-type ProjectRefactorAction = 'preview-rename' | 'apply' | 'rollback'
+type ProjectRefactorAction = 'preview-rename' | 'apply' | 'rollback' | 'recovery' | 'dismiss-recovery'
 
 export function handleProjectRefactorIpc(
   event: IpcMainInvokeEvent,
@@ -18,12 +24,14 @@ export function handleProjectRefactorIpc(
   const session = sessionManager.get(sessionId)
   if (!session) throw new Error('Session was not found')
   if (action === 'preview-rename') return previewTypeScriptRename(session.meta.cwd, sessionId, requiredInput(rawValue))
-  if (action === 'apply') return applyProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
-  return rollbackProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
+  if (action === 'apply') return applyProjectRefactor(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
+  if (action === 'rollback') return rollbackProjectRefactor(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
+  if (action === 'recovery') return getProjectRefactorRecovery(session.meta.cwd, sessionId)
+  return dismissProjectRefactorRecovery(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
 }
 
 function requiredAction(value: unknown): ProjectRefactorAction {
-  if (value === 'preview-rename' || value === 'apply' || value === 'rollback') return value
+  if (value === 'preview-rename' || value === 'apply' || value === 'rollback' || value === 'recovery' || value === 'dismiss-recovery') return value
   throw new Error('Project refactor action is invalid')
 }
 
