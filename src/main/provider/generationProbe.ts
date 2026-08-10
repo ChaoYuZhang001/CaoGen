@@ -5,7 +5,9 @@ import type {
   ProviderDiagnosticGenerationProtocol,
   ProviderGenerationProbeInput,
   ProviderGenerationProbeOutcome,
-  ProviderGenerationProbeResult
+  ProviderGenerationProbeResult,
+  ProviderModelFailureReason,
+  ProviderModelSuggestedAction
 } from '../../shared/types'
 import { inspectProviderBaseUrl } from '../providerCredentialBroker'
 import { openAiEndpoint } from './openai-provider-utils'
@@ -27,12 +29,12 @@ export async function executeProviderGenerationProbe(
   const providerId = input.providerId?.trim() || undefined
   const engine = input.engine ?? 'openai'
   const protocol = generationProtocol(engine, input.openaiProtocol)
-  const endpointPath = publicGenerationPath(protocol)
   const baseUrl = safeBaseUrl(input.baseUrl)
   const model = input.model.trim()
   if (!model) throw new Error('Generation probe requires a model')
 
   const request = generationRequest(baseUrl, model, protocol)
+  const endpointPath = safeGenerationPath(request.url, protocol, model)
   if (!credentials.available) {
     return {
       ok: false,
@@ -43,6 +45,8 @@ export async function executeProviderGenerationProbe(
       credentialLabel: credentials.label,
       credentialHeaderNames: credentials.headerNames,
       outcome: 'auth',
+      reasonCode: 'credentials_missing',
+      suggestedActions: ['enter_credentials'],
       latencyMs: Date.now() - startedAt,
       billableRequest: true
     }
@@ -67,6 +71,7 @@ export async function executeProviderGenerationProbe(
   } catch {
     outcome = 'network'
   }
+  const diagnosis = diagnoseOutcome(outcome, status)
 
   return {
     ok: outcome === 'success',
@@ -77,6 +82,8 @@ export async function executeProviderGenerationProbe(
     credentialLabel: credentials.label,
     credentialHeaderNames: credentials.headerNames,
     outcome,
+    reasonCode: diagnosis.reasonCode,
+    suggestedActions: diagnosis.suggestedActions,
     status,
     latencyMs: Date.now() - startedAt,
     billableRequest: true
@@ -95,13 +102,6 @@ function generationProtocol(engine: EngineKind, protocol: OpenAIProtocol | undef
   if (engine === 'anthropic') return 'anthropic-messages'
   if (engine === 'gemini') return 'google-generative-language'
   return protocol === 'chat' ? 'openai-chat-completions' : 'openai-responses'
-}
-
-function publicGenerationPath(protocol: ProviderDiagnosticGenerationProtocol): string {
-  if (protocol === 'anthropic-messages') return '/v1/messages'
-  if (protocol === 'google-generative-language') return '/v1beta/models/{model}:generateContent'
-  if (protocol === 'openai-chat-completions') return '/v1/chat/completions'
-  return '/v1/responses'
 }
 
 function generationRequest(
@@ -133,6 +133,43 @@ function generationRequest(
   return {
     url: openAiEndpoint(baseUrl, 'responses'),
     body: { model, max_output_tokens: 1, stream: false, input: 'OK' }
+  }
+}
+
+function safeGenerationPath(
+  requestUrl: string,
+  protocol: ProviderDiagnosticGenerationProtocol,
+  model: string
+): string {
+  const url = new URL(requestUrl)
+  if (protocol !== 'google-generative-language') return url.pathname
+  const encodedModel = encodeURIComponent(model.replace(/^models\//, ''))
+  return url.pathname.replace(encodedModel, '{model}')
+}
+
+function diagnoseOutcome(
+  outcome: ProviderGenerationProbeOutcome,
+  status: number | undefined
+): { reasonCode: ProviderModelFailureReason | 'none'; suggestedActions: ProviderModelSuggestedAction[] } {
+  if (outcome === 'success') return { reasonCode: 'none', suggestedActions: [] }
+  if (outcome === 'auth') {
+    return {
+      reasonCode: 'base_url_or_credentials_mismatch',
+      suggestedActions: ['review_credentials', 'review_base_url_and_credentials', 'review_protocol']
+    }
+  }
+  if (outcome === 'not_found') {
+    return {
+      reasonCode: 'base_url_invalid',
+      suggestedActions: ['review_base_url_and_credentials', 'review_protocol']
+    }
+  }
+  if (outcome === 'rate_limit') return { reasonCode: 'rate_limited', suggestedActions: ['retry_later'] }
+  if (outcome === 'server') return { reasonCode: 'provider_unavailable', suggestedActions: ['retry_later'] }
+  if (outcome === 'network') return { reasonCode: 'network_unavailable', suggestedActions: ['check_network'] }
+  return {
+    reasonCode: status === 400 || status === 422 ? 'unknown' : 'base_url_invalid',
+    suggestedActions: ['review_model', 'review_protocol', 'review_configuration']
   }
 }
 

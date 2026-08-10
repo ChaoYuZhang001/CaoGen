@@ -325,6 +325,23 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
     void connect()
   }
 
+  const handleGenerationDiagnosticAction = (action: ProviderModelSuggestedAction): void => {
+    const field = action === 'enter_credentials' || action === 'review_credentials'
+      ? 'api-key'
+      : action === 'review_base_url_and_credentials'
+        ? 'base-url'
+        : action === 'review_model' || action === 'enter_models_manually' ? 'models' : null
+    if (field) {
+      setupRef.current?.querySelector<HTMLElement>(`[data-provider-quick-field="${field}"]`)?.focus()
+      return
+    }
+    if (action === 'review_protocol' || action === 'review_configuration') {
+      onAdvanced()
+      return
+    }
+    void probeGeneration()
+  }
+
   return (
     <section ref={setupRef} className="provider-editor" aria-label={t('providerQuickTitle')} data-provider-quick-setup>
       <header className="provider-editor-header">
@@ -449,12 +466,15 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
         <button
           type="button"
           className="btn btn-ghost"
+          data-provider-generation-action="run"
           disabled={busy || probingGeneration || !baseUrl.trim()}
           onClick={() => void probeGeneration()}
         >
           {probingGeneration ? t('providerGenerationProbeRunning') : t('providerGenerationProbeButton')}
         </button>
-        {generationProbe && <ProviderGenerationProbe result={generationProbe} />}
+        {generationProbe && (
+          <ProviderGenerationProbe result={generationProbe} onAction={handleGenerationDiagnosticAction} />
+        )}
         <ProviderQuickErrorNotice error={error} localReason={localReason} />
       </div>
       <div className="provider-editor-actions">

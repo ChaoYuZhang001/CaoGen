@@ -518,6 +518,17 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
     zh: '\u6b64\u64cd\u4f5c\u663e\u5f0f\u53d1\u8d77\u6700\u591a 1 \u4e2a\u8f93\u51fa token \u7684\u8bf7\u6c42\uff0c\u53ef\u80fd\u4ea7\u751f\u5c11\u91cf\u8d39\u7528\uff1b\u54cd\u5e94\u6b63\u6587\u4e0d\u4f1a\u88ab\u8bfb\u53d6\u6216\u4fdd\u5b58\u3002',
     en: 'This explicitly sends a request capped at one output token and may incur a small charge. The response body is neither read nor stored.'
   },
+  providerGenerationProbeReason_none: { zh: '\u914d\u7f6e\u5df2\u901a\u8fc7\u771f\u5b9e\u751f\u6210\u8bf7\u6c42\u3002', en: 'The configuration passed a real generation request.' },
+  providerGenerationProbeReason_credentials_missing: { zh: '\u672c\u6b21\u672a\u53d1\u9001\u8bf7\u6c42\uff1a\u6ca1\u6709\u53ef\u7528 API Key\u3002', en: 'No request was sent because no API key is available.' },
+  providerGenerationProbeReason_base_url_or_credentials_mismatch: {
+    zh: 'Provider \u62d2\u7edd\u4e86\u8bf7\u6c42\u3002401/403 \u53ef\u7531 Key \u65e0\u6548\u3001Key \u65e0\u6a21\u578b\u6743\u9650\u3001\u9274\u6743\u5934\u540d\u4e0d\u5339\u914d\u3001Base URL \u8def\u5f84\u6216\u534f\u8bae\u9519\u8bef\u5f15\u8d77\uff1b\u8be5\u72b6\u6001\u7801\u4e0d\u80fd\u5355\u72ec\u8bc1\u660e Key \u586b\u9519\u3002',
+    en: 'The provider rejected the request. A 401/403 can mean an invalid key, missing model permission, a wrong credential header, or a Base URL/protocol mismatch; the status alone does not prove the entered key is wrong.'
+  },
+  providerGenerationProbeReason_base_url_invalid: { zh: '\u4efb\u52a1\u8def\u5f84\u4e0d\u5b58\u5728\u6216\u4e0e\u6240\u9009\u534f\u8bae\u4e0d\u5339\u914d\u3002', en: 'The task path does not exist or does not match the selected protocol.' },
+  providerGenerationProbeReason_rate_limited: { zh: '\u8bf7\u6c42\u5df2\u5230\u8fbe Provider \u4f46\u88ab\u9650\u6d41\u6216\u989d\u5ea6\u4e0d\u8db3\u3002', en: 'The provider received the request but rate limits or quota blocked it.' },
+  providerGenerationProbeReason_provider_unavailable: { zh: 'Provider \u5f53\u524d\u8fd4\u56de\u670d\u52a1\u7aef\u9519\u8bef\u3002', en: 'The provider is currently returning a server error.' },
+  providerGenerationProbeReason_network_unavailable: { zh: '\u672a\u6536\u5230 HTTP \u54cd\u5e94\uff1b\u68c0\u67e5\u7f51\u7edc\u3001DNS\u3001\u4ee3\u7406\u548c TLS\u3002', en: 'No HTTP response was received. Check network, DNS, proxy, and TLS.' },
+  providerGenerationProbeReason_unknown: { zh: 'Provider \u62d2\u7edd\u4e86\u6a21\u578b\u6216\u8bf7\u6c42\u683c\u5f0f\uff1b\u68c0\u67e5\u6a21\u578b ID \u548c\u534f\u8bae\u3002', en: 'The provider rejected the model or request shape. Review the model ID and protocol.' },
   providerGenerationProbeOutcome_success: { zh: '\u751f\u6210\u63a5\u53e3\u53ef\u7528', en: 'Generation endpoint works' },
   providerGenerationProbeOutcome_auth: { zh: '\u9274\u6743\u88ab\u62d2\u7edd', en: 'Authorization rejected' },
   providerGenerationProbeOutcome_rate_limit: { zh: '\u9650\u6d41\u6216\u989d\u5ea6\u4e0d\u8db3', en: 'Rate limited or quota exhausted' },
@@ -538,6 +549,8 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
   providerDiagnosticAction_enter_credentials: { zh: '\u586b\u5199 API Key', en: 'Enter API key' },
   providerDiagnosticAction_review_credentials: { zh: '\u68c0\u67e5 API Key \u548c\u9274\u6743\u5934', en: 'Review key and header' },
   providerDiagnosticAction_review_base_url_and_credentials: { zh: '\u68c0\u67e5 Base URL \u548c\u9274\u6743', en: 'Review Base URL and auth' },
+  providerDiagnosticAction_review_protocol: { zh: '\u68c0\u67e5\u534f\u8bae', en: 'Review protocol' },
+  providerDiagnosticAction_review_model: { zh: '\u68c0\u67e5\u6a21\u578b ID', en: 'Review model ID' },
   providerDiagnosticAction_enter_models_manually: { zh: '\u624b\u52a8\u586b\u5199\u6a21\u578b', en: 'Enter models manually' },
   providerDiagnosticAction_retry_later: { zh: '\u91cd\u65b0\u63a2\u6d4b', en: 'Probe again' },
   providerDiagnosticAction_check_network: { zh: '\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5', en: 'Retry after checking network' },

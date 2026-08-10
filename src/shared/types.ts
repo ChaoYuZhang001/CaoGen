@@ -1693,6 +1693,8 @@ export type ProviderModelSuggestedAction =
   | 'enter_credentials'
   | 'review_credentials'
   | 'review_base_url_and_credentials'
+  | 'review_protocol'
+  | 'review_model'
   | 'enter_models_manually'
   | 'retry_later'
   | 'check_network'
@@ -1749,6 +1751,10 @@ export interface ProviderGenerationProbeResult {
   credentialLabel?: string
   credentialHeaderNames: string[]
   outcome: ProviderGenerationProbeOutcome
+  /** Bounded diagnosis derived only from request configuration and HTTP status. */
+  reasonCode: ProviderModelFailureReason | 'none'
+  /** Ordered recovery actions. No Provider response text is exposed. */
+  suggestedActions: ProviderModelSuggestedAction[]
   status?: number
   latencyMs: number
   /** The probe intentionally requests at most one output token and may be billable. */

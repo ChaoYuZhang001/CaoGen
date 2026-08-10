@@ -176,6 +176,8 @@
     "test:provider-runtime-containment:required": "npm run test:provider-runtime-containment",
     "test:provider-connectivity": "node scripts/provider-connectivity-smoke.mjs",
     "test:provider-generation-probe": "node scripts/provider-generation-probe-smoke.mjs",
+    "test:provider-generation-diagnostic:e2e": "node scripts/provider-generation-diagnostic-e2e.mjs",
+    "test:provider-generation-diagnostic:required": "npm run test:provider-generation-probe && npm run build && npm run test:provider-generation-diagnostic:e2e",
     "test:provider-profile": "node scripts/provider-profile-smoke.mjs",
     "test:provider-profile-sync": "node scripts/provider-profile-sync-smoke.mjs",
     "test:provider-profile-webdav": "node scripts/provider-profile-webdav-smoke.mjs",

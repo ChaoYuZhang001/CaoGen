@@ -1,7 +1,13 @@
-import type { ProviderGenerationProbeResult } from '../../../shared/types'
+import type { ProviderGenerationProbeResult, ProviderModelSuggestedAction } from '../../../shared/types'
 import { useT } from '../i18n'
 
-export default function ProviderGenerationProbe({ result }: { result: ProviderGenerationProbeResult }): React.JSX.Element {
+export default function ProviderGenerationProbe({
+  result,
+  onAction
+}: {
+  result: ProviderGenerationProbeResult
+  onAction?: (action: ProviderModelSuggestedAction) => void
+}): React.JSX.Element {
   const t = useT()
   const credential = result.credentialSource === 'stored-active' && result.credentialLabel
     ? t('providerDiagnosticCredentialSource_storedLabel', { label: result.credentialLabel })
@@ -26,6 +32,22 @@ export default function ProviderGenerationProbe({ result }: { result: ProviderGe
         status: result.status ?? t('providerDiagnosticNoStatus'),
         latencyMs: result.latencyMs
       })}</p>
+      {!result.ok && <p data-provider-generation-diagnosis>{t(`providerGenerationProbeReason_${result.reasonCode}`)}</p>}
+      {!result.ok && onAction && result.suggestedActions.length > 0 && (
+        <div className="provider-model-probe-actions" data-provider-generation-actions>
+          {result.suggestedActions.map((action) => (
+            <button
+              key={action}
+              type="button"
+              className="btn btn-ghost btn-sm"
+              data-provider-generation-action={action}
+              onClick={() => onAction(action)}
+            >
+              {t(`providerDiagnosticAction_${action}`)}
+            </button>
+          ))}
+        </div>
+      )}
       <p className="provider-generation-probe-billing">{t('providerGenerationProbeBillingNotice')}</p>
     </section>
   )

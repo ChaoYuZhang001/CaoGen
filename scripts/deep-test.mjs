@@ -190,6 +190,8 @@ const commandDefinitions = [
   { name: 'provider credential target binding smoke', command: 'node', args: ['scripts/provider-credential-target-binding-smoke.mjs'], category: 'smoke' },
   { name: 'provider runtime containment smoke', command: 'node', args: ['scripts/provider-runtime-containment-smoke.mjs'], category: 'smoke' },
   { name: 'providerConnectivity smoke', command: 'node', args: ['scripts/provider-connectivity-smoke.mjs'], category: 'smoke' },
+  { name: 'provider generation diagnostic smoke', command: 'node', args: ['scripts/provider-generation-probe-smoke.mjs'], category: 'smoke' },
+  { name: 'provider generation diagnostic UI e2e', command: 'node', args: ['scripts/provider-generation-diagnostic-e2e.mjs'], category: 'ui' },
   { name: 'provider profile smoke', command: 'node', args: ['scripts/provider-profile-smoke.mjs'], category: 'smoke' },
   { name: 'provider profile strong-kill recovery E2E', command: 'node', args: ['scripts/provider-profile-restart-e2e.mjs'], category: 'system' },
   { name: 'provider profile Electron E2E', command: 'node', args: ['scripts/provider-profile-e2e.mjs'], category: 'system' },

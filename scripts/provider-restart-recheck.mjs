@@ -8,8 +8,11 @@ if (!existsSync(outMain)) {
   throw new Error('缺少 out/main/index.js;请先运行 npm run build')
 }
 
-const electron = process.platform === 'win32' ? 'npx.cmd' : 'npx'
-execFileSync(electron, ['electron', path.join(repoRoot, 'scripts', 'provider-restart-recheck-electron.cjs')], {
+const electron = process.platform === 'win32'
+  ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+  : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+if (!existsSync(electron)) throw new Error('缺少 Electron 可执行文件;请先运行 npm install')
+execFileSync(electron, [path.join(repoRoot, 'scripts', 'provider-restart-recheck-electron.cjs')], {
   cwd: repoRoot,
   stdio: 'inherit',
   env: process.env

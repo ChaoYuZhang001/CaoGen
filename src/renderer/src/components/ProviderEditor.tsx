@@ -214,6 +214,15 @@ function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.
     void fetchModels()
   }
 
+  const handleGenerationDiagnosticAction = (action: ProviderModelSuggestedAction): void => {
+    const field = generationDiagnosticTargetField(action, engine)
+    if (field) {
+      editorRef.current?.querySelector<HTMLElement>(`[data-provider-field="${field}"]`)?.focus()
+      return
+    }
+    void probeGeneration()
+  }
+
   const probeGeneration = async (): Promise<void> => {
     const model = modelsText.split(/\r?\n/).map((item) => item.trim()).find(Boolean)
     if (!model) {
@@ -416,6 +425,7 @@ function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.
             </button>
             <button
               className="btn btn-ghost btn-sm"
+              data-provider-generation-action="run"
               disabled={fetching || probingGeneration || !baseUrl.trim()}
               onClick={() => void probeGeneration()}
             >
@@ -442,7 +452,9 @@ function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.
             onAction={() => handleDiagnosticAction(fetchError.suggestedAction)}
           />
         )}
-        {generationProbe && <ProviderGenerationProbe result={generationProbe} />}
+        {generationProbe && (
+          <ProviderGenerationProbe result={generationProbe} onAction={handleGenerationDiagnosticAction} />
+        )}
 
         <label className="field-label">
           {t('customHeadersLabel')} <span className="field-hint">{t('customHeadersHint')}</span>
@@ -532,6 +544,14 @@ function diagnosticTargetField(action: ProviderModelSuggestedAction): string | n
   if (action === 'enter_credentials' || action === 'review_credentials') return 'api-key'
   if (action === 'review_base_url_and_credentials' || action === 'review_configuration') return 'base-url'
   if (action === 'enter_models_manually') return 'models'
+  return null
+}
+
+function generationDiagnosticTargetField(action: ProviderModelSuggestedAction, engine: EngineKind): string | null {
+  if (action === 'enter_credentials' || action === 'review_credentials') return 'api-key'
+  if (action === 'review_base_url_and_credentials') return 'base-url'
+  if (action === 'review_protocol') return engine === 'openai' ? 'openai-protocol' : 'engine'
+  if (action === 'review_model' || action === 'enter_models_manually') return 'models'
   return null
 }
 

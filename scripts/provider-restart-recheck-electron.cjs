@@ -165,7 +165,12 @@ async function run() {
       'turn-result not emitted for provider error'
     )
     const text = turn.resultText || ''
-    check('OpenAI runtime error includes provider/baseUrl/model/protocol', turn.isError && text.includes('404 response gateway') && text.includes(errorServer.base) && text.includes('does-not-exist') && text.includes('responses'), text)
+    check('OpenAI runtime error includes provider/model/protocol and redacts Base URL', turn.isError
+      && text.includes('404 response gateway')
+      && text.includes('baseUrl: [provider-url-redacted]')
+      && !text.includes(errorServer.base)
+      && text.includes('does-not-exist')
+      && text.includes('responses'), text)
   } finally {
     await new Promise((resolve) => modelServer.server.close(resolve))
     await new Promise((resolve) => errorServer.server.close(resolve))
