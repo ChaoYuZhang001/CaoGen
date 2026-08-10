@@ -154,6 +154,10 @@ export class ProjectIndexer {
   private persistChain: Promise<void> = Promise.resolve()
   private persistenceWrites = 0
   private disposing = false
+  private networkRecoveryTimer: NodeJS.Timeout | null = null
+  private networkUnavailable = false
+  private networkRecovering = false
+  private networkRecoveryDirty = false
 
   private constructor(
     private readonly root: string,
@@ -189,6 +193,8 @@ export class ProjectIndexer {
     if (this.watcher) await this.watcher.close()
     this.watcher = null
     this.watcherReady = null
+    if (this.networkRecoveryTimer) clearInterval(this.networkRecoveryTimer)
+    this.networkRecoveryTimer = null
     await Promise.allSettled([...this.activeUpdates])
     if (this.persistTimer) clearTimeout(this.persistTimer)
     this.persistTimer = null
@@ -236,26 +242,66 @@ export class ProjectIndexer {
         if (!ready) reject(error)
       })
     })
+    if (isNetworkPath(this.root)) {
+      this.networkRecoveryTimer = setInterval(() => this.checkNetworkRoot(), NETWORK_WATCH_POLL_MS)
+    }
     return this.watcherReady
+  }
+
+  private checkNetworkRoot(): void {
+    if (this.disposing) return
+    const reachable = networkRootExists(this.root)
+    if (!reachable) {
+      this.networkUnavailable = true
+      return
+    }
+    if (!this.networkUnavailable || this.networkRecovering) return
+    const recovery = this.recoverNetworkRoot()
+    this.activeUpdates.add(recovery)
+    void recovery.catch((error: unknown) => {
+      this.networkUnavailable = true
+      console.error('[caogen] Project index network recovery failed:', errorName(error))
+    }).finally(() => this.activeUpdates.delete(recovery))
+  }
+
+  private async recoverNetworkRoot(): Promise<void> {
+    this.networkRecovering = true
+    try {
+      for (const timer of this.pendingUpdates.values()) clearTimeout(timer)
+      this.pendingUpdates.clear()
+      const inFlight = [...this.activeUpdates]
+      if (inFlight.length > 0) await Promise.allSettled(inFlight)
+      do {
+        this.networkRecoveryDirty = false
+        await this.rebuild()
+      } while (!this.disposing && this.networkRecoveryDirty && networkRootExists(this.root))
+      this.networkUnavailable = false
+    } finally {
+      this.networkRecovering = false
+    }
   }
 
   async rebuild(): Promise<ProjectIndexStats> {
     const started = Date.now()
+    if (isNetworkPath(this.root) && !networkRootExists(this.root)) throw new Error('Network project root is unavailable')
     const scan = await this.scanFiles()
-    const files = scan.files
-    if (!scan.truncated) {
-      const seen = new Set(files.map((file) => file.relPath))
-      for (const row of this.select<{ path: string }>('SELECT path FROM files')) {
-        if (!seen.has(row.path)) this.removeFile(row.path, false, true)
-      }
-    }
-
+    if (isNetworkPath(this.root) && !networkRootExists(this.root)) throw new Error('Network project root became unavailable during scan')
     this.db.run('BEGIN TRANSACTION')
     try {
+      const files = scan.files
+      if (!scan.truncated) {
+        const seen = new Set(files.map((file) => file.relPath))
+        for (const row of this.select<{ path: string }>('SELECT path FROM files')) {
+          if (!seen.has(row.path)) this.removeFile(row.path, false, true)
+        }
+      }
       for (const file of files) {
         const current = this.fileRecord(file.relPath)
         if (current && current.size === file.size && current.mtimeMs === file.mtimeMs) continue
         await this.indexFile(file, false)
+      }
+      if (isNetworkPath(this.root) && !networkRootExists(this.root)) {
+        throw new Error('Network project root became unavailable during rebuild')
       }
       this.db.run('COMMIT')
     } catch (err) {
@@ -485,6 +531,10 @@ export class ProjectIndexer {
 
   private queueUpdate(fullPath: string): void {
     if (this.disposing) return
+    if (this.networkUnavailable || this.networkRecovering) {
+      this.networkRecoveryDirty = true
+      return
+    }
     const relPath = toProjectRelative(this.root, fullPath)
     if (!relPath || this.shouldIgnore(relPath, false) || !languageForFile(fullPath)) return
     const previous = this.pendingUpdates.get(fullPath)
@@ -502,6 +552,10 @@ export class ProjectIndexer {
   }
 
   private async indexChangedFile(fullPath: string): Promise<void> {
+    if (isNetworkPath(this.root) && !networkRootExists(this.root)) {
+      this.networkUnavailable = true
+      return
+    }
     const relPath = toProjectRelative(this.root, fullPath)
     const info = await stat(fullPath).catch(() => null)
     if (!info || !info.isFile() || info.size > MAX_FILE_BYTES) {
@@ -512,6 +566,14 @@ export class ProjectIndexer {
   }
 
   private removeFileByFullPath(fullPath: string): void {
+    if (this.networkUnavailable || this.networkRecovering) {
+      this.networkRecoveryDirty = true
+      return
+    }
+    if (isNetworkPath(this.root) && !networkRootExists(this.root)) {
+      this.networkUnavailable = true
+      return
+    }
     const relPath = toProjectRelative(this.root, fullPath)
     if (relPath) this.removeFile(relPath, true, true)
   }
@@ -571,11 +633,22 @@ export class ProjectIndexer {
   }
 
   private schedulePersist(): void {
-    if (this.disposing) return
+    if (this.networkRecovering) {
+      this.networkRecoveryDirty = true
+      return
+    }
+    if (this.disposing || (isNetworkPath(this.root) && !networkRootExists(this.root))) {
+      if (isNetworkPath(this.root)) this.networkUnavailable = true
+      return
+    }
     this.persistDirty = true
     if (this.persistTimer) return
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null
+      if (isNetworkPath(this.root) && !networkRootExists(this.root)) {
+        this.networkUnavailable = true
+        return
+      }
       void this.enqueuePersist().catch((err: unknown) => {
         console.error('[caogen] Project index persistence failed:', errorName(err))
       })
@@ -583,6 +656,10 @@ export class ProjectIndexer {
   }
 
   private async persistNow(): Promise<void> {
+    if (isNetworkPath(this.root) && !networkRootExists(this.root)) {
+      this.networkUnavailable = true
+      return
+    }
     this.persistDirty = true
     if (this.persistTimer) clearTimeout(this.persistTimer)
     this.persistTimer = null
@@ -774,6 +851,14 @@ function toProjectRelative(root: string, fullPath: string): string {
 
 function isNetworkPath(filePath: string): boolean {
   return filePath.startsWith('\\\\')
+}
+
+function networkRootExists(root: string): boolean {
+  try {
+    return (nodeRequire('node:fs') as typeof import('node:fs')).existsSync(root)
+  } catch {
+    return false
+  }
 }
 
 function clampLimit(value: number): number {

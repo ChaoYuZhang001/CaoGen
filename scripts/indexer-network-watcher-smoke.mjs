@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -26,10 +27,12 @@ const report = {
 }
 const watcherErrors = []
 const persistenceErrors = []
+const recoveryErrors = []
 const originalError = console.error
 console.error = (...args) => {
   if (args.some((arg) => String(arg).includes('Project index watcher'))) watcherErrors.push(args.map(String).join(' '))
   if (args.some((arg) => String(arg).includes('Project index persistence failed'))) persistenceErrors.push(args.map(String).join(' '))
+  if (args.some((arg) => String(arg).includes('Project index network recovery failed'))) recoveryErrors.push(args.map(String).join(' '))
   originalError(...args)
 }
 
@@ -150,8 +153,6 @@ try {
   await indexerModule.disposeProjectIndexers()
   const reopened = await indexerModule.ensureProjectIndex(projectDir, { watch: false })
   report.reopenedStats = publicStats(reopened.stats())
-  assert(watcherErrors.length === 0, `UNC watcher must not emit errors, got ${watcherErrors.length}`)
-  assert(persistenceErrors.length === 0, `UNC persistence must not emit errors, got ${persistenceErrors.length}`)
   assert(report.reopenedStats?.files === report.expectedFiles, 'UNC database reopen must preserve the exact final file count')
   assert(
     reopened.searchSymbols(`stormWave${lastWave}Item31`, 'function', 10).some((item) => item.filePath === 'src/live/item-031.ts'),
@@ -163,6 +164,28 @@ try {
   )
   assert(reopened.searchSymbols('baseSymbol0', 'function', 10).length === 0, 'UNC database reopen must retain deletes')
   assert(existsSync(path.join(projectDir, '.caogen', 'index.db')), 'UNC index database must remain durable')
+
+  await indexerModule.disposeProjectIndexers()
+  const recoveryIndexer = await indexerModule.ensureProjectIndex(projectDir, { watch: true })
+  const persistenceBeforeOffline = recoveryIndexer.stats()?.persistenceWrites ?? 0
+  const databaseDigestBeforeOffline = fileDigest(path.join(localProjectDir, '.caogen', 'index.db'))
+  const offlineRoot = path.join(tempRoot, 'project-offline')
+  const offlineSymbol = 'offlineRecoverySentinel'
+  await renameNetworkTree(localProjectDir, offlineRoot)
+  writeSource(path.join(offlineRoot, 'src', 'offline.ts'), offlineSymbol, 99)
+  report.rootOffline = true
+  await delay(1_500)
+  report.offlineRows = recoveryIndexer.stats()?.files ?? 0
+  assert(report.offlineRows === report.expectedFiles, 'an open offline UNC project must retain the last complete index snapshot')
+  assert(recoveryIndexer.stats()?.persistenceWrites === persistenceBeforeOffline, 'offline UNC root must not attempt a new snapshot')
+  assert(fileDigest(path.join(offlineRoot, '.caogen', 'index.db')) === databaseDigestBeforeOffline, 'offline UNC root must not mutate the last durable index')
+  await renameNetworkTree(offlineRoot, localProjectDir)
+  await waitFor(() => recoveryIndexer.searchSymbols(offlineSymbol, 'function', 10).length === 1, 'watcher must rebuild after UNC root recovery')
+  report.restoredRows = recoveryIndexer.stats()?.files ?? 0
+  assert(report.restoredRows === report.expectedFiles + 1, 'UNC recovery must add the file created while offline')
+  assert(watcherErrors.length === 0, `UNC watcher must not emit errors, got ${watcherErrors.length}`)
+  assert(persistenceErrors.length === 0, `UNC persistence must not emit errors, got ${persistenceErrors.length}`)
+  assert(recoveryErrors.length === 0, `UNC recovery must not emit errors, got ${recoveryErrors.length}`)
   await indexerModule.disposeProjectIndexers()
   indexerModule = undefined
 
@@ -224,6 +247,10 @@ function rounded(value) {
   return Math.round(value * 10) / 10
 }
 
+function fileDigest(filePath) {
+  return createHash('sha256').update(require('node:fs').readFileSync(filePath)).digest('hex')
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -239,6 +266,19 @@ async function removeNetworkTree(target) {
     }
   }
   throw new Error(`unable to remove UNC fixture path after retries: ${target}`)
+}
+
+async function renameNetworkTree(source, destination) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      await rename(source, destination)
+      return
+    } catch (error) {
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(error?.code)) throw error
+      await delay(200)
+    }
+  }
+  throw new Error(`unable to rename network fixture path after retries: ${source}`)
 }
 
 function assert(condition, message) {
