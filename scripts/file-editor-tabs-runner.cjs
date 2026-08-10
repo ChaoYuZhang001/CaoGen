@@ -1,5 +1,6 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const { execFileSync } = require('node:child_process')
 const { app, BrowserWindow, ipcMain } = require('electron')
 
 const repoRoot = path.resolve(__dirname, '..')
@@ -22,6 +23,7 @@ fs.writeFileSync(path.join(projectDir, 'src', 'semantic.ts'), 'export const tota
 const consumerDraft = "import { calculateInvoice } from './components/search'\nexport const invoice = calculateInvo(21)\n"
 const consumerCompleted = consumerDraft.replace('calculateInvo(21)', 'calculateInvoice(21)')
 fs.writeFileSync(path.join(projectDir, 'src', 'consumer.ts'), consumerDraft)
+initializeGitFixture()
 
 const checks = []
 function check(name, condition, detail = '') {
@@ -167,6 +169,38 @@ async function run() {
   await key(win, 's', { ctrlKey: true })
   await waitForRenderer(win, `document.querySelectorAll('.file-diagnostic-row').length === 0 && document.querySelector('.file-search-summary')?.textContent.trim().startsWith('0')`)
   check('saving a syntax fix refreshes and clears the Problems view', await rendererValue(win, `document.querySelectorAll('.file-diagnostic-row').length === 0`))
+
+  await openDeskTool(win, 1, '.workspace-diff')
+  await waitForRenderer(win, `document.querySelectorAll('.workspace-diff-file').length >= 4`, 20_000)
+  check('Diff review shows the editor fixes from the same Project Session',
+    await rendererValue(win, `['src/b.ts','src/broken.py','src/consumer.ts','src/semantic.ts'].every((file) => [...document.querySelectorAll('.workspace-diff-path')].some((item) => item.textContent.includes(file)))`))
+  check('Git review starts with unstaged changes and no staged changes',
+    await rendererValue(win, `document.querySelector('.git-commit-sub')?.textContent.includes('0 staged') && document.querySelectorAll('.git-file-row:not(.git-file-row-all)').length >= 4`))
+  await capture(win, 'file-editor-diff-review.png')
+  await rendererValue(win, `[...document.querySelectorAll('.git-commit-actions button')].find((button) => button.textContent.trim() === 'Stage all')?.click()`)
+  await waitForRenderer(win, `document.querySelector('.git-commit-sub')?.textContent.match(/[1-9][0-9]* staged/)`, 20_000)
+  check('Stage all uses the built-in Git action and refreshes visible status',
+    await rendererValue(win, `document.querySelector('.git-commit-sub')?.textContent.match(/[1-9][0-9]* staged/) !== null`))
+  await setInputValue(win, '.git-commit-input', 'Fix diagnostics through CaoGen')
+  await rendererValue(win, `document.querySelector('.git-commit-form button')?.click()`)
+  await waitForRenderer(win, `document.querySelector('.git-file-empty')?.textContent === 'No Git changes'`, 20_000)
+  check('Commit through CaoGen leaves the Project worktree clean',
+    git(projectDir, ['status', '--porcelain']).trim() === '')
+  check('Git history contains the exact in-app commit',
+    git(projectDir, ['log', '-1', '--pretty=%s']).trim() === 'Fix diagnostics through CaoGen')
+
+  await openDeskTool(win, 2, '.terminal-panel')
+  await waitForRenderer(win, `document.querySelector('.terminal-input:not(:disabled)') !== null`, 20_000)
+  await setInputValue(win, '.terminal-input', `node -e "console.log('caogen-terminal-heavy-ok')"`)
+  await rendererValue(win, `document.querySelector('.terminal-input-row button')?.click()`)
+  await waitForRenderer(win, `document.querySelector('.terminal-output')?.textContent.includes('caogen-terminal-heavy-ok')`, 20_000)
+  check('built-in Terminal executes inside the same Project Session',
+    await rendererValue(win, `document.querySelector('.terminal-output')?.textContent.includes('caogen-terminal-heavy-ok')`))
+  check('Terminal panel reports the active Project working directory',
+    await rendererValue(win, `document.querySelector('.workspace-diff-sub')?.textContent.includes(${JSON.stringify(projectDir)})`))
+  await capture(win, 'file-editor-terminal.png')
+  await openDeskTool(win, 4, '.file-panel')
+  await selectFileBrowserMode(win, 'tree')
   await closeTab(win, 'src/b.ts')
   await closeTab(win, 'src/consumer.ts')
   await closeTab(win, 'src/components/search.ts')
@@ -199,7 +233,7 @@ async function run() {
     generatedAt: new Date().toISOString(),
     pass: checks.length,
     total: checks.length,
-    screenshots: ['file-editor-content-search.png', 'file-editor-symbol-completion.png', 'file-editor-semantic-hover.png', 'file-editor-problems.png', 'file-editor-tabs-desktop.png', 'file-editor-tabs-compact.png'],
+    screenshots: ['file-editor-content-search.png', 'file-editor-symbol-completion.png', 'file-editor-semantic-hover.png', 'file-editor-problems.png', 'file-editor-diff-review.png', 'file-editor-terminal.png', 'file-editor-tabs-desktop.png', 'file-editor-tabs-compact.png'],
     checks
   }, null, 2)}\n`)
   app.exit(0)
@@ -235,6 +269,13 @@ async function openFiles(win) {
   await waitForRenderer(win, `document.querySelector('.file-row-directory[title="src"]') !== null`)
   await expandDirectory(win, 'src')
   await waitForRenderer(win, `document.querySelectorAll('.file-row-file').length >= 2`)
+}
+
+async function openDeskTool(win, index, selector) {
+  await rendererValue(win, `document.querySelector('.desk-rail-drawer-anchor .desk-rail-button')?.click()`)
+  await waitForRenderer(win, `document.querySelectorAll('.desk-tool-item').length >= ${index}`)
+  await rendererValue(win, `document.querySelector('.desk-tool-item:nth-child(${index})')?.click()`)
+  await waitForRenderer(win, `document.querySelector(${JSON.stringify(selector)})?.checkVisibility() === true`, 20_000)
 }
 
 async function openFile(win, filePath) {
@@ -320,6 +361,18 @@ function tabDirty(win, filePath) {
   return rendererValue(win, `document.querySelector('[data-file-tab=${JSON.stringify(filePath)}]')?.getAttribute('data-file-tab-dirty') === 'true'`)
 }
 
+function initializeGitFixture() {
+  git(projectDir, ['init', '-b', 'main'])
+  git(projectDir, ['config', 'user.name', 'CaoGen E2E'])
+  git(projectDir, ['config', 'user.email', 'caogen-e2e@example.invalid'])
+  git(projectDir, ['add', '--', '.'])
+  git(projectDir, ['commit', '-m', 'Initial fixture'])
+}
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
 async function key(win, keyValue, modifiers = {}) {
   await rendererValue(win, `(() => {
     const target = document.activeElement instanceof HTMLElement ? document.activeElement : window;
@@ -343,7 +396,9 @@ async function layoutState(win) {
     const filePanel = document.querySelector('.file-panel');
     const treeViewport = document.querySelector('.file-list-scroll');
     const editor = document.querySelector('.file-editor-textarea');
-    const controls = [...document.querySelectorAll('.workspace-diff-actions .btn, .file-row-preview, .file-editor-tab-close, .file-editor-head .btn')];
+    const controls = filePanel
+      ? [...filePanel.querySelectorAll('.workspace-diff-actions .btn, .file-row-preview, .file-editor-tab-close, .file-editor-head .btn')]
+      : [];
     const treeRow = document.querySelector('.file-row-directory[title="src"]');
     const sideRect = side?.getBoundingClientRect();
     const panelRect = panel?.getBoundingClientRect();
