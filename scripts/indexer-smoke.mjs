@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -90,6 +90,8 @@ try {
   await waitFor(() => existsSync(path.join(projectDir, '.caogen/index.db')), 'index.db should be persisted')
   const stats = indexer.stats()
   assert(stats?.files >= 5, `expected at least 5 indexed files, got ${stats?.files}`)
+  assert(stats?.truncated === false, 'small project should not report a truncated index')
+  assert(stats?.persistenceWrites === 1, 'initial rebuild should persist exactly one atomic index snapshot')
 
   const addSymbols = indexer.searchSymbols('add', 'function', 10)
   assert(addSymbols.some((item) => item.filePath === 'src/math.ts' && item.exported), 'should find exported add function')
@@ -144,6 +146,46 @@ try {
   )
   await waitFor(() => indexer.searchSymbols('freshSymbol', 'function', 5).length > 0, 'watcher should incrementally index changed file')
 
+  const burstDir = path.join(projectDir, 'src/burst')
+  mkdirSync(burstDir, { recursive: true })
+  const persistenceBeforeBurst = indexer.stats().persistenceWrites
+  for (let index = 0; index < 24; index += 1) {
+    writeFileSync(
+      path.join(burstDir, `burst-${String(index).padStart(2, '0')}.ts`),
+      `export function burstSymbol${index}() { return ${index} }\n`,
+      'utf8'
+    )
+  }
+  await waitFor(
+    () => indexer.searchSymbols('burstSymbol', 'function', 100).length === 24,
+    'watcher should index a burst of changed files'
+  )
+  await waitFor(
+    () => indexer.stats().persistenceWrites > persistenceBeforeBurst,
+    'burst update should persist an index snapshot'
+  )
+  await new Promise((resolve) => setTimeout(resolve, 750))
+  const persistenceAfterBurst = indexer.stats().persistenceWrites
+  assert(
+    persistenceAfterBurst - persistenceBeforeBurst <= 3,
+    `24 watcher updates should coalesce to at most 3 snapshots, got ${persistenceAfterBurst - persistenceBeforeBurst}`
+  )
+  assert(
+    !readdirSync(path.join(projectDir, '.caogen')).some((name) => name.endsWith('.tmp')),
+    'atomic index persistence should not leave temporary files'
+  )
+
+  await indexerModule.disposeProjectIndexers()
+  const reopened = await indexerModule.ensureProjectIndex(projectDir, { watch: false })
+  assert(
+    reopened.searchSymbols('burstSymbol23', 'function', 5).some((item) => item.filePath.endsWith('burst-23.ts')),
+    'coalesced snapshot should survive a fresh indexer process boundary'
+  )
+  assert(reopened.stats()?.files >= 29, 'live stats should include watcher-added files after reopen')
+  await indexerModule.disposeProjectIndexers()
+  const truncated = await indexerModule.ensureProjectIndex(projectDir, { watch: false, maxFiles: 10 })
+  assert(truncated.stats()?.truncated === true, 'bounded scan should report truncation explicitly')
+  assert(truncated.stats()?.files >= 29, 'truncated warm scan must not delete previously indexed rows it did not revisit')
   await indexerModule.disposeProjectIndexers()
   console.log('indexer smoke ok')
 } finally {

@@ -62,6 +62,7 @@ const commandDefinitions = [
   { name: 'searchReplace/view smoke', command: 'node', args: ['scripts/search-replace-smoke.mjs'], category: 'smoke' },
   { name: 'chat virtual list smoke', command: 'node', args: ['scripts/chat-virtual-list-smoke.mjs'], category: 'smoke' },
   { name: 'indexer smoke', command: 'node', args: ['scripts/indexer-smoke.mjs'], category: 'smoke' },
+  { name: 'indexer large-repo smoke', command: 'node', args: ['scripts/indexer-large-repo-smoke.mjs'], category: 'smoke' },
   { name: 'context loader smoke', command: 'node', args: ['scripts/context-loader-smoke.mjs'], category: 'smoke' },
   { name: 'projectRules UI smoke', command: 'node', args: ['scripts/project-rules-ui-smoke.mjs'], category: 'smoke' },
   { name: 'sandbox permission smoke', command: 'node', args: ['scripts/p0-004-sandbox-permission-smoke.mjs'], category: 'smoke' },

@@ -141,6 +141,8 @@
     "test:chat-virtual-list": "node scripts/chat-virtual-list-smoke.mjs",
     "test:file-editor-tabs": "node scripts/file-editor-tabs-smoke.mjs",
     "test:file-editor-tabs:e2e": "node scripts/file-editor-tabs-e2e.mjs",
+    "test:indexer": "node scripts/indexer-smoke.mjs",
+    "test:indexer-large-repo:required": "node scripts/indexer-large-repo-smoke.mjs",
     "test:project-tests": "node scripts/project-test-runner-smoke.mjs",
     "test:project-tests:required": "npm run test:project-tests",
     "test:project-tests:e2e": "node scripts/project-test-panel-e2e.mjs",

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -16,6 +17,8 @@ const nodeRequire = createRequire(__filename)
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_SCAN_FILES = 50_000
 const WATCH_DEBOUNCE_MS = 250
+const PERSIST_DEBOUNCE_MS = 300
+const STAT_CONCURRENCY = 64
 const DEFAULT_LIMIT = 20
 const DEFAULT_IGNORED_DIRS = new Set([
   '.caogen',
@@ -84,10 +87,13 @@ export interface ProjectIndexStats {
   dependencies: number
   indexedAt: number
   durationMs: number
+  truncated: boolean
+  persistenceWrites: number
 }
 
 interface EnsureOptions {
   watch?: boolean
+  maxFiles?: number
 }
 
 interface IgnoreRule {
@@ -102,6 +108,11 @@ interface ScannedFile {
   relPath: string
   size: number
   mtimeMs: number
+}
+
+interface ScanResult {
+  files: ScannedFile[]
+  truncated: boolean
 }
 
 const indexers = new Map<string, Promise<ProjectIndexer>>()
@@ -130,14 +141,20 @@ export class ProjectIndexer {
   private watcher: FSWatcher | null = null
   private watcherReady: Promise<void> | null = null
   private readonly pendingUpdates = new Map<string, NodeJS.Timeout>()
+  private readonly activeUpdates = new Set<Promise<void>>()
   private readonly indexPath: string
   private readonly ignoreRules: IgnoreRule[]
   private initializedAt = 0
   private lastStats: ProjectIndexStats | null = null
+  private persistTimer: NodeJS.Timeout | null = null
+  private persistDirty = false
+  private persistChain: Promise<void> = Promise.resolve()
+  private persistenceWrites = 0
 
   private constructor(
     private readonly root: string,
-    private readonly db: SqlDatabase
+    private readonly db: SqlDatabase,
+    private readonly maxScanFiles: number
   ) {
     this.indexPath = join(root, '.caogen', 'index.db')
     this.ignoreRules = readGitignoreRules(root)
@@ -154,7 +171,7 @@ export class ProjectIndexer {
     const db = await access(dbPath, constants.R_OK)
       .then(async () => new SQL.Database(await readFile(dbPath)))
       .catch(() => new SQL.Database())
-    const indexer = new ProjectIndexer(root, db)
+    const indexer = new ProjectIndexer(root, db, clampScanLimit(options.maxFiles))
     indexer.setupSchema()
     await indexer.rebuild()
     if (options.watch !== false) await indexer.startWatcher()
@@ -167,12 +184,21 @@ export class ProjectIndexer {
     if (this.watcher) await this.watcher.close()
     this.watcher = null
     this.watcherReady = null
-    this.persist()
+    await Promise.allSettled([...this.activeUpdates])
+    if (this.persistTimer) clearTimeout(this.persistTimer)
+    this.persistTimer = null
+    await this.persistNow()
     this.db.close()
   }
 
   stats(): ProjectIndexStats | null {
-    return this.lastStats
+    return this.lastStats ? {
+      ...this.lastStats,
+      files: this.scalar('SELECT COUNT(*) FROM files'),
+      symbols: this.scalar('SELECT COUNT(*) FROM symbols'),
+      dependencies: this.scalar('SELECT COUNT(*) FROM dependencies'),
+      persistenceWrites: this.persistenceWrites
+    } : null
   }
 
   startWatcher(): Promise<void> {
@@ -208,10 +234,13 @@ export class ProjectIndexer {
 
   async rebuild(): Promise<ProjectIndexStats> {
     const started = Date.now()
-    const files = await this.scanFiles()
-    const seen = new Set(files.map((file) => file.relPath))
-    for (const row of this.select<{ path: string }>('SELECT path FROM files')) {
-      if (!seen.has(row.path)) this.removeFile(row.path, false, true)
+    const scan = await this.scanFiles()
+    const files = scan.files
+    if (!scan.truncated) {
+      const seen = new Set(files.map((file) => file.relPath))
+      for (const row of this.select<{ path: string }>('SELECT path FROM files')) {
+        if (!seen.has(row.path)) this.removeFile(row.path, false, true)
+      }
     }
 
     this.db.run('BEGIN TRANSACTION')
@@ -227,7 +256,7 @@ export class ProjectIndexer {
       throw err
     }
 
-    this.persist()
+    await this.persistNow()
     this.initializedAt = Date.now()
     this.lastStats = {
       root: this.root,
@@ -236,7 +265,9 @@ export class ProjectIndexer {
       symbols: this.scalar('SELECT COUNT(*) FROM symbols'),
       dependencies: this.scalar('SELECT COUNT(*) FROM dependencies'),
       indexedAt: this.initializedAt,
-      durationMs: Date.now() - started
+      durationMs: Date.now() - started,
+      truncated: scan.truncated,
+      persistenceWrites: this.persistenceWrites
     }
     return this.lastStats
   }
@@ -272,8 +303,7 @@ export class ProjectIndexer {
     if (!clean) return []
     const capped = clampLimit(limit)
     try {
-      const matches = await runRipgrepBinary(this.root, clean, glob, capped)
-      return matches.length > 0 ? matches : this.fallbackSearchCode(clean, glob, capped)
+      return await runRipgrepBinary(this.root, clean, glob, capped)
     } catch {
       return this.fallbackSearchCode(clean, glob, capped)
     }
@@ -282,18 +312,31 @@ export class ProjectIndexer {
   findFiles(pattern: string, limit = DEFAULT_LIMIT): IndexedFile[] {
     const clean = pattern.trim().toLowerCase()
     const capped = clampLimit(limit)
-    const rows = this.select<IndexedFileRow>(
-      'SELECT path, language, size, mtime_ms FROM files ORDER BY length(path), path LIMIT 5000'
+    const direct = this.select<IndexedFileRow>(
+      clean
+        ? 'SELECT path, language, size, mtime_ms FROM files WHERE instr(lower(path), ?) > 0 ORDER BY length(path), path LIMIT ?'
+        : 'SELECT path, language, size, mtime_ms FROM files ORDER BY length(path), path LIMIT ?',
+      clean ? [clean, capped] : [capped]
     )
-    return rows
-      .filter((row) => !clean || row.path.toLowerCase().includes(clean) || fuzzyMatch(row.path.toLowerCase(), clean))
-      .slice(0, capped)
-      .map((row) => ({
-        path: row.path,
-        language: row.language,
-        size: row.size,
-        mtimeMs: row.mtime_ms
-      }))
+    const rows = [...direct]
+    if (clean && rows.length < capped) {
+      const seen = new Set(rows.map((row) => row.path))
+      for (const row of this.select<IndexedFileRow>(
+        'SELECT path, language, size, mtime_ms FROM files ORDER BY length(path), path LIMIT ?',
+        [MAX_SCAN_FILES]
+      )) {
+        if (seen.has(row.path) || !fuzzyMatch(row.path.toLowerCase(), clean)) continue
+        rows.push(row)
+        seen.add(row.path)
+        if (rows.length >= capped) break
+      }
+    }
+    return rows.map((row) => ({
+      path: row.path,
+      language: row.language,
+      size: row.size,
+      mtimeMs: row.mtime_ms
+    }))
   }
 
   dependencies(filePath: string): DependencyView {
@@ -347,17 +390,22 @@ export class ProjectIndexer {
     `)
   }
 
-  private async scanFiles(): Promise<ScannedFile[]> {
+  private async scanFiles(): Promise<ScanResult> {
     const out: ScannedFile[] = []
     const queue: string[] = [this.root]
-    while (queue.length > 0 && out.length < MAX_SCAN_FILES) {
-      const dir = queue.shift() as string
+    let cursor = 0
+    let truncated = false
+    while (cursor < queue.length && out.length < this.maxScanFiles) {
+      const dir = queue[cursor]
+      cursor += 1
       let entries: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>
       try {
         entries = await readdir(dir, { withFileTypes: true })
       } catch {
         continue
       }
+      entries.sort((left, right) => left.name.localeCompare(right.name))
+      const candidates: Array<{ fullPath: string; relPath: string }> = []
       for (const entry of entries) {
         const fullPath = join(dir, entry.name)
         const relPath = toProjectRelative(this.root, fullPath)
@@ -367,18 +415,31 @@ export class ProjectIndexer {
           continue
         }
         if (!entry.isFile() || this.shouldIgnore(relPath, false) || !languageForFile(fullPath)) continue
-        const info = await stat(fullPath).catch(() => null)
-        if (!info || info.size > MAX_FILE_BYTES) continue
-        out.push({ fullPath, relPath, size: info.size, mtimeMs: info.mtimeMs })
+        candidates.push({ fullPath, relPath })
+      }
+      for (let offset = 0; offset < candidates.length; offset += STAT_CONCURRENCY) {
+        const batch = candidates.slice(offset, offset + STAT_CONCURRENCY)
+        const infos = await Promise.all(batch.map((file) => stat(file.fullPath).catch(() => null)))
+        for (let index = 0; index < batch.length; index += 1) {
+          const info = infos[index]
+          if (!info?.isFile() || info.size > MAX_FILE_BYTES) continue
+          const file = batch[index]
+          out.push({ ...file, size: info.size, mtimeMs: info.mtimeMs })
+          if (out.length >= this.maxScanFiles) {
+            truncated = offset + index + 1 < candidates.length || cursor < queue.length
+            break
+          }
+        }
+        if (out.length >= this.maxScanFiles) break
       }
     }
-    return out
+    return { files: out, truncated: truncated || cursor < queue.length }
   }
 
   private async indexFile(file: ScannedFile, persistAfter = true): Promise<void> {
     const parsed = await readParseableFile(file.fullPath)
     if (!parsed.ok) {
-      this.removeFile(file.relPath, false, false)
+      this.removeFile(file.relPath, persistAfter, false)
       return
     }
     const code = parseCodeFile(file.fullPath, parsed.content)
@@ -412,7 +473,7 @@ export class ProjectIndexer {
         [file.relPath, resolved.path, item.specifier, resolved.external ? 1 : 0, item.line]
       )
     }
-    if (persistAfter) this.persist()
+    if (persistAfter) this.schedulePersist()
   }
 
   private queueUpdate(fullPath: string): void {
@@ -422,7 +483,11 @@ export class ProjectIndexer {
     if (previous) clearTimeout(previous)
     const timer = setTimeout(() => {
       this.pendingUpdates.delete(fullPath)
-      void this.indexChangedFile(fullPath)
+      const update = this.indexChangedFile(fullPath)
+      this.activeUpdates.add(update)
+      void update.catch((error: unknown) => {
+        console.error('[caogen] Project index update failed:', errorName(error))
+      }).finally(() => this.activeUpdates.delete(update))
     }, WATCH_DEBOUNCE_MS)
     this.pendingUpdates.set(fullPath, timer)
   }
@@ -450,7 +515,7 @@ export class ProjectIndexer {
     } else {
       this.db.run('DELETE FROM dependencies WHERE file_path = ?', [relPath])
     }
-    if (persistAfter) this.persist()
+    if (persistAfter) this.schedulePersist()
   }
 
   private fileRecord(relPath: string): { size: number; mtimeMs: number } | null {
@@ -462,15 +527,17 @@ export class ProjectIndexer {
     return row ? { size: row.size, mtimeMs: row.mtime_ms } : null
   }
 
-  private fallbackSearchCode(query: string, glob: string | undefined, limit: number): CodeSearchMatch[] {
-    const files = this.findFiles('', 5000)
+  private async fallbackSearchCode(query: string, glob: string | undefined, limit: number): Promise<CodeSearchMatch[]> {
+    const files = this.select<IndexedFileRow>(
+      'SELECT path, language, size, mtime_ms FROM files ORDER BY path LIMIT ?',
+      [MAX_SCAN_FILES]
+    )
     const matches: CodeSearchMatch[] = []
     for (const file of files) {
       if (glob && !globMatch(file.path, glob)) continue
-      const fullPath = join(this.root, file.path)
-      const text = readFileSyncUtf8(fullPath)
-      if (text === null) continue
-      const lines = text.split(/\r?\n/)
+      const parsed = await readParseableFile(join(this.root, file.path))
+      if (!parsed.ok) continue
+      const lines = parsed.content.split(/\r?\n/)
       for (const [index, line] of lines.entries()) {
         if (!line.includes(query)) continue
         matches.push({ filePath: file.path, line: index + 1, snippet: line.trim() })
@@ -494,11 +561,39 @@ export class ProjectIndexer {
     return false
   }
 
-  private persist(): void {
-    const data = this.db.export()
-    writeFile(this.indexPath, data).catch((err: unknown) => {
-      console.error('[caogen] 保存项目索引失败:', err)
+  private schedulePersist(): void {
+    this.persistDirty = true
+    if (this.persistTimer) return
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      void this.enqueuePersist().catch((err: unknown) => {
+        console.error('[caogen] Project index persistence failed:', errorName(err))
+      })
+    }, PERSIST_DEBOUNCE_MS)
+  }
+
+  private async persistNow(): Promise<void> {
+    this.persistDirty = true
+    if (this.persistTimer) clearTimeout(this.persistTimer)
+    this.persistTimer = null
+    await this.enqueuePersist()
+  }
+
+  private enqueuePersist(): Promise<void> {
+    const next = this.persistChain.catch(() => undefined).then(async () => {
+      while (this.persistDirty) {
+        this.persistDirty = false
+        try {
+          await writeIndexAtomically(this.indexPath, this.db.export())
+          this.persistenceWrites += 1
+        } catch (error) {
+          this.persistDirty = true
+          throw error
+        }
+      }
     })
+    this.persistChain = next
+    return next
   }
 
   private select<T extends Record<string, SqlValue>>(sql: string, params: SqlValue[] = []): T[] {
@@ -547,6 +642,27 @@ async function loadSql(): Promise<SqlJsStatic> {
   return sqlPromise
 }
 
+async function writeIndexAtomically(indexPath: string, data: Uint8Array): Promise<void> {
+  const temporary = join(dirname(indexPath), `.index.${process.pid}.${randomUUID()}.tmp`)
+  try {
+    const handle = await open(temporary, 'wx', 0o600)
+    try {
+      await handle.writeFile(data)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await rename(temporary, indexPath)
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'UnknownError'
+}
+
 async function readParseableFile(filePath: string): Promise<{ ok: true; content: string } | { ok: false }> {
   const buffer = await readFile(filePath).catch(() => null)
   if (!buffer || buffer.includes(0)) return { ok: false }
@@ -554,17 +670,6 @@ async function readParseableFile(filePath: string): Promise<{ ok: true; content:
     return { ok: true, content: new TextDecoder('utf-8', { fatal: true }).decode(buffer) }
   } catch {
     return { ok: false }
-  }
-}
-
-function readFileSyncUtf8(filePath: string): string | null {
-  try {
-    const fs = nodeRequire('node:fs') as typeof import('node:fs')
-    const buffer = fs.readFileSync(filePath)
-    if (buffer.includes(0)) return null
-    return buffer.toString('utf8')
-  } catch {
-    return null
   }
 }
 
@@ -647,6 +752,12 @@ function toProjectRelative(root: string, fullPath: string): string {
 
 function clampLimit(value: number): number {
   return Number.isFinite(value) ? Math.min(100, Math.max(1, Math.floor(value))) : DEFAULT_LIMIT
+}
+
+function clampScanLimit(value: number | undefined): number {
+  return value === undefined || !Number.isFinite(value)
+    ? MAX_SCAN_FILES
+    : Math.min(MAX_SCAN_FILES, Math.max(1, Math.floor(value)))
 }
 
 function runRipgrepBinary(root: string, query: string, glob: string | undefined, limit: number): Promise<CodeSearchMatch[]> {
