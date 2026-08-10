@@ -8,7 +8,7 @@ import { configureModelStatsDir } from './modelStats'
 import { configureProviderHealthDir } from './providerHealth'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
-import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { calculateDurableMonthlyBudgetSnapshot } from './model/durable-monthly-budget'
 import { checkpointRestoreEffectBoundary } from './checkpoint-effect-boundary'
 import { normalizeStableMessagePayload } from './stable-message-payload'
 import { withSessionOperationQueue } from './session-operation-queue'
@@ -2032,12 +2032,21 @@ class SessionManager {
 
   private budgetError(session: Engine): string | null {
     const budget = effectiveBudgetUsd(session.meta)
-    const monthlyBudget = calculateMonthlyBudgetSnapshot({
-      settings: getSettings(),
-      history: listHistory(),
-      currentSession: session.meta
-    })
-    if (budget <= 0 && monthlyBudget.limitUsd <= 0) return null
+    const settings = getSettings()
+    if (budget <= 0 && settings.budgetUsdPerMonth <= 0) return null
+    let monthlyBudget = { limitUsd: 0, exceeded: false, monthKey: '' }
+    if (settings.budgetUsdPerMonth > 0) {
+      try {
+        monthlyBudget = calculateDurableMonthlyBudgetSnapshot({
+          rootDir: app.getPath('userData'),
+          settings,
+          history: listHistory(),
+          currentSession: session.meta
+        })
+      } catch {
+        return '月度计费账本不可审计，已阻止继续请求；请先修复账本或关闭月度预算'
+      }
+    }
     if (!canTrackCost(session.meta)) {
       return '当前引擎不提供费用回传,无法保证预算闸门;请关闭预算或切换到支持费用统计的引擎后继续。'
     }

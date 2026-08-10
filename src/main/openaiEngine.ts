@@ -38,7 +38,7 @@ import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
 import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './model/session-routing'
 import { settingsForCaoGenDrive } from './model/drive'
-import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
+import { calculateDurableMonthlyBudgetSnapshot } from './model/durable-monthly-budget'
 import { canRotateProviderKey } from './providerKeyRouting'
 import { OPENAI_CODING_TOOLS, RESPONSES_CODING_TOOLS } from './openaiTools'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
@@ -309,11 +309,14 @@ export class OpenAIEngine implements Engine {
         ? compatibleProviders.filter((provider) => provider.id === this.meta.providerId)
         : compatibleProviders
       if (settings.smartModelRoutingEnabled || this.meta.routingScope === 'provider' || this.meta.routingScope === 'global') {
-        const monthlyBudget = calculateMonthlyBudgetSnapshot({
-          settings,
-          history: listHistory(),
-          currentSession: this.meta
-        })
+        const monthlyBudget = settings.budgetUsdPerMonth > 0
+          ? calculateDurableMonthlyBudgetSnapshot({
+              rootDir: app.getPath('userData'),
+              settings,
+              history: listHistory(),
+              currentSession: this.meta
+            })
+          : { remainingUsd: undefined }
         const smart = resolveSessionModelRoute({
           enabled: true,
           currentModel: this.meta.model,

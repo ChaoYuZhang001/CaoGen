@@ -1,11 +1,31 @@
-import { appendFileSync, closeSync, existsSync, fsyncSync, openSync, readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { DigitalWorkerBinding } from '../../shared/digital-worker-types'
 import type { ModelAttemptRecord, ModelAttemptUsage } from '../../shared/model-attempt-types'
 
 const SCHEMA_VERSION = 1 as const
 const GENESIS_DIGEST = '0'.repeat(64)
+const LOCK_RETRY_MS = 10
+const LOCK_TIMEOUT_MS = 5_000
+const ABANDONED_LOCK_MS = 30_000
+
+interface LedgerLockOwner {
+  pid: number
+  token: string
+  acquiredAt: number
+}
 
 export interface BillableUsageLedgerEntry {
   schemaVersion: typeof SCHEMA_VERSION
@@ -39,23 +59,30 @@ export function appendBillableUsageLedger(
 ): BillableUsageLedgerEntry | undefined {
   const attempt = input.attempt
   if (attempt.status === 'started' || attempt.completedAt === undefined) return undefined
-  const existing = readBillableUsageLedger(rootDir)
-  const duplicate = existing.find((entry) => entry.attemptId === attempt.id)
-  if (duplicate) {
-    const candidate = buildEntry(input, duplicate.seq, duplicate.prevDigest)
-    if (candidate.digest !== duplicate.digest) throw new Error(`billable usage attempt ${attempt.id} conflicts with ledger history`)
-    return duplicate
-  }
-  const candidate = buildEntry(input, existing.length + 1, existing.at(-1)?.digest ?? GENESIS_DIGEST)
-  const path = billableUsageLedgerPath(rootDir)
-  const descriptor = openSync(path, 'a')
+  const normalizedRoot = requiredRoot(rootDir)
+  mkdirSync(normalizedRoot, { recursive: true })
+  const lockPath = join(normalizedRoot, 'billable-usage-ledger.lock')
+  const lock = acquireLedgerLock(lockPath)
   try {
-    appendFileSync(descriptor, `${JSON.stringify(candidate)}\n`, 'utf8')
-    fsyncSync(descriptor)
+    const existing = readBillableUsageLedger(normalizedRoot)
+    const duplicate = existing.find((entry) => entry.attemptId === attempt.id)
+    if (duplicate) {
+      const candidate = buildEntry(input, duplicate.seq, duplicate.prevDigest)
+      if (candidate.digest !== duplicate.digest) throw new Error(`billable usage attempt ${attempt.id} conflicts with ledger history`)
+      return duplicate
+    }
+    const candidate = buildEntry(input, existing.length + 1, existing.at(-1)?.digest ?? GENESIS_DIGEST)
+    const descriptor = openSync(billableUsageLedgerPath(normalizedRoot), 'a', 0o600)
+    try {
+      appendFileSync(descriptor, `${JSON.stringify(candidate)}\n`, 'utf8')
+      fsyncSync(descriptor)
+    } finally {
+      closeSync(descriptor)
+    }
+    return candidate
   } finally {
-    closeSync(descriptor)
+    releaseLedgerLock(lockPath, lock)
   }
-  return candidate
 }
 
 export function readBillableUsageLedger(rootDir: string): BillableUsageLedgerEntry[] {
@@ -87,13 +114,15 @@ function buildEntry(
   prevDigest: string
 ): BillableUsageLedgerEntry {
   const attempt = input.attempt
+  const sessionId = input.sessionId.trim()
+  if (!sessionId) throw new Error('billable usage ledger sessionId is required')
   const costUsd = validCost(attempt.costUsd)
   const entry: BillableUsageLedgerEntry = {
     schemaVersion: SCHEMA_VERSION,
     seq,
     attemptId: attempt.id,
     runId: attempt.runId,
-    sessionId: input.sessionId.trim(),
+    sessionId,
     providerId: attempt.providerId,
     model: attempt.model,
     status: attempt.status,
@@ -123,10 +152,85 @@ function normalizeEntry(value: unknown, line: number): BillableUsageLedgerEntry 
   for (const field of required) if (typeof entry[field] !== 'string' || !entry[field]) throw new Error(`billable usage ledger ${field} is invalid`)
   if (entry.schemaVersion !== SCHEMA_VERSION || !Number.isSafeInteger(entry.seq) || (entry.seq as number) < 1) throw new Error(`billable usage ledger line ${line} has invalid schema/sequence`)
   if (!Number.isFinite(entry.startedAt) || !Number.isFinite(entry.completedAt) || typeof entry.billable !== 'boolean') throw new Error(`billable usage ledger line ${line} has invalid timing/billing fields`)
+  if (entry.status !== 'succeeded' && entry.status !== 'failed' && entry.status !== 'cancelled') throw new Error(`billable usage ledger line ${line} has invalid terminal status`)
   if (entry.billable && validCost(entry.costUsd) === undefined) throw new Error(`billable usage ledger line ${line} has invalid cost`)
+  if (!entry.billable && entry.costUsd !== undefined) throw new Error(`billable usage ledger line ${line} has contradictory billing fields`)
+  if (!/^[0-9a-f]{64}$/.test(entry.prevDigest as string) || !/^[0-9a-f]{64}$/.test(entry.digest as string)) throw new Error(`billable usage ledger line ${line} has invalid digest fields`)
   return entry as BillableUsageLedgerEntry
 }
 
 function validCost(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value * 1_000_000) / 1_000_000 : undefined
+}
+
+function requiredRoot(rootDir: string): string {
+  const normalized = rootDir.trim()
+  if (!normalized) throw new Error('billable usage ledger rootDir is required')
+  return normalized
+}
+
+function acquireLedgerLock(lockPath: string): { descriptor: number; owner: LedgerLockOwner } {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS
+  while (true) {
+    const owner = { pid: process.pid, token: randomUUID(), acquiredAt: Date.now() }
+    try {
+      const descriptor = openSync(lockPath, 'wx', 0o600)
+      writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, 'utf8')
+      fsyncSync(descriptor)
+      return { descriptor, owner }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      recoverAbandonedLedgerLock(lockPath)
+      if (Date.now() >= deadline) throw new Error('billable usage ledger is locked by another writer')
+      synchronousWait(LOCK_RETRY_MS)
+    }
+  }
+}
+
+function recoverAbandonedLedgerLock(lockPath: string): void {
+  let owner: LedgerLockOwner | undefined
+  try {
+    const value = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LedgerLockOwner>
+    if (Number.isSafeInteger(value.pid) && (value.pid as number) > 0 && typeof value.token === 'string') {
+      owner = value as LedgerLockOwner
+    }
+  } catch {
+    // A malformed lock cannot identify a live owner and is recoverable.
+  }
+  if (owner && processIsAlive(owner.pid)) return
+  if (!owner) {
+    try {
+      if (Date.now() - statSync(lockPath).mtimeMs <= ABANDONED_LOCK_MS) return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+  }
+  try { unlinkSync(lockPath) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+}
+
+function releaseLedgerLock(lockPath: string, lock: { descriptor: number; owner: LedgerLockOwner }): void {
+  try { fsyncSync(lock.descriptor) } catch { /* close remains mandatory */ }
+  closeSync(lock.descriptor)
+  try {
+    const current = JSON.parse(readFileSync(lockPath, 'utf8')) as Partial<LedgerLockOwner>
+    if (current.token === lock.owner.token && current.pid === lock.owner.pid) unlinkSync(lockPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function synchronousWait(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
 }
