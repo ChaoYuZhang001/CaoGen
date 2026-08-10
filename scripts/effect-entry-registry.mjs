@@ -76,7 +76,6 @@ const readOnlyToolNames = [
 
 const opaqueToolNames = [
   'bash', 'browser_click', 'browser_evaluate', 'browser_navigate', 'browser_type',
-  'gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type',
   'mcp_builtin_servers', 'mcp_call_tool', 'mcp_discover', 'mcp_import_claude_desktop',
   'memory_add', 'optimize_skill', 'send_notification'
 ]
@@ -87,12 +86,20 @@ const durableToolNames = [
 
 const readOnlyIpcChannels = [
   'attachments:ocr', 'browser:listAnnotations', 'browser:observe', 'dialog:pickDirectory',
-  'engines:list', 'files:list', 'files:read', 'git:status', 'history:list', 'learning:list',
+  'engines:list', 'files:definition', 'files:diagnostics', 'files:list', 'files:read',
+  'files:search', 'files:symbols', 'files:typescriptCompletions',
+  'files:typescriptDefinitions', 'files:typescriptDiagnostics', 'files:typescriptHover',
+  'git:status', 'history:list', 'learning:list',
   'memory:layeredExport', 'memory:layeredList', 'memory:layeredSearch', 'memory:read',
   'migration:scan', 'modelAttempts:listReconciliations', 'notificationConnectors:list',
   'plugins:reveal', 'plugins:scan', 'preview:listAnnotations', 'projectContext:read',
   'projectContext:template', 'projects:list', 'providers:fetchModels', 'providers:health',
-  'providers:list', 'quickbar:getState', 'quickbar:getWindowContext', 'quickbar:pickFiles',
+  'permissions:gui-grants:list', 'permissions:tool-grants:list',
+  'providers:authorization:accounts', 'providers:balance:capability',
+  'providers:billing:capability', 'providers:billing:list', 'providers:billing:reconcile',
+  'providers:fetchPricingCatalog', 'providers:list', 'providers:usage',
+  'providers:gateway:models', 'providers:gateway:status',
+  'quickbar:getState', 'quickbar:getWindowContext', 'quickbar:pickFiles',
   'quickbar:readClipboard', 'routines:list', 'routines:listRuns', 'routines:listTemplates',
   'sessions:list', 'sessions:outboundContextPreview', 'sessions:pendingPermissions',
   'sessions:suggestFiles', 'sessions:transcript', 'settings:get', 'startSuggestions:get',
@@ -118,7 +125,9 @@ const durableIpcChannels = [
   'notificationConnectors:setDefault', 'preview:prepare', 'preview:prepareVisual',
   'preview:saveAnnotation', 'projectContext:write', 'projects:delete', 'projects:update',
   'projectWorkspace:invoke', 'providers:activateLocalCompute', 'providers:create',
-  'providers:delete', 'providers:update', 'routines:create', 'routines:delete',
+  'providers:authorization:revoke', 'providers:billing:remove', 'providers:billing:save',
+  'providers:delete', 'providers:update',
+  'routines:create', 'routines:delete',
   'routines:markRun', 'routines:reviewRun', 'routines:update', 'sessions:close',
   'sessions:create', 'sessions:rename', 'sessions:setModel', 'sessions:setPermissionMode',
   'settings:update', 'supervisor:invoke', 'taskSnapshots:delete', 'taskSnapshots:recover',
@@ -131,16 +140,28 @@ const durableIpcChannels = [
 ]
 
 const opaqueIpcChannels = [
-  'browser:back', 'browser:close', 'browser:forward', 'browser:navigate', 'browser:open',
+  'attachments:copyDocument', 'browser:back', 'browser:close', 'browser:forward',
+  'browser:navigate', 'browser:open',
   'browser:pickElement', 'browser:reload', 'migration:import', 'plugins:installLocal', 'plugins:probeMcp',
   'plugins:setEnabled', 'plugins:uninstall', 'quickbar:captureScreenshot',
   'quickbar:prepareFiles', 'routines:runNow', 'sessions:decomposeTask',
   'sessions:dispatchSubagents', 'sessions:dispatchTaskDag', 'sessions:interrupt',
   'sessions:permission', 'sessions:restoreCheckpoint', 'sessions:rewindFiles',
-  'sessions:send', 'terminals:close', 'terminals:start', 'terminals:write'
+  'sessions:send', 'terminals:close', 'terminals:start', 'terminals:write',
+  'providers:authorization:start', 'providers:authorization:quick-start',
+  'providers:authorization:quick-poll', 'providers:authorization:poll',
+  'providers:authorization:bind', 'providers:authorization:refresh',
+  'providers:authorization:quota', 'providers:balance:query', 'providers:billing:sync',
+  'providers:probeGeneration',
+  'providers:gateway:copy-token', 'providers:gateway:update'
 ]
 
-const ephemeralIpcChannels = ['browser:bounds', 'quickbar:setVisible', 'terminals:resize']
+const ephemeralIpcChannels = [
+  'browser:bounds',
+  'permissions:gui-grants:revoke', 'permissions:gui-grants:revoke-all',
+  'permissions:tool-grants:revoke', 'permissions:tool-grants:revoke-all',
+  'quickbar:setVisible', 'terminals:resize'
+]
 const blockedIpcChannels = [
   'workflowLedger:createGoal', 'workflowLedger:createWorkItem', 'workflowLedger:transitionWorkItem'
 ]
@@ -184,11 +205,18 @@ const durableSupervisorActions = [
 ]
 
 const readOnlyAppFeatureActions = [
-  'provider-profile/backups', 'provider-profile/preview', 'studio-result/export',
+  'provider-profile/backups', 'provider-profile/native-backups',
+  'provider-profile/cc-switch-backups', 'provider-profile/cc-switch-preview',
+  'provider-profile/native-codex-preview', 'provider-profile/native-config-backups',
+  'provider-profile/native-config-preview', 'provider-profile/preview', 'studio-result/export',
   'studio-result/audit', 'studio-result/get', 'task-plan/get'
 ]
 const durableAppFeatureActions = [
-  'provider-profile/apply', 'provider-profile/export', 'provider-profile/rollback',
+  'provider-profile/apply', 'provider-profile/backup-apply', 'provider-profile/backup-preview',
+  'provider-profile/cc-switch-apply', 'provider-profile/cc-switch-rollback',
+  'provider-profile/export', 'provider-profile/native-codex-apply',
+  'provider-profile/native-config-apply', 'provider-profile/native-config-rollback',
+  'provider-profile/native-rollback', 'provider-profile/rollback',
   'studio-result/save', 'task-plan/approve', 'task-plan/create-version',
   'task-plan/revoke', 'task-plan/strategy'
 ]
@@ -199,6 +227,8 @@ export const EFFECT_ENTRY_REGISTRY = [
   ...entries(tools(durableToolNames), durableTool),
   ...entries(tools(['write_file', 'search_replace', 'edit_file']),
     queryable(['file_content'], 'src/main/task/effect-target-builder.ts')),
+  ...entries(tools(['gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type']),
+    queryable(['gui_postcondition'], 'src/main/gui/gui-effect.ts')),
   ...entries(tools(['create_document', 'create_pdf', 'create_presentation', 'create_spreadsheet']),
     queryable(['office_artifact'], 'src/main/agent/tools/office-artifact.ts')),
   ...entries(tools(['git_stage', 'git_stage_all']),

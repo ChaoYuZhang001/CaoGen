@@ -119,6 +119,90 @@ try {
     'portable replay must explicitly forbid side-effect replay'
   )
 
+  const confirmedTurnWriter = new transcript.TranscriptWriter()
+  confirmedTurnWriter.next({
+    kind: 'user-message',
+    messageId: 'confirmed-turn',
+    text: 'Create the release document.'
+  })
+  confirmedTurnWriter.next({
+    kind: 'assistant-message',
+    blocks: [{
+      type: 'tool_use',
+      id: 'create-document-original',
+      name: 'create_document',
+      input: { path: 'release.docx', title: 'Release evidence' }
+    }]
+  })
+  confirmedTurnWriter.next({
+    kind: 'tool-result',
+    toolUseId: 'create-document-original',
+    content: 'Created release.docx',
+    isError: false,
+    effectStatus: 'confirmed'
+  })
+  confirmedTurnWriter.next({
+    kind: 'assistant-message',
+    blocks: [{
+      type: 'tool_use',
+      id: 'failed-document',
+      name: 'create_document',
+      input: { path: 'failed.docx' }
+    }]
+  })
+  confirmedTurnWriter.next({
+    kind: 'tool-result',
+    toolUseId: 'failed-document',
+    content: 'failed',
+    isError: true,
+    effectStatus: 'waiting_reconciliation'
+  })
+  const confirmedIndex = replay.buildConfirmedToolReplayIndex(
+    confirmedTurnWriter.readAll(),
+    'confirmed-turn',
+    new Map([['create-document-original', 'release-document-target']])
+  )
+  const confirmedResult = replay.findConfirmedToolReplay(
+    confirmedIndex,
+    'create_document',
+    'release-document-target'
+  )
+  assert(confirmedResult, 'confirmed result must bind to its durable effect target')
+  assertEqual(
+    confirmedResult.resultDigest.length,
+    64,
+    'confirmed replay must expose only a fixed-size result digest'
+  )
+  assertEqual(
+    replay.findConfirmedToolReplay(confirmedIndex, 'create_document', 'changed-document-target'),
+    undefined,
+    'changed tool input must not reuse a prior side effect'
+  )
+  assertEqual(
+    replay.findConfirmedToolReplay(confirmedIndex, 'create_document', 'failed-document-target'),
+    undefined,
+    'failed or unresolved effects must never be replayed as success'
+  )
+  const immediateIndex = replay.recordConfirmedToolReplay(new Map(), {
+    toolUseId: 'create-document-immediate',
+    toolName: 'create_document',
+    targetDigest: 'immediate-document-target',
+    resultContent: 'Created immediate.docx'
+  })
+  const immediateResult = replay.findConfirmedToolReplay(
+    immediateIndex,
+    'create_document',
+    'immediate-document-target'
+  )
+  assert(immediateResult, 'confirmed side effects must enter the active turn index immediately')
+  assertEqual(immediateResult.resultDigest.length, 64, 'immediate replay result must expose a SHA-256 digest')
+  confirmedTurnWriter.next({ kind: 'user-message', messageId: 'next-turn', text: 'Create another document.' })
+  assertEqual(
+    replay.buildConfirmedToolReplayIndex(confirmedTurnWriter.readAll(), 'next-turn').size,
+    0,
+    'confirmed replay must be isolated to the current user turn'
+  )
+
   const restored = writer.restore('checkpoint-2', {
     kind: 'checkpoint-restore',
     messageId: 'checkpoint-2',

@@ -43,7 +43,11 @@ try {
     jsx: 'automatic',
     external: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/server']
   })
-  symlinkSync(path.join(repoRoot, 'node_modules'), path.join(tempRoot, 'node_modules'), 'dir')
+  symlinkSync(
+    path.join(repoRoot, 'node_modules'),
+    path.join(tempRoot, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
 
   const module = require(bundlePath)
   const StudioMessageItem = module.StudioMessageItem

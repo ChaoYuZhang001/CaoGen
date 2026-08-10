@@ -18,6 +18,91 @@ export interface PortableConversationReplay {
   characters: number
 }
 
+export interface ConfirmedToolReplay {
+  toolUseId: string
+  toolName: string
+  targetDigest: string
+  resultDigest: string
+}
+
+export type ConfirmedToolReplayIndex = ReadonlyMap<string, ConfirmedToolReplay>
+
+/**
+ * Index confirmed side effects from the active user turn so provider failover can
+ * return the durable result without executing the same external operation again.
+ */
+export function buildConfirmedToolReplayIndex(
+  entries: TranscriptEntry[],
+  currentMessageId?: string,
+  replayTargets: ReadonlyMap<string, string> = new Map()
+): ConfirmedToolReplayIndex {
+  if (!currentMessageId) return new Map()
+  let turnStart = -1
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const event = entries[index].event
+    if (event.kind === 'user-message' && event.messageId === currentMessageId) {
+      turnStart = index
+      break
+    }
+  }
+  if (turnStart < 0) return new Map()
+
+  const calls = new Map<string, { toolUseId: string; toolName: string }>()
+  const confirmed = new Map<string, ConfirmedToolReplay>()
+  for (let index = turnStart + 1; index < entries.length; index += 1) {
+    const event = entries[index].event
+    if (event.kind === 'user-message') break
+    if (event.kind === 'assistant-message') {
+      for (const block of event.blocks) {
+        if (block.type !== 'tool_use') continue
+        calls.set(block.id, {
+          toolUseId: block.id,
+          toolName: block.name
+        })
+      }
+      continue
+    }
+    if (event.kind !== 'tool-result' || event.isError || event.effectStatus !== 'confirmed') continue
+    const call = calls.get(event.toolUseId)
+    const targetDigest = replayTargets.get(event.toolUseId)
+    if (!call || !targetDigest) continue
+    confirmed.set(confirmedToolReplayFingerprint(call.toolName, targetDigest), {
+      ...call,
+      targetDigest,
+      resultDigest: createHash('sha256').update(event.content).digest('hex')
+    })
+  }
+  return confirmed
+}
+
+export function findConfirmedToolReplay(
+  index: ConfirmedToolReplayIndex,
+  toolName: string,
+  targetDigest: string
+): ConfirmedToolReplay | undefined {
+  return index.get(confirmedToolReplayFingerprint(toolName, targetDigest))
+}
+
+export function recordConfirmedToolReplay(
+  index: ConfirmedToolReplayIndex,
+  input: {
+    toolUseId: string
+    toolName: string
+    targetDigest: string
+    resultContent: string
+  }
+): ConfirmedToolReplayIndex {
+  const confirmed: ConfirmedToolReplay = {
+    toolUseId: input.toolUseId,
+    toolName: input.toolName,
+    targetDigest: input.targetDigest,
+    resultDigest: createHash('sha256').update(input.resultContent).digest('hex')
+  }
+  const next = new Map(index)
+  next.set(confirmedToolReplayFingerprint(input.toolName, input.targetDigest), confirmed)
+  return next
+}
+
 /**
  * Converts the durable CaoGen transcript into bounded, provider-neutral context.
  * Credential values and attachment bytes are never included.
@@ -224,6 +309,22 @@ function stableReplayJson(value: unknown): string {
   } catch {
     return '[unserializable tool input]'
   }
+}
+
+function confirmedToolReplayFingerprint(toolName: string, targetDigest: string): string {
+  return createHash('sha256')
+    .update(stableReplaySerialize({ toolName: toolName.trim(), targetDigest }))
+    .digest('hex')
+}
+
+function stableReplaySerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
+  if (Array.isArray(value)) return `[${value.map(stableReplaySerialize).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableReplaySerialize(record[key])}`)
+    .join(',')}}`
 }
 
 function boundedReplayText(value: string, max: number): string {

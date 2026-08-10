@@ -2,7 +2,6 @@ import { Suspense, lazy, useEffect } from 'react'
 import type { ExperienceMode } from '../store/experience-mode'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import AppModeSwitcher from './AppModeSwitcher'
 import Sidebar from './Sidebar'
 import WelcomeView from './WelcomeView'
 import WorkbenchRoot from './workbench/WorkbenchRoot'
@@ -186,10 +185,15 @@ export default function AppListView({
         onClose={onCloseMobileSidebar}
         onToggle={onToggleMobileSidebar}
       />
-      <Sidebar mobileOpen={mobileSidebarOpen} onMobileClose={onCloseMobileSidebar} />
+      <Sidebar
+        experienceMode={experienceMode}
+        language={language}
+        mobileOpen={mobileSidebarOpen}
+        onExperienceModeChange={onExperienceModeChange}
+        onMobileClose={onCloseMobileSidebar}
+      />
       <ExperienceProjectionProvider mode={sessionProjection}>
         <main className="main">
-          <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
           <StudioProjectionTabs
             hidden={experienceMode !== 'studio'}
             language={language}

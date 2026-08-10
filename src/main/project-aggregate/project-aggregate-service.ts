@@ -268,7 +268,9 @@ export class ProjectAggregateService {
       Date.parse(left.event.at) - Date.parse(right.event.at) || left.id.localeCompare(right.id)
     )
     const ledger = workflowExport.ledger
-    const workflow = workflowSelection(ledger, workflowRuns)
+    const canonicalGoalIds = new Set(goals.map((goal) => goal.id))
+    const canonicalWorkItemIds = new Set(workItems.map((item) => item.id))
+    const workflow = workflowSelection(ledger, workflowRuns, canonicalWorkItemIds)
     const audit = [
       ...workspaceAudit.map((event) => ({
         id: `project-workspace:${event.id}`,
@@ -320,18 +322,19 @@ export class ProjectAggregateService {
     }
     const sanitized = sanitizeProjectAggregateValue(rawDraft) as ProjectAggregateDraft
     return finalizeProjectAggregate(sanitized, enforceCanonicalParity ? {
-      goals: ledger.goals.items,
-      workItems: ledger.workItems.items
+      goals: ledger.goals.items.filter((goal) => canonicalGoalIds.has(goal.id)),
+      workItems: ledger.workItems.items.filter((item) => canonicalWorkItemIds.has(item.id))
     } : undefined)
   }
 }
 
 function workflowSelection(
   ledger: WorkflowLedgerExportSelection,
-  fullRuns: ProjectAggregateDraft['workflow']['runs']
+  fullRuns: ProjectAggregateDraft['workflow']['runs'],
+  canonicalWorkItemIds: ReadonlySet<string>
 ): ProjectAggregateDraft['workflow'] {
   const payloads = new Map(fullRuns.map((run) => [run.id, run]))
-  const runs = ledger.runs.items.map((metadata) => {
+  const runs = ledger.runs.items.filter((run) => canonicalWorkItemIds.has(run.workItemId)).map((metadata) => {
     const full = payloads.get(metadata.id)
     if (!full || workflowDigest(full.taskRun) !== metadata.taskRunDigest) {
       throw aggregateIntegrityError(`Run ${metadata.id} restorable payload does not match its export digest`, {
@@ -341,19 +344,52 @@ function workflowSelection(
     const { taskRunDigest: _taskRunDigest, ...projection } = metadata
     return { ...projection, taskRun: full.taskRun }
   })
-  if (runs.length !== fullRuns.length) {
+  const runIds = new Set(runs.map((run) => run.id))
+  const expectedFullRuns = fullRuns.filter((run) => runIds.has(run.id))
+  if (runs.length !== expectedFullRuns.length) {
     throw aggregateIntegrityError('Project Run export is not closed over its restorable payloads')
   }
+  const artifacts = ledger.artifacts.items.filter((artifact) =>
+    canonicalWorkflowOwner(artifact, canonicalWorkItemIds, runIds)
+  )
+  const artifactIds = new Set(artifacts.map((artifact) => artifact.id))
+  const acceptances = ledger.acceptances.items.filter((acceptance) =>
+    !acceptance.workItemId || canonicalWorkItemIds.has(acceptance.workItemId)
+  )
+  const acceptanceIds = new Set(acceptances.map((acceptance) => acceptance.id))
+  const evidenceLinks = ledger.evidenceLinks.items.filter((link) =>
+    (!link.runId || runIds.has(link.runId)) &&
+    (!link.artifactId || artifactIds.has(link.artifactId)) &&
+    (!link.acceptanceId || acceptanceIds.has(link.acceptanceId))
+  )
   return {
     runs: runs.sort(byId),
-    artifacts: [...ledger.artifacts.items].sort(byId),
-    artifactEdges: [...ledger.artifactEdges.items].sort(byId),
-    artifactLocations: [...ledger.artifactLocations.items].sort(byId),
-    acceptances: [...ledger.acceptances.items].sort(byId),
-    evidenceLinks: [...ledger.evidenceLinks.items].sort(byId),
-    taskEvidence: [...ledger.taskEvidence.items].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)),
-    workflowEvidence: [...ledger.workflowEvidence.items].sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))
+    artifacts: artifacts.sort(byId),
+    artifactEdges: ledger.artifactEdges.items.filter((edge) =>
+      artifactIds.has(edge.fromArtifactId) && artifactIds.has(edge.toArtifactId)
+    ).sort(byId),
+    artifactLocations: ledger.artifactLocations.items.filter((location) =>
+      artifactIds.has(location.artifactId)
+    ).sort(byId),
+    acceptances: acceptances.sort(byId),
+    evidenceLinks: evidenceLinks.sort(byId),
+    taskEvidence: ledger.taskEvidence.items.filter((evidence) => runIds.has(evidence.runId))
+      .sort((left, right) => left.evidenceId.localeCompare(right.evidenceId)),
+    workflowEvidence: ledger.workflowEvidence.items.filter((evidence) =>
+      canonicalWorkflowOwner(evidence, canonicalWorkItemIds, runIds) &&
+      (!evidence.artifactId || artifactIds.has(evidence.artifactId))
+    ).sort((left, right) => left.evidenceId.localeCompare(right.evidenceId))
   }
+}
+
+function canonicalWorkflowOwner(
+  record: { workItemId?: string; runId?: string },
+  canonicalWorkItemIds: ReadonlySet<string>,
+  canonicalRunIds: ReadonlySet<string>
+): boolean {
+  if (record.workItemId && !canonicalWorkItemIds.has(record.workItemId)) return false
+  if (record.runId && !canonicalRunIds.has(record.runId)) return false
+  return true
 }
 
 function buildBudgets(

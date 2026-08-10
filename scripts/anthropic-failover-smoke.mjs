@@ -37,7 +37,9 @@ try {
   runtime.settings.updateSettings({ sandboxMode: 'restrictedLocal' })
 
   await check('401 and 429 rotate keys with linked successor Attempts', verifyKeyFailover)
+  await check('503 switches models on the same Provider before Provider failover', verifyProviderModelFailover)
   await check('503 switches only to credentialed Anthropic Providers', verifyProviderFailover)
+  await check('exhausted Anthropic recovery emits manual takeover before the terminal result', verifyRecoveryExhaustion)
   await check('tool execution is not repeated and the next logical request gets a new id', verifyToolLoopLineage)
   await check('unresolved Effects block every automatic replay', verifyEffectReplayBlock)
   await check('partial text or thinking deltas block automatic replay', verifyPartialDeltaBlock)
@@ -148,6 +150,84 @@ async function verifyProviderFailover() {
     ))
     assert.equal(turnResult(harness).isError, false)
     assertNoCredentialLeak(harness, requests.map((item) => item.body), infra.tokens)
+  } finally {
+    await disposeHarness(harness)
+  }
+}
+
+async function verifyProviderModelFailover() {
+  const infra = providerInfrastructure({
+    primaryKeys: [['primary-model-key', 'primary-model-secret']],
+    primaryModels: ['claude-primary', 'claude-primary-backup'],
+    fallbackModel: 'claude-primary-backup'
+  })
+  const requests = []
+  const harness = await createHarness({
+    id: 'anthropic-model-503',
+    project: projectDirectory('model-503'),
+    messageIds: ['model-503-user'],
+    infra,
+    streamMessage: async (input) => {
+      const token = credential(input)
+      requests.push({ token, body: structuredClone(input.request) })
+      if (input.request.model === 'claude-primary') throw new Error(`HTTP 503: ${token}`)
+      input.onText?.('same provider model recovered')
+      return messageResult('model-503-success', 'same provider model recovered')
+    }
+  })
+
+  try {
+    harness.engine.send({ text: 'recover model', images: [], messageId: 'model-503-user' })
+    await waitForTurn(harness, 'model 503')
+    assert.deepEqual(requests.map((item) => item.body.model), ['claude-primary', 'claude-primary-backup'])
+    assert.deepEqual(requests.map((item) => item.token), ['primary-model-secret', 'primary-model-secret'])
+    assertAttemptSuccessor(harness.attempts.calls.start, 0, 1)
+    assert.equal(harness.attempts.calls.start[1].input.providerId, 'anthropic-primary')
+    assert.equal(harness.attempts.calls.start[1].input.model, 'claude-primary-backup')
+    const event = harness.events.find(({ event }) => event.kind === 'provider-model-failover')?.event
+    assert(event && event.kind === 'provider-model-failover')
+    assert.equal(event.providerId, 'anthropic-primary')
+    assert.equal(event.fromModel, 'claude-primary')
+    assert.equal(event.toModel, 'claude-primary-backup')
+    assert.equal(harness.events.some(({ event }) => event.kind === 'failover'), false)
+    assert.equal(harness.meta.providerId, 'anthropic-primary')
+    assert.equal(harness.meta.model, 'claude-primary-backup')
+    assert.equal(turnResult(harness).isError, false)
+    assertNoCredentialLeak(harness, requests.map((item) => item.body), infra.tokens)
+  } finally {
+    await disposeHarness(harness)
+  }
+}
+
+async function verifyRecoveryExhaustion() {
+  const infra = providerInfrastructure({
+    primaryKeys: [['primary-exhausted-key', 'primary-exhausted-secret']],
+    backupKeys: [],
+    primaryModels: ['claude-primary'],
+    fallbackModel: ''
+  })
+  const harness = await createHarness({
+    id: 'anthropic-recovery-exhausted',
+    project: projectDirectory('recovery-exhausted'),
+    messageIds: ['recovery-exhausted-user'],
+    infra,
+    streamMessage: async () => {
+      throw new Error('HTTP 503 service unavailable')
+    }
+  })
+
+  try {
+    harness.engine.send({ text: 'exhaust recovery', images: [], messageId: 'recovery-exhausted-user' })
+    await waitForTurn(harness, 'recovery exhausted')
+    const eventIndex = harness.events.findIndex(({ event }) => event.kind === 'provider-recovery-exhausted')
+    const resultIndex = harness.events.findIndex(({ event }) => event.kind === 'turn-result')
+    assert(eventIndex >= 0 && resultIndex > eventIndex)
+    const event = harness.events[eventIndex].event
+    assert.equal(event.engine, 'anthropic')
+    assert.equal(event.providerId, 'anthropic-primary')
+    assert.equal(event.reason, '服务端错误')
+    assert.equal(turnResult(harness).isError, true)
+    assertNoCredentialLeak(harness, [], infra.tokens)
   } finally {
     await disposeHarness(harness)
   }
@@ -423,8 +503,20 @@ function providerInfrastructure(options = {}) {
   ])
   const active = new Map([['anthropic-primary', 0], ['anthropic-backup', 0]])
   const providers = [
-    providerView('anthropic-primary', 'Primary Anthropic', 'anthropic', true, ['claude-primary']),
-    providerView('anthropic-backup', 'Backup Anthropic', 'anthropic', true, ['claude-backup']),
+    providerView(
+      'anthropic-primary',
+      'Primary Anthropic',
+      'anthropic',
+      true,
+      options.primaryModels ?? ['claude-primary']
+    ),
+    providerView(
+      'anthropic-backup',
+      'Backup Anthropic',
+      'anthropic',
+      true,
+      options.backupModels ?? ['claude-backup']
+    ),
     providerView('openai-decoy', 'OpenAI decoy', 'openai', true, ['gpt-decoy']),
     providerView('other-protocol-decoy', 'Other protocol decoy', 'unsupported', true, ['other-decoy']),
     providerView('anthropic-no-token', 'Anthropic no token', 'anthropic', false, ['claude-empty'])
@@ -448,6 +540,8 @@ function providerInfrastructure(options = {}) {
       model,
       headers: { 'content-type': 'application/json', 'x-api-key': key.token },
       token: key.token,
+      credentialProvider: { authMode: 'api-key', baseUrl: provider.baseUrl },
+      issueCredentialLease: () => ({ authMode: 'api-key', available: true }),
       keyId: key.id,
       keyLabel: key.label
     }
@@ -488,6 +582,8 @@ function providerInfrastructure(options = {}) {
       },
       markProviderKeyUsed: (providerId, keyId) => calls.used.push({ providerId, keyId }),
       recordProviderKeySuccess: (providerId, keyId) => calls.keySuccess.push({ providerId, keyId }),
+      acquireProviderRequest: () => true,
+      releaseProviderRequest: () => undefined,
       recordFailure: (providerId, error) => calls.failure.push({ providerId, error }),
       recordSuccess: (providerId, latencyMs) => calls.success.push({ providerId, latencyMs })
     }
@@ -516,7 +612,7 @@ function installPolicyProviderFixtures(providers, keys) {
       activeKeyId: apiKeys[0]?.id,
       models: provider.models,
       authMode: 'api-key',
-      engine: provider.engine === 'anthropic' ? 'anthropic' : 'openai',
+      engine: provider.engine === 'anthropic' || provider.engine === 'gemini' ? provider.engine : 'openai',
       budgetUsd: 0,
       createdAt: 1
     }

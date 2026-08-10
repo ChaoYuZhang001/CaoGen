@@ -102,7 +102,7 @@ try {
   await check(cdp, 'app opens with mock OpenAI provider available', async () => {
     await assertIsolatedRenderer(cdp)
     await waitForText(cdp, 'CaoGen', 20_000)
-    await clickByText(cdp, '+ 新建会话')
+    await clickByText(cdp, '新建会话')
     await waitForText(cdp, '新建会话')
     await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
@@ -111,7 +111,7 @@ try {
     await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, 'CaoGen OpenAI Mock')
     await chooseSelectOptionByText(cdp, 'mock-responses')
-    await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', prompt)
+    await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', prompt)
     await screenshot(cdp, '01-new-session-openai-mock')
   })
 
@@ -180,6 +180,26 @@ try {
     }
   })
 
+  await check(cdp, 'same-provider model failover recovers a real OpenAI Responses turn', async () => {
+    const requestOffset = mock.requests.length
+    await focusComposer(cdp)
+    await typeText(cdp, `model failover e2e ${runId}`)
+    await press(cdp, 'Enter')
+    await waitForText(cdp, 'Model failover handled', 15_000)
+    await waitForDomValue(cdp, '[data-session-model-select="true"]', 'mock-backup', 10_000)
+    const modelRequests = mock.requests.slice(requestOffset).filter((request) => request.kind === 'model-failover')
+    assert(modelRequests.length === 2, `expected failed model + recovered model, got ${modelRequests.length}`)
+    assert(
+      JSON.stringify(modelRequests.map((request) => request.body?.model)) ===
+        JSON.stringify(['mock-responses', 'mock-backup']),
+      'OpenAI must rotate models before crossing the Provider boundary'
+    )
+    assert(
+      modelRequests.every((request) => request.authorization === 'Bearer mock-key'),
+      'same-provider model recovery must retain the active Broker credential'
+    )
+  })
+
   await check(cdp, 'execute strategy can deny OpenAI bash tool call', async () => {
     await focusComposer(cdp)
     await typeText(cdp, `permission deny e2e ${runId}`)
@@ -227,16 +247,62 @@ try {
     )
   })
 
+  await check(cdp, 'Responses endpoint failure falls back to Chat Completions for the same logical turn', async () => {
+    const requestOffset = mock.requests.length
+    await focusComposer(cdp)
+    await typeText(cdp, `protocol failover e2e ${runId}`)
+    await press(cdp, 'Enter')
+    await waitForText(cdp, '已降级到 Chat Completions', 15_000)
+    await waitForText(cdp, 'Protocol fallback handled', 15_000)
+    const requests = mock.requests.slice(requestOffset).filter((request) => request.kind === 'protocol-failover')
+    assert(
+      JSON.stringify(requests.map((request) => request.url)) ===
+        JSON.stringify(['/v1/responses', '/v1/chat/completions']),
+      'the same turn must try Responses before Chat Completions'
+    )
+    await waitForTranscript(cdp, (entries) => {
+      const fallbackIndex = entries.findIndex((entry) => entry.event.kind === 'provider-protocol-failover')
+      return fallbackIndex >= 0 && entries.some((entry, index) =>
+        index > fallbackIndex && entry.event.kind === 'turn-result' && entry.event.isError === false
+      )
+    }, 10_000)
+  })
+
+  await check(cdp, 'exhausted automatic recovery exits running state and exposes manual takeover', async () => {
+    await focusComposer(cdp)
+    await typeText(cdp, `recovery exhausted e2e ${runId}`)
+    await press(cdp, 'Enter')
+    await waitForText(cdp, '自动恢复失败', 20_000)
+    await waitForText(cdp, '打开 Provider 设置', 10_000)
+    await waitForText(cdp, '本轮异常', 10_000)
+    const transcript = await waitForTranscript(cdp, (entries) => {
+      const exhaustedIndex = entries.findLastIndex((entry) => entry.event.kind === 'provider-recovery-exhausted')
+      return exhaustedIndex >= 0 && entries.some((entry, index) =>
+        index > exhaustedIndex && entry.event.kind === 'turn-result' && entry.event.isError === true
+      )
+    }, 10_000)
+    const exhaustedIndex = transcript.findLastIndex((entry) => entry.event.kind === 'provider-recovery-exhausted')
+    const result = transcript.slice(exhaustedIndex + 1).find((entry) => entry.event.kind === 'turn-result')
+    const status = transcript.slice(exhaustedIndex + 1).findLast((entry) => entry.event.kind === 'status')
+    assert(exhaustedIndex >= 0, 'manual takeover event must be durable')
+    assert(result?.event.isError === true, 'recovery exhaustion must terminate with an error result')
+    assert(status?.event.status === 'error', `expected terminal error status, got ${status?.event.status}`)
+    await screenshot(cdp, '02-provider-recovery-exhausted')
+    await clickByText(cdp, '打开 Provider 设置')
+    await waitForSelector(cdp, '[data-settings-tab="providers"].active', 10_000)
+  })
+
   report.requests = redactMockRequests(mock.requests)
   await check(cdp, 'renderer reports no uncaught errors', async () => {
     report.e2eErrors = await evalValue(cdp, 'globalThis.__caogenE2eErrors || []')
     assert(report.e2eErrors.length === 0, 'renderer emitted uncaught errors')
   })
-  await screenshot(cdp, '02-openai-response-complete')
+  await screenshot(cdp, '03-provider-settings-takeover')
   await cdp.close()
 } finally {
   const exited = await terminate(app)
   await closeServer(mock.server)
+  report.requests = redactMockRequests(mock.requests)
   report.warnings.push(...summarizeProcessOutput(stdout, stderr, exited))
   writeFileSync(path.join(runDir, 'openai-mock-e2e.json'), JSON.stringify(report, null, 2))
   cleanupTempRoot(tempRoot)
@@ -276,7 +342,7 @@ function writeMockUserData(port) {
             }
           ],
           activeKeyId: 'primary-key',
-          models: ['mock-responses'],
+          models: ['mock-responses', 'mock-backup'],
           // mock server 只实现 /v1/responses;非 api.openai.com 端点的智能默认
           // 是 chat,故显式声明 responses(与真实用户在 UI 里选协议一致)
           openaiProtocol: 'responses',
@@ -300,6 +366,7 @@ function writeMockUserData(port) {
         schedulerStrategy: 'balanced',
         budgetUsdPerSession: 0,
         failoverEnabled: true,
+        fallbackModel: 'mock-backup',
         language: 'zh',
         theme: 'dark',
         persona: '',
@@ -316,13 +383,13 @@ function writeMockUserData(port) {
 async function startOpenAiMock() {
   const requests = []
   const server = http.createServer(async (req, res) => {
-    if (req.url !== '/v1/responses' || req.method !== 'POST') {
+    if (!['/v1/responses', '/v1/chat/completions'].includes(req.url || '') || req.method !== 'POST') {
       res.writeHead(404)
       res.end('not found')
       return
     }
     const body = await readJson(req)
-    const prompt = lastInputText(body)
+    const prompt = lastRequestText(body)
     const kind = classifyMockRequest(body, prompt)
     requests.push({
       method: req.method,
@@ -337,6 +404,25 @@ async function startOpenAiMock() {
     if (req.headers.authorization === 'Bearer expired-key') {
       res.writeHead(401, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: { message: 'invalid API key' } }))
+      return
+    }
+    if (kind === 'model-failover' && body?.model === 'mock-responses') {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'service unavailable for selected model' } }))
+      return
+    }
+    if (kind === 'protocol-failover' && req.url === '/v1/responses') {
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'not found' } }))
+      return
+    }
+    if (kind === 'recovery-exhausted') {
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'service unavailable' } }))
+      return
+    }
+    if (req.url === '/v1/chat/completions') {
+      writeChatTextResponse(res, kind === 'protocol-failover' ? 'Protocol fallback handled' : `Mock Chat OK: ${prompt}`)
       return
     }
     if (kind === 'permission-deny-call') {
@@ -356,7 +442,9 @@ async function startOpenAiMock() {
       return
     }
     const reply =
-      kind === 'permission-deny-output'
+      kind === 'model-failover'
+        ? 'Model failover handled'
+        : kind === 'permission-deny-output'
         ? 'Permission deny handled'
         : kind === 'permission-allow-output'
           ? 'Permission allow handled'
@@ -408,7 +496,28 @@ function classifyMockRequest(body, prompt) {
   if (rawInput.includes('function_call_output') && rawInput.includes('call_permission_allow')) return 'permission-allow-output'
   if (prompt.includes('permission deny e2e')) return 'permission-deny-call'
   if (prompt.includes('permission allow e2e')) return 'permission-allow-call'
+  if (prompt.includes('model failover e2e')) return 'model-failover'
+  if (prompt.includes('protocol failover e2e')) return 'protocol-failover'
+  if (prompt.includes('recovery exhausted e2e')) return 'recovery-exhausted'
   return 'text'
+}
+
+function writeChatTextResponse(res, reply) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  for (const piece of reply.match(/.{1,9}/g) || []) {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: piece } }] })}\n\n`)
+  }
+  res.write(`data: ${JSON.stringify({ choices: [], usage: {
+    prompt_tokens: 29,
+    completion_tokens: 8,
+    prompt_tokens_details: { cached_tokens: 3 }
+  } })}\n\n`)
+  res.write('data: [DONE]\n\n')
+  res.end()
 }
 
 function writeFunctionCallResponse(res, { responseId, callId, command }) {
@@ -453,7 +562,7 @@ async function readJson(req) {
   }
 }
 
-function lastInputText(body) {
+function lastRequestText(body) {
   const input = Array.isArray(body?.input) ? body.input : []
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const content = Array.isArray(input[i]?.content) ? input[i].content : []
@@ -461,7 +570,35 @@ function lastInputText(body) {
       if (typeof content[j]?.text === 'string') return content[j].text
     }
   }
+  const messages = Array.isArray(body?.messages) ? body.messages : []
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const content = messages[i]?.content
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      const text = content.map((item) => typeof item?.text === 'string' ? item.text : '').filter(Boolean).join('\n')
+      if (text) return text
+    }
+  }
   return '(empty)'
+}
+
+async function latestTranscript(cdp) {
+  return evalValue(cdp, `(async () => {
+    const sessions = await window.agentDesk.listSessions()
+    const transcripts = await Promise.all(sessions.map((session) => window.agentDesk.getTranscript(session.id)))
+    return transcripts.sort((left, right) => right.length - left.length)[0] || []
+  })()`)
+}
+
+async function waitForTranscript(cdp, predicate, timeout = 5000) {
+  const start = Date.now()
+  let transcript = []
+  while (Date.now() - start < timeout) {
+    transcript = await latestTranscript(cdp)
+    if (predicate(transcript)) return transcript
+    await sleep(150)
+  }
+  throw new Error(`transcript condition not met: ${transcript.map((entry) => entry.event.kind).join(',')}`)
 }
 
 async function check(cdp, name, fn) {
@@ -693,6 +830,15 @@ async function waitForDomValue(cdp, selector, expected, timeout = 5000) {
     `document.querySelector(${JSON.stringify(selector)})?.value ?? null`
   )
   throw new Error(`DOM value mismatch for ${selector}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+}
+
+async function waitForSelector(cdp, selector, timeout = 5000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await evalValue(cdp, `Boolean(document.querySelector(${JSON.stringify(selector)}))`)) return
+    await sleep(150)
+  }
+  throw new Error(`selector not found: ${selector}`)
 }
 
 async function waitForFileContent(filePath, expected, timeout = 5000) {

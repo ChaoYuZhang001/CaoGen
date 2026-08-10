@@ -15,7 +15,7 @@ import {
   realpathSync
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import type { SandboxMode, SessionMeta, ToolRiskLevel } from '../../shared/types'
+import type { SandboxMode, SessionMeta, ToolRiskLevel, ToolSemanticCapability } from '../../shared/types'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
 
 export type AuditAction = 'allow' | 'deny' | 'ask' | 'execute'
@@ -27,6 +27,7 @@ export interface ToolAuditEvent {
   toolName: string
   riskLevel?: ToolRiskLevel
   riskReasons?: string[]
+  capabilities?: ToolSemanticCapability[]
   input?: unknown
   message?: string
   ok?: boolean

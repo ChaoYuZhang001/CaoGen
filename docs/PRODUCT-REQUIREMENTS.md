@@ -195,6 +195,21 @@ Codex 和 Claude Code 直接争夺代码任务入口；WorkBuddy 证明办公 Ag
 4. 分享和转交只改变显式访问权或 owner；Artifact、Evidence、审计和历史身份不复制、不丢失。
 5. 远程控制和多人协作属于 P2 扩展，不阻塞最小 1.0，但其领域和安全合同必须在 1.0 数据模型中预留。
 
+### 5.8 AI 视频创作(P2，非 1.0 阻塞)
+
+1. 用户导入小说、剧本或故事大纲，CaoGen 在写入正式工程前展示 Episode / Scene / Shot
+   解析结果、未确定项和修改入口。
+2. 用户建立或复用角色、场景、道具和声线资产；每个镜头显式引用资产版本，不依赖提示词中
+   隐含的人物身份维持一致性。
+3. CaoGen 按镜头生成分镜和关键帧，用户选择版本后才进入视频生成；批量操作显示预计成本、
+   Provider、数据外发范围和可取消边界。
+4. 图片、视频和 TTS 的外部任务保存独立 MediaJob，应用重启后先按外部 job ID 对账，不把
+   未知结果自动重新提交或误报为成功。
+5. 生成的视频、对白、字幕和配乐进入本地合成；最终成片及其输入、版本选择、模型尝试、费用、
+   Evidence 和 Acceptance 可从同一 Artifact 图追溯。
+6. AI 视频工作室属于 post-1.0 扩展；它复用 CaoGen 的核心交付合同，但不把短剧能力加入当前
+   64 个 P0 或 1.0 发布门禁。
+
 ## 6. Assistant / Studio 双模式
 
 ### 6.1 模式定义
@@ -535,6 +550,35 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 **立项目标**：Routine 改为引用 `projectId + digitalWorkerId? + goalTemplateId?`，到期后创建 WorkItem/Run；`projectCwd` 仅作为可选执行资源根，不再是业务归属主键。
 
+### 7.15 VideoProduction 和 MediaJob(P2)
+
+`VideoProduction` 是 Project 内的视频创作聚合，不替代 Goal/WorkItem。它至少包含：
+
+```text
+VideoProduction -> Episode -> Scene -> Shot
+Shot -> MediaAssetBinding -> canonical Artifact
+Shot -> MediaJob -> external generation attempt
+VideoProduction -> final Artifact / Evidence / Acceptance
+```
+
+- `Episode / Scene / Shot` 保存创作结构、稳定身份、顺序、时长意图和当前采用版本；Provider、
+  模型及其私有请求字段不得成为这些领域对象的身份。
+- `MediaAssetBinding` 绑定角色、服装、场景、道具、关键帧、声线、字幕或音轨的明确版本，
+  实际内容和派生关系仍由 canonical Artifact Graph 管理。
+- `MediaJob` 表示一次外部图片、视频、TTS 或本地合成尝试，建议字段为：
+
+```text
+id, projectId, productionId, shotId?, runId, providerProfileId,
+capability, adapterVersion, idempotencyKey, externalJobId?, status,
+inputDigest, outputArtifactIds, estimatedCost, actualCost,
+submittedAt?, observedAt?, finishedAt?, errorCode?, reconciliation
+```
+
+- MediaJob 与 ModelAttempt 分离。TaskRun 可以监督多个 MediaJob，但不能用一次聊天响应的状态
+  代替外部媒体任务的提交、轮询、下载、校验和对账状态。
+- MediaJob 的未知结果必须进入 `waiting_reconciliation` 或等价媒体状态；没有外部只读查询或
+  人工确认时不得自动重放。
+
 ## 8. 功能需求
 
 ### 8.1 Project Workspace
@@ -582,12 +626,12 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | ROUTE-001 | P0 | 当前已验证 | 基于任务、规则、健康、预算、成本、质量和速度进行模型选择。 |
-| ROUTE-002 | P0 | 当前已验证 | 同 Provider 多 Key failover 和跨 Provider failover。 |
+| ROUTE-002 | P0 | 当前已验证 | 同 Provider 多 Key/多授权账号 failover 和跨 Provider failover；API Key 已支持手动/首选/自动模式、优先级、真实月度计费预算、已知 USD 余额底线与失败冷却；OAuth 账号已支持同三种模式、优先级、最低剩余配额、已知配额要求与失败冷却，应用显式账号绑定保持最高优先级。 |
 | ROUTE-003 | P0 | 当前已验证 | Assistant 首次启动不显示 Provider/model/engine 选择；自动发现并激活固定 loopback 地址上正在运行的 Ollama、LM Studio 或 vLLM，无需 API Key 或 Project 即可经真实 Router/stream path 发送。无计算资源时提供非技术可恢复状态和“使用本机模型”入口，并可无损切换 Studio 后返回同一 canonical session 与 draft；不得将“已运行本地服务时零 Key”扩大为通用零前置试用。 |
 | ROUTE-004 | P0 | 部分完成（two-native-engine local closure） | 每次路由形成 ModelAttempt 和可读 route reason；原生 Anthropic Messages 已接入可选 Engine/UI、每个 HTTP 请求独立 durable Attempt、NativeToolRuntime 工具循环、同 Provider Key/同协议 Provider failover 和图片重启恢复。真实 Provider、完整恢复阶梯、统一 Run/Context 契约与 clean release-bound 证据仍开放。 |
 | ROUTE-005 | P0 | 立项目标 | Provider 切换保持 Goal、WorkItem、DigitalWorker、Run、上下文和 Artifact 连续。 |
 | ROUTE-006 | P0 | 部分完成（resource privacy hard-policy foundation） | 预算、权限、隐私和能力要求必须高于成本/速度偏好，禁止不满足硬条件的候选。当前 Project Resource `deny/S3/local_only` 已在 Provider Attempt 前 fail-closed，`local_only` 冻结原 Provider 并禁止跨 Provider failover，SessionManager DAG 直连也在 Attempt/network 前复核实际 request-body digest；region/domain/capability/permission/budget、初始统一候选过滤、其他 adapter/direct-fetch 入口与完整 request manifest 仍开放。 |
-| ROUTE-010 | P0 | 立项目标 | 故障恢复按“瞬时重试 → 同 Provider 换 Key → 同 Provider 换兼容模型 → 同协议健康 Provider → 跨协议 Adapter → 降级或人工处理”执行；每次请求形成可追踪 ModelAttempt，重放前检查未决 Effect。 |
+| ROUTE-010 | P0 | 部分完成（canonical six-rung local recovery） | OpenAI-compatible 已接通“瞬时重试 → API Key/OAuth 账号 → 同 Provider 兼容模型 → 同协议健康 Provider → 会话级 Responses-to-Chat 协议降级 → 人工接管”的本地六级恢复阶梯；原生 Anthropic 在适用层级恢复并在耗尽后进入同一人工接管状态。安全重放保持同一逻辑 requestId 与 Attempt 前驱关系，未决 Effect 和部分输出会阻止重放；真实 Provider 交接与 clean release 绑定仍开放。 |
 | ROUTE-007 | P1 | 立项目标 | 高风险或低置信度任务可自动交叉验证并记录独立 Evidence。 |
 | ROUTE-008 | P1 | 立项目标 | 专家模式允许固定模型、限制厂商、设置本地优先或禁止数据外发。 |
 | ROUTE-009 | P2 | 后续规划 | 基于长期接受率和真实质量反馈优化路由，不以厂商毛利作为隐藏因素。 |
@@ -646,11 +690,11 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 |---|---|---|---|
 | VIS-001 | P0 | 当前已验证 | 3D 场景已消费真实会话、任务、审批、成本、Provider、worktree 和 Git 状态。 |
 | VIS-002 | P1 | 立项目标 | 移除面向用户的机器人主角色，替换为原创或授权明确的水墨轻动漫人物。 |
-| VIS-003 | P1 | 立项目标 | 角色身份表达岗位和 DigitalWorker，不表达厂商模型品牌。 |
-| VIS-004 | P1 | 立项目标 | 角色动作、表情、工位和消息只由真实 WorkItem/Run/Approval/Artifact 事件驱动。 |
-| VIS-005 | P1 | 立项目标 | 至少提供研究、策划、写作、设计、开发、审查/测试和运营的可区分人物形象。 |
-| VIS-006 | P1 | 立项目标 | 保留状态色、图标、文字和形状多通道编码，水墨风格不得降低可读性。 |
-| VIS-007 | P1 | 立项目标 | 支持自动 LOD、低性能模式和非 3D 列表回退；视觉不阻塞核心任务操作。 |
+| VIS-003 | P1 | 部分完成（身份合同、招聘与 Office 绑定） | 七岗位身份写入 Provider-neutral `DigitalWorker.avatarProfile.watercolorRole`；RoleTemplate 语义和稳定 ID 只作回退。真实 Electron 已验证显式选择与重启持久化；Office 通过不可变 DigitalWorkerBinding 解析人物身份并接入透明资产 Rig，最终资产尚未登记。 |
+| VIS-004 | P1 | 部分完成（真实 Session + canonical repair 状态投影） | OfficeModel 已从真实 Session 派生 idle/thinking/tool-running/awaiting-approval/blocked/delivering；活动 Session 仅在绑定规范 `workflow-repair:<SHA-256>` WorkItem 时进入 `repairing`，审批与失败状态保持更高优先级。Artifact 合成和最终渲染 E2E 尚未完成。 |
+| VIS-005 | P1 | 部分完成（49/49 正式运行时资产；真人盲测开放） | 七个标准角色与七种状态均已有 prompt/hash 记录和透明运行时派生资产；required gate 已验证 49/49 个 1024x1536 RGBA PNG 及明暗背景、96px/48px 灰度 contact sheet。外部真人盲测的角色/状态辨识证据仍开放。 |
+| VIS-006 | P1 | 部分完成（96px/48px 专家 QC） | 现有三状态已做彩色、96px 与 48px 灰度检查；状态文字/图标/形状的真实界面合成与至少 10 人盲测尚未完成。 |
+| VIS-007 | P1 | 部分完成（49/49 透明资产已接入） | 透明 2.5D Sprite Rig 已区分 full/compact 尺寸、遵守 reduced-motion，并通过显式文件门禁接入全部 49 个登记资产；损坏或缺失文件仍回退机器人，现有 Office 质量档和非 3D 列表回退继续有效。最终 49 资产的显存、draw-call、包内摘要、目标硬件与自动降级证据尚未完成。 |
 | VIS-008 | P2 | 后续规划 | 用户自定义服装、发型、空间主题和团队合影，不引入受版权保护的现有动漫 IP。 |
 
 ### 8.10 连接器和协作
@@ -662,6 +706,22 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | CONN-003 | P2 | 后续规划 | Jira、Linear、Notion、飞书、Slack、Teams、Figma/Ardot 等双向连接器和知识检索；统一支持个人授权与管理员共享授权、增量刷新、权限变化、引用、删除和跨 Project 隔离。 |
 | COLLAB-001 | P2 | 部分完成（本地单用户转交基础） | 多用户、任务分享/转交、评论、提及、共享审批和组织策略；转交保持 Goal/WorkItem/Artifact/Evidence 身份和不可变审计。当前 Studio 已支持将 WorkItem 转交给同 Project 的人员或 active DigitalWorker；main-owned actor、WorkItem owner/active Assignment 原子协调、旧 lease 撤销、旧/新 owner 权限重算、原因/audit、CAS、幂等和重启读回已通过本地 required gate 与真实 Electron E2E。真实多用户身份、分享、评论、提及、共享审批、组织策略、Webhook 和统一 retention/export/delete 仍未实现。 |
 | COLLAB-002 | P2 | 明确不做 | 1.0 不自建团队聊天、会议和完整协同办公套件。 |
+
+### 8.11 AI 视频工作室(post-1.0)
+
+| ID | 优先级 | 状态 | 需求 |
+|---|---|---|---|
+| VID-001 | P2 | 后续规划 | 从小说、剧本或大纲生成可编辑的 VideoProduction / Episode / Scene / Shot 结构；解析结果必须版本化，用户修订不得被下一次生成静默覆盖。 |
+| VID-002 | P2 | 后续规划 | 提供角色、服装、场景、道具、声线、关键帧、字幕和音轨资产库；Shot 显式绑定资产版本，所有二进制内容进入 canonical Artifact Graph。 |
+| VID-003 | P2 | 后续规划 | 提供角色 Bible、资产锁定、参考图和跨镜头/跨集一致性约束；一致性是可检查的目标和 Evidence，不得仅以复用同一段提示词宣称已经保证。 |
+| VID-004 | P2 | 后续规划 | 新增独立于聊天 Engine 的 Media Provider Adapter，统一声明 `image.generate/edit`、`video.text/image/reference-to-video`、`speech.synthesize/voice-clone` 和 `media.compose` capability；领域模型不包含厂商品牌。 |
+| VID-005 | P2 | 后续规划 | 每次外部生成创建持久 MediaJob，保存幂等键、外部 job ID、输入摘要、Adapter 版本、轮询观察、成本和输出摘要；断网、限流、崩溃和未知结果必须先对账后重试。 |
+| VID-006 | P2 | 后续规划 | Video Studio 提供剧本结构、资产库、分镜表/Storyboard Grid、镜头参数、版本采用、批量生成和任务队列；无限画布和完整专业时间轴不是 MVP 前置条件。 |
+| VID-007 | P2 | 后续规划 | 支持多角色声线绑定、TTS、对白时序、字幕编辑和可替换音轨；声音克隆必须显示来源、授权状态和 Provider 数据外发范围。 |
+| VID-008 | P2 | 后续规划 | 使用受控本地 FFmpeg 或等价 Adapter 合成镜头、对白、字幕和音轨；记录二进制来源、版本、codec、命令摘要和输出 digest，失败合成不得覆盖已采用成片。 |
+| VID-009 | P2 | 后续规划 | 图片、音频和视频采用流式下载/写入、增量 SHA-256、磁盘配额和可恢复临时文件；视频/音频预览支持 Range 或受控本地协议，Renderer 不承载无上限 data URL。 |
+| VID-010 | P2 | 后续规划 | 每个镜头和最终成片可追溯到剧本版本、资产版本、提示词/参数摘要、MediaJob、Provider、成本、人工采用决定、Evidence 和 Acceptance；提交任务、生成完成和成片验收必须是三个不同状态。 |
+| VID-011 | P2 | 后续规划 | 第三方视频项目默认只作产品/协议研究；可选本地 sidecar 或 MCP/HTTP 连接器必须由用户安装和授权，声明版本、capability、数据方向、许可证与撤销行为，且不得绕过 CaoGen Effect、凭据、Artifact 和恢复合同。 |
 
 ## 9. 非功能需求
 
@@ -690,7 +750,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 |---|---|---|---|
 | NFR-AUD-001 | P0 | 部分完成（canonical audit timeline foundation） | 用户能够回答“谁/哪个岗位、何时、为何、用什么模型、调用什么工具、产生什么结果”。 |
 | NFR-AUD-002 | P0 | 部分完成（canonical audit timeline foundation） | Provider/model、路由原因、成本、审批、Effect 和 Evidence 可按 Run 查看。 |
-| NFR-AUD-003 | P0 | 立项目标 | 日志显示 Key 标签或哈希标识，不显示明文凭据。 |
+| NFR-AUD-003 | P0 | 部分完成（credential-attributed Provider ledger foundation） | Canonical ModelAttempt 记录安全 `label:`/`sha256:` Key 标识；Provider 请求账单可按凭据筛选和聚合成本、成功率与 Token，并在请求明细和 CSV 中显示安全标识。已保存的非敏感 Key 名称仅在能由哈希反向关联且通过凭据值检查时展示，否则降级为截断 SHA-256；明文凭据不进入 Usage 契约。所有其他日志、事件、导出和子进程输出的全局 canary 证明仍开放。 |
 | NFR-AUD-004 | P1 | 部分完成（Project aggregate export/import + 当前删除证明） | 项目导出已包含 schema-versioned、封存、脱敏的机器可读 Project Aggregate、显式依赖和可复算 SHA-256 `exportDigest`；当前参与者集合可从私密源经 durable journal 导入并做语义等价、重新封存和重启读回。私密删除备份可严格读回，当前 Project/Session 删除参与者生成绑定授权删除记录和零残留扫描的可复算 proof。每个 Artifact/Evidence blob 文件级 digest package、Session/ModelAttempt 等全量可移植包和全 inventory 删除证明仍开放。 |
 
 ### 9.4 性能和资源
@@ -718,7 +778,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 | ID | 优先级 | 状态 | 需求 |
 |---|---|---|---|
 | NFR-NEUTRAL-001 | P0 | 当前已验证 | DigitalWorker、Goal 和 WorkItem 的 schema 不含 Provider/model/engine 身份字段；DigitalWorker create/update 与 v1/v2 read/migration 对嵌套厂商身份污染 fail-closed，拒绝时 Store/Worker revision 不变。 |
-| NFR-NEUTRAL-002 | P0 | 立项目标 | 路由策略以用户设定的能力、质量、成本、速度、健康、隐私和预算为依据。 |
+| NFR-NEUTRAL-002 | P0 | 部分完成（credential user policy foundation） | API Key 路由已按用户设置的优先级、月度预算、已知余额底线与失败冷却执行；OAuth 账号路由已按用户模式、优先级、最低剩余配额、已知配额要求与失败冷却执行。能力、质量、速度、隐私及完整跨模型/Provider 恢复阶梯仍开放。 |
 | NFR-NEUTRAL-003 | P0 | 当前已验证 | Provider 商业名称、Provider 身份、Base URL、预算元数据和创建时间不得改变 Router 评分或选择；完全同分时以稳定 `providerId + model` 决胜，输入顺序不能影响自动路由、model-only override、cross-validation 或 hard-budget fallback。 |
 | NFR-NEUTRAL-004 | P1 | 立项目标 | Provider Adapter 可独立增加、禁用和测试，不修改领域模型。 |
 
@@ -1014,6 +1074,24 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 
 **当前证据边界**：无 GUI Service/Store smoke 以 135/135 覆盖无凭据导出、冲突预览、逐项决策、凭据排除、活动 Key 标签/数量、目标凭据绑定变化、规范化重复/URL path 大小写、IPv4/IPv6 loopback no-auth、远程 no-auth 网络前拒绝、目标变化凭据隔离与显式重绑、权威快照字段清除、锁内配置漂移 CAS、脱敏备份、Key 真删除、journal 文件边界和 backup 文件名/内嵌 ID 绑定（`test-results/provider-profile-smoke/2026-07-31T18-36-07-764Z/report.json`）。独立 restart gate 以 13/13 真实跨进程/`SIGKILL` 场景证明存活 owner 竞争返回 `LOCK_HELD`、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback checkpoint、死进程锁回收、重复恢复零 replay/字节稳定、同进程对账收敛和 6 类 pending writer 阻断（`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json`）。未知 Store digest 会持久进入 `waiting_reconciliation`，修复为 before/desired digest 后分别收敛为 `aborted`/`committed` 并恢复普通写入；safety/source backup 在 Store commit 前和 terminal 前复核 ID/digest，prepare 后或 Store commit 后篡改均 fail-closed，恢复冻结字节后才收敛。死 owner 回收按设计保留一个有 5 分钟保护期的 bounded recovered tombstone。真实 Electron gate 以 54/54 覆盖危险 URL 拒绝、导入预览/应用、跨启动回滚、脱敏备份/导出、活动 Key 标签与“保留/需重新录入/删除/无需密钥”影响说明、Key 删除取消/确认/重新录入及 `760x700` 无水平溢出（`test-results/provider-profile-e2e/2026-07-31T18-36-51-341Z/report.json`）。以上证据均绑定 dirty merge commit `8ba60148`，不构成 release binding；Windows ACL、Provider Store 顶层 schema 版本化、真人迁移、真实 Provider 发现/健康/failover 与 clean release 仍未验证，因此 AC-20 保持开放。
 
+### AC-21 AI 视频垂直链路(P2，非 1.0 阻塞)
+
+**操作**：用户导入一个包含 1~3 个场景、最多 8 个镜头的短剧本，配置或选择一个图片、
+视频和 TTS capability，完成角色/场景资产、分镜、关键帧、逐镜头视频、对白、字幕、本地合成
+和 30~60 秒 MP4 导出。
+
+**通过条件**：
+
+- Episode / Scene / Shot 和所有采用版本在重启前后身份稳定，角色/场景/声线绑定可检查。
+- 在 MediaJob `submitting`、`running` 和 `downloading` 三个检查点强杀应用，恢复后使用同一
+  external job ID 对账，未产生重复外部任务或重复计费。
+- 最终 MP4 可在 CaoGen 和至少一个系统播放器中播放；时长、分辨率、音轨、字幕和文件
+  SHA-256 与 Artifact 元数据一致。
+- 任一 Provider 不可用时，用户可在保持 Shot 和上游 Artifact 身份的前提下切换兼容 Adapter；
+  降级、费用变化和数据外发范围明确可见。
+- 从最终 Artifact 可以追溯剧本版本、资产、关键帧、镜头视频、对白、字幕、MediaJob、成本、
+  人工采用决定、Evidence 和 Acceptance；失败或未知任务不计入完成。
+
 ## 14. 1.0 发布验收总表
 
 | 验收项 | 门槛 |
@@ -1043,6 +1121,8 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 - **明确不做**：用随机动画、装饰消息或静态头像伪造数字员工工作。
 - **明确不做**：为了兼容 Claude Code 重新嵌入 SDK/CLI；旧数据必须显式迁移并保留诚实恢复边界。
 - **明确不做**：未验证前宣称 Office 像素级编辑、任意外部系统 exactly-once 或完全自治交付。
+- **明确不做**：在 1.0 内交付完整 AI 短剧平台；post-1.0 视频工作室不自研基础视频模型，
+  不复制许可证不兼容项目的代码/提示词/素材，也不以提交外部任务冒充成片完成。
 
 ## 16. 追踪与派生文档
 
@@ -1056,6 +1136,7 @@ resolvedAt, resolvedBy, decision, scope, expiresAt
 - 水墨轻动漫角色视觉规范、资产授权和性能预算。
 - Trust Kernel、Effect/Reconciler 和恢复测试矩阵。
 - 1.0 Roadmap、发布 Gate、真人验收脚本和商业验证计划。
+- post-1.0 AI 视频工作室的 Media Provider/MediaJob ADR、许可清单、大文件存储方案和 AC-21 验收脚本。
 
 相关当前文档：
 

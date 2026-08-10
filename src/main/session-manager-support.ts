@@ -14,6 +14,11 @@ import type {
 import { settingsForCaoGenDrive } from './model/drive'
 import type { Engine } from './engine'
 import { getProvider } from './providers'
+import {
+  builtinOpenAiPricingForModel,
+  estimateProviderCostUsd,
+  providerPricingForModel
+} from './provider/providerAdvancedConfig'
 import { getSettings } from './settings'
 import {
   recoverWorkflowTestFailureIngresses,
@@ -316,8 +321,9 @@ export function effectiveBudgetUsd(meta: SessionMeta): number {
 }
 
 export function canTrackCost(meta: SessionMeta): boolean {
-  // Anthropic Messages reports token usage but not monetary cost. Keep budget enforcement fail-closed.
-  return meta.engine === 'openai'
+  if (meta.engine === 'openai') return true
+  const provider = meta.providerId ? getProvider(meta.providerId) : undefined
+  return Boolean(providerPricingForModel(provider?.advancedConfig, meta.model))
 }
 
 /** Goal-level USD accounting requires provider-reported cost, not a fallback model estimate. */
@@ -352,15 +358,15 @@ export function estimateTurnCostUsd(
   meta: SessionMeta,
   event: Extract<AgentEvent, { kind: 'turn-result' }>
 ): number | undefined {
-  if (meta.engine !== 'openai' || !event.usage) return undefined
-  const price = openAiPriceFor(meta.model)
-  const inputTokens = event.usage.input + event.usage.cacheCreation
-  const cost = (
-    inputTokens * price.inputPerMillion +
-    event.usage.cacheRead * price.cachedInputPerMillion +
-    event.usage.output * price.outputPerMillion
-  ) / 1_000_000
-  return cost > 0 ? cost : undefined
+  if (!event.usage) return undefined
+  const provider = meta.providerId ? getProvider(meta.providerId) : undefined
+  const configured = estimateProviderCostUsd(
+    providerPricingForModel(provider?.advancedConfig, meta.model),
+    event.usage
+  )
+  if (configured !== undefined) return configured
+  if (meta.engine !== 'openai') return undefined
+  return estimateProviderCostUsd(builtinOpenAiPricingForModel(meta.model), event.usage)
 }
 
 function buildTaskStepReplayPrompt(
@@ -389,27 +395,4 @@ function buildTaskStepReplayPrompt(
     '3. 如果发现外部修改、冲突或无法确认的状态,先停止并向用户说明需要确认的点。',
     '4. 只继续执行原始请求剩余部分,不要扩大任务范围。'
   ].join('\n')
-}
-
-function openAiPriceFor(model: string | undefined): {
-  inputPerMillion: number
-  cachedInputPerMillion: number
-  outputPerMillion: number
-} {
-  const normalized = (model || '').toLowerCase()
-  if (normalized.includes('gpt-4o-mini')) {
-    return { inputPerMillion: 0.15, cachedInputPerMillion: 0.075, outputPerMillion: 0.6 }
-  }
-  if (normalized.includes('gpt-4o')) {
-    return { inputPerMillion: 2.5, cachedInputPerMillion: 1.25, outputPerMillion: 10 }
-  }
-  if (normalized.includes('gpt-4.1-mini')) {
-    return { inputPerMillion: 0.4, cachedInputPerMillion: 0.1, outputPerMillion: 1.6 }
-  }
-  if (normalized.includes('gpt-4.1-nano')) {
-    return { inputPerMillion: 0.1, cachedInputPerMillion: 0.025, outputPerMillion: 0.4 }
-  }
-  return normalized.includes('gpt-4.1')
-    ? { inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8 }
-    : { inputPerMillion: 2, cachedInputPerMillion: 0.5, outputPerMillion: 8 }
 }

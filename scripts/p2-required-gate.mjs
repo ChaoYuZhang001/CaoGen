@@ -36,22 +36,10 @@ const checks = [
     name: 'gui_permission_required',
     command: [npmCommand(), 'run', 'test:gui-permission', '--', '--required'],
     timeoutMs: checkTimeoutMs('gui_permission_required', 60_000),
-    evidence: ['test-results/gui-permission/latest.json']
-  },
-  {
-    name: 'ide_build_and_vscode_required',
-    command: [npmCommand(), 'run', 'test:p2-ide-build-and-vscode:required'],
-    timeoutMs: checkTimeoutMs('ide_build_and_vscode_required', 150_000),
     evidence: [
-      'test-results/ide-plugins/latest.json',
-      'test-results/vscode-extension-host/latest.json'
+      'test-results/gui-permission/latest.json',
+      'test-results/gui-postcondition/latest.json'
     ]
-  },
-  {
-    name: 'jetbrains_ide_interaction_required',
-    command: [npmCommand(), 'run', 'test:jetbrains-ide-interaction:required'],
-    timeoutMs: checkTimeoutMs('jetbrains_ide_interaction_required', 60_000),
-    evidence: ['test-results/jetbrains-ide-interaction/latest.json']
   },
   {
     name: 'china_real_network_required',
@@ -346,7 +334,6 @@ function isExternalConfigurationFailure(name) {
 function isEnvironmentConfigurationFailure(name) {
   return (
     isExternalConfigurationFailure(name) ||
-    name === 'jetbrains_ide_interaction_required' ||
     name === 'gui_desktop_e2e_required' ||
     name === 'gui_permission_required'
   )

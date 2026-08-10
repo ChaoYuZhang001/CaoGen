@@ -184,7 +184,7 @@ function writeLearningStateSync(filePath: string, state: LearningPersistedState)
 }
 
 function fsyncFileSync(filePath: string): void {
-  fsyncPathSync(filePath, constants.O_RDONLY | noFollowFlag())
+  fsyncPathSync(filePath, constants.O_RDWR | noFollowFlag())
 }
 
 function fsyncDirectorySync(directory: string): void {

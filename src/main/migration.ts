@@ -30,6 +30,7 @@ import {
   type JsonObject
 } from './migration-scan-store'
 import { applyMigration as applyMigrationSelection } from './migration-apply'
+import { scanCcSwitchMigrationAssets } from './migration-cc-switch'
 
 type MigrationDiagnostic = MigrationScan['diagnostics'][number]
 
@@ -61,6 +62,7 @@ export function scanMigration(cwdInput?: string, homeDirectory = homedir()): Mig
 
   if (cwd) scanProjectSources(cwd, home, internalAssets, diagnostics)
   scanUserSources(cwd, home, internalAssets, diagnostics)
+  scanCcSwitchMigrationAssets({ home, assets: internalAssets, diagnostics })
 
   const nativeAssetCount = countNativeClaudeAssets(cwd, home)
   const scanId = randomUUID()

@@ -82,6 +82,11 @@ try {
   )
   assert.match(
     managerSource,
+    /conversationForkCheckpointId[\s\S]*transcriptForkSeedEntries\([\s\S]*checkpointRestoreEffectBoundary\(sourceRun, false\)/,
+    'checkpoint-bound Session creation must validate the source ledger and unresolved Effect boundary'
+  )
+  assert.match(
+    managerSource,
     /当前结果仅为只读预览，完成对账前不可应用。/,
     'SessionManager must not present a blocked dry-run as safe to apply'
   )

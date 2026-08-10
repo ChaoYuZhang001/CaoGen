@@ -473,6 +473,7 @@ public static class CaoGenNativeInput {
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageText(IntPtr hWnd, uint msg, IntPtr wParam, string lParam);
   [DllImport("user32.dll", EntryPoint = "SendMessageW", SetLastError = true)] public static extern IntPtr SendMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  [DllImport("user32.dll", EntryPoint = "PostMessageW", SetLastError = true)] public static extern bool PostMessagePtr(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
   public static bool SendVirtualKey(ushort virtualKey, bool keyUp) {
     INPUT[] inputs = new INPUT[1];
@@ -525,6 +526,11 @@ public static class CaoGenNativeInput {
     if (hWnd == IntPtr.Zero) { return false; }
     SendMessagePtr(hWnd, 0x0111, new IntPtr(commandId), IntPtr.Zero);
     return true;
+  }
+
+  public static bool SendCloseMessage(IntPtr hWnd) {
+    if (hWnd == IntPtr.Zero) { return false; }
+    return PostMessagePtr(hWnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
   }
 }
 "@
@@ -999,6 +1005,12 @@ public static class CaoGenNativeInput {
 
   function Invoke-HotkeyCommandFallback($WindowInfo, $Keys) {
     if ($null -eq $WindowInfo) { return @{ ok = $false; error = 'no target window for command fallback' } }
+    if (Test-KeyComboMatch $Keys @('alt', 'f4')) {
+      if ([CaoGenNativeInput]::SendCloseMessage([IntPtr][int64]$WindowInfo.hwnd)) {
+        return @{ ok = $true; method = 'win32-wm-close' }
+      }
+      return @{ ok = $false; error = 'WM_CLOSE post returned false' }
+    }
     $ProcessName = ([string]$WindowInfo.processName).ToLowerInvariant()
     if ($ProcessName.Contains('notepad') -and (Test-KeyComboMatch $Keys @('ctrl', 's'))) {
       if ([CaoGenNativeInput]::SendCommandMessage([IntPtr][int64]$WindowInfo.hwnd, 3)) {

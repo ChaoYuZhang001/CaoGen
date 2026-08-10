@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import { useT } from '../i18n'
 import ProviderQuickSetup from './ProviderQuickSetup'
@@ -9,18 +9,34 @@ import type {
   ProviderApiKeyInput,
   ProviderApiKeyUpdateInput,
   ProviderApiKeyView,
+  ProviderAdvancedConfig,
+  ProviderCredentialRoutingMode,
   ProviderCredentialStorage,
+  ProviderGenerationProbeResult,
   ProviderInput,
+  ProviderModelFetchError,
+  ProviderModelSuggestedAction,
   ProviderView
 } from '../../../shared/types'
 import ProviderSavedKeys from './settings/ProviderSavedKeys'
-import type { ProviderKeyDraft } from './settings/ProviderSavedKeys'
+import {
+  createProviderKeyDrafts,
+  providerKeyPolicyFromDraft,
+  type ProviderKeyDraft
+} from './settings/ProviderSavedKeys'
+import ProviderAuthorizationPanel from './settings/ProviderAuthorizationPanel'
+import ProviderBalancePanel from './settings/ProviderBalancePanel'
+import ProviderAdvancedConfigEditor from './ProviderAdvancedConfigEditor'
+import ProviderConnectionDiagnostic from './ProviderConnectionDiagnostic'
+import ProviderPresetCatalog from './ProviderPresetCatalog'
+import ProviderGenerationProbe from './ProviderGenerationProbe'
 
 const DEFAULT_PROVIDER_BASE_URL = PROVIDER_PRESETS.find((preset) => preset.key === 'caogen-relay')?.baseUrl ?? ''
 
 interface Props {
   /** null = 新建;否则编辑该 Provider */
   provider: ProviderView | null
+  initialDiagnostic?: ProviderModelFetchError
   onClose: (result: ProviderEditorCloseResult) => void
 }
 
@@ -47,6 +63,8 @@ interface ProviderEditorSaveState {
   savedKeys: ProviderApiKeyView[]
   keyDrafts: Record<string, ProviderKeyDraft>
   activeKeyId: string
+  credentialRoutingMode: ProviderCredentialRoutingMode
+  advancedConfig?: ProviderAdvancedConfig
 }
 
 export default function ProviderEditorEntry(props: Props): React.JSX.Element {
@@ -68,8 +86,9 @@ function NewProviderEditor({ onClose }: Pick<Props, 'onClose'>): React.JSX.Eleme
       )
 }
 
-function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
+function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.JSX.Element {
   const t = useT()
+  const editorRef = useRef<HTMLElement>(null)
   const createProvider = useStore((s) => s.createProvider)
   const updateProvider = useStore((s) => s.updateProvider)
   const [name, setName] = useState(provider?.name ?? '')
@@ -79,60 +98,81 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
   const [authMode, setAuthMode] = useState<ProviderAuthMode>(provider?.authMode ?? 'api-key')
   const [customHeaders, setCustomHeaders] = useState(provider?.customHeaders ?? '')
   const [credentialHeaderNamesText, setCredentialHeaderNamesText] = useState(
-    (provider?.credentialHeaderNames ?? []).join('\n')
+    (provider?.credentialHeaderNames ?? [defaultCredentialHeaderName(provider?.engine ?? 'openai')]).join('\n')
   )
   const [budgetUsd, setBudgetUsd] = useState(provider?.budgetUsd ? String(provider.budgetUsd) : '')
   const [openaiProtocol, setOpenaiProtocol] = useState<OpenAIProtocol>(provider?.openaiProtocol ?? 'responses')
   const [note, setNote] = useState(provider?.note ?? '')
+  const [advancedConfigText, setAdvancedConfigText] = useState(
+    provider?.advancedConfig ? JSON.stringify(provider.advancedConfig, null, 2) : ''
+  )
   const [token, setToken] = useState('')
   const [tokenLabel, setTokenLabel] = useState(provider?.activeKeyLabel ?? '')
   const [tokenTouched, setTokenTouched] = useState(false)
   const [additionalKeysText, setAdditionalKeysText] = useState('')
   const [activeKeyId, setActiveKeyId] = useState(provider?.activeKeyId ?? '')
-  const [keyDrafts, setKeyDrafts] = useState<Record<string, ProviderKeyDraft>>(() =>
-    Object.fromEntries(
-      (provider?.apiKeys ?? []).map((key) => [
-        key.id,
-        { label: key.label, disabled: key.disabled, remove: false }
-      ])
-    )
-  )
+  const [credentialRoutingMode, setCredentialRoutingMode] = useState<ProviderCredentialRoutingMode>(initialCredentialRoutingMode(provider))
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, ProviderKeyDraft>>(() => createProviderKeyDrafts(provider?.apiKeys ?? []))
   const [presetHint, setPresetHint] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [fetching, setFetching] = useState(false)
   const [fetchNote, setFetchNote] = useState('')
+  const [fetchError, setFetchError] = useState<ProviderModelFetchError | null>(initialDiagnostic ?? null)
+  const [generationProbe, setGenerationProbe] = useState<ProviderGenerationProbeResult | null>(null)
+  const [probingGeneration, setProbingGeneration] = useState(false)
   const [modelSourceKey, setModelSourceKey] = useState(() =>
-    provider ? providerModelSourceKey(provider.id, provider.baseUrl, provider.openaiProtocol ?? 'responses') : ''
+    provider ? providerModelSourceKey(provider.id, provider.baseUrl, provider.engine, provider.openaiProtocol ?? 'responses') : ''
   )
   const isEdit = provider !== null
   const savedKeys = provider?.apiKeys ?? []
   const existingCredentialCount = countExistingProviderCredentials(provider)
   const currentModelSourceKey = useMemo(
-    () => providerModelSourceKey(provider?.id, baseUrl, openaiProtocol),
-    [provider?.id, baseUrl, openaiProtocol]
+    () => providerModelSourceKey(provider?.id, baseUrl, engine, openaiProtocol),
+    [provider?.id, baseUrl, engine, openaiProtocol]
   )
   const modelsStale = isProviderModelListStale(modelsText, modelSourceKey, currentModelSourceKey)
+
+  useEffect(() => {
+    if (!fetchError) return
+    const frame = requestAnimationFrame(() => {
+      editorRef.current?.querySelector('[data-provider-connection-diagnostic]')?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'center'
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [fetchError])
 
   const handleAuthModeChange = (mode: ProviderAuthMode): void => {
     setAuthMode(mode)
     setError('')
+    setGenerationProbe(null)
     if (mode !== 'none') return
     setToken('')
     setTokenTouched(false)
     setTokenLabel('')
     setAdditionalKeysText('')
     setActiveKeyId('')
-    setKeyDrafts(Object.fromEntries(savedKeys.map((key) => [
-      key.id,
-      { label: key.label, disabled: key.disabled, remove: false }
-    ])))
+    setKeyDrafts(createProviderKeyDrafts(savedKeys))
+  }
+
+  const handleEngineChange = (nextEngine: EngineKind): void => {
+    setGenerationProbe(null)
+    const configuredNames = parseCredentialHeaderNames(credentialHeaderNamesText)
+    const currentDefault = defaultCredentialHeaderName(engine).toLowerCase()
+    if (configuredNames.length === 0
+      || (configuredNames.length === 1 && configuredNames[0].toLowerCase() === currentDefault)) {
+      setCredentialHeaderNamesText(defaultCredentialHeaderName(nextEngine))
+    }
+    setEngine(nextEngine)
   }
 
   const fetchModels = async (): Promise<void> => {
     setFetching(true)
     setError('')
     setFetchNote('')
+    setFetchError(null)
     try {
       const result = await window.agentDesk.fetchProviderModels({
         baseUrl: baseUrl.trim(),
@@ -140,13 +180,15 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
         providerId: provider?.id,
         customHeaders: customHeaders.trim() || undefined,
         credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
+        engine,
         openaiProtocol,
         authMode
       })
       if (!result.ok) {
         setModelSourceKey('')
         setFetchNote(t('modelListStaleAfterFailure', { baseUrl: result.baseUrl || baseUrl.trim() }))
-        setError(result.error?.message ?? t('fetchModelsFailed'))
+        if (result.error) setFetchError(result.error)
+        else setError(t('fetchModelsFailed'))
         return
       }
       setModelsText(result.models.join('\n'))
@@ -163,18 +205,57 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
     }
   }
 
+  const handleDiagnosticAction = (action: ProviderModelSuggestedAction): void => {
+    const field = diagnosticTargetField(action)
+    if (field) {
+      editorRef.current?.querySelector<HTMLElement>(`[data-provider-field="${field}"]`)?.focus()
+      return
+    }
+    void fetchModels()
+  }
+
+  const probeGeneration = async (): Promise<void> => {
+    const model = modelsText.split(/\r?\n/).map((item) => item.trim()).find(Boolean)
+    if (!model) {
+      setError(t('providerGenerationProbeModelRequired'))
+      editorRef.current?.querySelector<HTMLElement>('[data-provider-field="models"]')?.focus()
+      return
+    }
+    setProbingGeneration(true)
+    setGenerationProbe(null)
+    setError('')
+    try {
+      setGenerationProbe(await window.agentDesk.probeProviderGeneration({
+        baseUrl: baseUrl.trim(),
+        token: token.trim() || undefined,
+        providerId: provider?.id,
+        customHeaders: customHeaders.trim() || undefined,
+        credentialHeaderNames: parseCredentialHeaderNames(credentialHeaderNamesText),
+        engine,
+        openaiProtocol,
+        authMode,
+        model
+      }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setProbingGeneration(false)
+    }
+  }
+
   const applyPreset = (key: string): void => {
     const preset = PROVIDER_PRESETS.find((p) => p.key === key)
     if (!preset) return
     setPresetHint(preset.hint)
+    setGenerationProbe(null)
     if (preset.key === 'custom') return
     if (!name.trim()) setName(preset.label)
     setBaseUrl(preset.baseUrl)
     setModelsText(preset.models.join('\n'))
-    setEngine(preset.engine)
+    handleEngineChange(preset.engine)
     handleAuthModeChange(preset.key === 'local-openai' ? 'none' : 'api-key')
     setOpenaiProtocol(preset.openaiProtocol ?? 'responses')
-    setModelSourceKey(providerModelSourceKey(provider?.id, preset.baseUrl, preset.openaiProtocol ?? 'responses'))
+    setModelSourceKey(providerModelSourceKey(provider?.id, preset.baseUrl, preset.engine, preset.openaiProtocol ?? 'responses'))
   }
 
   const save = async (): Promise<void> => {
@@ -195,10 +276,17 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
       && !window.confirm(t('providerAuthModeNoneDeleteKeysConfirm', { n: existingCredentialCount }))) {
       return
     }
+    let advancedConfig: ProviderAdvancedConfig | undefined
+    try {
+      advancedConfig = parseAdvancedConfigText(advancedConfigText)
+    } catch {
+      setError(t('providerAdvancedConfigInvalid'))
+      return
+    }
     const input = buildProviderSaveInput({
       provider, name, baseUrl, modelsText, engine, authMode, customHeaders,
       credentialHeaderNamesText, budgetUsd, openaiProtocol, note, token, tokenLabel,
-      tokenTouched, additionalKeysText, savedKeys, keyDrafts, activeKeyId
+      tokenTouched, additionalKeysText, savedKeys, keyDrafts, activeKeyId, credentialRoutingMode, advancedConfig
     })
     setBusy(true)
     setError('')
@@ -212,8 +300,11 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
       setBusy(false)
     }
   }
+  const scrollToEditorSection = (selector: string): void => {
+    editorRef.current?.querySelector<HTMLElement>(selector)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   return (
-    <section className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')} data-provider-editor="form">
+    <section ref={editorRef} className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')} data-provider-editor="form">
         <header className="provider-editor-header">
           <button
             type="button"
@@ -230,16 +321,7 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
         {!isEdit && (
           <>
             <label className="field-label">{t('quickTemplate')}</label>
-            <select className="select select-block" defaultValue="" onChange={(e) => applyPreset(e.target.value)}>
-              <option value="" disabled>
-                {t('pickTemplate')}
-              </option>
-              {PROVIDER_PRESETS.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
+            <ProviderPresetCatalog onSelect={(preset) => applyPreset(preset.key)} />
             <p className="provider-gateway-note">
               {t('gatewayNote1')}
               <b>{t('gatewayNoteBold')}</b>
@@ -250,6 +332,27 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
 
         {presetHint && <div className="notice notice-info">{presetHint}</div>}
         <ProviderCredentialMigrationNotice provider={provider} />
+        <nav className="provider-editor-section-nav" aria-label={t('providerEditorSectionNavigation')}>
+          {provider && (
+            <button type="button" onClick={() => scrollToEditorSection('.provider-authorization')}>
+              {t('providerEditorSectionAuthorization')}
+            </button>
+          )}
+          <button type="button" onClick={() => scrollToEditorSection('[data-provider-field="base-url"]')}>
+            {t('providerEditorSectionConnection')}
+          </button>
+          <button type="button" onClick={() => scrollToEditorSection('[data-provider-field="models"]')}>
+            {t('providerEditorSectionModels')}
+          </button>
+          <button type="button" onClick={() => scrollToEditorSection('[data-provider-model-catalog]')}>
+            {t('providerEditorSectionPricing')}
+          </button>
+          <button type="button" onClick={() => scrollToEditorSection('[data-provider-reliability-config]')}>
+            {t('providerEditorSectionReliability')}
+          </button>
+        </nav>
+        {provider && <ProviderAuthorizationPanel provider={provider} />}
+        {provider && <ProviderBalancePanel provider={provider} />}
 
         <label className="field-label">{t('nameLabel')}</label>
         <input
@@ -264,17 +367,18 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
           className="input input-block" data-provider-field="base-url"
           value={baseUrl}
           placeholder="https://your-gateway.example.com"
-          onChange={(e) => setBaseUrl(e.target.value)}
+          onChange={(e) => { setBaseUrl(e.target.value); setGenerationProbe(null) }}
         />
 
         <label className="field-label">{t('providerEngineLabel')}</label>
         <select
           className="select select-block" data-provider-field="engine"
           value={engine}
-          onChange={(e) => setEngine(e.target.value as EngineKind)}
+          onChange={(e) => handleEngineChange(e.target.value as EngineKind)}
         >
           <option value="openai">{t('providerEngineOpenAI')}</option>
           <option value="anthropic">{t('providerEngineAnthropic')}</option>
+          <option value="gemini">{t('providerEngineGemini')}</option>
         </select>
 
         <ProviderCredentialFields
@@ -285,13 +389,15 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
           isEdit={isEdit}
           token={token}
           tokenTouched={tokenTouched}
-          onTokenChange={(value) => { setToken(value); setTokenTouched(true) }}
+          onTokenChange={(value) => { setToken(value); setTokenTouched(true); setGenerationProbe(null) }}
           tokenLabel={tokenLabel}
           onTokenLabelChange={setTokenLabel}
           savedKeys={savedKeys}
           keyDrafts={keyDrafts}
           activeKeyId={activeKeyId}
           onActiveKeyChange={setActiveKeyId}
+          credentialRoutingMode={credentialRoutingMode}
+          onCredentialRoutingModeChange={setCredentialRoutingMode}
           onKeyDraftsChange={setKeyDrafts}
           additionalKeysText={additionalKeysText}
           onAdditionalKeysTextChange={setAdditionalKeysText}
@@ -299,14 +405,23 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
 
         <div className="field-label-row">
           <label className="field-label">{t('modelListLabel')}</label>
-          <button
-            className="btn btn-ghost btn-sm"
-            disabled={fetching}
-            onClick={() => void fetchModels()}
-            title={t('fetchModelsTitle')}
-          >
-            {fetching ? t('fetching') : t(authMode === 'none' ? 'fetchModelsNoKey' : 'fetchWithKey')}
-          </button>
+          <div className="provider-model-probe-actions">
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={fetching || probingGeneration}
+              onClick={() => void fetchModels()}
+              title={t('fetchModelsTitle')}
+            >
+              {fetching ? t('fetching') : t(authMode === 'none' ? 'fetchModelsNoKey' : 'fetchWithKey')}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={fetching || probingGeneration || !baseUrl.trim()}
+              onClick={() => void probeGeneration()}
+            >
+              {probingGeneration ? t('providerGenerationProbeRunning') : t('providerGenerationProbeButton')}
+            </button>
+          </div>
         </div>
         <textarea
           className="input input-block textarea" data-provider-field="models"
@@ -315,11 +430,19 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
           placeholder={'gpt-4o\nclaude-3-5-sonnet\ngemini-1.5-pro'}
           onChange={(e) => {
             setModelsText(e.target.value)
+            setGenerationProbe(null)
             setModelSourceKey(currentModelSourceKey)
           }}
         />
         {fetchNote && <div className="field-hint field-hint-ok">{fetchNote}</div>}
         {modelsStale && <div className="field-hint field-hint-warning">{t('modelListStale')}</div>}
+        {fetchError && (
+          <ProviderConnectionDiagnostic
+            error={fetchError}
+            onAction={() => handleDiagnosticAction(fetchError.suggestedAction)}
+          />
+        )}
+        {generationProbe && <ProviderGenerationProbe result={generationProbe} />}
 
         <label className="field-label">
           {t('customHeadersLabel')} <span className="field-hint">{t('customHeadersHint')}</span>
@@ -329,7 +452,7 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
           value={customHeaders}
           rows={2}
           placeholder={'X-Gateway-Route: openai\nX-Trace-Id: request-label'}
-          onChange={(e) => setCustomHeaders(e.target.value)}
+          onChange={(e) => { setCustomHeaders(e.target.value); setGenerationProbe(null) }}
         />
 
         <label className="field-label">
@@ -340,26 +463,40 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
           value={credentialHeaderNamesText}
           rows={2}
           placeholder={'api-key\nOcp-Apim-Subscription-Key'}
-          onChange={(e) => setCredentialHeaderNamesText(e.target.value)}
+          onChange={(e) => { setCredentialHeaderNamesText(e.target.value); setGenerationProbe(null) }}
         />
 
-        <label className="field-label">
-          {t('openaiProtocolLabel')} <span className="field-hint">{t('openaiProtocolHint')}</span>
-        </label>
-        <select
-          className="select select-block" data-provider-field="openai-protocol"
-          value={openaiProtocol}
-          onChange={(e) => setOpenaiProtocol(e.target.value as OpenAIProtocol)}
-        >
-          <option value="responses">{t('openaiProtocolResponses')}</option>
-          <option value="chat">{t('openaiProtocolChat')}</option>
-        </select>
+        {engine === 'openai' && (
+          <>
+            <label className="field-label">
+              {t('openaiProtocolLabel')} <span className="field-hint">{t('openaiProtocolHint')}</span>
+            </label>
+            <select
+              className="select select-block" data-provider-field="openai-protocol"
+              value={openaiProtocol}
+              onChange={(e) => { setOpenaiProtocol(e.target.value as OpenAIProtocol); setGenerationProbe(null) }}
+            >
+              <option value="responses">{t('openaiProtocolResponses')}</option>
+              <option value="chat">{t('openaiProtocolChat')}</option>
+            </select>
+          </>
+        )}
 
         <label className="field-label">{t('noteOptional')}</label>
         <input
           className="input input-block"
           value={note}
           onChange={(e) => setNote(e.target.value)}
+        />
+
+        <label className="field-label">
+          {t('providerAdvancedConfigLabel')} <span className="field-hint">{t('providerAdvancedConfigHint')}</span>
+        </label>
+        <ProviderAdvancedConfigEditor
+          value={advancedConfigText}
+          availableModels={modelsText.split(/\r?\n/).map((model) => model.trim()).filter(Boolean)}
+          engine={engine}
+          onChange={setAdvancedConfigText}
         />
 
         <label className="field-label">Provider 预算上限 ($)</label>
@@ -385,6 +522,17 @@ function ProviderEditor({ provider, onClose }: Props): React.JSX.Element {
         </div>
     </section>
   )
+}
+
+function initialCredentialRoutingMode(provider: ProviderView | null): ProviderCredentialRoutingMode {
+  return provider?.credentialRoutingMode ?? 'preferred'
+}
+
+function diagnosticTargetField(action: ProviderModelSuggestedAction): string | null {
+  if (action === 'enter_credentials' || action === 'review_credentials') return 'api-key'
+  if (action === 'review_base_url_and_credentials' || action === 'review_configuration') return 'base-url'
+  if (action === 'enter_models_manually') return 'models'
+  return null
 }
 
 function providerEditorValidationKey(
@@ -436,8 +584,24 @@ function buildProviderSaveInput(state: ProviderEditorSaveState): ProviderInput {
     budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 0,
     openaiProtocol: state.openaiProtocol,
     note: state.note.trim(),
+    advancedConfig: state.advancedConfig,
+    credentialRoutingMode: state.credentialRoutingMode,
     ...buildProviderCredentialPatch(state)
   }
+}
+
+function parseAdvancedConfigText(value: string): ProviderAdvancedConfig | undefined {
+  const text = value.trim()
+  if (!text) return undefined
+  const parsed: unknown = JSON.parse(text)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid config')
+  return parsed as ProviderAdvancedConfig
+}
+
+function defaultCredentialHeaderName(engine: EngineKind): string {
+  if (engine === 'anthropic') return 'x-api-key'
+  if (engine === 'gemini') return 'x-goog-api-key'
+  return 'Authorization'
 }
 
 function buildProviderCredentialPatch(state: ProviderEditorSaveState): Partial<ProviderInput> {
@@ -480,6 +644,8 @@ function ProviderCredentialFields({
   keyDrafts,
   activeKeyId,
   onActiveKeyChange,
+  credentialRoutingMode,
+  onCredentialRoutingModeChange,
   onKeyDraftsChange,
   additionalKeysText,
   onAdditionalKeysTextChange
@@ -498,6 +664,8 @@ function ProviderCredentialFields({
   keyDrafts: Record<string, ProviderKeyDraft>
   activeKeyId: string
   onActiveKeyChange: (id: string) => void
+  credentialRoutingMode: ProviderCredentialRoutingMode
+  onCredentialRoutingModeChange: (mode: ProviderCredentialRoutingMode) => void
   onKeyDraftsChange: React.Dispatch<React.SetStateAction<Record<string, ProviderKeyDraft>>>
   additionalKeysText: string
   onAdditionalKeysTextChange: (value: string) => void
@@ -542,7 +710,9 @@ function ProviderCredentialFields({
             savedKeys={savedKeys}
             keyDrafts={keyDrafts}
             activeKeyId={activeKeyId}
+            routingMode={credentialRoutingMode}
             onActiveKeyChange={onActiveKeyChange}
+            onRoutingModeChange={onCredentialRoutingModeChange}
             onKeyDraftsChange={onKeyDraftsChange}
           />
           <label className="field-label">{t('additionalApiKeysLabel')}</label>
@@ -631,18 +801,27 @@ function buildKeyUpdates(
     const label = draft.label.trim()
     const labelChanged = label !== key.label
     const disabledChanged = draft.disabled !== key.disabled
-    if (!labelChanged && !disabledChanged) return []
+    const policy = providerKeyPolicyFromDraft(draft)
+    const policyChanged = Object.entries(policy).some(([name, value]) =>
+      key.policy[name as keyof typeof key.policy] !== value)
+    if (!labelChanged && !disabledChanged && !policyChanged) return []
     return [{
       id: key.id,
       ...(labelChanged ? { label } : {}),
-      ...(disabledChanged ? { disabled: draft.disabled } : {})
+      ...(disabledChanged ? { disabled: draft.disabled } : {}),
+      ...(policyChanged ? { policy } : {})
     }]
   })
 }
 
-function providerModelSourceKey(providerId: string | undefined, baseUrl: string, protocol: OpenAIProtocol | undefined): string {
+function providerModelSourceKey(
+  providerId: string | undefined,
+  baseUrl: string,
+  engine: EngineKind,
+  protocol: OpenAIProtocol | undefined
+): string {
   const clean = normalizeProviderModelBaseUrl(baseUrl)
-  return [providerId || 'new-provider', clean, protocol || 'default'].join('|')
+  return [providerId || 'new-provider', engine, clean, engine === 'openai' ? protocol || 'default' : 'native'].join('|')
 }
 
 function normalizeProviderModelBaseUrl(value: string): string {

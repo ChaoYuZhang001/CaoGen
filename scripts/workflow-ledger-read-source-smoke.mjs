@@ -62,7 +62,7 @@ try {
   await snapshotStore.saveTaskSnapshot(secondSnapshot, primaryRoot)
   const primaryDb = snapshotStore.taskSnapshotsDbFile(primaryRoot)
 
-  assertEqual(readUserVersion(SQL, primaryDb), 8, 'task store must migrate to v8')
+  assertEqual(readUserVersion(SQL, primaryDb), 9, 'task store must migrate to v9')
   assertEqual(rowCount(SQL, primaryDb, 'workflow_recovery_sessions'), 1, 'one current recovery session')
   assertEqual(rowCount(SQL, primaryDb, 'workflow_runs'), 2, 'multi-run history must remain canonical')
   assertEqual(readRecoveryRunId(SQL, primaryDb), 'run-2', 'only current session recovery is projected')
@@ -177,7 +177,7 @@ try {
     snapshotStore.listTaskSnapshots(migrationRoot),
     snapshotStore.configureWorkflowLedgerReadMode('canonical', migrationRoot)
   ])
-  assertEqual(readUserVersion(SQL, migrationDb), 8, 'v7 source must migrate to v8')
+  assertEqual(readUserVersion(SQL, migrationDb), 9, 'v7 source must migrate to v9')
   assertEqual(rowCount(SQL, migrationDb, 'workflow_runs'), 2, 'v7 migration must preserve multi-run history')
   assertEqual(rowCount(SQL, migrationDb, 'workflow_recovery_sessions'), 1,
     'v7 migration must project only the current recovery session')

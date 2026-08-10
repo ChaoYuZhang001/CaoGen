@@ -44,6 +44,7 @@ try {
   await workflowEvidenceTableAdditiveRepair()
   await canonicalSupersetV8UpgradesToV9()
   await committedCanonicalSupersetV8UpgradesToV9()
+  await legacyCommittedV8AddsConversationLedger()
   await committedTargetIdentityContinuity()
   await futureAndCorruptionFailClosed()
   await fenceReadinessBoundaries()
@@ -228,6 +229,59 @@ async function committedTargetIdentityContinuity() {
   console.log('[PASS] committed target rejects same-version valid empty store replacement')
 }
 
+async function legacyCommittedV8AddsConversationLedger() {
+  const fixture = await seedStore('legacy-committed-v8-conversation-gap', {
+    projectId: 'project-legacy-committed-v8'
+  })
+  mutateDb(fixture.databasePath, (db) => {
+    db.run('PRAGMA user_version = 8')
+    db.run('DROP TABLE workflow_artifact_locations')
+  })
+  const committed = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(
+    fixture,
+    (source) => buildVersionedCandidate(source, 8),
+    { supportedStoreVersion: 9, targetStoreVersion: 8 }
+  ))
+  const journalPath = committed.migration.journalPath
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+  delete journal.readiness.verification.conversationLedger
+  delete journal.readiness.counts.conversationStreams
+  delete journal.readiness.counts.conversationGenerations
+  delete journal.readiness.counts.conversationEvents
+  delete journal.readiness.counts.currentConversationEvents
+  delete journal.readiness.digests.conversationLedger
+  const { reportDigest: _reportDigest, ...readinessWithoutDigest } = journal.readiness
+  journal.readiness.reportDigest = workflowCodec.digest(readinessWithoutDigest)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  mutateDb(fixture.databasePath, (db) => {
+    db.run('DROP TABLE conversation_ledger_events')
+    db.run('DROP TABLE conversation_ledger_generations')
+    db.run('DROP TABLE conversation_ledger_streams')
+  })
+
+  const before = await migration.assessWorkflowLedgerCanonicalReadinessFile(fixture.databasePath, {
+    assessedAt: 42
+  })
+  assert(before.verification?.workflowLedger?.valid,
+    'legacy v8 readiness must retain Workflow Ledger verification while conversation tables are absent')
+  assert(before.verification?.taskEvidence?.valid,
+    'legacy v8 readiness must retain task evidence verification while conversation tables are absent')
+  assertEqual(before.verification?.conversationLedger, undefined,
+    'legacy v8 readiness must identify the missing conversation verification independently')
+
+  migration.clearWorkflowLedgerMigrationSingleFlightForTests()
+  const upgraded = await migration.ensureWorkflowLedgerTaskStoreReady(optionsFor(fixture, (source) =>
+    buildVersionedCandidate(source, 9), {
+    supportedStoreVersion: 9,
+    targetStoreVersion: 9
+  }))
+  assertEqual(upgraded.disposition, 'migrated', 'legacy committed v8 conversation gap must migrate')
+  assertEqual(readStoreVersion(fixture.databasePath), 9, 'legacy committed v8 target version')
+  assert(upgraded.report.verification?.conversationLedger?.valid,
+    'v9 migration must establish conversation ledger verification')
+  console.log('[PASS] legacy committed v8 adds conversation ledger without false history regression')
+}
+
 async function committedCanonicalSupersetV8UpgradesToV9() {
   const fixture = await seedStore('committed-canonical-superset-v8', {
     projectId: 'project-committed-canonical-upgrade'
@@ -310,6 +364,47 @@ async function futureAndCorruptionFailClosed() {
   assert(compat.diagnostics.some((item) => item.code === 'legacy_snapshot_without_run'), 'Snapshot compatibility diagnostic')
   assertEqual(compat.status, 'ready', 'Snapshot compatibility is not corruption')
   assertEqual(compat.readyForCanonicalRead, true, 'v9 recovery projection makes Snapshot compatibility canonical-ready')
+
+  const quarantined = await seedStore('quarantined-without-snapshot', {
+    projectId: 'project-quarantined',
+    waitingReconciliation: true
+  })
+  const quarantinedRun = {
+    ...quarantined.run,
+    status: 'recovering',
+    revision: quarantined.run.revision + 1,
+    recoveryCount: quarantined.run.recoveryCount + 1,
+    updatedAt: quarantined.run.updatedAt + 1
+  }
+  await snapshotStore.saveTaskSnapshot({
+    ...quarantined.snapshot,
+    updatedAt: quarantinedRun.updatedAt,
+    run: quarantinedRun
+  }, quarantined.root)
+  mutateDb(quarantined.databasePath, (db) => {
+    db.run('DELETE FROM task_snapshots')
+    db.run('DELETE FROM workflow_recovery_sessions')
+  })
+  migration.clearWorkflowLedgerMigrationSingleFlightForTests()
+  const quarantinedBytes = readFileSync(quarantined.databasePath)
+  const quarantinedReport = await migration.assessWorkflowLedgerCanonicalReadinessFile(
+    quarantined.databasePath,
+    { assessedAt: 45 }
+  )
+  assert(quarantinedReport.diagnostics.some((item) =>
+    item.code === 'quarantined_run_without_snapshot' && item.category === 'canonical_compatibility'
+  ), 'quarantined Run compatibility diagnostic')
+  assertEqual(quarantinedReport.counts.activeRunsWithoutSnapshot, 1, 'quarantined Run gap count')
+  assertEqual(quarantinedReport.status, 'ready', 'quarantined Run must not block unrelated sessions')
+  assertEqual(quarantinedReport.readyForCanonicalRead, true, 'quarantined Run remains canonical-readable')
+  const preservedRuns = await snapshotStore.listTaskRuns(undefined, quarantined.root)
+  assertEqual(preservedRuns.length, 1, 'quarantined Run remains inspectable')
+  assertEqual(preservedRuns[0].status, 'waiting_reconciliation',
+    'unresolved Effect keeps the quarantined Run in the stricter reconciliation state')
+  assert(preservedRuns[0].effects.some((effect) => effect.status === 'waiting_reconciliation'),
+    'quarantined unresolved Effect is preserved')
+  assertEqual(Buffer.compare(quarantinedBytes, readFileSync(quarantined.databasePath)), 0,
+    'quarantined compatibility read must not mutate the store')
   console.log('[PASS] future/corrupt/active gates and compatibility diagnostics')
 }
 

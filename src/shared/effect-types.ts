@@ -35,6 +35,7 @@ export type InteractiveOperationKind =
   | 'pull_request_create'
   | 'issue_create'
   | 'checkpoint_restore'
+  | 'provider_operation'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
 
@@ -102,6 +103,19 @@ export interface ManagedWorktreeProjectionRecord {
 }
 
 export type EffectTarget =
+  | {
+      kind: 'gui_postcondition'
+      platform: 'win32' | 'darwin'
+      toolName: 'gui_activate_window' | 'gui_click' | 'gui_type' | 'gui_scroll' | 'gui_hotkey'
+      postcondition: {
+        kind: 'window' | 'element'
+        state: 'exists' | 'absent' | 'enabled' | 'disabled' | 'visible' | 'hidden'
+        windowId: string
+        elementId?: string
+        maxElements?: number
+      }
+      preconditionSatisfied: false
+    }
   | {
       kind: 'file_content'
       rootPath: string

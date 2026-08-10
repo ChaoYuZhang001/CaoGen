@@ -20,11 +20,11 @@ try {
   writeFileSync(modulePath, output, 'utf8')
   const { SubagentOrchestrationCoordinator } = require(modulePath)
 
-  verifyAcceptedFanIn(SubagentOrchestrationCoordinator)
-  verifyRejectedChildDoesNotHang(SubagentOrchestrationCoordinator)
+  await verifyAcceptedFanIn(SubagentOrchestrationCoordinator)
+  await verifyRejectedChildDoesNotHang(SubagentOrchestrationCoordinator)
   await verifyBusyParentDefersSummary(SubagentOrchestrationCoordinator)
   await verifyRejectedSummaryIsRetried(SubagentOrchestrationCoordinator)
-  verifyClosedParentClearsSummary(SubagentOrchestrationCoordinator)
+  await verifyClosedParentClearsSummary(SubagentOrchestrationCoordinator)
   verifyProductionWiring()
 
   console.log('subagent orchestration reliability smoke: PASS')
@@ -32,19 +32,20 @@ try {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
-function verifyAcceptedFanIn(Coordinator) {
+async function verifyAcceptedFanIn(Coordinator) {
   const harness = createHarness(Coordinator)
   const children = beginWithChildren(harness, 'accepted', 2)
-  harness.coordinator.finishProvisioning('accepted', children)
+  await harness.coordinator.finishProvisioning('accepted', children)
   assertEqual(harness.childPrompts.length, 2)
   harness.coordinator.recordChildResult(children[0].meta, turnResult(false, 'first done'))
   harness.coordinator.recordChildResult(children[1].meta, turnResult(false, 'second done'))
+  await flushPromises()
   assertEqual(harness.parentPrompts.length, 1)
   assertIncludes(harness.parentPrompts[0], '[子代理编排完成] 2/2 成功')
   assertEqual(harness.coordinator.states().length, 0)
 }
 
-function verifyRejectedChildDoesNotHang(Coordinator) {
+async function verifyRejectedChildDoesNotHang(Coordinator) {
   const harness = createHarness(Coordinator, {
     childSend: (sessionId) => {
       if (sessionId !== 'rejected-child-1') return true
@@ -53,12 +54,13 @@ function verifyRejectedChildDoesNotHang(Coordinator) {
     }
   })
   const children = beginWithChildren(harness, 'rejected', 2)
-  harness.coordinator.finishProvisioning('rejected', children)
+  await harness.coordinator.finishProvisioning('rejected', children)
   assertEqual(harness.coordinator.states()[0].pending.size, 1)
   assertEvent(harness.events, 'subagent-dispatch-rejected', 'fixture child gate rejection')
   assertEqual(harness.events.some((entry) => entry.event.kind === 'subagent-result' && entry.event.status === 'error'), true)
 
   harness.coordinator.recordChildResult(children[1].meta, turnResult(false, 'survivor done'))
+  await flushPromises()
   assertEqual(harness.parentPrompts.length, 1)
   assertIncludes(harness.parentPrompts[0], '[子代理编排完成] 1/2 成功')
   assertIncludes(harness.parentPrompts[0], '子任务首条指令未被接受')
@@ -69,7 +71,7 @@ async function verifyBusyParentDefersSummary(Coordinator) {
   const harness = createHarness(Coordinator)
   harness.parent.status = 'running'
   const [child] = beginWithChildren(harness, 'busy', 1)
-  harness.coordinator.finishProvisioning('busy', [child])
+  await harness.coordinator.finishProvisioning('busy', [child])
   harness.coordinator.recordChildResult(child.meta, turnResult(false, 'done while parent busy'))
   assertEqual(harness.parentPrompts.length, 0)
   assertEqual(harness.coordinator.states().length, 1)
@@ -95,8 +97,9 @@ async function verifyRejectedSummaryIsRetried(Coordinator) {
     }
   })
   const [child] = beginWithChildren(harness, 'retry', 1)
-  harness.coordinator.finishProvisioning('retry', [child])
+  await harness.coordinator.finishProvisioning('retry', [child])
   harness.coordinator.recordChildResult(child.meta, turnResult(false, 'ready to summarize'))
+  await flushPromises()
   assertEqual(parentAttempts, 1)
   assertEqual(harness.coordinator.states().length, 1)
   assertEvent(harness.events, 'subagent-summary-delivery-rejected', 'fixture parent recovery gate')
@@ -110,12 +113,13 @@ async function verifyRejectedSummaryIsRetried(Coordinator) {
   assertEqual(harness.coordinator.states().length, 0)
 }
 
-function verifyClosedParentClearsSummary(Coordinator) {
+async function verifyClosedParentClearsSummary(Coordinator) {
   const harness = createHarness(Coordinator)
   harness.parent.status = 'running'
   const [child] = beginWithChildren(harness, 'closed', 1)
-  harness.coordinator.finishProvisioning('closed', [child])
+  await harness.coordinator.finishProvisioning('closed', [child])
   harness.coordinator.recordChildResult(child.meta, turnResult(false, 'done'))
+  await flushPromises()
   harness.parent.status = 'closed'
   harness.coordinator.handleEvent(harness.parent.id, status('closed'))
   assertEqual(harness.coordinator.states().length, 0)

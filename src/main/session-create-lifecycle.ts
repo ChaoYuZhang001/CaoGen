@@ -56,8 +56,8 @@ export function prepareSessionCreationDraft(
   const settings = getSettings()
   const driveMode = sessionDriveMode(opts, resumeHistory, settings)
   const drivePolicy = getCaoGenDrivePolicy(driveMode)
-  const routingScope = sessionRoutingScope(opts, resumeHistory, parentMeta)
-  const selectedModel = sessionModel(opts, resumeHistory, forking)
+  const selectedModel = sessionModel(opts, resumeHistory, settings, forking)
+  const routingScope = sessionRoutingScope(opts, resumeHistory, parentMeta, selectedModel)
   const selectedProviderId = sessionProviderId(opts, resumeHistory, settings, driveMode, forking)
   const provider = explicitSessionProvider(selectedProviderId, selectedModel)
   const unassigned = sessionUnassigned(opts, resumeHistory, parentMeta)
@@ -145,6 +145,9 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     workItemId: input.workItemId,
     digitalWorkerBinding: input.historyMode === 'resume' ? resumeHistory?.digitalWorkerBinding : undefined,
     conversationForkSourceSdkSessionId: input.historyMode === 'fork' ? resumeHistory?.sdkSessionId : undefined,
+    conversationForkCheckpointId: input.historyMode === 'fork'
+      ? normalizedOptionalId(opts.forkCheckpointId)
+      : undefined,
     conversationForkSourceSessionId: input.historyMode === 'fork' ? resumeHistory?.id : undefined,
     responsesContext: input.historyMode === 'resume' ? resumeHistory?.responsesContext : undefined
   }
@@ -225,8 +228,16 @@ function sessionDriveMode(
   return opts.driveMode ?? history?.driveMode ?? settings.driveMode
 }
 
-function sessionModel(opts: CreateSessionOptions, history?: HistoryEntry, forking = false): string {
-  return forking ? opts.model ?? '' : history?.model ?? opts.model ?? ''
+function sessionModel(
+  opts: CreateSessionOptions,
+  history: HistoryEntry | undefined,
+  settings: AppSettings,
+  forking = false
+): string {
+  if (forking) return opts.model ?? ''
+  if (history) return history.model
+  if (opts.model !== undefined) return opts.model
+  return opts.providerId === AUTO_PROVIDER_ID ? AUTO_MODEL : settings.defaultModel
 }
 
 function sessionProviderId(
@@ -424,7 +435,12 @@ export async function managedSessionPlacement(
   const created = await executeManagedWorktreeCreateEffect(
     prepared.plan,
     baseMeta.workspaceId ?? baseMeta.projectId,
-    executeInteractiveOperationEffect
+    executeInteractiveOperationEffect,
+    {
+      workspaceId: baseMeta.workspaceId,
+      goalId: baseMeta.goalId,
+      workItemId: baseMeta.workItemId
+    }
   )
   if (!created.ok) {
     throw sessionCreateEffectError(
@@ -640,6 +656,12 @@ function sessionConversationHistory(
   if (opts.resumeSdkSessionId !== undefined && opts.forkFromSdkSessionId !== undefined) {
     throw new Error('恢复会话与分叉会话不能同时指定')
   }
+  if (opts.forkCheckpointId !== undefined && opts.forkFromSdkSessionId === undefined) {
+    throw new Error('消息级分叉必须同时指定来源 sdkSessionId')
+  }
+  if (opts.forkCheckpointId !== undefined && !opts.forkCheckpointId.trim()) {
+    throw new Error('分叉 checkpointId 不能为空')
+  }
   const mode = opts.forkFromSdkSessionId !== undefined ? 'fork' : 'resume'
   const raw = mode === 'fork' ? opts.forkFromSdkSessionId : opts.resumeSdkSessionId
   if (raw === undefined) return undefined
@@ -653,10 +675,16 @@ function sessionConversationHistory(
 function sessionRoutingScope(
   opts: CreateSessionOptions,
   resumeHistory: HistoryEntry | undefined,
-  parentMeta: SessionMeta | undefined
+  parentMeta: SessionMeta | undefined,
+  selectedModel: string
 ): SessionRoutingScope {
   return opts.routingScope ?? resumeHistory?.routingScope ?? parentMeta?.routingScope ??
-    (opts.model === AUTO_MODEL ? 'provider' : 'fixed')
+    (opts.providerId === AUTO_PROVIDER_ID ? 'global' : selectedModel === AUTO_MODEL ? 'provider' : 'fixed')
+}
+
+function normalizedOptionalId(value: string | undefined): string | undefined {
+  const normalized = value?.trim()
+  return normalized || undefined
 }
 
 function initialProviderId(
@@ -664,7 +692,8 @@ function initialProviderId(
   settings: AppSettings,
   driveMode: CaoGenDriveMode
 ): string {
-  const requested = opts.providerId ?? ''
+  if (opts.providerId === undefined) return settings.defaultProviderId.trim()
+  const requested = opts.providerId.trim()
   if (requested !== AUTO_PROVIDER_ID) return requested
   const routeSettings = settingsForCaoGenDrive(settings, driveMode)
   const initialRoute = resolveSessionModelRoute({

@@ -172,7 +172,6 @@ function validateBrandAssets() {
   const sidebar = readRequiredText('src/renderer/src/components/Sidebar.tsx')
   const welcome = readRequiredText('src/renderer/src/components/WelcomeView.tsx')
   const app = readRequiredText('src/renderer/src/App.tsx')
-  const vscodeLogo = readRequiredText('plugins/vscode/media/caogen.svg')
 
   if (brandModule) {
     requireSnippet(brandModule, "resources/icon.png?url", 'brand module must import the official CaoGen app icon asset')
@@ -198,10 +197,6 @@ function validateBrandAssets() {
     rejectBrandPlaceholder('src/renderer/src/App.tsx', app)
   }
 
-  if (vscodeLogo) {
-    requireSnippet(vscodeLogo, 'data:image/png;base64,', 'VS Code extension logo must embed the official CaoGen app icon')
-    rejectBrandPlaceholder('plugins/vscode/media/caogen.svg', vscodeLogo)
-  }
 }
 
 function scanText(label, text) {

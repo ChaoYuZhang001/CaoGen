@@ -77,9 +77,9 @@ try {
   const snapshot = snapshotStore.buildTaskSnapshot({
     meta: meta('session-a', 'running'),
     transcript: [
-      { seq: 1, event: { kind: 'user-message', messageId: 'local-user-a', text: '实现 P0-005' } },
-      { seq: 2, event: { kind: 'checkpoint', messageId: 'sdk-checkpoint-a', userMessageId: 'local-user-a' } },
-      { seq: 3, event: { kind: 'tool-result', toolUseId: 'tool-a', content: 'ok', isError: false } }
+      transcriptEntry(1, { kind: 'user-message', messageId: 'local-user-a', text: '实现 P0-005' }),
+      transcriptEntry(2, { kind: 'checkpoint', messageId: 'sdk-checkpoint-a', userMessageId: 'local-user-a' }),
+      transcriptEntry(3, { kind: 'tool-result', toolUseId: 'tool-a', content: 'ok', isError: false })
     ],
     lastSeq: 3,
     lastEventId: 'event-tool-result-a',
@@ -297,10 +297,12 @@ try {
     baseRun.toolExecutions = [baseTool]
     const baseSnapshot = snapshotStore.buildTaskSnapshot({
       meta: meta(sessionId, 'running'),
-      transcript: [{
-        seq: 3,
-        event: { kind: 'user-message', messageId: `${sessionId}-message`, text: 'race write' }
-      }],
+      transcript: [transcriptEntry(
+        3,
+        { kind: 'user-message', messageId: `${sessionId}-message`, text: 'race write' },
+        sessionId,
+        `${sessionId}-event-3`
+      )],
       lastSeq: 3,
       lastEventId: `${sessionId}-event-3`,
       lastEventKind: 'user-message',
@@ -376,15 +378,17 @@ try {
       },
       transcript: [
         ...baseSnapshot.transcript,
-        {
-          seq: 4,
-          event: {
+        transcriptEntry(
+          4,
+          {
             kind: 'tool-result',
             toolUseId,
             content: 'write complete',
             isError: false
-          }
-        }
+          },
+          sessionId,
+          `${sessionId}-event-4`
+        )
       ],
       run: eventRun
     }
@@ -434,7 +438,7 @@ try {
   for (const run of crossSessionRuns) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(run.sessionId, 'running'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: 'cross-session lease' } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: 'cross-session lease' })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -543,7 +547,7 @@ try {
     legacyRun.effects = [legacyEffect]
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(legacySessionId, 'error'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: `legacy ${toolName}` } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: `legacy ${toolName}` })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -575,7 +579,7 @@ try {
     }
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(queryableSessionId, 'running'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: `queryable ${toolName}` } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: `queryable ${toolName}` })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -641,7 +645,7 @@ try {
     const persistedSameRun = { ...sameRun, effects: [sameRunLegacyEffect] }
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(sameRunSessionId, 'error'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: `same-run legacy ${toolName}` } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: `same-run legacy ${toolName}` })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -685,7 +689,7 @@ try {
     }
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(opaquePeerSessionId, 'running'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: `opaque peer ${toolName}` } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: `opaque peer ${toolName}` })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -729,7 +733,7 @@ try {
     }
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(writePeerSessionId, 'running'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: `write peer ${toolName}` } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: `write peer ${toolName}` })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -838,7 +842,7 @@ try {
   for (const run of independentRuns) {
     await snapshotStore.saveTaskSnapshot(snapshotStore.buildTaskSnapshot({
       meta: meta(run.sessionId, 'running'),
-      transcript: [{ seq: 1, event: { kind: 'user-message', text: 'independent resource lease' } }],
+      transcript: [transcriptEntry(1, { kind: 'user-message', text: 'independent resource lease' })],
       lastSeq: 1,
       lastEventKind: 'user-message',
       eventCount: 1,
@@ -869,8 +873,8 @@ try {
   const completedSnapshot = snapshotStore.buildTaskSnapshot({
     meta: meta('session-completed', 'idle'),
     transcript: [
-      { seq: 1, event: { kind: 'user-message', messageId: 'local-user-completed', text: '已完成任务' } },
-      { seq: 2, event: { kind: 'turn-result', subtype: 'success', isError: false, resultText: 'done' } }
+      transcriptEntry(1, { kind: 'user-message', messageId: 'local-user-completed', text: '已完成任务' }),
+      transcriptEntry(2, { kind: 'turn-result', subtype: 'success', isError: false, resultText: 'done' })
     ],
     lastSeq: 2,
     lastEventKind: 'turn-result',
@@ -1025,7 +1029,7 @@ try {
   const migratedV2 = await snapshotStore.listTaskSnapshots(sqliteV2Root)
   assertEqual(migratedV2.length, 1)
   assertEqual(migratedV2[0].run, undefined)
-  assertEqual(readSqliteUserVersion(SQL, snapshotStore.taskSnapshotsDbFile(sqliteV2Root)), 8)
+  assertEqual(readSqliteUserVersion(SQL, snapshotStore.taskSnapshotsDbFile(sqliteV2Root)), 9)
   assertEqual((await snapshotStore.listTaskRuns('session-a', sqliteV2Root)).length, 0)
 
   mkdirSync(sqliteFutureRoot, { recursive: true })
@@ -1033,11 +1037,11 @@ try {
     SQL,
     snapshotStore.taskSnapshotsDbFile(sqliteFutureRoot),
     legacySnapshotWithoutRun,
-    9
+    10
   )
   await assertRejects(
     () => snapshotStore.listTaskSnapshots(sqliteFutureRoot),
-    '任务快照数据库版本过新:9 > 8'
+    '任务快照数据库版本过新:10 > 9'
   )
   assert(typeof snapshotStore.flushTaskSnapshotMutations === 'function', 'snapshot store should expose flushTaskSnapshotMutations')
   const taskSnapshotSource = readFileSync(path.join(repoRoot, 'src/main/task/task-snapshot.ts'), 'utf8')
@@ -1116,6 +1120,10 @@ function readSqliteUserVersion(SQL, dbPath) {
 }
 function assertEqual(actual, expected) {
   assert(actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+}
+
+function transcriptEntry(seq, event, streamId = 'task-snapshot-fixture', eventId = `${streamId}-event-${seq}`) {
+  return { seq, eventId, streamId, event }
 }
 
 function preparedEffect(run, effectKey, index, resourceKey = effectKey) {

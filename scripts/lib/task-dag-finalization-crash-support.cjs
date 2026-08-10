@@ -175,6 +175,7 @@ function prepareScenario(name) {
   git(project, ['init', '-q', '-b', 'main'])
   git(project, ['config', 'user.email', 'dag-finalization@example.test'])
   git(project, ['config', 'user.name', 'DAG Finalization Crash E2E'])
+  git(project, ['config', 'core.autocrlf', 'false'])
   fs.writeFileSync(path.join(project, 'README.md'), `# ${name}\n`, 'utf8')
   git(project, ['add', 'README.md'])
   git(project, ['commit', '-qm', 'initial'])
@@ -402,8 +403,12 @@ function sendAndExit(payload) {
 
 function workerFailure(error) {
   const message = error instanceof Error ? error.stack ?? error.message : String(error)
+  // Keep failures observable on Windows where an IPC send followed by an
+  // immediate process.exit can drop the message before the parent receives it.
+  try { process.stderr.write(`${message}\n`) } catch {}
   if (process.send) {
     process.send({ type: 'worker-error', message }, () => process.exit(1))
+    setTimeout(() => process.exit(1), 250)
   } else {
     console.error(message)
     process.exit(1)

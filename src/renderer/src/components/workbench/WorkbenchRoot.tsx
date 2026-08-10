@@ -16,8 +16,10 @@ import {
 
 type RoutineEditorState = { mode: 'create' } | { mode: 'edit'; id: string }
 
-const SIDE_MIN_WIDTH = 360
-const SIDE_MAX_WIDTH = 900
+const SIDE_MIN_WIDTH = 320
+const SIDE_MAX_WIDTH = 720
+const DOCK_MIN_HEIGHT = 220
+const DOCK_MAX_HEIGHT = 520
 
 type DeskToolKey = 'review' | 'terminal' | 'browser' | 'files' | 'sideChat' | 'memory'
 
@@ -59,6 +61,38 @@ function startWorkbenchSideResize(
     if (gutter.hasPointerCapture(event.pointerId)) gutter.releasePointerCapture(event.pointerId)
     document.body.classList.remove('is-resizing-layout')
     patchLayout({ workbenchSideWidth: nextWidth })
+  }
+  document.body.classList.add('is-resizing-layout')
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop, { once: true })
+}
+
+function startWorkbenchDockResize(
+  event: React.PointerEvent<HTMLDivElement>,
+  dockHeight: number,
+  setDockHeight: (height: number) => void,
+  patchLayout: (patch: Partial<LayoutSettings>) => void
+): void {
+  event.preventDefault()
+  const gutter = event.currentTarget
+  try {
+    gutter.setPointerCapture(event.pointerId)
+  } catch {
+    // Synthetic pointers can miss capture; window listeners still preserve the drag.
+  }
+  const startY = event.clientY
+  const startHeight = dockHeight
+  let nextHeight = startHeight
+  const move = (moveEvent: PointerEvent): void => {
+    nextHeight = clamp(startHeight - (moveEvent.clientY - startY), DOCK_MIN_HEIGHT, DOCK_MAX_HEIGHT)
+    setDockHeight(nextHeight)
+  }
+  const stop = (): void => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    if (gutter.hasPointerCapture(event.pointerId)) gutter.releasePointerCapture(event.pointerId)
+    document.body.classList.remove('is-resizing-layout')
+    patchLayout({ workbenchDockHeight: nextHeight })
   }
   document.body.classList.add('is-resizing-layout')
   window.addEventListener('pointermove', move)
@@ -120,10 +154,14 @@ function WorkbenchRoot(): React.JSX.Element {
   const markRoutineRun = useStore((s) => s.markRoutineRun)
   const deleteRoutine = useStore((s) => s.deleteRoutine)
   const closeMemoryPanel = useStore((s) => s.closeMemoryPanel)
-  const [sideWidth, setSideWidth] = useState(layout.workbenchSideWidth)
+  const [sideWidth, setSideWidth] = useState(clamp(layout.workbenchSideWidth, SIDE_MIN_WIDTH, SIDE_MAX_WIDTH))
+  const [dockHeight, setDockHeight] = useState(clamp(layout.workbenchDockHeight, DOCK_MIN_HEIGHT, DOCK_MAX_HEIGHT))
   useEffect(() => {
-    setSideWidth(layout.workbenchSideWidth)
+    setSideWidth(clamp(layout.workbenchSideWidth, SIDE_MIN_WIDTH, SIDE_MAX_WIDTH))
   }, [layout.workbenchSideWidth])
+  useEffect(() => {
+    setDockHeight(clamp(layout.workbenchDockHeight, DOCK_MIN_HEIGHT, DOCK_MAX_HEIGHT))
+  }, [layout.workbenchDockHeight])
   const patchLayout = (patch: Partial<LayoutSettings>): void => {
     void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
       console.error('[agent-desk] Failed to persist workbench layout:', error)
@@ -156,7 +194,8 @@ function WorkbenchRoot(): React.JSX.Element {
         .filter((meta): meta is SessionMeta => Boolean(meta && meta.parentSessionId === activeId))
     : []
   const childResults = activeId ? sessions[activeId]?.childResults ?? {} : {}
-  const sideOpen = activePanelId !== null
+  const terminalOpen = activePanelId === 'terminal'
+  const sideOpen = activePanelId !== null && !terminalOpen
   const deskTools: DeskToolItem[] = [
     {
       key: 'review',
@@ -276,8 +315,11 @@ function WorkbenchRoot(): React.JSX.Element {
 
   return (
     <div
-      className={`workbench ${sideOpen ? 'workbench-split' : ''}`}
-      style={{ '--workbench-side-width': `${sideWidth}px` } as React.CSSProperties}
+      className={`workbench ${sideOpen ? 'workbench-split' : ''} ${terminalOpen ? 'workbench-dock-open' : ''}`}
+      style={{
+        '--workbench-side-width': `${sideWidth}px`,
+        '--workbench-dock-height': `${dockHeight}px`
+      } as React.CSSProperties}
     >
       <DeskControlRail
         sideOpen={sideOpen}
@@ -286,9 +328,44 @@ function WorkbenchRoot(): React.JSX.Element {
         onToggleSummary={toggleSummaryPanel}
         onToggleSidePanel={toggleSidePanel}
       />
-      <section className="workbench-pane workbench-chat">
-        <FirstTaskWorkbenchStatus />
-        <ChatView />
+      <section className="workbench-pane workbench-primary">
+        <section className="workbench-chat">
+          <FirstTaskWorkbenchStatus />
+          <ChatView />
+        </section>
+        <div
+          className="workbench-dock-gutter no-drag"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('resizeToolPanel')}
+          title={t('resizeToolPanel')}
+          onPointerDown={(event) => startWorkbenchDockResize(event, dockHeight, setDockHeight, patchLayout)}
+          style={{ display: terminalOpen ? undefined : 'none' }}
+        />
+        <section
+          className="workbench-pane workbench-bottom-dock"
+          style={{ display: terminalOpen ? 'flex' : 'none' }}
+          data-workbench-terminal-dock
+        >
+          <Suspense fallback={<div className="workbench-panel-loading" />}>
+            {PANEL_REGISTRY.filter((def) => def.id === 'terminal').map((def) => {
+              const isActive = activePanelId === def.id
+              const isMounted = mountedPanels.has(def.id)
+              if (!isActive && !isMounted) return null
+              const Component = def.component
+              return (
+                <div
+                  key={def.id}
+                  className="workbench-panel"
+                  style={{ display: isActive ? 'flex' : 'none' }}
+                  aria-hidden={!isActive}
+                >
+                  {createElement(Component, renderPanelContent(def.id))}
+                </div>
+              )
+            })}
+          </Suspense>
+        </section>
       </section>
       <div
         className="workbench-side-gutter no-drag"
@@ -311,11 +388,11 @@ function WorkbenchRoot(): React.JSX.Element {
         </button>
       </div>
       <section
-        className="workbench-pane workbench-side"
+        className={`workbench-pane workbench-side ${activePanelId === 'files' ? 'workbench-side-files' : ''}`}
         style={{ display: sideOpen ? 'flex' : 'none' }}
       >
         <Suspense fallback={<div className="workbench-panel-loading" />}>
-          {PANEL_REGISTRY.map((def) => {
+          {PANEL_REGISTRY.filter((def) => def.id !== 'terminal').map((def) => {
             const isActive = activePanelId === def.id
             const isMounted = mountedPanels.has(def.id)
             if (!isActive && !isMounted) return null

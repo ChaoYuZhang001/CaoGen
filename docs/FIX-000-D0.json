@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "gateId": "fix_000_d0",
+  "fileName": "CaoGen-0.1.8-windows-x64-unsigned-preview.exe",
+  "relativePath": "dist/CaoGen-0.1.8-windows-x64-unsigned-preview.exe",
+  "size": 229172133,
+  "sha256": "938bc5c13ead77cb4dc592cbfa66ad3a4e93c44dbca7758c48f820815d4619c2",
+  "artifactSetSha256": "898e778c976e1f2552854b244b4197b2b5d68123785718bf967acd4d0722bb13",
+  "packageVersion": "0.1.8",
+  "platform": "windows-x64",
+  "distributionChannel": "unsigned_preview",
+  "signaturePolicy": "intentionally_unsigned",
+  "gitCommit": "374793c486261c90e91190d68ec81d3f8389d631",
+  "worktreeClean": false
+}

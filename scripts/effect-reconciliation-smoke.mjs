@@ -1169,7 +1169,10 @@ try {
     'an unchanged skip-worktree path must not block a proven not_applied reconciliation'
   )
 
-  const colonMergeRepo = path.join(tempRoot, 'merge-reconcile:colon-repo')
+  const colonMergeRepo = path.join(
+    tempRoot,
+    process.platform === 'win32' ? 'merge-reconcile-colon-repo' : 'merge-reconcile:colon-repo'
+  )
   initMergeFixture(colonMergeRepo)
   const colonMergeDescriptor = await reconciler.buildEffectDescriptor({
     toolName: 'git_merge',
@@ -1178,7 +1181,9 @@ try {
   })
   assert(
     colonMergeDescriptor.target.gitCommonDir.includes(':'),
-    'colon-path reconciliation fixture must preserve the colon in gitCommonDir'
+    process.platform === 'win32'
+      ? 'Windows reconciliation fixture must preserve the volume separator in gitCommonDir'
+      : 'colon-path reconciliation fixture must preserve the colon in gitCommonDir'
   )
   const colonMergeExecution = prepareExecutingEffect({
     ledger,

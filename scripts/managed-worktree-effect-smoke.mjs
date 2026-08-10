@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readdirSync,
   rmSync,
   symlinkSync,
@@ -22,13 +23,14 @@ process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_P
 require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-managed-worktree-effect-'))
 const outDir = path.join(tempRoot, 'compiled')
-const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
+const realGit = locateGit()
 const cleanGitEnv = sanitizedGitEnvironment(process.env)
 
 try {
   compileSources()
   installElectronStub()
   const modules = loadModules()
+  await lifecyclePlanCanonicalizationCase(modules)
   await createAndRemoveCase(modules)
   await symlinkParentDriftCase(modules.lifecycle)
   await partialRemoveCase(modules.lifecycle)
@@ -37,6 +39,19 @@ try {
   console.log('managed worktree effect smoke: PASS')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+async function lifecyclePlanCanonicalizationCase({ lifecycle, registry }) {
+  const repo = createRepo('canonical-plan')
+  const prepared = registry.prepareManagedWorktreeCreateEffect({
+    sessionId: 'session-canonical-plan',
+    cwd: repo,
+    isolated: true
+  })
+  assert(prepared.ok && prepared.isolated && 'plan' in prepared, 'lifecycle must prepare an isolated create plan')
+  assertEqual(prepared.plan.record.repoRoot, fsRealpath(repo), 'registry repoRoot must use the observed real path')
+  const target = lifecycle.buildManagedWorktreeCreateTarget(repo, prepared.plan.toolInput)
+  assertEqual(target.repoRoot, prepared.plan.record.repoRoot, 'effect target must accept the frozen registry repoRoot')
 }
 
 async function symlinkParentDriftCase(lifecycle) {
@@ -57,7 +72,7 @@ async function symlinkParentDriftCase(lifecycle) {
     target.worktreeParentPath
   ).split(path.sep)[0]
   const injected = path.join(target.worktreeParentAnchorPath, firstMissing)
-  symlinkSync(malicious, injected, 'dir')
+  symlinkSync(malicious, injected, process.platform === 'win32' ? 'junction' : 'dir')
   try {
     assertEqual(
       lifecycle.reconcileManagedWorktreeCreateTarget(target).kind,
@@ -164,6 +179,21 @@ async function refMoveCasCase(lifecycle) {
   const removeTarget = lifecycle.buildManagedWorktreeRemoveTarget(repo, removeInputFor(input, true, true))
   const tree = gitText(repo, ['rev-parse', 'HEAD^{tree}'])
   const movedSha = gitText(repo, ['commit-tree', tree, '-p', input.baseSha, '-m', 'concurrent ref move'])
+  if (process.platform === 'win32') {
+    git(repo, ['update-ref', removeTarget.branchRef, movedSha, removeTarget.branchSha])
+    const result = lifecycle.executeManagedWorktreeRemoveTarget(removeTarget)
+    assert(!result.ok, 'pre-execution ref drift must fail the executor CAS')
+    assert(existsSync(worktreePath), 'pre-execution ref drift must not remove the worktree')
+    assertEqual(refShaOrEmpty(repo, removeTarget.branchRef), movedSha, 'moved ref must remain intact')
+    assertEqual(
+      lifecycle.reconcileManagedWorktreeRemoveTarget(removeTarget).kind,
+      'unresolved',
+      'pre-execution ref drift must remain unresolved'
+    )
+    git(repo, ['worktree', 'remove', '--force', worktreePath])
+    git(repo, ['update-ref', '-d', removeTarget.branchRef, movedSha])
+    return
+  }
   const wrapperDir = path.join(tempRoot, 'git-wrapper')
   mkdirSync(wrapperDir)
   writeExecutable(path.join(wrapperDir, 'git'), refMoveWrapper())
@@ -274,7 +304,7 @@ function createInput(repo, sourceCwd, worktreePath, branch) {
   const canonicalWorktreePath = canonicalPlannedPath(worktreePath)
   const baseSha = gitText(repo, ['rev-parse', 'HEAD'])
   const baseBranch = gitText(repo, ['symbolic-ref', '--short', 'HEAD'])
-  const repoRoot = gitText(repo, ['rev-parse', '--show-toplevel'])
+  const repoRoot = fsRealpath(gitText(repo, ['rev-parse', '--show-toplevel']))
   const sourcePrefix = path.relative(repoRoot, fsRealpath(sourceCwd))
   const cwd = path.resolve(canonicalWorktreePath, sourcePrefix)
   const registryRecord = {
@@ -313,7 +343,7 @@ function canonicalPlannedPath(value) {
 }
 
 function fsRealpath(value) {
-  return execFileSync('realpath', [value], { encoding: 'utf8' }).trim()
+  return realpathSync(value)
 }
 
 function emptyRun(id) {
@@ -352,6 +382,7 @@ function compileSources() {
   execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
     'src/main/git/managed-worktree-effect.ts',
+    'src/main/managed-worktree-lifecycle.ts',
     'src/main/task/effect-reconciler.ts',
     'src/main/task/effect-ledger.ts',
     'src/main/task/effect-target-conflict.ts',
@@ -370,6 +401,7 @@ function compileSources() {
 function loadModules() {
   return {
     lifecycle: require(findCompiledModule(outDir, 'managed-worktree-effect.js')),
+    registry: require(findCompiledModule(outDir, 'managed-worktree-lifecycle.js')),
     reconciler: require(findCompiledModule(outDir, 'effect-reconciler.js')),
     ledger: require(findCompiledModule(outDir, 'effect-ledger.js')),
     conflict: require(findCompiledModule(outDir, 'effect-target-conflict.js')),
@@ -451,7 +483,16 @@ function writeExecutable(file, content) {
 }
 
 function shellQuote(value) {
-  return `'${value.replace(/'/g, `'\\''`)}'`
+  const normalized = process.platform === 'win32' ? value.replace(/\\/g, '/') : value
+  return `'${normalized.replace(/'/g, `'\\''`)}'`
+}
+
+function locateGit() {
+  const command = process.platform === 'win32' ? 'where.exe' : 'which'
+  return execFileSync(command, ['git'], { encoding: 'utf8' })
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
 }
 
 function assertThrows(task) {

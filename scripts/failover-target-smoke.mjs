@@ -57,7 +57,7 @@ try {
   })
 
   check('unhealthy configured fallback is skipped for a healthy provider', () => {
-    for (let i = 0; i < 3; i += 1) scheduler.recordFailure('offline-backup', 'quota')
+    for (let i = 0; i < 4; i += 1) scheduler.recordFailure('offline-backup', 'quota')
     const unhealthySkipped = scheduler.pickFailoverTarget({
       candidates: [
         { id: 'primary-b', name: 'Primary B', models: ['primary-b-strong'] },
@@ -87,30 +87,118 @@ try {
     assert(modelOnly?.model === 'preferred-lite', 'fallback model-only preference should set the target model')
   })
 
+  check('same-provider recovery honors the configured fallback model', () => {
+    const selected = scheduler.pickProviderModelFailoverTarget({
+      providerId: 'model-primary',
+      models: ['gpt-4.1', 'gpt-4o-mini', 'gpt-4o'],
+      desiredModel: 'gpt-4.1',
+      exclude: new Set(['gpt-4.1']),
+      fallbackModel: 'gpt-4o-mini',
+      failure: scheduler.classifyFailure('HTTP 429 rate limit')
+    })
+    assert(selected?.model === 'gpt-4o-mini', 'configured same-provider fallback model must win')
+    assert(selected?.preference === 'Configured fallback model', 'configured fallback reason must remain visible')
+  })
+
+  check('same-provider recovery excludes attempted models and is stable', () => {
+    const input = {
+      providerId: 'model-stable',
+      desiredModel: 'gpt-4.1',
+      exclude: new Set(['gpt-4.1', 'gpt-4o']),
+      failure: scheduler.classifyFailure('model not found')
+    }
+    const forward = scheduler.pickProviderModelFailoverTarget({
+      ...input,
+      models: ['gpt-4.1', 'gpt-4o', 'gpt-4o-mini', 'alpha-mini']
+    })
+    const reverse = scheduler.pickProviderModelFailoverTarget({
+      ...input,
+      models: ['alpha-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1']
+    })
+    assert(forward?.model === 'alpha-mini', `expected stable lower-cost model, got ${forward?.model}`)
+    assert(reverse?.model === forward?.model, 'candidate order must not change model recovery')
+  })
+
+  check('same-provider recovery rejects incompatible failures and open circuits', () => {
+    const base = {
+      providerId: 'model-guarded',
+      models: ['gpt-4.1', 'gpt-4o-mini'],
+      desiredModel: 'gpt-4.1',
+      exclude: new Set(['gpt-4.1'])
+    }
+    assert(
+      scheduler.pickProviderModelFailoverTarget({
+        ...base,
+        failure: scheduler.classifyFailure('HTTP 401 invalid API key')
+      }) === null,
+      'authentication failures must remain credential/provider recovery concerns'
+    )
+    assert(
+      scheduler.pickProviderModelFailoverTarget({
+        ...base,
+        failure: scheduler.classifyFailure('fetch failed')
+      }) === null,
+      'network failures must not rotate models on the same unreachable Provider'
+    )
+    for (let i = 0; i < 4; i += 1) scheduler.recordFailure('model-guarded', 'HTTP 503 service unavailable')
+    assert(
+      scheduler.pickProviderModelFailoverTarget({
+        ...base,
+        failure: scheduler.classifyFailure('HTTP 503 service unavailable')
+      }) === null,
+      'an open Provider circuit must skip same-provider model recovery'
+    )
+  })
+
   check('OpenAI failover updates fixed model and exposes the preference reason', () => {
     const openaiEngine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+    const recovery = readFileSync(path.join(repoRoot, 'src/main/provider/openAiProviderModelRecovery.ts'), 'utf8')
+    const autoRouteIndex = openaiEngine.indexOf('if (this.meta.model === AUTO_MODEL) this.autoRoute(payload)')
+    const triedProviderIndex = openaiEngine.indexOf('new OpenAiRecoveryState(this.meta.providerId)')
+    assert(
+      autoRouteIndex >= 0 && triedProviderIndex > autoRouteIndex,
+      'OpenAI failover must exclude the Provider selected by automatic routing'
+    )
+    assert(
+      recovery.includes("provider.engine === 'openai'") && recovery.includes('providerIsReady(provider)'),
+      'OpenAI hot failover must not select an incompatible engine'
+    )
     assert(
       openaiEngine.includes('else this.meta.model = target.model'),
       'OpenAI failover must update fixed meta.model when a target model is selected'
     )
     assert(
-      openaiEngine.includes("const routeReason = [failure.label, target.preference].filter(Boolean).join(' · ')") &&
-        openaiEngine.includes('this.modelAttempts.setRouteReason(routeReason)') &&
-        openaiEngine.includes('reason: routeReason'),
+      recovery.includes("routeReason: [input.failure.label, target.preference].filter(Boolean).join(' / ')") &&
+        openaiEngine.includes('this.modelAttempts.setRouteReason(target.routeReason)') &&
+        openaiEngine.includes('reason: target.routeReason'),
       'OpenAI failover event must include the user-visible preference reason'
     )
   })
 
   check('Anthropic failover updates fixed model and exposes the preference reason', () => {
-    const anthropicEngine = readFileSync(path.join(repoRoot, 'src/main/anthropicEngine.ts'), 'utf8')
+    const anthropicRecovery = readFileSync(path.join(repoRoot, 'src/main/provider/anthropicRecovery.ts'), 'utf8')
     assert(
-      anthropicEngine.includes('if (this.meta.model !== AUTO_MODEL) this.meta.model = target.model'),
+      anthropicRecovery.includes('if (input.meta.model !== AUTO_MODEL) input.meta.model = target.model'),
       'Anthropic failover must update fixed meta.model when a target model is selected'
     )
     assert(
-      anthropicEngine.includes("const routeReason = [failure.label, selected.preference].filter(Boolean).join(' · ')") &&
-        anthropicEngine.includes('reason: routeReason'),
+      anthropicRecovery.includes("const routeReason = [failure.label, selected.preference].filter(Boolean).join(' / ')") &&
+        anthropicRecovery.includes('reason: routeReason'),
       'Anthropic failover event must include the user-visible preference reason'
+    )
+  })
+
+  check('native engines preserve the credential-model-provider recovery order', () => {
+    const openaiEngine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+    const anthropicRecovery = readFileSync(path.join(repoRoot, 'src/main/provider/anthropicRecovery.ts'), 'utf8')
+    assert(
+      openaiEngine.indexOf('tryProviderKeyFailover(text') < openaiEngine.indexOf('tryProviderModelFailover(text') &&
+        openaiEngine.indexOf('tryProviderModelFailover(text') < openaiEngine.indexOf('tryFailover(text'),
+      'OpenAI recovery order must be credential, same-provider model, then Provider'
+    )
+    assert(
+      anthropicRecovery.includes('recoverProviderKey(input) ?? recoverProviderModel(input) ?? recoverProvider(input)'),
+      'Anthropic recovery order must be credential, same-provider model, then Provider'
     )
   })
 
@@ -120,13 +208,15 @@ try {
       path.join(repoRoot, 'src/renderer/src/components/experience/RoutingMessage.tsx'),
       'utf8'
     )
-    const i18n = readFileSync(path.join(repoRoot, 'src/renderer/src/i18n.ts'), 'utf8')
+    const i18n = readFileSync(path.join(repoRoot, 'src/renderer/src/i18n/routingRecoveryTranslations.ts'), 'utf8')
     assert(messageItem.includes("case 'failover'"), 'MessageItem must render failover events')
     assert(
       messageItem.includes('<FailoverMessage item={item} />') && routingMessage.includes("t('failoverText'"),
       'failover note must use localized copy through the experience projection'
     )
     assert(routingMessage.includes("t('assistantFailoverStatus')"), 'Assistant projection must keep a simplified failover status')
+    assert(messageItem.includes("case 'provider-model-failover'"), 'MessageItem must render model failover events')
+    assert(routingMessage.includes('ProviderModelFailoverMessage'), 'model failover must have a dedicated renderer')
     assert(i18n.includes('已切换 → {to},自动重试中'), 'Chinese failover copy must explain the retry target')
   })
 

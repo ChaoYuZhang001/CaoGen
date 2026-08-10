@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Review-and-Test anchor and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Review-and-Test specialist actively using the real inspection tools in the tool-running state.
+Action: the left forearm securely supports the inspection board while the left hand steadies its frame; the right hand aligns the square magnifier directly above one of the board's four empty geometric squares; the gaze inspects through the magnifier. Add only two short restrained directional ink strokes near the magnifier hand, not a floating interface.
+State readability: active inspection must remain distinguishable at 96 pixels through the square-over-square relationship, upright posture and both-hand action, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, compact bun, glasses, age, body proportions, muted-yellow jacket, charcoal outfit, loafers, square magnifier, four-square board, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and restrained focused expression required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, checkmarks, warning symbols, labels, logos or watermark. Board retains exactly four empty squares.
+Avoid: redesign, extra people, duplicate magnifier or board, floating props, police styling, holograms, decorative UI, glow, cyberpunk, malformed hands, cropped anatomy or style drift.

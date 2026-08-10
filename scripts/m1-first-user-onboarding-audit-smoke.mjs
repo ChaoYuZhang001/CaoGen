@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -81,10 +81,7 @@ try {
   assert.equal(JSON.stringify(secret.report).includes(secretRecord.apiKey), false)
 
   const symlinkRecord = makeRecord()
-  const target = writeFixture('real-recording.txt', 'private-screen-recording')
-  const link = path.join(tempRoot, 'recording-link.txt')
-  symlinkSync(target, link)
-  symlinkRecord.evidenceFiles[0].path = link
+  symlinkRecord.evidenceFiles[0].path = linkedEvidencePath()
   const symlink = runAudit('symlink-evidence', symlinkRecord, ['--required', ...baseArgs])
   assert.equal(symlink.exitCode, 1)
   assert.match(symlink.report.schemaFailures.join('\n'), /not a symlink/)
@@ -138,6 +135,21 @@ try {
   console.log('M1 first-user onboarding audit smoke: pass')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function linkedEvidencePath() {
+  if (process.platform !== 'win32') {
+    const target = writeFixture('real-recording.txt', 'private-screen-recording')
+    const link = path.join(tempRoot, 'recording-link.txt')
+    symlinkSync(target, link)
+    return link
+  }
+  const targetDirectory = path.join(tempRoot, 'real-recording-directory')
+  const junction = path.join(tempRoot, 'recording-junction')
+  mkdirSync(targetDirectory)
+  writeFileSync(path.join(targetDirectory, 'recording.txt'), 'private-screen-recording')
+  symlinkSync(targetDirectory, junction, 'junction')
+  return path.join(junction, 'recording.txt')
 }
 
 function makeRecord() {

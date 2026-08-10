@@ -1,6 +1,6 @@
-import type { ImageAttachmentResult } from '../shared/types'
-import type { PreparedImageAttachment } from './attachmentOps'
-import { persistPreparedImageAttachment } from './attachmentOps'
+import type { DocumentAttachmentResult, ImageAttachmentResult } from '../shared/types'
+import type { PreparedDocumentAttachment, PreparedImageAttachment } from './attachmentOps'
+import { persistPreparedDocumentAttachment, persistPreparedImageAttachment } from './attachmentOps'
 import {
   executeInteractiveOperationEffect,
   type InteractiveOperationEffectOutcome
@@ -48,6 +48,46 @@ export async function executePreparedImageAttachmentEffect(
   return attachmentEffectOutcome(outcome)
 }
 
+export async function executePreparedDocumentAttachmentEffect(
+  context: ImageAttachmentEffectContext,
+  prepared: PreparedDocumentAttachment,
+  runOperation: OperationGateway = executeInteractiveOperationEffect
+): Promise<DocumentAttachmentResult> {
+  const toolName = 'attachment_copy_document'
+  const outcome = await runOperation({
+    kind: 'attachment_write',
+    title: '复制文档到会话附件区',
+    sourceSessionId: context.sourceSessionId,
+    projectId: context.projectId,
+    cwd: context.cwd,
+    toolName,
+    toolInput: {
+      source: 'workspace_file',
+      contentSha256: prepared.hash,
+      bytes: prepared.bytes,
+      mime: prepared.mime,
+      dataClass: prepared.dataClass
+    },
+    execute: (effect) => {
+      if (effect.target.kind !== 'unsupported' || effect.target.toolName !== toolName) {
+        throw new Error('附件写入 EffectTarget 必须保持 opaque 并与工具名绑定')
+      }
+      return persistPreparedDocumentAttachment(prepared, context.attachmentsRoot)
+    },
+    isSuccess: (result) => result.ok,
+    resultSummary: summarizeDocumentAttachmentResult
+  })
+  if (outcome.status === 'completed' && outcome.value?.ok) return outcome.value
+  if (outcome.status === 'completed') return { ok: false, error: '文档附件写入效果已确认，但执行结果缺失' }
+  return {
+    ok: false,
+    error: outcome.error,
+    effectStatus: outcome.effectStatus,
+    operationId: outcome.operationId,
+    ...(outcome.status === 'waiting_reconciliation' ? { snapshotId: outcome.snapshotId } : {})
+  }
+}
+
 function attachmentEffectOutcome(
   outcome: InteractiveOperationEffectOutcome<Awaited<ReturnType<typeof persistPreparedImageAttachment>>>
 ): ImageAttachmentResult {
@@ -69,5 +109,19 @@ function summarizeAttachmentResult(
 ): string {
   return result.ok
     ? JSON.stringify({ ok: true, hash: result.hash, mime: result.mime, bytes: result.bytes })
+    : JSON.stringify(result)
+}
+
+function summarizeDocumentAttachmentResult(
+  result: Awaited<ReturnType<typeof persistPreparedDocumentAttachment>>
+): string {
+  return result.ok
+    ? JSON.stringify({
+        ok: true,
+        hash: result.hash,
+        mime: result.mime,
+        bytes: result.bytes,
+        dataClass: result.dataClass
+      })
     : JSON.stringify(result)
 }

@@ -411,11 +411,14 @@ function exerciseReferencedFileContainment(runtime) {
     writeFileSync(path.join(root, 'allowed.txt'), 'ALLOWED-MENTION-CONTENT', 'utf8')
     const secret = path.join(sibling, 'secret.txt')
     writeFileSync(secret, 'FORBIDDEN-MENTION-CONTENT', 'utf8')
-    symlinkSync(secret, path.join(root, 'escape.txt'))
+    const escapePath = process.platform === 'win32'
+      ? path.join(root, 'escape-dir')
+      : path.join(root, 'escape.txt')
+    symlinkSync(process.platform === 'win32' ? sibling : secret, escapePath, process.platform === 'win32' ? 'junction' : 'file')
     const injected = runtime.readReferencedFiles(root, [
       'allowed.txt',
       `../${path.basename(sibling)}/secret.txt`,
-      'escape.txt'
+      process.platform === 'win32' ? 'escape-dir/secret.txt' : 'escape.txt'
     ])
     assert(injected.includes('ALLOWED-MENTION-CONTENT'), 'allowed referenced file was not loaded')
     assert(!injected.includes('FORBIDDEN-MENTION-CONTENT'), 'referenced-file boundary leaked outside content')

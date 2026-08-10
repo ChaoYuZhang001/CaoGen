@@ -1,0 +1,9 @@
+Use case: background-extraction
+Asset type: CaoGen transparent runtime derivative source
+Input images: Image 1 is the approved CaoGen role-and-state master and is the strict identity, pose, clothing, prop, anatomy, framing and visual-style reference.
+Primary request: Change only the background of Image 1 to a perfectly flat solid #00ff00 chroma-key background for deterministic local background removal. Preserve the exact current character and work state.
+Scene/backdrop: one uniform #00ff00 color extending to every canvas edge, with no shadows, gradients, texture, paper grain, reflections, floor plane, horizon, lighting variation or other marks.
+Composition/framing: preserve Image 1's complete full-body framing, scale, camera angle, pose and safe margin. Keep the head, both hands, both feet, all role tools and all state props fully visible and separated from the canvas edges.
+Identity invariants: preserve the exact face, age, hair, anatomy, body proportions, garment construction, role colors, tool design, state action, hand-to-tool relationship, expression, dry-brush linework, watercolor pigment behavior and internal xuan-paper texture from Image 1.
+Edge requirements: preserve intentional hair tips, dry-brush flyaway marks and watercolor edge detail while keeping the outer silhouette crisp enough for chroma-key removal. Do not use #00ff00 or a visually similar green anywhere inside the character, clothing, tools, props or state accents.
+Constraints: change only the background. Exactly one complete character. No cast shadow, contact shadow, reflection, glow, halo, floor, pedestal, text, pseudo-text, letters, numbers, code, labels, logos, signatures or watermark. Do not redesign, recolor, relight, crop, rescale or reposition the character. Do not add, remove or duplicate any person, limb, garment, tool, prop, state symbol or brush mark belonging to the approved subject.

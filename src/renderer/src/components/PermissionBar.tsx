@@ -2,7 +2,8 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import type { PermissionRequestInfo } from '../../../shared/types'
 
-const GUI_TEMPORARY_GRANT_MESSAGE = 'gui-temporary-grant:5m'
+const GUI_TEMPORARY_GRANT_MESSAGE = 'gui-scoped-grant:5m'
+const TOOL_TEMPORARY_GRANT_MESSAGE = 'tool-scoped-grant:5m'
 const SENSITIVE_INPUT_KEY = /(authorization|cookie|password|secret|token|api[-_]?key|credential)/i
 
 export function formatPermissionInput(input: unknown): string {
@@ -55,6 +56,12 @@ export default function PermissionBar({
               </pre>
             )}
             {req.decisionReason && <div className="permission-reason">{req.decisionReason}</div>}
+            {(req.capabilities?.length ?? 0) > 0 && (
+              <div className="permission-capabilities">
+                <span>{t('permissionRequestCapabilities')}</span>
+                {req.capabilities.map((capability) => <code key={capability}>{capability}</code>)}
+              </div>
+            )}
           </div>
           <div className="permission-actions">
             <button
@@ -63,11 +70,23 @@ export default function PermissionBar({
             >
               {t('allow')}
             </button>
-            {req.toolName.startsWith('gui_') && (
+            {req.guiGrantScope && (
               <button
                 className="btn btn-ghost"
+                title={req.guiGrantScope}
                 onClick={() =>
                   void respondPermission(sessionId, req.requestId, true, GUI_TEMPORARY_GRANT_MESSAGE)
+                }
+              >
+                {t('allowTemporary')}
+              </button>
+            )}
+            {req.toolGrantScope && (
+              <button
+                className="btn btn-ghost"
+                title={req.toolGrantScope}
+                onClick={() =>
+                  void respondPermission(sessionId, req.requestId, true, TOOL_TEMPORARY_GRANT_MESSAGE)
                 }
               >
                 {t('allowTemporary')}

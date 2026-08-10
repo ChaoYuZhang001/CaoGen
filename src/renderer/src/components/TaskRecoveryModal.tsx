@@ -19,6 +19,7 @@ export default function TaskRecoveryModal(): React.JSX.Element | null {
   const modelAttemptReconciliations = useStore((s) => s.modelAttemptReconciliations)
   const loading = useStore((s) => s.taskSnapshotsLoading)
   const error = useStore((s) => s.taskSnapshotsError)
+  const language = useStore((s) => s.settings.language)
   const showTaskRecovery = useStore((s) => s.showTaskRecovery)
   const recoverTaskSnapshot = useStore((s) => s.recoverTaskSnapshot)
   const resolveTaskEffect = useStore((s) => s.resolveTaskEffect)
@@ -35,7 +36,23 @@ export default function TaskRecoveryModal(): React.JSX.Element | null {
       )
   )
 
-  if (!ready || !showTaskRecovery || (recoverable.length === 0 && modelAttemptReconciliations.length === 0)) return null
+  if (!ready || (recoverable.length === 0 && modelAttemptReconciliations.length === 0)) return null
+
+  const labels = language === 'zh'
+    ? {
+        close: '关闭恢复中心',
+        later: '稍后处理',
+        subtitle: `检测到 ${recoverable.length} 个任务快照和 ${modelAttemptReconciliations.length} 个待处置模型请求。`,
+        title: '恢复中心'
+      }
+    : {
+        close: 'Close Recovery Center',
+        later: 'Review later',
+        subtitle: `${recoverable.length} task snapshots and ${modelAttemptReconciliations.length} model requests need review.`,
+        title: 'Recovery Center'
+      }
+
+  if (!showTaskRecovery) return null
 
   const recover = async (snapshot: TaskSnapshotRecord): Promise<void> => {
     setBusyId(snapshot.id)
@@ -85,13 +102,30 @@ export default function TaskRecoveryModal(): React.JSX.Element | null {
   }
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal modal-wide task-recovery-modal">
-        <h2 className="modal-title">恢复未完成任务</h2>
-        <p className="task-recovery-subtitle">
-          检测到 {recoverable.length} 个任务快照和 {modelAttemptReconciliations.length} 个待处置模型请求。
-        </p>
+    <aside
+      className="task-recovery-drawer no-drag"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="task-recovery-title"
+    >
+      <header className="task-recovery-drawer-header">
+        <div>
+          <h2 id="task-recovery-title" className="modal-title">{labels.title}</h2>
+          <p className="task-recovery-subtitle">{labels.subtitle}</p>
+        </div>
+        <button
+          type="button"
+          className="icon-btn task-recovery-drawer-close"
+          aria-label={labels.close}
+          title={labels.close}
+          disabled={busyId !== null}
+          onClick={() => setShowTaskRecovery(false)}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      </header>
 
+      <div className="task-recovery-drawer-body">
         {error && <div className="notice notice-error task-recovery-notice">{error}</div>}
         {loading && <div className="task-recovery-meta">正在刷新恢复候选...</div>}
 
@@ -117,17 +151,17 @@ export default function TaskRecoveryModal(): React.JSX.Element | null {
             />
           ))}
         </div>
-
-        <div className="modal-actions">
-          <button
-            className="btn btn-ghost"
-            disabled={busyId !== null}
-            onClick={() => setShowTaskRecovery(false)}
-          >
-            稍后处理
-          </button>
-        </div>
       </div>
-    </div>
+
+      <footer className="task-recovery-drawer-footer">
+        <button
+          className="btn btn-ghost"
+          disabled={busyId !== null}
+          onClick={() => setShowTaskRecovery(false)}
+        >
+          {labels.later}
+        </button>
+      </footer>
+    </aside>
   )
 }

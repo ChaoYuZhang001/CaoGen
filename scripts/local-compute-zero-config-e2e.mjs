@@ -164,7 +164,8 @@ try {
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 1, `expected one session, got ${sessions.length}`)
     assert(sessions[0].unassigned === true, 'zero-config session unexpectedly requires a Project')
-    assert(sessions[0].cwd.endsWith('/personal-workspace'), `unexpected managed workspace: ${sessions[0].cwd}`)
+    assert(sessions[0].cwd.replaceAll('\\', '/').endsWith('/personal-workspace'),
+      `unexpected managed workspace: ${sessions[0].cwd}`)
     assert(sessions[0].taskStrategy === 'execute', `report preset strategy mismatch: ${sessions[0].taskStrategy}`)
     assert(sessions[0].title === '整理文件成报告', `report preset title mismatch: ${sessions[0].title}`)
   })

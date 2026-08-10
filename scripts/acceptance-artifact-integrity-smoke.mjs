@@ -348,8 +348,14 @@ function materialize(filePath, content, kind) {
   }
   if (kind === 'symlink') {
     const targetPath = `${filePath}.target`
-    writeFileSync(targetPath, content)
-    symlinkSync(targetPath, filePath)
+    if (process.platform === 'win32') {
+      mkdirSync(targetPath, { recursive: true })
+      writeFileSync(path.join(targetPath, 'target.txt'), content)
+      symlinkSync(targetPath, filePath, 'junction')
+    } else {
+      writeFileSync(targetPath, content)
+      symlinkSync(targetPath, filePath)
+    }
     return
   }
   writeFileSync(filePath, content)

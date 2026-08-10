@@ -75,6 +75,15 @@ try {
     }))
   }
   const [alpha, bravo] = fixtures
+  const legacyOperationRun = taskRunFixture('legacy-operation-alpha', 2_500)
+  await snapshotApi.mutateTaskSnapshotDatabase(roots.workflowRoot, (db) => {
+    workflowStore.setupWorkflowLedgerSchema(db)
+    workflowStore.projectTaskRun(db, legacyOperationRun, {
+      projectId: alpha.project.id,
+      source: 'legacy-derived',
+      workItemTitle: 'Historical managed worktree operation'
+    })
+  })
   const service = new aggregateApi.ProjectAggregateService(roots)
   const competingService = new aggregateApi.ProjectAggregateService(roots)
   const initialSealOutcomes = await Promise.allSettled([
@@ -103,6 +112,10 @@ try {
   assertEqual(bravoZero.resources.length, 0, 'bravo starts without a directory or Resource')
   assertCompleteDomain(alphaZero)
   assertCompleteDomain(bravoZero)
+  assert(
+    !alphaZero.workflow.runs.some((run) => run.id === legacyOperationRun.id),
+    'legacy-derived Operation Runs remain auditable without entering the canonical Project aggregate'
+  )
   assert(Number.isSafeInteger(alphaZero.leases[0].fencingToken), 'lease fencing token remains typed aggregate data')
   assert(
     alphaZero.memory.some((memory) => memory.namespace === 'legacy_path'),
@@ -279,6 +292,7 @@ try {
       'memory-ipc-project-id-cutover',
       'memory-identity-survives-path-change',
       'project-workspace-production-mutation-ingress',
+      'legacy-operation-run-does-not-block-canonical-project',
       'digital-worker-production-mutation-ingress',
       'workflow-ledger-production-mutation-ingress',
       'memory-production-mutation-ingress',
@@ -905,6 +919,7 @@ function aggregateRoots(root) {
     workflowRoot: path.join(root, 'workflow'),
     digitalWorkerRoot: path.join(root, 'digital-worker'),
     learningRoot: path.join(root, 'learning'),
+    routineRoot: path.join(root, 'routines'),
     aggregateRoot: path.join(root, 'aggregate'),
     legacyLearningRoots: {
       'project-alpha': [path.join(root, 'legacy-project-alpha')]

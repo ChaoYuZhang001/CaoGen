@@ -5,14 +5,24 @@ import { getSettings } from './settings'
 import { EDIT_TOOLS, executeCodingTool, type ToolExecResult } from './openaiTools'
 import {
   GUI_TEMPORARY_GRANT_MESSAGE,
+  TOOL_TEMPORARY_GRANT_MESSAGE,
   decideGuiPermission,
+  decideToolCapabilityPermission,
   grantTemporaryGuiAutomation,
+  grantTemporaryToolCapability,
+  permissionEffectScope,
+  temporaryGuiGrantScopeLabel,
+  temporaryToolGrantScopeLabel,
+  type ToolCapabilityDecision,
   type GuiPermissionDecision
 } from './permission/permission-manager'
 import { writeSessionAuditLog } from './permission/audit-log'
 import { evaluateToolPermission, type ToolPermissionDecision } from './permission/tool-permission'
+import { classifyToolCapabilities } from './permission/tool-capabilities'
 import { taskRuntimeRegistry, type ToolIdempotencyDecision } from './task/task-runtime-registry'
-import { isDisabledModeInspectionToolCall, isReadOnlyToolCall } from './task/tool-idempotency'
+import { isDisabledModeInspectionToolCall, isReadOnlyToolCall, isSideEffectingToolCall } from './task/tool-idempotency'
+import { buildEffectDescriptor, effectReplayTargetDigest } from './task/effect-reconciler'
+import { describeOfficeArtifactReplayTarget, isOfficeArtifactTool } from './agent/tools/office-artifact'
 import { decideTaskStrategyTool } from './task/task-strategy'
 import { digitalWorkerToolPolicyError } from './digital-worker/tool-action-policy'
 import {
@@ -22,7 +32,14 @@ import {
   prepareEffectExecution,
   type PrepareEffectExecutionInput
 } from './task/effect-runtime'
-import type { AgentEvent, EffectStatus, PermissionRequestInfo, SessionMeta, ToolRiskLevel } from '../shared/types'
+import type {
+  AgentEvent,
+  EffectStatus,
+  PermissionEffectScopeView,
+  PermissionRequestInfo,
+  SessionMeta,
+  ToolRiskLevel
+} from '../shared/types'
 
 export type NativeToolExecutionResult = ToolExecResult & { effectStatus?: EffectStatus }
 export type NativeToolPermissionDecision = { allow: boolean; message?: string }
@@ -40,6 +57,7 @@ type NativeToolPreflightDecision =
       policy: ToolPermissionDecision
       readOnlyCall: boolean
       guiDecision: GuiPermissionDecision
+      toolCapabilityDecision: ToolCapabilityDecision
       idempotency: ToolIdempotencyDecision
     }
 
@@ -63,23 +81,69 @@ export class NativeToolRuntime {
   respondPermission(requestId: string, allow: boolean, message?: string): void {
     const pending = this.pendingPerms.get(requestId)
     if (!pending) return
-    this.pendingPerms.delete(requestId)
+    let resolvedAllow = allow
+    let resolvedMessage = message
     if (allow && message === GUI_TEMPORARY_GRANT_MESSAGE && pending.info.toolName.startsWith('gui_')) {
-      grantTemporaryGuiAutomation()
+      try {
+        grantTemporaryGuiAutomation(
+          this.meta.id,
+          this.meta.cwd,
+          pending.info.toolName,
+          pending.info.input as Record<string, unknown>
+        )
+      } catch (error) {
+        resolvedAllow = false
+        resolvedMessage = error instanceof Error ? error.message : String(error)
+      }
     }
+    if (allow && message === TOOL_TEMPORARY_GRANT_MESSAGE && !pending.info.toolName.startsWith('gui_')) {
+      try {
+        grantTemporaryToolCapability(
+          this.meta.id,
+          this.meta.cwd,
+          pending.info.toolName,
+          pending.info.input as Record<string, unknown>,
+          pending.info.riskLevel,
+          pending.info.effectScope
+        )
+      } catch (error) {
+        resolvedAllow = false
+        resolvedMessage = error instanceof Error ? error.message : String(error)
+      }
+    }
+    this.pendingPerms.delete(requestId)
     writeSessionAuditLog(this.meta, {
-      action: allow ? 'allow' : 'deny',
+      action: resolvedAllow ? 'allow' : 'deny',
       source: 'user',
       toolName: pending.info.toolName,
       input: pending.info.input,
-      message
+      capabilities: pending.info.capabilities,
+      message: resolvedMessage
     })
-    this.emit({ kind: 'permission-resolved', requestId, behavior: allow ? 'allow' : 'deny' })
-    pending.resolve({ allow, message })
+    this.emit({ kind: 'permission-resolved', requestId, behavior: resolvedAllow ? 'allow' : 'deny' })
+    pending.resolve({ allow: resolvedAllow, message: resolvedMessage })
   }
 
   pendingPermissions(): PermissionRequestInfo[] {
     return [...this.pendingPerms.values()].map((pending) => pending.info)
+  }
+
+  async describeSideEffectTarget(
+    name: string,
+    input: Record<string, unknown>
+  ): Promise<{ targetDigest: string } | null> {
+    if (!isSideEffectingToolCall(name, input)) return null
+    if (isOfficeArtifactTool(name)) {
+      const target = await describeOfficeArtifactReplayTarget(input, this.meta.cwd)
+      return { targetDigest: effectReplayTargetDigest(target) }
+    }
+    const descriptor = await buildEffectDescriptor({
+      sessionId: this.meta.id,
+      toolName: name,
+      toolInput: input,
+      cwd: this.meta.cwd
+    })
+    return { targetDigest: effectReplayTargetDigest(descriptor.target) }
   }
 
   rejectAllPending(message: string): void {
@@ -93,11 +157,15 @@ export class NativeToolRuntime {
   async gateTool(
     name: string,
     input: Record<string, unknown>,
-    toolUseId: string
+    toolUseId: string,
+    effectHandle?: EffectExecutionHandle | null
   ): Promise<NativeToolPermissionDecision> {
-    const preflight = this.preflightToolGate(name, input, toolUseId)
+    const effectScope = effectHandle?.target && effectHandle.targetDigest
+      ? permissionEffectScope(effectHandle.target, effectHandle.targetDigest)
+      : undefined
+    const preflight = this.preflightToolGate(name, input, toolUseId, effectHandle?.targetDigest)
     if (!preflight.allow) return preflight
-    const { policy, readOnlyCall, guiDecision, idempotency } = preflight
+    const { policy, readOnlyCall, guiDecision, toolCapabilityDecision, idempotency } = preflight
 
     if (idempotency.kind === 'ask') {
       this.auditGateDecision(
@@ -114,7 +182,10 @@ export class NativeToolRuntime {
         input,
         toolUseId,
         idempotency.reason,
-        idempotency.duplicateExecutionId
+        idempotency.duplicateExecutionId,
+        false,
+        policy.risk.level,
+        effectScope
       )
     }
     if (guiDecision.kind === 'allow') {
@@ -129,7 +200,14 @@ export class NativeToolRuntime {
         policy.risk.level,
         policy.risk.reasons
       )
-      return this.requestToolPermission(name, input, toolUseId, guiDecision.reason)
+      return this.requestToolPermission(name, input, toolUseId, guiDecision.reason, undefined, true, policy.risk.level, effectScope)
+    }
+    if (toolCapabilityDecision.kind === 'allow') {
+      this.auditGateDecision('allow', 'policy', name, input, toolCapabilityDecision.reason,
+        policy.risk.level,
+        policy.risk.reasons
+      )
+      return { allow: true, message: toolCapabilityDecision.reason }
     }
     if (policy.kind === 'allow') {
       writeSessionAuditLog(this.meta, {
@@ -139,12 +217,26 @@ export class NativeToolRuntime {
         input,
         message: policy.reason,
         riskLevel: policy.risk.level,
-        riskReasons: policy.risk.reasons
+        riskReasons: policy.risk.reasons,
+        capabilities: policy.risk.capabilities
       })
       return { allow: true, message: policy.reason }
     }
 
     const mode = this.meta.permissionMode
+    if (mode === 'bypassPermissions' && requiresExplicitApprovalDespiteBypass(name, policy.risk.level)) {
+      const reason = `该 ${policy.risk.level} 风险操作不可被 Full Access 静默放行；${policy.reason}`
+      this.auditGateDecision(
+        'ask',
+        'permission-mode',
+        name,
+        input,
+        reason,
+        policy.risk.level,
+        policy.risk.reasons
+      )
+      return this.requestToolPermission(name, input, toolUseId, reason, undefined, true, policy.risk.level, effectScope)
+    }
     if (mode === 'bypassPermissions') {
       this.auditGateDecision(
         'allow',
@@ -190,13 +282,14 @@ export class NativeToolRuntime {
       policy.risk.level,
       policy.risk.reasons
     )
-    return this.requestToolPermission(name, input, toolUseId, policy.reason)
+    return this.requestToolPermission(name, input, toolUseId, policy.reason, undefined, true, policy.risk.level, effectScope)
   }
 
   preflightToolGate(
     name: string,
     input: Record<string, unknown>,
-    toolUseId: string
+    toolUseId: string,
+    effectTargetDigest?: string
   ): NativeToolPreflightDecision {
     const workerPolicyError = digitalWorkerToolPolicyError(this.meta, name, input, app.getPath('userData'))
     if (workerPolicyError) return { allow: false, message: workerPolicyError }
@@ -210,7 +303,8 @@ export class NativeToolRuntime {
         input,
         message: policy.reason,
         riskLevel: policy.risk.level,
-        riskReasons: policy.risk.reasons
+        riskReasons: policy.risk.reasons,
+        capabilities: policy.risk.capabilities
       })
       return { allow: false, message: policy.reason }
     }
@@ -242,7 +336,10 @@ export class NativeToolRuntime {
       )
       return { allow: false, message: LOCAL_EXECUTION_DISABLED_MESSAGE }
     }
-    const guiDecision = decideGuiPermission(name, settings)
+    const guiDecision = decideGuiPermission(name, input, settings, {
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd
+    })
     if (guiDecision.kind === 'deny') {
       this.auditGateDecision('deny', 'policy', name, input, guiDecision.reason,
         policy.risk.level,
@@ -250,6 +347,11 @@ export class NativeToolRuntime {
       )
       return { allow: false, message: guiDecision.reason }
     }
+    const toolCapabilityDecision = decideToolCapabilityPermission(name, input, {
+      sessionId: this.meta.id,
+      cwd: this.meta.cwd,
+      effectTargetDigest
+    })
     const idempotency = taskRuntimeRegistry.evaluateTool({
       sessionId: this.meta.id,
       cwd: this.meta.cwd,
@@ -269,7 +371,7 @@ export class NativeToolRuntime {
       )
       return { allow: false, message: idempotency.reason }
     }
-    return { allow: true, policy, readOnlyCall, guiDecision, idempotency }
+    return { allow: true, policy, readOnlyCall, guiDecision, toolCapabilityDecision, idempotency }
   }
 
   async executeToolWithPermission(
@@ -335,7 +437,7 @@ export class NativeToolRuntime {
     effectHandle: EffectExecutionHandle
   ): Promise<NativeToolPermissionDecision> {
     try {
-      return await this.gateTool(name, input, toolUseId)
+      return await this.gateTool(name, input, toolUseId, effectHandle)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await cancelEffectExecution(effectHandle, `权限判断异常，未执行:${message}`).catch(() => undefined)
@@ -388,7 +490,16 @@ export class NativeToolRuntime {
     riskLevel: ToolRiskLevel,
     riskReasons: string[]
   ): void {
-    writeSessionAuditLog(this.meta, { action, source, toolName, input, message, riskLevel, riskReasons })
+    writeSessionAuditLog(this.meta, {
+      action,
+      source,
+      toolName,
+      input,
+      message,
+      riskLevel,
+      riskReasons,
+      capabilities: classifyToolCapabilities(toolName, input)
+    })
   }
 
   private requestToolPermission(
@@ -396,7 +507,10 @@ export class NativeToolRuntime {
     input: Record<string, unknown>,
     toolUseId: string,
     decisionReason?: string,
-    duplicateExecutionId?: string
+    duplicateExecutionId?: string,
+    allowTemporaryGrant = true,
+    riskLevel?: ToolRiskLevel,
+    effectScope?: PermissionEffectScopeView
   ): Promise<NativeToolPermissionDecision> {
     const requestId = randomUUID()
     const info: PermissionRequestInfo = {
@@ -405,7 +519,12 @@ export class NativeToolRuntime {
       input,
       toolUseId,
       decisionReason,
-      duplicateExecutionId
+      duplicateExecutionId,
+      riskLevel,
+      capabilities: classifyToolCapabilities(name, input),
+      guiGrantScope: allowTemporaryGrant ? temporaryGuiGrantScopeLabel(name, input) : undefined,
+      toolGrantScope: allowTemporaryGrant ? temporaryToolGrantScopeLabel(name, input, riskLevel, effectScope) : undefined,
+      effectScope
     }
     this.emit({ kind: 'permission-request', request: info })
     return new Promise((resolve) => {
@@ -479,6 +598,7 @@ export class NativeToolRuntime {
       ok: exec.ok,
       riskLevel: executionPolicy.risk.level,
       riskReasons: executionPolicy.risk.reasons,
+      capabilities: executionPolicy.risk.capabilities,
       sandboxMode: exec.sandboxMode,
       modeUsed: exec.modeUsed,
       sandboxed: exec.sandboxed,
@@ -525,4 +645,16 @@ export class NativeToolRuntime {
       }
     }
   }
+}
+
+const NON_BYPASSABLE_TOOLS = new Set([
+  'mcp_call_tool',
+  'git_push',
+  'git_create_issue',
+  'send_notification'
+])
+
+function requiresExplicitApprovalDespiteBypass(name: string, riskLevel: ToolRiskLevel): boolean {
+  return riskLevel === 'critical' || riskLevel === 'high' || NON_BYPASSABLE_TOOLS.has(name) ||
+    name.toLowerCase().startsWith('mcp__')
 }

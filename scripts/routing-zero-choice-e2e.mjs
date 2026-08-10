@@ -253,7 +253,7 @@ try {
     const persisted = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
     assert(persisted, 'welcome draft was not persisted before reload')
     const payload = JSON.parse(persisted)
-    assert(payload.schemaVersion === 1, `unexpected welcome draft schema: ${payload.schemaVersion}`)
+    assert(payload.schemaVersion === 3, `unexpected welcome draft schema: ${payload.schemaVersion}`)
     assert(!persisted.includes('test-only'), 'welcome draft storage leaked the Provider API key')
     assert(!persisted.includes(mock.baseUrl), 'welcome draft storage leaked the Provider Base URL')
 
@@ -318,6 +318,8 @@ try {
     assert(sessions.length === 0, `Provider recreation created ${sessions.length} session(s)`)
     await screenshot(page, '02-expert-provider-recreated')
 
+    await page.click('[data-welcome-routing-mode="global"]')
+    await page.waitForSelector('[data-welcome-routing-mode="global"].active', { visible: true, timeout: 5_000 })
     await clickMode(page, 'assistant')
     await page.waitForFunction(() => document.querySelector('[data-assistant-compute-state]')?.getAttribute('data-compute-available') === 'true')
     await assertAssistantProjection(page)

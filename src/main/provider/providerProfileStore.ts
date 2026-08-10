@@ -12,11 +12,13 @@ import {
   normalizedCustomHeaders,
   normalizedProviderKeys,
   persistedProviders,
+  resolvedProviderCredentialHeaderNames,
   resolveProviderEngine,
   restoreProviderProfileStoreMemory,
   toView
 } from '../providers'
 import { normalizeProviderAuthMode } from './providerAuthMode'
+import { normalizeProviderAdvancedConfig, normalizeProviderAuthorization } from './providerAdvancedConfig'
 import { assertNoDuplicateProviderProfileTargets } from './providerProfile'
 import { mergeProviderPatch, resolveProviderPatchFields } from './providerUpdate'
 
@@ -227,6 +229,7 @@ function providerFromProfileInput(providerId: string, input: ProviderInput): Pro
     baseUrl: fields.baseUrl,
     encryptedToken: '',
     apiKeys: [],
+    credentialRoutingMode: input.credentialRoutingMode ?? 'preferred',
     models: [...input.models],
     authMode: fields.authMode,
     engine: fields.engine,
@@ -235,6 +238,8 @@ function providerFromProfileInput(providerId: string, input: ProviderInput): Pro
     budgetUsd: normalizeBudget(input.budgetUsd),
     openaiProtocol: input.openaiProtocol,
     note: input.note?.trim() || undefined,
+    authorization: normalizeProviderAuthorization(input.authorization),
+    advancedConfig: normalizeProviderAdvancedConfig(input.advancedConfig),
     createdAt: Date.now()
   }
 }
@@ -251,10 +256,17 @@ function providerWithProfileInput(provider: Provider, input: ProviderInput): Pro
   const authMode = normalizeProviderAuthMode(input.authMode ?? provider.authMode, fields.baseUrl, nextEngine)
   const keys = authMode === 'none' ? [] : normalizedProviderKeys(provider)
   const activeKeyId = activeKeyIdFor(provider, keys)
-  return mergeProviderPatch(provider, { ...input, authMode }, fields, keys, activeKeyId, {
+  const next = mergeProviderPatch(provider, { ...input, authMode }, fields, keys, activeKeyId, {
     normalizeBudget,
     resolveProviderEngine
   }, replaceOptionalConfiguration)
+  next.authorization = input.authorization === undefined
+    ? provider.authorization
+    : normalizeProviderAuthorization(input.authorization)
+  next.advancedConfig = input.advancedConfig === undefined
+    ? provider.advancedConfig
+    : normalizeProviderAdvancedConfig(input.advancedConfig)
+  return next
 }
 
 function normalizedProfileFields(input: ProviderInput): {
@@ -266,12 +278,17 @@ function normalizedProfileFields(input: ProviderInput): {
 } {
   const engine = input.engine ?? 'openai'
   const baseUrl = normalizeBaseUrl(input.baseUrl, engine, input.openaiProtocol)
+  const authMode = normalizeProviderAuthMode(input.authMode, baseUrl, engine)
   return {
     baseUrl,
-    authMode: normalizeProviderAuthMode(input.authMode, baseUrl, engine),
+    authMode,
     engine,
     customHeaders: normalizedCustomHeaders(input.customHeaders),
-    credentialHeaderNames: normalizedCredentialHeaderNames(input.credentialHeaderNames)
+    credentialHeaderNames: resolvedProviderCredentialHeaderNames({
+      authMode,
+      engine,
+      credentialHeaderNames: normalizedCredentialHeaderNames(input.credentialHeaderNames)
+    })
   }
 }
 

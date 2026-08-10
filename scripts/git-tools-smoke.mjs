@@ -92,7 +92,13 @@ try {
   assert(sharedReadonlyBlock.includes("'git_status'"), 'git_status should be readonly')
   assert(sharedReadonlyBlock.includes("'git_diff'"), 'git_diff should be readonly')
   assert(!sharedReadonlyBlock.includes("'code_forge_delivery'"), 'code_forge_delivery should not be readonly')
-  assert(openaiToolsSource.includes("export const EDIT_TOOLS = new Set(['write_file', 'search_replace', 'edit_file'])"), 'git tools should not be acceptEdits-only')
+  const editToolsStart = openaiToolsSource.indexOf('export const EDIT_TOOLS = new Set([')
+  const editToolsEnd = openaiToolsSource.indexOf('\n])', editToolsStart)
+  const editToolsBlock = editToolsStart >= 0 && editToolsEnd > editToolsStart
+    ? openaiToolsSource.slice(editToolsStart, editToolsEnd)
+    : ''
+  assert(editToolsBlock.includes("'write_file'") && editToolsBlock.includes("'edit_file'"), 'edit tools should remain acceptEdits-enabled')
+  assert(!editToolsBlock.includes("'git_stage'") && !editToolsBlock.includes("'git_stage_all'"), 'git tools should not be acceptEdits-only')
   assert(permissions.classifyToolRisk('git_stage', { paths: ['a.txt'] }, projectDir).level === 'medium', 'git_stage should be a medium-risk index write')
   const sensitiveStageRisk = permissions.classifyToolRisk('git_stage', { paths: ['src/a.ts', '.env'] }, projectDir)
   assert(sensitiveStageRisk.level === 'high', 'any sensitive git_stage path must raise the request to high risk')
@@ -563,15 +569,15 @@ try {
     '-m',
     'concurrent destination drift'
   ]).trim()
-  const casWatcher = spawn('/bin/sh', ['-c', [
-    'set -eu',
-    `while :; do for candidate in ${JSON.stringify(tmpdir())}/caogen-merge-hooks-${process.pid}-*; do`,
-    '  if [ -d "$candidate" ]; then exit_loop=1; break; fi',
-    'done',
-    '  [ "${exit_loop:-0}" = 1 ] && break',
-    'done',
-    `git -C ${JSON.stringify(destinationCasDir)} update-ref refs/heads/main ${casDriftHead} ${casPreHead}`
-  ].join('\n')], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const casWatcher = spawn(process.execPath, ['-e', [
+    "const { execFileSync } = require('node:child_process')",
+    "const { existsSync, readdirSync } = require('node:fs')",
+    "const path = require('node:path')",
+    'const [tempRootArg, repoArg, driftArg, preArg, parentPid] = process.argv.slice(1)',
+    'const prefix = `caogen-merge-hooks-${parentPid}-`',
+    'const wait = () => new Promise((resolve) => { const timer = setInterval(() => { if (readdirSync(tempRootArg).some((name) => name.startsWith(prefix))) { clearInterval(timer); resolve() } }, 10) })',
+    '(async () => { await wait(); execFileSync(\'git\', [\'-C\', repoArg, \"update-ref\", \"refs/heads/main\", driftArg, preArg], { stdio: \"ignore\" }) })().catch((error) => { console.error(error); process.exitCode = 1 })'
+  ].join(';'), tmpdir(), destinationCasDir, casDriftHead, casPreHead, String(process.pid)], { stdio: ['ignore', 'pipe', 'pipe'] })
   const casMerge = gitHelper.gitMerge(
     destinationCasDir,
     'feature',
@@ -584,6 +590,7 @@ try {
   assert(git(destinationCasDir, ['status', '--porcelain']) === '', 'failed CAS merge must not leave index/worktree changes')
   assert(!existsSync(path.join(destinationCasDir, 'cas-file-0000.txt')), 'failed CAS merge must not expose source files')
 
+  if (process.platform !== 'win32') {
   const semanticDriftDir = path.join(tempRoot, 'merge-semantics-drift')
   initRepo(semanticDriftDir)
   commitFiles(semanticDriftDir, 'semantic drift base', { 'app.txt': 'base one\nshared\nbase three\n' })
@@ -595,7 +602,8 @@ try {
   const semanticWrapperDir = path.join(tempRoot, 'semantic-drift-wrapper')
   mkdirSync(semanticWrapperDir, { recursive: true })
   const semanticDriftMarker = path.join(tempRoot, 'semantic-drift-real-merge-ran.txt')
-  const semanticRealGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
+  const semanticRealGit = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['git'], { encoding: 'utf8' })
+    .split(/\r?\n/).map((line) => line.trim()).find(Boolean)
   writeExecutable(
     semanticWrapperDir,
     'git',
@@ -649,6 +657,7 @@ try {
     readFileSync(path.join(semanticDriftDir, 'app.txt'), 'utf8') === 'base one\nshared\nmain three\n',
     'semantic drift rejection must preserve destination content'
   )
+  }
 
   prepareConflictingMergeRepo(conflictingMergeDir)
   const conflictingPreHead = gitHead(conflictingMergeDir)
@@ -665,11 +674,13 @@ try {
     'conflicting merge-tree preflight must not write unreachable objects into the repository object database'
   )
 
-  const colonMergeDir = path.join(tempRoot, 'repo:colon')
-  prepareFastForwardMergeRepo(colonMergeDir)
-  const colonMerge = gitHelper.gitMerge(colonMergeDir, 'feature')
-  assert(colonMerge.ok, `git_merge must support repository paths containing a colon: ${JSON.stringify(colonMerge)}`)
-  assert(existsSync(path.join(colonMergeDir, 'feature.txt')), 'colon-path merge must materialize the source tree')
+  if (process.platform !== 'win32') {
+    const colonMergeDir = path.join(tempRoot, 'repo:colon')
+    prepareFastForwardMergeRepo(colonMergeDir)
+    const colonMerge = gitHelper.gitMerge(colonMergeDir, 'feature')
+    assert(colonMerge.ok, `git_merge must support repository paths containing a colon: ${JSON.stringify(colonMerge)}`)
+    assert(existsSync(path.join(colonMergeDir, 'feature.txt')), 'colon-path merge must materialize the source tree')
+  }
 
   for (const mergeDriverName of ['caogen-unsafe', 'text']) {
     const unsafeMergeDir = path.join(tempRoot, `unsafe-merge-driver-${mergeDriverName}`)
@@ -793,7 +804,7 @@ try {
   )
   assert(
     readFileSync(path.join(ignoredRenameCollisionDir, 'old.txt'), 'utf8') === 'tracked source\n',
-    'blocked rename collision must preserve the tracked source path'
+    `blocked rename collision must preserve the tracked source path: ${JSON.stringify({ merge: ignoredRenameMerge, files: readdirSync(ignoredRenameCollisionDir), old: readFileSync(path.join(ignoredRenameCollisionDir, 'old.txt'), 'utf8') })}`
   )
 
   const ignoredRaceDir = path.join(tempRoot, 'ignored-collision-race')
@@ -809,7 +820,8 @@ try {
   mkdirSync(ignoredRaceWrapperDir, { recursive: true })
   const ignoredRaceMarker = path.join(tempRoot, 'ignored-race-real-merge-ran.txt')
   const ignoredRaceSecret = path.join(ignoredRaceDir, 'secret.txt')
-  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
+  const realGit = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', ['git'], { encoding: 'utf8' })
+    .split(/\r?\n/).map((line) => line.trim()).find(Boolean)
   writeExecutable(
     ignoredRaceWrapperDir,
     'git',
@@ -905,6 +917,7 @@ try {
 function initRepo(dir) {
   mkdirSync(dir, { recursive: true })
   git(dir, ['init', '-b', 'main'])
+  git(dir, ['config', 'core.autocrlf', 'false'])
   git(dir, ['config', 'user.email', 'smoke@example.test'])
   git(dir, ['config', 'user.name', 'CaoGen Smoke'])
 }

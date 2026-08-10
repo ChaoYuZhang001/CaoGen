@@ -89,6 +89,12 @@ export interface OfficeArtifactPlan {
   mediaType: string
 }
 
+export interface OfficeArtifactReplayTarget {
+  kind: 'office_artifact'
+  rootIdentity: FileSystemIdentity
+  relativePath: string
+}
+
 export interface GeneratedOfficeArtifact {
   path: string
   sha256: string
@@ -101,6 +107,18 @@ export interface GeneratedOfficeArtifact {
 
 export function isOfficeArtifactTool(name: string): name is OfficeArtifactToolName {
   return OFFICE_ARTIFACT_TOOLS.has(name)
+}
+
+export async function describeOfficeArtifactReplayTarget(
+  input: Record<string, unknown>,
+  cwd: string
+): Promise<OfficeArtifactReplayTarget> {
+  const output = await resolveWritableProjectPath(cwd, requiredText(input.path, 'path', 1_024))
+  return {
+    kind: 'office_artifact',
+    rootIdentity: fileSystemIdentity(output.root),
+    relativePath: output.relativePath
+  }
 }
 
 /** Build the immutable Effect target before permission is requested. */

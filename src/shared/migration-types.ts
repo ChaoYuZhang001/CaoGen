@@ -1,4 +1,4 @@
-export type MigrationAssetKind = 'rules' | 'mcp' | 'config' | 'skill' | 'hook'
+export type MigrationAssetKind = 'rules' | 'mcp' | 'config' | 'skill' | 'prompt' | 'usage' | 'hook'
 export type MigrationAssetScope = 'project' | 'user'
 export type MigrationAssetRisk = 'low' | 'review' | 'blocked'
 export type MigrationAssetConflict = 'none' | 'merge' | 'duplicate' | 'replace_required' | 'unsupported'

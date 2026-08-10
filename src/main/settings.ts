@@ -13,18 +13,23 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { normalizeCaoGenDriveMode } from '../shared/types'
+import { migrateLegacyPermissionRules, normalizePermissionRules } from './permission/tool-permission'
 import type {
   AppSettings,
   ModelRoutingRule,
   ModelRoutingTaskKind,
   OfficeQualityMode,
+  PermissionRuleConfig,
+  ProviderCircuitBreakerSettings,
   SchedulerStrategy
 } from '../shared/types'
 
-const SIDEBAR_MIN_WIDTH = 220
-const SIDEBAR_MAX_WIDTH = 420
-const WORKBENCH_SIDE_MIN_WIDTH = 360
-const WORKBENCH_SIDE_MAX_WIDTH = 900
+const SIDEBAR_MIN_WIDTH = 208
+const SIDEBAR_MAX_WIDTH = 360
+const WORKBENCH_SIDE_MIN_WIDTH = 320
+const WORKBENCH_SIDE_MAX_WIDTH = 720
+const WORKBENCH_DOCK_MIN_HEIGHT = 220
+const WORKBENCH_DOCK_MAX_HEIGHT = 520
 const CHAT_SCALE_MIN = 0.85
 const CHAT_SCALE_MAX = 1.25
 const SETTINGS_SCHEMA_VERSION = 1
@@ -73,8 +78,15 @@ const DEFAULTS: AppSettings = {
   budgetUsdPerSession: 0,
   budgetUsdPerMonth: 0,
   failoverEnabled: true,
+  providerCircuitBreaker: {
+    failureThreshold: 4,
+    successThreshold: 2,
+    timeoutSeconds: 60,
+    errorRateThreshold: 0.6,
+    minRequests: 10
+  },
   language: 'zh',
-  theme: 'dark',
+  theme: 'light',
   persona: '',
   allowedTools: '',
   disallowedTools: '',
@@ -85,20 +97,20 @@ const DEFAULTS: AppSettings = {
   permissionAllowlist: '',
   permissionDenylist: '',
   permissionTemporaryAllowlist: '',
+  permissionRulesVersion: 2,
+  permissionRules: [],
   guiAutomationEnabled: false,
   guiAutomationTemporaryGrantUntil: 0,
   notificationsEnabled: true,
   preventDisplaySleep: true,
-  ideBridgeEnabled: false,
-  ideBridgeHost: '127.0.0.1',
-  ideBridgePort: 17365,
-  ideBridgeToken: '',
   autoSkillLearningEnabled: false,
   office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
   layout: {
+    sidebarDesignVersion: 2,
     sidebarCollapsed: false,
-    sidebarWidth: 264,
-    workbenchSideWidth: 560,
+    sidebarWidth: 228,
+    workbenchSideWidth: 400,
+    workbenchDockHeight: 340,
     chatScale: 1,
     chatDensity: 'comfortable'
   }
@@ -116,15 +128,25 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number,
 
 function normalizeLayout(raw: unknown): AppSettings['layout'] {
   const layout = raw && typeof raw === 'object' ? (raw as Partial<AppSettings['layout']>) : {}
+  const sidebarWidth = layout.sidebarDesignVersion === 2
+    ? layout.sidebarWidth
+    : layout.sidebarWidth === 264 ? DEFAULTS.layout.sidebarWidth : layout.sidebarWidth
   return {
+    sidebarDesignVersion: 2,
     sidebarCollapsed:
       typeof layout.sidebarCollapsed === 'boolean' ? layout.sidebarCollapsed : DEFAULTS.layout.sidebarCollapsed,
-    sidebarWidth: clampNumber(layout.sidebarWidth, DEFAULTS.layout.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+    sidebarWidth: clampNumber(sidebarWidth, DEFAULTS.layout.sidebarWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
     workbenchSideWidth: clampNumber(
       layout.workbenchSideWidth,
       DEFAULTS.layout.workbenchSideWidth,
       WORKBENCH_SIDE_MIN_WIDTH,
       WORKBENCH_SIDE_MAX_WIDTH
+    ),
+    workbenchDockHeight: clampNumber(
+      layout.workbenchDockHeight,
+      DEFAULTS.layout.workbenchDockHeight,
+      WORKBENCH_DOCK_MIN_HEIGHT,
+      WORKBENCH_DOCK_MAX_HEIGHT
     ),
     chatScale: clampNumber(layout.chatScale, DEFAULTS.layout.chatScale, CHAT_SCALE_MIN, CHAT_SCALE_MAX, 2),
     chatDensity: layout.chatDensity === 'compact' ? 'compact' : 'comfortable'
@@ -147,6 +169,29 @@ function normalizeOffice(raw: unknown, fallback: AppSettings['office']): AppSett
 
 function normalizeSchedulerStrategy(raw: unknown, fallback: SchedulerStrategy): SchedulerStrategy {
   return raw === 'quality' || raw === 'cost' || raw === 'speed' || raw === 'balanced' ? raw : fallback
+}
+
+function normalizeProviderCircuitBreaker(
+  raw: unknown,
+  fallback: ProviderCircuitBreakerSettings
+): ProviderCircuitBreakerSettings {
+  const value = raw && typeof raw === 'object' ? raw as Partial<ProviderCircuitBreakerSettings> : {}
+  return {
+    failureThreshold: clampNumber(value.failureThreshold, fallback.failureThreshold, 1, 20),
+    successThreshold: clampNumber(value.successThreshold, fallback.successThreshold, 1, 10),
+    timeoutSeconds: clampNumber(value.timeoutSeconds, fallback.timeoutSeconds, 0, 300),
+    errorRateThreshold: clampNumber(value.errorRateThreshold, fallback.errorRateThreshold, 0.01, 1, 2),
+    minRequests: clampNumber(value.minRequests, fallback.minRequests, 1, 100)
+  }
+}
+
+function mergePermissionRules(
+  current: PermissionRuleConfig[],
+  incoming: PermissionRuleConfig[]
+): PermissionRuleConfig[] {
+  const byId = new Map(current.map((rule) => [rule.id, rule]))
+  for (const rule of incoming) byId.set(rule.id, rule)
+  return normalizePermissionRules([...byId.values()])
 }
 
 function normalizeSandboxMode(raw: unknown): AppSettings['sandboxMode'] {
@@ -230,18 +275,45 @@ export function getSettings(): AppSettings {
       sandboxMode: normalizeSandboxMode(sandboxMode),
       schedulerStrategy: normalizeSchedulerStrategy(raw.schedulerStrategy, DEFAULTS.schedulerStrategy),
       modelRoutingRules: normalizeModelRoutingRules(raw.modelRoutingRules),
+      providerCircuitBreaker: normalizeProviderCircuitBreaker(
+        raw.providerCircuitBreaker,
+        DEFAULTS.providerCircuitBreaker
+      ),
+      permissionAllowlist: '',
+      permissionDenylist: '',
+      permissionTemporaryAllowlist: '',
+      allowedTools: '',
+      disallowedTools: '',
+      permissionRulesVersion: 2,
+      permissionRules: mergePermissionRules(
+        normalizePermissionRules(raw.permissionRules, false),
+        migrateLegacyPermissionRules(raw)
+      ),
+      // Legacy global grants are invalidated during migration. Scoped GUI grants
+      // are runtime capabilities and are never persisted in settings.json.
+      guiAutomationTemporaryGrantUntil: 0,
       office: normalizeOffice(raw.office, DEFAULTS.office),
       layout: normalizeLayout(raw.layout)
     }
   } catch (error) {
     if (error instanceof UnsupportedSettingsSchemaError) throw error
-    cache = { ...DEFAULTS, office: { ...DEFAULTS.office }, layout: { ...DEFAULTS.layout } }
+    cache = {
+      ...DEFAULTS,
+      providerCircuitBreaker: { ...DEFAULTS.providerCircuitBreaker },
+      office: { ...DEFAULTS.office },
+      layout: { ...DEFAULTS.layout }
+    }
   }
   return cache
 }
 
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const prev = getSettings()
+  const migratedLegacyRules = migrateLegacyPermissionRules(patch)
+  const permissionRules = mergePermissionRules(
+    patch.permissionRules === undefined ? prev.permissionRules : normalizePermissionRules(patch.permissionRules),
+    migratedLegacyRules
+  )
   const next = {
     ...prev,
     ...patch,
@@ -253,6 +325,18 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
         : normalizeSchedulerStrategy(patch.schedulerStrategy, prev.schedulerStrategy),
     modelRoutingRules:
       patch.modelRoutingRules === undefined ? prev.modelRoutingRules : normalizeModelRoutingRules(patch.modelRoutingRules),
+    providerCircuitBreaker: normalizeProviderCircuitBreaker(
+      patch.providerCircuitBreaker,
+      prev.providerCircuitBreaker
+    ),
+    allowedTools: '',
+    disallowedTools: '',
+    permissionAllowlist: '',
+    permissionDenylist: '',
+    permissionTemporaryAllowlist: '',
+    permissionRulesVersion: 2 as const,
+    permissionRules,
+    guiAutomationTemporaryGrantUntil: 0,
     office: normalizeOffice(patch.office, prev.office),
     layout: normalizeLayout({ ...prev.layout, ...(patch.layout ?? {}) })
   }

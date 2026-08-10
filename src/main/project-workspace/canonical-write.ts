@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import type { Goal, ProjectWorkspaceState, WorkItem } from '../../shared/project-workspace-types'
 import { canonicalJson, digest } from './codec'
 import {
@@ -400,7 +400,7 @@ function parseJournal(path: string, raw: string): CanonicalWriteJournal {
   let value: unknown
   try { value = JSON.parse(raw) } catch (error) { throw new ProjectWorkspaceError('canonical_write_journal_invalid', `cannot parse ${path}: ${String(error)}`) }
   if (!isRecord(value) || value.schemaVersion !== 1 || value.format !== CANONICAL_WRITE_FORMAT || typeof value.operationId !== 'string' ||
-      path.split('/').at(-1) !== `${value.operationId}.json` || !isRecord(value.mutation) || !isRecord(value.before) ||
+      basename(path) !== `${value.operationId}.json` || !isRecord(value.mutation) || !isRecord(value.before) ||
       !['prepared', 'canonical_committed', 'projection_committed', 'aborted'].includes(String(value.state))) {
     throw new ProjectWorkspaceError('canonical_write_journal_invalid', `invalid canonical write journal ${path}`)
   }

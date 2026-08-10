@@ -1,25 +1,61 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import type { StudioResultSnapshot } from '../../../shared/studio-result-types'
 import { deriveDeliveryVerdict, canMarkGoalComplete } from './delivery-verdict.ts'
 
-type Snap = {
-  acceptances: Array<{ status: string }>
-  runs?: Array<{ status: string }>
-  goal?: { status: string }
+type AcceptanceStub = Pick<StudioResultSnapshot['acceptances'][number], 'status'>
+type RunStub = Pick<StudioResultSnapshot['runs'][number], 'status'>
+type GoalStub = Pick<NonNullable<StudioResultSnapshot['goal']>, 'status'>
+type SnapshotOverrides = {
+  acceptances?: AcceptanceStub[]
+  runs?: RunStub[]
+  goal?: GoalStub
 }
 
-function makeSnapshot(over: Partial<Snap> = {}): any {
+function makeSnapshot(over: SnapshotOverrides = {}): StudioResultSnapshot {
+  const acceptances = (over.acceptances ?? []).map((acceptance, index) => ({
+    id: `acceptance-${index}`,
+    status: acceptance.status,
+    criteria: [],
+    coveredCriteria: 0,
+    evidenceRefs: [],
+    revision: 1,
+    updatedAt: 0
+  }))
+  const runs = (over.runs ?? []).map((run, index) => ({
+    id: `run-${index}`,
+    sessionId: 's',
+    workItemId: 'work-item',
+    status: run.status,
+    attempt: 1,
+    revision: 1,
+    createdAt: 0,
+    updatedAt: 0,
+    taskRunDigest: ''
+  }))
+  const goal = over.goal
+    ? {
+        id: 'goal',
+        title: 'Goal',
+        objective: 'Verify delivery verdict',
+        status: over.goal.status,
+        riskLevel: 'low' as const,
+        constraints: [],
+        successCriteria: [],
+        revision: 1
+      }
+    : undefined
   return {
     schemaVersion: 1,
     format: 'caogen.studio-result.v1',
     state: 'ready',
     generatedAt: 0,
-    scope: { sessionId: 's' },
+    scope: { sessionId: 's', level: 'conversation' },
     workItems: [],
-    runs: [],
+    runs,
     artifacts: [],
     evidence: [],
-    acceptances: [],
+    acceptances,
     tests: [],
     risks: [],
     openItems: [],
@@ -31,7 +67,7 @@ function makeSnapshot(over: Partial<Snap> = {}): any {
       passedAcceptances: 0, tests: 0, changes: 0, openItems: 0, approvals: 0, risks: 0
     },
     verification: { canonicalAggregateVerified: true, sanitized: true as const, resultDigest: '' },
-    ...over
+    goal
   }
 }
 

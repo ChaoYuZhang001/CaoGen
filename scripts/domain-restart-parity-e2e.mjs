@@ -427,7 +427,7 @@ async function runCrashWorker(payload) {
   assert(state.supervisor.lease)
   assert.equal(state.executionCount, 1)
   process.send?.({ kind: 'domain-restart-barrier', state })
-  await new Promise(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 60_000))
 }
 
 async function runRestartProbe(payload) {

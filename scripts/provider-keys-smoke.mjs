@@ -17,6 +17,7 @@ const dagDecomposer = read('src/main/agent/model-dag-decomposer.ts')
 const providerRuntimeAuth = read('src/main/providerRuntimeAuth.ts')
 const providerBaseUrl = read('src/main/provider/providerBaseUrl.ts')
 const providerUpdate = read('src/main/provider/providerUpdate.ts')
+const providerKeyRecords = read('src/main/provider/providerKeyRecords.ts')
 
 assert(!/from\s+['"]electron['"]/.test(brokerSource), 'credential broker must not import Electron')
 assert(!/return\s+[`'"]b64:/.test(brokerSource), 'credential broker must never write b64 records')
@@ -61,8 +62,8 @@ staticAssert(
 )
 
 staticAssert(
-  providers.includes('function normalizedProviderKeys'),
-  'providers.ts must normalize legacy and multi-key storage'
+  providerKeyRecords.includes('function normalizedProviderKeys'),
+  'Provider key records must normalize legacy and multi-key storage'
 )
 staticAssert(
   providers.includes('export function decryptProviderToken'),
@@ -73,7 +74,7 @@ staticAssert(
   'providers.ts must support automatic key rotation'
 )
 staticAssert(
-  providers.includes('legacyKeyId(provider.id)'),
+  providerKeyRecords.includes('legacyKeyId(provider.id)'),
   'legacy encryptedToken must migrate into a deterministic key view'
 )
 staticAssert(providers.includes('apiKeys,'), 'create/update provider path must persist apiKeys')
@@ -125,6 +126,16 @@ staticAssert(
 staticAssert(
   providerCredentialHeaders.includes('names.push(normalized)'),
   'managed credential header names must be case-normalized to avoid duplicate HTTP headers'
+)
+staticAssert(
+  providerCredentialHeaders.includes('export function resolvedProviderCredentialHeaderNames')
+    && providerCredentialHeaders.includes("provider?.engine === 'anthropic' ? 'x-api-key' : 'authorization'"),
+  'API-key Providers must have engine-aware managed credential-header defaults'
+)
+staticAssert(
+  providers.includes('withDefaultProviderCredentialHeaders')
+    && providers.includes('resolvedProviderCredentialHeaderNames(provider)'),
+  'legacy Provider records must persist engine-aware credential-header defaults during load migration'
 )
 staticAssert(
   providers.includes('sanitize: sanitizeLoadedProvidersForRuntime')
@@ -182,6 +193,11 @@ staticAssert(
   'ProviderEditor must configure managed credential header names without secret values'
 )
 staticAssert(
+  editor.includes('defaultCredentialHeaderName(provider?.engine')
+    && editor.includes('handleEngineChange(e.target.value as EngineKind)'),
+  'ProviderEditor must initialize and maintain engine-aware credential-header defaults'
+)
+staticAssert(
   editor.includes('handleAuthModeChange')
     && editor.includes("setToken('')")
     && editor.includes('setTokenTouched(false)')
@@ -197,10 +213,10 @@ staticAssert(
   'ProviderEditor must confirm stored-key deletion and omit credential fields in no-auth mode'
 )
 staticAssert(
-  openaiEngine.includes("import { mergeProviderCredentialHeaders } from './providerRuntimeAuth'")
-    && openaiEngine.includes('mergeProviderCredentialHeaders(provider, selection.token')
+  openaiEngine.includes('fetchWithProviderCredentialLease,')
+    && openaiEngine.includes('return fetchWithProviderCredentialLease({')
     && providerRuntimeAuth.includes('providerCredentialHeaders(provider, token)'),
-  'OpenAI requests must receive Broker-managed credential headers'
+  'OpenAI requests must redeem Broker-managed credential headers through a scoped lease'
 )
 staticAssert(
   !providerRuntimeAuth.includes('ANTHROPIC_CUSTOM_HEADERS')
@@ -506,6 +522,14 @@ function runProviderHeaderPolicyChecks({
   assert(isAllowedProviderCustomHeaderName('Helicone-Property-Session'), 'Helicone metadata must be allowed')
   assert(isAllowedProviderCustomHeaderName('X-Debug-Mode'), 'debug metadata must be allowed')
   assert(isAllowedProviderCustomHeaderName('X-RapidAPI-Host'), 'RapidAPI host metadata must be allowed')
+  for (const name of [
+    'Copilot-Integration-Id',
+    'Editor-Version',
+    'Editor-Plugin-Version',
+    'X-GitHub-Api-Version'
+  ]) {
+    assert(isAllowedProviderCustomHeaderName(name), `${name} Copilot routing metadata must be allowed`)
+  }
   assert(!isAllowedProviderCustomHeaderName('X-License'), 'unknown custom headers must fail closed')
   for (const name of [
     'Authorization',

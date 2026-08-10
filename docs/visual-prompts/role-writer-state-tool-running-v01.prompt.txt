@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Writer anchor and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Writer actively using the real writing tools in the tool-running state.
+Action: the left hand securely supports both blank manuscript sheets; the right hand brings the same modern pen just above the top sheet in a precise active writing posture; the gaze follows the pen point. The sheets stay blank with no visible marks. Add only two short restrained directional ink strokes near the pen hand, outside the paper, not a floating interface.
+State readability: active writing must remain distinguishable at 96 pixels through the pen-to-page relationship, focused gaze and both-hand action, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, hair, glasses, age, body proportions, indigo jacket, white shirt, charcoal trousers, shoes, pen, two sheets, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and restrained focused expression required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, handwriting, labels, logos or watermark. Manuscript pages remain completely blank.
+Avoid: redesign, extra people, duplicate pen or pages, floating props, feather quill, holograms, decorative UI, glow, cyberpunk, malformed hands, cropped anatomy or style drift.

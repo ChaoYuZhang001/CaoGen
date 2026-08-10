@@ -1,49 +1,50 @@
 .app-mode-bar {
   z-index: 12;
-  display: grid;
-  flex: 0 0 46px;
-  place-items: center;
+  display: block;
+  flex: 0 0 auto;
   width: 100%;
   min-width: 0;
-  min-height: 46px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-raised);
+  min-height: 0;
+  padding: 4px 0 3px;
+  border-bottom: 0;
+  background: transparent;
 }
 
 .app-mode-switcher {
   display: grid;
-  grid-template-columns: repeat(2, minmax(88px, 1fr));
-  width: min(224px, calc(100% - 24px));
-  min-height: 34px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  min-height: 30px;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
 }
 
 .app-mode-switcher button {
   min-width: 0;
-  min-height: 28px;
+  min-height: 30px;
   border: 0;
   border-radius: 5px;
   color: var(--text-dim);
   background: transparent;
   font: inherit;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   letter-spacing: 0;
   cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, transform 110ms ease-out;
 }
 
-.app-mode-switcher button:hover {
-  color: var(--text);
-  background: var(--accent-soft);
+.app-mode-switcher button:active {
+  transform: scale(0.97);
 }
 
 .app-mode-switcher button.active {
   color: var(--text);
   background: var(--bg-card);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
+  box-shadow: none;
 }
 
 .app-mode-switcher button:focus-visible {
@@ -199,11 +200,11 @@
 
 @media (max-width: 720px) {
   .app-mode-bar {
-    padding-left: 46px;
+    padding: 8px 0 4px;
   }
 
   .app-mode-switcher {
-    width: min(196px, calc(100% - 16px));
+    width: 100%;
   }
 
   .studio-projection-tabs {
@@ -214,5 +215,12 @@
   .assistant-start-notice {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .app-mode-switcher button:hover {
+    color: var(--text);
+    background: var(--accent-soft);
   }
 }

@@ -87,7 +87,7 @@ await check('windows controller uses UI Automation for top-level windows', () =>
 
 await check('windows controller has Win32 activation and input primitives', () => {
   const text = source('src/main/gui/windows-controller.ts')
-  for (const marker of ['SetForegroundWindow', 'BringWindowToTop', 'SetCursorPos', 'mouse_event', 'keybd_event']) {
+  for (const marker of ['SetForegroundWindow', 'BringWindowToTop', 'SetCursorPos', 'mouse_event', 'keybd_event', 'SendCloseMessage', 'win32-wm-close']) {
     assert(text.includes(marker), `missing ${marker}`)
   }
 })
@@ -123,12 +123,38 @@ await check('windows controller exposes UI Automation element discovery', () => 
 
 await check('gui controller routes Windows before nut.js fallback', () => {
   const text = source('src/main/gui/gui-controller.ts')
-  for (const marker of ['windowsListWindows(input)', 'windowsActivateWindow(input)', 'windowsClick(input)', 'windowsTypeText(input)', 'windowsScroll(input)', 'windowsHotkey(keys)']) {
+  for (const marker of ['windowsListWindows(input)', 'windowsActivateWindow(input)', 'windowsClick(input)', 'windowsTypeText(input)', 'windowsScroll(input)', 'windowsHotkey(input)']) {
     assert(text.includes(marker), `missing Windows route ${marker}`)
   }
   assert(
     text.indexOf('windowsClick(input)') < text.indexOf('nutClick(input.x, input.y, input.button)'),
     'Windows click path must run before nut.js fallback'
+  )
+})
+
+await check('GUI mutation tools expose fail-closed postcondition verification', () => {
+  const toolsText = source('src/main/agent/tools/gui-tools.ts')
+  const postconditionText = source('src/main/gui/gui-postcondition.ts')
+  const openaiToolsText = source('src/main/openaiTools.ts')
+  assert(
+    (toolsText.match(/postcondition: GUI_POSTCONDITION_SCHEMA/g) ?? []).length === 5,
+    'all five GUI mutation schemas must expose postcondition'
+  )
+  for (const marker of [
+    'additionalProperties: false',
+    'normalizeGuiPostcondition(args.postcondition)',
+    'verifyGuiPostcondition(',
+    "verification: { status: 'not_requested' }",
+    "verification: { status: 'not_run', reason: 'action_failed' }"
+  ]) {
+    assert(toolsText.includes(marker), `missing GUI verification contract ${marker}`)
+  }
+  for (const marker of ['timeoutMs', '5_000', 'includeElements', 'signal?.aborted']) {
+    assert(postconditionText.includes(marker), `missing postcondition runtime contract ${marker}`)
+  }
+  assert(
+    openaiToolsText.includes('executeGuiTool(name, args, cwd, options.signal)'),
+    'GUI verification must receive tool cancellation signal'
   )
 })
 

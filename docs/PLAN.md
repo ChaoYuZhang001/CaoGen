@@ -9,7 +9,7 @@
 > [`docs/WORKOS-REFACTOR-MASTER-PLAN.md`](./WORKOS-REFACTOR-MASTER-PLAN.md)；该文档从属于本计划。
 
 - 制定日期:2026-07-23
-- 最近校正:2026-07-30(外部 Effect 批次与“集中开发、统一测试”节奏)
+- 最近校正:2026-08-08(增加 post-1.0 AI 视频工作室目标与分阶段计划)
 - 状态:已生效
 - 决策人:创始人
 
@@ -65,6 +65,29 @@ DigitalWorker。
 - 不复制 Jira / HR / CRM / ERP / Office / 聊天 / 会议产品
 - 不用随机动画伪造工作状态
 - 不以隐藏模型差价或强制特定厂商作为收入来源
+
+### 1.4 AI 视频工作室扩展目标(post-1.0,不改变 1.0 完成定义)
+
+**目标:**在 CaoGen 的 Project / Goal / WorkItem / Run / Artifact / Evidence /
+Acceptance 主链上增加厂商中立、可恢复、可审计的 AI 视频工作室。用户可从小说或剧本开始，
+管理角色、场景、道具和声线，形成 Episode / Scene / Shot，生成分镜、关键帧、视频、配音和
+字幕，并通过本地合成导出可追溯成片。
+
+该目标扩展 Agent Work OS 的创作交付范围，不把 CaoGen 改造成只服务短剧的垂直产品，也不
+纳入当前 64 个 P0、M4 1.0 Beta 或 M5 1.0 Stable 的完成定义。正式开发顺序和门禁见 §10。
+
+实现必须遵守以下边界：
+
+- Media Provider 与现有 OpenAI/Anthropic 对话 Engine 分离；图片、视频、TTS 和本地合成以
+  capability Adapter 接入，不能把异步媒体任务伪装成聊天会话。
+- 单次外部生成使用独立、持久的 MediaJob；TaskRun 监督业务流程，MediaJob 保存外部 job ID、
+  幂等键、轮询状态、成本、输出摘要和对账结果。
+- 大文件采用流式下载、增量 SHA-256、受控本地存储和 Range 预览；Renderer 不持有无上限
+  视频或音频二进制副本。
+- 第三方项目只用于事实核验、产品对标和架构研究。未取得兼容许可证或书面商业授权时，
+  不复制其源码、提示词、素材或受保护的界面表达；CaoGen 核心采用 clean-room 实现。
+- 不自研基础视频模型，不强制单一生成厂商，不把用户素材或 Provider Key 上传到 CaoGen
+  自有服务，不把“已提交生成任务”显示为“已生成成片”。
 
 ---
 
@@ -189,8 +212,9 @@ README、官网、STATUS 三处必须一致:
   - [x] `CaoGen-Website@e5be292` 已推送 `main`；中文/英文首页均包含原生 MP4 播放器、poster、下载入口与移动端单列布局，官网 `npm run check` 全部通过
   - [x] 生产 `https://caogen.dev/`、`https://caogen.dev/en/` 已出现 `#demo`；`https://caogen.dev/demo/caogen-website-demo.mp4` 返回 `200 video/mp4`，3,369,296 B，SHA-256 `bdb93198b35db545a6af0fd5530b0eb598eb4c5680085f48e3b88810711a553f`
 - [ ] M2-T6 零配置试用路径——新用户在掏自己 key 之前,先能 60 秒看到产品真能干活:内置一键接本地 Ollama 预设,或一个试用额度入口。BYOK 仍是默认,只是不让它当冷启动的墙。**先给价值,再要承诺。**〔借鉴 WorkBuddy「开箱即用」,属 onboarding 打磨,不算新愿景功能〕
-  - [x] 本地算力自动发现增量：首次进入 Assistant 会自动探测仅限固定 loopback 地址的 Ollama（`127.0.0.1:11434`）、LM Studio（`127.0.0.1:1234`）和 vLLM（`127.0.0.1:8000`），发现后自动激活，不扫描局域网、不要求 API Key、不发送 `Authorization`，也不要求先创建 Project；设置页仍提供“使用本机模型”作为可见恢复入口。无鉴权只允许 loopback OpenAI-compatible Provider，远端无鉴权配置 fail-closed，重复发现不会创建重复 Provider。当前 dirty worktree 的真实 Electron required gate `5/5` 通过，并覆盖 `360px` 无横向溢出（`test-results/local-compute-zero-config/2026-07-29T05-28-17-080Z/report.json`）；零选择路由 required gate `7/7` 通过（`test-results/routing-zero-choice/2026-07-29T05-30-38-811Z/report.json`）。
-  - [ ] 完整零前置试用仍开放：机器上没有已安装且正在运行的兼容本地服务、也没有用户 Key 时，仍缺可执行的试用算力；在该路径补齐并完成真人 60 秒首任务前，M2-T6 不关闭，也不宣称所有新用户均可零前置启动。
+  - [x] 本地算力自动发现增量：首次进入 Assistant 会自动探测仅限固定 loopback 地址的 Ollama（`127.0.0.1:11434`）、LM Studio（`127.0.0.1:1234`）和 vLLM（`127.0.0.1:8000`），发现后自动激活，不扫描局域网、不要求 API Key、不发送 `Authorization`，也不要求先创建 Project；设置页仍提供“使用本机模型”作为可见恢复入口。无鉴权只允许 loopback OpenAI-compatible Provider，远端无鉴权配置 fail-closed，重复发现不会创建重复 Provider。最新 dirty worktree 真实 Electron gate 为 `6/6`（`test-results/local-compute-zero-config/2026-08-10T11-54-49-146Z/report.json`），继续覆盖真实 Router/stream、模型选择、重复提交和 `360px` 无横向溢出；零选择路由为 `12/12`（`test-results/routing-zero-choice/2026-08-10T11-54-49-145Z`）。
+  - [x] 已安装但未启动的恢复增量：自动首屏探测保持只读；用户发送首任务、重新检查或在设置中选择本机模型时，CaoGen 才会在 Windows/macOS/Linux 的受限已知位置和 `PATH` 中定位 Ollama，并以无 Shell、隐藏窗口方式启动，最多等待 8 秒后继续原任务。缺运行时、启动失败、服务无模型分别返回有界状态；Assistant 保持非技术文案和草稿，设置页保留精确恢复信息。真实 Electron `2/2` 证明缺运行时为零 Provider/零 Session、草稿保留且 360px 无溢出，以及停服后自动启动只产生一个无 `Authorization` 请求、一个 Provider、一个 Session（`test-results/local-compute-runtime-recovery/2026-08-10T11-54-49-144Z/report.json`）。
+  - [ ] 完整零前置试用仍开放：机器上完全没有兼容本地运行时、也没有用户 Key 时，当前提供安装入口但仍缺可立即执行的试用算力；在该路径补齐并完成真人 60 秒首任务前，M2-T6 不关闭，也不宣称所有新用户均可零前置启动。
 - [x] M2-T7 3-5 个开箱即用预设任务——杀掉空白页:如「读懂这个项目」「审查我的改动」「把这批文件整理成报告」,一键起步。只做预设模板,不做完整数字员工招聘系统〔借鉴 WorkBuddy Expert,扩展 M2-T2 的"首个任务模板"〕
   - [x] Assistant 首屏提供“读懂这个项目”“审查当前改动”“整理文件成报告”“规划复杂任务”四个预设任务，覆盖代码与办公场景；预设分别绑定 `view / execute / plan` 策略。按 D0 架构，“读懂项目”在没有真实目录时只填入原始 prompt 并聚焦输入框，用户确认后提交；其余三个预设点击直接创建“对话”并发送，不要求 Project。结构化 Prompt 明确输出、来源引用、不可臆测和无输入时的恢复方式；报告预设保留原文件并生成/增量更新 `CaoGen-report.md`。同步提交锁阻止双击生成重复 Session/请求。历史真实 Electron gate `5/5` 证明四预设清单/策略、报告请求、报告预设无 Project 双击仅一个 Session/模型请求，以及 `1320x860 / 360x520` 无横向溢出且移动端 Composer 同屏可达；它没有逐个点击执行另外三个预设（`test-results/local-compute-zero-config/2026-07-29T05-28-17-080Z/report.json`）。
 - [ ] M2-T8 用首批真人任务验证统一结果工作台:至少覆盖一个代码交付和一个 Office 成品任务,用户能在一个入口找到产物、工作区文件、变更、预览、Evidence 和导出;本阶段优先修断点,不扩建连接器市场
@@ -203,6 +227,9 @@ README、官网、STATUS 三处必须一致:
   - [x] 产品实现、持久 journal 与无 GUI 自动化证据：无凭据导出，导入前展示 Base URL/协议/目标/冲突并允许逐项新建/更新/跳过，凭据字段忽略；只有目标绑定身份未变化时才保留 Broker 凭据，Base URL、引擎、协议、自定义路由头或凭据头变化会进入 `credentialMigrationRequired` 隔离，显式替换凭据后才重绑。新 Provider 不携带 Key；`authMode:none` 仅允许 IPv4/IPv6 loopback，保存、模型发现和运行均不发送凭据，切换时清除 Broker/磁盘 Key，编辑器清空隐藏草稿并对已有 Key 永久删除确认。应用前生成脱敏私密备份，一键回滚前再备份；跨进程 mutation lock、锁内 CAS 和 fsync/rename 持久边界阻止旁路写入。schema v2 operation journal 绑定前后 Store digest 以及 safety/source backup ID + digest，以 `prepared / waiting_reconciliation / committed / aborted` 对 import/rollback 分类，不自动 replay。最新 `135/135` smoke 新增活动 Key 标签/数量与目标凭据绑定变化断言，并保留文件、凭据、备份、journal malformed/篡改/symlink/超限及 backup 文件名/内嵌 ID 不一致拒绝（`test-results/provider-profile-smoke/2026-07-31T18-36-07-764Z/report.json`）。`13/13` 真实跨进程/`SIGKILL` gate 继续覆盖存活 owner 的 `LOCK_HELD` 竞争、失败 candidate 清理、同进程可重入、正常释放竞争、import/rollback 两个 checkpoint、死锁回收、重复恢复字节稳定、同进程对账收敛和 6 类 pending writer 阻断（`test-results/provider-profile-restart/2026-07-31T18-36-15-308Z/report.json`）。该 restart gate 还证明 safety/source backup 在 Store commit 前和 terminal 前复核 ID/digest，prepare 后或 Store commit 后篡改均 fail-closed；恢复冻结字节后才收敛并重新开放普通写入。Provider Profile Service、operation journal、mutation lock 与 Store repository 已进入 durable writer inventory；最新 dirty inventory `test-results/durable-write-inventory/2026-08-03T14-22-17-696Z/report.json` 通过 `13/13`、登记 76 个模块和 432 个 sink call，Permission Audit 与 Conversation Ledger 均已转为 `implemented_unverified`，全局降至 7 个 recovery gap 和 7 个显式 schema gap。Conversation Ledger 的 canonical append/replace/copy 已覆盖文件 fsync、原子 rename、POSIX 目录 fsync、严格损坏拒绝和 fault matrix；Windows 目录 durability/ACL 与 Provider Store 顶层 schema 仍未闭环。以上报告绑定 dirty merge commit `8ba60148`，不是 clean release 证据；本地真实 Provider 测试只显式读取权限收紧的 `~/.caogen-private/provider-parity.json`，生产模式拒绝自定义路径和内联 JSON，普通回归使用合成凭据且不自动付费，私有文件和派生明文不得进入 Git、日志、报告或公开资产。
   - [x] 当前源码 Electron required gate：`54/54` 通过真实主进程 IPC、Renderer 和四张截图验证危险 URL 在预览前拒绝、导入预览/应用、跨启动回滚、脱敏备份/导出、活动 Key 标签与保留绑定说明、Key 删除取消/确认/重新录入，以及 `760x700` 无水平溢出（`test-results/provider-profile-e2e/2026-07-31T18-36-51-341Z/report.json`）。备份文案已明确 API Key 不进入 Profile 备份、回滚后可能需要重新录入。
   - [x] 当前 merge 后源码的 Provider Profile 三阶段 Electron gate 已重跑并通过 `54/54`（`test-results/provider-profile-e2e/2026-08-01T02-08-04-853Z/report.json`），绑定 dirty worktree count `444`；仍不替代 clean release、Windows ACL、真人迁移和真实 Provider 发现/健康/failover 证据。
+  - [x] CC Switch Provider 批量迁移切片：直接只读扫描其 SQLite，区分 Codex/Claude 与 OpenAI Responses、Chat Completions、Anthropic Messages；预览并导入模型、定价、成本倍率、月预算、端点和凭据，已有 CaoGen 凭据保持不变。逐项新建/更新/跳过、来源与目标重验、脱敏批次备份和漂移拒绝回滚已接入设置页。Provider 级可靠性继续读取 `proxy_config`，按来源 App 独立迁入自动切换、最大恢复次数、五项熔断策略以及首字节/流空闲/非流式超时；运行时按 Provider 覆盖全局设置。流式计时从 fetch 前开始，首块后转为空闲计时，非流式覆盖网络和响应消费；Provider 超时与用户取消保持不同错误语义。代理监听/接管/日志明确忽略。合同 smoke `37/37`、超时 smoke `15/15`、熔断 smoke `11/11`、Electron E2E `13/13`；批次真实跨进程 `SIGKILL` gate `12/12` 覆盖 prepare 后、apply Store commit 后和 rollback Store commit 后强杀，按精确 before/desired digest 对账且不自动重放，凭据保留、备份无明文、来源库字节不变。本机真实库只读预览确认 6 个记录中 5 个可导入、5 个有凭据和 189 条定价，且 Claude/Codex 策略分别为 6/3 次恢复与不同熔断/超时值，前后数据库 SHA 不变。该证据不等于真实 apply；云同步和真实库 apply 仍开放，因此 `MIG-001` 与 M2-T10 不关闭。
+  - [x] CC Switch MCP/Prompt/Skill 迁移切片：同一只读 SQLite 扫描生成脱敏预览；MCP 复用安全字段白名单并剥离 `env` 等凭据字段，Prompt 转为 CaoGen prompt-only Skill，Skill 复制到 CaoGen 全局 Skill 根目录。应用前重读数据库行和 Skill 内容拒绝源漂移，目标指纹拒绝覆盖竞态，批次私有备份支持故障恢复和一键回滚。
+  - [x] CC Switch 历史用量迁移切片：读取 `usage_daily_rollups` 而非复制 21,780 条逐请求日志或伪造 CaoGen ModelAttempt；将请求/成功数、四类 Token、成本与加权延迟写入独立、带摘要的外部日汇总账本，再合并到 Usage 总计、趋势、Provider/模型统计和来源筛选。来源 Provider ID 先哈希并可映射到已导入 Provider，凭据过滤自动排除无可验证凭据归属的外部汇总，原生最近请求分页保持不变。Provider import smoke `37/37`、资产事务 smoke `22/22`、Usage 聚合/UI smoke `43/43 + 25/25`、资产 Electron E2E `18/18`、Provider Usage Electron E2E `35/35`；本机真实库只读预览识别 MCP、Prompt、Usage 三项且均可迁移，数据库前后 SHA 不变。真实库未执行 apply，云同步仍开放，因此 `MIG-001` 与 M2-T10 仍不关闭。
   - [ ] 真人迁移钻取：由首批真实用户导入两个日常 Profile，完成模型发现、健康检查、默认切换、故障切换、导出和回滚，记录计时、卡点和回退原工具次数；此项通过前 M2-T10 保持未完成。
 
 **完成判据**:10 个真实用户完成 ≥1 次真实任务;周留存 ≥3 人;
@@ -389,11 +416,11 @@ Issue/MCP 强杀后只读对账和零自动 replay，`notification-effect` 以 2
 | ROUTE-004 | 每次路由形成 ModelAttempt,全 Provider 统一契约 | 部分完成 |
 | ROUTE-005 | 跨 Provider 切换保持 Goal/WorkItem/Run/上下文连续 | 立项目标 |
 | ROUTE-006 | Project Resource 的 `deny/S3/local_only` 已在 Provider Attempt 前 fail-closed，`local_only` 冻结原 Provider 并过滤 failover；SessionManager DAG 直连也已在 Attempt/network 前复核实际 request-body digest。region/domain/capability/permission/budget、初始统一候选过滤、其他直连入口和完整 request manifest 仍开放 | 部分完成 |
-| ROUTE-010 | 六级故障恢复阶梯,重放前检查未决 Effect | 立项目标 |
+| ROUTE-010 | 六级故障恢复阶梯,重放前检查未决 Effect | 部分完成（瞬时重试 -> API Key/OAuth 账号 -> 同 Provider 模型 -> 同协议 Provider -> 协议降级 -> 人工接管的本地链路与统一 required gate 已接通；真实 Provider 交接和 clean release 绑定仍开放） |
 | TEAM-003 | 员工策略执行,堵五类 P0 绕过 | 部分完成 |
 | TEAM-004 | 员工身份与 Provider/model 解耦 | 立项目标 |
 | TEAM-005 | 退休保留完整 Assignment/Run/Artifact/Evidence 历史 | 部分完成 |
-| NFR-NEUTRAL-002 | 路由仅以用户设定为依据 | 立项目标 |
+| NFR-NEUTRAL-002 | 路由仅以用户设定为依据 | 部分完成（凭据用户策略层） |
 
 ### 波次 C:交付链与审计(5 周)
 
@@ -449,9 +476,9 @@ Issue/MCP 强杀后只读对账和零自动 replay，`notification-effect` 以 2
 ## 9. 正式竞品优势转化计划
 
 本节只调整产品优先级，不改变 M1 的唯一焦点，也不把 P2 能力塞入 1.0 发布门禁。
-W0~W5 是实现顺序，不是终极产品范围裁剪；终局必须完成各类竞品核心优势的统一集成。
+W0~W6 是实现顺序，不是终极产品范围裁剪；终局必须完成各类竞品核心优势的统一集成。
 事实和完整差距矩阵见 `docs/COMPETITOR-GAP-ANALYSIS.md`，需求合同见
-`docs/PRODUCT-REQUIREMENTS.md` §2.3~2.4、§5.6~5.7、§6.4 和 AC-15~20。
+`docs/PRODUCT-REQUIREMENTS.md` §2.3~2.4、§5.6~5.8、§6.4、§8.11 和 AC-15~21。
 
 | 顺序 | 交付 | 需求映射 | 启动条件 | 退出判据 |
 |---|---|---|---|---|
@@ -461,6 +488,7 @@ W0~W5 是实现顺序，不是终极产品范围裁剪；终局必须完成各�
 | W3 1.0 P1 | Provider profile 完整闭环、项目知识和连接器合同 | `PROJ-002`、`CONN-002/003`、`ROUTE-005/006`、AC-16/20 | Trust/权限/retention 与 Artifact 引用合同稳定 | Provider 迁移在真实网络下完成发现/健康/切换并取得真人与 clean release 证据；本地+外部知识源引用、刷新、撤销、个人/共享授权和跨项目隔离通过 required gate |
 | W4 post-1.0 | Routine canonical 化后增加 Webhook 与远程接续 | `AUTO-002/005`、AC-17 | 非终态 Run 恢复、远程身份、审批、幂等触发和设备绑定威胁模型关闭 | 远程/事件发起复用同一任务，不上传本地凭据，断线/重复 webhook 不重复副作用 |
 | W5 post-1.0 | 最小团队协作和设计连接器 | `COLLAB-001/002`、`ART-003`、`CONN-003`、AC-18 | 单用户权限/导出/删除闭环且有团队需求证据 | 可分享/转交/共享审批；设计 Artifact 可替换接入；不自建聊天、会议、Office 或设计平台 |
+| W6 post-1.0 | AI 视频工作室 | `VID-001~011`、AC-21 | W2 的 Artifact/Acceptance 主链、大文件流式存储、外部 Effect 对账和至少一个可合法调用的媒体 Provider 稳定 | 真实用户从短剧本生成 30~60 秒可播放成片；进程强杀不重复扣费；镜头、素材、成本和最终 MP4 全链可追溯 |
 
 W5 前置增量（2026-07-29）：已完成本地单用户 WorkItem 转交 foundation。它复用 canonical
 WorkItem owner 与 Assignment 协调链，覆盖可信 actor、旧 owner 撤权、新 owner 授权、lease
@@ -553,5 +581,183 @@ implemented gate、116 项 strict closure failure，Release Doctor 仍为 `not_r
 1. W0 未完成时，W1 只允许修复首批用户直接撞到的结果发现和任务策略问题。
 2. W2 先接 canonical Artifact producer，再做漂亮的结果 UI；文件路径或聊天链接不算交付闭环。
 3. W3 必须先定义授权、引用、刷新、撤销、删除和跨项目隔离，不先堆连接器数量。
-4. W4/W5 必须有真实用户需求和安全合同，不因竞品已有就提前膨胀范围。
+4. W4/W5/W6 必须有真实用户需求和安全合同，不因竞品已有就提前膨胀范围。
 5. Codex/Claude Code 的每项“兼容”都必须由真实深度用户迁移证明；扫描到文件、能导入配置或存在相似按钮都不算迁移完成。
+
+## 10. AI 视频工作室执行计划(post-1.0)
+
+本节是 §1.4 / W6 的唯一执行拆分。V0 只允许进行有时间上限的契约、许可和技术验证；
+V1~V3 不得以“探索性开发”为由绕过 W0~W5 的启动条件或改变当前 Release Gate。
+以下工期为一名熟悉 CaoGen 的全职工程师的粗估，不是发布日期承诺。
+
+### V0:架构与合法性验证(1~2 周,可在不影响当前主线时开展)
+
+交付：
+
+- 冻结 `MediaCapability`、`MediaProviderProfile`、`MediaJob`、`VideoProduction`、`Episode`、
+  `Scene`、`Shot` 和 `MediaAssetBinding` 的版本化合同。
+- 完成 DramaClaw、Huobao Drama、Moyin Creator、Toonflow、waoowaoo、printfilm 的
+  license inventory；明确“只作行为参考 / 可作协议参考 / 可复用代码 / 必须商业授权”。
+- 用本地 mock Adapter 跑通 `submit -> poll -> download -> digest -> Artifact`，覆盖成功、失败、
+  限流、取消、未知结果和进程重启；V0 不接真实付费生成，不制作完整 Studio UI。
+- 形成 ADR，证明 Media Provider 不扩展 `EngineKind`，MediaJob 不复用 ModelAttempt，且所有
+  外部写操作进入 Effect/Reconciler。
+
+退出判据：版本化 schema、迁移策略、威胁模型、许可清单和 mock 强杀测试全部评审通过；
+未满足时不得进入 V1。
+
+### V1:30~60 秒垂直链路(4~6 周)
+
+范围：一个短剧本、1~3 个场景、最多 8 个镜头；接入一个图片 Provider、一个视频 Provider、
+一个 TTS Provider 和本地 FFmpeg。允许同一厂商同时提供多种 capability，但数据模型不得绑定
+其品牌或私有 job schema。
+
+交付：
+
+- 剧本结构化解析和 Episode / Scene / Shot 持久化。
+- 角色、场景、道具、声线的最小资产库，以及 Shot 到参考资产的显式绑定。
+- 分镜表、关键帧选择、逐镜头生成、任务队列、失败重试和版本采用。
+- 视频/音频流式下载、SHA-256、时长/分辨率元数据、Range 预览和本地 FFmpeg 合成。
+- 每个输出都形成 Artifact，记录 `derived_from / input_to / output_of` 关系；最终 MP4 只有在
+  Acceptance 通过后才标记交付完成。
+
+退出判据：AC-21 的本地 mock、真实 Provider 条件测试和真人 30~60 秒任务全部通过；在
+`submitting/running/downloading` 三个检查点强杀后，不得重复创建外部任务或重复计费。
+
+### V2:创作者 MVP(8~12 周)
+
+交付：
+
+- 多集管理、角色 Bible、跨镜头资产锁定、角色/服装/场景版本和批量生成。
+- 多角色对白、声线绑定、字幕编辑、镜头重排、简化时间轴和分段重新合成。
+- Provider capability/价格/限额/健康探测，按质量、成本、速度、隐私和预算选择；切换
+  Provider 时保持 Shot、MediaJob lineage 和 Artifact 身份。
+- Project 可移植包覆盖工程 JSON、提示词、生成参数、素材、字幕、音频、视频、许可元数据和
+  digest；删除、导出、恢复和磁盘配额策略闭环。
+
+退出判据：至少 5 名目标创作者各完成一个不少于 2 分钟的项目；项目重启、迁移、Provider
+切换和局部返工不丢资产，不要求回到外部脚本或手工目录寻找结果。
+
+### V3:生产化(12~20 周,以 V2 留存证据决定是否启动)
+
+交付：
+
+- 跨集一致性评估、生成结果质量检查、失败镜头自动归因和受审批约束的局部重做。
+- 可扩展 Adapter SDK、可选本地 sidecar、队列并发/限流、磁盘与成本预算、长任务通知。
+- 完整时间轴只在真人证据表明简化时间轴不足时建设；无限画布同样需要独立需求证据，
+  不作为 V1/V2 的默认前置项。
+- Windows/macOS 原生打包、FFmpeg 来源和 codec 许可、硬件解码、长时间稳定性与大项目性能门禁。
+
+退出判据：连续 30 天真实项目中无不可恢复的工程损坏或重复付费任务；输出可在目标发布平台
+播放，项目的素材来源、模型尝试、费用、人工选择、验收和最终成片可从同一审计链解释。
+
+### 工作包与责任边界
+
+| 工作包 | 核心内容 | 主要复用 | 必须新增 |
+|---|---|---|---|
+| VID-A 领域合同 | Production/Episode/Scene/Shot/资产版本 | Project、Goal、Artifact Graph | 视频领域 schema、迁移和查询 |
+| VID-B Media Runtime | capability Adapter、MediaJob、轮询/取消/下载 | Provider Credential Broker、Effect、Supervisor | 异步 job 对账和媒体专用状态机 |
+| VID-C 媒体存储 | 大文件、摘要、预览、配额、清理 | Artifact lifecycle、Project export/delete | 流式内容存储、Range 视频/音频预览 |
+| VID-D 创作工作台 | 剧本、资产库、分镜、队列、版本、时间轴 | Assistant/Studio、结果工作台 | Video Studio 投影和批量操作 |
+| VID-E 本地合成 | FFmpeg、字幕、音轨、导出 | 本地 Tool/Effect、Acceptance | 可恢复合成、codec/二进制治理 |
+| VID-F 质量与治理 | 一致性、成本、许可、隐私、强杀测试 | Evidence、Acceptance、审计时间线 | 媒体质量 Evidence 和真实创作者验收 |
+
+### 2026-08-10 Provider 同步
+
+- [x] 支持 OneDrive、Dropbox、iCloud、NAS 等同步文件夹；同步包络包含父版本、内容摘要和发布设备 ID，远端历史只增不改。
+- [x] 区分 `remote_missing / in_sync / local_ahead / remote_ahead / diverged`，预览后复核本机和远端摘要，拒绝静默覆盖预览后变化。
+- [x] API Key 和凭据记录不进入同步目录；远端凭据形字段、摘要篡改、符号链接和超限文件均 fail-closed。
+- [x] 远端应用复用 Provider Profile 逐项决策、私密备份、跨进程锁和 operation journal；中断在内容完全相等时自动恢复本地 revision 绑定。
+- [x] 原生 WebDAV 支持 `PROPFIND / MKCOL / GET / PUT`、Basic Auth、不可变历史和 ETag CAS；密码只通过系统加密的 `ProviderCredentialRecord` 保存，公网端点强制 HTTPS。
+- [x] WebDAV 安全自动发布按配置间隔运行，仅处理 `remote_missing / local_ahead`；显式启用自动拉取后只应用 `remote_ahead`，首次连接、歧义项和双方分叉仍停下等待人工。
+- [x] 原生 S3/S3-compatible 支持 AWS SigV4、Region/Bucket/Prefix、自定义 HTTPS 端点、path-style、临时 Session Token、不可变历史和 ETag 条件写入；Access Key、Secret 和 Session Token 均只进入系统加密凭据记录。
+- [x] S3 安全自动发布沿用同一三方关系和冲突策略；远端领先或双方分叉时只报告待处理，不后台覆盖。
+- [x] WebDAV/S3 均提供显式自动拉取开关，以及最近 20 个不可变远端版本的列表、逐项预览和恢复；恢复前复核 revision/内容摘要并沿用私密备份与 operation journal，浏览历史不改写远端 current。
+- [x] 本地目录专项 `26/26`、WebDAV 专项 `35/35`、S3 专项 `36/36`、Provider Profile `145/145`、restart `13/13`、Electron UI `70/70`、typecheck、production build 和 durable writer inventory `13/13` 通过。
+- [x] 本机真实 CC Switch Provider 样本在隔离 CaoGen 用户目录完成 apply/rollback `16/16`；真实 MCP/Prompt/Skill/Usage 副本在隔离 home 完成批次 apply/rollback `12/12`。两条链路均证明源数据库字节身份不变、目标无明文凭据且 rollback 恢复初始状态，技术项 `MIG-001` 关闭。
+- [ ] M2-T10 仍等待真人在正式 UI 完成两套日常 Profile 的计时迁移钻取；自动化隔离 apply 不替代真人体验验收。
+
+### 2026-08-10 内建代码工作台
+
+- [x] `CODE-002`：从受信任项目清单和固定约定发现测试命令，提供运行、取消、结构化退出、有界输出与脱敏耐久失败证据。
+- [x] Code 工作区加入“文件 / 测试”一级标签；专项 smoke `26/26`、Electron 可见 UI `11/11`、文件编辑器回归 `29/29`，`760x700` 无横向溢出且文件编辑器保持可用。
+- [ ] `IDE-001`：现有项目树、搜索、多标签、LSP、诊断、Diff、终端、Git、Preview、测试和断点调试入口已在 CaoGen 内建；仍需重构闭环、大型仓库性能与恢复验证后才能关闭。
+- [ ] `IDE-002`：断点调试专项和可见 UI 门禁已通过 `16/16`、`13/13`；仍需大型仓库、崩溃恢复、键盘可达和真人重度任务黄金门禁；旧 IDE 插件不得作为证据。
+
+### 2026-08-10 内建代码工作台增量交付
+
+- [x] TypeScript 跨文件重构闭环：官方 TypeScript Language Service、受限预览、逐文件 SHA-256 CAS、应用补偿恢复、回滚前 digest 校验、Session/项目互斥与一次性 operation ID。
+- [x] 重构 smoke `14/14`，真实 Electron 重构面板 `12/12`；跨文件声明/导入/调用、漂移拒绝、应用/回滚和 `760x700` 无横向溢出均已验证。
+- [x] 调试 `16/16 + 13/13`，测试工作台 `26/26 + 11/11`，文件标签/LSP/诊断回归 `31/31 + 29/29`，typecheck 通过。
+- [ ] `IDE-001`、`IDE-002` 仍保持开放：尚缺大型仓库性能、崩溃 journal/恢复、键盘全覆盖和真人重度任务黄金门禁；当前能力只绑定 dirty worktree 与独立 unpacked preview。
+- [x] Provider 可视化配置增量：结构化编辑器现覆盖 Provider 级 failover、重试、首字节/流空闲/总请求超时、熔断器阈值和多端点优先级；保存、重开和 `760x700` UI 门禁为 `18/18`。
+- [x] 运行时消费回归：高级编辑器 `21/21`、配置归一化 `27/27`、超时 `15/15`、熔断 `11/11`、端点选择 `3/3`、请求覆盖 `17/17`、CC Switch 导入 `37/37`。
+- [x] Provider 计费可信度增量：完整筛选区间按 `Provider 上报 / Provider 配置价格估算 / 内置价格估算 / 历史导入 / 未定价` 五类汇总费用来源；未定价请求保留请求数和 Token，但金额固定为零并提示总额可能低于 Provider 最终账单。
+- [x] 用量账本后端与 Dashboard 门禁通过 `48/48 + 32/32`；授权回归 `129/129` 证明最近一次非敏感 quota 观测可在重启后恢复。真实 Electron 的用量、费用来源、官方账单新增、重开、删除和 `760px` 布局验证通过 `42/42`，报告 `test-results/provider-usage-dashboard-e2e/2026-08-10T03-07-19-468Z`。
+- [x] 外部账单手工对账 foundation：仅保存 Provider、期间、USD 金额和固定来源，使用 schema/revision/digest、原子 fsync+rename 和 symlink/损坏拒绝；只有未截断、无未定价且全部金额由 Provider 直接上报时才允许 `matched/mismatch`，否则 fail-closed 为 `incomplete`。专项 smoke `34/34`，耐久写入与 Effect 入口 required gate 均通过。
+- [x] 独立 Windows unpacked 预览 `dist-preview-billing-reconciliation-20260810-110846/win-unpacked/CaoGen.exe` 已通过两次冷启动 renderer 诊断；SHA-256 为 `AAC59991FA4DAF30253F1D44CCFA06CBBCBC127D123C883289F097D9A8DC9A67`，报告 `test-results/windows-unpacked-renderer-smoke/2026-08-10T03-10-14-779Z`。
+- [ ] 真实付费账号的长期准确性仍开放：尚未自动拉取 Provider 发票/余额/月度账单，也没有跨月真实费用证据；手工账单快照与本地差异对账不能替代该门禁。
+
+### 2026-08-10 Provider 本地配置版本历史
+
+- [x] 普通 Provider 新增、编辑和删除在提交前自动创建 credential-free 配置快照；无变化保存不生成版本，API Key、`enc:` 包络和 session-only Key 不写入历史。
+- [x] 设置页显示最多 50 条有界本地历史，标明产生原因；回退必须先预览新增、更新、删除、不变和字段级差异，不把 Base URL 值、备份正文、凭据或本地路径发送到 Renderer。
+- [x] 预览绑定当前 Provider 配置摘要和备份 payload digest；预览后配置或备份变化均拒绝回退。确认回退继续复用 Provider Store mutation lock、operation journal 和反向 safety backup。
+- [x] Provider Profile smoke `155/155`、跨进程 restart/recovery `13/13`、真实 Electron UI `80/80`、typecheck、production build、durable writer inventory `13/13` 和 Effect 入口 required audit `387 entries / 10 checks` 通过。
+- [x] 独立 Windows unpacked 预览 `dist-preview-provider-version-history-20260810-1138/win-unpacked/CaoGen.exe`，SHA-256 `F4A7CED68B7CD0DE9BDEA1B3CA14EB53FFE4C05291D3D6D6738D5BFFAE9C50F9`；隔离用户目录双启动 renderer 诊断通过，报告 `test-results/windows-unpacked-renderer-smoke/2026-08-10T03-51-26-811Z`。
+- [ ] 该切片只改善重复配置与恢复效率；自动发票/余额拉取、真实付费账号跨月准确性、日常 Profile 真人计时迁移和完整 1.0 产品验收仍开放。
+
+### 2026-08-10 Provider 官方账单 API
+
+- [x] Provider 高级配置加入通用同源官方账单连接器：支持 GET/POST、Provider Key/无凭据、指定 Key 标签、Query 或嵌套 JSON Pointer Body 账期参数、Unix 秒/毫秒/ISO、静态非敏感 Header/Query/Body，以及 items/金额/币种/缩放映射。
+- [x] 主进程连接器禁止跨域与重定向，限制响应为 512 KiB 和 2,000 条，只接受 USD；401/403、跨域、重定向、超限、无效 JSON、非 USD 与网络异常均 fail-closed，Renderer/Effect/报告不接收 URL、响应正文或凭据。
+- [x] 成功拉取后以 `provider-api` 来源原子幂等 upsert 同账期 statement 并自动对账；同步 IPC 登记为 opaque external effect，target 只含 Provider ID 与账期。
+- [x] 账单 `62/62`、余额 `9/9`、高级配置 `34/34`、高级编辑器 `25/25`、用量静态 `48/48 + 34/34`、真实 Electron `46/46`、typecheck、production build、durable inventory `13/13` 和 Effect required audit `389 entries / 10 checks` 通过。Electron 报告：`test-results/provider-usage-dashboard-e2e/2026-08-10T04-20-56-249Z`。
+- [x] 独立 Windows unpacked preview：`dist-preview-provider-billing-api-20260810-122211/win-unpacked/CaoGen.exe`，SHA-256 `439B56EA0B60CA67F337782802514395722B6DC4CE4A340CDA47A80D3B12B9A3`；两次冷启动 renderer diagnostic 通过，报告 `test-results/windows-unpacked-renderer-smoke/2026-08-10T04-26-11-454Z`。
+- [ ] 真实付费账号、厂商专用账单端点、跨月准确性和长期账单漂移仍开放；未验证的私有端点不得伪装成内建适配器，本切片不是 1.0 或公开发布完成证据。
+
+### 2026-08-10 本地 Provider Gateway
+
+- [x] 主进程实现仅绑定 `127.0.0.1` 的 OpenAI-compatible Gateway，提供 `/health`、`/v1/models`、`/v1/chat/completions` 和 `/v1/responses`；支持 Bearer 或 `x-api-key` 网关鉴权，Token 使用 Electron `safeStorage` 加密，Renderer 只读取状态，复制由主进程直写剪贴板。
+- [x] 模型短名必须唯一，歧义返回 `409`，也可显式使用 `provider-id/model`；Provider credential 仅通过一次性 lease 注入，不转发客户端 Authorization、Host 或 Cookie，阻断上游重定向。请求限制为 2 MiB、并发 8、全局 120 秒，并复用 Provider 首字节、流空闲、总请求超时和熔断策略。
+- [x] Chat Completions 与 Responses 的流式响应按背压转发；usage 只在最多 1 MiB 的有界扫描内提取，并进入现有 Provider usage/计价 Dashboard。配置与 usage store 均为 schema v1，拒绝 symlink，使用 fsync + rename，usage 最多保留 10,000 条；端口冲突保持 blocked，不静默换端口，跨进程冷启动恢复同一端口和 Token。
+- [x] 设置 -> Provider -> 本地网关已提供启停、端口、OpenAI `/v1` 与 Google `/v1beta` Base URL、Token 复制/轮换、运行状态、模型协议与映射。Provider usage `48/48`、Dashboard static `34/34`、真实 Electron Gateway `58/58`、统一三引擎 Adapter parity、typecheck 和 production build 通过。
+- [x] 当前独立 Windows unpacked preview 为 `dist-preview-provider-gemini-gateway-20260810-182859/win-unpacked/CaoGen.exe`，SHA-256 `7D6EE6F636D950A3A04A9AFFC79AAFF80F9A2C93C4FDE031213F8E3FFA3D8899`；Gateway E2E 报告 `test-results/provider-gateway-e2e/2026-08-10T10-17-01-756Z`，首次启动/重启 renderer 诊断 `test-results/windows-unpacked-renderer-smoke/2026-08-10T10-29-38-186Z`。
+- [x] Anthropic Messages 到 OpenAI Gateway 的协议转换和 Gemini 原生 Gateway 入口均已完成。
+- [x] Gateway 请求级同协议跨 Provider failover 已接通：请求正文只读一次；仅在下游尚未提交响应头/正文时，对网络错误、Provider 超时、401/403、429 和选定 5xx 切换；400、重定向和首字节后断流绝不重放。策略继承全局开关并允许 Provider 覆盖，遵守 `maxRetries` 与 Provider 专属熔断配置；OpenAI/Gemini 每个上游尝试使用独立 credential lease。
+- [x] 每个 Gateway 上游尝试独立写入 usage/计价账本，同时保留同一 request ID、ordinal、前驱 attempt 和安全 route reason；失败响应提供 usage 时不会被吞掉，成功响应不会重复入账。真实 Electron `58/58` 覆盖 OpenAI 429、Gemini 503、凭据隔离、重试上限、全局/Provider 开关、400、重定向、首字节前后断流和失败/成功双尝试用量。
+- [x] 最新独立 Windows unpacked 开发预览为 `dist-preview-provider-gateway-failover-20260810-191523/win-unpacked/CaoGen.exe`，SHA-256 `67260273C6CD3AED3437C7FD63D7EA26C37C25F406F29C0B8213A5AF0332E60F`；Authenticode 为 `NotSigned` 且无稳定更新元数据。最终 Gateway E2E `58/58` 报告为 `test-results/provider-gateway-e2e/2026-08-10T11-14-26-348Z`；首次启动/重启 renderer diagnostic 通过，报告 `test-results/windows-unpacked-renderer-smoke/2026-08-10T11-16-50-066Z`。
+- [ ] 真实付费账号与跨月成本准确性、clean candidate、安装器、1.0 和 N1 真人验收仍开放；上述 Gateway 结果全部来自隔离 mock，没有调用真实 OpenAI、Anthropic 或 Google 账号。
+
+### 2026-08-10 Anthropic Messages Gateway 转换
+
+- [x] 新增严格转换层：Anthropic `/v1/messages` 请求的 system、文本、受限 HTTPS/base64 图片、stop_sequences、tools/tool_choice、assistant tool_use 和 user tool_result 会转换为 OpenAI Chat Completions；thinking、top_k、document、MCP/server 等无法无损映射的字段在 Provider 出网前 fail-closed。
+- [x] 非流式 Chat 响应转换为 Anthropic Message；OpenAI SSE 转换为有序 `message_start`、文本块、tool_use、`message_delta`、`message_stop`；上游 401/403/429/5xx 使用有界 Anthropic 错误包络，不回传 Provider 响应正文。usage 仍写入同一 Gateway/Provider 账本，来源为 `gateway.anthropic.messages`。
+- [x] 真实 Electron Gateway `35/35`，包含 x-api-key、工具双向转换、图片映射、流式事件顺序、错误脱敏和 unsupported 出网前阻断；Provider usage `48/48`、Dashboard `34/34`、Effect required `393 entries / 10 checks`、durable inventory `87 modules / 13 checks`、typecheck 和 production build 通过。
+- [x] 最新独立 Windows unpacked preview：`dist-preview-provider-anthropic-gateway-20260810-1318/win-unpacked/CaoGen.exe`，SHA-256 `B382BE3C86AD07604843B7EA6206F10B71CF6C4832594A4EEA6FE44388FA0676`，两次冷启动 renderer 报告 `test-results/windows-unpacked-renderer-smoke/2026-08-10T05-18-08-741Z`；PID `36548` 正在运行。
+- [ ] 原生 Anthropic Provider 的完整多模态语义、Gateway 请求级跨 Provider failover、真实付费账号跨月账单准确性和 N1 真人验收仍开放。
+
+### 明确的暂停条件
+
+- 1.0 当前 Release Gate 因本功能回归、变慢或扩大签名资产范围。
+- 无法获得至少一个可持续、API 条款清晰的图片/视频/TTS Provider。
+- 大文件仍通过 Renderer data URL 或无上限内存副本传输。
+- MediaJob 未能在崩溃后通过外部 job ID 对账，却允许自动重新提交。
+- 引入的第三方代码使 CaoGen 无法同时履行 AGPL-3.0-only 和既定商业授权路径。
+
+### 2026-08-10 原生 Anthropic 结构化运行配置
+
+- [x] Provider 高级配置加入原生 Anthropic `max_tokens`、temperature、top_p、top_k、Thinking 模式/预算/显示和 Prompt Cache 开关/TTL/策略；结构化字段优先，旧 `request.body` 保持兼容。
+- [x] Messages Engine 按原生协议发送配置，启用 Thinking 时对历史 thinking block 的 replay signature 严格 fail-closed；请求构建不修改原始 messages/tools。
+- [x] Messages `19/19`、Tool Loop `10/10 + 1 Windows symlink 环境跳过`、Failover `10/10`、Provider 配置 `43/43 + 26/26`、请求覆盖 `17/17`、真实 Electron UI `8/8`、typecheck 和 production build 通过。
+- [x] 最新 Windows unpacked preview：`dist-preview-provider-native-anthropic-20260810-1430/win-unpacked/CaoGen.exe`，SHA-256 `6C7E9DD70DB5CC62EAEFF8CBA049101C39FA031BB588BE5A4ACBD942211BA391`；首次启动/重启 renderer diagnostic 见 `test-results/windows-unpacked-renderer-smoke/2026-08-10T06-29-51-974Z`，隔离实例 PID `33280` 正在运行。
+- [ ] 完整 Anthropic 多模态、真实付费 Anthropic/Google 账号交接、Gateway 请求级跨 Provider Failover、clean candidate 和最终 1.0 验收仍开放。
+
+### 2026-08-10 Gemini 原生 Runtime 与结构化配置
+
+- [x] 新增 Google Generative Language 原生 Engine/Adapter/target，不借道 OpenAI-compatible：使用 `x-goog-api-key`，支持 system、文本、图片、工具声明、functionCall/functionResponse、SSE/JSON、usage 与 Provider 计价。
+- [x] Provider 高级配置提供独立 Gemini `topK`、Thinking level/budget/includeThoughts；Google thought/function signature 能跨流式聚合、durable transcript、工具回放与应用重启保留，缺失或漂移时 fail-closed。
+- [x] Gemini 合同 smoke `7/7`、隔离真实 Electron 本地 mock `6/6` 和统一三引擎 Adapter parity 通过；Electron 覆盖实际 wire body、图片、工具循环、凭据头、无 Authorization、计费、`760x700` 布局和重启恢复。最新报告为 `test-results/google-genai-mock-e2e/2026-08-10T08-27-38-134Z`。
+- [x] 独立 Windows unpacked 开发预览为 `dist-preview-provider-native-gemini-20260810-163024/win-unpacked/CaoGen.exe`，SHA-256 `B1483B0177D16ADFEBED35E5524054BA735F8CDF970FA8C8728D89D722417E4D`；Authenticode 状态为未签名且无稳定更新元数据。首次启动/重启 renderer diagnostic 通过，报告为 `test-results/windows-unpacked-renderer-smoke/2026-08-10T08-37-48-757Z`。
+- [x] Gateway 提供 Google 原生 `/v1beta/models`、`:generateContent` 与 `:streamGenerateContent?alt=sse`；原样转发 JSON/SSE、inlineData、functionCall/functionResponse 和 thoughtSignature，隔离入口/Provider 凭据，支持歧义模型 namespaced 路由、有界 Google 错误，以及 usageMetadata/Thinking/cache token 与配置计价。真实 Electron Gateway `46/46` 通过。
+- [ ] 真实 Google 付费账号、完整 Gemini 多模态/模型能力矩阵、真实账单准确性、clean candidate 与最终 1.0 验收仍开放；本地 mock 不得冒充真实 Provider 调用。

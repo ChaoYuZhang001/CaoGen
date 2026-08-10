@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { dirname } from 'node:path'
 import type { ProjectAggregateSnapshot } from '../../shared/project-aggregate-types'
 import type { SessionMeta } from '../../shared/types'
 import type { WorkItem, WorkItemType } from '../../shared/project-workspace-types'
@@ -7,6 +8,7 @@ import { createProductionProjectAggregateService } from '../project-aggregate/pr
 import { openProjectWorkspaceCommandService } from '../project-workspace/command-service'
 import { openProjectWorkspaceStore } from '../project-workspace/store'
 import { createWorkflowArtifactEdge } from './workflow-ledger-api'
+import { taskSnapshotsDbFile } from './task-snapshot'
 
 const MAX_HANDOFF_ARTIFACTS = 24
 const MAX_HANDOFF_PROMPT_CHARS = 24_000
@@ -95,7 +97,8 @@ export async function attachProducedArtifactToStage(input: {
   runId: string
   rootDir?: string
 }): Promise<void> {
-  const aggregate = await createProductionProjectAggregateService(input.rootDir)
+  const rootDir = input.rootDir ?? dirname(taskSnapshotsDbFile())
+  const aggregate = await createProductionProjectAggregateService(rootDir)
     .verifyLiveProject(input.projectId)
   const output = aggregate.workflow.artifacts.find((artifact) => artifact.id === input.artifactId)
   if (!output || output.projectId !== input.projectId || output.workItemId !== input.workItemId ||
@@ -124,9 +127,9 @@ export async function attachProducedArtifactToStage(input: {
       },
       createdAt: output.createdAt,
       updatedAt: output.createdAt
-    }, input.rootDir)
+    }, rootDir)
   }
-  await attachArtifactReference(input.workItemId, input.artifactId, input.rootDir)
+  await attachArtifactReference(input.workItemId, input.artifactId, rootDir)
 }
 
 export function selectHandoffArtifacts(

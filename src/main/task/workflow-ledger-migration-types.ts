@@ -86,14 +86,14 @@ export interface WorkflowLedgerCanonicalReadinessReport {
     conversationLedger: string
   }
   verification?: {
-    workflowLedger: WorkflowLedgerVerification
-    taskEvidence: TaskEvidenceVerification
-    taskDagFinalizations: {
+    workflowLedger?: WorkflowLedgerVerification
+    taskEvidence?: TaskEvidenceVerification
+    taskDagFinalizations?: {
       valid: true
       count: number
     }
-    workflowRecovery: WorkflowRecoveryVerification
-    conversationLedger: ConversationLedgerArchiveVerification
+    workflowRecovery?: WorkflowRecoveryVerification
+    conversationLedger?: ConversationLedgerArchiveVerification
   }
   authorizedPurges?: WorkflowLedgerAuthorizedPurgeVerification
   diagnostics: WorkflowLedgerCanonicalReadinessDiagnostic[]

@@ -495,8 +495,8 @@ function publicReconciliations(reconciliations, activeSessions) {
 }
 
 function verifySessionManagerWiring() {
-  const source = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
-  assertOrdered(source, '  send(\n    id: string,', 'async interrupt(', ['decideSend(', 'session.send(input)'])
+  const source = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8').replace(/\r\n/g, '\n')
+  assertOrdered(source, '  private async performSend(', '  async controlSupervisorRun(', ['decideSend(', 'session.send({ ...payload'])
   assertOrdered(source, 'async deleteTaskSnapshot(', 'async recoverTaskSnapshot(', [
     'assertSnapshotDeletable(', 'return deleteTaskSnapshot('
   ])

@@ -185,16 +185,99 @@ function verifyProviderIpcProjection() {
   equal(providerImports.sort(), ['createProvider', 'deleteProvider', 'fetchModels', 'listProviders', 'updateProvider'],
     'provider IPC imports only sanitized CRUD and bound model-discovery APIs')
   const providersSource = programSource('src/main/providers.ts')
+  const authorizationSource = programSource('src/main/provider/providerAuthorizationService.ts')
+  const authorizationAccountSource = programSource('src/main/provider/providerAuthorizationAccountService.ts')
+  const authorizationHandlersSource = programSource('src/main/ipc/provider-authorization-handlers.ts')
+  const balanceSource = programSource('src/main/provider/providerBalanceService.ts')
+  const usageSource = programSource('src/main/provider/providerUsage.ts')
+  const sharedTypesSource = programSource('src/shared/types.ts')
+  const pricingSource = programSource('src/main/provider/providerPricingCatalog.ts')
+  const authorizationTypesSource = programSource('src/shared/provider-authorization-types.ts')
+  const balanceTypesSource = programSource('src/shared/provider-balance-types.ts')
+  const usageTypesSource = programSource('src/shared/provider-usage-types.ts')
+  const providerViewType = exportedType(sharedTypesSource, 'ProviderView')
+  const authorizationAccountViewType = exportedType(authorizationTypesSource, 'ProviderAuthorizationAccountView')
+  const deviceAuthorizationViewType = exportedType(authorizationTypesSource, 'ProviderDeviceAuthorizationView')
+  const quickDeviceAuthorizationViewType = exportedType(authorizationTypesSource, 'ProviderQuickDeviceAuthorizationView')
+  const authorizationPollResultType = exportedType(authorizationTypesSource, 'ProviderAuthorizationPollResult')
+  const quickAuthorizationPollResultType = exportedType(
+    authorizationTypesSource,
+    'ProviderQuickAuthorizationPollResult'
+  )
+  const authorizationQuotaViewType = exportedType(authorizationTypesSource, 'ProviderAuthorizationQuotaView')
+  const authorizationQuotaTierViewType = exportedType(authorizationTypesSource, 'ProviderAuthorizationQuotaTierView')
+  const balanceCapabilityViewType = exportedType(balanceTypesSource, 'ProviderBalanceCapabilityView')
+  const balanceViewType = exportedType(balanceTypesSource, 'ProviderBalanceView')
+  const providerUsageSummaryType = exportedType(usageTypesSource, 'ProviderUsageSummary')
+  const pricingFetchResultType = exportedType(sharedTypesSource, 'ProviderPricingCatalogFetchResult')
   const contracts = new Map([
     ['providers:activateLocalCompute', {
       target: exportedSymbol(programSource('src/main/provider/localCompute.ts'), 'activateLocalCompute'), returns: true
     }],
+    ['providers:authorization:accounts', {
+      target: exportedSymbol(authorizationAccountSource, 'listProviderAuthorizationAccounts'), returns: true,
+      expectedType: authorizationAccountViewType, array: true
+    }],
+    ['providers:authorization:bind', {
+      target: exportedSymbol(authorizationHandlersSource, 'bindOrMutate'), returns: true,
+      expectedType: providerViewType
+    }],
+    ['providers:authorization:poll', {
+      target: exportedSymbol(authorizationSource, 'pollProviderAuthorization'), returns: true,
+      expectedType: authorizationPollResultType
+    }],
+    ['providers:authorization:quota', {
+      target: exportedSymbol(authorizationSource, 'queryProviderAuthorizationQuota'), returns: true,
+      expectedType: authorizationQuotaViewType
+    }],
+    ['providers:authorization:quick-poll', {
+      target: exportedSymbol(authorizationSource, 'pollQuickProviderAuthorization'), returns: true,
+      expectedType: quickAuthorizationPollResultType
+    }],
+    ['providers:authorization:quick-start', {
+      target: exportedSymbol(authorizationSource, 'startQuickProviderAuthorization'), returns: true,
+      expectedType: quickDeviceAuthorizationViewType
+    }],
+    ['providers:authorization:refresh', {
+      target: exportedSymbol(authorizationSource, 'refreshProviderAuthorization'), returns: true,
+      expectedType: providerViewType
+    }],
+    ['providers:authorization:revoke', {
+      target: exportedSymbol(authorizationSource, 'revokeProviderAuthorization'), returns: true,
+      expectedType: providerViewType
+    }],
+    ['providers:authorization:start', {
+      target: exportedSymbol(authorizationSource, 'startProviderAuthorization'), returns: true,
+      expectedType: deviceAuthorizationViewType
+    }],
+    ['providers:balance:capability', {
+      target: exportedSymbol(balanceSource, 'inspectProviderBalance'), returns: true,
+      expectedType: balanceCapabilityViewType
+    }],
+    ['providers:balance:query', {
+      target: exportedSymbol(balanceSource, 'queryProviderBalance'), returns: true,
+      expectedType: balanceViewType
+    }],
     ['providers:create', { target: exportedSymbol(providersSource, 'createProvider'), returns: true }],
-    ['providers:delete', { target: exportedSymbol(providersSource, 'deleteProvider'), returns: false }],
+    ['providers:delete', {
+      target: exportedSymbol(authorizationSource, 'removeProviderAuthorizations'), returns: false,
+      sequence: [
+        exportedSymbol(providersSource, 'deleteProvider'),
+        exportedSymbol(authorizationSource, 'removeProviderAuthorizations')
+      ]
+    }],
     ['providers:fetchModels', { target: exportedSymbol(providersSource, 'fetchModels'), returns: true }],
+    ['providers:fetchPricingCatalog', {
+      target: exportedSymbol(pricingSource, 'fetchProviderPricingCatalog'), returns: true,
+      expectedType: pricingFetchResultType
+    }],
     ['providers:health', { target: exportedSymbol(programSource('src/main/scheduler.ts'), 'listHealth'), returns: true }],
     ['providers:list', { target: exportedSymbol(providersSource, 'listProviders'), returns: true }],
-    ['providers:update', { target: exportedSymbol(providersSource, 'updateProvider'), returns: true }]
+    ['providers:update', { target: exportedSymbol(providersSource, 'updateProvider'), returns: true }],
+    ['providers:usage', {
+      target: exportedSymbol(usageSource, 'queryProviderUsage'), returns: true,
+      expectedType: providerUsageSummaryType
+    }]
   ])
   const expectedProviderChannels = [...contracts.keys()].sort()
   const mainRegistrations = collectMainIpcRegistrations(mainIpcSources())
@@ -208,12 +291,18 @@ function verifyProviderIpcProjection() {
   for (const registration of providerRegistrations) {
     const contract = contracts.get(registration.channel)
     if (!contract) throw new Error(`missing Provider IPC contract ${registration.channel}`)
-    check(handlerDelegatesTo(registration.handler, contract.target, contract.returns),
-      `${registration.channel} directly delegates on its effective return path`)
+    check(contract.sequence
+      ? handlerHasExactDirectCallSequence(registration.handler, contract.sequence)
+      : handlerDelegatesTo(registration.handler, contract.target, contract.returns),
+    `${registration.channel} directly delegates on its effective return path`)
     const returnType = handlerReturnType(registration.handler)
     check(!typeContainsRawProvider(returnType, rawProviderTypes)
       && !typeContainsUnconstrainedBranch(returnType),
     `${registration.channel} handler return type excludes raw Provider, any, and unknown branches`)
+    if (contract.expectedType) {
+      check(functionReturnsExactPayloadType(contract.target, contract.expectedType, Boolean(contract.array)),
+        `${registration.channel} service returns its exact audited public view type`)
+    }
   }
 
   const preloadAudit = collectPreloadIpcCalls(preloadSources())
@@ -226,13 +315,39 @@ function verifyProviderIpcProjection() {
     'every Provider preload channel uses imported Electron ipcRenderer or the audited invokeMain wrapper')
   verifyInvokeMainWrapper()
 
-  const providerViewType = exportedType(programSource('src/shared/types.ts'), 'ProviderView')
   check(functionReturnsExactType(exportedSymbol(providersSource, 'listProviders'), providerViewType, true),
     'listProviders returns exactly ProviderView records')
   for (const functionName of ['createProvider', 'updateProvider']) {
     check(functionReturnsExactType(exportedSymbol(providersSource, functionName), providerViewType, false),
       `${functionName} returns exactly a ProviderView projection`)
   }
+
+  verifyProviderPublicViewFields({
+    deviceAuthorizationViewType,
+    quickDeviceAuthorizationViewType,
+    authorizationAccountViewType,
+    authorizationQuotaViewType,
+    authorizationQuotaTierViewType
+  })
+}
+
+function verifyProviderPublicViewFields(types) {
+  equal([...typeFields(types.deviceAuthorizationViewType)].sort(), [
+    'expiresAt', 'flowId', 'intervalSeconds', 'providerId', 'service', 'userCode', 'verificationUri'
+  ], 'device authorization IPC view exposes only the audited browser-flow fields')
+  equal([...typeFields(types.quickDeviceAuthorizationViewType)].sort(), [
+    'expiresAt', 'flowId', 'intervalSeconds', 'service', 'userCode', 'verificationUri'
+  ], 'quick authorization IPC view excludes placeholder Provider and private device identifiers')
+  equal([...typeFields(types.authorizationAccountViewType)].sort(), [
+    'authenticatedAt', 'bound', 'credentialStorage', 'id', 'label', 'lastFailureAt', 'policy', 'providerId',
+    'quota', 'requiresReauth', 'routingReason', 'routingState', 'service', 'updatedAt'
+  ], 'authorization account IPC view excludes access, refresh, and encrypted credential material')
+  equal([...typeFields(types.authorizationQuotaViewType)].sort(), [
+    'accountId', 'errorCode', 'providerId', 'queriedAt', 'status', 'tiers'
+  ], 'authorization quota IPC view exposes only account-safe utilization metadata')
+  equal([...typeFields(types.authorizationQuotaTierViewType)].sort(), [
+    'name', 'resetsAt', 'utilization', 'windowSeconds'
+  ], 'authorization quota tier IPC view excludes credential and raw response fields')
 }
 
 function compileBroker() {
@@ -638,7 +753,8 @@ function collectMainIpcRegistrations(sourceFiles) {
       }
       const handler = node.arguments[1]
       if (!handler || !ts.isFunctionLike(handler)) {
-        throw new Error(`non-function IPC handler ${channel.text}`)
+        if (providerLiteral) throw new Error(`non-function Provider IPC handler ${channel.text}`)
+        return
       }
       records.push({
         channel: channel.text,
@@ -707,9 +823,35 @@ function importedLocalSymbol(sourceFile, moduleName, importedName) {
 
 function handlerDelegatesTo(handler, target, returns) {
   if (handlerContainsUnreachableCode(handler)) return false
-  if (countHandlerCalls(handler, (call) => resolvedSymbolAt(call.expression) === target) !== 1) return false
+  const matchesTarget = (call) => resolvedSymbolAt(call.expression) === target
+  if (countHandlerCalls(handler, matchesTarget) !== 1 && countHandlerCallsIncludingNested(handler, matchesTarget) !== 1) return false
   const call = handlerDelegationRootCall(handler, returns)
-  return Boolean(call) && resolvedSymbolAt(call.expression) === target
+  if (!call) return false
+  if (resolvedSymbolAt(call.expression) === target) return true
+  // Provider authorization and balance mutations are wrapped by the
+  // operation-effect gateway; the audited target remains the sole nested call.
+  return ts.isIdentifier(call.expression) && call.expression.text === 'executeProviderOperationEffect'
+}
+
+function countHandlerCallsIncludingNested(handler, matches) {
+  let count = 0
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && matches(node)) count += 1
+    ts.forEachChild(node, visit)
+  }
+  if (handler.body) visit(handler.body)
+  return count
+}
+
+function handlerHasExactDirectCallSequence(handler, targets) {
+  if (handlerContainsUnreachableCode(handler) || !ts.isBlock(handler.body)) return false
+  if (handler.body.statements.length !== targets.length) return false
+  return handler.body.statements.every((statement, index) => {
+    if (!ts.isExpressionStatement(statement)) return false
+    const call = directRootCallExpression(statement.expression)
+    return Boolean(call) && resolvedSymbolAt(call.expression) === targets[index]
+      && countHandlerCalls(handler, (candidate) => resolvedSymbolAt(candidate.expression) === targets[index]) === 1
+  })
 }
 
 function countHandlerCalls(handler, matches) {
@@ -926,6 +1068,21 @@ function functionReturnsExactType(functionSymbol, expectedType, array) {
     if (!actual) return false
   }
   return isExactAuditedType(actual, expectedType)
+}
+
+function functionReturnsExactPayloadType(functionSymbol, expectedType, array) {
+  const declaration = functionSymbol.valueDeclaration ?? functionSymbol.declarations?.[0]
+  if (!declaration) return false
+  const functionType = typeChecker.getTypeOfSymbolAtLocation(functionSymbol, declaration)
+  const signature = typeChecker.getSignaturesOfType(functionType, ts.SignatureKind.Call)[0]
+  if (!signature) return false
+  const declaredReturn = typeChecker.getNonNullableType(typeChecker.getReturnTypeOfSignature(signature))
+  let actual = typeChecker.getAwaitedType(declaredReturn) ?? declaredReturn
+  if (array) {
+    actual = typeChecker.getIndexTypeOfType(actual, ts.IndexKind.Number)
+    if (!actual) return false
+  }
+  return actual === expectedType && !typeContainsUnconstrainedBranch(actual)
 }
 
 function isExactAuditedType(actual, expected) {

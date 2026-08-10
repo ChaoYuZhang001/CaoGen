@@ -3,29 +3,35 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import { app } from 'electron'
+import { documentAttachmentsToPrompt, sessionImageAttachmentsRoot } from './attachmentOps'
 import { TranscriptWriter } from './transcript'
 import {
   getProvider,
   listProviders,
   markProviderKeyUsed,
-  providerAuthMode,
   providerIsReady,
   recordProviderKeySuccess,
   issueDirectProviderCredentialLease,
   issueProviderCredentialLease,
-  selectProviderCredential,
   rotateProviderKey
 } from './providers'
 import {
   fetchWithProviderCredentialLease,
   providerCredentialScopeForSession
 } from './providerRuntimeAuth'
+import {
+  ensureProviderAuthorizationFresh,
+  issueProviderAuthorizationAccountLease,
+  recordProviderAuthorizationAccountFailure,
+} from './provider/providerAuthorizationService'
+import { resolveOpenAiAuthConfig, type OpenAIAuthConfig } from './provider/openAiAuthorizationRouting'
 import { listHistory } from './history'
 import {
+  acquireProviderRequest,
   classifyFailure,
-  pickFailoverTarget,
   pickModelAcrossProviders,
   recordFailure,
+  releaseProviderRequest,
   recordSuccess
 } from './scheduler'
 import { recordModelFailure, recordModelSuccess } from './modelStats'
@@ -49,26 +55,57 @@ import {
 } from './agent/context-compressor'
 import { isGuiToolName } from './agent/tools/gui-tools'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
+import { effectReplayTargetDigest } from './task/effect-reconciler'
 import { taskStrategySystemPrompt, updateTaskStrategyMeta } from './task/task-strategy'
 import { buildWorkflowStageHandoffPrompt } from './task/workflow-stage-handoff'
 import {
   assertOutboundContextAllowed,
   OutboundContextPolicyError,
-  prepareOutboundContext,
-  providerAllowedByOutboundContext
+  prepareOutboundContext
 } from './project-workspace/outbound-context-policy'
 import {
   openAiEndpoint,
   parseProviderHeaders,
-  redactProviderBaseUrl
+  redactProviderBaseUrl,
+  redactProviderErrorText
 } from './provider/openai-provider-utils'
+import { applyProviderRequestOverrides } from './provider/providerRequestOverrides'
+import { resolveOpenAIProtocol, resolveProviderRuntimeTarget } from './provider/providerRuntimeTarget'
+import {
+  ProviderRequestDeadline,
+  providerRequestIsStreaming,
+  providerRequestTimeouts
+} from './provider/providerRequestTimeout'
+import {
+  firstSuccessfulRecovery,
+  OpenAiRecoveryState,
+  planOpenAiProviderFailover,
+  planOpenAiProviderModelRecovery,
+  planOpenAiProtocolRecovery
+} from './provider/openAiProviderModelRecovery'
 import { normalizeStableMessagePayload } from './stable-message-payload'
 import {
+  providerChatCheckpointId,
+  restoreProviderChatCheckpoint
+} from './provider-chat-checkpoint'
+import {
+  buildConfirmedToolReplayIndex,
   buildPortableConversationReplay,
-  portableConversationReplayDetail
+  findConfirmedToolReplay,
+  portableConversationReplayDetail,
+  recordConfirmedToolReplay,
+  type ConfirmedToolReplayIndex
 } from './conversation-ledger-replay'
 import { isModelAttemptPersistenceError, unwrapModelAttemptOperationError } from './task/model-attempt-runtime'
 import { addUsageTotals, OpenAIModelAttemptTracker } from './task/openai-model-attempt-runtime'
+import type {
+  ChatContent,
+  ChatMessage,
+  OpenAIErrorContext,
+  PendingToolCall,
+  TurnToolFailure
+} from './openAiEngineTypes'
+import { formatProviderErrorContext, isResponsesConversationContext } from './openAiEngineTypes'
 import {
   assertDigitalWorkerProviderDispatchAllowed, isDigitalWorkerProviderDispatchDeniedError
 } from './digital-worker/session-action-policy'
@@ -77,6 +114,8 @@ import type { Engine, EngineEmit, EngineFactory } from './engine'
 import type {
   AgentEvent,
   AssistantBlock,
+  CheckpointRestoreMode,
+  CheckpointRestoreResult,
   EffectStatus,
   ImageAttachmentView,
   OpenAIProtocol,
@@ -92,52 +131,7 @@ import type {
   UsageTotals
 } from '../shared/types'
 
-const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1'
-
-/** Chat Completions 多轮历史消息(text 或 text+图片混合内容) */
-type ChatContent = string | Array<Record<string, unknown>>
-interface ChatMessage {
-  role: 'user' | 'assistant' | 'tool' | 'system'
-  content: ChatContent | null
-  /** assistant 消息的工具调用(原样回传给模型维持上下文) */
-  tool_calls?: Array<Record<string, unknown>>
-  /** tool 消息必带:对应的调用 id */
-  tool_call_id?: string
-}
-
-/** 流式累积中的一次工具调用 */
-interface PendingToolCall {
-  id: string
-  name: string
-  argsText: string
-}
-
-interface TurnToolFailure {
-  toolName: string
-  toolUseId: string
-  detail: string
-}
-
-interface OpenAIErrorContext {
-  providerId: string
-  providerName: string
-  baseUrl: string
-  model: string
-  protocol: OpenAIProtocol
-}
-
-interface OpenAIAuthConfig {
-  baseUrl: string
-  authMode: 'api-key' | 'none'
-  headers: Record<string, string>
-  providerId: string
-  available: boolean
-  provider?: Provider
-  environmentCredential: boolean
-  keyId?: string
-  keyLabel?: string
-}
 
 /** Agent 循环上限:防模型无限调工具烧穿 */
 const MAX_TOOL_ITERATIONS = 40
@@ -166,6 +160,10 @@ export class OpenAIEngine implements Engine {
   private assistantText = ''
   private turnUsage: UsageTotals | undefined
   private turnStartedAt = 0
+  private activeMessageId?: string
+  private activeConfirmedToolReplay: ConfirmedToolReplayIndex = new Map()
+  private turnRevisionEligible = false
+  private turnHadToolEvents = false
   private readonly modelAttempts = new OpenAIModelAttemptTracker()
   private readonly nativeToolRuntime: NativeToolRuntime
   /** chat 协议的多轮历史(user/assistant/tool);responses 协议不使用 */
@@ -186,7 +184,7 @@ export class OpenAIEngine implements Engine {
     this.meta = meta
     this.transcript = new TranscriptWriter(resumeSdkSessionId, initialEventSeq)
     if (!resumeSdkSessionId && meta.conversationForkSourceSdkSessionId) {
-      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId)
+      this.transcript.seedFrom(meta.conversationForkSourceSdkSessionId, meta.conversationForkCheckpointId)
       this.forkBoundaryPending = true
     }
     this.emitRaw = (event) => {
@@ -204,6 +202,7 @@ export class OpenAIEngine implements Engine {
 
   /** resume 时从转录重建 chat 协议的多轮历史(仅文本;图片不回放) */
   private rebuildChatHistory(): void {
+    this.chatHistory = []
     try {
       for (const entry of this.transcript.read()) {
         const ev = entry.event
@@ -253,10 +252,14 @@ export class OpenAIEngine implements Engine {
       return
     }
     const normalizedPayload = normalizeStableMessagePayload(input)
-    if (!normalizedPayload.text && normalizedPayload.images.length === 0) return
+    if (!normalizedPayload.text && normalizedPayload.images.length === 0 && normalizedPayload.documents.length === 0) return
 
     const messageId = normalizedPayload.messageId || randomUUID()
     const payload: SendMessagePayload = { ...normalizedPayload, messageId }
+    this.activeMessageId = messageId
+    this.activeConfirmedToolReplay = new Map()
+    this.turnRevisionEligible = normalizedPayload.images.length === 0 && normalizedPayload.documents.length === 0
+    this.turnHadToolEvents = false
     this.modelAttempts.startTurn(messageId)
     this.emit({
       kind: 'user-message',
@@ -273,11 +276,12 @@ export class OpenAIEngine implements Engine {
     this.assistantText = ''
     this.turnUsage = undefined
     this.turnGuiToolFailures = []
+    this.recoveryExhaustedEmitted = false
     // 新一轮:重置故障切换防打转记录
-    this.triedProviders = new Set([this.meta.providerId])
-    this.triedProviderKeys = new Set()
     // auto 模式:跨厂商路由(openai 引擎切 Provider 无需重建,authConfig 每请求现读)
     if (this.meta.model === AUTO_MODEL) this.autoRoute(payload)
+    // Initialize after auto routing so failover cannot select the active Provider again.
+    this.recoveryState = new OpenAiRecoveryState(this.meta.providerId)
     this.abort = new AbortController()
     this.setStatus('running')
     const turn = this.runResponse(payload, this.abort)
@@ -299,6 +303,10 @@ export class OpenAIEngine implements Engine {
   private autoRoute(payload: SendMessagePayload): void {
     try {
       const settings = settingsForCaoGenDrive(getSettings(), this.meta.driveMode)
+      const compatibleProviders = listProviders().filter((provider) => provider.engine === 'openai')
+      const routingProviders = this.meta.routingScope === 'provider'
+        ? compatibleProviders.filter((provider) => provider.id === this.meta.providerId)
+        : compatibleProviders
       if (settings.smartModelRoutingEnabled || this.meta.routingScope === 'provider' || this.meta.routingScope === 'global') {
         const monthlyBudget = calculateMonthlyBudgetSnapshot({
           settings,
@@ -309,10 +317,7 @@ export class OpenAIEngine implements Engine {
           enabled: true,
           currentModel: this.meta.model,
           providerId: this.meta.providerId,
-          providers:
-            this.meta.routingScope === 'provider'
-              ? listProviders().filter((provider) => provider.id === this.meta.providerId)
-              : listProviders(),
+          providers: routingProviders,
           engine: this.meta.engine,
           driveMode: this.meta.driveMode,
           payload,
@@ -344,7 +349,10 @@ export class OpenAIEngine implements Engine {
         })
         if (smart.kind === 'routed') {
           const routeChanged = smart.providerId !== this.meta.providerId || smart.model !== this.effectiveModel()
-          if (routeChanged) this.clearResponsesContext(this.protocol() === 'responses')
+          if (routeChanged) {
+            this.clearResponsesContext(this.protocol() === 'responses')
+            this.protocolOverride = undefined
+          }
           this.modelAttempts.setRouteReason(smart.reason)
           this.routedModel = smart.model
           if (smart.switchedProvider) this.meta.providerId = smart.providerId
@@ -362,7 +370,7 @@ export class OpenAIEngine implements Engine {
         }
       }
       // 候选:有端点且已配 key 的厂商(没 key 的选中必失败,不进池)
-      const candidates = listProviders()
+      const candidates = routingProviders
         .filter((p) => p.baseUrl.trim().length > 0 && providerIsReady(p))
         .map((p) => ({ id: p.id, name: p.name, models: p.models }))
       const decision = pickModelAcrossProviders({
@@ -373,7 +381,10 @@ export class OpenAIEngine implements Engine {
       })
       if (!decision) return
       const routeChanged = decision.providerId !== this.meta.providerId || decision.model !== this.effectiveModel()
-      if (routeChanged) this.clearResponsesContext(this.protocol() === 'responses')
+      if (routeChanged) {
+        this.clearResponsesContext(this.protocol() === 'responses')
+        this.protocolOverride = undefined
+      }
       this.modelAttempts.setRouteReason(decision.reason)
       this.routedModel = decision.model
       if (decision.switchedProvider) {
@@ -437,8 +448,115 @@ export class OpenAIEngine implements Engine {
     return this.nativeToolRuntime.executeToolWithPermission(name, input, toolUseId, signal)
   }
 
+  private async confirmedFailoverToolOutput(
+    index: ConfirmedToolReplayIndex,
+    name: string,
+    input: Record<string, unknown>,
+    toolUseId: string
+  ): Promise<string | undefined> {
+    if (index.size === 0) return undefined
+    const target = await this.nativeToolRuntime.describeSideEffectTarget(name, input).catch(() => null)
+    if (!target) return undefined
+    const confirmed = findConfirmedToolReplay(index, name, target.targetDigest)
+    if (!confirmed) {
+      const indexedTargets = [...index.values()]
+        .filter((candidate) => candidate.toolName === name)
+        .map((candidate) => candidate.targetDigest.slice(0, 12))
+        .join(',')
+      this.emit({
+        kind: 'hook-event',
+        event: 'confirmed-tool-replay-miss',
+        toolName: name,
+        detail: `Failover replay target ${target.targetDigest.slice(0, 12)} did not match indexed targets ${indexedTargets || 'none'}`
+      })
+      return undefined
+    }
+    this.emit({
+      kind: 'hook-event',
+      event: 'confirmed-tool-failover-replay',
+      toolName: name,
+      detail: `Reused confirmed target result ${confirmed.toolUseId} for failover call ${toolUseId}`
+    })
+    return [
+      '[CaoGen confirmed side-effect replay]',
+      `A ${name} operation for the same external target already completed successfully in this user turn.`,
+      `Local result digest: sha256:${confirmed.resultDigest}`,
+      'Do not execute this operation again. Continue from the confirmed success.'
+    ].join('\n')
+  }
+
+  private confirmedEffectReplayTargets(): ReadonlyMap<string, string> {
+    const targets = new Map<string, string>()
+    for (const effect of taskRuntimeRegistry.get(this.meta.id)?.effects ?? []) {
+      if (effect.status !== 'confirmed') continue
+      targets.set(effect.toolUseId, effectReplayTargetDigest(effect.target))
+    }
+    return targets
+  }
+
+  private refreshConfirmedToolReplay(messageId?: string): void {
+    const confirmed = buildConfirmedToolReplayIndex(
+      this.transcript.read(),
+      messageId,
+      this.confirmedEffectReplayTargets()
+    )
+    if (confirmed.size === 0) return
+    this.activeConfirmedToolReplay = new Map([
+      ...this.activeConfirmedToolReplay,
+      ...confirmed
+    ])
+  }
+
+  private rememberConfirmedToolReplay(input: {
+    toolUseId: string
+    toolName: string
+    targetDigest?: string
+    resultContent: string
+    isError: boolean
+    effectStatus?: EffectStatus
+  }): void {
+    if (input.isError || input.effectStatus !== 'confirmed' || !input.targetDigest) return
+    this.activeConfirmedToolReplay = recordConfirmedToolReplay(this.activeConfirmedToolReplay, {
+      toolUseId: input.toolUseId,
+      toolName: input.toolName,
+      targetDigest: input.targetDigest,
+      resultContent: input.resultContent
+    })
+    this.emit({
+      kind: 'hook-event',
+      event: 'confirmed-tool-replay-indexed',
+      toolName: input.toolName,
+      detail: `Indexed confirmed side effect ${input.toolUseId} target ${input.targetDigest.slice(0, 12)} for current-turn failover replay`
+    })
+  }
+
   getTranscript(): TranscriptEntry[] {
     return this.transcript.read()
+  }
+
+  async restoreCheckpoint(
+    messageId: string,
+    mode: CheckpointRestoreMode,
+    dryRun: boolean
+  ): Promise<CheckpointRestoreResult> {
+    if (this.abort) {
+      return { mode, checkpointId: messageId, canRewind: false, applied: false, error: '会话仍在运行' }
+    }
+    const result = restoreProviderChatCheckpoint(this.transcript, messageId, mode, dryRun, () => {
+      this.rebuildChatHistory()
+      this.clearResponsesContext(true)
+    })
+    if (result.applied) {
+      this.emit({
+        kind: 'checkpoint-restore',
+        messageId,
+        mode: 'chat',
+        filesChanged: [],
+        chatRemovedEntries: result.chatRemovedEntries,
+        note: '已恢复到所选消息之前的聊天状态'
+      })
+    }
+    return result
   }
 
   emitSyntheticEvent(event: AgentEvent): void {
@@ -458,6 +576,7 @@ export class OpenAIEngine implements Engine {
 
   async setModel(model: string): Promise<void> {
     if (this.meta.model !== model) this.clearResponsesContext(this.protocol() === 'responses')
+    this.protocolOverride = undefined
     this.meta.model = model
     this.emit({ kind: 'meta', meta: { ...this.meta } })
   }
@@ -491,9 +610,18 @@ export class OpenAIEngine implements Engine {
       const prepared = await this.augmentPayloadWithLayeredMemory(payload)
       this.activeOutboundContext = prepared.manifest
       auth = this.authConfig()
+      this.modelAttempts.setRouteReason(auth.authorizationRouteReason ?? 'Session uses the configured provider and model')
+      this.recoveryState.models(this.meta.providerId).add(this.effectiveModel())
       if (!auth.available && auth.authMode !== 'none') throw new Error(this.missingKeyMessage())
+      if (!acquireProviderRequest(this.meta.providerId)) {
+        const circuitError = 'Provider circuit is open'
+        if (await this.tryFailover(circuitError, payload)) return
+        this.emitRecoveryExhausted(circuitError)
+        this.finishTurn(true, this.withProviderErrorContext(circuitError), 'error')
+        return
+      }
       if (auth.keyId) {
-        this.triedProviderKeys.add(auth.keyId)
+        this.recoveryState.keys.add(auth.keyId)
         markProviderKeyUsed(this.meta.providerId, auth.keyId)
       }
 
@@ -510,28 +638,37 @@ export class OpenAIEngine implements Engine {
     } catch (err) {
       const aborted = controller.signal.aborted
       if (aborted) {
+        releaseProviderRequest(this.meta.providerId)
         this.finishTurn(true, '已中断', 'interrupted')
         return
       }
       if (isDigitalWorkerProviderDispatchDeniedError(err)) {
+        releaseProviderRequest(this.meta.providerId)
         this.finishTurn(true, err.message, 'policy-denied')
         return
       }
       if (err instanceof OutboundContextPolicyError) {
+        releaseProviderRequest(this.meta.providerId)
         this.finishTurn(true, err.message, 'outbound-policy-denied')
         return
       }
       if (isModelAttemptPersistenceError(err)) {
+        releaseProviderRequest(this.meta.providerId)
         const phase = err.phase === 'start' ? '启动' : '完成'
         this.finishTurn(true, `模型请求账本${phase}落盘失败，已阻止请求重放:${err.message}`, 'ledger-error')
         return
       }
       const text = errText(unwrapModelAttemptOperationError(err))
-      if (auth && (await this.tryProviderKeyFailover(text, payload, controller, auth))) return
+      releaseProviderRequest(this.meta.providerId)
+      if (await this.tryProviderKeyFailover(text, payload, controller, auth)) return
       recordFailure(this.meta.providerId, text)
       recordModelFailure(this.effectiveModel())
-      // 跨厂商故障切换:厂商侧故障(限流/余额/5xx/网络)自动换健康厂商重试本轮
-      if (await this.tryFailover(text, payload)) return
+      if (await firstSuccessfulRecovery(
+        () => this.tryProviderModelFailover(text, payload, controller),
+        () => this.tryFailover(text, payload),
+        () => this.tryProtocolFailover(text, payload, controller)
+      )) return
+      this.emitRecoveryExhausted(text)
       this.finishTurn(true, this.withProviderErrorContext(text), 'error')
     }
   }
@@ -580,11 +717,24 @@ export class OpenAIEngine implements Engine {
       additionalItems
     })
     const projectResources = outbound.resourceContext.prompt
+    const documentPrompt = documentAttachmentsToPrompt(
+      payload.documents ?? [],
+      sessionImageAttachmentsRoot(app.getPath('userData'), this.meta.id)
+    )
     const enriched = memory.trim() || skillPrompt.trim() || ideDocumentContext.trim() ||
-      handoff.trim() || projectResources.trim()
+      handoff.trim() || projectResources.trim() || documentPrompt.trim()
       ? {
         ...payload,
-        text: [projectResources, handoff, skillPrompt, ideDocumentContext, memory, '## Current User Request', payload.text]
+        text: [
+          projectResources,
+          handoff,
+          skillPrompt,
+          ideDocumentContext,
+          memory,
+          documentPrompt,
+          '## Current User Request',
+          payload.text
+        ]
           .filter((item) => item.trim().length > 0)
           .join('\n\n')
       }
@@ -593,13 +743,15 @@ export class OpenAIEngine implements Engine {
   }
 
   /** 本轮已试过的厂商(防切换打转);send 时重置 */
-  private triedProviders = new Set<string>()
-  /** 本轮已试过的 API Key id;同 Provider 内轮换时防止打转。 */
-  private triedProviderKeys = new Set<string>()
+  private recoveryState = new OpenAiRecoveryState()
+  private protocolOverride?: { providerId: string; from: 'responses'; to: 'chat' }
+  private recoveryExhaustedEmitted = false
   /** Responses 协议的上一轮 response id(服务端多轮上下文) */
   private lastResponseId?: string
   /** 服务端链不可复用时，从本地耐久事件重建可移植上下文。 */
   private responsesReplayRequired = false
+  /** 端点不支持 REST 模式的 previous_response_id 时置 true，后续请求跳过该字段 */
+  private previousResponseIdUnsupported = false
   /** 本轮流式累积的 Responses 函数调用(按 output_index 拼装) */
   private pendingResponseCalls: Array<{ callId: string; name: string; argsText: string }> = []
   private static readonly MAX_FAILOVERS_PER_TURN = 3
@@ -682,6 +834,8 @@ export class OpenAIEngine implements Engine {
     const replay = this.responsesReplayRequired
       ? buildPortableConversationReplay(this.transcript.read(), payload.messageId)
       : null
+    if (replay) this.refreshConfirmedToolReplay(payload.messageId)
+    const confirmedToolReplay = this.activeConfirmedToolReplay
     let input: unknown[] = [
       ...(replay ? [{ role: 'user', content: [{ type: 'input_text', text: replay.text }] }] : []),
       { role: 'user', content: buildInputContent(payload) }
@@ -704,24 +858,58 @@ export class OpenAIEngine implements Engine {
         instructions,
         input,
         tools: RESPONSES_CODING_TOOLS,
-        ...(this.lastResponseId ? { previous_response_id: this.lastResponseId } : {}),
+        ...(this.lastResponseId && !this.previousResponseIdUnsupported
+          ? { previous_response_id: this.lastResponseId }
+          : {}),
         stream: true
       }
-      await this.fetchWithRetry(
+      const request = applyProviderRequestOverrides(
+        auth.provider,
         openAiEndpoint(auth.baseUrl, 'responses'),
-        {
-          method: 'POST',
-          headers: openAIRequestHeaders(auth),
-          body: JSON.stringify(body),
-          signal: controller.signal
-        },
-        controller.signal,
-        auth,
-        async (res) => {
-          if (!res.ok) throw new Error(await formatOpenAIError(res, this.openAIErrorContext(auth)))
-          await this.consumeResponse(res)
-        }
+        body,
+        openAIRequestHeaders(auth)
       )
+      try {
+        await this.fetchWithRetry(
+          request.url,
+          {
+            method: 'POST',
+            headers: request.headers,
+            body: JSON.stringify(request.body),
+            signal: controller.signal
+          },
+          controller.signal,
+          auth,
+          async (res) => {
+            if (!res.ok) {
+              const errMsg = await formatOpenAIError(res, this.openAIErrorContext(auth))
+              // previous_response_id unsupported by endpoint: disable and fall back to full replay
+              if (!this.previousResponseIdUnsupported &&
+                  errMsg.includes('previous_response_id') &&
+                  (res.status === 400 || res.status === 500)) {
+                console.warn('[caogen] endpoint does not support previous_response_id; falling back to full context replay')
+                this.previousResponseIdUnsupported = true
+                this.lastResponseId = undefined
+                this.responsesReplayRequired = true
+                throw new Error('__PREVIOUS_RESPONSE_ID_UNSUPPORTED__')
+              }
+              throw new Error(errMsg)
+            }
+            await this.consumeResponse(res)
+          }
+        )
+      } catch (err) {
+        // previous_response_id fallback: rebuild input with full context and retry once
+        if (err instanceof Error && err.message === '__PREVIOUS_RESPONSE_ID_UNSUPPORTED__') {
+          const replay = buildPortableConversationReplay(this.transcript.read(), payload.messageId)
+          input = [
+            ...(replay ? [{ role: 'user', content: [{ type: 'input_text', text: replay.text }] }] : []),
+            ...input
+          ]
+          continue
+        }
+        throw err
+      }
 
       const calls = this.pendingResponseCalls.filter((c) => c.name && c.callId)
       this.pendingResponseCalls = []
@@ -737,6 +925,21 @@ export class OpenAIEngine implements Engine {
         } catch {
           // 参数非法 JSON:如实回给模型重试
         }
+        const confirmedOutput = await this.confirmedFailoverToolOutput(
+          confirmedToolReplay,
+          call.name,
+          args,
+          call.callId
+        )
+        if (confirmedOutput) {
+          outputs.push({
+            type: 'function_call_output',
+            call_id: call.callId,
+            output: confirmedOutput
+          })
+          continue
+        }
+        const replayTarget = await this.nativeToolRuntime.describeSideEffectTarget(call.name, args).catch(() => null)
         this.emit({ kind: 'tool-start', toolUseId: call.callId, name: call.name })
         this.emit({
           kind: 'assistant-message',
@@ -755,6 +958,14 @@ export class OpenAIEngine implements Engine {
           ...(exec.commandTermination ? { commandTermination: exec.commandTermination } : {}),
           effectStatus
         })
+        this.rememberConfirmedToolReplay({
+          toolUseId: call.callId,
+          toolName: call.name,
+          targetDigest: replayTarget?.targetDigest,
+          resultContent: resultText,
+          isError,
+          effectStatus
+        })
         assertToolEffectSettled(effectStatus, call.name, call.callId)
         outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
       }
@@ -762,52 +973,90 @@ export class OpenAIEngine implements Engine {
     }
     this.appendText(`\n\n[已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次,任务可能未完成;请拆分任务后继续]`)
   }
-  /**
-   * OpenAI 引擎跨厂商故障切换:错误可切换时挑健康厂商换家重试。
-   * 比 Claude 引擎轻得多 —— 无需重建进程,authConfig 每请求现读,
-   * 换 providerId + 模型即可;chat 历史在内存里原样带走。
-   */
+  /** Recover the current logical request on another model before another Provider. */
+  private async tryProviderModelFailover(
+    errorText: string,
+    payload: SendMessagePayload,
+    controller: AbortController
+  ): Promise<boolean> {
+    const settings = getSettings()
+    const providerId = this.meta.providerId?.trim()
+    if (this.disposed || !providerId || !this.recoveryState.canRecover(providerId, settings.failoverEnabled)) return false
+    const fromModel = this.effectiveModel()
+    const failure = classifyFailure(errorText)
+    const recovery = planOpenAiProviderModelRecovery({
+      providerId,
+      fromModel,
+      exclude: this.recoveryState.models(providerId),
+      fallbackModel: settings.fallbackModel,
+      failure,
+      outboundContext: this.activeOutboundContext
+    })
+    if (!recovery) return false
+
+    const previousProtocol = this.protocol()
+    this.refreshConfirmedToolReplay(payload.messageId)
+    this.recoveryState.models(providerId).add(recovery.toModel)
+    this.recoveryState.recordRecovery()
+    if (this.meta.model === AUTO_MODEL) this.routedModel = recovery.toModel
+    else this.meta.model = recovery.toModel
+    const nextProtocol = this.protocol()
+    this.clearResponsesContext(
+      previousProtocol === 'responses' || nextProtocol === 'responses' || Boolean(this.lastResponseId)
+    )
+    this.modelAttempts.setRouteReason(recovery.routeReason)
+    this.emit({
+      kind: 'provider-model-failover',
+      providerId,
+      providerName: recovery.providerName,
+      fromModel,
+      toModel: recovery.toModel,
+      reason: recovery.routeReason
+    })
+    this.emit({ kind: 'meta', meta: { ...this.meta } })
+    await this.runResponse(payload, controller)
+    return true
+  }
+
   private async tryFailover(errorText: string, payload: SendMessagePayload): Promise<boolean> {
     const settings = getSettings()
-    if (this.disposed || !settings.failoverEnabled) return false
-    if (this.triedProviders.size > OpenAIEngine.MAX_FAILOVERS_PER_TURN) return false
+    if (this.disposed || !this.recoveryState.canRecover(this.meta.providerId, settings.failoverEnabled)) return false
+    if (this.recoveryState.providers.size > OpenAIEngine.MAX_FAILOVERS_PER_TURN) return false
     const failure = classifyFailure(errorText)
-    if (!failure.switchable) return false
-
-    const candidates = listProviders()
-      .filter((p) => p.baseUrl.trim().length > 0 && providerIsReady(p))
-      .filter((p) => providerAllowedByOutboundContext(this.activeOutboundContext, p, this.effectiveModel()))
-      .map((p) => ({ id: p.id, name: p.name, models: p.models }))
-    const target = pickFailoverTarget({
-      candidates,
-      exclude: this.triedProviders,
-      desiredModel: this.effectiveModel(),
+    const fromId = this.meta.providerId
+    const target = planOpenAiProviderFailover({
+      currentProviderId: fromId,
+      currentModel: this.effectiveModel(),
+      exclude: this.recoveryState.providers,
       fallbackProviderId: settings.fallbackProviderId,
-      fallbackModel: settings.fallbackModel
+      fallbackModel: settings.fallbackModel,
+      failure,
+      currentProtocol: this.protocol(),
+      outboundContext: this.activeOutboundContext
     })
     if (!target) return false
 
-    const fromId = this.meta.providerId
-    const fromName = listProviders().find((p) => p.id === fromId)?.name ?? fromId ?? '当前厂商'
+    this.refreshConfirmedToolReplay(payload.messageId)
     const requiresPortableReplay = this.protocol() === 'responses' || Boolean(this.lastResponseId)
-    this.triedProviders.add(target.providerId)
+    this.recoveryState.providers.add(target.providerId)
+    this.recoveryState.recordRecovery()
     this.meta.providerId = target.providerId
+    this.protocolOverride = undefined
     if (target.model) {
       if (this.meta.model === AUTO_MODEL) this.routedModel = target.model
       else this.meta.model = target.model
     }
     // Responses 的 response id 不跨厂商;换家后重新开始服务端上下文链
     this.clearResponsesContext(requiresPortableReplay)
-    const routeReason = [failure.label, target.preference].filter(Boolean).join(' · ')
-    this.modelAttempts.setRouteReason(routeReason)
+    this.modelAttempts.setRouteReason(target.routeReason)
     this.emit({
       kind: 'failover',
       fromProviderId: fromId,
       toProviderId: target.providerId,
-      fromName,
+      fromName: target.fromName,
       toName: target.name,
       model: target.model,
-      reason: routeReason
+      reason: target.routeReason
     })
     this.emit({ kind: 'meta', meta: { ...this.meta } })
 
@@ -817,25 +1066,94 @@ export class OpenAIEngine implements Engine {
     return true
   }
 
+  private async tryProtocolFailover(
+    errorText: string,
+    payload: SendMessagePayload,
+    controller: AbortController
+  ): Promise<boolean> {
+    const settings = getSettings()
+    const providerId = this.meta.providerId?.trim()
+    if (this.disposed || !providerId || !this.recoveryState.canRecover(providerId, settings.failoverEnabled)
+      || this.protocol() !== 'responses') return false
+    const recovery = planOpenAiProtocolRecovery({
+      providerId,
+      model: this.effectiveModel(),
+      currentProtocol: this.protocol(),
+      failure: classifyFailure(errorText)
+    })
+    if (!recovery) return false
+
+    this.refreshConfirmedToolReplay(payload.messageId)
+    this.clearResponsesContext(true)
+    this.protocolOverride = { providerId, from: recovery.fromProtocol, to: recovery.toProtocol }
+    this.recoveryState.recordRecovery()
+    this.modelAttempts.setRouteReason(recovery.routeReason)
+    this.emit({
+      kind: 'provider-protocol-failover',
+      providerId,
+      providerName: recovery.providerName,
+      model: recovery.model,
+      fromProtocol: recovery.fromProtocol,
+      toProtocol: recovery.toProtocol,
+      reason: recovery.routeReason
+    })
+    await this.runResponse(payload, controller)
+    return true
+  }
+
+  private emitRecoveryExhausted(errorText: string): void {
+    const settings = getSettings()
+    if (this.recoveryExhaustedEmitted
+      || !this.recoveryState.isEnabled(this.meta.providerId, settings.failoverEnabled)) return
+    const failure = classifyFailure(errorText)
+    if (!failure.switchable) return
+    const providerId = this.meta.providerId?.trim()
+    if (!providerId) return
+    this.recoveryExhaustedEmitted = true
+    this.emit({
+      kind: 'provider-recovery-exhausted',
+      engine: 'openai',
+      providerId,
+      providerName: listProviders().find((provider) => provider.id === providerId)?.name ?? providerId,
+      model: this.effectiveModel(),
+      reason: failure.label
+    })
+  }
+
   private async tryProviderKeyFailover(
     errorText: string,
     payload: SendMessagePayload,
     controller: AbortController,
-    auth: OpenAIAuthConfig
+    auth: OpenAIAuthConfig | undefined
   ): Promise<boolean> {
+    if (!auth) return false
     const settings = getSettings()
-    if (this.disposed || !settings.failoverEnabled || !this.meta.providerId || !auth.keyId) return false
+    if (this.disposed || !this.meta.providerId || !auth.keyId
+      || !this.recoveryState.canRecover(this.meta.providerId, settings.failoverEnabled)) return false
     const failure = classifyFailure(errorText)
     if (!canRotateProviderKey(failure)) return false
+    if (auth.authorizationAccountId) {
+      if (auth.authorizationAccountExplicit) return false
+      const next = recordProviderAuthorizationAccountFailure(this.meta.providerId, auth.authorizationAccountId)
+      if (!next.account) return false
+      this.refreshConfirmedToolReplay(payload.messageId)
+      this.recoveryState.recordRecovery()
+      this.clearResponsesContext(this.protocol() === 'responses')
+      this.modelAttempts.setRouteReason(`OAuth account failover: ${failure.label}; ${next.reason}`)
+      await this.runResponse(payload, controller)
+      return true
+    }
     const rotation = rotateProviderKey({
       providerId: this.meta.providerId,
       failedKeyId: auth.keyId,
-      excludedKeyIds: this.triedProviderKeys,
+      excludedKeyIds: this.recoveryState.keys,
       reason: failure.label
     })
     if (!rotation) return false
 
-    this.triedProviderKeys.add(rotation.toKeyId)
+    this.refreshConfirmedToolReplay(payload.messageId)
+    this.recoveryState.keys.add(rotation.toKeyId)
+    this.recoveryState.recordRecovery()
     this.clearResponsesContext(this.protocol() === 'responses')
     this.modelAttempts.setRouteReason(`Provider key failover: ${failure.label}`)
     this.emit({
@@ -864,8 +1182,12 @@ export class OpenAIEngine implements Engine {
     controller: AbortController,
     auth: OpenAIAuthConfig
   ): Promise<void> {
-    if (this.responsesReplayRequired) {
-      const replay = buildPortableConversationReplay(this.transcript.read(), payload.messageId)
+    const replayRequired = this.responsesReplayRequired
+    const replayEntries = replayRequired ? this.transcript.read() : []
+    if (replayRequired) this.refreshConfirmedToolReplay(payload.messageId)
+    const confirmedToolReplay = this.activeConfirmedToolReplay
+    if (replayRequired) {
+      const replay = buildPortableConversationReplay(replayEntries, payload.messageId)
       if (replay) {
         this.chatHistory = [{ role: 'system', content: replay.text }]
         this.emit({
@@ -900,12 +1222,18 @@ export class OpenAIEngine implements Engine {
         for (const warning of adaptation.warnings) {
           this.emit({ kind: 'hook-event', event: 'provider-adapter', detail: warning })
         }
-        await this.fetchWithRetry(
+        const request = applyProviderRequestOverrides(
+          auth.provider,
           openAiEndpoint(auth.baseUrl, 'chat/completions'),
+          adaptation.body as unknown as Record<string, unknown>,
+          openAIRequestHeaders(auth)
+        )
+        await this.fetchWithRetry(
+          request.url,
           {
             method: 'POST',
-            headers: openAIRequestHeaders(auth),
-            body: JSON.stringify(adaptation.body),
+            headers: request.headers,
+            body: JSON.stringify(request.body),
             signal: controller.signal
           },
           controller.signal,
@@ -949,6 +1277,17 @@ export class OpenAIEngine implements Engine {
           } catch {
             // 参数不是合法 JSON:如实回给模型让它重试
           }
+          const confirmedOutput = await this.confirmedFailoverToolOutput(
+            confirmedToolReplay,
+            call.name,
+            args,
+            call.id
+          )
+          if (confirmedOutput) {
+            this.chatHistory.push({ role: 'tool', tool_call_id: call.id, content: confirmedOutput })
+            continue
+          }
+          const replayTarget = await this.nativeToolRuntime.describeSideEffectTarget(call.name, args).catch(() => null)
           this.emit({ kind: 'tool-start', toolUseId: call.id, name: call.name })
           this.emit({
             kind: 'assistant-message',
@@ -965,6 +1304,14 @@ export class OpenAIEngine implements Engine {
             isError,
             ...(exec.exitCode === undefined ? {} : { exitCode: exec.exitCode }),
             ...(exec.commandTermination ? { commandTermination: exec.commandTermination } : {}),
+            effectStatus
+          })
+          this.rememberConfirmedToolReplay({
+            toolUseId: call.id,
+            toolName: call.name,
+            targetDigest: replayTarget?.targetDigest,
+            resultContent: resultText,
+            isError,
             effectStatus
           })
           assertToolEffectSettled(effectStatus, call.name, call.id)
@@ -1077,12 +1424,18 @@ export class OpenAIEngine implements Engine {
       stream: false,
       max_tokens: 800
     }
-    return this.fetchWithRetry(
+    const request = applyProviderRequestOverrides(
+      auth.provider,
       openAiEndpoint(auth.baseUrl, 'chat/completions'),
+      body,
+      openAIRequestHeaders(auth)
+    )
+    return this.fetchWithRetry(
+      request.url,
       {
         method: 'POST',
-        headers: openAIRequestHeaders(auth),
-        body: JSON.stringify(body)
+        headers: request.headers,
+        body: JSON.stringify(request.body)
       },
       this.abort?.signal ?? new AbortController().signal,
       auth,
@@ -1213,16 +1566,14 @@ export class OpenAIEngine implements Engine {
    */
   private protocol(): OpenAIProtocol {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
-    if (provider?.openaiProtocol === 'chat') return 'chat'
-    if (provider?.openaiProtocol === 'responses') return 'responses'
-    const baseUrl = (provider?.baseUrl ?? '').trim()
-    if (!baseUrl) return 'responses'
-    try {
-      const host = new URL(baseUrl).host
-      return host === 'api.openai.com' ? 'responses' : 'chat'
-    } catch {
-      return 'chat'
-    }
+    const target = provider
+      ? resolveProviderRuntimeTarget(provider, { appId: 'openai', model: this.requestedModel() })
+      : undefined
+    const configured = resolveOpenAIProtocol(target ?? { baseUrl: '', protocol: undefined })
+    return this.protocolOverride?.providerId === this.meta.providerId &&
+      this.protocolOverride.from === configured
+      ? this.protocolOverride.to
+      : configured
   }
 
   private async consumeResponse(res: Response): Promise<void> {
@@ -1331,6 +1682,9 @@ export class OpenAIEngine implements Engine {
     auth: OpenAIAuthConfig,
     consume: (response: Response) => Promise<T>
   ): Promise<T> {
+    const streaming = providerRequestIsStreaming(init.body)
+    const timeouts = providerRequestTimeouts(auth.provider)
+    const deadlines = new WeakMap<Response, ProviderRequestDeadline>()
     return this.modelAttempts.fetch({
       run: taskRuntimeRegistry.get(this.meta.id),
       providerId: this.meta.providerId || 'openai',
@@ -1340,7 +1694,17 @@ export class OpenAIEngine implements Engine {
       init: { ...init, signal },
       signal,
       auth: { keyId: auth.keyId, keyLabel: auth.keyLabel },
-      executeFetch: (operationId) => this.executeProviderFetch(url, { ...init, signal }, auth, operationId),
+      executeFetch: async (operationId) => {
+        const deadline = new ProviderRequestDeadline(signal, timeouts, streaming)
+        try {
+          const response = await this.executeProviderFetch(url, { ...init, signal: deadline.signal }, auth, operationId)
+          deadlines.set(response, deadline)
+          return response
+        } catch (error) {
+          deadline.finish()
+          throw deadline.errorOr(error)
+        }
+      },
       preflight: async () => {
         assertDigitalWorkerProviderDispatchAllowed(this.meta)
         const manifest = this.activeOutboundContext
@@ -1359,7 +1723,17 @@ export class OpenAIEngine implements Engine {
         })
       },
       readUsage: () => this.turnUsage,
-      consume
+      consume: async (response) => {
+        const deadline = deadlines.get(response)
+        if (!deadline) return consume(response)
+        try {
+          return await consume(deadline.wrapResponse(response))
+        } catch (error) {
+          throw deadline.errorOr(error)
+        } finally {
+          deadline.finish()
+        }
+      }
     })
   }
 
@@ -1403,6 +1777,18 @@ export class OpenAIEngine implements Engine {
       resultText: isError ? resultText : text || undefined,
       usage: this.turnUsage
     })
+    if (this.activeMessageId && this.turnRevisionEligible && !this.turnHadToolEvents) {
+      this.emit({
+        kind: 'checkpoint',
+        messageId: providerChatCheckpointId(this.activeMessageId),
+        userMessageId: this.activeMessageId,
+        scope: 'chat'
+      })
+    }
+    this.activeMessageId = undefined
+    this.activeConfirmedToolReplay = new Map()
+    this.turnRevisionEligible = false
+    this.turnHadToolEvents = false
     if (isError && resultText) this.setStatus('error', resultText)
     else this.setStatus('idle')
   }
@@ -1445,34 +1831,15 @@ export class OpenAIEngine implements Engine {
 
   private authConfig(): OpenAIAuthConfig {
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
-    let baseUrl = (provider?.baseUrl || process.env.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '')
-    // 用户把为 Claude 引擎准备的 Anthropic 兼容 Provider(…/anthropic)用在
-    // OpenAI 引擎上时,剥掉子路径回到裸域 —— DeepSeek 等厂商在裸域同时提供
-    // /v1/chat/completions,直接可用而非 404。
-    if (this.protocol() === 'chat') baseUrl = baseUrl.replace(/\/anthropic$/, '')
-    const providerId = provider?.id || this.meta.providerId || 'openai'
-    const selection = provider
-      ? selectProviderCredential(provider)
-      : {
-          providerId,
-          keyId: 'environment:OPENAI_API_KEY',
-          authMode: 'api-key' as const,
-          available: Boolean(process.env.OPENAI_API_KEY)
-        }
-    return {
-      baseUrl,
-      authMode: providerAuthMode(provider),
-      headers: parseProviderHeaders(provider?.customHeaders),
-      providerId,
-      available: selection.available,
+    return resolveOpenAiAuthConfig({
       provider,
-      environmentCredential: !provider,
-      keyId: selection.keyId,
-      keyLabel: selection.keyLabel
-    }
+      providerId: this.meta.providerId,
+      model: this.requestedModel(),
+      protocol: this.protocol()
+    })
   }
 
-  private executeProviderFetch(
+  private async executeProviderFetch(
     url: string,
     init: RequestInit,
     auth: OpenAIAuthConfig,
@@ -1480,6 +1847,28 @@ export class OpenAIEngine implements Engine {
   ): Promise<Response> {
     const scope = providerCredentialScopeForSession(this.meta, auth.providerId, operationId)
     const currentProvider = auth.provider ? getProvider(auth.providerId) : undefined
+    if (currentProvider && auth.authorizationAccountId) {
+      const account = await issueProviderAuthorizationAccountLease(
+        { ...currentProvider, baseUrl: auth.baseUrl },
+        auth.authorizationAccountId,
+        scope
+      )
+      return fetchWithProviderCredentialLease({
+        provider: account.credentialProvider,
+        lease: account.lease,
+        scope,
+        url,
+        init: {
+          ...init,
+          headers: {
+            ...openAIRequestHeaders(auth),
+            ...((init.headers ?? {}) as Record<string, string>),
+            ...parseProviderHeaders(account.credentialProvider.customHeaders)
+          }
+        }
+      })
+    }
+    await ensureProviderAuthorizationFresh(auth.providerId)
     const selection = currentProvider
       ? issueProviderCredentialLease(currentProvider, scope, {}, auth.keyId)
       : issueDirectProviderCredentialLease(
@@ -1496,18 +1885,42 @@ export class OpenAIEngine implements Engine {
       lease: selection.lease,
       scope,
       url,
-      init: { ...init, headers: openAIRequestHeaders(auth) }
+      init: {
+        ...init,
+        headers: {
+          ...openAIRequestHeaders(auth),
+          ...((init.headers ?? {}) as Record<string, string>)
+        }
+      }
     })
   }
 
-  private effectiveModel(): string {
+  private requestedModel(): string {
     if (this.meta.model && this.meta.model !== AUTO_MODEL) return this.meta.model
-    if (this.routedModel) return this.routedModel // auto 模式:本轮路由结果
+    if (this.routedModel) return this.routedModel
     const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
     return provider?.models?.[0] || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
   }
 
+  private effectiveModel(): string {
+    const provider = this.meta.providerId ? getProvider(this.meta.providerId) : undefined
+    if (this.meta.model && this.meta.model !== AUTO_MODEL) {
+      return provider
+        ? resolveProviderRuntimeTarget(provider, { appId: 'openai', model: this.meta.model }).model
+        : this.meta.model
+    }
+    if (this.routedModel) return this.routedModel // auto 模式:本轮路由结果
+    const fallback = provider?.models?.[0] || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
+    return provider
+      ? resolveProviderRuntimeTarget(provider, { appId: 'openai', model: fallback }).model
+      : fallback
+  }
+
   private emit(event: AgentEvent): void {
+    if (event.kind === 'tool-start' || event.kind === 'tool-result' ||
+        event.kind === 'permission-request' || event.kind === 'permission-resolved') {
+      this.turnHadToolEvents = true
+    }
     this.emitRaw(event)
   }
 
@@ -1535,7 +1948,7 @@ export class OpenAIEngine implements Engine {
 
   private withProviderErrorContext(message: string): string {
     const auth = this.authConfig()
-    return `${message}\n${formatProviderErrorContext(this.openAIErrorContext(auth))}`
+    return `${redactProviderErrorText(message)}\n${formatProviderErrorContext(this.openAIErrorContext(auth))}`
   }
 }
 
@@ -1544,18 +1957,6 @@ function openAIRequestHeaders(auth: OpenAIAuthConfig): Record<string, string> {
     'content-type': 'application/json',
     ...auth.headers
   }
-}
-
-function isResponsesConversationContext(value: unknown): value is ResponsesConversationContext {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  return typeof record.responseId === 'string' && record.responseId.trim().length > 0 &&
-    typeof record.providerId === 'string' && record.providerId.trim().length > 0 &&
-    typeof record.model === 'string' && record.model.trim().length > 0 &&
-    record.protocol === 'responses' &&
-    (record.keyId === undefined || typeof record.keyId === 'string') &&
-    typeof record.generation === 'number' && Number.isInteger(record.generation) && record.generation > 0 &&
-    typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
 }
 
 function openAiAdditionalContextItems(input: {
@@ -1677,9 +2078,9 @@ async function formatOpenAIError(res: Response, context?: OpenAIErrorContext): P
   const suffix = context ? `\n${formatProviderErrorContext(context)}` : ''
   try {
     const json = JSON.parse(text) as Record<string, unknown>
-    return `${prefix}: ${extractErrorMessage(json.error) || text || res.statusText}${suffix}`
+    return `${prefix}: ${redactProviderErrorText(extractErrorMessage(json.error) || text || res.statusText)}${suffix}`
   } catch {
-    return `${prefix}: ${text || res.statusText}${suffix}`
+    return `${prefix}: ${redactProviderErrorText(text || res.statusText)}${suffix}`
   }
 }
 
@@ -1689,10 +2090,6 @@ function statusHint(status: number): string {
   if (status === 429) return '(限流/余额不足)'
   if (status >= 500) return '(网关或上游服务错误)'
   return ''
-}
-
-function formatProviderErrorContext(context: OpenAIErrorContext): string {
-  return `Provider: ${context.providerName} (${context.providerId}); baseUrl: ${context.baseUrl}; model: ${context.model}; protocol: ${context.protocol}`
 }
 
 function extractErrorMessage(error: unknown): string {

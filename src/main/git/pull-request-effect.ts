@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { EffectTarget, FileSystemIdentity } from '../../shared/types'
+import { gitCliAvailable, gitCliForProvider, gitCliOverride } from './cli-override'
 import { stableValueDigest } from '../task/tool-idempotency'
 import {
   isolatedLocalGitEnv,
@@ -222,8 +223,8 @@ export async function buildIssueEffectTarget(input: {
 export async function queryIssueEffectTarget(
   target: IssueEffectTarget
 ): Promise<IssueEffectObservation> {
-  const tool = toolForProvider(target.provider)
-  if (!commandExists(tool)) {
+  const tool = gitCliForProvider(target.provider)
+  if (!gitCliAvailable(tool, LOCAL_TIMEOUT_MS)) {
     return { complete: false, records: [], error: `本机未检测到 ${tool}，无法对账 Issue` }
   }
   const command: PullRequestCliCommand = target.provider === 'github'
@@ -329,7 +330,7 @@ async function createIssue(
   body: string,
   labels: string[]
 ): Promise<IssueEffectExecutionResult> {
-  const tool = toolForProvider(target.provider)
+  const tool = gitCliForProvider(target.provider)
   const markedBody = appendMarker(body, target.marker)
   const labelArgs = labels.length > 0 ? ['--label', labels.join(',')] : []
   const command: PullRequestCliCommand = target.provider === 'github'
@@ -353,7 +354,7 @@ function existingIssueResult(target: IssueEffectTarget, url: string): IssueEffec
     ok: true,
     repoRoot: target.repoRoot,
     provider: target.provider,
-    tool: toolForProvider(target.provider),
+    tool: gitCliForProvider(target.provider),
     url,
     existing: true
   }
@@ -410,8 +411,8 @@ export function inspectPullRequestCapability(cwd: string): PullRequestCapability
     if (!parsed.provider || !parsed.host || !parsed.projectPath) {
       return { available: false, message: '当前 remote 不是受支持的 GitHub/GitLab 仓库' }
     }
-    const tool = toolForProvider(parsed.provider)
-    if (!commandExists(tool)) {
+    const tool = gitCliForProvider(parsed.provider)
+    if (!gitCliAvailable(tool, LOCAL_TIMEOUT_MS)) {
       return {
         available: false,
         provider: parsed.provider,
@@ -428,8 +429,8 @@ export function inspectPullRequestCapability(cwd: string): PullRequestCapability
 export async function queryPullRequestEffectTarget(
   target: PullRequestEffectTarget
 ): Promise<PullRequestEffectObservation> {
-  const tool = toolForProvider(target.provider)
-  if (!commandExists(tool)) {
+  const tool = gitCliForProvider(target.provider)
+  if (!gitCliAvailable(tool, LOCAL_TIMEOUT_MS)) {
     return { complete: false, records: [], error: `本机未检测到 ${tool}，无法对账 PR/MR` }
   }
   const command: { args: string[]; env: Record<string, string> } = target.provider === 'github'
@@ -556,7 +557,7 @@ function existingPullRequestResult(
     ok: true,
     repoRoot: target.repoRoot,
     provider: target.provider,
-    tool: toolForProvider(target.provider),
+    tool: gitCliForProvider(target.provider),
     branch: target.sourceBranch,
     base: target.baseBranch,
     url,
@@ -568,7 +569,7 @@ async function createPullRequest(
   target: PullRequestEffectTarget,
   execution: ValidatedPullRequestExecution
 ): Promise<PullRequestEffectExecutionResult> {
-  const tool = toolForProvider(target.provider)
+  const tool = gitCliForProvider(target.provider)
   const command = createPullRequestCommand(target, execution)
   const created = await cliRun(tool, command.args, target.repoRoot, command.env, CLI_TIMEOUT_MS)
   if (!created.ok) return failure(`${tool} 创建 PR/MR 失败`, target.repoRoot, created.error)
@@ -661,8 +662,8 @@ async function inspectRepository(cwd: string): Promise<InspectedRepository> {
   if (!parsed.provider || !parsed.host || !parsed.projectPath) {
     throw new Error('当前 remote 不是受支持的 GitHub/GitLab 仓库')
   }
-  const tool = toolForProvider(parsed.provider)
-  if (!commandExists(tool)) throw new Error(`已识别 ${parsed.provider} remote，但本机未检测到 ${tool}`)
+  const tool = gitCliForProvider(parsed.provider)
+  if (!gitCliAvailable(tool, LOCAL_TIMEOUT_MS)) throw new Error(`已识别 ${parsed.provider} remote，但本机未检测到 ${tool}`)
   return {
     repoRoot,
     remote,
@@ -766,16 +767,6 @@ function appendMarker(body: string, marker: string): string {
   return body ? `${body.replace(/\s+$/, '')}\n\n${marker}` : marker
 }
 
-function toolForProvider(provider: PullRequestProvider): PullRequestTool {
-  return provider === 'github' ? 'gh' : 'glab'
-}
-
-function commandExists(command: string): boolean {
-  const probe = process.platform === 'win32' ? 'where' : 'which'
-  const result = spawnSync(probe, [command], { stdio: 'ignore', timeout: LOCAL_TIMEOUT_MS })
-  return result.status === 0
-}
-
 function preferredRemoteSync(repoRoot: string): string | null {
   const names = syncGitText(repoRoot, ['remote'])
     .split(/\r?\n/)
@@ -859,7 +850,15 @@ function cliRun(
   envPatch: Record<string, string>,
   timeoutMs = REMOTE_TIMEOUT_MS
 ): Promise<CommandResult> {
-  return commandRun(command, args, cwd, { ...process.env, ...envPatch }, timeoutMs, [0])
+  const override = command === 'gh' || command === 'glab' ? gitCliOverride(command) : undefined
+  return commandRun(
+    override?.executable ?? command,
+    override ? [...override.argsPrefix, ...args] : args,
+    cwd,
+    { ...process.env, ...envPatch },
+    timeoutMs,
+    [0]
+  )
 }
 
 function commandRun(

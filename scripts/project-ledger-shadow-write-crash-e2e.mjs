@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -60,7 +60,7 @@ async function strongKillRecovery(checkpoint) {
   const workspaceId = `workspace-${checkpoint}`
   const goalId = `goal-${checkpoint}`
   await seedWorkspace(root, workspaceId)
-  const child = spawnSync(process.execPath, [new URL(import.meta.url).pathname], {
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -73,7 +73,8 @@ async function strongKillRecovery(checkpoint) {
     },
     encoding: 'utf8'
   })
-  assertEqual(child.signal, 'SIGKILL', `${checkpoint} child must be killed at the checkpoint`)
+  assert(process.platform === 'win32' ? child.signal === null && child.status !== 0 : child.signal === 'SIGKILL',
+    `${checkpoint} child must be killed at the checkpoint`)
   const sourceAfterKill = readJsonState(root)
   const goalAfterKill = sourceAfterKill.goals.find((item) => item.id === goalId)
   assertEqual(Boolean(goalAfterKill), checkpoint !== 'after_prepare', `${checkpoint} JSON commit boundary`)

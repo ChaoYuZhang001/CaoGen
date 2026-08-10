@@ -39,7 +39,7 @@ This table describes the current product structure. It does not claim that every
 
 ## Current progress
 
-As of 2026-07-31, 21 of the PRD's 64 P0s are verified and 43 remain open. The latest clean/public snapshot classifies the open set as 19 partially complete, 23 project targets, and 1 foundation only; a newer dirty-worktree structural projection classifies it as 30 partially complete, 12 project targets, and 1 foundation only. Neither snapshot is a version-completion percentage or release binding. The published `v0.1.7` is a signed macOS Intel wedge release, not 1.0 stable, and the formal cross-platform Release Gate remains blocked. See the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md) and [STATUS.md](./STATUS.md) for exact boundaries.
+As of 2026-08-07, the current structural projection is: PRD has 64 P0s: 21 verified, 30 partially complete, 12 project targets, and 1 foundation only. This is not a version-completion percentage or release binding. The published `v0.1.7` is a signed macOS Intel wedge release, not 1.0 stable, and the formal cross-platform Release Gate remains blocked. See the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md) and [STATUS.md](./STATUS.md) for exact boundaries.
 
 > **First-time-user acceptance remains open**: the target is a private, 30-minute install of a supported release asset, Provider setup, and read-only task drill. Eligibility, privacy boundaries, and the volunteer format are in [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9). Never post keys, Provider URLs, or project paths.
 

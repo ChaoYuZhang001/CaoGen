@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 const CONTEXT_FILES = ['caogen.md', '.caogen.md', 'README.md'] as const
@@ -69,9 +70,11 @@ interface ReadTextResult {
 /** 定位项目根目录:优先包含 caogen 上下文文件的上级目录,其次常见工程根标记。 */
 export function resolveProjectRoot(startPath: string): string {
   const start = normalizeExistingDirectory(startPath)
+  const userHome = resolve(homedir())
   let current = start
   let firstMarkerDir: string | null = null
   while (true) {
+    if (samePath(current, userHome) && !samePath(start, userHome)) break
     if (CONTEXT_FILES.some((name) => existsSync(join(current, name)))) return current
     if (!firstMarkerDir && ROOT_MARKERS.some((name) => existsSync(join(current, name)))) {
       firstMarkerDir = current
@@ -81,6 +84,12 @@ export function resolveProjectRoot(startPath: string): string {
     current = parent
   }
   return firstMarkerDir ?? start
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
 }
 
 export function readProjectContext(projectPath: string): ProjectContextReadResult {

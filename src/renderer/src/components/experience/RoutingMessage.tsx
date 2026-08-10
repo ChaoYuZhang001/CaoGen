@@ -1,4 +1,5 @@
-import type { ChatItem } from '../../store'
+import { Settings } from 'lucide-react'
+import { useStore, type ChatItem } from '../../store'
 import { formatCost } from '../../format'
 import { useT } from '../../i18n'
 import { useExperienceProjection } from './ExperienceProjection'
@@ -7,6 +8,9 @@ type RoutingItem = Extract<ChatItem, { kind: 'routing' }>
 type RoutingDecision = NonNullable<RoutingItem['decision']>
 type FailoverItem = Extract<ChatItem, { kind: 'failover' }>
 type KeyFailoverItem = Extract<ChatItem, { kind: 'provider-key-failover' }>
+type ModelFailoverItem = Extract<ChatItem, { kind: 'provider-model-failover' }>
+type ProtocolFailoverItem = Extract<ChatItem, { kind: 'provider-protocol-failover' }>
+type RecoveryExhaustedItem = Extract<ChatItem, { kind: 'provider-recovery-exhausted' }>
 
 const ROUTING_TASK_KEYS: Record<string, string> = {
   chat: 'routingTaskChat',
@@ -65,6 +69,72 @@ export function ProviderKeyFailoverMessage({ item }: { item: KeyFailoverItem }):
           to: item.toKeyLabel
         })}
       </span>
+    </div>
+  )
+}
+
+export function ProviderModelFailoverMessage({ item }: { item: ModelFailoverItem }): React.JSX.Element {
+  const projection = useExperienceProjection()
+  const t = useT()
+  if (projection === 'assistant') {
+    return <AssistantRouteNotice text={t('assistantFailoverStatus')} kind="model-failover" />
+  }
+  return (
+    <div className="routing-note failover-note model-failover-note" title={t('modelFailoverTitle')}>
+      <span className="routing-icon">M</span>
+      <span className="routing-text">
+        {t('modelFailoverText', {
+          provider: item.providerName,
+          from: item.fromModel,
+          reason: item.reason,
+          to: item.toModel
+        })}
+      </span>
+    </div>
+  )
+}
+
+export function ProviderProtocolFailoverMessage({ item }: { item: ProtocolFailoverItem }): React.JSX.Element {
+  const projection = useExperienceProjection()
+  const t = useT()
+  if (projection === 'assistant') {
+    return <AssistantRouteNotice text={t('assistantProtocolFailoverStatus')} kind="protocol-failover" />
+  }
+  return (
+    <div className="routing-note failover-note protocol-failover-note" title={t('protocolFailoverTitle')}>
+      <span className="routing-icon">P</span>
+      <span className="routing-text">
+        {t('protocolFailoverText', {
+          provider: item.providerName,
+          model: item.model,
+          reason: item.reason
+        })}
+      </span>
+    </div>
+  )
+}
+
+export function ProviderRecoveryExhaustedMessage({ item }: { item: RecoveryExhaustedItem }): React.JSX.Element {
+  const t = useT()
+  const setShowSettings = useStore((state) => state.setShowSettings)
+  return (
+    <div className="routing-note failover-note routing-recovery-note" title={t('recoveryExhaustedTitle')}>
+      <span className="routing-icon">!</span>
+      <span className="routing-text">
+        {t('recoveryExhaustedText', {
+          provider: item.providerName,
+          model: item.model,
+          reason: item.reason
+        })}
+      </span>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm routing-recovery-action"
+        onClick={() => setShowSettings(true, 'providers', 'provider-recovery-exhausted')}
+      >
+        <Settings size={14} aria-hidden="true" />
+        {t('openProviderSettings')}
+      </button>
     </div>
   )
 }

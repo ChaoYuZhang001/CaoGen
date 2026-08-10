@@ -58,6 +58,7 @@ export interface ProjectResourceInput extends Omit<ProjectResource, 'id'> {
 export type OutboundContextItemKind =
   | 'user_prompt'
   | 'image_attachment'
+  | 'document_attachment'
   | 'project_resource'
   | 'project_resource_metadata'
   | 'conversation_context'

@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
+import { Search } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
@@ -8,12 +9,16 @@ import type {
   HistoryEntry,
   LayoutSettings,
   SessionStatus,
-  TaskSnapshotRecord,
   TranscriptSearchResult
 } from '../../../shared/types'
+import type { ExperienceMode } from '../store/experience-mode'
+import AppModeSwitcher from './AppModeSwitcher'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
 import { preloadOfficeView } from './office/loadOffice'
 import SidebarProjectSections, { type SidebarProjectSort } from './SidebarProjectSections'
+import { HeaderIcon } from './ChatHeaderIcons'
+import { modelAttemptMatchesSnapshot } from './ModelAttemptRecoveryPanel'
+import { isTaskSnapshotRecoverable } from './TaskRecoveryItem'
 import {
   buildSidebarProjectGroups,
   sidebarEntryPath,
@@ -30,8 +35,8 @@ const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   closed: 'statusClosed'
 }
 
-const SIDEBAR_MIN_WIDTH = 220
-const SIDEBAR_MAX_WIDTH = 420
+const SIDEBAR_MIN_WIDTH = 208
+const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_COLLAPSED_WIDTH = 56
 
 interface EditingTarget { kind: SidebarEntry['kind']; id: string }
@@ -87,9 +92,21 @@ function highlightSnippet(snippet: string, query: string): React.ReactNode {
   )
 }
 
-interface SidebarProps { mobileOpen?: boolean; onMobileClose?: () => void }
+interface SidebarProps {
+  experienceMode: ExperienceMode
+  language: 'zh' | 'en'
+  mobileOpen?: boolean
+  onExperienceModeChange: (mode: ExperienceMode) => void
+  onMobileClose?: () => void
+}
 
-function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX.Element {
+function Sidebar({
+  experienceMode,
+  language,
+  mobileOpen = false,
+  onExperienceModeChange,
+  onMobileClose
+}: SidebarProps): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
   const sessions = useStore((s) => s.sessions)
@@ -98,8 +115,7 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
   const projects = useStore((s) => s.projects)
   const projectWorkspaces = useStore((s) => s.projectWorkspaces)
   const taskSnapshots = useStore((s) => s.taskSnapshots)
-  const taskSnapshotsLoading = useStore((s) => s.taskSnapshotsLoading)
-  const taskSnapshotsError = useStore((s) => s.taskSnapshotsError)
+  const modelAttemptReconciliations = useStore((s) => s.modelAttemptReconciliations)
   const query = useStore((s) => s.sidebarQuery)
   const setSidebarQuery = useStore((s) => s.setSidebarQuery)
   const transcriptSearchResults = useStore((s) => s.transcriptSearchResults)
@@ -113,8 +129,6 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
   const archiveHistory = useStore((s) => s.archiveHistory)
   const pinHistory = useStore((s) => s.pinHistory)
   const deleteHistoryEntry = useStore((s) => s.deleteHistoryEntry)
-  const recoverTaskSnapshot = useStore((s) => s.recoverTaskSnapshot)
-  const deleteTaskSnapshot = useStore((s) => s.deleteTaskSnapshot)
   const setShowTaskRecovery = useStore((s) => s.setShowTaskRecovery)
   const closeSession = useStore((s) => s.closeSession)
   const archiveProject = useStore((s) => s.archiveProject)
@@ -126,6 +140,9 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setView = useStore((s) => s.setView)
+  const showNewSession = useStore((s) => s.showNewSession)
+  const showTaskRecovery = useStore((s) => s.showTaskRecovery)
+  const view = useStore((s) => s.view)
   const layout = useStore((s) => s.settings.layout)
   const updateSettings = useStore((s) => s.updateSettings)
 
@@ -137,6 +154,8 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
   const [projectSort, setProjectSort] = useState<SidebarProjectSort>('recent')
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [sidebarWidth, setSidebarWidth] = useState(layout.sidebarWidth)
   useEffect(() => {
     setSidebarWidth(layout.sidebarWidth)
@@ -198,24 +217,18 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
     return text.includes(q)
   }
 
-  const matchesTaskSnapshot = (snapshot: TaskSnapshotRecord): boolean => {
-    const q = query.trim().toLowerCase()
-    if (!q) return true
-    const projectName = projectNameForPath(snapshot.projectPath)
-    const text = [
-      snapshot.title,
-      snapshot.projectPath,
-      projectName,
-      snapshot.model,
-      snapshot.providerId
-    ].map(normalized).join('\n')
-    return text.includes(q)
-  }
-
   const openSdkIds = new Set(
     order.map((id) => sessions[id]?.meta.sdkSessionId).filter((id): id is string => Boolean(id))
   )
   const openSessionIds = new Set(order)
+  const recoverySnapshots = taskSnapshots.filter(
+    (snapshot) =>
+      isTaskSnapshotRecoverable(snapshot, openSessionIds) ||
+      modelAttemptReconciliations.some((reconciliation) =>
+        modelAttemptMatchesSnapshot(reconciliation, snapshot)
+      )
+  )
+  const recoveryCount = recoverySnapshots.length + modelAttemptReconciliations.length
   const activeEntries: ActiveSidebarEntry[] = order.flatMap((id) => {
     const session = sessions[id]
     if (!session) return []
@@ -252,14 +265,6 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
   const archivedHistory = historyEntries
     .filter((entry) => entry.archived)
     .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
-  const visibleTaskSnapshots = taskSnapshots
-    .filter((snapshot) => snapshot.reason !== 'created')
-    .filter((snapshot) =>
-      !openSessionIds.has(snapshot.sessionId) ||
-      snapshot.run?.effects?.some((effect) => effect.status === 'waiting_reconciliation')
-    )
-    .filter(matchesTaskSnapshot)
-
   const groupedEntries = useMemo(() => {
     return buildSidebarProjectGroups({
       entries: [
@@ -611,56 +616,8 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
     )
   }
 
-  const renderTaskSnapshot = (snapshot: TaskSnapshotRecord): React.ReactNode => {
-    const waitingReconciliation = snapshot.run?.effects?.some(
-      (effect) => effect.status === 'waiting_reconciliation'
-    ) === true
-    const openSnapshot = (): void => {
-      closeMobile()
-      if (waitingReconciliation) {
-        setShowTaskRecovery(true)
-        return
-      }
-      void recoverTaskSnapshot(snapshot.id)
-    }
-    return (
-      <div
-        key={snapshot.id}
-        className="session-card task-snapshot-card"
-        role="button"
-        tabIndex={0}
-        title={t('recoverTaskSnapshotTitle', { cwd: snapshot.projectPath })}
-        onClick={openSnapshot}
-        onKeyDown={(e) => activateByKeyboard(e, openSnapshot)}
-      >
-        <span className="history-icon">↺</span>
-        <span className="session-card-body">
-          <span className="session-card-title">{snapshot.title}</span>
-          <span className="session-card-sub">
-            {waitingReconciliation ? '等待对账 · ' : ''}
-            {projectNameForPath(snapshot.projectPath)} · {formatTime(snapshot.updatedAt)}
-          </span>
-        </span>
-        <button
-          className="session-action task-snapshot-delete"
-          title={t('deleteTaskSnapshot')}
-          disabled={waitingReconciliation}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (waitingReconciliation) return
-            if (!window.confirm(t('deleteTaskSnapshotConfirm', { title: snapshot.title }))) return
-            void deleteTaskSnapshot(snapshot.id)
-          }}
-        >
-          ×
-        </button>
-      </div>
-    )
-  }
-
   const totalVisible =
     pinnedEntries.length +
-    visibleTaskSnapshots.length +
     projectGroups.reduce((count, group) => count + group.entries.length, 0) +
     archivedProjectGroups.reduce((count, group) => count + group.entries.length, 0) +
     unassigned.entries.length +
@@ -684,6 +641,20 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
         <span className="brand-name">{APP_NAME}</span>
         <button
           type="button"
+          className={`sidebar-header-action no-drag ${searchOpen || query ? 'is-active' : ''}`}
+          aria-label={t('sidebarSearchPlaceholder')}
+          aria-expanded={searchOpen || Boolean(query)}
+          title={t('sidebarSearchPlaceholder')}
+          onClick={() => {
+            const nextOpen = !searchOpen || Boolean(query)
+            setSearchOpen(nextOpen)
+            if (nextOpen) requestAnimationFrame(() => searchRef.current?.focus())
+          }}
+        >
+          <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           className="sidebar-collapse-toggle no-drag"
           aria-label={layout.sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}
           title={layout.sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}
@@ -701,34 +672,62 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
         </button>
       </div>
 
-      <button
-        className="btn btn-primary sidebar-new"
-        onClick={() => {
-          closeMobile()
-          setShowNewSession(true)
-        }}
-      >
-        {t('newSession')}
-      </button>
+      <nav className="sidebar-primary-nav" aria-label={t('primaryNavigation')}>
+        <button
+          type="button"
+          className={`sidebar-nav-item sidebar-new ${showNewSession ? 'is-active' : ''}`}
+          aria-current={showNewSession ? 'page' : undefined}
+          onClick={() => {
+            closeMobile()
+            setShowNewSession(true)
+          }}
+        >
+          <HeaderIcon name="compose" />
+          <span>{t('newSession')}</span>
+        </button>
 
-      <button
-        className="btn btn-ghost sidebar-office"
-        onPointerEnter={preloadOfficeView}
-        onFocus={preloadOfficeView}
-        onPointerDown={preloadOfficeView}
-        onClick={() => {
-          closeMobile()
-          setView('office')
-        }}
-      >
-        {t('office3d')}
-      </button>
+        <button
+          type="button"
+          className={`sidebar-nav-item sidebar-office ${view === 'office' ? 'is-active' : ''}`}
+          aria-current={view === 'office' ? 'page' : undefined}
+          onPointerEnter={preloadOfficeView}
+          onFocus={preloadOfficeView}
+          onPointerDown={preloadOfficeView}
+          onClick={() => {
+            closeMobile()
+            setView('office')
+          }}
+        >
+          <HeaderIcon name="office" />
+          <span>{t('office3d')}</span>
+        </button>
 
-      <div className="sidebar-search-wrap">
+        {recoveryCount > 0 && (
+          <button
+            type="button"
+            className={`sidebar-nav-item sidebar-recovery ${showTaskRecovery ? 'is-active' : ''}`}
+            aria-expanded={showTaskRecovery}
+            aria-haspopup="dialog"
+            data-sidebar-action="recovery-center"
+            onClick={() => {
+              closeMobile()
+              setShowTaskRecovery(true)
+            }}
+          >
+            <HeaderIcon name="recovery" />
+            <span>{t('recoveryCenter')}</span>
+            <strong className="sidebar-nav-badge">{recoveryCount}</strong>
+          </button>
+        )}
+      </nav>
+
+      <div className={`sidebar-search-wrap ${searchOpen || query ? 'is-open' : ''}`}>
         <input
+          ref={searchRef}
           className="input sidebar-search"
           value={query}
           placeholder={t('sidebarSearchPlaceholder')}
+          onFocus={() => setSearchOpen(true)}
           onChange={(e) => setSidebarQuery(e.target.value)}
         />
       </div>
@@ -738,19 +737,6 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
           <section className="sidebar-section">
             <div className="sidebar-section-title">{t('pinned')}</div>
             {pinnedEntries.map(renderSidebarEntry)}
-          </section>
-        )}
-
-        {(visibleTaskSnapshots.length > 0 || taskSnapshotsLoading || taskSnapshotsError) && (
-          <section className="sidebar-section">
-            <div className="sidebar-section-title">{t('recoverableTasks')}</div>
-            {visibleTaskSnapshots.map((snapshot) => renderTaskSnapshot(snapshot))}
-            {visibleTaskSnapshots.length === 0 && taskSnapshotsLoading && (
-              <div className="sidebar-empty">{t('loadingTaskSnapshots')}</div>
-            )}
-            {visibleTaskSnapshots.length === 0 && taskSnapshotsError && (
-              <div className="sidebar-empty">{taskSnapshotsError}</div>
-            )}
           </section>
         )}
 
@@ -826,14 +812,17 @@ function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps): React.JSX
       </div>
 
       <div className="sidebar-footer">
+        <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
         <button
-          className="btn btn-ghost"
+          type="button"
+          className="sidebar-nav-item"
           onClick={() => {
             closeMobile()
             setShowSettings(true)
           }}
         >
-          {t('settings')}
+          <HeaderIcon name="settings" />
+          <span>{t('settings')}</span>
         </button>
       </div>
 

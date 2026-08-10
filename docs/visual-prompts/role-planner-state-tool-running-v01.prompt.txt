@@ -1,0 +1,10 @@
+Use case: identity-preserve
+Asset type: CaoGen digital-worker tool-running state pose
+Input images: Image 1 is the approved canonical Planner anchor v02 and is the strict identity, clothing, prop and style reference.
+Primary request: Render the same Planner actively using the real planning tools in the tool-running state.
+Action: the left forearm securely supports the unfolded blank plan sheet as a physical surface; the left hand steadies it while the right hand deliberately positions one of the three blank node cards on the sheet; the other two cards are held against the sheet under the left thumb. Add only two short restrained directional ink strokes beside the moving card, not a floating interface.
+State readability: active planning must remain distinguishable at 96 pixels through the supported plan, card placement and decisive forward attention, not through color alone.
+Composition/framing: same three-quarter view and body scale as Image 1; complete full body; 14 percent safe margin; same plain cool off-white xuan-paper background.
+Identity invariants: preserve the exact face, asymmetrical hair, earrings, age, body proportions, cinnabar cropped blazer, black civilian outfit, shoes, three cards, blank plan, palette, line weight, pigment behavior and personality from Image 1.
+Constraints: change only pose, hand action and restrained focused expression required by tool-running. Exactly one character. No furniture, new props, text, pseudo-text, maps, diagrams, labels, logos or watermark. Cards and plan remain blank except physical fold edges.
+Avoid: redesign, extra people, duplicate cards, floating props, military posing, holograms, decorative UI, glow, cyberpunk, malformed hands, cropped anatomy or style drift.

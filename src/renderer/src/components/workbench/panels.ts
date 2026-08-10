@@ -100,7 +100,7 @@ export const PANEL_REGISTRY: readonly PanelDefinition[] = [
     id: 'files',
     titleKey: 'deskFiles',
     icon: 'files',
-    component: lazyPanel(() => import('./FilePanel')),
+    component: lazyPanel(() => import('./DeveloperPanel')),
     keepAlive: true
   },
   {
