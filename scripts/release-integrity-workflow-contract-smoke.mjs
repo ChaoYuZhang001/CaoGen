@@ -21,8 +21,17 @@ assert.deepEqual(Object.keys(workflow.jobs), ['audit'])
 
 const job = workflow.jobs.audit
 assert.equal(job['runs-on'], 'ubuntu-24.04')
+const releaseProbe = job.steps.find((step) => step.name === 'Check whether the target release is published')
+assert.equal(releaseProbe?.id, 'release')
+assert.equal(releaseProbe?.env?.GH_TOKEN, '${{ github.token }}')
+assert.match(releaseProbe?.run ?? '', /require\('\.\/package\.json'\)\.version/)
+assert.match(releaseProbe?.run ?? '', /releases\/tags\/\$\{tag\}/)
+assert.match(releaseProbe?.run ?? '', /200\)[\s\S]*published=true/)
+assert.match(releaseProbe?.run ?? '', /404\)[\s\S]*published=false/)
+assert.match(releaseProbe?.run ?? '', /GitHub release lookup failed/)
 const audit = job.steps.find((step) => step.name === 'Audit the published release')
 assert.equal(audit?.run, 'npm run test:github-release-integrity:required')
+assert.equal(audit?.if, "steps.release.outputs.published == 'true'")
 assert.match(
   packageJson.scripts?.['test:github-release-integrity:required'] ?? '',
   /github-release-audit\.mjs --required --read-text-assets --expected-assets-from-notes docs\/RELEASE-NOTES-FINAL\.md/,
@@ -30,7 +39,7 @@ assert.match(
 )
 
 const upload = job.steps.find((step) => step.name === 'Upload the redacted audit report')
-assert.equal(upload?.if, 'always()')
+assert.equal(upload?.if, "always() && steps.release.outputs.published == 'true'")
 assert.equal(upload?.with?.path, 'test-results/github-release-audit/**')
 assert.equal(upload?.with?.['if-no-files-found'], 'error')
 assert(!/gh\s+release|create-release|softprops\/action-gh-release|contents:\s*write/i.test(source), 'integrity audit must not mutate releases')
