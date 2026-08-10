@@ -398,6 +398,20 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     gaps: ['Connectors are global application configuration and are intentionally excluded from Project export and Project deletion; full application-data export/reset remains open.']
   },
   {
+    id: 'provider-authorizations',
+    title: 'Provider OAuth authorization accounts and encrypted tokens',
+    paths: ['userData/provider-authorizations.json'],
+    sourceModules: ['src/main/provider/providerAuthorizationStore.ts'],
+    owner: { scope: 'provider', key: 'providerId and authorization accountId' },
+    sensitivity: 'credential',
+    backup: { behavior: 'private_local', status: 'partial' },
+    retention: { rule: 'Authorization records persist until explicit revocation or Provider deletion.', status: 'partial' },
+    export: { mode: 'excluded', status: 'enforced' },
+    deletion: { softDelete: 'none', purge: 'record', externalDelete: 'external_untouched', status: 'partial' },
+    implementationStatus: 'partial',
+    gaps: ['Remote provider-side revocation and expiry depend on each authorization service; full application-data reset remains open.']
+  },
+  {
     id: 'provider-health-and-model-stats',
     title: 'Provider health and model routing statistics',
     paths: ['userData/provider-health.json', 'userData/model-stats.json'],
@@ -450,6 +464,59 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     gaps: [
       'The journal stores operation phase, Store snapshot digests, backup IDs plus frozen backup digests, and timestamps rather than Provider values or credentials.',
       'No user-facing purge control exists; an unresolved operation is retained until startup/service reconciliation classifies it as committed or aborted, while a third Store digest or backup substitution moves it to waiting_reconciliation and requires manual reconciliation.'
+    ]
+  },
+  {
+    id: 'cc-switch-provider-import-backups', title: 'CC Switch Provider batch import and rollback records',
+    paths: ['userData/cc-switch-provider-import-backups/<backup-id>.json'], sourceModules: ['src/main/provider/ccSwitchProviderImport.ts'],
+    owner: { scope: 'user', key: 'backupId and Provider operationId' }, sensitivity: 'credential',
+    backup: { behavior: 'private_local', status: 'enforced' },
+    retention: { rule: 'Each import record persists until removed outside the service; no count or age limit is enforced.', status: 'inventory_only' },
+    export: { mode: 'excluded', status: 'enforced' }, implementationStatus: 'partial',
+    deletion: { softDelete: 'none', purge: 'none', externalDelete: 'external_untouched', status: 'inventory_only' },
+    gaps: ['Encrypted key material supports exact rollback but is never exported; purge and retention controls remain open.']
+  },
+  {
+    id: 'provider-profile-sync', title: 'Credential-free Provider profile folder synchronization',
+    paths: ['userData/provider-profile-sync/state.json', 'userData/provider-profile-webdav/config.json', '<selected-sync-folder-or-WebDAV>/caogen-provider-sync-and-history'],
+    sourceModules: ['src/main/provider/providerProfileSync.ts', 'src/main/provider/providerProfileWebDavSync.ts'], owner: { scope: 'user', key: 'deviceId and revisionId' },
+    sensitivity: 'credential', backup: { behavior: 'external_owner', status: 'enforced' }, export: { mode: 'redacted', status: 'enforced' },
+    retention: { rule: 'The current envelope and every published history revision persist until the user or sync service removes them.', status: 'inventory_only' },
+    implementationStatus: 'partial', deletion: { softDelete: 'none', purge: 'none', externalDelete: 'external_untouched', status: 'inventory_only' },
+    gaps: ['WebDAV passwords are OS-encrypted locally; remote profiles reject credentials. Disconnect leaves history untouched. Retention controls, S3, and automatic pull remain open.']
+  },
+  {
+    id: 'provider-native-import-backups',
+    title: 'Credential-scrubbed native Provider import rollback backups',
+    paths: ['userData/provider-native-import-backups/<backup-id>.json'],
+    sourceModules: ['src/main/provider/providerNativeConfigImport.ts'],
+    owner: { scope: 'user', key: 'backupId' },
+    sensitivity: 'confidential',
+    backup: { behavior: 'private_local', status: 'enforced' },
+    retention: { rule: 'Unrolled backups persist until removed outside the service; no count or age limit is enforced.', status: 'inventory_only' },
+    export: { mode: 'excluded', status: 'enforced' },
+    deletion: { softDelete: 'none', purge: 'none', externalDelete: 'external_untouched', status: 'inventory_only' },
+    implementationStatus: 'partial',
+    gaps: [
+      'Backups include only renderer-safe Provider views and imported key identifiers; secret values and encrypted credential material are excluded.',
+      'No maximum backup count, expiry, or user purge control exists.'
+    ]
+  },
+  {
+    id: 'codex-native-config-backups',
+    title: 'System-encrypted Codex config.toml rollback backups',
+    paths: ['userData/codex-native-config-backups/<backup-id>.json'],
+    sourceModules: ['src/main/provider/codexNativeConfigService.ts'],
+    owner: { scope: 'user', key: 'backupId and CODEX_HOME identity' },
+    sensitivity: 'credential',
+    backup: { behavior: 'private_local', status: 'enforced' },
+    retention: { rule: 'Unrolled backups persist until removed outside the service; no count or age limit is enforced.', status: 'inventory_only' },
+    export: { mode: 'excluded', status: 'enforced' },
+    deletion: { softDelete: 'none', purge: 'none', externalDelete: 'external_untouched', status: 'inventory_only' },
+    implementationStatus: 'partial',
+    gaps: [
+      'Original config.toml bytes are encrypted with Electron safeStorage; backup metadata is integrity checked and contains no plaintext configuration.',
+      'No maximum backup count, expiry, or user purge control exists.'
     ]
   },
   {
@@ -566,7 +633,12 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     id: 'plugins',
     title: 'Plugin registry state and managed installations',
     paths: ['userData/plugin-registry-state.json', 'userHome/.claude/plugins/<managed-plugin>'],
-    sourceModules: ['src/main/pluginRegistry.ts', 'src/main/pluginInstall.ts', 'src/main/ipc.ts'],
+    sourceModules: [
+      'src/main/pluginRegistry.ts',
+      'src/main/pluginInstall.ts',
+      'src/main/plugin/plugin-directory-effect.ts',
+      'src/main/ipc.ts'
+    ],
     owner: { scope: 'external_resource', key: 'plugin registry item key and installation path' },
     sensitivity: 'personal',
     backup: { behavior: 'external_owner', status: 'inventory_only' },

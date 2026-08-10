@@ -7,6 +7,7 @@ import yaml from 'js-yaml'
 const repoRoot = process.cwd()
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'windows-unsigned-build.yml')
 const source = readFileSync(workflowPath, 'utf8')
+const packagedSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'packaged-app-smoke.mjs'), 'utf8')
 const workflow = yaml.load(source)
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
 const packageLock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'))
@@ -75,7 +76,22 @@ assert.equal(
 )
 assert.match(
   packageJson.scripts?.['test:packaged-app:win:x64:unsigned'] ?? '',
-  /packaged-app-smoke\.mjs --platform windows --arch x64 --unsigned/
+  /packaged-app-smoke\.mjs --platform windows --arch x64 --unsigned --ci-unattended-installer/
+)
+assert.match(
+  packagedSmokeSource,
+  /ciUnattendedInstaller && process\.env\.GITHUB_ACTIONS !== 'true'/,
+  'unattended unsigned installation must be restricted to GitHub Actions'
+)
+assert.match(
+  packagedSmokeSource,
+  /await waitForPathAbsent\(installRoot, 45_000\)/,
+  'packaged smoke must prove the uninstaller removed the isolated install root before test cleanup'
+)
+assert.match(
+  packagedSmokeSource,
+  /NSIS uninstaller left a CaoGen uninstall registry entry/,
+  'packaged smoke must fail when the uninstaller leaves registration behind'
 )
 const rollupVersion = packageLock.packages?.['node_modules/rollup']?.version
 const windowsRollup = packageLock.packages?.['node_modules/@rollup/rollup-win32-x64-msvc']

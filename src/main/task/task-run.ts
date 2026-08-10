@@ -16,6 +16,10 @@ import type {
 import { isEffectRecord, isTaskStepRecord, isToolExecutionRecord } from './task-execution'
 
 const TERMINAL_STATUSES = new Set<TaskRunStatus>(['completed', 'failed', 'cancelled'])
+const SNAPSHOT_OPTIONAL_QUARANTINE_STATUSES = new Set<TaskRunStatus>([
+  'recovering',
+  'waiting_reconciliation'
+])
 const RECENT_EVENT_IDS_LIMIT = 128
 
 const ALLOWED_TRANSITIONS: Record<TaskRunStatus, ReadonlySet<TaskRunStatus>> = {
@@ -76,7 +80,7 @@ export function createTaskRun(input: CreateTaskRunInput): TaskRunRecord {
 export function createSessionTaskRun(
   meta: Pick<SessionMeta,
     'id' | 'childTaskId' | 'digitalWorkerBinding' | 'conversationForkSourceSdkSessionId' |
-    'conversationForkSourceSessionId' | 'conversationForkSourceRunId'>
+    'conversationForkCheckpointId' | 'conversationForkSourceSessionId' | 'conversationForkSourceRunId'>
 ): TaskRunRecord {
   return createTaskRun({
     sessionId: meta.id,
@@ -89,7 +93,7 @@ export function createSessionTaskRun(
 function sessionTaskRunContinuation(
   meta: Pick<SessionMeta,
     'conversationForkSourceSdkSessionId' | 'conversationForkSourceSessionId' |
-    'conversationForkSourceRunId'>
+    'conversationForkCheckpointId' | 'conversationForkSourceRunId'>
 ): TaskRunContinuation | undefined {
   const values = [
     meta.conversationForkSourceSdkSessionId,
@@ -106,12 +110,18 @@ function sessionTaskRunContinuation(
     kind: 'conversation_fork',
     sourceSdkSessionId: meta.conversationForkSourceSdkSessionId!,
     sourceSessionId: meta.conversationForkSourceSessionId!,
-    sourceRunId: meta.conversationForkSourceRunId!
+    sourceRunId: meta.conversationForkSourceRunId!,
+    sourceCheckpointId: meta.conversationForkCheckpointId
   }
 }
 
 export function isTaskRunTerminal(status: TaskRunStatus): boolean {
   return TERMINAL_STATUSES.has(status)
+}
+
+/** Quarantined Runs remain inspectable, but cannot be replayed without an explicit recovery Snapshot. */
+export function taskRunRequiresRecoverySnapshot(status: TaskRunStatus): boolean {
+  return !isTaskRunTerminal(status) && !SNAPSHOT_OPTIONAL_QUARANTINE_STATUSES.has(status)
 }
 
 export function hasTaskRunAppliedEvent(current: TaskRunRecord, identity: AgentEventIdentity): boolean {
@@ -568,7 +578,8 @@ function isTaskRunContinuation(value: unknown): value is TaskRunContinuation {
   const record = value as Record<string, unknown>
   return record.schemaVersion === 1 && record.kind === 'conversation_fork' &&
     isNonEmptyString(record.sourceSessionId) && isNonEmptyString(record.sourceRunId) &&
-    isNonEmptyString(record.sourceSdkSessionId)
+    isNonEmptyString(record.sourceSdkSessionId) &&
+    (record.sourceCheckpointId === undefined || isNonEmptyString(record.sourceCheckpointId))
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -670,7 +681,8 @@ const interactiveOperationKinds = new Set<InteractiveOperationKind>([
   'git_push',
   'pull_request_create',
   'issue_create',
-  'checkpoint_restore'
+  'checkpoint_restore',
+  'provider_operation'
 ])
 
 function isTaskRunOperationMetadata(value: unknown): value is TaskRunOperationMetadata {

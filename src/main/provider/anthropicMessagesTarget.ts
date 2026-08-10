@@ -10,6 +10,10 @@ import {
   inspectProviderCustomHeaders
 } from '../providerCredentialBroker'
 import type { ProviderCredentialLeaseScope } from '../providerCredentialBroker'
+import { appendProviderRequestQuery } from './providerRequestOverrides'
+import { resolveProviderRuntimeTarget } from './providerRuntimeTarget'
+import { configureProviderReliabilityPolicy } from '../providerHealth'
+import { providerRequestTimeouts, type ProviderRequestTimeouts } from './providerRequestTimeout'
 
 const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01'
@@ -21,9 +25,10 @@ export interface AnthropicMessagesTarget {
   endpoint: string
   model: string
   headers: Record<string, string>
+  timeouts?: ProviderRequestTimeouts
   credentialProvider: Pick<
     Provider,
-    'authMode' | 'baseUrl' | 'credentialMigrationRequired' | 'customHeaders' | 'credentialHeaderNames'
+    'authMode' | 'baseUrl' | 'credentialMigrationRequired' | 'customHeaders' | 'credentialHeaderNames' | 'advancedConfig'
   >
   issueCredentialLease(scope: ProviderCredentialLeaseScope): ProviderCredentialLeaseSelection
   keyId?: string
@@ -59,6 +64,7 @@ export function resolveAnthropicMessagesTarget(
   const providerId = input.providerId.trim()
   if (!providerId) throw new Error('Anthropic Messages requires an explicit Provider')
   const provider = dependencies.getProvider(providerId)
+  if (provider) configureProviderReliabilityPolicy(provider)
   if (!provider || provider.id !== providerId) throw new Error(`Provider 不存在:${providerId}`)
 
   const selection = dependencies.selectProviderCredential(provider)
@@ -66,8 +72,10 @@ export function resolveAnthropicMessagesTarget(
     throw new Error(`${provider.name} 缺少可用 API Key`)
   }
 
-  const baseUrl = savedBaseUrl(provider)
-  const model = selectedModel(input.model, provider)
+  const runtimeTarget = resolveProviderRuntimeTarget(provider, { appId: 'anthropic', model: input.model })
+  const baseUrl = savedBaseUrl(provider, runtimeTarget.baseUrl)
+  const model = runtimeTarget.model
+  if (!model) throw new Error(`Provider ${provider.id} has no Anthropic model`)
   const customHeaders = parseSavedHeaders(provider.customHeaders)
   const credentialProvider = provider.credentialHeaderNames?.length
     ? provider
@@ -76,16 +84,23 @@ export function resolveAnthropicMessagesTarget(
     accept: 'text/event-stream',
     'content-type': 'application/json',
     'anthropic-version': customHeaders['anthropic-version'] || DEFAULT_ANTHROPIC_VERSION,
-    ...customHeaders
+    ...customHeaders,
+    ...(provider.advancedConfig?.request?.headers ?? {})
   }
+  const endpoint = appendProviderRequestQuery(
+    messagesEndpoint(baseUrl),
+    baseUrl,
+    provider.advancedConfig?.request?.query
+  )
 
   return {
     providerId: provider.id,
     providerName: provider.name,
     baseUrl,
-    endpoint: messagesEndpoint(baseUrl),
+    endpoint,
     model,
     headers,
+    timeouts: providerRequestTimeouts(provider),
     credentialProvider,
     issueCredentialLease: (scope) =>
       dependencies.issueProviderCredentialLease(provider, scope, selection.keyId),
@@ -94,20 +109,13 @@ export function resolveAnthropicMessagesTarget(
   }
 }
 
-function savedBaseUrl(provider: Provider): string {
-  const raw = provider.baseUrl.trim() || DEFAULT_ANTHROPIC_BASE_URL
+function savedBaseUrl(provider: Provider, resolvedBaseUrl: string): string {
+  const raw = resolvedBaseUrl.trim() || DEFAULT_ANTHROPIC_BASE_URL
   const inspected = inspectProviderBaseUrl(raw)
   if (!inspected.safeValue || inspected.rejectedNames.length > 0) {
     throw new Error(`Provider ${provider.id} 的 Anthropic 网络目标无效`)
   }
   return inspected.safeValue.replace(/\/+$/, '')
-}
-
-function selectedModel(requested: string | undefined, provider: Provider): string {
-  const explicit = requested?.trim()
-  const model = explicit && explicit !== 'auto' ? explicit : provider.models.find((item) => item.trim())?.trim()
-  if (!model) throw new Error(`Provider ${provider.id} 未配置 Anthropic 模型`)
-  return model
 }
 
 function parseSavedHeaders(raw: string | undefined): Record<string, string> {

@@ -505,7 +505,8 @@ function providerView(value: unknown): ProviderView | undefined {
     models,
     authMode,
     ready: authMode === 'none' || hasToken,
-    engine: value.engine === 'anthropic' || value.engine === 'claude' ? 'anthropic' : 'openai',
+    engine: value.engine === 'anthropic' || value.engine === 'claude'
+      ? 'anthropic' : value.engine === 'gemini' ? 'gemini' : 'openai',
     budgetUsd: optionalNumber(value.budgetUsd) ?? 0,
     customHeaders: optionalString(value.customHeaders),
     credentialHeaderNames: stringArray(value.credentialHeaderNames),
@@ -513,8 +514,13 @@ function providerView(value: unknown): ProviderView | undefined {
     note: optionalString(value.note),
     createdAt: optionalNumber(value.createdAt) ?? Date.now(),
     hasToken,
+    credentialRoutingMode: providerCredentialRoutingMode(value.credentialRoutingMode),
     credentialStorage: hasToken ? 'encrypted' : 'none'
   }
+}
+
+function providerCredentialRoutingMode(value: unknown): ProviderView['credentialRoutingMode'] {
+  return value === 'manual' || value === 'automatic' ? value : 'preferred'
 }
 
 function isLoopbackUrl(value: string): boolean {

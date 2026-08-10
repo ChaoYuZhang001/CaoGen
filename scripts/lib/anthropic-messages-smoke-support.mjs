@@ -32,7 +32,7 @@ export function durableImageFixture(sessionId, bytes) {
   return { hash, path: filePath, bytes: bytes.length }
 }
 
-export function storedTargetFixture(runtime) {
+export function storedTargetFixture(runtime, providerOverrides = {}) {
   const secret = 'secret-for-smoke-broker-canary'
   const ref = { providerId: 'provider-saved', keyId: 'key-primary' }
   runtime.credentials.forgetProviderCredentials(ref.providerId)
@@ -54,7 +54,8 @@ export function storedTargetFixture(runtime) {
       disabled: false
     }],
     activeKeyId: ref.keyId,
-    credentialHeaderNames: undefined
+    credentialHeaderNames: undefined,
+    ...providerOverrides
   })
   runtime.providers.commitProviderProfileStore([provider])
   return {
@@ -449,6 +450,7 @@ export function loadRuntime() {
     }
     return {
       adapter: require(findCompiled(outDir, 'anthropicMessagesAdapter.js')),
+      history: require(findCompiled(outDir, 'anthropic-history.js')),
       attempt: require(findCompiled(outDir, 'anthropic-model-attempt-runtime.js')),
       broker: require(findCompiled(outDir, 'providerCredentialBroker.js')),
       engine: require(findCompiled(outDir, 'anthropicEngine.js')),

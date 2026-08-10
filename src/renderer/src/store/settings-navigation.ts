@@ -10,7 +10,7 @@ export type SettingsTab =
   | 'plugins'
   | 'migrate'
 
-export type SettingsContext = 'welcome-provider-recovery'
+export type SettingsContext = 'welcome-provider-recovery' | 'provider-recovery-exhausted'
 
 export interface SettingsNavigationSlice {
   showSettings: boolean

@@ -42,6 +42,9 @@ const PERSIST_KINDS = new Set<AgentEvent['kind']>([
   'routing',
   'failover',
   'provider-key-failover',
+  'provider-model-failover',
+  'provider-protocol-failover',
+  'provider-recovery-exhausted',
   'checkpoint',
   'checkpoint-restore',
   'subagent-result',
@@ -49,6 +52,11 @@ const PERSIST_KINDS = new Set<AgentEvent['kind']>([
   'hook-event'
 ])
 const SESSION_RUNTIME_KINDS = new Set<AgentEvent['kind']>(['init', 'status', 'meta'])
+const FORK_EXCLUDED_KINDS = new Set<AgentEvent['kind']>([
+  ...SESSION_RUNTIME_KINDS,
+  'permission-request',
+  'permission-resolved'
+])
 
 /** 回放上限:超长会话只回填最近这么多条,避免打开即卡死 */
 const MAX_REPLAY_ENTRIES = 1000
@@ -312,6 +320,28 @@ export function readTranscriptEntriesStrict(sdkSessionId: string): TranscriptEnt
   return readEntriesStrict(transcriptFile(sdkSessionId))
 }
 
+/** Build the portable history inherited by a new conversation fork. */
+export function transcriptForkSeedEntries(
+  sourceSdkSessionId: string,
+  checkpointId?: string
+): TranscriptEntry[] {
+  const source = sourceSdkSessionId.trim()
+  if (!source) throw new Error('分叉来源 sdkSessionId 不能为空')
+  const sourceEntries = readEntriesStrict(transcriptFile(source)).map(unsealedEntry)
+  if (sourceEntries.length === 0) {
+    throw new Error('分叉来源没有可移植的 CaoGen 会话账本，不能伪装恢复隐藏 Provider 上下文')
+  }
+  let candidates = sourceEntries
+  if (checkpointId !== undefined) {
+    const checkpoint = checkpointId.trim()
+    if (!checkpoint) throw new Error('分叉 checkpointId 不能为空')
+    const plan = planTranscriptRestore(sourceEntries, checkpoint)
+    if (!plan.ok) throw new Error(plan.reason ?? `找不到分叉 checkpoint:${checkpoint}`)
+    candidates = applyTranscriptRestorePlan(sourceEntries, plan)
+  }
+  return candidates.filter((entry) => !FORK_EXCLUDED_KINDS.has(entry.event.kind))
+}
+
 export function shouldPersistConversationLedgerEvent(kind: AgentEvent['kind']): boolean {
   return PERSIST_KINDS.has(kind)
 }
@@ -451,21 +481,17 @@ export class TranscriptWriter {
   }
 
   /** Seed a new conversation ledger without binding or resuming the source Provider session. */
-  seedFrom(sourceSdkSessionId: string): void {
+  seedFrom(sourceSdkSessionId: string, checkpointId?: string): void {
     const source = sourceSdkSessionId.trim()
     if (!source) throw new Error('分叉来源 sdkSessionId 不能为空')
     if (this.sdkSessionId || this.buffer.length > 0 || this.receiptBuffer.length > 0) {
       throw new Error('会话账本仅可在绑定前分叉一次')
     }
-    const sourceEntries = readEntriesStrict(transcriptFile(source)).map(unsealedEntry)
-    if (sourceEntries.length === 0) {
-      throw new Error('分叉来源没有可移植的 CaoGen 会话账本，不能伪装恢复隐藏 Provider 上下文')
-    }
-    const inheritedEntries = sourceEntries.filter((entry) => !SESSION_RUNTIME_KINDS.has(entry.event.kind))
+    const inheritedEntries = transcriptForkSeedEntries(source, checkpointId)
     this.buffer = inheritedEntries
     // A fork inherits observed history, not source-side runtime identity or effect receipts.
     this.receiptBuffer = []
-    this.seq = Math.max(this.seq, sourceEntries.reduce((max, entry) => Math.max(max, entry.seq), 0))
+    this.seq = Math.max(this.seq, inheritedEntries.reduce((max, entry) => Math.max(max, entry.seq), 0))
     for (const entry of inheritedEntries) this.rememberLinks(entry.event, { eventId: entry.eventId! })
   }
 

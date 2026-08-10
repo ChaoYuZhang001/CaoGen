@@ -6,10 +6,17 @@ import type {
   ProviderProfileConflictKind,
   ProviderProfileImportAction,
   ProviderProfileImportItem,
-  ProviderView
+  ProviderView,
+  ProviderAuthorization,
+  ProviderAdvancedConfig
 } from '../../shared/types'
 import { normalizeBaseUrl } from './providerBaseUrl'
 import { normalizeProviderAuthMode } from './providerAuthMode'
+import { normalizeProviderAdvancedConfig, normalizeProviderAuthorization } from './providerAdvancedConfig'
+import {
+  normalizedCredentialHeaderNames,
+  resolvedProviderCredentialHeaderNames
+} from './providerCredentialHeaders'
 
 const PROFILE_KIND = 'caogen-provider-profile'
 const PROFILE_SCHEMA_VERSION = 1
@@ -30,6 +37,8 @@ export interface PortableProviderProfileEntry {
   openaiProtocol?: OpenAIProtocol
   authMode?: ProviderAuthMode
   note?: string
+  authorization?: ProviderAuthorization
+  advancedConfig?: ProviderAdvancedConfig
 }
 
 export interface ParsedProviderProfile {
@@ -138,7 +147,9 @@ function portableEntryFromView(provider: ProviderView): PortableProviderProfileE
     credentialHeaderNames: provider.credentialHeaderNames,
     budgetUsd: provider.budgetUsd || undefined,
     openaiProtocol: provider.openaiProtocol,
-    note: provider.note
+    note: provider.note,
+    authorization: provider.authorization,
+    advancedConfig: provider.advancedConfig
   }
 }
 
@@ -151,7 +162,11 @@ function parseEntry(value: unknown, index: number): PortableProviderProfileEntry
   const engine = engineValue(entry.engine)
   const openaiProtocol = protocolValue(entry.openaiProtocol)
   const authMode = authModeValue(entry.authMode)
+  const authorization = normalizeProviderAuthorization(entry.authorization)
+  const advancedConfig = normalizeProviderAdvancedConfig(entry.advancedConfig)
   return {
+    authorization,
+    advancedConfig,
     name,
     baseUrl,
     models,
@@ -169,6 +184,8 @@ function toProviderInput(entry: PortableProviderProfileEntry): ProviderInput {
   const baseUrl = normalizeBaseUrl(entry.baseUrl, entry.engine, entry.openaiProtocol)
   const authMode = normalizeProviderAuthMode(entry.authMode, baseUrl, entry.engine)
   return {
+    authorization: normalizeProviderAuthorization(entry.authorization),
+    advancedConfig: normalizeProviderAdvancedConfig(entry.advancedConfig),
     name: entry.name,
     baseUrl,
     models: [...entry.models],
@@ -223,6 +240,12 @@ function allowedActions(
 }
 
 function changedProviderFields(entry: PortableProviderProfileEntry, provider: ProviderView): string[] {
+  const entryCredentialHeaderNames = resolvedProviderCredentialHeaderNames({
+    authMode: entry.authMode ?? 'api-key',
+    engine: entry.engine,
+    credentialHeaderNames: normalizedCredentialHeaderNames(entry.credentialHeaderNames)
+  })
+  const providerCredentialHeaderNames = resolvedProviderCredentialHeaderNames(provider)
   const pairs: Array<[string, unknown, unknown]> = [
     ['name', entry.name, provider.name],
     ['baseUrl', entry.baseUrl, provider.baseUrl],
@@ -230,10 +253,12 @@ function changedProviderFields(entry: PortableProviderProfileEntry, provider: Pr
     ['engine', entry.engine, provider.engine],
     ['authMode', entry.authMode ?? 'api-key', provider.authMode ?? 'api-key'],
     ['customHeaders', entry.customHeaders ?? '', provider.customHeaders ?? ''],
-    ['credentialHeaderNames', entry.credentialHeaderNames ?? [], provider.credentialHeaderNames ?? []],
+    ['credentialHeaderNames', entryCredentialHeaderNames, providerCredentialHeaderNames],
     ['budgetUsd', entry.budgetUsd ?? 0, provider.budgetUsd ?? 0],
     ['openaiProtocol', entry.openaiProtocol ?? '', provider.openaiProtocol ?? ''],
-    ['note', entry.note ?? '', provider.note ?? '']
+    ['note', entry.note ?? '', provider.note ?? ''],
+    ['authorization', entry.authorization ?? null, provider.authorization ?? null],
+    ['advancedConfig', entry.advancedConfig ?? null, provider.advancedConfig ?? null]
   ]
   return pairs.filter(([, next, current]) => JSON.stringify(next) !== JSON.stringify(current)).map(([name]) => name)
 }
@@ -306,7 +331,7 @@ function countCredentialFields(value: unknown): number {
 function engineValue(value: unknown): EngineKind {
   if (value === undefined) return 'openai'
   if (value === 'claude') return 'anthropic'
-  if (value === 'openai' || value === 'anthropic') return value
+  if (value === 'openai' || value === 'anthropic' || value === 'gemini') return value
   throw new Error('Provider 执行引擎不受支持')
 }
 

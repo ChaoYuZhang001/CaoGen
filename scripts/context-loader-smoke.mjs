@@ -180,7 +180,8 @@ try {
   assert(existsSync(path.join(projectDir, 'caogen.md')), 'caogen.md should be written')
   assertSourceContains('src/main/anthropicEngine.ts', [
     'buildProjectContextSystemAppendSync',
-    'system: buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)'
+    'const projectContext = buildProjectContextSystemAppendSync(this.meta.sourceCwd ?? this.meta.cwd)',
+    'system: taskStrategySystemAppend(this.meta.taskStrategy, projectContext)'
   ])
   assertSourceContains('src/main/openaiEngine.ts', [
     'buildProjectContextSystemAppendSync',
@@ -222,7 +223,7 @@ try {
     "| 'project'",
     "| 'providers'",
     "| 'migrate'",
-    "export type SettingsContext = 'welcome-provider-recovery'",
+    "export type SettingsContext = 'welcome-provider-recovery' | 'provider-recovery-exhausted'",
     'setShowSettings(value: boolean, tab?: SettingsTab, context?: SettingsContext): void'
   ])
 

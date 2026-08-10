@@ -214,7 +214,7 @@ async function reconcileStoppedTaskRunEffects(
 }
 
 function usesPreExecutionNativeToolGate(engine: TaskSnapshotRecord['engine']): boolean {
-  return engine === 'openai' || engine === 'anthropic'
+  return engine === 'openai' || engine === 'anthropic' || engine === 'gemini'
 }
 
 function effectHandleFromRecord(effect: EffectRecord): EffectExecutionHandle {

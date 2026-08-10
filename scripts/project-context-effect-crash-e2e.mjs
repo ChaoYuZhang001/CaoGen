@@ -74,18 +74,20 @@ async function successAndBoundaryCases() {
   assertEqual(readFileSync(path.join(project, 'caogen.md'), 'utf8'), content)
   assertDatabaseExcludes(content)
 
-  const outside = path.join(tempRoot, 'outside-rules.md')
+  const outside = path.join(tempRoot, process.platform === 'win32' ? 'outside-rules' : 'outside-rules.md')
+  const outsideCanary = process.platform === 'win32' ? path.join(outside, 'canary.txt') : outside
   const symlinkProject = projectPath('symlink')
   createProject(symlinkProject)
-  writeFileSync(outside, 'outside-before\n', 'utf8')
-  symlinkSync(outside, path.join(symlinkProject, 'caogen.md'))
+  if (process.platform === 'win32') mkdirSync(outside)
+  writeFileSync(outsideCanary, 'outside-before\n', 'utf8')
+  symlinkSync(outside, path.join(symlinkProject, 'caogen.md'), process.platform === 'win32' ? 'junction' : 'file')
   const blocked = await modules.projectContextEffect.executeProjectContextWriteEffect(
     symlinkProject,
     'must-not-escape\n',
     modules.gateway.executeInteractiveOperationEffect
   )
   assert(!blocked.ok, 'symlink target must fail closed')
-  assertEqual(readFileSync(outside, 'utf8'), 'outside-before\n')
+  assertEqual(readFileSync(outsideCanary, 'utf8'), 'outside-before\n')
 }
 
 async function confirmedCrashCase() {

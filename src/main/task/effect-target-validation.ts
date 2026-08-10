@@ -3,6 +3,7 @@ import { isManagedPluginEffectTarget } from '../plugin/plugin-effect-target-vali
 
 export function isEffectTarget(value: unknown): value is EffectTarget {
   if (!isRecord(value)) return false
+  if (value.kind === 'gui_postcondition') return isGuiPostconditionTarget(value)
   if (value.kind === 'file_content') return isFileContentTarget(value)
   if (value.kind === 'git_commit') return isGitCommitTarget(value)
   if (value.kind === 'git_index_update') return isGitIndexUpdateTarget(value)
@@ -21,6 +22,27 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
   if (value.kind === 'webhook_message_send') return isWebhookMessageTarget(value)
   if (value.kind === 'office_artifact') return isOfficeArtifactTarget(value)
   return value.kind === 'unsupported' && isString(value.toolName)
+}
+
+function isGuiPostconditionTarget(record: Record<string, unknown>): boolean {
+  if (!isRecord(record.postcondition)) return false
+  const postcondition = record.postcondition
+  const windowIdMatches = record.platform === 'win32'
+    ? typeof postcondition.windowId === 'string' && /^win32:\d+$/.test(postcondition.windowId)
+    : record.platform === 'darwin' && typeof postcondition.windowId === 'string' && /^darwin:\d+:\d+$/.test(postcondition.windowId)
+  const windowState = postcondition.state === 'exists' || postcondition.state === 'absent'
+  const elementState = windowState || postcondition.state === 'enabled' || postcondition.state === 'disabled' ||
+    postcondition.state === 'visible' || postcondition.state === 'hidden'
+  const toolName = record.toolName === 'gui_activate_window' || record.toolName === 'gui_click' ||
+    record.toolName === 'gui_type' || record.toolName === 'gui_scroll' || record.toolName === 'gui_hotkey'
+  return Boolean(
+    toolName && windowIdMatches && record.preconditionSatisfied === false &&
+    (postcondition.kind === 'window'
+      ? windowState && postcondition.elementId === undefined
+      : postcondition.kind === 'element' && elementState && isString(postcondition.elementId)) &&
+    (postcondition.maxElements === undefined ||
+      (Number.isInteger(postcondition.maxElements) && Number(postcondition.maxElements) >= 1 && Number(postcondition.maxElements) <= 300))
+  )
 }
 
 function isOfficeArtifactTarget(record: Record<string, unknown>): boolean {

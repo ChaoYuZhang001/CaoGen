@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -23,7 +24,7 @@ import {
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
 const { loadPrivateChatProvider } = require('./lib/private-provider-e2e.cjs')
-const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-private-provider-config-'))
+const tempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'caogen-private-provider-config-')))
 const testHome = path.join(tempRoot, 'home')
 const privateDir = path.join(testHome, '.caogen-private')
 const providerFile = path.join(privateDir, 'provider-parity.json')
@@ -39,27 +40,28 @@ try {
   assert.equal(loaded.source, 'private-default')
   assert.equal(JSON.parse(loaded.text)[0].apiKey, fixtureCredential)
 
-  chmodSync(providerFile, 0o644)
-  assertConfigError(
-    () => resolvePrivateProviderConfig({ homeDirectory: testHome, repoRoot }),
-    'provider_config_permissions'
-  )
-  chmodSync(providerFile, 0o600)
+  if (process.platform !== 'win32') {
+    chmodSync(providerFile, 0o644)
+    assertConfigError(
+      () => resolvePrivateProviderConfig({ homeDirectory: testHome, repoRoot }),
+      'provider_config_permissions'
+    )
+    chmodSync(providerFile, 0o600)
 
-  chmodSync(privateDir, 0o755)
-  assertConfigError(
-    () => resolvePrivateProviderConfig({ homeDirectory: testHome, repoRoot }),
-    'provider_config_directory_permissions'
-  )
-  chmodSync(privateDir, 0o700)
+    chmodSync(privateDir, 0o755)
+    assertConfigError(
+      () => resolvePrivateProviderConfig({ homeDirectory: testHome, repoRoot }),
+      'provider_config_directory_permissions'
+    )
+    chmodSync(privateDir, 0o700)
+  }
 
   assertConfigError(
     () => resolvePrivateProviderConfig({ setting: providerFile, repoRoot }),
     'provider_config_override_disabled'
   )
 
-  const symlinkFile = path.join(privateDir, 'symlink.json')
-  symlinkSync(providerFile, symlinkFile)
+  const symlinkFile = linkedProviderFile()
   assertConfigError(
     () => resolvePrivateProviderConfig({ setting: symlinkFile, repoRoot, allowTestOverride: true }),
     'provider_config_not_regular'
@@ -99,6 +101,20 @@ function writeProviderFile(file) {
     apiKey: fixtureCredential
   }])}\n`, { mode: 0o600 })
   chmodSync(file, 0o600)
+}
+
+function linkedProviderFile() {
+  if (process.platform !== 'win32') {
+    const link = path.join(privateDir, 'symlink.json')
+    symlinkSync(providerFile, link)
+    return link
+  }
+  const targetDirectory = path.join(tempRoot, 'provider-link-target')
+  const junction = path.join(privateDir, 'provider-junction')
+  mkdirSync(targetDirectory)
+  copyFileSync(providerFile, path.join(targetDirectory, 'provider.json'))
+  symlinkSync(targetDirectory, junction, 'junction')
+  return path.join(junction, 'provider.json')
 }
 
 function assertConfigError(action, code) {

@@ -146,16 +146,19 @@ function verifyPackageGateContracts() {
     'test:plan-contract',
     'test:search-replace',
     'test:chat-virtual-list',
-    'test:git-tools',
-    'test:p2-ide-build-and-vscode:required',
-    'test:p2-ide:required'
+    'test:git-tools'
   ]) {
     assert(packageJson.scripts?.[scriptName], `package.json missing ${scriptName}`)
   }
-  assert(
-    packageJson.scripts['test:p2-ide:required'].includes('test:jetbrains-ide-interaction:required'),
-    'test:p2-ide:required must include real JetBrains IDE interaction'
-  )
+  for (const retiredScript of [
+    'test:ide-bridge', 'test:ide-plugins', 'test:ide-plugins:required',
+    'test:jetbrains-ide-interaction', 'test:jetbrains-ide-interaction:required',
+    'test:jetbrains-recorder-e2e', 'test:jetbrains-recorder-e2e:required',
+    'test:vscode-extension-host:required', 'test:p2-ide-build-and-vscode:required',
+    'test:p2-ide:required'
+  ]) {
+    assert(!packageJson.scripts?.[retiredScript], `${retiredScript} must remain retired`)
+  }
 
   const deepTest = readFileSync(path.join(repoRoot, 'scripts/deep-test.mjs'), 'utf8')
   assert(deepTest.includes('p0-p1-p2-contract-smoke.mjs'), 'deep-test must include plan contract smoke')
@@ -163,8 +166,8 @@ function verifyPackageGateContracts() {
   assert(deepTest.includes('event-cursor-crash-smoke.mjs'), 'deep-test must include event cursor crash recovery')
   verifyAnthropicRegistrationGateWiring(packageJson, deepTest)
   const p2RequiredGate = readFileSync(path.join(repoRoot, 'scripts/p2-required-gate.mjs'), 'utf8')
-  assert(p2RequiredGate.includes("name: 'ide_build_and_vscode_required'"), 'P2 required gate must use precise IDE build/VS Code check name')
-  assert(p2RequiredGate.includes('test:p2-ide-build-and-vscode:required'), 'P2 required gate must call the precise IDE build/VS Code script')
+  assert(!p2RequiredGate.includes('ide_build_and_vscode_required'), 'P2 required gate must not restore IDE plugin checks')
+  assert(!p2RequiredGate.includes('jetbrains_ide_interaction_required'), 'P2 required gate must not restore JetBrains plugin checks')
 }
 
 function verifyChinaExternalSourceContracts() {
@@ -300,7 +303,7 @@ function verifyTaskSnapshotFinalizerContract(source) {
 
 function verifyProviderSchedulerWiring(source) {
   const sourceFile = ts.createSourceFile('providers.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  assertNamedImports(sourceFile, './scheduler', ['recordFailure', 'recordSuccess'])
+  assertNamedImports(sourceFile, './scheduler', ['recordProbeFailure', 'recordProbeSuccess'])
   assertNamedImports(sourceFile, './provider/modelDiscovery', ['discoverProviderModels'])
   assertNamedImports(sourceFile, './provider/modelDiscoveryBinding', ['bindProviderModelDiscoveryInput'])
 
@@ -318,8 +321,8 @@ function verifyProviderSchedulerWiring(source) {
   assertIdentifierCall(delegation, 'discoverProviderModels', 3, 'providers:fetchModels must delegate to model discovery with injected dependencies')
   assertBoundDiscoveryInput(fetchModels.body)
   assertResolverCallback(delegation.arguments[1])
-  assertSchedulerCallback(delegation.arguments[2], 'success', 'recordSuccess', ['providerId', 'latencyMs'])
-  assertSchedulerCallback(delegation.arguments[2], 'failure', 'recordFailure', ['providerId', 'message'])
+  assertSchedulerCallback(delegation.arguments[2], 'success', 'recordProbeSuccess', ['providerId', 'latencyMs'])
+  assertSchedulerCallback(delegation.arguments[2], 'failure', 'recordProbeFailure', ['providerId', 'message'])
 }
 
 function assertStringUnionMembers(source, aliasName, expected) {
@@ -355,7 +358,7 @@ function verifyAnthropicRegistrationGateWiring(packageJson, deepTest) {
 
 function verifyAnthropicEngineTypeContract(builtinEngines, sharedTypes) {
   assert(builtinEngines.includes("kind: 'anthropic'"), 'Anthropic Messages must be a registered formal engine')
-  assertStringUnionMembers(sharedTypes, 'EngineKind', ['anthropic', 'openai'])
+  assertStringUnionMembers(sharedTypes, 'EngineKind', ['anthropic', 'gemini', 'openai'])
 }
 
 function verifyProviderModelDiscoverySourceContracts(source) {
@@ -528,6 +531,10 @@ async function verifyProviderModelDiscoveryBehavior() {
   try {
     await verifySuccessfulModelDiscovery(modelDiscovery.discoverProviderModels)
     await verifyFailedModelDiscovery(modelDiscovery.discoverProviderModels)
+    await verifyVersionedBaseModelDiscovery(modelDiscovery.discoverProviderModels)
+    await verifyRetryAfterPathAuthorization(modelDiscovery.discoverProviderModels)
+    await verifyMixedPathAuthorizationDiagnostic(modelDiscovery.discoverProviderModels)
+    await verifyUnavailableModelCatalogDiagnostic(modelDiscovery.discoverProviderModels)
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -582,6 +589,14 @@ async function verifyFailedModelDiscovery(discoverProviderModels) {
   assert(Number.isFinite(result.latencyMs) && result.latencyMs >= 0, 'failed model discovery must expose non-negative latencyMs')
   assert(result.stale === true && result.fetchedAt === undefined, 'failed model discovery must return a stale result without fetchedAt')
   assert(result.error?.kind === 'auth' && result.error.status === 401, '401 model discovery must expose its typed auth error')
+  assert(result.error.reasonCode === 'credentials_rejected', 'all-auth failures must identify rejected credentials')
+  assert(result.error.suggestedAction === 'review_credentials', 'all-auth failures must recommend credential review')
+  assert(result.error.diagnosticContext.engine === 'openai', 'diagnostics must identify the effective engine')
+  assert(result.error.diagnosticContext.generationProtocol === 'openai-chat-completions', 'diagnostics must identify the effective generation protocol')
+  assert(result.error.diagnosticContext.generationEndpointPath === '/v1/chat/completions', 'diagnostics must expose the task path without an origin')
+  assert(result.error.diagnosticContext.credentialSource === 'stored-active', 'saved-provider diagnostics must identify the stored active credential source')
+  assert(result.error.diagnosticContext.catalogProbeOnly === true, 'diagnostics must distinguish catalog probing from generation')
+  assert(result.error.attempts.length === 2, 'all safe endpoint candidates must be attempted before reporting auth failure')
   assert(
     result.error.providerId === result.providerId && result.error.baseUrl === result.baseUrl,
     'failed model discovery error must preserve provider identity and public Base URL'
@@ -591,6 +606,109 @@ async function verifyFailedModelDiscovery(discoverProviderModels) {
     calls.failure[0].providerId === result.providerId && calls.failure[0].message === result.error.message,
     'failure health reporting must preserve providerId and the returned error message'
   )
+}
+
+async function verifyVersionedBaseModelDiscovery(discoverProviderModels) {
+  const urls = []
+  globalThis.fetch = async (url) => {
+    urls.push(String(url))
+    if (new URL(String(url)).pathname === '/gateway/v1/models') {
+      return new Response(JSON.stringify({ data: [{ id: 'versioned-model' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    return new Response('', { status: 401 })
+  }
+  const result = await discoverProviderModels(
+    { baseUrl: 'https://provider.example/gateway/v1', authMode: 'api-key' },
+    () => ({
+      token: 'fixture',
+      authMode: 'api-key',
+      credentialHeaderNames: ['Authorization'],
+      customHeaderRejections: [],
+      headers: { Authorization: 'Bearer fixture' }
+    }),
+    modelDiscoveryHealth({ success: [], failure: [] })
+  )
+
+  assert(result.ok && result.models[0] === 'versioned-model', 'a Base URL ending in /v1 must discover /v1/models')
+  assert(!urls.some((url) => new URL(url).pathname.includes('/v1/v1/')), 'model discovery must never duplicate a trailing /v1 segment')
+}
+
+async function verifyMixedPathAuthorizationDiagnostic(discoverProviderModels) {
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname
+    return new Response('', { status: path.endsWith('/v1/models') ? 401 : 404 })
+  }
+  const result = await discoverProviderModels(
+    { baseUrl: 'https://provider.example/gateway', authMode: 'api-key' },
+    () => ({
+      token: 'fixture',
+      authMode: 'api-key',
+      credentialHeaderNames: ['api-key'],
+      customHeaderRejections: [],
+      headers: { 'api-key': 'fixture' }
+    }),
+    modelDiscoveryHealth({ success: [], failure: [] })
+  )
+
+  assert(!result.ok && result.error?.kind === 'auth', 'mixed 401/404 discovery must remain an auth-class failure')
+  assert(result.error.reasonCode === 'base_url_or_credentials_mismatch', 'mixed 401/404 must not claim the key alone is invalid')
+  assert(result.error.suggestedAction === 'review_base_url_and_credentials', 'mixed 401/404 must recommend reviewing URL and credentials')
+  assert(result.error.credentialStyle.headerNames.join(',') === 'api-key', 'diagnostics must expose credential header names only')
+  assert(result.error.diagnosticContext.generationProtocol === 'openai-responses', 'default OpenAI diagnostics must identify Responses')
+  assert(result.error.diagnosticContext.generationEndpointPath === '/v1/responses', 'Responses diagnostics must expose the task path only')
+  assert(result.error.diagnosticContext.credentialSource === 'explicit', 'unsaved-provider diagnostics must identify the form credential source')
+  assert(result.error.attempts.every((attempt) => attempt.endpointPath.startsWith('/')), 'diagnostic attempts must expose path-only endpoints')
+  assert(!JSON.stringify(result.error).includes('fixture'), 'diagnostics must never expose credential values')
+  assert(!JSON.stringify(result.error.diagnosticContext).includes('provider.example'), 'diagnostic context must not contain the Provider origin')
+}
+
+async function verifyRetryAfterPathAuthorization(discoverProviderModels) {
+  const paths = []
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname
+    paths.push(path)
+    if (path.endsWith('/v1/models')) return new Response('', { status: 401 })
+    return new Response(JSON.stringify({ data: [{ id: 'fallback-model' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+  }
+  const result = await discoverProviderModels(
+    { baseUrl: 'https://provider.example/gateway', authMode: 'api-key' },
+    () => ({
+      token: 'fixture',
+      authMode: 'api-key',
+      credentialHeaderNames: ['Authorization'],
+      customHeaderRejections: [],
+      headers: { Authorization: 'Bearer fixture' }
+    }),
+    modelDiscoveryHealth({ success: [], failure: [] })
+  )
+
+  assert(result.ok && result.models[0] === 'fallback-model', 'a path-specific 401 must not stop a later safe endpoint candidate')
+  assert(paths.join(',') === '/gateway/v1/models,/gateway/models', 'safe endpoint candidates must retain deterministic order')
+}
+
+async function verifyUnavailableModelCatalogDiagnostic(discoverProviderModels) {
+  globalThis.fetch = async () => new Response('', { status: 404 })
+  const result = await discoverProviderModels(
+    { baseUrl: 'https://provider.example/gateway', authMode: 'api-key' },
+    () => ({
+      token: 'fixture',
+      authMode: 'api-key',
+      credentialHeaderNames: ['Authorization'],
+      customHeaderRejections: [],
+      headers: { Authorization: 'Bearer fixture' }
+    }),
+    modelDiscoveryHealth({ success: [], failure: [] })
+  )
+
+  assert(!result.ok && result.error?.kind === 'not_found', '404-only discovery must report unavailable model catalog')
+  assert(result.error.reasonCode === 'model_catalog_unavailable', '404-only discovery must not report invalid credentials')
+  assert(result.error.suggestedAction === 'enter_models_manually', 'missing model catalog must offer manual model entry')
 }
 
 function modelDiscoveryHealth(calls) {

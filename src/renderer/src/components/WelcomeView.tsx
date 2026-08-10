@@ -1,10 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ArrowUp,
+  FileText,
+  Folder,
+  FolderOpen,
+  GitPullRequest,
+  ListChecks,
+  LoaderCircle,
+  SearchCode,
+  type LucideIcon
+} from 'lucide-react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { APP_ICON_URL, APP_NAME } from '../brand'
-import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
 import { AUTO_MODEL, caogenDrivePolicyView } from '../../../shared/types'
-import type { LocalComputeActivationResult, Project, TaskStrategy } from '../../../shared/types'
+import type {
+  LocalComputeActivationResult,
+  LocalComputeUnavailableReason,
+  Project,
+  TaskStrategy
+} from '../../../shared/types'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 import AssistantStartNotice from './experience/AssistantStartNotice'
 import TaskStrategyControl from './experience/TaskStrategyControl'
@@ -25,11 +40,8 @@ import {
   useWelcomeDraftController
 } from './experience/useWelcomeDraft'
 import {
-  deriveFirstTaskOnboardingStatus,
-  deriveFirstTaskProgress,
   patchFirstTaskOnboardingRecord,
-  runFirstTaskSubmissionExclusive,
-  useFirstTaskOnboardingRecord
+  runFirstTaskSubmissionExclusive
 } from './experience/first-task-onboarding'
 
 type WelcomeStoreState = ReturnType<typeof useStore.getState>
@@ -39,39 +51,38 @@ function useLocalComputeActivation(
   projection: WelcomeProjection,
   providersLoaded: boolean,
   computeAvailable: boolean,
-  activateLocalCompute: () => Promise<LocalComputeActivationResult>,
+  activateLocalCompute: (options?: { startInstalled?: boolean }) => Promise<LocalComputeActivationResult>,
   updateWelcomeDraft: WelcomeStoreState['updateWelcomeDraft']
 ) {
   const [status, setStatus] = useState<'idle' | 'checking' | 'ready' | 'unavailable'>('idle')
-  const activation = useRef<Promise<boolean> | null>(null)
-  const ensure = useCallback(async (): Promise<boolean> => {
-    if (hasAvailableCompute(useStore.getState().providers)) return true
-    if (activation.current) return activation.current
+  const ensure = useCallback(async (startInstalled = false): Promise<LocalComputeActivationResult> => {
+    if (hasAvailableCompute(useStore.getState().providers)) {
+      return { status: 'activated', checkedAt: Date.now() }
+    }
     setStatus('checking')
-    const pending = activateLocalCompute()
+    return activateLocalCompute({ startInstalled })
       .then((result) => {
         if (result.status !== 'activated' || !result.provider) {
           setStatus('unavailable')
-          return false
+          return result
         }
-        updateWelcomeDraft({ providerId: result.provider.id, model: AUTO_MODEL })
+        updateWelcomeDraft({
+          computeSelectionSource: 'default',
+          providerId: result.provider.id,
+          model: AUTO_MODEL
+        })
         setStatus('ready')
-        return true
+        return result
       })
-      .catch(() => {
+      .catch((): LocalComputeActivationResult => {
         setStatus('unavailable')
-        return false
+        return { status: 'unavailable', checkedAt: Date.now(), reason: 'runtime-stopped' }
       })
-      .finally(() => {
-        activation.current = null
-      })
-    activation.current = pending
-    return pending
   }, [activateLocalCompute, updateWelcomeDraft])
 
   useEffect(() => {
     if (!providersLoaded || projection !== 'assistant' || computeAvailable || status !== 'idle') return
-    void ensure()
+    void ensure(false)
   }, [computeAvailable, ensure, projection, providersLoaded, status])
 
   return { localComputeStatus: status, ensureLocalCompute: ensure }
@@ -81,7 +92,7 @@ interface WelcomeTool {
   key: string
   labelKey: string
   promptKey: string
-  icon: HeaderIconName
+  icon: LucideIcon
   taskStrategy: TaskStrategy
 }
 
@@ -97,28 +108,28 @@ const WELCOME_TOOLS: WelcomeTool[] = [
     key: 'understand',
     labelKey: 'welcomeUnderstandProject',
     promptKey: 'welcomeUnderstandProjectPrompt',
-    icon: 'summary',
+    icon: SearchCode,
     taskStrategy: 'view'
   },
   {
     key: 'review',
     labelKey: 'welcomeReviewChanges',
     promptKey: 'welcomeReviewChangesPrompt',
-    icon: 'review',
+    icon: GitPullRequest,
     taskStrategy: 'view'
   },
   {
     key: 'report',
     labelKey: 'welcomeOrganizeReport',
     promptKey: 'welcomeOrganizeReportPrompt',
-    icon: 'files',
+    icon: FileText,
     taskStrategy: 'execute'
   },
   {
     key: 'plan',
     labelKey: 'welcomePlanTask',
     promptKey: 'welcomePlanTaskPrompt',
-    icon: 'subagents',
+    icon: ListChecks,
     taskStrategy: 'plan'
   }
 ]
@@ -129,9 +140,20 @@ interface WelcomeStartActionsInput {
   text: string
   taskStrategy: TaskStrategy
   computeAvailable: boolean
-  ensureLocalCompute: () => Promise<boolean>
+  ensureLocalCompute: (startInstalled?: boolean) => Promise<LocalComputeActivationResult>
   startSessionWithPrompt: WelcomeStoreState['startSessionWithPrompt']
   refreshProviders: WelcomeStoreState['refreshProviders']
+}
+
+function localComputeValidationKey(reason: LocalComputeUnavailableReason | undefined):
+  | 'assistantLocalRuntimeMissing'
+  | 'assistantLocalRuntimeStartFailed'
+  | 'assistantLocalModelMissing'
+  | 'assistantComputeUnavailable' {
+  if (reason === 'runtime-missing') return 'assistantLocalRuntimeMissing'
+  if (reason === 'runtime-stopped') return 'assistantLocalRuntimeStartFailed'
+  if (reason === 'model-missing') return 'assistantLocalModelMissing'
+  return 'assistantComputeUnavailable'
 }
 
 function useWelcomeStartActions(input: WelcomeStartActionsInput) {
@@ -140,6 +162,7 @@ function useWelcomeStartActions(input: WelcomeStartActionsInput) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [recoveryKind, setRecoveryKind] = useState<WelcomeRecoveryKind | null>(null)
+  const [computeReason, setComputeReason] = useState<LocalComputeUnavailableReason | null>(null)
 
   const submit = async (
     promptInput = input.text,
@@ -153,15 +176,21 @@ function useWelcomeStartActions(input: WelcomeStartActionsInput) {
       const draft = { ...input.sessionDraft, taskStrategy: selectedStrategy }
       try {
         let available = input.computeAvailable
-        if (input.projection === 'assistant' && !available) available = await input.ensureLocalCompute()
+        let localResult: LocalComputeActivationResult | undefined
+        if (input.projection === 'assistant' && !available) {
+          localResult = await input.ensureLocalCompute(true)
+          available = localResult.status === 'activated'
+        }
         const validationKey = welcomeValidationKey(input.projection, draft, available)
         if (validationKey) {
-          setError(t(validationKey))
+          setError(t(localResult ? localComputeValidationKey(localResult.reason) : validationKey))
           setRecoveryKind(welcomeRecoveryKind(validationKey))
+          setComputeReason(localResult?.reason ?? null)
           return
         }
         setError('')
         setRecoveryKind(null)
+        setComputeReason(null)
         const options = welcomeSessionOptions(input.projection, draft, prompt)
         const candidateSessionId = await startSessionWithPrompt(
           title ? { ...options, title } : options,
@@ -179,33 +208,42 @@ function useWelcomeStartActions(input: WelcomeStartActionsInput) {
         const safeKey = assistantSafeStartError(input.projection, err)
         setError(safeKey ? t(safeKey) : err instanceof Error ? err.message : String(err))
         setRecoveryKind(safeKey ? 'compute' : null)
+        setComputeReason(null)
       } finally {
         setBusy(false)
       }
     })
   }
 
+  const retryLocalCompute = async (): Promise<void> => {
+    const result = await input.ensureLocalCompute(true)
+    if (result.status !== 'activated') await input.refreshProviders()
+    const available = hasAvailableCompute(useStore.getState().providers)
+    setError(available ? '' : t(localComputeValidationKey(result.reason)))
+    setRecoveryKind(available ? null : 'compute')
+    setComputeReason(available ? null : result.reason ?? null)
+  }
+
+  const retryProviderCompute = async (): Promise<void> => {
+    await input.refreshProviders()
+    const available = hasAvailableCompute(useStore.getState().providers)
+    setError(available ? '' : t('explicitProviderRequired'))
+    setRecoveryKind(available ? null : 'provider')
+    setComputeReason(null)
+  }
+
   const retryCompute = async (): Promise<void> => {
+    const nextRecovery = recoveryKind ?? (input.projection === 'assistant' ? 'compute' : 'provider')
     setBusy(true)
     try {
-      const nextRecovery = recoveryKind ?? (input.projection === 'assistant' ? 'compute' : 'provider')
-      if (nextRecovery === 'compute') {
-        const activated = await input.ensureLocalCompute()
-        if (!activated) await input.refreshProviders()
-      } else {
-        await input.refreshProviders()
-      }
-      const available = hasAvailableCompute(useStore.getState().providers)
-      setError(available ? '' : t(
-        nextRecovery === 'provider' ? 'explicitProviderRequired' : 'assistantComputeUnavailable'
-      ))
-      setRecoveryKind(available ? null : nextRecovery)
+      if (nextRecovery === 'compute') await retryLocalCompute()
+      else await retryProviderCompute()
     } catch {
-      const nextRecovery = recoveryKind ?? (input.projection === 'assistant' ? 'compute' : 'provider')
       setError(t(
         nextRecovery === 'provider' ? 'welcomeProviderRefreshFailed' : 'assistantComputeCheckFailed'
       ))
       setRecoveryKind(nextRecovery)
+      setComputeReason(null)
     } finally {
       setBusy(false)
     }
@@ -214,49 +252,10 @@ function useWelcomeStartActions(input: WelcomeStartActionsInput) {
   const clearError = (): void => {
     setError('')
     setRecoveryKind(null)
+    setComputeReason(null)
   }
 
-  return { busy, clearError, error, recoveryKind, retryCompute, submit }
-}
-
-interface WelcomeFirstTaskProgressProps {
-  providersLoaded: boolean
-  computeAvailable: boolean
-  activatingLocal: boolean
-}
-
-function WelcomeFirstTaskProgress({
-  providersLoaded,
-  computeAvailable,
-  activatingLocal
-}: WelcomeFirstTaskProgressProps): React.JSX.Element | null {
-  const t = useT()
-  const sessions = useStore((state) => state.sessions)
-  const onboardingRecord = useFirstTaskOnboardingRecord()
-  const candidateStatus = onboardingRecord.candidateSessionId
-    ? sessions[onboardingRecord.candidateSessionId]?.meta.status
-    : undefined
-  const onboardingStatus = deriveFirstTaskOnboardingStatus({
-    record: onboardingRecord,
-    providersHydrated: providersLoaded,
-    computeAvailable,
-    activatingLocal,
-    sessionStatus: candidateStatus
-  })
-  const onboardingProgress = deriveFirstTaskProgress(onboardingStatus, onboardingRecord)
-  if (onboardingStatus === 'completed') return null
-  return (
-    <div
-      className="first-task-progress"
-      aria-label={t('firstTaskProgressRun')}
-      data-first-task-status={onboardingStatus}
-    >
-      <span className={onboardingProgress.compute}>{t('firstTaskProgressCompute')}</span>
-      <span className={onboardingProgress.task}>{t('firstTaskProgressRun')}</span>
-      <span className={onboardingProgress.result}>{t('firstTaskProgressResult')}</span>
-      <span className={onboardingProgress.acceptance}>{t('firstTaskProgressAcceptance')}</span>
-    </div>
-  )
+  return { busy, clearError, computeReason, error, recoveryKind, retryCompute, submit }
 }
 
 interface WelcomeProjectSelectorProps {
@@ -279,6 +278,7 @@ function WelcomeProjectSelector({
   const t = useT()
   return (
     <div className="welcome-project-bar">
+      <Folder size={15} strokeWidth={1.8} aria-hidden="true" />
       <select
         className="welcome-project-select"
         aria-label={t('project')}
@@ -301,7 +301,15 @@ function WelcomeProjectSelector({
             aria-label={t('projectDir')}
             onChange={(event) => onCwdChange(event.target.value)}
           />
-          <button className="welcome-project-browse" onClick={onBrowse}>{t('browse')}</button>
+          <button
+            type="button"
+            className="welcome-project-browse"
+            aria-label={t('browse')}
+            title={t('browse')}
+            onClick={onBrowse}
+          >
+            <FolderOpen size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
         </>
       ) : projectChoice !== UNASSIGNED ? (
         <span className="welcome-project-current" title={cwd}>{cwd}</span>
@@ -356,16 +364,10 @@ export default function WelcomeView(): React.JSX.Element {
     providerId,
     routingMode,
     unassigned: projectChoice === UNASSIGNED,
-    forkFromSdkSessionId: welcomeDraft.forkFromSdkSessionId
+    forkFromSdkSessionId: welcomeDraft.forkFromSdkSessionId,
+    forkCheckpointId: welcomeDraft.forkCheckpointId
   }
-  const {
-    busy,
-    clearError,
-    error,
-    recoveryKind,
-    retryCompute,
-    submit
-  } = useWelcomeStartActions({
+  const { busy, clearError, computeReason, error, recoveryKind, retryCompute, submit } = useWelcomeStartActions({
     projection,
     sessionDraft,
     text,
@@ -431,55 +433,52 @@ export default function WelcomeView(): React.JSX.Element {
         <div className="welcome-hero-inner">
           <img className="welcome-logo" src={APP_ICON_URL} alt={APP_NAME} />
           <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
-          <WelcomeFirstTaskProgress
-            providersLoaded={providersLoaded}
-            computeAvailable={computeAvailable || localComputeStatus === 'ready'}
-            activatingLocal={localComputeStatus === 'checking'}
-          />
           <div className="welcome-suggestion-grid">
-            {WELCOME_TOOLS.map((tool) => (
-              <button
-                key={tool.key}
-                type="button"
-                className={`welcome-suggestion ${tool.key === 'understand' ? 'welcome-suggestion-recommended' : ''}`}
-                data-welcome-preset={tool.key}
-                data-preset-strategy={tool.taskStrategy}
-                disabled={busy}
-                title={t('welcomePresetStartsNow')}
-                onClick={() => startPreset(tool)}
-              >
-                <HeaderIcon name={tool.icon} />
-                <span>{t(tool.labelKey)}</span>
-                {tool.key === 'understand' && <small>{t('firstTaskRecommended')}</small>}
-              </button>
-            ))}
+            {WELCOME_TOOLS.map((tool) => {
+              const ToolIcon = tool.icon
+              return (
+                <button
+                  key={tool.key}
+                  type="button"
+                  className="welcome-suggestion"
+                  data-welcome-preset={tool.key}
+                  data-preset-strategy={tool.taskStrategy}
+                  disabled={busy}
+                  title={t('welcomePresetStartsNow')}
+                  onClick={() => startPreset(tool)}
+                >
+                  <ToolIcon size={17} strokeWidth={1.8} aria-hidden="true" />
+                  <span>{t(tool.labelKey)}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
 
         <div className="welcome-compose-dock">
-          {welcomeDraft.forkFromSdkSessionId ? (
-            <div className="welcome-fork-source">
-              {t('conversationForkSource', {
-                title: welcomeDraft.forkSourceTitle ?? t('conversation')
-              })}
-            </div>
-          ) : (
-            <WelcomeProjectSelector
-              availableProjects={availableProjects}
-              cwd={cwd}
-              projectChoice={projectChoice}
-              onBrowse={() => void browse()}
-              onCwdChange={(nextCwd) => welcome.update({ cwd: nextCwd })}
-              onProjectChange={onProjectChange}
-            />
-          )}
           <div className="welcome-composer">
+            {welcomeDraft.forkFromSdkSessionId ? (
+              <div className="welcome-fork-source">
+                {t('conversationForkSource', {
+                  title: welcomeDraft.forkSourceTitle ?? t('conversation')
+                })}
+              </div>
+            ) : (
+              <WelcomeProjectSelector
+                availableProjects={availableProjects}
+                cwd={cwd}
+                projectChoice={projectChoice}
+                onBrowse={() => void browse()}
+                onCwdChange={(nextCwd) => welcome.update({ cwd: nextCwd })}
+                onProjectChange={onProjectChange}
+              />
+            )}
             <textarea
               ref={taRef}
               className="welcome-composer-input"
               placeholder={t('welcomeInputPlaceholder')}
               value={text}
-              rows={2}
+              rows={1}
               onChange={(event) => welcome.update({ text: event.target.value })}
               onKeyDown={onKeyDown}
               autoFocus
@@ -490,7 +489,7 @@ export default function WelcomeView(): React.JSX.Element {
                 onChange={(nextStrategy) => welcome.update({ taskStrategy: nextStrategy })}
                 compact
               />
-              {projection === 'assistant' ? (
+              {projection === 'assistant' && !welcomeDraft.forkFromSdkSessionId ? (
                 <AssistantComputeIndicator
                   available={computeAvailable || localComputeStatus === 'ready'}
                   checking={localComputeStatus === 'checking'}
@@ -505,22 +504,31 @@ export default function WelcomeView(): React.JSX.Element {
                   routingMode={routingMode}
                   routingStrategyLabel={routingStrategyLabel}
                   onDriveChange={welcome.setDriveMode}
-                  onModelChange={(nextModel) => welcome.update({ model: nextModel })}
+                  onModelChange={(nextModel) => welcome.update({
+                    computeSelectionSource: 'user',
+                    model: nextModel
+                  })}
                   onProviderChange={welcome.setProvider}
                   onRoutingModeChange={onRoutingModeChange}
                 />
               )}
               <button
+                type="button"
                 className="welcome-send"
+                aria-label={t('send')}
+                title={t('send')}
                 disabled={busy || !text.trim()}
                 onClick={() => void submit()}
               >
-                {busy ? '···' : '↑'}
+                {busy
+                  ? <LoaderCircle className="welcome-send-spinner" size={17} aria-hidden="true" />
+                  : <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />}
               </button>
             </div>
           </div>
           <AssistantStartNotice
             busy={busy}
+            computeReason={computeReason}
             error={error}
             recoveryKind={recoveryKind}
             onOpenSettings={() => setShowSettings(true, 'providers', 'welcome-provider-recovery')}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
@@ -274,12 +274,21 @@ async function inspectFile(filePath, label, failures) {
     failures.push(`${label} does not exist`)
     return undefined
   }
+  const canonical = realpathSync.native(absolute)
   const stat = lstatSync(absolute)
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0) {
+  if (!samePath(canonical, absolute) || stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0) {
     failures.push(`${label} must be a non-empty regular file and not a symlink`)
     return undefined
   }
   return { size: stat.size, sha256: await sha256File(absolute) }
+}
+
+function samePath(left, right) {
+  const normalizedLeft = path.normalize(left)
+  const normalizedRight = path.normalize(right)
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
 }
 
 function summarize(value, installer, evidenceFiles) {

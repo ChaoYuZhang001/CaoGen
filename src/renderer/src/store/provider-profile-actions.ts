@@ -1,6 +1,7 @@
 import {
   AUTO_MODEL,
   type AppSettings,
+  type LocalComputeActivationOptions,
   type LocalComputeActivationResult,
   type ProviderInput,
   type ProviderProfileApplyResult,
@@ -11,7 +12,7 @@ import {
 
 export interface ProviderProfileStoreActions {
   refreshProviders(): Promise<void>
-  activateLocalCompute(): Promise<LocalComputeActivationResult>
+  activateLocalCompute(options?: LocalComputeActivationOptions): Promise<LocalComputeActivationResult>
   createProvider(input: ProviderInput): Promise<ProviderView>
   updateProvider(id: string, patch: Partial<ProviderInput>): Promise<ProviderView>
   deleteProvider(id: string): Promise<void>
@@ -38,8 +39,8 @@ export function createProviderProfileStoreActions(
     async refreshProviders() {
       set({ providers: await window.agentDesk.listProviders(), providersHydrated: true })
     },
-    async activateLocalCompute() {
-      const result = await window.agentDesk.activateLocalCompute()
+    async activateLocalCompute(options) {
+      const result = await window.agentDesk.activateLocalCompute(options)
       if (result.provider) {
         await get().updateSettings({
           defaultProviderId: result.provider.id,

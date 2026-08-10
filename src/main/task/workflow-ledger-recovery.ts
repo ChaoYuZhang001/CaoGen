@@ -1,6 +1,6 @@
 import type { TaskRunRecord, TaskSnapshotRecord } from '../../shared/types'
 import { resolve } from 'node:path'
-import { isTaskRunRecord, isTaskRunTerminal } from './task-run'
+import { isTaskRunRecord, isTaskRunTerminal, taskRunRequiresRecoverySnapshot } from './task-run'
 import { taskSnapshotTaskIdMatchesRun } from './task-snapshot-identity'
 import { isTaskSnapshotRecord } from './task-snapshot-validation'
 import { canonicalJson, digest } from './workflow-ledger-codec'
@@ -219,7 +219,7 @@ export function verifyWorkflowRecoveryProjection(
   }
 
   const activeRuns = runs.filter((run) => !isTaskRunTerminal(run.status))
-  for (const run of activeRuns) {
+  for (const run of activeRuns.filter((item) => taskRunRequiresRecoverySnapshot(item.status))) {
     if (!recoveredRunIds.has(run.id)) {
       throw new WorkflowLedgerCorruptionError(`active canonical Run ${run.id} has no recovery session`)
     }

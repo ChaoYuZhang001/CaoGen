@@ -2,18 +2,21 @@ import type { CaoGenDriveMode, PermissionModeId, TaskStrategy } from '../../../s
 import { loadWelcomeDraft, persistWelcomeDraft } from './welcome-draft-persistence'
 
 export type WelcomeRoutingMode = 'fixed' | 'provider' | 'global'
+export type WelcomeComputeSelectionSource = 'default' | 'user'
 
 export interface WelcomeDraftState {
   text: string
   projectChoice: string | null
   cwd: string | null
   driveMode: CaoGenDriveMode | null
+  computeSelectionSource: WelcomeComputeSelectionSource
   routingMode: WelcomeRoutingMode
   providerId: string | null
   model: string | null
   permissionMode: PermissionModeId | null
   taskStrategy?: TaskStrategy
   forkFromSdkSessionId?: string
+  forkCheckpointId?: string
   forkSourceTitle?: string
 }
 
@@ -29,6 +32,7 @@ export function emptyWelcomeDraft(): WelcomeDraftState {
     projectChoice: null,
     cwd: null,
     driveMode: null,
+    computeSelectionSource: 'default',
     routingMode: 'global',
     providerId: null,
     model: null,

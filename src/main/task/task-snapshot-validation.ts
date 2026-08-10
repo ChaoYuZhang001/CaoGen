@@ -12,7 +12,7 @@ type Validator = (value: unknown) => boolean
 
 const SESSION_STATUSES = new Set<unknown>(['starting', 'running', 'idle', 'error', 'closed'])
 // Legacy Claude snapshots remain readable so recovery can migrate them to native Anthropic.
-const ENGINE_KINDS = new Set<unknown>(['claude', 'anthropic', 'openai'])
+const ENGINE_KINDS = new Set<unknown>(['claude', 'anthropic', 'gemini', 'openai'])
 const SNAPSHOT_REASONS = new Set<unknown>(['created', 'important-event', 'event-batch', 'shutdown', 'recovered'])
 const SUBTASK_STATUSES = new Set<unknown>(['pending', 'running', 'success', 'failed', 'closed'])
 const DAG_TASK_STATUSES = new Set<unknown>(['waiting', 'running', 'success', 'failed'])
@@ -29,7 +29,8 @@ const AUTO_MERGE_ENTRY_STATUSES = new Set<unknown>(['merged', 'skipped', 'blocke
 const AUTO_MERGE_VERIFICATION_STATUSES = new Set<unknown>(['passed', 'failed', 'skipped', 'not-run'])
 const AGENT_EVENT_KINDS = new Set<unknown>([
   'status', 'init', 'meta', 'user-message', 'checkpoint', 'checkpoint-restore',
-  'routing', 'failover', 'provider-key-failover', 'text-delta', 'thinking-delta',
+  'routing', 'failover', 'provider-key-failover', 'provider-model-failover',
+  'provider-protocol-failover', 'provider-recovery-exhausted', 'text-delta', 'thinking-delta',
   'tool-start', 'assistant-message', 'tool-result', 'permission-request',
   'permission-resolved', 'turn-result', 'subagent-result', 'task-dag-update', 'hook-event'
 ])

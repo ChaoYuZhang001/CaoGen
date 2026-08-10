@@ -106,7 +106,11 @@ try {
     'session ids must not escape the attachment base'
   )
   const symlinkRoot = path.join(tempRoot, 'symlink-attachments')
-  symlinkSync(realpathSync(attachmentsRoot), symlinkRoot)
+  symlinkSync(
+    realpathSync(attachmentsRoot),
+    symlinkRoot,
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
   assertThrows(
     () => attachmentOps.imageAttachmentRefToContentBlock(copied, symlinkRoot),
     /普通目录/,

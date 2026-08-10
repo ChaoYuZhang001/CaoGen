@@ -641,7 +641,14 @@ async function verifyCorruptAttachmentHistory() {
 async function verifyCorruptAttachmentVariant(variant, hash, canonicalBytes) {
   const sessionId = `anthropic-corrupt-${variant.name}`
   const sdkSessionId = `sdk-${sessionId}`
-  prepareCorruptAttachmentObject(sessionId, variant, hash, canonicalBytes)
+  if (!prepareCorruptAttachmentObject(sessionId, variant, hash, canonicalBytes)) {
+    checks.push({
+      name: `${variant.name} attachment recovery requires symbolic-link permission`,
+      status: 'skip',
+      reason: 'Windows symbolic-link creation is unavailable for the current user'
+    })
+    return
+  }
   writeTranscriptFixture(sdkSessionId, corruptThenValidEvents(variant.attachments ?? [variant.attachment]))
   const resumed = new runtime.engine.AnthropicEngine(
     metaFixture(sessionId, projectDirectory(sessionId), 'bypassPermissions'),
@@ -664,20 +671,26 @@ function prepareCorruptAttachmentObject(sessionId, variant, hash, canonicalBytes
     mkdirSync(external, { recursive: true })
     writeFileSync(path.join(external, `${hash}.png`), canonicalBytes)
     mkdirSync(path.dirname(root), { recursive: true })
-    symlinkSync(external, root)
-    return
+    symlinkSync(external, root, process.platform === 'win32' ? 'junction' : 'dir')
+    return true
   }
   mkdirSync(root, { recursive: true })
-  if (!variant.object) return
+  if (!variant.object) return true
   const extension = variant.attachment?.mime === 'image/jpeg' ? 'jpg' : 'png'
   const target = path.join(root, `${hash}.${extension}`)
   if (variant.symlinkObject) {
     const external = path.join(tempRoot, `${sessionId}-object.png`)
     writeFileSync(external, variant.object)
-    symlinkSync(external, target)
+    try {
+      symlinkSync(external, target, 'file')
+    } catch (error) {
+      if (process.platform === 'win32' && error?.code === 'EPERM') return false
+      throw error
+    }
   } else {
     writeFileSync(target, variant.object)
   }
+  return true
 }
 
 function imageReference(hash, bytes, mime) {
@@ -969,7 +982,7 @@ async function check(name, fn) {
 
 function projectDirectory(name) {
   const project = path.join(tempRoot, name)
-  execFileSync('mkdir', ['-p', project])
+  mkdirSync(project, { recursive: true })
   return project
 }
 

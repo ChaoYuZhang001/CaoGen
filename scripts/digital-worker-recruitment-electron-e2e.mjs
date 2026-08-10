@@ -43,6 +43,7 @@ const state = {
   projectName: 'TEAM-002 Release Project',
   roleName: 'Release Evidence Reviewer',
   workerName: 'CaoGen Release Reviewer',
+  watercolorRole: 'review-test',
   primaryWorkItemTitle: 'Review release evidence package',
   secondaryWorkItemTitle: 'Post-retirement assignment probe',
   projectId: '',
@@ -82,6 +83,7 @@ const report = {
     verified: [
       'directory-free Project and two WorkItems created through real Studio UI clicks',
       'role creation and role-selected native DigitalWorker recruitment through real UI clicks',
+      'explicit watercolor role selection and restart-safe avatar profile persistence',
       'responsibility, tool, data, budget, concurrency, acceptance, and escalation policy presentation',
       'WorkItem assignment through the native renderer to main-process IPC gateway',
       'same-userData recovery without duplicate project, role, worker, or assignment records',
@@ -146,6 +148,7 @@ try {
         'role-selected recruitment did not retain the chosen RoleTemplate'
       )
       await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '员工名称', state.workerName)
+      await page.select('[data-dws-form="hire-worker"] [data-dws-watercolor-role]', state.watercolorRole)
       await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '职责范围', 'Review release evidence\nReport acceptance gaps')
       await setLabeledCheckbox(page, '[data-dws-form="hire-worker"]', '修改工作区', true)
       await setLabeledCheckbox(page, '[data-dws-form="hire-worker"]', '终端操作', true)
@@ -278,6 +281,7 @@ try {
     assert(document.workers.length === 1, `persisted DigitalWorker count ${document.workers.length}`)
     assert(document.assignments.length === 1, `persisted Assignment count ${document.assignments.length}`)
     assert(document.workers[0].status === 'retired', `persisted status ${document.workers[0].status}`)
+    assert(document.workers[0].avatarProfile?.watercolorRole === state.watercolorRole, 'persisted watercolor role changed')
     assert(document.assignments[0].id === state.assignmentId, 'persisted Assignment identity changed')
     const forbiddenKeys = findForbiddenRegistrationKeys(document)
     assert(forbiddenKeys.length === 0, `DigitalWorker state contains external runtime identity keys: ${forbiddenKeys.join(', ')}`)
@@ -290,6 +294,7 @@ try {
       workerCount: document.workers.length,
       assignmentCount: document.assignments.length,
       workerStatus: document.workers[0].status,
+      watercolorRole: document.workers[0].avatarProfile.watercolorRole,
       assignmentStatus: document.assignments[0].status,
       auditCount: document.audit.length,
       forbiddenRegistrationKeys: forbiddenKeys
@@ -455,8 +460,11 @@ async function enterStudio(page) {
 
 async function createDirectoryFreeProject(page) {
   await page.waitForSelector('.pws-project-empty', { visible: true, timeout: 10_000 })
-  await page.click('[data-studio-action="create-project"]')
-  await page.waitForSelector('[data-studio-form="project"]', { visible: true, timeout: 5_000 })
+  await clickVisibleSelectorUntilVisible(
+    page,
+    '[data-studio-action="create-project-empty"]',
+    '[data-studio-form="project"]'
+  )
   await replaceSelectorValue(page, '[data-studio-form="project"] [name="projectName"]', state.projectName)
   await page.select('[data-studio-form="project"] [name="projectKind"]', 'software')
   await page.click('[data-studio-form="project"] button[type="submit"]')
@@ -538,6 +546,7 @@ function assertTeamSnapshot(snapshot, label) {
   assert(snapshot.workItems.length === 2, `${label} WorkItem duplication: ${snapshot.workItems.length}`)
   assert(snapshot.roles.length === 1 && snapshot.roles[0].id === state.roleId, `${label} RoleTemplate duplication: ${snapshot.roles.length}`)
   assert(snapshot.workers.length === 1 && snapshot.workers[0].id === state.workerId, `${label} DigitalWorker duplication: ${snapshot.workers.length}`)
+  assertWorkerPolicy(snapshot.workers[0])
   assert(snapshot.history.length === 1 && snapshot.history[0].id === state.assignmentId, `${label} Assignment history duplication: ${snapshot.history.length}`)
   assert(snapshot.activeAssignments.length === 1 && snapshot.activeAssignments[0].id === state.assignmentId, `${label} active Assignment changed`)
 }
@@ -559,6 +568,7 @@ function assertWorkerPolicy(worker) {
   assert(worker.acceptancePolicy.requireUserApproval === true, 'user approval policy missing')
   assert(worker.escalationPolicy.target === 'release-manager', `escalation target ${worker.escalationPolicy.target}`)
   assert(worker.escalationPolicy.afterFailures === 3, `escalation failures ${worker.escalationPolicy.afterFailures}`)
+  assert(worker.avatarProfile?.watercolorRole === state.watercolorRole, `watercolor role ${JSON.stringify(worker.avatarProfile)}`)
   for (const field of ['providerId', 'model', 'engine', 'cli']) {
     assert(!(field in worker), `native DigitalWorker unexpectedly contains ${field}`)
   }
@@ -568,9 +578,13 @@ async function assertWorkerCardPresentation(page, expectedStatus) {
   const presentation = await page.$eval(workerCardSelector(), (element) => ({
     text: element.textContent || '',
     status: element.getAttribute('data-digital-worker-status'),
+    watercolorRole: element.getAttribute('data-watercolor-role'),
+    watercolorRoleSource: element.getAttribute('data-watercolor-role-source'),
     sections: [...element.querySelectorAll('h4')].map((heading) => heading.textContent?.trim() || '')
   }))
   assert(presentation.status === expectedStatus, `worker card status ${presentation.status}, expected ${expectedStatus}`)
+  assert(presentation.watercolorRole === state.watercolorRole, `worker card watercolor role ${presentation.watercolorRole}`)
+  assert(presentation.watercolorRoleSource === 'avatar-profile', `worker card watercolor role source ${presentation.watercolorRoleSource}`)
   for (const section of ['职责', '工具权限', '数据范围', '验收与升级', 'WorkItem']) {
     assert(presentation.sections.includes(section), `worker card missing ${section}: ${presentation.sections.join(', ')}`)
   }
@@ -703,6 +717,44 @@ async function clickButtonByText(page, text, rootSelector = 'body', exact = true
     }
   }
   throw new Error(`visible enabled button not found: ${text}`)
+}
+
+async function clickVisibleSelector(page, selector) {
+  await page.waitForFunction((candidate) => {
+    const element = document.querySelector(candidate)
+    if (!(element instanceof HTMLElement)) return false
+    const style = getComputedStyle(element)
+    const rect = element.getBoundingClientRect()
+    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+  }, { timeout: 5_000 }, selector)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const element = await page.$(selector)
+    try {
+      assert(element, `visible selector disappeared before click: ${selector}`)
+      await element.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }))
+      await element.click()
+      return
+    } catch (error) {
+      if (attempt === 2) throw error
+      await sleep(100)
+    } finally {
+      await element?.dispose()
+    }
+  }
+}
+
+async function clickVisibleSelectorUntilVisible(page, triggerSelector, targetSelector) {
+  let lastError
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await clickVisibleSelector(page, triggerSelector)
+    try {
+      await page.waitForSelector(targetSelector, { visible: true, timeout: 5_000 })
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError ?? new Error(`selector did not become visible after click: ${targetSelector}`)
 }
 
 function workerCardSelector() {

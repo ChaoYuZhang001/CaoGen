@@ -25,6 +25,9 @@ const sessionManager = {
   },
   async close(id) {
     calls.push({ kind: 'close', id })
+  },
+  getTaskRun() {
+    return undefined
   }
 }
 
@@ -62,7 +65,23 @@ const stubs = new Map([
           finishedAt: Date.now()
         }
       }
-    }
+    },
+    setRoutineRunDispatchState: async () => null,
+    setRoutineRunExecutionBinding: async () => true,
+    settleRoutineRun: async (_rootDir, runId, patch) => ({ id: runId, ...patch })
+  }],
+  ['./routine-project-runtime', {
+    prepareRoutineProjectExecution: async (_workspaceRoot, routine) => ({
+      projectId: 'routine-project',
+      goalId: 'routine-goal',
+      workItemId: 'routine-work-item',
+      cwd: routine.projectCwd
+    }),
+    transitionRoutineGoal: async () => undefined,
+    transitionRoutineWorkItem: async () => undefined
+  }],
+  ['./routine-session-lifecycle', {
+    initializeRoutineSessionLifecycle() {}
   }]
 ])
 

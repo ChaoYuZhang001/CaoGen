@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -79,10 +79,11 @@ async function canonicalOrderingProof() {
 
 async function strongKillRecovery(checkpoint) {
   const root = scenarioRoot(`kill-${checkpoint}`)
+  const crashMarker = path.join(root, 'crash-checkpoint.txt')
   const workspaceId = `workspace-${checkpoint}`
   const goalId = `goal-${checkpoint}`
   await seedWorkspace(root, workspaceId)
-  const child = spawnSync(process.execPath, [new URL(import.meta.url).pathname], {
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -90,12 +91,17 @@ async function strongKillRecovery(checkpoint) {
       CAOGEN_CANONICAL_WRITE_COMPILED: outDir,
       CAOGEN_CANONICAL_WRITE_ROOT: root,
       CAOGEN_CANONICAL_WRITE_CHECKPOINT: checkpoint,
+      CAOGEN_CANONICAL_WRITE_MARKER: crashMarker,
       CAOGEN_CANONICAL_WRITE_WORKSPACE: workspaceId,
       CAOGEN_CANONICAL_WRITE_GOAL: goalId
     },
     encoding: 'utf8'
   })
-  assertEqual(child.signal, 'SIGKILL', `${checkpoint} child must be killed at the checkpoint`)
+  assert(
+    child.signal === 'SIGKILL' || child.status !== 0,
+    `${checkpoint} child must terminate abnormally at the checkpoint`
+  )
+  assertEqual(readFileSync(crashMarker, 'utf8'), checkpoint, `${checkpoint} child checkpoint marker`)
 
   const jsonAfterKill = readJsonState(root)
   const jsonHasGoal = jsonAfterKill.goals.some((goal) => goal.id === goalId)
@@ -127,6 +133,7 @@ async function runCrashChild() {
   const compiled = requiredEnv('CAOGEN_CANONICAL_WRITE_COMPILED')
   const root = requiredEnv('CAOGEN_CANONICAL_WRITE_ROOT')
   const checkpoint = requiredEnv('CAOGEN_CANONICAL_WRITE_CHECKPOINT')
+  const crashMarker = requiredEnv('CAOGEN_CANONICAL_WRITE_MARKER')
   const workspaceId = requiredEnv('CAOGEN_CANONICAL_WRITE_WORKSPACE')
   const goalId = requiredEnv('CAOGEN_CANONICAL_WRITE_GOAL')
   const storeApi = await import(pathToFileURL(path.join(compiled, 'main/project-workspace/store.js')).href)
@@ -136,7 +143,10 @@ async function runCrashChild() {
     rootDir: root,
     canonicalWrite: {
       faultAt: checkpoint,
-      onFault: () => process.kill(process.pid, 'SIGKILL')
+      onFault: () => {
+        writeFileSync(crashMarker, checkpoint)
+        process.kill(process.pid, 'SIGKILL')
+      }
     }
   })
   await commands.createGoal({

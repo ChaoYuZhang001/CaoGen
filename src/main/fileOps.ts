@@ -16,6 +16,12 @@ const DEFAULT_MAX_READ_BYTES = 1_000_000
 const DEFAULT_MAX_WRITE_BYTES = 1_000_000
 const DEFAULT_MAX_LIST_ENTRIES = 5_000
 const DEFAULT_MAX_LIST_DEPTH = 10
+const DEFAULT_MAX_SEARCH_FILES = 2_000
+const DEFAULT_MAX_SEARCH_FILE_BYTES = 512_000
+const DEFAULT_MAX_SEARCH_TOTAL_BYTES = 32_000_000
+const DEFAULT_MAX_SEARCH_RESULTS = 200
+const DEFAULT_MAX_SEARCH_QUERY_CHARS = 120
+const DEFAULT_MAX_SEARCH_SNIPPET_CHARS = 240
 
 const DEFAULT_IGNORED_DIRS = new Set([
   '.cache',
@@ -29,6 +35,13 @@ const DEFAULT_IGNORED_DIRS = new Set([
   'node_modules',
   'out',
   '__pycache__'
+])
+
+const DEFAULT_IGNORED_SEARCH_EXTENSIONS = new Set([
+  '.7z', '.avi', '.bmp', '.class', '.db', '.dll', '.doc', '.docx', '.eot', '.exe',
+  '.gif', '.gz', '.ico', '.jar', '.jpeg', '.jpg', '.lock', '.mov', '.mp3', '.mp4',
+  '.otf', '.pdf', '.png', '.ppt', '.pptx', '.pyc', '.sqlite', '.tar', '.tgz', '.ttf',
+  '.wav', '.webm', '.webp', '.woff', '.woff2', '.xls', '.xlsx', '.zip'
 ])
 
 export interface ReadTextFileOptions {
@@ -79,6 +92,34 @@ export interface ListProjectFilesSuccess {
   truncated: boolean
 }
 
+export interface SearchProjectTextOptions {
+  caseSensitive?: boolean
+  maxFiles?: number
+  maxFileBytes?: number
+  maxTotalBytes?: number
+  maxResults?: number
+  maxQueryChars?: number
+  maxSnippetChars?: number
+}
+
+export interface ProjectTextSearchMatch {
+  path: string
+  line: number
+  column: number
+  snippet: string
+  matchStart: number
+  matchLength: number
+}
+
+export interface SearchProjectTextSuccess {
+  ok: true
+  query: string
+  matches: ProjectTextSearchMatch[]
+  filesScanned: number
+  filesMatched: number
+  truncated: boolean
+}
+
 export interface FileOpsFailure {
   ok: false
   error: string
@@ -87,6 +128,7 @@ export interface FileOpsFailure {
 export type ReadTextFileResult = ReadTextFileSuccess | FileOpsFailure
 export type WriteTextFileResult = WriteTextFileSuccess | FileOpsFailure
 export type ListProjectFilesResult = ListProjectFilesSuccess | FileOpsFailure
+export type SearchProjectTextResult = SearchProjectTextSuccess | (FileOpsFailure & { matches: ProjectTextSearchMatch[] })
 
 /**
  * 读取项目内 UTF-8 文本文件。拒绝 cwd 外路径、目录、过大文件和明显二进制内容。
@@ -239,6 +281,112 @@ export async function listProjectFiles(
   }
 }
 
+/**
+ * Searches UTF-8 text files below the project root without following symbolic links.
+ * Every resource dimension is bounded so renderer-triggered searches cannot scan an
+ * unbounded repository or return unbounded snippets.
+ */
+export async function searchProjectText(
+  projectRoot: string,
+  queryValue: string,
+  options: SearchProjectTextOptions = {}
+): Promise<SearchProjectTextResult> {
+  try {
+    const query = queryValue.trim()
+    const maxQueryChars = boundedLimit(options.maxQueryChars, DEFAULT_MAX_SEARCH_QUERY_CHARS, DEFAULT_MAX_SEARCH_QUERY_CHARS)
+    if (!query) return { ok: false, matches: [], error: 'Search query cannot be empty' }
+    if (query.length > maxQueryChars) return { ok: false, matches: [], error: `Search query exceeds ${maxQueryChars} characters` }
+    if (/\0|\r|\n/.test(query)) return { ok: false, matches: [], error: 'Search query must be a single line' }
+
+    const root = await normalizeProjectRoot(projectRoot)
+    const maxFiles = boundedLimit(options.maxFiles, DEFAULT_MAX_SEARCH_FILES, DEFAULT_MAX_SEARCH_FILES)
+    const maxFileBytes = boundedLimit(options.maxFileBytes, DEFAULT_MAX_SEARCH_FILE_BYTES, DEFAULT_MAX_SEARCH_FILE_BYTES)
+    const maxTotalBytes = boundedLimit(options.maxTotalBytes, DEFAULT_MAX_SEARCH_TOTAL_BYTES, DEFAULT_MAX_SEARCH_TOTAL_BYTES)
+    const maxResults = boundedLimit(options.maxResults, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_MAX_SEARCH_RESULTS)
+    const maxSnippetChars = Math.max(
+      query.length + 6,
+      boundedLimit(options.maxSnippetChars, DEFAULT_MAX_SEARCH_SNIPPET_CHARS, DEFAULT_MAX_SEARCH_SNIPPET_CHARS)
+    )
+    const listing = await listProjectFiles(root, { maxEntries: Math.min(DEFAULT_MAX_LIST_ENTRIES, maxFiles * 3) })
+    if (listing.ok === false) return { ok: false, matches: [], error: listing.error }
+
+    const files = listing.entries.filter((entry) => entry.kind === 'file')
+    const candidates = files.slice(0, maxFiles)
+    const needle = options.caseSensitive ? query : query.toLocaleLowerCase()
+    const matchedPaths = new Set<string>()
+    const matches: ProjectTextSearchMatch[] = []
+    let filesScanned = 0
+    let totalBytes = 0
+    let truncated = listing.truncated || files.length > candidates.length
+
+    for (const entry of candidates) {
+      if (matches.length >= maxResults) {
+        truncated = true
+        break
+      }
+      if (DEFAULT_IGNORED_SEARCH_EXTENSIONS.has(path.extname(entry.name).toLocaleLowerCase())) continue
+
+      const target = await resolveExistingProjectPath(root, entry.path).catch(() => null)
+      if (!target) continue
+      const info = await stat(target.fullPath).catch(() => null)
+      if (!info?.isFile() || info.size > maxFileBytes) continue
+      if (totalBytes + info.size > maxTotalBytes) {
+        truncated = true
+        break
+      }
+
+      const buffer = await readFile(target.fullPath).catch(() => null)
+      if (!buffer || buffer.includes(0)) continue
+      let content: string
+      try {
+        content = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+      } catch {
+        continue
+      }
+
+      filesScanned += 1
+      totalBytes += buffer.byteLength
+      const lines = content.split(/\r?\n/)
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        const line = lines[lineIndex]
+        const haystack = options.caseSensitive ? line : line.toLocaleLowerCase()
+        let from = 0
+        while (from <= haystack.length - needle.length) {
+          const index = haystack.indexOf(needle, from)
+          if (index < 0) break
+          const snippet = searchSnippet(line, index, query.length, maxSnippetChars)
+          matches.push({
+            path: entry.path,
+            line: lineIndex + 1,
+            column: index + 1,
+            snippet: snippet.text,
+            matchStart: snippet.matchStart,
+            matchLength: query.length
+          })
+          matchedPaths.add(entry.path)
+          if (matches.length >= maxResults) {
+            truncated = true
+            break
+          }
+          from = index + Math.max(needle.length, 1)
+        }
+        if (matches.length >= maxResults) break
+      }
+    }
+
+    return {
+      ok: true,
+      query,
+      matches,
+      filesScanned,
+      filesMatched: matchedPaths.size,
+      truncated
+    }
+  } catch (err) {
+    return { ok: false, matches: [], error: errorMessage(err) }
+  }
+}
+
 async function normalizeProjectRoot(projectRoot: string): Promise<string> {
   if (!projectRoot.trim()) throw new Error('项目目录不能为空')
   const root = await realpath(projectRoot)
@@ -327,6 +475,30 @@ function toProjectRelative(root: string, fullPath: string): string {
 function positiveLimit(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+function boundedLimit(value: number | undefined, fallback: number, ceiling: number): number {
+  return Math.min(positiveLimit(value, fallback), ceiling)
+}
+
+function searchSnippet(
+  line: string,
+  matchIndex: number,
+  matchLength: number,
+  maxChars: number
+): { text: string; matchStart: number } {
+  const normalized = line.replace(/\t/g, ' ')
+  if (normalized.length <= maxChars) return { text: normalized, matchStart: matchIndex }
+  const contentBudget = Math.max(matchLength, maxChars - 6)
+  const context = Math.max(0, Math.floor((contentBudget - matchLength) / 2))
+  const start = Math.max(0, Math.min(matchIndex - context, normalized.length - contentBudget))
+  const end = Math.min(normalized.length, start + contentBudget)
+  const prefix = start > 0 ? '...' : ''
+  const suffix = end < normalized.length ? '...' : ''
+  return {
+    text: `${prefix}${normalized.slice(start, end)}${suffix}`,
+    matchStart: prefix.length + matchIndex - start
+  }
 }
 
 function failure(error: string): FileOpsFailure {

@@ -133,7 +133,7 @@ try {
   assert.equal(crossValidationFailureVerdict('BLOCKED', 'NEED_HUMAN'), null)
   assert.equal(crossValidationFailureVerdict(null, null), null)
   const acceptedEvents = []
-  assert.equal(dispatchCrossValidationPrompt({
+  assert.equal(await dispatchCrossValidationPrompt({
     send: (sessionId, prompt) => sessionId === 'review-ok' && prompt === 'review prompt',
     getMeta: () => undefined,
     dispatch: (sessionId, event) => acceptedEvents.push({ sessionId, event })
@@ -146,7 +146,7 @@ try {
   assert.deepEqual(acceptedEvents, [], 'accepted review prompt should not emit a rejection event')
 
   const rejectedEvents = []
-  assert.equal(dispatchCrossValidationPrompt({
+  assert.equal(await dispatchCrossValidationPrompt({
     send: () => false,
     getMeta: () => ({ lastError: 'provider key missing\nretry after configuration' }),
     dispatch: (sessionId, event) => rejectedEvents.push({ sessionId, event })
@@ -162,7 +162,7 @@ try {
   assert.match(rejectedEvents[0].event.detail, /provider key missing retry after configuration/)
 
   const thrownEvents = []
-  assert.equal(dispatchCrossValidationPrompt({
+  assert.equal(await dispatchCrossValidationPrompt({
     send: () => { throw new Error('synchronous arbitration failure') },
     getMeta: () => undefined,
     dispatch: (sessionId, event) => thrownEvents.push({ sessionId, event })

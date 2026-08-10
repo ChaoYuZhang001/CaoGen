@@ -11,6 +11,7 @@ const { readPackagedReleaseProvenanceFromAsar, releaseProvenanceChecks } = requi
 const required = process.argv.includes('--required')
 const configOnly = process.argv.includes('--config-only')
 const previewMode = process.argv.includes('--preview')
+const allowDirtyPreview = previewMode && process.argv.includes('--allow-dirty')
 const distributionChannel = previewMode ? 'unsigned_preview' : 'formal'
 const targetArch = argValue('--arch') || 'x64'
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
@@ -47,6 +48,7 @@ const report = {
   status: failures.length === 0 ? 'passed' : 'failed',
   mode: configOnly ? 'config_only' : 'post_build',
   required,
+  allowDirtyPreview,
   distributionChannel,
   runId,
   reportDir,
@@ -96,6 +98,10 @@ function inspectReleaseConfig() {
     nsisTarget: false,
     assistedInstaller: false,
     customInstallDirectory: false,
+    defaultUninstallWelcomeRemoved: false,
+    nsisInclude: null,
+    electronLanguages: [],
+    asarUnpack: [],
     artifactName: null,
     publishDisabled: false,
     certificateEnvironmentDisabled: false,
@@ -115,10 +121,19 @@ function inspectReleaseConfig() {
     result.loaded = isRecord(releaseConfig)
     const win = isRecord(releaseConfig?.win) ? releaseConfig.win : {}
     const nsis = isRecord(releaseConfig?.nsis) ? releaseConfig.nsis : {}
+    result.electronLanguages = Array.isArray(releaseConfig?.electronLanguages)
+      ? releaseConfig.electronLanguages.filter((value) => typeof value === 'string')
+      : []
+    result.asarUnpack = Array.isArray(releaseConfig?.asarUnpack)
+      ? releaseConfig.asarUnpack.filter((value) => typeof value === 'string')
+      : []
     result.forceCodeSigning = win.forceCodeSigning === true
     result.nsisTarget = hasTarget(win.target, 'nsis')
     result.assistedInstaller = nsis.oneClick === false
     result.customInstallDirectory = nsis.allowToChangeInstallationDirectory === true
+    result.defaultUninstallWelcomeRemoved = nsis.removeDefaultUninstallWelcomePage === true
+    const nsisIncludePath = typeof nsis.include === 'string' ? path.resolve(repoRoot, nsis.include) : null
+    result.nsisInclude = nsisIncludePath ? reportPath(nsisIncludePath) : null
     result.artifactName = typeof win.artifactName === 'string' ? win.artifactName : null
     result.publishDisabled = releaseConfig.publish === null
     result.certificateEnvironmentDisabled =
@@ -141,6 +156,82 @@ function inspectReleaseConfig() {
     check('config', 'Windows distribution includes the NSIS target', result.nsisTarget)
     check('config', 'Windows distribution uses the assisted installer', result.assistedInstaller)
     check('config', 'Windows distribution allows a custom installation directory', result.customInstallDirectory)
+    check('config', 'NSIS default uninstall welcome is replaced by the CaoGen confirmation', result.defaultUninstallWelcomeRemoved)
+    const nsisIncludeSource = nsisIncludePath && existsSync(nsisIncludePath)
+      ? readFileSync(nsisIncludePath, 'utf8')
+      : ''
+    check('config', 'NSIS custom include exists', Boolean(nsisIncludeSource))
+    check(
+      'config',
+      'NSIS uninstaller requires explicit confirmation for non-silent invocation',
+      nsisIncludeSource.includes('!macro customUnInit') &&
+      nsisIncludeSource.includes('${IfNot} ${Silent}') &&
+      nsisIncludeSource.includes('MessageBox MB_ICONQUESTION|MB_YESNO')
+    )
+    check(
+      'config',
+      'NSIS direct uninstall restores files when removal cannot complete',
+      nsisIncludeSource.includes('!macro customRemoveFiles') &&
+      nsisIncludeSource.includes('Call un.atomicRMDir') &&
+      nsisIncludeSource.includes('Call un.restoreFiles')
+    )
+    check(
+      'config',
+      'NSIS confirmed uninstall schedules removal of the install root after self-delete',
+      (() => {
+        const macroStart = nsisIncludeSource.indexOf('!macro customRemoveFiles')
+        const macroEnd = nsisIncludeSource.indexOf('!macroend', macroStart)
+        const macro = macroStart >= 0 && macroEnd > macroStart
+          ? nsisIncludeSource.slice(macroStart, macroEnd)
+          : ''
+        const atomicCall = macro.indexOf('Call un.atomicRMDir')
+        const restoreCall = macro.indexOf('Call un.restoreFiles')
+        const currentProcess = macro.indexOf('GetCurrentProcess()', restoreCall)
+        const currentProcessId = macro.indexOf('GetProcessId(i R4)', currentProcess)
+        const tempWorkingDirectory = macro.indexOf('SetOutPath $TEMP', currentProcessId)
+        const inProcessRootDelete = macro.indexOf('RMDir /r "$INSTDIR"', tempWorkingDirectory)
+        const helperStart = macro.indexOf('GetTempFileName $R0 "$TEMP"')
+        const helperExec = macro.indexOf('Exec', helperStart)
+        const processIdBinding = macro.indexOf('caogenUninstallerPid=$R4', helperStart)
+        const retryLoop = macro.indexOf('for /l %%I in (1,1,30)', helperStart)
+        const retryLoopCount = (macro.match(/for \/l /g) || []).length
+        const processProbe = macro.indexOf('tasklist.exe', retryLoop)
+        const processMatch = macro.indexOf('findstr.exe', processProbe)
+        const processAbsentGuard = macro.indexOf('if errorlevel 1', processMatch)
+        const helperRootDelete = macro.indexOf('rmdir /s /q')
+        const rootAbsentGuard = macro.indexOf('if not exist', helperRootDelete)
+        const reliableDelay = macro.indexOf('ping.exe', rootAbsentGuard)
+        return macroStart >= 0 &&
+          atomicCall >= 0 &&
+          restoreCall > atomicCall &&
+          currentProcess > restoreCall &&
+          currentProcessId > currentProcess &&
+          tempWorkingDirectory > currentProcessId &&
+          inProcessRootDelete > tempWorkingDirectory &&
+          helperStart > inProcessRootDelete &&
+          processIdBinding > helperStart &&
+          macro.includes('$SYSDIR\\cmd.exe') &&
+          retryLoop > processIdBinding &&
+          retryLoopCount === 1 &&
+          processProbe > retryLoop &&
+          processMatch > processProbe &&
+          processAbsentGuard > processMatch &&
+          helperRootDelete > processAbsentGuard &&
+          rootAbsentGuard > helperRootDelete &&
+          macro.indexOf('%caogenInstallRoot%', rootAbsentGuard) > rootAbsentGuard &&
+          macro.indexOf('goto finish', rootAbsentGuard) > rootAbsentGuard &&
+          reliableDelay > rootAbsentGuard &&
+          macro.indexOf('-n 2 127.0.0.1', reliableDelay) > reliableDelay &&
+          helperExec > reliableDelay &&
+          !macro.includes('timeout.exe')
+      })()
+    )
+    check('config', 'Windows distribution includes required Electron locales',
+      ['en-US', 'zh-CN', 'zh-TW'].every((locale) => result.electronLanguages.includes(locale)))
+    check('config', 'Windows distribution unpacks the TypeScript language-server runtime',
+      result.asarUnpack.includes('**/node_modules/typescript-language-server/**'))
+    check('config', 'Windows distribution unpacks the TypeScript compiler runtime',
+      result.asarUnpack.includes('**/node_modules/typescript/**'))
     check('config', 'Windows distribution provenance schema is supported', result.releaseProvenance?.schemaVersion === 1)
     check('config', 'Windows distribution provenance commit is resolved', /^[0-9a-f]{40}$/i.test(result.releaseProvenance?.gitCommit || ''))
     check('config', 'Windows distribution provenance version matches package.json', result.releaseProvenance?.packageVersion === version)
@@ -155,7 +246,8 @@ function inspectArtifacts() {
   check('invocation', 'target architecture is x64', targetArch === 'x64')
   check('platform', 'post-build audit runs on Windows', process.platform === 'win32')
   check('platform', 'post-build audit runs natively on x64', process.arch === 'x64')
-  check('git', 'distribution audit runs from a clean worktree', git.worktreeClean)
+  check('git', 'distribution audit runs from a clean worktree', allowDirtyPreview || git.worktreeClean,
+    allowDirtyPreview && !git.worktreeClean ? 'D0 dirty preview explicitly allowed' : undefined)
   check('app', 'unpacked application executable exists', isFile(appExecutable), reportPath(appExecutable))
   check('installer', 'NSIS installer exists', isFile(installer), reportPath(installer))
   if (previewMode) {
@@ -184,7 +276,18 @@ function inspectArtifacts() {
     packageVersion: version
   })
   check('app', 'release build provenance is readable', !inspected.error, inspected.error || undefined)
-  for (const [name, passed] of Object.entries(provenance)) check('app', `release build provenance ${name}`, passed)
+  for (const [name, passed] of Object.entries(provenance)) {
+    check('app', `release build provenance ${name}`, name === 'worktreeWasClean' && allowDirtyPreview ? true : passed,
+      name === 'worktreeWasClean' && allowDirtyPreview && !passed ? 'D0 dirty preview explicitly allowed' : undefined)
+  }
+  for (const locale of ['en-US', 'zh-CN', 'zh-TW']) {
+    check('app', `packaged Electron locale ${locale} exists`, isFile(path.join(appDir, 'locales', `${locale}.pak`)))
+  }
+  const unpackedModules = path.join(appDir, 'resources', 'app.asar.unpacked', 'node_modules')
+  check('app', 'packaged TypeScript language-server CLI exists',
+    isFile(path.join(unpackedModules, 'typescript-language-server', 'lib', 'cli.mjs')))
+  check('app', 'packaged TypeScript tsserver runtime exists',
+    isFile(path.join(unpackedModules, 'typescript', 'lib', 'tsserver.js')))
 
   if (process.platform === 'win32') {
     signing = {

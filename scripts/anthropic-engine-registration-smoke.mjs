@@ -118,8 +118,8 @@ try {
   const engineKinds = new Set(engineModule.listEngines().map((engine) => engine.kind))
   assert.deepEqual(
     engineKinds,
-    new Set(['anthropic', 'openai']),
-    'builtins must expose exactly the two formal engines'
+    new Set(['anthropic', 'gemini', 'openai']),
+    'builtins must expose exactly the three formal engines'
   )
 
   const meta = await manager.create({
@@ -212,13 +212,13 @@ function verifyStaticRegistrationContracts() {
   const members = stringUnionMembers(sharedTypes, 'EngineKind')
   assert.deepEqual(
     members,
-    new Set(['anthropic', 'openai']),
-    'EngineKind must expose exactly the two formal engines'
+    new Set(['anthropic', 'gemini', 'openai']),
+    'EngineKind must expose exactly the three formal engines'
   )
 
   const providerEditor = sourceFile('src/renderer/src/components/ProviderEditor.tsx', ts.ScriptKind.TSX)
   const optionValues = jsxSelectOptionValues(providerEditor, 'engine')
-  for (const kind of ['anthropic', 'openai']) {
+  for (const kind of ['anthropic', 'gemini', 'openai']) {
     assert(optionValues.has(kind), `ProviderEditor must expose an independent ${kind} engine option`)
   }
 }

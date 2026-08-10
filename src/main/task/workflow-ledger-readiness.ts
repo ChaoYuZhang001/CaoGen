@@ -143,6 +143,13 @@ function buildReadinessReport(input: {
   const safeForShadowUse = !corrupt && !repairable
   const readyForCanonicalRead = !hasCanonicalBlocker(diagnostics) &&
     verifications.recovery !== undefined && verifications.conversationLedger !== undefined
+  const verification = {
+    ...(verifications.workflow ? { workflowLedger: verifications.workflow } : {}),
+    ...(verifications.evidence ? { taskEvidence: verifications.evidence } : {}),
+    ...(hasDagFinalizers ? { taskDagFinalizations: { valid: true as const, count: dagFinalizations } } : {}),
+    ...(verifications.recovery ? { workflowRecovery: verifications.recovery } : {}),
+    ...(verifications.conversationLedger ? { conversationLedger: verifications.conversationLedger } : {})
+  }
   const reportWithoutDigest = {
     schemaVersion: 1 as const,
     format: WORKFLOW_LEDGER_READINESS_FORMAT,
@@ -176,18 +183,7 @@ function buildReadinessReport(input: {
       taskSnapshots: collectionDigest(records.snapshots),
       conversationLedger: verifications.conversationLedger?.digest ?? collectionDigest([])
     },
-    ...(verifications.workflow && verifications.evidence && verifications.recovery &&
-      verifications.conversationLedger && hasDagFinalizers
-      ? {
-          verification: {
-            workflowLedger: verifications.workflow,
-            taskEvidence: verifications.evidence,
-            taskDagFinalizations: { valid: true as const, count: dagFinalizations },
-            workflowRecovery: verifications.recovery,
-            conversationLedger: verifications.conversationLedger
-          }
-        }
-      : {}),
+    ...(Object.keys(verification).length > 0 ? { verification } : {}),
     authorizedPurges,
     diagnostics
   }

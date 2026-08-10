@@ -19,7 +19,12 @@ const HTTP_HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 type ProviderCredentialHeaderSource = Pick<
   Provider,
   'authMode' | 'credentialHeaderNames' | 'credentialMigrationRequired'
->
+> & Partial<Pick<Provider, 'engine'>>
+
+type ProviderCredentialHeaderDefaults = Partial<Pick<
+  Provider,
+  'authMode' | 'credentialHeaderNames' | 'engine'
+>>
 
 export function normalizedCustomHeaders(value: string | undefined): string | undefined {
   const inspected = inspectProviderCustomHeaders(value ?? '')
@@ -47,12 +52,23 @@ export function normalizedCredentialHeaderNames(value: unknown): string[] | unde
   return inspected.names.length > 0 ? inspected.names : undefined
 }
 
+export function resolvedProviderCredentialHeaderNames(
+  provider: ProviderCredentialHeaderDefaults | undefined
+): string[] {
+  const { names } = inspectCredentialHeaderNames(provider?.credentialHeaderNames)
+  if (names.length > 0) return names
+  if (provider?.authMode === 'none') return []
+  if (provider?.engine === 'anthropic') return ['x-api-key']
+  if (provider?.engine === 'gemini') return ['x-goog-api-key']
+  return ['authorization']
+}
+
 export function providerCredentialHeaders(
   provider: ProviderCredentialHeaderSource | undefined,
   token: string
 ): Record<string, string> {
   if (!token || provider?.authMode === 'none' || provider?.credentialMigrationRequired === true) return {}
-  const { names } = inspectCredentialHeaderNames(provider?.credentialHeaderNames)
+  const names = resolvedProviderCredentialHeaderNames(provider)
   return Object.fromEntries(names.map((name) => [
     name,
     name === 'authorization' ? `Bearer ${token}` : token

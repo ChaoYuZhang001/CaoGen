@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   EngineKind,
   OpenAIProtocol,
@@ -9,12 +9,28 @@ import type {
   ProviderApiKeyUpdateInput,
   ProviderAuthMode,
   ProviderInput,
+  ProviderGenerationProbeInput,
+  ProviderGenerationProbeResult,
+  ProviderDiagnosticCredentialSource,
   ProviderModelFetchInput,
   ProviderModelFetchResult,
   ProviderView
 } from '../shared/types'
-import { recordFailure, recordSuccess } from './scheduler'
-import { pickNextProviderKey } from './providerKeyRouting'
+import { recordProbeFailure, recordProbeSuccess } from './scheduler'
+import {
+  normalizeProviderCredentialPolicy,
+  normalizeProviderCredentialRoutingMode,
+  pickNextProviderKey,
+  selectProviderKey
+} from './providerKeyRouting'
+import { providerCredentialMetrics } from './provider/providerCredentialMetrics'
+import {
+  applyKeyUpdates,
+  cleanKeyLabel,
+  LEGACY_KEY_LABEL,
+  legacyKeyId,
+  normalizedProviderKeys
+} from './provider/providerKeyRecords'
 import {
   inspectProviderBaseUrl,
   inspectProviderCustomHeaders,
@@ -41,6 +57,7 @@ import {
 } from './provider/credentialMigration'
 import { bindProviderModelDiscoveryInput } from './provider/modelDiscoveryBinding'
 import { discoverProviderModels, parseProviderHeaderLines } from './provider/modelDiscovery'
+import { executeProviderGenerationProbe } from './provider/generationProbe'
 import {
   mergeProviderPatch,
   providerCredentialBindingChanged,
@@ -50,18 +67,21 @@ import {
 } from './provider/providerUpdate'
 import { normalizeBaseUrl } from './provider/providerBaseUrl'
 import { normalizeProviderAuthMode } from './provider/providerAuthMode'
+import { normalizeProviderAdvancedConfig, normalizeProviderAuthorization } from './provider/providerAdvancedConfig'
 import {
   assertProviderCredentialInput,
   inspectCredentialHeaderNames,
   normalizedCredentialHeaderNames,
   normalizedCustomHeaders,
   providerCredentialHeaderLines,
-  providerCredentialHeaders
+  providerCredentialHeaders,
+  resolvedProviderCredentialHeaderNames
 } from './provider/providerCredentialHeaders'
 import {
   ProviderStoreMutationBlockedError,
   ProviderStoreRepository
 } from './provider/providerStoreRepository'
+import { writeProviderProfileBackup } from './provider/providerProfileBackupWriter'
 
 export { normalizeBaseUrl } from './provider/providerBaseUrl'
 export {
@@ -69,9 +89,11 @@ export {
   normalizedCredentialHeaderNames,
   normalizedCustomHeaders,
   providerCredentialHeaderLines,
-  providerCredentialHeaders
+  providerCredentialHeaders,
+  resolvedProviderCredentialHeaderNames
 } from './provider/providerCredentialHeaders'
 export { ProviderStoreMutationBlockedError } from './provider/providerStoreRepository'
+export { normalizedProviderKeys } from './provider/providerKeyRecords'
 
 const providerStore = new ProviderStoreRepository(
   () => app.getPath('userData'),
@@ -123,7 +145,7 @@ export function persistedProviders(providers: Provider[]): Provider[] {
       : activeKey?.encryptedToken ?? ''
     const safeHeaders = inspectProviderCustomHeaders(provider.customHeaders ?? '').safeValue.trim()
     const safeBaseUrl = inspectProviderBaseUrl(provider.baseUrl).safeValue
-    const managedCredentialHeaders = inspectCredentialHeaderNames(provider.credentialHeaderNames).names
+    const managedCredentialHeaders = resolvedProviderCredentialHeaderNames(provider)
     return {
       ...provider,
       baseUrl: safeBaseUrl,
@@ -150,7 +172,9 @@ export function migrateLoadedProviders(providers: Provider[]): { providers: Prov
     if (migratedEngine !== provider) changed = true
     const sanitized = sanitizeLoadedProviderAuthMode(migratedEngine)
     if (sanitized !== provider) changed = true
-    return sanitized
+    const defaulted = withDefaultProviderCredentialHeaders(sanitized)
+    if (defaulted !== sanitized) changed = true
+    return defaulted
   })
   return { providers: migratedProviders, changed }
 }
@@ -160,7 +184,10 @@ function sanitizeLoadedProvidersForRuntime(providers: Provider[]): Provider[] {
     inspectCredentialHeaderNames,
     migrationMarker: { credentialMigrationRequired: true }
   })
-  return sanitizedCredentials.map(migrateLegacyProviderEngine).map(sanitizeLoadedProviderAuthMode)
+  return sanitizedCredentials
+    .map(migrateLegacyProviderEngine)
+    .map(sanitizeLoadedProviderAuthMode)
+    .map(withNormalizedProviderCredentialRouting)
 }
 
 function migrateLegacyProviderEngine(provider: Provider): Provider {
@@ -203,17 +230,6 @@ export function decryptToken(encrypted: string): string {
   ).token
 }
 
-const LEGACY_KEY_LABEL = '主密钥'
-
-function legacyKeyId(providerId: string): string {
-  return `${providerId}:legacy-primary`
-}
-
-function cleanKeyLabel(value: string | undefined, fallback: string): string {
-  const label = value?.trim()
-  return label || fallback
-}
-
 function createApiKey(providerId: string, input: ProviderApiKeyInput, fallbackLabel: string): ProviderApiKey | null {
   const token = input.token.trim()
   if (!token) return null
@@ -225,48 +241,9 @@ function createApiKey(providerId: string, input: ProviderApiKeyInput, fallbackLa
     encryptedToken: credential.encryptedToken,
     sessionOnly: credential.sessionOnly,
     createdAt: Date.now(),
-    disabled: input.disabled === true
+    disabled: input.disabled === true,
+    policy: normalizeProviderCredentialPolicy(input.policy)
   }
-}
-
-function hasProviderKeyRecord(value: unknown): value is ProviderApiKey {
-  return Boolean(value) && typeof (value as ProviderApiKey).encryptedToken === 'string'
-}
-
-export function normalizedProviderKeys(provider: Provider): ProviderApiKey[] {
-  const seen = new Set<string>()
-  const keys: ProviderApiKey[] = []
-  const storedKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : []
-  for (const [index, key] of storedKeys.entries()) {
-    if (!hasProviderKeyRecord(key)) continue
-    if (!key.encryptedToken && key.sessionOnly !== true) continue
-    const id = typeof key.id === 'string' && key.id.trim() ? key.id : randomUUID()
-    if (seen.has(id)) continue
-    seen.add(id)
-    keys.push({
-      id,
-      label: cleanKeyLabel(key.label, `Key ${index + 1}`),
-      encryptedToken: key.encryptedToken,
-      sessionOnly: key.sessionOnly === true,
-      createdAt: Number.isFinite(key.createdAt) ? key.createdAt : Date.now(),
-      lastUsedAt: Number.isFinite(key.lastUsedAt) ? key.lastUsedAt : undefined,
-      lastFailureAt: Number.isFinite(key.lastFailureAt) ? key.lastFailureAt : undefined,
-      lastFailureReason: typeof key.lastFailureReason === 'string' && key.lastFailureReason.trim()
-        ? key.lastFailureReason.trim().slice(0, 80)
-        : undefined,
-      disabled: key.disabled === true
-    })
-  }
-  if (keys.length === 0 && provider.encryptedToken) {
-    keys.push({
-      id: legacyKeyId(provider.id),
-      label: LEGACY_KEY_LABEL,
-      encryptedToken: provider.encryptedToken,
-      createdAt: provider.createdAt || Date.now(),
-      disabled: false
-    })
-  }
-  return keys
 }
 
 function credentialStateFor(providerId: string, key: ProviderApiKey) {
@@ -281,29 +258,22 @@ function keyIsAvailable(providerId: string, key: ProviderApiKey): boolean {
 }
 
 function activeProviderKey(provider: Provider, keys = normalizedProviderKeys(provider)): ProviderApiKey | undefined {
-  const activeId = provider.activeKeyId?.trim()
-  const enabledKeys = keys.filter((key) => !key.disabled && keyIsAvailable(provider.id, key))
-  return enabledKeys.find((key) => key.id === activeId) ?? enabledKeys[0]
+  return providerKeyDecision(provider, keys).key
+}
+
+function providerKeyDecision(provider: Provider, keys = normalizedProviderKeys(provider)) {
+  return selectProviderKey(keys, {
+    activeKeyId: provider.activeKeyId?.trim(),
+    routingMode: normalizeProviderCredentialRoutingMode(provider.credentialRoutingMode),
+    metrics: providerCredentialMetrics(provider.id, keys),
+    available: (key) => keyIsAvailable(provider.id, key)
+  })
 }
 
 export function activeKeyIdFor(provider: Provider, keys: ProviderApiKey[], requestedId?: string): string | undefined {
   const activeId = requestedId?.trim() || provider.activeKeyId?.trim()
   const enabledKeys = keys.filter((key) => !key.disabled && keyIsAvailable(provider.id, key))
   return enabledKeys.find((key) => key.id === activeId)?.id ?? enabledKeys[0]?.id
-}
-
-function applyKeyUpdates(keys: ProviderApiKey[], updates: ProviderApiKeyUpdateInput[] | undefined): ProviderApiKey[] {
-  if (!updates || updates.length === 0) return keys
-  const byId = new Map(updates.filter((item) => item.id).map((item) => [item.id, item]))
-  return keys.map((key, index) => {
-    const update = byId.get(key.id)
-    if (!update) return key
-    return {
-      ...key,
-      label: update.label === undefined ? key.label : cleanKeyLabel(update.label, `Key ${index + 1}`),
-      disabled: update.disabled === undefined ? key.disabled : update.disabled
-    }
-  })
 }
 
 function appendNewKeys(
@@ -338,7 +308,8 @@ function withPrimaryToken(keys: ProviderApiKey[], provider: Provider, patch: Par
       encryptedToken: credential.encryptedToken,
       sessionOnly: credential.sessionOnly,
       createdAt: configuredActive?.createdAt ?? Date.now(),
-      disabled: false
+      disabled: false,
+      policy: normalizeProviderCredentialPolicy(configuredActive?.policy)
     }
     if (configuredActive) return keys.map((key) => key.id === configuredActive.id ? nextKey : key)
     return [nextKey, ...keys]
@@ -392,6 +363,7 @@ export interface ProviderCredentialLeaseSelection {
   keyLabel?: string
   authMode: ProviderAuthMode
   available: boolean
+  routeReason?: string
   lease?: ProviderCredentialLease
 }
 
@@ -406,13 +378,15 @@ export function selectProviderCredential(provider: Provider | undefined): Provid
   if (provider.credentialMigrationRequired === true) {
     return { providerId: provider.id, authMode, available: false }
   }
-  const active = activeProviderKey(provider)
+  const decision = providerKeyDecision(provider)
+  const active = decision.key
   return {
     providerId: provider.id,
     keyId: active?.id,
     keyLabel: active?.label,
     authMode,
-    available: Boolean(active)
+    available: Boolean(active),
+    routeReason: decision.reason
   }
 }
 
@@ -422,13 +396,28 @@ export function issueProviderCredentialLease(
   options: ProviderCredentialLeaseOptions = {},
   expectedKeyId?: string
 ): ProviderCredentialLeaseSelection {
-  const selection = selectProviderCredential(provider)
-  if (selection.authMode === 'none' || !selection.available || !selection.keyId) return selection
-  if (expectedKeyId && selection.keyId !== expectedKeyId) {
-    return { ...selection, available: false }
+  const authMode = providerAuthMode(provider)
+  if (authMode === 'none') return { providerId: provider.id, authMode, available: true }
+  if (provider.credentialMigrationRequired === true) {
+    return { providerId: provider.id, authMode, available: false }
   }
-  const key = normalizedProviderKeys(provider).find((candidate) => candidate.id === selection.keyId)
-  if (!key) return { ...selection, available: false }
+  const keys = normalizedProviderKeys(provider)
+  const requestedId = expectedKeyId?.trim()
+  const decision = providerKeyDecision(provider, keys)
+  const key = requestedId
+    ? keys.find((candidate) => candidate.id === requestedId
+      && !candidate.disabled
+      && keyIsAvailable(provider.id, candidate))
+    : decision.key
+  const selection: ProviderCredentialLeaseSelection = {
+    providerId: provider.id,
+    keyId: key?.id,
+    keyLabel: key?.label,
+    authMode,
+    available: Boolean(key),
+    routeReason: requestedId ? '使用请求绑定的精确凭据' : decision.reason
+  }
+  if (!key) return selection
   const lease = issueStoredProviderCredentialLease(
     { providerId: provider.id, keyId: key.id },
     { encryptedToken: key.encryptedToken, sessionOnly: key.sessionOnly },
@@ -529,7 +518,13 @@ function rotateProviderKeyLocked(
     ? { ...key, lastFailureAt: now, lastFailureReason: input.reason.trim().slice(0, 80) }
     : key)
   const next = pickNextProviderKey(marked.filter((key) => keyIsAvailable(provider.id, key)), {
-    activeKeyId: provider.activeKeyId, failedKeyId, excludedKeyIds: input.excludedKeyIds, now
+    activeKeyId: provider.activeKeyId,
+    failedKeyId,
+    excludedKeyIds: input.excludedKeyIds,
+    routingMode: provider.credentialRoutingMode,
+    metrics: providerCredentialMetrics(provider.id, marked),
+    available: (key) => keyIsAvailable(provider.id, key),
+    now
   })
   const nextProvider: Provider = {
     ...provider,
@@ -555,7 +550,9 @@ function rotateProviderKeyLocked(
 export function toView(p: Provider): ProviderView {
   const keys = normalizedProviderKeys(p)
   const credentialsUsable = providerAuthMode(p) !== 'none' && p.credentialMigrationRequired !== true
-  const active = credentialsUsable ? activeProviderKey(p, keys) : undefined
+  const metrics = providerCredentialMetrics(p.id, keys)
+  const decision = credentialsUsable ? providerKeyDecision(p, keys) : undefined
+  const active = decision?.key
   const apiKeys = keys.map((key) => {
     const credential = credentialStateFor(p.id, key)
     return {
@@ -568,12 +565,17 @@ export function toView(p: Provider): ProviderView {
       disabled: key.disabled === true,
       active: active?.id === key.id,
       credentialStorage: providerCredentialStorage(credential.storage),
-      available: credentialsUsable && credential.available
+      available: credentialsUsable && credential.available,
+      policy: normalizeProviderCredentialPolicy(key.policy),
+      monthlySpendUsd: metrics.get(key.id)?.monthlySpendUsd ?? 0,
+      balanceRemainingUsd: metrics.get(key.id)?.balanceRemainingUsd,
+      routingBlockedReason: decision?.blocked.get(key.id)
     }
   })
   const keyCount = apiKeys.filter((key) => !key.disabled && key.available).length
   const credentialStorage = aggregateCredentialStorage(apiKeys.map((key) => key.credentialStorage))
   const customHeaders = inspectProviderCustomHeaders(p.customHeaders ?? '').safeValue.trim()
+  const credentialHeaderNames = resolvedProviderCredentialHeaderNames(p)
   return {
     id: p.id,
     name: p.name,
@@ -583,15 +585,19 @@ export function toView(p: Provider): ProviderView {
     ready: providerAuthMode(p) === 'none' || keyCount > 0,
     engine: resolveProviderEngine(p),
     customHeaders: customHeaders || undefined,
-    credentialHeaderNames: inspectCredentialHeaderNames(p.credentialHeaderNames).names,
+    credentialHeaderNames,
     budgetUsd: normalizeBudget(p.budgetUsd),
     openaiProtocol: p.openaiProtocol,
     note: p.note,
+    authorization: p.authorization,
+    advancedConfig: p.advancedConfig,
     createdAt: p.createdAt,
     hasToken: keyCount > 0,
     keyCount,
     activeKeyId: active?.id,
     activeKeyLabel: active?.label,
+    credentialRoutingMode: normalizeProviderCredentialRoutingMode(p.credentialRoutingMode),
+    credentialRouteReason: decision?.reason,
     apiKeys,
     credentialStorage,
     credentialMigrationRequired: p.credentialMigrationRequired === true
@@ -695,7 +701,7 @@ export function getProvider(id: string): Provider | undefined {
 
 export function resolveProviderEngine(provider: Pick<Provider, 'engine' | 'name' | 'baseUrl' | 'models' | 'openaiProtocol'>): EngineKind {
   const engine = (provider as unknown as { engine?: string }).engine
-  if (engine === 'openai' || engine === 'anthropic') return engine
+  if (engine === 'openai' || engine === 'anthropic' || engine === 'gemini') return engine
   if (engine === 'claude') return 'anthropic'
   if (provider.openaiProtocol === 'chat') return 'openai'
   const identity = `${provider.name}\n${provider.baseUrl}\n${provider.models.join('\n')}`.toLowerCase()
@@ -706,10 +712,16 @@ export function createProvider(input: ProviderInput): ProviderView {
   const providerId = randomUUID()
   assertProviderCredentialInput(input)
   const customHeaders = normalizedCustomHeaders(input.customHeaders)
-  const credentialHeaderNames = normalizedCredentialHeaderNames(input.credentialHeaderNames)
   const baseUrl = normalizeBaseUrl(input.baseUrl, input.engine ?? 'openai', input.openaiProtocol)
   const authMode = normalizeProviderAuthMode(input.authMode, baseUrl, input.engine ?? 'openai')
+  const credentialHeaderNames = resolvedProviderCredentialHeaderNames({
+    authMode,
+    engine: input.engine ?? 'openai',
+    credentialHeaderNames: normalizedCredentialHeaderNames(input.credentialHeaderNames)
+  })
   assertNoAuthCredentialInput(authMode, input)
+  const authorization = normalizeProviderAuthorization(input.authorization)
+  const advancedConfig = normalizeProviderAdvancedConfig(input.advancedConfig)
   const list = load()
   const credentialSnapshot = snapshotProviderCredentials(providerId)
   return withProviderStoreMutation('创建 Provider', {}, () => {
@@ -727,6 +739,7 @@ export function createProvider(input: ProviderInput): ProviderView {
         encryptedToken: activeKey?.encryptedToken ?? '',
         apiKeys,
         activeKeyId,
+        credentialRoutingMode: normalizeProviderCredentialRoutingMode(input.credentialRoutingMode),
         models: input.models,
         authMode,
         engine: input.engine ?? 'openai',
@@ -735,8 +748,11 @@ export function createProvider(input: ProviderInput): ProviderView {
         budgetUsd: normalizeBudget(input.budgetUsd),
         openaiProtocol: input.openaiProtocol,
         note: input.note,
+        authorization,
+        advancedConfig,
         createdAt: Date.now()
       }
+      createAutomaticProviderProfileBackup('provider-create', list)
       providerStore.replace([...list, provider])
       persistUnlocked()
       return toView(provider)
@@ -761,6 +777,12 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
     resolveProviderEngine
   })
   const nextEngine = patch.engine ?? resolveProviderEngine(prev)
+  const authorization = patch.authorization === undefined
+    ? prev.authorization
+    : normalizeProviderAuthorization(patch.authorization)
+  const advancedConfig = patch.advancedConfig === undefined
+    ? prev.advancedConfig
+    : normalizeProviderAdvancedConfig(patch.advancedConfig)
   const authMode = normalizeProviderAuthMode(patch.authMode ?? prev.authMode, fields.baseUrl, nextEngine)
   assertNoAuthCredentialInput(authMode, patch)
   const credentialSnapshot = snapshotProviderCredentials(id)
@@ -770,8 +792,13 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
       const activeKeyId = activeKeyIdFor(prev, apiKeys, patch.activeKeyId)
       const next = mergeProviderPatch(prev, { ...patch, authMode }, fields, apiKeys, activeKeyId,
         { normalizeBudget, resolveProviderEngine })
+      next.authorization = authorization
+      next.advancedConfig = advancedConfig
       const view = toView(next)
-      providerStore.replace([...list.slice(0, idx), next, ...list.slice(idx + 1)])
+      const nextList = [...list.slice(0, idx), next, ...list.slice(idx + 1)]
+      if (persistedProviderStoreDigest(list) === persistedProviderStoreDigest(nextList)) return view
+      createAutomaticProviderProfileBackup('provider-update', list)
+      providerStore.replace(nextList)
       persistUnlocked()
       return view
     } catch (err) {
@@ -815,8 +842,11 @@ export function normalizeBudget(value: unknown): number {
 
 export function deleteProvider(id: string): void {
   const list = load()
+  if (!list.some((provider) => provider.id === id)) return
   withProviderStoreMutation('删除 Provider', {}, () => {
-    providerStore.replace(list.filter((p) => p.id !== id))
+    const next = list.filter((p) => p.id !== id)
+    createAutomaticProviderProfileBackup('provider-delete', list)
+    providerStore.replace(next)
     try {
       persistUnlocked()
     } catch (err) {
@@ -833,7 +863,8 @@ export function deleteProvider(id: string): void {
  * - OpenAI 风格 / 部分厂商(如 DeepSeek):{base}/models
  * - base 含 /anthropic 子路径时(如 https://api.deepseek.com/anthropic),
  *   模型列表常在根域:{root}/v1/models、{root}/models
- * 401/403 立即抛(密钥问题);全部 404/无果才报"端点不支持"。
+ * 所有安全候选都会被探测。单个路径返回 401/403 不能证明密钥错误，因为部分网关会对
+ * 不存在的路径返回鉴权错误；只有汇总所有候选后才给出分类诊断。
  */
 export async function fetchModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult> {
   const requestedProviderId = opts.providerId?.trim()
@@ -845,9 +876,91 @@ export async function fetchModels(opts: ProviderModelFetchInput): Promise<Provid
   }
   const credentialProvider = bound.usesStoredCredential ? provider : undefined
   return discoverProviderModels(input, () => resolveModelDiscoveryCredentials(input, credentialProvider), {
-    success: (providerId, latencyMs) => recordSuccess(providerId, latencyMs),
-    failure: (providerId, message) => recordFailure(providerId, message)
+    success: (providerId, latencyMs) => recordProbeSuccess(providerId, latencyMs),
+    failure: (providerId, message) => recordProbeFailure(providerId, message)
   })
+}
+
+export async function probeProviderGeneration(
+  opts: ProviderGenerationProbeInput
+): Promise<ProviderGenerationProbeResult> {
+  const requestedProviderId = opts.providerId?.trim()
+  const provider = requestedProviderId ? getProvider(requestedProviderId) : undefined
+  const bound = bindProviderModelDiscoveryInput(opts, provider)
+  const input: ProviderGenerationProbeInput = {
+    ...bound.input,
+    model: opts.model,
+    authMode: normalizeProviderAuthMode(bound.input.authMode, bound.input.baseUrl, bound.input.engine ?? 'openai')
+  }
+  const credentialProvider = bound.usesStoredCredential ? provider : undefined
+  const credentials = resolveModelDiscoveryCredentials(input, credentialProvider)
+  if (credentials.customHeaderRejections.length > 0) {
+    throw new Error('Provider generation probe headers are invalid')
+  }
+  return executeProviderGenerationProbe(input, {
+    headers: credentials.headers,
+    headerNames: credentials.credentialHeaderNames ?? [],
+    source: credentials.source,
+    label: credentials.label,
+    available: credentials.authMode === 'none' || Boolean(credentials.token)
+  })
+}
+
+function createAutomaticProviderProfileBackup(
+  reason: 'provider-create' | 'provider-update' | 'provider-delete',
+  providers: Provider[]
+): void {
+  const persisted = persistedProviders(providers)
+  let excludedCredentialCount = 0
+  const sanitized = persisted.map((provider) => {
+    const keyCount = normalizedProviderKeys(provider).length || Number(Boolean(provider.encryptedToken))
+    excludedCredentialCount += keyCount
+    return {
+      ...provider,
+      encryptedToken: '',
+      apiKeys: [],
+      activeKeyId: undefined,
+      credentialMigrationRequired: provider.authMode === 'none'
+        ? false
+        : keyCount > 0 || provider.credentialMigrationRequired === true
+    }
+  })
+  writeProviderProfileBackup(app.getPath('userData'), reason, {
+    providers: sanitized,
+    nonPersistentCredentialCount: providers.reduce(
+      (count, provider) => count + normalizedProviderKeys(provider)
+        .filter((key) => key.sessionOnly === true).length,
+      0
+    ),
+    excludedCredentialCount
+  })
+}
+
+function persistedProviderStoreDigest(providers: Provider[]): string {
+  return createHash('sha256').update(JSON.stringify(persistedProviders(providers))).digest('hex')
+}
+
+function withNormalizedProviderCredentialRouting(provider: Provider): Provider {
+  const credentialRoutingMode = normalizeProviderCredentialRoutingMode(provider.credentialRoutingMode)
+  const sourceKeys = Array.isArray(provider.apiKeys) ? provider.apiKeys : []
+  let changed = provider.credentialRoutingMode !== credentialRoutingMode
+  const apiKeys = sourceKeys.map((key) => {
+    const policy = normalizeProviderCredentialPolicy(key?.policy)
+    if (JSON.stringify(key?.policy) === JSON.stringify(policy)) return key
+    changed = true
+    return { ...key, policy }
+  })
+  return changed ? { ...provider, credentialRoutingMode, apiKeys } : provider
+}
+
+function withDefaultProviderCredentialHeaders(provider: Provider): Provider {
+  if (provider.authMode === 'none' || inspectCredentialHeaderNames(provider.credentialHeaderNames).names.length > 0) {
+    return provider
+  }
+  return {
+    ...provider,
+    credentialHeaderNames: resolvedProviderCredentialHeaderNames(provider)
+  }
 }
 
 function resolveModelDiscoveryCredentials(opts: ProviderModelFetchInput, provider: Provider | undefined) {
@@ -865,9 +978,20 @@ function resolveModelDiscoveryCredentials(opts: ProviderModelFetchInput, provide
     opts.customHeaders ?? provider?.customHeaders ?? ''
   )
   const customHeaders = parseProviderHeaderLines(inspectedCustomHeaders.safeValue)
+  const selectedKey = provider && authMode !== 'none'
+    ? providerKeyDecision(provider).key
+    : undefined
+  const source: ProviderDiagnosticCredentialSource = authMode === 'none'
+    ? 'none'
+    : provider
+      ? 'stored-active'
+      : 'explicit'
   return {
     authMode,
     token,
+    source,
+    label: selectedKey?.label,
+    credentialHeaderNames,
     customHeaderRejections: inspectedCustomHeaders.rejectedNames,
     headers: {
       ...customHeaders,

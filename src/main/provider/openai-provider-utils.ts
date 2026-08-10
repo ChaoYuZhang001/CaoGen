@@ -22,14 +22,11 @@ export function parseProviderHeaders(raw: string | undefined): Record<string, st
 
 export function redactProviderBaseUrl(value: string): string {
   const clean = (value || '').trim()
-  try {
-    const url = new URL(clean)
-    url.username = ''
-    url.password = ''
-    url.search = ''
-    url.hash = ''
-    return url.toString().replace(/\/+$/, '')
-  } catch {
-    return clean.replace(/([?&](?:key|token|api_key|apikey|access_token)=)[^&]+/gi, '$1[redacted]')
-  }
+  return clean ? '[provider-url-redacted]' : '[not-configured]'
+}
+
+export function redactProviderErrorText(value: string): string {
+  return value
+    .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, '[provider-url-redacted]')
+    .replace(/((?:base\s*url|baseurl|endpoint)\s*[:=]\s*)[^\s,;]+/gi, '$1[provider-url-redacted]')
 }

@@ -58,6 +58,7 @@ try {
       verifyActiveSessionFailure(stage))
   }
   await check('Settings rejects a future schema without overwriting it', verifyFutureSettingsSchema)
+  await check('Settings migrates legacy permission DSL into validated structured rules', verifyLegacyPermissionRuleMigration)
   await check('Project Store rejects a future schema without overwriting it', verifyFutureProjectsSchema)
   await check('Project Store migrates a legacy array on the first successful mutation', verifyLegacyProjectsMigration)
   await check('History Store rejects a future schema without overwriting it', verifyFutureHistorySchema)
@@ -237,6 +238,48 @@ function verifyFutureSettingsSchema() {
   assert.throws(() => settings.getSettings(), /Unsupported settings schema version: 2/)
   assert.throws(() => settings.updateSettings({ theme: 'dark' }), /Unsupported settings schema version: 2/)
   assert.equal(readFileSync(file, 'utf8'), before)
+}
+
+function verifyLegacyPermissionRuleMigration() {
+  const root = path.join(tempRoot, 'settings-permission-migration')
+  const file = path.join(root, 'settings.json')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(file, `${JSON.stringify({
+    _schemaVersion: 1,
+    permissionAllowlist: 'tool=write_file path=src/**',
+    permissionDenylist: 'tool=bash risk>=high',
+    permissionTemporaryAllowlist: 'tool=git_commit until=4102444800000'
+  })}\n`, 'utf8')
+  const settings = loadSettingsModule(root)
+  const migrated = settings.getSettings()
+  assert.equal(migrated.permissionRulesVersion, 2)
+  assert.equal(migrated.permissionRules.length, 3)
+  assert.equal(migrated.permissionDenylist, '')
+  assert.equal(migrated.permissionAllowlist, '')
+  assert.equal(migrated.permissionTemporaryAllowlist, '')
+  assert.equal(migrated.permissionRules[0].effect, 'deny')
+  assert.equal(migrated.permissionRules[1].expiresAt, 4102444800000)
+  assert.equal(migrated.permissionRules[2].pathPattern, 'src/**')
+  assert(migrated.permissionRules.every((rule) => rule.capabilityScope.length === 0))
+
+  settings.updateSettings({ theme: 'light' })
+  const persisted = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(persisted.permissionRules.length, 3)
+  assert.equal(persisted.permissionDenylist, '')
+  settings.updateSettings({ permissionAllowlist: 'tool=write_file path=src/**' })
+  assert.equal(settings.getSettings().permissionRules.length, 3)
+  const beforeInvalidPatch = readFileSync(file, 'utf8')
+  assert.throws(() => settings.updateSettings({
+    permissionRules: [{
+      id: 'invalid-rule', enabled: true, effect: 'allow', toolPattern: '', pathPattern: '',
+      riskOperator: 'exact', misspelledSelector: 'bash'
+    }]
+  }), /未知字段 misspelledSelector/)
+  assert.equal(readFileSync(file, 'utf8'), beforeInvalidPatch)
+
+  const reloaded = loadSettingsModule(root).getSettings()
+  assert.equal(reloaded.permissionRules.length, 3)
+  assertNoTemporaryFiles(root)
 }
 
 function verifyProjectsFailure(stage) {

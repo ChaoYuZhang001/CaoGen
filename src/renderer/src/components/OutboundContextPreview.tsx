@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ImageAttachmentView, OutboundContextManifest } from '../../../shared/types'
+import type {
+  DocumentAttachmentView,
+  ImageAttachmentView,
+  OutboundContextManifest
+} from '../../../shared/types'
 import { useT } from '../i18n'
 import { useExperienceProjection } from './experience/ExperienceProjection'
 
@@ -8,6 +12,7 @@ interface OutboundPreviewInput {
   receiverKey: string
   text: string
   images: ImageAttachmentView[]
+  documents: DocumentAttachmentView[]
 }
 
 export function useOutboundContextPreview(input: OutboundPreviewInput) {
@@ -25,7 +30,8 @@ export function useOutboundContextPreview(input: OutboundPreviewInput) {
     const timer = window.setTimeout(() => {
       void window.agentDesk.previewOutboundContext(sessionId, {
         text: input.text,
-        images: input.images
+        images: input.images,
+        documents: input.documents
       }).then((next) => {
         if (cancelled) return
         setManifest(next)
@@ -40,7 +46,7 @@ export function useOutboundContextPreview(input: OutboundPreviewInput) {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [input.images, input.receiverKey, input.sessionId, input.text])
+  }, [input.documents, input.images, input.receiverKey, input.sessionId, input.text])
 
   const rejectBlockedSend = useCallback((): boolean => {
     if (!manifest?.blocked) return false

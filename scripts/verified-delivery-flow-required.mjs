@@ -116,7 +116,7 @@ function runCheck(id, action, extra = {}) {
 
 function runCrashCheck(id, action, extra = {}) {
   const result = runWorker({ action, ...extra, crashAfterCommit: true }, {
-    expectedSignal: 'SIGKILL'
+    expectStrongKill: true
   })
   report.checks.push({ id, status: 'passed', mode: 'strong_kill_after_commit' })
   return result
@@ -140,17 +140,20 @@ function runWorker(input, options = {}) {
     maxBuffer: 16 * 1024 * 1024
   })
   const response = parseWorkerResponse(child.stdout)
-  if (options.expectedSignal && child.signal === options.expectedSignal &&
+  const strongKillObserved = process.platform === 'win32'
+    ? child.signal === null && child.status !== 0
+    : child.signal === 'SIGKILL'
+  if (options.expectStrongKill && strongKillObserved &&
       response.ok && response.checkpoint === 'after_commit') {
-    return { signal: child.signal, checkpoint: response.checkpoint }
+    return { signal: child.signal, status: child.status, checkpoint: response.checkpoint }
   }
-  if (options.expectedSignal || child.status !== 0 || !response.ok) {
+  if (options.expectStrongKill || child.status !== 0 || !response.ok) {
     if (process.env.CAOGEN_VERIFIED_DELIVERY_DEBUG === '1' && child.stderr) {
       process.stderr.write(child.stderr)
     }
     const error = new Error('verified-delivery worker failed')
     Object.assign(error, {
-      code: response.failure?.code ?? (options.expectedSignal
+      code: response.failure?.code ?? (options.expectStrongKill
         ? 'VERIFIED_DELIVERY_STRONG_KILL_NOT_OBSERVED'
         : 'VERIFIED_DELIVERY_WORKER_FAILED'),
       workerFingerprint: response.failure?.fingerprint

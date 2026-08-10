@@ -14,6 +14,7 @@ try {
     process.execPath,
     [
       path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+      'src/renderer/src/env.d.ts',
       'src/renderer/src/components/workbench/officePreviewUtils.ts',
       'src/renderer/src/components/workbench/previewUtils.ts',
       'src/renderer/src/components/workbench/PreviewRenderer.tsx',
@@ -237,7 +238,11 @@ function assert(condition, message = 'assertion failed') {
 function linkNodeModules() {
   const linkPath = path.join(buildDir, 'node_modules')
   if (existsSync(linkPath)) return
-  symlinkSync(path.join(repoRoot, 'node_modules'), linkPath, 'dir')
+  symlinkSync(
+    path.join(repoRoot, 'node_modules'),
+    linkPath,
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
 }
 
 function renderPreview(PreviewRenderer, preview, props = {}) {

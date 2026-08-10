@@ -1,5 +1,7 @@
-import { memo, Suspense, lazy } from 'react'
+import { memo, Suspense, lazy, useEffect, useState } from 'react'
+import { ArrowUp, GitBranch, Pencil, RefreshCw, X } from 'lucide-react'
 import type { ChatItem, ToolResultInfo } from '../store'
+import type { CheckpointRestoreMode } from '../../../shared/types'
 import { useT } from '../i18n'
 import { formatCost, formatDuration, formatTokens } from '../format'
 import ToolCallCard from './ToolCallCard'
@@ -7,8 +9,12 @@ import RewindButton from './RewindButton'
 import {
   FailoverMessage,
   ProviderKeyFailoverMessage,
+  ProviderModelFailoverMessage,
+  ProviderProtocolFailoverMessage,
+  ProviderRecoveryExhaustedMessage,
   RoutingMessage
 } from './experience/RoutingMessage'
+import CopyButton from './CopyButton'
 
 // Markdown 依赖 highlight.js(~700KB),懒加载拆出首屏包;未加载完先按纯文本显示
 const Markdown = lazy(() => import('./Markdown'))
@@ -24,11 +30,67 @@ interface Props {
   item: ChatItem
   toolResults: Record<string, ToolResultInfo>
   runningTools: Record<string, true>
+  revision?: MessageRevision
+  onRevise?: (revision: MessageRevision, text: string) => Promise<boolean>
+  fork?: MessageFork
+  onFork?: (fork: MessageFork) => void
 }
 
-function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Element | null {
+type RoutingChatItem = Extract<ChatItem, {
+  kind: 'routing' | 'failover' | 'provider-key-failover' | 'provider-model-failover' |
+    'provider-protocol-failover' | 'provider-recovery-exhausted'
+}>
+
+export interface MessageRevision {
+  checkpointId: string
+  restoreMode: CheckpointRestoreMode
+  kind: 'edit' | 'regenerate'
+  text: string
+}
+
+export interface MessageFork {
+  checkpointId: string
+  text: string
+}
+
+function MessageItem({
+  item,
+  toolResults,
+  runningTools,
+  revision,
+  onRevise,
+  fork,
+  onFork
+}: Props): React.JSX.Element | null {
   // useT 直接订阅 store 的语言字段,语言切换时即使 memo 也会触发重渲染
   const t = useT()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setEditing(false)
+    setDraft('')
+    setBusy(false)
+    setError('')
+  }, [item.id])
+
+  const submitRevision = async (text: string): Promise<void> => {
+    if (!revision || !onRevise || busy || !text.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      const applied = await onRevise(revision, text.trim())
+      if (applied) setEditing(false)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (isRoutingChatItem(item)) return <RoutingEventItem item={item} />
   switch (item.kind) {
     case 'user':
       return (
@@ -39,7 +101,53 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
               <RewindButton messageId={item.checkpointId} sourceText={item.text} />
             </div>
           )}
-          {item.text && <div className="msg-user-text">{item.text}</div>}
+          {editing ? (
+            <div className="message-edit" data-message-editing="true">
+              <textarea
+                autoFocus
+                className="message-edit-input"
+                value={draft}
+                rows={3}
+                aria-label={t('editMessage')}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    setEditing(false)
+                    setError('')
+                  } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault()
+                    void submitRevision(draft)
+                  }
+                }}
+              />
+              <div className="message-edit-actions">
+                <button
+                  type="button"
+                  className="message-action-button"
+                  aria-label={t('cancel')}
+                  title={t('cancel')}
+                  disabled={busy}
+                  onClick={() => {
+                    setEditing(false)
+                    setError('')
+                  }}
+                >
+                  <X size={15} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="message-action-button message-action-primary"
+                  aria-label={t('send')}
+                  title={t('send')}
+                  disabled={busy || !draft.trim()}
+                  onClick={() => void submitRevision(draft)}
+                >
+                  <ArrowUp size={15} strokeWidth={2.2} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ) : item.text ? <div className="msg-user-text">{item.text}</div> : null}
           {item.attachments && item.attachments.length > 0 && (
             <div className="msg-user-attachments">
               {item.attachments.map((attachment, index) => (
@@ -50,10 +158,48 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
               ))}
             </div>
           )}
+          {!editing && (
+            <div className="message-actions">
+              {fork && onFork && (
+                <button
+                  type="button"
+                  className="message-action-button"
+                  data-message-action="fork"
+                  aria-label={t('forkFromMessage')}
+                  title={t('forkFromMessage')}
+                  onClick={() => onFork(fork)}
+                >
+                  <GitBranch size={14} aria-hidden="true" />
+                </button>
+              )}
+              {revision?.kind === 'edit' && onRevise && (
+                <button
+                  type="button"
+                  className="message-action-button"
+                  data-message-action="edit"
+                  aria-label={t('editMessage')}
+                  title={t('editMessage')}
+                  onClick={() => {
+                    setDraft(item.text)
+                    setError('')
+                    setEditing(true)
+                  }}
+                >
+                  <Pencil size={14} aria-hidden="true" />
+                </button>
+              )}
+              <CopyButton text={item.text} kind="message" />
+            </div>
+          )}
+          {error && <div className="message-revision-error" role="status">{error}</div>}
         </div>
       )
 
-    case 'assistant':
+    case 'assistant': {
+      const publicText = item.blocks
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n\n')
       return (
         <div className="msg-assistant">
           {item.blocks.map((block, i) => {
@@ -84,8 +230,26 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
               />
             )
           })}
+          <div className="message-actions">
+            {revision?.kind === 'regenerate' && onRevise && (
+              <button
+                type="button"
+                className="message-action-button"
+                data-message-action="regenerate"
+                aria-label={t('regenerateResponse')}
+                title={t('regenerateResponse')}
+                disabled={busy}
+                onClick={() => void submitRevision(revision.text)}
+              >
+                <RefreshCw size={14} className={busy ? 'message-action-spin' : undefined} aria-hidden="true" />
+              </button>
+            )}
+            <CopyButton text={publicText} kind="message" />
+          </div>
+          {error && <div className="message-revision-error" role="status">{error}</div>}
         </div>
       )
+    }
 
     case 'turn-result':
       return (
@@ -113,20 +277,28 @@ function MessageItem({ item, toolResults, runningTools }: Props): React.JSX.Elem
         </div>
       )
 
-    case 'routing':
-      return <RoutingMessage item={item} />
-
-    case 'failover':
-      return <FailoverMessage item={item} />
-
-    case 'provider-key-failover':
-      return <ProviderKeyFailoverMessage item={item} />
-
     case 'notice':
       return <div className={`notice notice-${item.level}`}>{item.text}</div>
 
     default:
       return null
+  }
+}
+
+function isRoutingChatItem(item: ChatItem): item is RoutingChatItem {
+  return item.kind === 'routing' || item.kind === 'failover' ||
+    item.kind === 'provider-key-failover' || item.kind === 'provider-model-failover' ||
+    item.kind === 'provider-protocol-failover' || item.kind === 'provider-recovery-exhausted'
+}
+
+function RoutingEventItem({ item }: { item: RoutingChatItem }): React.JSX.Element {
+  switch (item.kind) {
+    case 'routing': return <RoutingMessage item={item} />
+    case 'failover': return <FailoverMessage item={item} />
+    case 'provider-key-failover': return <ProviderKeyFailoverMessage item={item} />
+    case 'provider-model-failover': return <ProviderModelFailoverMessage item={item} />
+    case 'provider-protocol-failover': return <ProviderProtocolFailoverMessage item={item} />
+    case 'provider-recovery-exhausted': return <ProviderRecoveryExhaustedMessage item={item} />
   }
 }
 

@@ -12,8 +12,10 @@ import {
   prepareArtifactContent
 } from './artifact-lifecycle-content'
 import {
+  assertLegacyArtifactLifecycleOwnership,
   assertArtifactLifecycleProjectOwnership,
-  resolveArtifactProjectOwnership
+  resolveArtifactProjectOwnership,
+  resolveLegacyArtifactProjectOwnership
 } from './artifact-lifecycle-ownership'
 import {
   findArtifactLifecycle,
@@ -38,7 +40,7 @@ import {
   readTaskSnapshotDatabase,
   taskSnapshotsDbFile
 } from './task-snapshot'
-import { findWorkflowRun } from './workflow-ledger-store'
+import { findWorkflowRun, findWorkflowWorkItem } from './workflow-ledger-store'
 import { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
 
 export async function registerPersistedArtifactLifecycle(
@@ -97,7 +99,16 @@ export async function verifyPersistedArtifactLifecycle(
   const state = await workspace.getState()
   return readTaskSnapshotDatabase(roots.workflowRoot, async (db) => {
     const records = readArtifactLifecycles(db)
-    assertArtifactLifecycleProjectOwnership(state, records)
+    const legacyRecords = records.filter((record) => record.provenance === 'legacy-derived')
+    assertArtifactLifecycleProjectOwnership(
+      state,
+      records.filter((record) => record.provenance !== 'legacy-derived')
+    )
+    for (const record of legacyRecords) {
+      const run = findWorkflowRun(db, record.runId)
+      const workItem = run ? findWorkflowWorkItem(db, run.workItemId) : null
+      assertLegacyArtifactLifecycleOwnership(record, run, workItem)
+    }
     return verifyArtifactLifecycle(db, roots.workflowRoot, requiredKinds)
   })
 }
@@ -114,11 +125,19 @@ async function loadRegistrationOwnership(
   input: ArtifactLifecycleRegistrationInput,
   roots: ResolvedArtifactLifecycleRoots
 ): Promise<ArtifactProjectOwnership> {
-  const run = await readTaskSnapshotDatabase(roots.workflowRoot, (db) => findWorkflowRun(db, input.runId))
+  const { run, workItem } = await readTaskSnapshotDatabase(roots.workflowRoot, (db) => {
+    const run = findWorkflowRun(db, input.runId)
+    return { run, workItem: run ? findWorkflowWorkItem(db, run.workItemId) : null }
+  })
   if (!run) throw new WorkflowLedgerCorruptionError(`creating Run not found: ${input.runId}`)
   const workspace = new ProjectWorkspaceStore(roots.workspaceRoot)
   await workspace.open()
-  return resolveArtifactProjectOwnership(await workspace.getState(), run, input.projectId, true)
+  const state = await workspace.getState()
+  if (state.workspaces.some((candidate) => candidate.id === input.projectId) ||
+      input.provenance !== 'legacy-derived') {
+    return resolveArtifactProjectOwnership(state, run, input.projectId, true)
+  }
+  return resolveLegacyArtifactProjectOwnership(run, workItem, input.projectId)
 }
 
 async function assertPurgeProjectOwnership(
@@ -134,6 +153,14 @@ async function assertPurgeProjectOwnership(
   }
   const workspace = new ProjectWorkspaceStore(roots.workspaceRoot)
   await workspace.open()
+  if (lifecycle.provenance === 'legacy-derived') {
+    await readTaskSnapshotDatabase(roots.workflowRoot, (db) => {
+      const run = findWorkflowRun(db, lifecycle.runId)
+      const workItem = run ? findWorkflowWorkItem(db, run.workItemId) : null
+      assertLegacyArtifactLifecycleOwnership(lifecycle, run, workItem)
+    })
+    return
+  }
   assertArtifactLifecycleProjectOwnership(await workspace.getState(), [lifecycle])
 }
 
@@ -142,14 +169,15 @@ interface ResolvedArtifactLifecycleRoots {
   workspaceRoot: string
 }
 
-function resolveLifecycleRoots(input?: ArtifactLifecycleRootInput): ResolvedArtifactLifecycleRoots {
+export function resolveLifecycleRoots(input?: ArtifactLifecycleRootInput): ResolvedArtifactLifecycleRoots {
   if (typeof input === 'string') {
     const root = resolveProjectWorkspaceRoot(input)
     return { workflowRoot: root, workspaceRoot: root }
   }
+  const workflowRoot = input?.workflowRoot ?? dirname(taskSnapshotsDbFile())
   return {
-    workflowRoot: input?.workflowRoot ?? dirname(taskSnapshotsDbFile()),
-    workspaceRoot: resolveProjectWorkspaceRoot(input?.workspaceRoot)
+    workflowRoot,
+    workspaceRoot: resolveProjectWorkspaceRoot(input?.workspaceRoot ?? workflowRoot)
   }
 }
 

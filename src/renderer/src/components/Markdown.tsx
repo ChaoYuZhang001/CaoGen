@@ -1,7 +1,8 @@
-import { memo } from 'react'
+import { isValidElement, memo, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import CopyButton from './CopyButton'
 
 /**
  * 助手消息 Markdown 渲染:GFM(表格/删除线/任务列表)+ 代码高亮。
@@ -18,13 +19,24 @@ function MarkdownImpl({ text }: { text: string }): React.JSX.Element {
             <a href={href} target="_blank" rel="noreferrer noopener">
               {children}
             </a>
-          )
+          ),
+          pre: ({ children }) => {
+            const code = nodeText(children).replace(/\n$/, '')
+            return <pre><CopyButton text={code} kind="code" className="markdown-copy-code" />{children}</pre>
+          }
         }}
       >
         {text}
       </ReactMarkdown>
     </div>
   )
+}
+
+function nodeText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (isValidElement<{ children?: ReactNode }>(node)) return nodeText(node.props.children)
+  return ''
 }
 
 export default memo(MarkdownImpl)

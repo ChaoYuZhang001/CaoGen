@@ -13,6 +13,9 @@ import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
 import type { UserMessageAttachmentView } from './attachment-types'
 import type { ProviderProfileApi } from './provider-profile-types'
+import type { ProjectTestApi } from './project-test-types'
+import type { ProjectDebugApi } from './project-debug-types'
+import type { ProjectRefactorApi } from './project-refactor-types'
 import type { TaskPlanApi, TaskStrategy } from './task-plan-types'
 import type { MigrationApi } from './migration-types'
 import type { StudioResultApi } from './studio-result-types'
@@ -21,8 +24,22 @@ import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 import type { TerminalEffectApi } from './terminal-operation-types'
 import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
 import type { NotificationConnectorInput, NotificationConnectorView } from './notification-connector-types'
+import type { ProviderApiKeyInput, ProviderApiKeyUpdateInput, ProviderCredentialPolicy, ProviderCredentialRoutingMode } from './provider-credential-routing-types'
+import type { ProviderAuthorization } from './provider-authorization-types'
+import type { ProviderAnthropicRuntimeConfig } from './provider-anthropic-runtime-types'
+import type { ProviderGeminiRuntimeConfig } from './provider-gemini-runtime-types'
+export type { ProviderAuthorization, ProviderAuthorizationMethod, ProviderAuthorizationStatus } from './provider-authorization-types'
+export type * from './provider-anthropic-runtime-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type * from './provider-profile-types'
+export type * from './provider-profile-webdav-types'
+export type * from './provider-profile-s3-types'
+export type * from './project-test-types'
+export type * from './project-debug-types'
+export type * from './project-refactor-types'
+export type * from './provider-native-import-types'
+export type * from './provider-credential-routing-types'
+export type * from './codex-native-config-types'
 export type * from './task-plan-types'
 export type * from './migration-types'
 export type * from './studio-result-types'
@@ -31,10 +48,14 @@ export type * from './notification-connector-types'
 export type * from './project-aggregate-types'
 export type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 export type * from './workflow-types'
+export * from './workflow-repair'
 export type * from './digital-worker-types'
+export type * from './watercolor-character'
 export type * from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
+export type * from './provider-authorization-types'
+export type * from './provider-balance-types'
 export type * from './terminal-operation-types'
 export type * from './browser-operation-types'
 export type {
@@ -65,6 +86,41 @@ export type PermissionModeId = 'default' | 'acceptEdits' | 'plan' | 'bypassPermi
 export type SandboxMode = 'disabled' | 'restrictedLocal' | 'loose'
 /** Native command lifecycle outcome; exitCode is meaningful only for exited. */ export type CommandTermination = 'exited' | 'timed_out' | 'aborted' | 'output_limit' | 'spawn_error' | 'not_started'
 export type ToolRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+export type ToolSemanticCapability = 'workspaceRead' | 'workspaceWrite' | 'terminal' | 'browser' | 'network'
+
+export type PermissionRuleEffect = 'allow' | 'deny'
+export type PermissionRuleRiskOperator = 'exact' | 'atLeast' | 'atMost'
+
+/** Versioned user permission rule. Runtime-only capability grants are stored separately. */
+export interface PermissionRuleConfig {
+  id: string
+  enabled: boolean
+  effect: PermissionRuleEffect
+  toolPattern: string
+  pathPattern: string
+  commandPattern: string
+  networkHostPattern: string
+  guiApplicationPattern: string
+  guiWindowPattern: string
+  mcpToolPattern: string
+  /** RFC 6901 pointer into MCP arguments; must be paired with mcpArgumentPattern. */
+  mcpArgumentPointer: string
+  /** Wildcard match for the non-sensitive scalar selected by mcpArgumentPointer. */
+  mcpArgumentPattern: string
+  /** Capabilities covered by this rule. Composite allow rules must cover every requested capability. */
+  capabilityScope: ToolSemanticCapability[]
+  requirePostcondition: boolean
+  riskLevel?: ToolRiskLevel
+  riskOperator: PermissionRuleRiskOperator
+  expiresAt?: number
+}
+
+/** Frozen Effect target identity shown in an approval request and bound to grants. */
+export interface PermissionEffectScopeView {
+  targetKind: string
+  targetDigest: string
+  summary: string
+}
 export type SchedulerStrategy = 'quality' | 'cost' | 'speed' | 'balanced'
 export type ModelRoutingTaskKind =
   | 'chat'
@@ -260,18 +316,44 @@ export function caogenDrivePolicyView(mode: unknown): CaoGenDrivePolicyView {
   return CAOGEN_DRIVE_POLICIES.find((policy) => policy.mode === normalized) ?? CAOGEN_DRIVE_POLICIES[1]
 }
 
+export type ProviderCircuitState = 'closed' | 'open' | 'half_open'
+
+export interface ProviderCircuitBreakerSettings {
+  /** Consecutive switchable failures required to open the circuit. */
+  failureThreshold: number
+  /** Successful half-open probes required to close the circuit. */
+  successThreshold: number
+  /** Cooldown before an open circuit permits recovery probes. */
+  timeoutSeconds: number
+  /** Switchable failure ratio that can open the circuit after minRequests. */
+  errorRateThreshold: number
+  /** Minimum generation requests before error-rate opening is evaluated. */
+  minRequests: number
+}
+
 export interface ProviderHealthView {
   /** Provider id;历史健康记录里可能出现 official,但新会话不再使用空 Provider 默认。 */
   providerId: string
   successes: number
   failures: number
   consecutiveFailures: number
+  probeSuccesses?: number
+  probeFailures?: number
+  lastProbeLatencyMs?: number
+  lastProbeError?: string
+  lastProbeSuccessAt?: number
+  lastProbeFailureAt?: number
   lastLatencyMs?: number
   latencyEmaMs?: number
   lastError?: string
   lastSuccessAt?: number
   lastFailureAt?: number
   lastUsedAt?: number
+  circuitState: ProviderCircuitState
+  circuitOpenedAt?: number
+  halfOpenSuccesses: number
+  circuitTotalRequests: number
+  circuitFailedRequests: number
   recentFailures: Array<{
     at: number
     label: string
@@ -281,9 +363,96 @@ export interface ProviderHealthView {
   healthy: boolean
 }
 
+export interface ProviderModelPricing {
+  currency: 'USD'
+  inputPerMillion: number
+  outputPerMillion: number
+  cacheReadPerMillion?: number
+  cacheWritePerMillion?: number
+  source: 'builtin' | 'provider' | 'catalog' | 'user'
+  updatedAt?: number
+}
+
+export interface ProviderPricingCatalogEntry {
+  key: string
+  providerId: string
+  providerName: string
+  modelId: string
+  normalizedId: string
+  modelName: string
+  releaseDate?: string
+  pricing: ProviderModelPricing
+}
+
+export interface ProviderPricingCatalogFetchResult {
+  endpoint: 'https://models.dev/api.json'
+  fetchedAt: number
+  requested: number
+  matched: ProviderPricingCatalogEntry[]
+}
+
+export interface ProviderModelProfile {
+  model: string
+  displayName?: string
+  aliases?: string[]
+  pricing?: ProviderModelPricing
+  contextWindow?: number
+  capabilities?: string[]
+}
+
+export interface ProviderEndpointProfile {
+  id: string
+  url: string
+  priority?: number
+  enabled?: boolean
+  protocol?: OpenAIProtocol
+}
+
+export interface ProviderAppBinding {
+  accountId?: string
+  endpointId?: string
+  modelMap?: Record<string, string>
+}
+
+export type ProviderReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ProviderOutputVerbosity = 'low' | 'medium' | 'high'
+export type ProviderServiceTier = 'auto' | 'default' | 'flex' | 'priority'
+
+/** Typed Provider request controls. These never contain credentials. */
+export interface ProviderRuntimeConfig {
+  reasoningEffort?: ProviderReasoningEffort
+  verbosity?: ProviderOutputVerbosity
+  temperature?: number
+  topP?: number
+  maxOutputTokens?: number
+  parallelToolCalls?: boolean
+  storeResponses?: boolean
+  serviceTier?: ProviderServiceTier
+  anthropic?: ProviderAnthropicRuntimeConfig
+  gemini?: ProviderGeminiRuntimeConfig
+}
+
+/** Versioned, non-secret extension point for provider configuration. */
+export interface ProviderAdvancedConfig {
+  schemaVersion: 1
+  endpoints?: ProviderEndpointProfile[]
+  modelProfiles?: ProviderModelProfile[]
+  appBindings?: Record<string, ProviderAppBinding>
+  runtime?: ProviderRuntimeConfig
+  request?: {
+    headers?: Record<string, string>
+    query?: Record<string, string>
+    body?: Record<string, unknown>
+  }
+  balanceQuery?: import('./provider-balance-types').ProviderBalanceQueryConfig
+  billingQuery?: import('./provider-billing-query-types').ProviderBillingQueryConfig
+  reliability?: import('./provider-reliability-types').ProviderReliabilityConfig; metadata?: Record<string, string>
+}
+
 export type SessionStatus = 'starting' | 'running' | 'idle' | 'error' | 'closed'
 /** Agent 引擎标识:anthropic = Anthropic Messages API;openai = OpenAI-compatible API。 */
-export type EngineKind = 'anthropic' | 'openai'
+/** Native model engine identity: Anthropic Messages, Google Generative Language, or OpenAI-compatible. */
+export type EngineKind = 'anthropic' | 'gemini' | 'openai'
 export interface EngineInfo {
   kind: string
   label: string
@@ -388,6 +557,8 @@ export interface SessionMeta {
   sdkSessionId?: string
   /** 显式跨 Provider/模型分叉的直接来源；仅用于本地账本继承，不可作为 SDK resume id。 */
   conversationForkSourceSdkSessionId?: string
+  /** 消息级分叉的截断边界；新账本只继承该 checkpoint 对应用户轮次之前的历史。 */
+  conversationForkCheckpointId?: string
   /** 分叉来源的 CaoGen Session；用于把新 Run 绑定到明确的前驱，而不复用旧 Session 身份。 */
   conversationForkSourceSessionId?: string
   /** 分叉时观察到的 canonical source Run；新 Session 会创建独立 successor Run。 */
@@ -439,6 +610,7 @@ export interface HistoryEntry {
   sdkSessionId: string
   /** 显式跨 Provider/模型分叉的直接来源；新会话拥有独立 sdkSessionId。 */
   conversationForkSourceSdkSessionId?: string
+  conversationForkCheckpointId?: string
   conversationForkSourceSessionId?: string
   conversationForkSourceRunId?: string
   /** OpenAI Responses 服务端上下文；仅在严格身份匹配时恢复。 */
@@ -489,6 +661,8 @@ export interface CreateSessionOptions {
   resumeSdkSessionId?: string
   /** 从历史账本创建全新会话；与 resumeSdkSessionId 互斥，不复用任何 Provider 服务端上下文。 */
   forkFromSdkSessionId?: string
+  /** 可选的消息级分叉边界；只能与 forkFromSdkSessionId 同时使用。 */
+  forkCheckpointId?: string
   title?: string
 }
 
@@ -758,6 +932,7 @@ export interface TaskRunContinuation {
   sourceSessionId: string
   sourceRunId: string
   sourceSdkSessionId: string
+  sourceCheckpointId?: string
 }
 
 export interface TaskStepRecord {
@@ -1054,12 +1229,16 @@ export interface OfficeSettings {
 export type ChatDensity = 'comfortable' | 'compact'
 
 export interface LayoutSettings {
+  /** One-time migration marker for the compact desktop sidebar geometry. */
+  sidebarDesignVersion?: number
   /** 桌面侧栏是否收回;窄屏仍走抽屉模式。 */
   sidebarCollapsed: boolean
   /** 桌面侧栏宽度(px)。 */
   sidebarWidth: number
   /** 工作台右侧工具面板宽度(px)。 */
   workbenchSideWidth: number
+  /** 工作台底部终端 Dock 高度(px)。 */
+  workbenchDockHeight: number
   /** 聊天内容缩放倍率。 */
   chatScale: number
   /** 聊天内容密度。 */
@@ -1115,6 +1294,8 @@ export interface AppSettings {
   budgetUsdPerMonth: number
   /** 厂商故障时自动切换到其他 Provider 重试(M4.1) */
   failoverEnabled: boolean
+  /** Provider circuit breaker thresholds and recovery policy. */
+  providerCircuitBreaker: ProviderCircuitBreakerSettings
   /** 界面语言 */
   language: AppLanguage
   /** 主题:light 白天 / dark 夜晚 / system 跟随系统 */
@@ -1139,22 +1320,18 @@ export interface AppSettings {
   permissionDenylist: string
   /** 临时允许规则:同白名单,可追加 until=<ms 时间戳> */
   permissionTemporaryAllowlist: string
+  /** 结构化权限规则 schema 版本。 */
+  permissionRulesVersion: 2
+  /** 结构化用户权限规则；旧文本规则加载后迁移到这里。 */
+  permissionRules: PermissionRuleConfig[]
   /** 权限:GUI 自动化总开关;默认关闭,避免 Agent 直接操作真实桌面。 */
   guiAutomationEnabled: boolean
-  /** 权限:GUI 自动化临时授权过期时间戳(ms);0 = 无临时授权。 */
+  /** @deprecated 旧全局 GUI grant 占位；主进程始终归零，不再作为授权依据。 */
   guiAutomationTemporaryGrantUntil: number
   /** 桌面通知:关闭后任务完成/权限/失败均不弹系统通知 */
   notificationsEnabled: boolean
   /** 会话运行时阻止显示器休眠(prevent-display-sleep) */
   preventDisplaySleep: boolean
-  /** IDE Bridge:默认关闭,开启后 VS Code/JetBrains 插件可通过本机 WebSocket 连接桌面端。 */
-  ideBridgeEnabled: boolean
-  /** IDE Bridge 监听地址,默认仅本机。 */
-  ideBridgeHost: string
-  /** IDE Bridge 监听端口,默认 17365。 */
-  ideBridgePort: number
-  /** IDE Bridge 可选 token,为空表示本机连接无需 token。 */
-  ideBridgeToken: string
   /** 自动 Skill 沉淀:任务成功完成后后台复盘、验证并写入项目本地 Skill 库。默认关闭。 */
   autoSkillLearningEnabled: boolean
   /** Agent 控制室外观设置 */
@@ -1176,6 +1353,7 @@ export interface Provider {
   credentialMigrationRequired?: boolean
   /** 当前活动 API Key;为空时使用第一个可用 key。 */
   activeKeyId?: string
+  credentialRoutingMode?: ProviderCredentialRoutingMode
   /** 此 Provider 支持的模型列表(供 UI 下拉) */
   models: string[]
   /** 鉴权方式。旧数据缺省为 api-key；none 只允许本机回环 OpenAI 兼容服务。 */
@@ -1199,6 +1377,8 @@ export interface Provider {
   openaiProtocol?: OpenAIProtocol
   /** 用户备注 */
   note?: string
+  authorization?: ProviderAuthorization
+  advancedConfig?: ProviderAdvancedConfig
   createdAt: number
 }
 
@@ -1213,6 +1393,7 @@ export interface ProviderApiKey {
   lastFailureAt?: number
   lastFailureReason?: string
   disabled?: boolean
+  policy?: ProviderCredentialPolicy
 }
 
 export type ProviderCredentialStorage =
@@ -1235,6 +1416,10 @@ export interface ProviderApiKeyView {
   credentialStorage: ProviderCredentialStorage
   /** 当前主进程是否能够解析并使用该密钥。 */
   available: boolean
+  policy: ProviderCredentialPolicy
+  monthlySpendUsd: number
+  balanceRemainingUsd?: number
+  routingBlockedReason?: string
 }
 
 /** OpenAI 引擎可用的 API 协议 */
@@ -1258,6 +1443,8 @@ export interface ProviderView {
   budgetUsd: number
   openaiProtocol?: OpenAIProtocol
   note?: string
+  authorization?: ProviderAuthorization
+  advancedConfig?: ProviderAdvancedConfig
   createdAt: number
   hasToken: boolean
   credentialStorage: ProviderCredentialStorage
@@ -1265,6 +1452,8 @@ export interface ProviderView {
   keyCount?: number
   activeKeyId?: string
   activeKeyLabel?: string
+  credentialRoutingMode: ProviderCredentialRoutingMode
+  credentialRouteReason?: string
   apiKeys?: ProviderApiKeyView[]
 }
 
@@ -1279,6 +1468,21 @@ export interface ImageAttachmentView {
 
 export type ImageAttachmentResult =
   | ({ ok: true } & ImageAttachmentView)
+  | { ok: false; error: string; effectStatus?: EffectStatus; operationId?: string; snapshotId?: string }
+
+export interface DocumentAttachmentView {
+  id: string
+  hash: string
+  path: string
+  name: string
+  mime: 'text/plain; charset=utf-8'
+  bytes: number
+  createdAt: string
+  dataClass: 'S2' | 'S3'
+}
+
+export type DocumentAttachmentResult =
+  | ({ ok: true } & DocumentAttachmentView)
   | { ok: false; error: string; effectStatus?: EffectStatus; operationId?: string; snapshotId?: string }
 
 /** OCR 结果(引擎:macOS Vision 或 tesseract) */
@@ -1297,6 +1501,7 @@ export interface SaveImageAttachmentBytesInput {
 export interface SendMessagePayload {
   text: string
   images?: ImageAttachmentView[]
+  documents?: DocumentAttachmentView[]
   /** Internal callers may supply a stable id for crash-safe outbox delivery. */
   messageId?: string
 }
@@ -1388,18 +1593,6 @@ export interface QuickbarDispatchResult {
   error?: string
 }
 
-export interface ProviderApiKeyInput {
-  label?: string
-  token: string
-  disabled?: boolean
-}
-
-export interface ProviderApiKeyUpdateInput {
-  id: string
-  label?: string
-  disabled?: boolean
-}
-
 export interface ProviderInput {
   name: string
   baseUrl: string
@@ -1412,6 +1605,9 @@ export interface ProviderInput {
   budgetUsd?: number
   openaiProtocol?: OpenAIProtocol
   note?: string
+  authorization?: ProviderAuthorization
+  /** null explicitly clears an existing Provider's advanced configuration. */
+  advancedConfig?: ProviderAdvancedConfig | null
   /** 明文 token,经 IPC 传入主进程;安全存储可用时加密落盘,否则仅当前进程可用。 */
   token?: string
   /** 主/活动密钥标签;不含密钥值,可回传渲染进程。 */
@@ -1424,6 +1620,7 @@ export interface ProviderInput {
   removeKeyIds?: string[]
   /** 设置活动 key;为空或不存在时回落到第一个可用 key。 */
   activeKeyId?: string
+  credentialRoutingMode?: ProviderCredentialRoutingMode
 }
 
 export type ProviderModelErrorKind =
@@ -1437,6 +1634,7 @@ export type ProviderModelErrorKind =
 
 export interface ProviderModelFetchInput {
   baseUrl: string
+  engine?: EngineKind
   token?: string
   providerId?: string
   customHeaders?: string
@@ -1445,12 +1643,75 @@ export interface ProviderModelFetchInput {
   authMode?: ProviderAuthMode
 }
 
+export type ProviderModelAttemptResult =
+  | 'success'
+  | 'auth'
+  | 'rate_limit'
+  | 'server'
+  | 'network'
+  | 'not_found'
+  | 'invalid_response'
+
+export interface ProviderModelFetchAttempt {
+  /** Path only. Origin, query parameters, credentials, and response bodies are never exposed. */
+  endpointPath: string
+  result: ProviderModelAttemptResult
+  status?: number
+}
+
+export type ProviderDiagnosticGenerationProtocol =
+  | 'openai-responses'
+  | 'openai-chat-completions'
+  | 'anthropic-messages'
+  | 'google-generative-language'
+
+export type ProviderDiagnosticCredentialSource = 'explicit' | 'stored-active' | 'none'
+
+export interface ProviderModelDiagnosticContext {
+  engine: EngineKind
+  generationProtocol: ProviderDiagnosticGenerationProtocol
+  /** Path only. The Provider origin, query string, model id, and credentials are excluded. */
+  generationEndpointPath: string
+  credentialSource: ProviderDiagnosticCredentialSource
+  /** Optional user-defined key label; never contains the credential value. */
+  credentialLabel?: string
+  catalogProbeOnly: true
+}
+
+export type ProviderModelFailureReason =
+  | 'credentials_missing'
+  | 'credentials_rejected'
+  | 'base_url_invalid'
+  | 'base_url_or_credentials_mismatch'
+  | 'model_catalog_unavailable'
+  | 'rate_limited'
+  | 'provider_unavailable'
+  | 'network_unavailable'
+  | 'unknown'
+
+export type ProviderModelSuggestedAction =
+  | 'enter_credentials'
+  | 'review_credentials'
+  | 'review_base_url_and_credentials'
+  | 'enter_models_manually'
+  | 'retry_later'
+  | 'check_network'
+  | 'review_configuration'
+
 export interface ProviderModelFetchError {
   kind: ProviderModelErrorKind
   message: string
   status?: number
   providerId?: string
   baseUrl: string
+  reasonCode: ProviderModelFailureReason
+  suggestedAction: ProviderModelSuggestedAction
+  credentialStyle: {
+    authMode: ProviderAuthMode
+    headerNames: string[]
+  }
+  diagnosticContext: ProviderModelDiagnosticContext
+  attempts: ProviderModelFetchAttempt[]
 }
 
 export interface ProviderModelFetchResult {
@@ -1465,11 +1726,40 @@ export interface ProviderModelFetchResult {
   error?: ProviderModelFetchError
 }
 
+export interface ProviderGenerationProbeInput extends ProviderModelFetchInput {
+  model: string
+}
+
+export type ProviderGenerationProbeOutcome =
+  | 'success'
+  | 'auth'
+  | 'rate_limit'
+  | 'server'
+  | 'network'
+  | 'not_found'
+  | 'invalid_request'
+
+export interface ProviderGenerationProbeResult {
+  ok: boolean
+  providerId?: string
+  protocol: ProviderDiagnosticGenerationProtocol
+  /** Path only. Provider origin, query values, model id, credentials, and response bodies are excluded. */
+  endpointPath: string
+  credentialSource: ProviderDiagnosticCredentialSource
+  credentialLabel?: string
+  credentialHeaderNames: string[]
+  outcome: ProviderGenerationProbeOutcome
+  status?: number
+  latencyMs: number
+  /** The probe intentionally requests at most one output token and may be billable. */
+  billableRequest: true
+}
+
 export type AssistantBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string; signature?: string }
   | { type: 'redacted_thinking'; data: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; signature?: string }
 
 export interface PermissionRequestInfo {
   requestId: string
@@ -1478,6 +1768,36 @@ export interface PermissionRequestInfo {
   toolUseId?: string
   decisionReason?: string
   duplicateExecutionId?: string
+  riskLevel?: ToolRiskLevel
+  /** Main-process-computed capabilities exercised by this tool call. */
+  capabilities: ToolSemanticCapability[]
+  /** Main-process-computed description; absent when a scoped temporary grant is unsafe. */
+  guiGrantScope?: string
+  /** Main-process-computed exact non-GUI capability; absent for unstable or high-risk operations. */
+  toolGrantScope?: string
+  /** Main-process-frozen Effect target; absent for read-only or non-effect calls. */
+  effectScope?: PermissionEffectScopeView
+}
+
+export interface GuiAutomationGrantView {
+  id: string
+  kind: 'gui'
+  sessionId: string
+  toolName: string
+  scopeLabel: string
+  issuedAt: number
+  expiresAt: number
+}
+
+export interface ToolCapabilityGrantView {
+  id: string
+  kind: 'tool'
+  sessionId: string
+  toolName: string
+  scopeLabel: string
+  issuedAt: number
+  expiresAt: number
+  effectTargetDigest: string
 }
 
 export type AgentEvent =
@@ -1496,7 +1816,12 @@ export type AgentEvent =
       messageId?: string
       attachments?: UserMessageAttachmentView[]
     }
-  | { kind: 'checkpoint'; messageId: string; userMessageId?: string }
+  | {
+      kind: 'checkpoint'
+      messageId: string
+      userMessageId?: string
+      scope?: 'chat' | 'both'
+    }
   | {
       kind: 'checkpoint-restore'
       messageId: string
@@ -1536,6 +1861,34 @@ export type AgentEvent =
       fromKeyLabel: string
       toKeyId: string
       toKeyLabel: string
+      reason: string
+    }
+  | {
+      /** Same-Provider model recovery; contains routing metadata only. */
+      kind: 'provider-model-failover'
+      providerId: string
+      providerName: string
+      fromModel: string
+      toModel: string
+      reason: string
+    }
+  | {
+      /** Session-scoped OpenAI protocol recovery; never mutates the saved Provider. */
+      kind: 'provider-protocol-failover'
+      providerId: string
+      providerName: string
+      model: string
+      fromProtocol: 'responses'
+      toProtocol: 'chat'
+      reason: string
+    }
+  | {
+      /** Automatic Provider recovery is exhausted and requires explicit user action. */
+      kind: 'provider-recovery-exhausted'
+      engine: EngineKind
+      providerId: string
+      providerName: string
+      model: string
       reason: string
     }
   | { kind: 'text-delta'; text: string }
@@ -2069,6 +2422,115 @@ export interface ListProjectFilesResult {
   error?: string
 }
 
+export interface ProjectTextSearchMatch {
+  path: string
+  line: number
+  column: number
+  snippet: string
+  matchStart: number
+  matchLength: number
+}
+
+export interface SearchProjectTextResult {
+  ok: boolean
+  query?: string
+  matches: ProjectTextSearchMatch[]
+  filesScanned?: number
+  filesMatched?: number
+  truncated?: boolean
+  error?: string
+}
+
+export interface ProjectDiagnostic {
+  path: string
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
+  severity: 'error' | 'warning' | 'info'
+  source: string
+  code: string
+  message: string
+}
+
+export interface ProjectDiagnosticsResult {
+  ok: boolean
+  diagnostics: ProjectDiagnostic[]
+  analyzedFiles: number
+  supportedFiles: number
+  truncated: boolean
+  error?: string
+}
+
+export interface ProjectSymbolLocation {
+  name: string
+  kind: string
+  path: string
+  line: number
+  column: number
+  endLine: number
+  signature: string
+  exported: boolean
+}
+
+export interface ProjectSymbolSearchResult {
+  ok: boolean
+  symbols: ProjectSymbolLocation[]
+  error?: string
+}
+
+export interface TypeScriptLanguageInput {
+  path: string
+  content: string
+  line: number
+  column: number
+}
+
+export interface SemanticCompletionItem {
+  label: string
+  kind: string
+  detail: string
+  insertText: string
+}
+
+export interface SemanticCompletionResult {
+  ok: boolean
+  engine: 'typescript-lsp'
+  items: SemanticCompletionItem[]
+  error?: string
+}
+
+export interface SemanticHoverResult {
+  ok: boolean
+  engine: 'typescript-lsp'
+  markdown: string
+  error?: string
+}
+
+export interface SemanticDefinitionLocation {
+  path: string
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
+}
+
+export interface SemanticDefinitionResult {
+  ok: boolean
+  engine: 'typescript-lsp'
+  locations: SemanticDefinitionLocation[]
+  error?: string
+}
+
+export interface SemanticDiagnostic extends ProjectDiagnostic {}
+
+export interface SemanticDiagnosticsResult {
+  ok: boolean
+  engine: 'typescript-lsp'
+  diagnostics: SemanticDiagnostic[]
+  error?: string
+}
+
 export interface ReadTextFileResult {
   ok: boolean
   path?: string
@@ -2269,7 +2731,7 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, ProjectTestApi, ProjectDebugApi, ProjectRefactorApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
   listSessions(): Promise<SessionMeta[]>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
@@ -2306,6 +2768,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
     input: TaskDagDispatchInput
   ): Promise<TaskDagDispatchResult>
   copyImageAttachment(sessionId: string, sourcePath: string): Promise<ImageAttachmentResult>
+  copyDocumentAttachment(sessionId: string, sourcePath: string): Promise<DocumentAttachmentResult>
   saveImageAttachmentBytes(
     sessionId: string,
     input: SaveImageAttachmentBytesInput
@@ -2334,6 +2797,37 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   deleteHistory(id: string): Promise<void>
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  listGuiAutomationGrants(): Promise<GuiAutomationGrantView[]>
+  revokeGuiAutomationGrant(grantId: string): Promise<boolean>
+  revokeAllGuiAutomationGrants(): Promise<number>
+  listToolCapabilityGrants(): Promise<ToolCapabilityGrantView[]>
+  revokeToolCapabilityGrant(grantId: string): Promise<boolean>
+  revokeAllToolCapabilityGrants(): Promise<number>
+  queryProviderUsage(query?: import('./provider-usage-types').ProviderUsageQuery): Promise<import('./provider-usage-types').ProviderUsageSummary>
+  getProviderGatewayStatus(): Promise<import('./provider-gateway-types').ProviderGatewayStatusView>
+  updateProviderGateway(input: import('./provider-gateway-types').ProviderGatewayUpdateInput): Promise<import('./provider-gateway-types').ProviderGatewayStatusView>
+  listProviderGatewayModels(): Promise<import('./provider-gateway-types').ProviderGatewayModelView[]>
+  copyProviderGatewayToken(): Promise<boolean>
+  listProviderBillingStatements(providerId: string): Promise<import('./provider-billing-types').ProviderBillingStatementView[]>
+  saveProviderBillingStatement(input: import('./provider-billing-types').ProviderBillingStatementInput): Promise<import('./provider-billing-types').ProviderBillingStatementView>
+  removeProviderBillingStatement(providerId: string, statementId: string): Promise<boolean>
+  reconcileProviderBilling(providerId: string): Promise<import('./provider-billing-types').ProviderBillingReconciliationView[]>
+  inspectProviderBillingQuery(providerId: string): Promise<import('./provider-billing-query-types').ProviderBillingQueryCapabilityView>
+  syncProviderBillingStatement(input: import('./provider-billing-query-types').ProviderBillingSyncInput): Promise<import('./provider-billing-query-types').ProviderBillingSyncResult>
+  startProviderAuthorization(
+    providerId: string,
+    service?: import('./provider-authorization-types').ProviderAuthorizationService
+  ): Promise<import('./provider-authorization-types').ProviderDeviceAuthorizationView>
+  pollProviderAuthorization(providerId: string, flowId: string): Promise<import('./provider-authorization-types').ProviderAuthorizationPollResult>
+  startQuickProviderAuthorization(service?: import('./provider-authorization-types').ProviderAuthorizationService): Promise<import('./provider-authorization-types').ProviderQuickDeviceAuthorizationView>
+  pollQuickProviderAuthorization(flowId: string): Promise<import('./provider-authorization-types').ProviderQuickAuthorizationPollResult>
+  listProviderAuthorizationAccounts(providerId: string): Promise<import('./provider-authorization-types').ProviderAuthorizationAccountView[]>
+  bindProviderAuthorizationAccount(providerId: string, accountId: string, mutation?: import('./provider-authorization-types').ProviderAuthorizationMutation): Promise<ProviderView>
+  refreshProviderAuthorization(providerId: string): Promise<ProviderView>
+  revokeProviderAuthorization(providerId: string, accountId?: string): Promise<ProviderView>
+  queryProviderAuthorizationQuota(providerId: string, accountId?: string): Promise<import('./provider-authorization-types').ProviderAuthorizationQuotaView>
+  inspectProviderBalance(providerId: string): Promise<import('./provider-balance-types').ProviderBalanceCapabilityView>
+  queryProviderBalance(providerId: string): Promise<import('./provider-balance-types').ProviderBalanceView>
   listNotificationConnectors(): Promise<NotificationConnectorView[]>
   createNotificationConnector(input: NotificationConnectorInput): Promise<NotificationConnectorView>
   deleteNotificationConnector(id: string): Promise<boolean>
@@ -2388,6 +2882,14 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
     opts?: { deleteBranch?: boolean; force?: boolean }
   ): Promise<WorktreeRemoveResult>
   listProjectFiles(sessionId: string): Promise<ListProjectFilesResult>
+  searchProjectText(sessionId: string, query: string): Promise<SearchProjectTextResult>
+  listProjectDiagnostics(sessionId: string): Promise<ProjectDiagnosticsResult>
+  searchProjectSymbols(sessionId: string, query: string, limit?: number): Promise<ProjectSymbolSearchResult>
+  resolveProjectDefinition(sessionId: string, path: string, symbol: string): Promise<ProjectSymbolSearchResult>
+  getTypeScriptCompletions(sessionId: string, input: TypeScriptLanguageInput): Promise<SemanticCompletionResult>
+  getTypeScriptHover(sessionId: string, input: TypeScriptLanguageInput): Promise<SemanticHoverResult>
+  getTypeScriptDefinitions(sessionId: string, input: TypeScriptLanguageInput): Promise<SemanticDefinitionResult>
+  getTypeScriptDiagnostics(sessionId: string, input: TypeScriptLanguageInput): Promise<SemanticDiagnosticsResult>
   readTextFile(sessionId: string, path: string): Promise<ReadTextFileResult>
   writeTextFile(sessionId: string, path: string, content: string): Promise<WriteTextFileResult>
   preparePreview(sessionId: string, path: string): Promise<PreparedPreview>
@@ -2427,6 +2929,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Di
   updateLayeredMemory(entryId: string, input: LayeredMemoryUpdateInput): Promise<LayeredMemoryEntry | null>
   deleteLayeredMemory(entryId: string): Promise<boolean>
   pickDirectory(): Promise<string | null>
+  pathForFile(file: File): string
   quickbarGetState(): Promise<QuickbarState>
   quickbarSetVisible(visible: boolean): Promise<QuickbarState>
   quickbarGetWindowContext(cwd?: string, sourceId?: string): Promise<QuickbarContextResult>

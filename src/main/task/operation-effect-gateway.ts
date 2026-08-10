@@ -36,6 +36,9 @@ export interface InteractiveOperationEffectSpec<T> {
   title: string
   sourceSessionId: string
   projectId?: string
+  workspaceId?: string
+  goalId?: string
+  workItemId?: string
   cwd: string
   toolName: string
   toolInput: Record<string, unknown>
@@ -150,7 +153,7 @@ function createOperationExecutionContext<T>(
     'executing',
     { now }
   )
-  const meta = operationMeta(scopeId, spec.cwd, operation.title, spec.projectId, now)
+  const meta = operationMeta(scopeId, spec.cwd, operation.title, spec, now)
   const effectInput: PrepareEffectExecutionInput = {
     sessionId: scopeId,
     cwd: spec.cwd,
@@ -478,14 +481,21 @@ function operationMeta(
   scopeId: string,
   cwd: string,
   title: string,
-  projectId: string | undefined,
+  ownership: Pick<InteractiveOperationEffectSpec<unknown>, 'projectId' | 'workspaceId' | 'goalId' | 'workItemId'>,
   createdAt: number
 ): SessionMeta {
+  const projectId = ownership.projectId?.trim()
+  const workspaceId = ownership.workspaceId?.trim()
+  const goalId = ownership.goalId?.trim()
+  const workItemId = ownership.workItemId?.trim()
   return {
     id: scopeId,
     title: `操作恢复: ${title}`,
     cwd: requireText(cwd, 'cwd'),
-    ...(projectId?.trim() ? { projectId: projectId.trim() } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(goalId ? { goalId } : {}),
+    ...(workItemId ? { workItemId } : {}),
     model: '',
     providerId: '',
     taskStrategy: 'execute',

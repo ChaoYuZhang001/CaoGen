@@ -1,3 +1,9 @@
+import { buildAnthropicMessagesWireBody } from './anthropicMessagesRequest'
+import {
+  ProviderRequestDeadline,
+  type ProviderRequestTimeouts
+} from './provider/providerRequestTimeout'
+
 export interface AnthropicMessagesUsage {
   input: number
   output: number
@@ -20,6 +26,8 @@ export interface AnthropicMessagesToolUseBlock extends Record<string, unknown> {
   id: string
   name: string
   input: Record<string, unknown>
+  /** Opaque vendor replay signature used by Gemini function-call history. */
+  signature?: string
 }
 
 export type AnthropicMessagesToolResultContentBlock =
@@ -73,6 +81,18 @@ export interface AnthropicMessagesMessage {
   content: string | AnthropicMessagesContentBlock[]
 }
 
+export interface AnthropicMessagesThinkingConfig {
+  mode: 'disabled' | 'adaptive' | 'enabled'
+  budgetTokens?: number
+  display?: 'summarized' | 'omitted'
+}
+
+export interface AnthropicMessagesPromptCachingConfig {
+  enabled: boolean
+  ttl?: '5m' | '1h'
+  strategy?: 'automatic' | 'system' | 'tools' | 'last-user'
+}
+
 export interface AnthropicMessagesRequest {
   model: string
   maxTokens: number
@@ -80,6 +100,12 @@ export interface AnthropicMessagesRequest {
   tools?: AnthropicMessagesTool[]
   system?: string
   temperature?: number
+  topP?: number
+  topK?: number
+  thinking?: AnthropicMessagesThinkingConfig
+  promptCaching?: AnthropicMessagesPromptCachingConfig
+  /** Non-protected provider-specific body fields. */
+  extraBody?: Record<string, unknown>
 }
 
 export interface AnthropicMessagesResult {
@@ -100,7 +126,10 @@ export interface AnthropicMessagesStreamInput {
   onText?: (text: string) => void
   onThinking?: (text: string) => void
   fetch?: typeof fetch
+  timeouts?: ProviderRequestTimeouts
 }
+
+export { buildAnthropicMessagesWireBody } from './anthropicMessagesRequest'
 
 export class AnthropicMessagesHttpError extends Error {
   readonly name = 'AnthropicMessagesHttpError'
@@ -117,28 +146,29 @@ export class AnthropicMessagesProtocolError extends Error {
 export async function streamAnthropicMessage(
   input: AnthropicMessagesStreamInput
 ): Promise<AnthropicMessagesResult> {
-  const response = await (input.fetch ?? fetch)(input.endpoint, {
-    method: 'POST',
-    redirect: 'error',
-    headers: input.headers,
-    body: JSON.stringify({
-      model: input.request.model,
-      max_tokens: positiveInteger(input.request.maxTokens, 8192),
-      messages: input.request.messages,
-      stream: true,
-      ...(input.request.tools ? { tools: input.request.tools } : {}),
-      ...(input.request.system?.trim() ? { system: input.request.system.trim() } : {}),
-      ...(typeof input.request.temperature === 'number' ? { temperature: input.request.temperature } : {})
-    }),
-    signal: input.signal
-  })
-  if (!response.ok) throw new AnthropicMessagesHttpError(response.status, await responseError(response))
+  const wireBody = buildAnthropicMessagesWireBody(input.request)
+  const deadline = new ProviderRequestDeadline(input.signal, input.timeouts ?? {}, true)
+  try {
+    const rawResponse = await (input.fetch ?? fetch)(input.endpoint, {
+      method: 'POST',
+      redirect: 'error',
+      headers: input.headers,
+      body: JSON.stringify(wireBody),
+      signal: deadline.signal
+    })
+    const response = deadline.wrapResponse(rawResponse)
+    if (!response.ok) throw new AnthropicMessagesHttpError(response.status, await responseError(response))
 
-  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-  if (!response.body || (contentType && !contentType.includes('text/event-stream'))) {
-    return consumeJsonResponse(await response.json(), input)
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (!response.body || (contentType && !contentType.includes('text/event-stream'))) {
+      return await consumeJsonResponse(await response.json(), input)
+    }
+    return await consumeSseResponse(response.body, input)
+  } catch (error) {
+    throw deadline.errorOr(error)
+  } finally {
+    deadline.finish()
   }
-  return consumeSseResponse(response.body, input)
 }
 
 async function consumeSseResponse(
@@ -625,10 +655,6 @@ async function responseError(response: Response): Promise<string> {
   } catch {
     return text || response.statusText
   }
-}
-
-function positiveInteger(value: number, fallback: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
 }
 
 function usageCount(

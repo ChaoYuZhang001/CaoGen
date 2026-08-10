@@ -31,9 +31,6 @@ const reports = {
   p2ReleaseScope: readJson('test-results/p2-release-scope/latest.json'),
   p2Required: readJson('test-results/p2-required/latest.json'),
   p2Audit: readJson('test-results/p2-completion-audit/latest.json'),
-  idePlugins: readJson('test-results/ide-plugins/latest.json'),
-  vscodeExtensionHost: readJson('test-results/vscode-extension-host/latest.json'),
-  jetbrainsInteraction: readJson('test-results/jetbrains-ide-interaction/latest.json'),
   guiPermission: readJson('test-results/gui-permission/latest.json'),
   guiInputPreflight: readJson('test-results/gui-input-preflight/latest.json'),
   guiVscode: readJson('test-results/gui-vscode-e2e/latest.json'),
@@ -73,7 +70,7 @@ const p2ReleaseRequirements = Array.isArray(reports.p2ReleaseScope.data?.require
 const p2ReleaseById = Object.fromEntries(p2ReleaseRequirements.filter(isRecord).map((item) => [item.id, item]))
 const p2RequiredResults = Array.isArray(reports.p2Required.data?.results) ? reports.p2Required.data.results : []
 const p2RequiredByName = Object.fromEntries(p2RequiredResults.filter(isRecord).map((item) => [item.name, item]))
-const releaseRequiredP2Ids = ['P2-002', 'P2-003', 'P2-005']
+const releaseRequiredP2Ids = ['P2-002', 'P2-003']
 const nonBlockingP2Ids = {
   'P2-001': 'delegated_windows_agent',
   'P2-004': 'user_configured_external'
@@ -152,7 +149,7 @@ const report = {
     'Do not label a 1.x build stable without a release-bound CycloneDX/SPDX inventory and vulnerability disposition.',
     'Do not publish v0.1.7 or any later macOS build without Developer ID signing, Hardened Runtime, notarization, stapling, and the required macOS release audit.',
     'Do not publish until the required taskDag durable finalization crash e2e is present and passing in the release-bound Deep report.',
-    'Do not publish while release-scope P2 evidence is missing: P2-002, P2-003, and P2-005 must be proved.',
+    'Do not publish while release-scope P2 evidence is missing: P2-002 and P2-003 must be proved.',
     'Do not claim P2-001 Windows GUI evidence or P2-004 China external evidence as release-proved until their separate required gates pass.',
     'Do not make N1 30-minute human migration claims in release notes without a passed private N1 audit record.',
     'Do not publish a 1.x stable release without a passed private seven-day soak record bound to the exact frozen version, commit, and artifact set, except 1.0.0 when its explicit version-scoped owner waiver validates; that waiver never applies to another release.',
@@ -181,11 +178,7 @@ function p2Domain() {
     releaseScopeGit?.commit === gitState.commit && releaseScopeGit?.worktreeClean === true && releaseScopeGit?.unchanged === true
   const legacyReleaseChecks = {
     'P2-002': p2ById['P2-002']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
-    'P2-003': p2ById['P2-003']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass',
-    'P2-005': p2ById['P2-005']?.status === 'proved' || (
-      p2RequiredByName.ide_build_and_vscode_required?.status === 'pass' &&
-      p2RequiredByName.jetbrains_ide_interaction_required?.status === 'pass'
-    )
+    'P2-003': p2ById['P2-003']?.status === 'proved' || p2RequiredByName.p2_default_smoke?.status === 'pass'
   }
   const releaseChecks = Object.fromEntries(releaseRequiredP2Ids.map((id) => [id,
     releaseScopeExists ? releaseScopeBound && p2ReleaseById[id]?.status === 'proved' : legacyReleaseChecks[id]
@@ -228,13 +221,11 @@ function p2Domain() {
     commands: [
       'npm run test:p2-release-scope:required',
       'npm run test:p2',
-      'npm run test:p2-ide-build-and-vscode:required',
-      'npm run test:jetbrains-ide-interaction:required',
       'npm run test:p2-audit -- --required # optional full external audit; P2-001/P2-004 are non-blocking unless release notes claim them'
     ],
     nextActions: [
       ...(blockingOpen.length === 0
-        ? ['Keep P2-002/P2-003/P2-005 proved on the release commit.']
+        ? ['Keep P2-002/P2-003 proved on the release commit.']
         : blockingOpen.flatMap((item) => nextActionsForP2(item.id))),
       ...nonBlockingOpen.flatMap((item) => nextActionsForP2(item.id))
     ]
@@ -622,7 +613,7 @@ function nextActionsForP2(id) {
   if (id === 'P2-004') {
     return [
       'Run China external evidence with real public HTTPS targets and real provider config.',
-      'Commands: npm run test:p2-external:doctor -- --refresh, npm run test:china-real-network:required, npm run test:china-tool-call-parity:required.',
+      'Commands: npm run test:china-real-network:required, npm run test:china-tool-call-parity:required.',
       'Acceptance: China real-network and tool-call parity reports pass, then strict P2 audit marks P2-004 proved.'
     ]
   }
@@ -1116,8 +1107,6 @@ function buildParallelAgents() {
       branch: 'codex/workos-b4-china-external',
       objective: 'Close P2-004 using real China network targets and real provider tool-call parity.',
       commands: [
-        'npm run test:p2-external:pack',
-        'npm run test:p2-external:doctor -- --refresh',
         'npm run test:china-real-network:required',
         'npm run test:china-tool-call-parity:required'
       ],
@@ -1130,8 +1119,6 @@ function buildParallelAgents() {
       commands: [
         'npm run workos:release-doctor -- --refresh',
         'npm run test:p2',
-        'npm run test:p2-ide-build-and-vscode:required',
-        'npm run test:jetbrains-ide-interaction:required',
         'npm run test:release-packaging-audit:required',
         'npm run test:product-positioning:required',
         'npm run test:release-notes-audit:required',

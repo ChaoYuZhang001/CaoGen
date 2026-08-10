@@ -1,4 +1,11 @@
 import { createGuiController } from '../../gui/gui-controller'
+import {
+  captureGuiVisualBaseline,
+  normalizeGuiPostcondition,
+  verifyGuiPostcondition,
+  verifyGuiVisualPostcondition,
+  type GuiPostcondition
+} from '../../gui/gui-postcondition'
 import type { ToolDefinition, ToolExecResult } from './tool-types'
 
 export const GUI_TOOL_NAMES = [
@@ -36,6 +43,29 @@ const ELEMENT_SELECTOR_SCHEMA = {
   maxElements: { type: 'number', description: '元素定位时最多扫描的元素数，默认 80，最大 300' }
 } satisfies Record<string, Record<string, unknown>>
 
+const GUI_POSTCONDITION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  description: '动作后的可验证条件；未达到时工具返回失败，不把动作调用成功冒充任务成功。',
+  properties: {
+    kind: { type: 'string', enum: ['window', 'element', 'visual'], description: '验证窗口、可访问性元素或同一窗口的视觉变化' },
+    state: {
+      type: 'string',
+      enum: ['exists', 'absent', 'enabled', 'disabled', 'visible', 'hidden', 'changed', 'unchanged'],
+      description: 'window 支持 exists/absent；element 支持可访问性状态；visual 支持 changed/unchanged'
+    },
+    ...WINDOW_SELECTOR_SCHEMA,
+    ...ELEMENT_SELECTOR_SCHEMA,
+    sourceId: { type: 'string', description: '可选；visual 使用的精确 desktopCapturer source id' },
+    minimumChangedRatio: { type: 'number', exclusiveMinimum: 0, maximum: 1, description: 'changed 的最小变化像素比例' },
+    maximumChangedRatio: { type: 'number', minimum: 0, maximum: 1, description: 'unchanged 的最大变化像素比例' },
+    pixelDifferenceThreshold: { type: 'number', minimum: 0, maximum: 255, description: '单通道像素差阈值，默认 16' },
+    timeoutMs: { type: 'number', minimum: 0, maximum: 5000, description: '等待上限，默认 1500ms' },
+    intervalMs: { type: 'number', minimum: 50, maximum: 1000, description: '轮询间隔，默认 150ms' }
+  },
+  required: ['kind', 'state']
+} satisfies Record<string, unknown>
+
 export const GUI_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
@@ -60,7 +90,10 @@ export const GUI_TOOLS: ToolDefinition[] = [
       description: '按窗口 id、标题、进程名或 pid 激活桌面窗口。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
       parameters: {
         type: 'object',
-        properties: WINDOW_SELECTOR_SCHEMA
+        properties: {
+          ...WINDOW_SELECTOR_SCHEMA,
+          postcondition: GUI_POSTCONDITION_SCHEMA
+        }
       }
     }
   },
@@ -97,7 +130,8 @@ export const GUI_TOOLS: ToolDefinition[] = [
           y: { type: 'number', description: '屏幕绝对 Y 坐标；使用元素 selector 时可省略' },
           button: { type: 'string', enum: ['left', 'right', 'middle'], description: '默认 left' },
           ...WINDOW_SELECTOR_SCHEMA,
-          ...ELEMENT_SELECTOR_SCHEMA
+          ...ELEMENT_SELECTOR_SCHEMA,
+          postcondition: GUI_POSTCONDITION_SCHEMA
         }
       }
     }
@@ -113,7 +147,8 @@ export const GUI_TOOLS: ToolDefinition[] = [
         properties: {
           text: { type: 'string', description: '要输入的文本' },
           ...WINDOW_SELECTOR_SCHEMA,
-          ...ELEMENT_SELECTOR_SCHEMA
+          ...ELEMENT_SELECTOR_SCHEMA,
+          postcondition: GUI_POSTCONDITION_SCHEMA
         },
         required: ['text']
       }
@@ -133,7 +168,8 @@ export const GUI_TOOLS: ToolDefinition[] = [
           deltaX: { type: 'number', description: '可选；水平滚动量，正数向右，负数向左' },
           deltaY: { type: 'number', description: '可选；垂直滚动量，正数向下，负数向上，默认 360' },
           ...WINDOW_SELECTOR_SCHEMA,
-          ...ELEMENT_SELECTOR_SCHEMA
+          ...ELEMENT_SELECTOR_SCHEMA,
+          postcondition: GUI_POSTCONDITION_SCHEMA
         }
       }
     }
@@ -143,7 +179,7 @@ export const GUI_TOOLS: ToolDefinition[] = [
     function: {
       name: 'gui_hotkey',
       description:
-        '向当前激活窗口发送快捷键，例如 ["ctrl","shift","p"] 或 ["cmd","s"]。GUI 自动化属于高风险能力，调用前必须获得用户审批。',
+        '向明确选择的窗口或当前激活窗口发送快捷键，例如 ["ctrl","shift","p"] 或 ["cmd","s"]。提供 window selector 时会先绑定目标；GUI 自动化属于高风险能力，调用前必须获得用户审批。',
       parameters: {
         type: 'object',
         properties: {
@@ -151,7 +187,9 @@ export const GUI_TOOLS: ToolDefinition[] = [
             type: 'array',
             items: { type: 'string' },
             description: '快捷键按键序列'
-          }
+          },
+          ...WINDOW_SELECTOR_SCHEMA,
+          postcondition: GUI_POSTCONDITION_SCHEMA
         },
         required: ['keys']
       }
@@ -162,8 +200,16 @@ export const GUI_TOOLS: ToolDefinition[] = [
 export async function executeGuiTool(
   name: GuiToolName,
   args: Record<string, unknown>,
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ): Promise<ToolExecResult> {
+  if ((name === 'gui_list_windows' || name === 'gui_screenshot') && args.postcondition !== undefined) {
+    throw new Error(`${name} 是观察工具，不接受 postcondition`)
+  }
+  const postcondition = normalizeGuiPostcondition(args.postcondition)
+  if (postcondition?.kind === 'visual' && !sharesExactWindowSelector(args, postcondition)) {
+    throw new Error('visual postcondition 必须与 GUI 动作共享同一窗口 selector')
+  }
   const controller = createGuiController(cwd)
   switch (name) {
     case 'gui_list_windows':
@@ -175,7 +221,7 @@ export async function executeGuiTool(
         })
       )
     case 'gui_activate_window':
-      return result(await controller.activateWindow(windowSelector(args)))
+      return verifiedResult(() => controller.activateWindow(windowSelector(args)), postcondition, controller, signal)
     case 'gui_screenshot':
       return result(
         await controller.screenshot({
@@ -186,41 +232,94 @@ export async function executeGuiTool(
         })
       )
     case 'gui_click':
-      return result(
-        await controller.click({
+      return verifiedResult(
+        () => controller.click({
           ...windowSelector(args),
           ...elementSelector(args),
           x: numberValue(args.x),
           y: numberValue(args.y),
           button: buttonValue(args.button)
-        })
+        }),
+        postcondition,
+        controller,
+        signal
       )
     case 'gui_type':
-      return result(
-        await controller.typeText({
+      return verifiedResult(
+        () => controller.typeText({
           ...windowSelector(args),
           ...elementSelector(args),
           text: requiredString(args.text, 'text')
-        })
+        }),
+        postcondition,
+        controller,
+        signal
       )
     case 'gui_scroll':
-      return result(
-        await controller.scroll({
+      return verifiedResult(
+        () => controller.scroll({
           ...windowSelector(args),
           ...elementSelector(args),
           x: numberValue(args.x),
           y: numberValue(args.y),
           deltaX: numberValue(args.deltaX),
           deltaY: numberValue(args.deltaY)
-        })
+        }),
+        postcondition,
+        controller,
+        signal
       )
     case 'gui_hotkey':
-      return result(await controller.hotkey(requiredStringArray(args.keys, 'keys')))
+      return verifiedResult(
+        () => controller.hotkey({ ...windowSelector(args), keys: requiredStringArray(args.keys, 'keys') }),
+        postcondition,
+        controller,
+        signal
+      )
   }
 }
 
-function result(value: { ok: boolean }): ToolExecResult {
+function result<T extends { ok: boolean }>(value: T): ToolExecResult {
   return { ok: value.ok, output: JSON.stringify(value, null, 2) }
+}
+
+async function verifiedResult(
+  runAction: () => Promise<{ ok: boolean; error?: string }>,
+  postcondition: GuiPostcondition | undefined,
+  controller: ReturnType<typeof createGuiController>,
+  signal?: AbortSignal
+): Promise<ToolExecResult> {
+  if (!postcondition) {
+    const action = await runAction()
+    return result({ ...action, verification: { status: 'not_requested' } })
+  }
+  const baseline = postcondition.kind === 'visual'
+    ? await captureGuiVisualBaseline((input) => controller.captureVisual(input), postcondition, signal)
+    : undefined
+  if (baseline && 'error' in baseline) {
+    return result({
+      ok: false,
+      error: baseline.error,
+      verification: { status: 'not_run', reason: 'baseline_failed' }
+    })
+  }
+  const action = await runAction()
+  if (!action.ok) return result({ ...action, verification: { status: 'not_run', reason: 'action_failed' } })
+  const verification = baseline?.ok
+    ? await verifyGuiVisualPostcondition(
+        (input) => controller.captureVisual(input),
+        postcondition,
+        baseline.baseline,
+        signal
+      )
+    : await verifyGuiPostcondition(
+        (input) => controller.listWindows(input),
+        postcondition,
+        signal
+      )
+  return verification.status === 'passed'
+    ? result({ ...action, verification })
+    : result({ ...action, ok: false, error: verification.error, verification })
 }
 
 function windowSelector(args: Record<string, unknown>) {
@@ -230,6 +329,15 @@ function windowSelector(args: Record<string, unknown>) {
     processName: stringValue(args.processName),
     pid: numberValue(args.pid)
   }
+}
+
+function sharesExactWindowSelector(args: Record<string, unknown>, postcondition: GuiPostcondition): boolean {
+  for (const key of ['windowId', 'title', 'processName'] as const) {
+    const actionValue = stringValue(args[key])
+    const expectedValue = postcondition[key]
+    if (actionValue && expectedValue && actionValue.toLocaleLowerCase() === expectedValue.toLocaleLowerCase()) return true
+  }
+  return typeof args.pid === 'number' && Number.isInteger(args.pid) && args.pid > 0 && args.pid === postcondition.pid
 }
 
 function elementSelector(args: Record<string, unknown>) {

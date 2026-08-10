@@ -9,6 +9,7 @@ import type {
   WorkflowAcceptanceInput,
   WorkflowAcceptanceRecord
 } from '../../shared/workflow-types'
+import { WORKFLOW_ACCEPTANCE_REPAIR_WORK_ITEM_PREFIX } from '../../shared/workflow-repair'
 import type { ProjectWorkspaceCommandService } from '../project-workspace/command-service'
 
 const REPAIR_ID_NAMESPACE = 'caogen.workflow-acceptance-repair.v1'
@@ -267,7 +268,7 @@ export function workflowAcceptanceRepairWorkItemId(
       { acceptanceId: id, failedAcceptanceRevision }
     )
   }
-  return `workflow-repair:${sha256(`${REPAIR_ID_NAMESPACE}\0${id}\0${failedAcceptanceRevision}`)}`
+  return `${WORKFLOW_ACCEPTANCE_REPAIR_WORK_ITEM_PREFIX}${sha256(`${REPAIR_ID_NAMESPACE}\0${id}\0${failedAcceptanceRevision}`)}`
 }
 
 export function workflowAcceptanceRepairAcceptanceId(repairWorkItemId: string): string {

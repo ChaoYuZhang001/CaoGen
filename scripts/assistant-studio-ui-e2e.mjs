@@ -520,6 +520,7 @@ try {
     await page.setViewport({ width: 360, height: 520, deviceScaleFactor: 1 })
     await page.click('.mobile-sidebar-toggle')
     await page.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar-mobile-open')).transform === 'matrix(1, 0, 0, 1, 0, 0)', { timeout: 5_000 })
     const stacking = await readMobileSidebarStacking(page)
     assert(stacking.sidebarZ > stacking.switcherZ, `sidebar z-index ${stacking.sidebarZ} <= switcher ${stacking.switcherZ}`)
     assert(stacking.backdropZ > stacking.switcherZ, `sidebar backdrop ${stacking.backdropZ} <= switcher ${stacking.switcherZ}`)
@@ -564,11 +565,12 @@ if (report.status !== 'pass') {
 }
 
 async function verifyMigrationManager(targetPage, targetProject, secretCanary) {
-  await targetPage.click('.sidebar-footer .btn-ghost')
+  await targetPage.click('.sidebar-footer button.sidebar-nav-item')
   await targetPage.waitForSelector('[data-settings-tab="migrate"]', { visible: true, timeout: 10_000 })
   await targetPage.click('[data-settings-tab="migrate"]')
   await targetPage.waitForSelector('[data-migration-manager]', { visible: true, timeout: 5_000 })
-  await clearFieldValue(targetPage, '[data-migration-manager] input')
+  await sleep(100)
+  await setFieldValue(targetPage, '[data-migration-manager] input', '')
   await targetPage.click('[data-migration-scan]')
   await targetPage.waitForSelector('[data-migration-mode="conversation"]', { visible: true, timeout: 10_000 })
   const conversation = await targetPage.evaluate(() => ({
@@ -666,7 +668,24 @@ async function check(name, fn) {
 }
 
 async function clickMode(targetPage, mode) {
-  await targetPage.click(`[data-experience-mode-option="${mode}"]`)
+  const selector = `[data-experience-mode-option="${mode}"]`
+  const visible = await targetPage.$eval(selector, (button) => {
+    const rect = button.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= window.innerWidth
+  })
+  if (!visible) {
+    await targetPage.click('.mobile-sidebar-toggle')
+    await targetPage.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
+    await targetPage.waitForFunction((option) => {
+      const rect = document.querySelector(`.sidebar-mobile-open ${option}`)?.getBoundingClientRect()
+      return rect && rect.left >= 0 && rect.right <= window.innerWidth
+    }, { timeout: 5_000 }, selector)
+  }
+  await targetPage.click(visible ? selector : `.sidebar-mobile-open ${selector}`)
+  if (!visible) {
+    await targetPage.click('.sidebar-mobile-close')
+    await targetPage.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
+  }
   await assertMode(targetPage, mode)
 }
 
@@ -863,6 +882,7 @@ async function readOverflow(targetPage, mode) {
     const main = document.querySelector('.main')
     const switcher = document.querySelector('[data-experience-mode-switcher]')
     const switcherRect = switcher?.getBoundingClientRect()
+    const mobileToggleRect = document.querySelector('.mobile-sidebar-toggle')?.getBoundingClientRect()
     const strategy = document.querySelector('[data-task-strategy]')
     const strategyRect = strategy?.getBoundingClientRect()
     const width = window.innerWidth
@@ -890,7 +910,8 @@ async function readOverflow(targetPage, mode) {
       documentOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
       appOverflow: app ? Math.max(0, app.scrollWidth - app.clientWidth) : -1,
       mainOverflow: main ? Math.max(0, main.scrollWidth - main.clientWidth) : -1,
-      switcherInsideViewport: Boolean(switcherRect && switcherRect.left >= -1 && switcherRect.right <= width + 1),
+      switcherInsideViewport: [switcherRect, mobileToggleRect]
+        .some((rect) => rect && rect.width > 0 && rect.height > 0 && rect.left >= -1 && rect.right <= width + 1),
       strategyInsideViewport: Boolean(strategyRect && strategyRect.left >= -1 && strategyRect.right <= width + 1),
       strategyTextFits: [...document.querySelectorAll('[data-task-strategy-option]')]
         .every((button) => button.scrollWidth <= button.clientWidth + 1),

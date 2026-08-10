@@ -488,6 +488,14 @@ function isStaleWorkflowRun(current: WorkflowRunRecord | null, run: TaskRunRecor
 }
 
 function compareRunFreshness(current: WorkflowRunRecord, incoming: TaskRunRecord): number {
+  // Revisions are local to one Run. A follow-up turn creates a new Run at
+  // revision 1, so comparing revisions across IDs would incorrectly keep the
+  // older Run as the WorkItem owner and omit the new Run from runIds.
+  if (current.id !== incoming.id) {
+    if (current.createdAt !== incoming.createdAt) return current.createdAt - incoming.createdAt
+    if (current.updatedAt !== incoming.updatedAt) return current.updatedAt - incoming.updatedAt
+    return current.id.localeCompare(incoming.id)
+  }
   if (current.revision !== incoming.revision) return current.revision - incoming.revision
   if (current.attempt !== incoming.attempt) return current.attempt - incoming.attempt
   return current.updatedAt - incoming.updatedAt

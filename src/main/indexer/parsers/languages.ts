@@ -31,6 +31,14 @@ export interface ParsedCodeFile {
   imports: ParsedImport[]
 }
 
+export interface ParsedCodeDiagnostic {
+  line: number
+  column: number
+  endLine: number
+  endColumn: number
+  message: string
+}
+
 interface LanguageConfig {
   language: CodeLanguage
   grammar: unknown
@@ -64,6 +72,33 @@ export function parseCodeFile(filePath: string, content: string): ParsedCodeFile
     symbols: dedupeSymbols(symbols),
     imports: extractImports(config.language, content)
   }
+}
+
+export function parseCodeDiagnostics(filePath: string, content: string): ParsedCodeDiagnostic[] | null {
+  const config = languageForFile(filePath)
+  if (!config) return null
+  parser.setLanguage(config.grammar)
+  const tree = parser.parse(content)
+  if (!tree.rootNode.hasError) return []
+  const diagnostics: ParsedCodeDiagnostic[] = []
+  collectDiagnostics(tree.rootNode, diagnostics)
+  return diagnostics
+}
+
+function collectDiagnostics(node: Parser.SyntaxNode, diagnostics: ParsedCodeDiagnostic[]): void {
+  if (node.type === 'ERROR' || node.isMissing) {
+    const raw = node.text.replace(/\s+/g, ' ').trim()
+    const near = raw ? ` near "${raw.slice(0, 80)}"` : ''
+    diagnostics.push({
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column + 1,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column + 1,
+      message: node.isMissing ? `Missing syntax${near}` : `Unexpected or invalid syntax${near}`
+    })
+    if (node.type === 'ERROR') return
+  }
+  for (const child of node.namedChildren) collectDiagnostics(child, diagnostics)
 }
 
 function collectSymbols(node: Parser.SyntaxNode, content: string, symbols: ParsedSymbol[]): void {

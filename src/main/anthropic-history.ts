@@ -198,7 +198,12 @@ function assistantBlockToHistory(
   state: AnthropicHistoryRebuildState,
   block: AssistantBlock
 ): AnthropicMessagesContentBlock | undefined {
-  if (block.type === 'thinking' && block.text && block.signature) {
+  if (block.type === 'thinking') {
+    if (!block.text) return undefined
+    if (!block.signature) {
+      state.validTurn = false
+      return undefined
+    }
     return { type: 'thinking', thinking: block.text, signature: block.signature }
   }
   if (block.type === 'redacted_thinking' && block.data) return { type: 'redacted_thinking', data: block.data }
@@ -209,7 +214,10 @@ function assistantBlockToHistory(
     return undefined
   }
   state.pendingToolUses.add(block.id)
-  return { type: 'tool_use', id: block.id, name: block.name, input: block.input }
+  return {
+    type: 'tool_use', id: block.id, name: block.name, input: block.input,
+    ...(block.signature ? { signature: block.signature } : {})
+  }
 }
 
 function appendToolResultHistory(
@@ -251,9 +259,12 @@ function commitHistoryTurn(
   resetHistoryTurn(state)
 }
 
-export function assistantHistoryContent(result: AnthropicMessagesResult): AnthropicMessagesContentBlock[] {
+export function assistantHistoryContent(
+  result: AnthropicMessagesResult,
+  requireThinkingSignatures = false
+): AnthropicMessagesContentBlock[] {
   const blocks = (Array.isArray(result.contentBlocks) ? result.contentBlocks : [])
-    .map(assistantResultBlockToHistory)
+    .map((block) => assistantResultBlockToHistory(block, requireThinkingSignatures))
     .filter((block): block is AnthropicMessagesContentBlock => Boolean(block))
   if (blocks.length > 0) return blocks
   if (result.text) blocks.push({ type: 'text', text: result.text })
@@ -264,9 +275,18 @@ export function assistantHistoryContent(result: AnthropicMessagesResult): Anthro
 }
 
 function assistantResultBlockToHistory(
-  block: AnthropicMessagesContentBlock
+  block: AnthropicMessagesContentBlock,
+  requireThinkingSignatures: boolean
 ): AnthropicMessagesContentBlock | undefined {
-  if (block.type === 'thinking' && block.signature) return { ...block }
+  if (block.type === 'thinking') {
+    if (!block.signature) {
+      if (requireThinkingSignatures) {
+        throw new Error('Anthropic thinking block is missing its replay signature')
+      }
+      return undefined
+    }
+    return { ...block }
+  }
   if (block.type === 'redacted_thinking' || block.type === 'text') return { ...block }
   if (block.type === 'tool_use') return { ...block, input: isRecord(block.input) ? block.input : {} }
   return undefined
@@ -280,7 +300,10 @@ export function assistantEventBlocks(result: AnthropicMessagesResult): Assistant
   if (result.thinking) blocks.push({ type: 'thinking', text: result.thinking })
   if (result.text) blocks.push({ type: 'text', text: result.text })
   for (const toolUse of Array.isArray(result.toolUses) ? result.toolUses : []) {
-    blocks.push({ type: 'tool_use', id: toolUse.id, name: toolUse.name, input: toolUse.input })
+    blocks.push({
+      type: 'tool_use', id: toolUse.id, name: toolUse.name, input: toolUse.input,
+      ...(toolUse.signature ? { signature: toolUse.signature } : {})
+    })
   }
   return blocks
 }
@@ -295,7 +318,12 @@ function assistantResultBlockToEvent(block: AnthropicMessagesContentBlock): Assi
   }
   if (block.type === 'redacted_thinking' && block.data) return { type: 'redacted_thinking', data: block.data }
   if (block.type === 'text' && block.text) return { type: 'text', text: block.text }
-  if (block.type === 'tool_use') return { type: 'tool_use', id: block.id, name: block.name, input: block.input }
+  if (block.type === 'tool_use') {
+    return {
+      type: 'tool_use', id: block.id, name: block.name, input: block.input,
+      ...(block.signature ? { signature: block.signature } : {})
+    }
+  }
   return undefined
 }
 

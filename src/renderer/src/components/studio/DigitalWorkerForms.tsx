@@ -10,12 +10,15 @@ import type {
 } from '../../../../shared/types'
 import type { DigitalWorkerStudioWorkItem } from './digital-worker-studio-model'
 import {
+  WATERCOLOR_ROLE_OPTIONS,
   splitList,
+  suggestedWatercolorRole,
   workerAllowedDataClasses,
   workerAllowedResourceIds,
   workerDeniedDataClasses,
   workItemTitle
 } from './digital-worker-studio-model'
+import type { WatercolorCharacterRole } from '../../../../shared/watercolor-character'
 
 interface RoleTemplateFormProps {
   busy: boolean
@@ -105,9 +108,11 @@ interface HireWorkerIdentityFieldsProps {
   roles: readonly RoleTemplate[]
   displayName: string
   roleId: string
+  watercolorRole: WatercolorCharacterRole
   responsibilities: string
   setDisplayName: Dispatch<SetStateAction<string>>
-  setRoleId: Dispatch<SetStateAction<string>>
+  onRoleIdChange: (roleId: string) => void
+  setWatercolorRole: Dispatch<SetStateAction<WatercolorCharacterRole>>
   setResponsibilities: Dispatch<SetStateAction<string>>
 }
 
@@ -116,9 +121,11 @@ function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.J
     roles,
     displayName,
     roleId,
+    watercolorRole,
     responsibilities,
     setDisplayName,
-    setRoleId,
+    onRoleIdChange,
+    setWatercolorRole,
     setResponsibilities
   } = props
   const nameRef = useRef<HTMLInputElement>(null)
@@ -139,9 +146,21 @@ function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.J
       </label>
       <label className="dws-field">
         <span>岗位模板</span>
-        <select value={roleId} onChange={(event) => setRoleId(event.target.value)} required>
+        <select value={roleId} onChange={(event) => onRoleIdChange(event.target.value)} required>
           <option value="" disabled>选择岗位</option>
           {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+        </select>
+      </label>
+      <label className="dws-field">
+        <span>水墨岗位形象</span>
+        <select
+          value={watercolorRole}
+          onChange={(event) => setWatercolorRole(event.target.value as WatercolorCharacterRole)}
+          data-dws-watercolor-role
+        >
+          {WATERCOLOR_ROLE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </select>
       </label>
       <label className="dws-field dws-field-wide">
@@ -332,6 +351,7 @@ function HireWorkerPolicyFields(props: HireWorkerPolicyFieldsProps): React.JSX.E
 interface HireWorkerInputValues {
   projectId: string
   roleId: string
+  watercolorRole: WatercolorCharacterRole
   displayName: string
   responsibilities: string
   permissions: PermissionFieldsProps['permissions']
@@ -353,6 +373,7 @@ function buildHireWorkerInput(values: HireWorkerInputValues): DigitalWorkerInput
     projectId: values.projectId,
     roleTemplateId: values.roleId,
     displayName: values.displayName.trim(),
+    avatarProfile: { watercolorRole: values.watercolorRole },
     responsibilityScope: splitList(values.responsibilities),
     toolPolicy: values.permissions,
     dataScope: {
@@ -379,6 +400,9 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
   const titleId = useId()
   const [displayName, setDisplayName] = useState('')
   const [roleId, setRoleId] = useState(initialRoleId || roles[0]?.id || '')
+  const [watercolorRole, setWatercolorRole] = useState<WatercolorCharacterRole>(() =>
+    suggestedWatercolorRole(initialRoleId || roles[0]?.id || '', roles)
+  )
   const [responsibilities, setResponsibilities] = useState('')
   const [monthlyBudget, setMonthlyBudget] = useState('')
   const [concurrency, setConcurrency] = useState('1')
@@ -400,14 +424,23 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
   })
 
   useEffect(() => {
-    if (initialRoleId && roles.some((role) => role.id === initialRoleId)) setRoleId(initialRoleId)
+    if (initialRoleId && roles.some((role) => role.id === initialRoleId)) {
+      setRoleId(initialRoleId)
+      setWatercolorRole(suggestedWatercolorRole(initialRoleId, roles))
+    }
   }, [initialRoleId, roles])
+
+  const selectRole = (nextRoleId: string): void => {
+    setRoleId(nextRoleId)
+    setWatercolorRole(suggestedWatercolorRole(nextRoleId, roles))
+  }
 
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault()
     const input = buildHireWorkerInput({
       projectId,
       roleId,
+      watercolorRole,
       displayName,
       responsibilities,
       permissions,
@@ -447,9 +480,11 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
           roles={roles}
           displayName={displayName}
           roleId={roleId}
+          watercolorRole={watercolorRole}
           responsibilities={responsibilities}
           setDisplayName={setDisplayName}
-          setRoleId={setRoleId}
+          onRoleIdChange={selectRole}
+          setWatercolorRole={setWatercolorRole}
           setResponsibilities={setResponsibilities}
         />
         <PermissionFields permissions={permissions} setPermissions={setPermissions} />

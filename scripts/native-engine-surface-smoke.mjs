@@ -32,7 +32,7 @@ for (const file of [
 }
 
 const sharedTypes = read('src/shared/types.ts')
-assert.match(sharedTypes, /export type EngineKind = 'anthropic' \| 'openai'/)
+assert.match(sharedTypes, /export type EngineKind = 'anthropic' \| 'gemini' \| 'openai'/)
 assert.doesNotMatch(sharedTypes, /EngineKind = [^\n]*'claude'/)
 
 const engines = read('src/main/engines.ts')

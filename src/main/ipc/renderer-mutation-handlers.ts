@@ -1,10 +1,12 @@
 import type { GitCommitResult, WorkspaceHunkResult, WriteTextFileResult } from '../../shared/types'
+import { isAbsolute, resolve } from 'node:path'
 import {
   prepareImageAttachmentBytes,
+  prepareDocumentAttachmentFile,
   prepareImageAttachmentFile,
   type ImageAttachmentBytesInput
 } from '../attachmentOps'
-import { executePreparedImageAttachmentEffect } from '../attachmentEffect'
+import { executePreparedDocumentAttachmentEffect, executePreparedImageAttachmentEffect } from '../attachmentEffect'
 import { writeTextFile } from '../fileOps'
 import { gitCommit } from '../git/git-helper'
 import { applyHunk } from '../gitDiff'
@@ -152,11 +154,37 @@ export async function executeInteractiveOperationEffectCopyImage(
   if (!context) return { ok: false, error: '会话不存在' }
   if (typeof sourcePath !== 'string' || !sourcePath.trim()) return { ok: false, error: '图片路径不能为空' }
   try {
-    const prepared = await prepareImageAttachmentFile(sourcePath)
+    const prepared = await prepareImageAttachmentFile(
+      isAbsolute(sourcePath) ? sourcePath : resolve(context.cwd, sourcePath)
+    )
     return executePreparedImageAttachmentEffect(
       { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
       prepared,
       'user_file',
+      runOperation
+    )
+  } catch (error) {
+    return { ok: false, error: errorText(error) }
+  }
+}
+
+export async function executeInteractiveOperationEffectCopyDocument(
+  id: string,
+  sourcePath: unknown,
+  attachmentsRoot: string,
+  runOperation: OperationGateway
+) {
+  const context = rendererOperationContext(id)
+  if (!context) return { ok: false, error: '会话不存在' }
+  if (typeof sourcePath !== 'string' || !sourcePath.trim()) return { ok: false, error: '文档路径不能为空' }
+  try {
+    const prepared = await prepareDocumentAttachmentFile(
+      isAbsolute(sourcePath) ? sourcePath : resolve(context.cwd, sourcePath),
+      context.cwd
+    )
+    return executePreparedDocumentAttachmentEffect(
+      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      prepared,
       runOperation
     )
   } catch (error) {

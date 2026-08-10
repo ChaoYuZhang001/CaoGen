@@ -108,9 +108,7 @@ async function runSmoke() {
     const signalCrash = runScenario('signal-crash', tempRoot, fixturePath)
     assert.equal(signalCrash.process.status, 1, signalCrash.process.output)
     assert.equal(signalCrash.report.status, 'fail')
-    assert.equal(resultByName(signalCrash.report, 'signal crash').status, 'fail')
-    assert.match(resultByName(signalCrash.report, 'signal crash').reason, /terminated by signal/)
-    assert.equal(typeof resultByName(signalCrash.report, 'signal crash').signal, 'string')
+    assertSignalCrashResult(resultByName(signalCrash.report, 'signal crash'))
 
     const optionalFail = runScenario('optional-fail', tempRoot, fixturePath)
     assert.equal(optionalFail.process.status, 1, optionalFail.process.output)
@@ -179,6 +177,18 @@ async function runSmoke() {
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
+}
+
+function assertSignalCrashResult(result) {
+  assert.equal(result.status, 'fail')
+  if (process.platform === 'win32') {
+    assert.equal(result.exitCode, 134)
+    assert.equal(result.signal, null)
+    assert.match(result.reason, /exited with code 134/)
+    return
+  }
+  assert.match(result.reason, /terminated by signal/)
+  assert.equal(typeof result.signal, 'string')
 }
 
 function runScenario(scenario, tempRoot, fixturePath) {

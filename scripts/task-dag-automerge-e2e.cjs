@@ -137,6 +137,7 @@ function startMockServer() {
 function initProjectRepo() {
   fs.mkdirSync(projectDir, { recursive: true })
   git(projectDir, ['init'])
+  git(projectDir, ['config', 'core.autocrlf', 'false'])
   git(projectDir, ['config', 'user.email', 'dag-automerge@example.test'])
   git(projectDir, ['config', 'user.name', 'DAG AutoMerge E2E'])
   fs.writeFileSync(path.join(projectDir, 'README.md'), '# DAG auto merge e2e\n', 'utf8')

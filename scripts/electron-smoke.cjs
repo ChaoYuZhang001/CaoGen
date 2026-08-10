@@ -79,7 +79,7 @@ async function run() {
   try {
     const engines = await invoke('engines:list')
     const kinds = Array.isArray(engines) ? engines.map((engine) => engine.kind).sort() : []
-    check('IPC engines:list 仅含两种原生引擎', JSON.stringify(kinds) === JSON.stringify(['anthropic', 'openai']), JSON.stringify(engines).slice(0, 120))
+    check('IPC engines:list 仅含三种原生引擎', JSON.stringify(kinds) === JSON.stringify(['anthropic', 'gemini', 'openai']), JSON.stringify(engines).slice(0, 120))
   } catch (e) { check('IPC engines:list', false, String(e.message)) }
 
   try {
@@ -238,7 +238,7 @@ async function exerciseRendererMutations(sessionId) {
     gitIndex,
     indexHookStayedInert: gitIndex.hookStayedInert,
     committed: committed.ok === true,
-    commitDetail: JSON.stringify(committed).slice(0, 100)
+    commitDetail: JSON.stringify(committed).slice(0, 500)
   }
 }
 
@@ -331,7 +331,7 @@ function confirmedOperation(result) {
 }
 
 function operationDetail(result, cachedDiff, worktreeDiff) {
-  return `${JSON.stringify(result).slice(0, 100)} cached=${cachedDiff.length} worktree=${worktreeDiff.length}`
+  return `${JSON.stringify(result).slice(0, 500)} cached=${cachedDiff.length} worktree=${worktreeDiff.length}`
 }
 
 function captureFileDiffState(file) {

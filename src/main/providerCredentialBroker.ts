@@ -85,11 +85,17 @@ const SAFE_CUSTOM_HEADER_NAMES = new Set([
   'anthropic-beta',
   'anthropic-version',
   'content-type',
+  'chatgpt-account-id',
+  'copilot-integration-id',
+  'editor-plugin-version',
+  'editor-version',
   'http-referer',
   'openai-organization',
   'openai-project',
+  'originator',
   'referer',
   'user-agent',
+  'x-github-api-version',
   'x-rapidapi-host',
   'x-title'
 ])

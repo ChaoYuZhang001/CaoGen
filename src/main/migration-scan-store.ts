@@ -1,4 +1,5 @@
 import type { MigrationAsset, MigrationScan } from '../shared/types'
+import type { SafeDirectorySnapshot } from './migration-safety'
 
 export type JsonObject = Record<string, unknown>
 
@@ -11,6 +12,9 @@ export interface InternalMigrationAsset {
   targetFingerprint?: string
   mcpServerName?: string
   mcpConfig?: JsonObject
+  readSourceDigest?: () => string
+  sourceDirectorySnapshot?: SafeDirectorySnapshot
+  targetBytes?: Buffer
 }
 
 export interface StoredMigrationScan {

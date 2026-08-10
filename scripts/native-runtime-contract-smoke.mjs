@@ -42,7 +42,7 @@ try {
 
   enginesModule.registerBuiltinEngines()
   const adapters = engineModule.listNativeRuntimeAdapters()
-  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'openai'])
+  assert.deepEqual(adapters.map((adapter) => adapter.engineKind), ['anthropic', 'gemini', 'openai'])
   checks.push('two-builtin-adapter-identities')
 
   assert.equal(contractModule.isNativeRuntimeFrozen(), true)
@@ -75,7 +75,7 @@ try {
     engine.bindNativeRun(taskRun(meta.id, `run-${adapter.engineKind}`))
     executeCanonicalTrace(engine, meta)
     const snapshot = engine.getNativeRuntimeSnapshot()
-    assert.equal(emitted.length, 17)
+    assert.equal(emitted.length, 20)
     assert(emitted.every((entry, index) =>
       entry.seq === index + 1 && entry.identity?.seq === entry.seq && entry.identity?.schemaVersion === 1
     ))
@@ -100,12 +100,15 @@ try {
     snapshots.push(snapshot)
     serialized.push(engine.serializeNativeRuntime())
   }
-  checks.push('two-real-engine-contract-execution')
+  checks.push('three-real-engine-contract-execution')
   checks.push('session-run-context-tool-permission-state')
   checks.push('usage-error-checkpoint-hook-state')
   checks.push('runtime-event-identity-and-order')
-  assert.deepEqual(snapshots.map(normalizeSnapshot), [normalizeSnapshot(snapshots[0]), normalizeSnapshot(snapshots[0])])
-  checks.push('two-engine-runtime-state-parity')
+  assert.deepEqual(
+    snapshots.map(normalizeSnapshot),
+    adapters.map(() => normalizeSnapshot(snapshots[0]))
+  )
+  checks.push('three-engine-runtime-state-parity')
 
   verifyForkHydrationIdentity(engineModule, boundModule, adapters)
   checks.push('fork-hydration-session-and-engine-identity')
@@ -169,6 +172,31 @@ function executeCanonicalTrace(engine, meta) {
     { kind: 'status', status: 'idle' },
     { kind: 'user-message', text: 'contract probe', messageId: 'message-1' },
     { kind: 'status', status: 'running' },
+    {
+      kind: 'provider-model-failover',
+      providerId: 'fixture-provider',
+      providerName: 'Fixture Provider',
+      fromModel: 'fixture-model',
+      toModel: 'fixture-model-backup',
+      reason: 'fixture model unavailable'
+    },
+    {
+      kind: 'provider-protocol-failover',
+      providerId: 'fixture-provider',
+      providerName: 'Fixture Provider',
+      model: 'fixture-model-backup',
+      fromProtocol: 'responses',
+      toProtocol: 'chat',
+      reason: 'fixture protocol unavailable'
+    },
+    {
+      kind: 'provider-recovery-exhausted',
+      engine: meta.engine,
+      providerId: 'fixture-provider',
+      providerName: 'Fixture Provider',
+      model: 'fixture-model-backup',
+      reason: 'fixture recovery exhausted'
+    },
     { kind: 'tool-start', toolUseId: 'tool-1', name: 'read_file' },
     { kind: 'permission-request', request: { requestId: 'permission-1', toolName: 'read_file', input: {}, toolUseId: 'tool-1' } },
     { kind: 'permission-resolved', requestId: 'permission-1', behavior: 'allow' },

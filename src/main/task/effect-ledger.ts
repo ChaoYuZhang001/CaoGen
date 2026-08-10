@@ -403,6 +403,13 @@ function buildResourceKey(
   effectKey: string
 ): string {
   const target = descriptor.target
+  if (target.kind === 'gui_postcondition') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'gui-window',
+      platform: target.platform,
+      windowId: target.postcondition.windowId
+    })}`
+  }
   if (target.kind === 'file_content') {
     const rootPath = realpathSync(resolve(target.rootPath))
     const fullPath = resolve(rootPath, target.relativePath)

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Paperclip } from 'lucide-react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
-import type { ImageAttachmentView, SessionMeta } from '../../../shared/types'
+import type { DocumentAttachmentView, ImageAttachmentView, SessionMeta } from '../../../shared/types'
+import DocumentAttachmentTray from './DocumentAttachmentTray'
 import ImageAttachmentTray from './ImageAttachmentTray'
 import { OutboundContextPreview, useOutboundContextPreview } from './OutboundContextPreview'
 import {
@@ -14,6 +16,7 @@ import {
   shouldLoadProjectedPluginRegistry
 } from './experience/projectedComposerCommands'
 import { useComposerSubmission } from './composer/useComposerSubmission'
+import { useSessionComposerDraft } from './composer/useSessionComposerDraft'
 
 interface Mention {
   start: number
@@ -31,14 +34,15 @@ function useComposerOutboundPreview(
   sessionId: string | null,
   meta: OutboundReceiverMeta | undefined,
   text: string,
-  attachments: ComposerImageAttachment[]
+  attachments: ComposerImageAttachment[],
+  documents: DocumentAttachmentView[]
 ) {
   const images = useMemo(
     () => attachments.map<ImageAttachmentView>(({ name: _name, previewUrl: _previewUrl, ...image }) => image),
     [attachments]
   )
   const receiverKey = [meta?.providerId, meta?.model, meta?.projectId, meta?.workspaceId].join('\u0000')
-  return { images, ...useOutboundContextPreview({ sessionId, receiverKey, text, images }) }
+  return { images, ...useOutboundContextPreview({ sessionId, receiverKey, text, images, documents }) }
 }
 
 /** 定位光标处正在输入的 @提及(@ 在行首或空白后,且其后无空白) */
@@ -67,13 +71,19 @@ function isSupportedImageFile(file: File): boolean {
 }
 
 function filePath(file: File): string | undefined {
-  return (file as File & { path?: string }).path
+  try {
+    return window.agentDesk.pathForFile(file) || undefined
+  } catch {
+    return (file as File & { path?: string }).path
+  }
 }
+
+let imageAttachmentDrafts: Record<string, ComposerImageAttachment[]> = {}
+let documentAttachmentDrafts: Record<string, DocumentAttachmentView[]> = {}
 
 export default function Composer({ running }: { running: boolean }): React.JSX.Element {
   const t = useT()
   const projection = useExperienceProjection()
-  const [text, setText] = useState('')
   const sendMessage = useStore((s) => s.sendMessage)
   const openLatestRewindPanel = useStore((s) => s.openLatestRewindPanel)
   const openBrowserPanel = useStore((s) => s.openBrowserPanel)
@@ -92,11 +102,13 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const setModel = useStore((s) => s.setModel)
   const theme = useStore((s) => s.settings.theme)
   const activeId = useStore((s) => s.activeId)
+  const [text, setText] = useSessionComposerDraft(activeId)
   const activeSession = useStore((s) => (s.activeId ? s.sessions[s.activeId] : undefined))
   const providers = useStore((s) => s.providers)
   const pluginRegistry = useStore((s) => s.workbench.pluginRegistry)
   const pluginRegistryLoading = useStore((s) => s.workbench.pluginRegistryLoading)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const previewUrls = useRef(new Set<string>())
   const slashRegistryScanKey = useRef<string | null>(null)
 
@@ -104,19 +116,27 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [attachments, setAttachments] = useState<ComposerImageAttachment[]>([])
+  const [attachmentsBySession, setAttachmentsBySession] = useState<Record<string, ComposerImageAttachment[]>>(
+    () => imageAttachmentDrafts
+  )
+  const [documentsBySession, setDocumentsBySession] = useState<Record<string, DocumentAttachmentView[]>>(
+    () => documentAttachmentDrafts
+  )
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [ocrBusyId, setOcrBusyId] = useState<string | null>(null)
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [dragActive, setDragActive] = useState(false)
-  const outbound = useComposerOutboundPreview(activeId, activeSession?.meta, text, attachments)
+  const attachments = activeId ? attachmentsBySession[activeId] ?? [] : []
+  const documents = activeId ? documentsBySession[activeId] ?? [] : []
+  const outbound = useComposerOutboundPreview(activeId, activeSession?.meta, text, attachments, documents)
 
   useEffect(() => {
-    return () => {
-      for (const url of previewUrls.current) URL.revokeObjectURL(url)
-      previewUrls.current.clear()
-    }
-  }, [])
+    imageAttachmentDrafts = attachmentsBySession
+  }, [attachmentsBySession])
+
+  useEffect(() => {
+    documentAttachmentDrafts = documentsBySession
+  }, [documentsBySession])
 
   // 拉取文件建议(mention 变化时)
   useEffect(() => {
@@ -194,21 +214,25 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   }
 
   const revokePreview = (url: string | undefined): void => {
-    if (!url || !previewUrls.current.has(url)) return
+    if (!url) return
     URL.revokeObjectURL(url)
     previewUrls.current.delete(url)
   }
 
   const clearAttachments = (): void => {
     for (const attachment of attachments) revokePreview(attachment.previewUrl)
-    setAttachments([])
+    if (!activeId) return
+    setAttachmentsBySession((current) => ({ ...current, [activeId]: [] }))
+    setDocumentsBySession((current) => ({ ...current, [activeId]: [] }))
   }
 
   const { attachmentsDisabled, sendDisabled, submit: submitWithHelper } = useComposerSubmission({
     attachments,
+    documents,
     running,
     uploadingAttachment,
     text,
+    documentOnlyPrompt: t('documentOnlyPrompt'),
     slashCommands,
     runSlashCommand,
     sendMessage,
@@ -227,26 +251,46 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     await submitWithHelper()
   }
 
-  const addImageFiles = async (files: Iterable<File>): Promise<void> => {
+  const addFiles = async (files: Iterable<File>): Promise<void> => {
     if (!activeId) {
-      setAttachmentError('请先创建或选择一个会话')
+      setAttachmentError(t('attachmentSessionRequired'))
       return
     }
-    const selected = [...files].filter(isSupportedImageFile)
+    const targetSessionId = activeId
+    const selected = [...files]
     if (selected.length === 0) {
-      setAttachmentError('仅支持 PNG、JPG、GIF、WebP 图片')
+      setAttachmentError(t('attachmentNothingSelected'))
       return
     }
     setAttachmentError(null)
     setUploadingAttachment(true)
     try {
       for (const file of selected) {
+        const localPath = filePath(file)
+        if (!isSupportedImageFile(file)) {
+          if (!localPath) {
+            setAttachmentError(t('documentPathUnavailable', { name: file.name }))
+            continue
+          }
+          const result = await window.agentDesk.copyDocumentAttachment(targetSessionId, localPath)
+          if (!result.ok) {
+            setAttachmentError(`${file.name}: ${result.error}`)
+            if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
+            continue
+          }
+          setDocumentsBySession((current) => {
+            const existing = current[targetSessionId] ?? []
+            if (existing.some((item) => item.id === result.id)) return current
+            return { ...current, [targetSessionId]: [...existing, result] }
+          })
+          continue
+        }
+
         const previewUrl = URL.createObjectURL(file)
         previewUrls.current.add(previewUrl)
-        const localPath = filePath(file)
         const result = localPath
-          ? await window.agentDesk.copyImageAttachment(activeId, localPath)
-          : await window.agentDesk.saveImageAttachmentBytes(activeId, {
+          ? await window.agentDesk.copyImageAttachment(targetSessionId, localPath)
+          : await window.agentDesk.saveImageAttachmentBytes(targetSessionId, {
               data: await file.arrayBuffer(),
               mime: file.type || undefined
             })
@@ -257,21 +301,62 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
           continue
         }
 
-        setAttachments((current) => {
-          if (current.some((item) => item.id === result.id)) {
+        setAttachmentsBySession((current) => {
+          const existing = current[targetSessionId] ?? []
+          if (existing.some((item) => item.id === result.id)) {
             revokePreview(previewUrl)
             return current
           }
-          return [
+          return {
             ...current,
-            {
+            [targetSessionId]: [...existing, {
               ...result,
               name: file.name || `${result.id.slice(0, 8)}.${result.mime.split('/')[1] ?? 'image'}`,
               previewUrl
-            }
-          ]
+            }]
+          }
         })
       }
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setUploadingAttachment(false)
+    }
+  }
+
+  const attachSuggestedFile = async (path: string): Promise<void> => {
+    if (!activeId) return
+    const targetSessionId = activeId
+    setAttachmentError(null)
+    setUploadingAttachment(true)
+    try {
+      if (/\.(png|jpe?g|gif|webp)$/i.test(path)) {
+        const result = await window.agentDesk.copyImageAttachment(targetSessionId, path)
+        if (!result.ok) {
+          setAttachmentError(result.error)
+          if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
+          return
+        }
+        setAttachmentsBySession((current) => {
+          const existing = current[targetSessionId] ?? []
+          if (existing.some((item) => item.id === result.id)) return current
+          return { ...current, [targetSessionId]: [...existing, { ...result, name: path }] }
+        })
+        return
+      }
+      const result = await window.agentDesk.copyDocumentAttachment(targetSessionId, path)
+      if (!result.ok) {
+        setAttachmentError(result.error)
+        if (result.effectStatus === 'waiting_reconciliation') await useStore.getState().refreshTaskSnapshots()
+        return
+      }
+      setDocumentsBySession((current) => {
+        const existing = current[targetSessionId] ?? []
+        if (existing.some((item) => item.id === result.id)) return current
+        return { ...current, [targetSessionId]: [...existing, result] }
+      })
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error))
     } finally {
       setUploadingAttachment(false)
     }
@@ -312,6 +397,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     setText(next)
     setMention(null)
     setSuggestions([])
+    void attachSuggestedFile(path)
     // 光标移到插入内容之后
     requestAnimationFrame(() => {
       if (el) {
@@ -383,13 +469,13 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     const files = [...e.clipboardData.files].filter(isSupportedImageFile)
     if (files.length === 0) return
     e.preventDefault()
-    void addImageFiles(files)
+    void addFiles(files)
   }
 
   const onDrop = (e: React.DragEvent<HTMLDivElement>): void => {
     e.preventDefault()
     setDragActive(false)
-    void addImageFiles(e.dataTransfer.files)
+    void addFiles(e.dataTransfer.files)
   }
 
   return (
@@ -449,16 +535,51 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         ocrBusyId={ocrBusyId}
         onOcr={(id) => void runOcr(id)}
         onRemove={(id) =>
-          setAttachments((current) => {
-            const target = current.find((item) => item.id === id)
+          activeId && setAttachmentsBySession((current) => {
+            const existing = current[activeId] ?? []
+            const target = existing.find((item) => item.id === id)
             revokePreview(target?.previewUrl)
-            return current.filter((item) => item.id !== id)
+            return { ...current, [activeId]: existing.filter((item) => item.id !== id) }
           })
         }
+      />
+      <DocumentAttachmentTray
+        attachments={documents}
+        disabled={attachmentsDisabled}
+        onRemove={(id) => {
+          if (!activeId) return
+          setDocumentsBySession((current) => ({
+            ...current,
+            [activeId]: (current[activeId] ?? []).filter((item) => item.id !== id)
+          }))
+        }}
       />
       {attachmentError && <div className="composer-error">{attachmentError}</div>}
       <OutboundContextPreview manifest={outbound.manifest} error={outbound.error} />
       <div className="composer-row">
+        <input
+          ref={fileInputRef}
+          className="composer-file-input"
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.mdx,.json,.jsonl,.yaml,.yml,.toml,.xml,.csv,.tsv,.js,.jsx,.ts,.tsx,.css,.scss,.html,.py,.go,.rs,.java,.kt,.kts,.c,.h,.cpp,.hpp,.cs,.sh,.ps1,.sql"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            void addFiles(event.currentTarget.files ?? [])
+            event.currentTarget.value = ''
+          }}
+        />
+        <button
+          type="button"
+          className="composer-attach"
+          aria-label={t('addAttachment')}
+          title={t('addAttachment')}
+          disabled={!activeId || attachmentsDisabled}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Paperclip size={18} strokeWidth={1.9} aria-hidden="true" />
+        </button>
         <textarea
           ref={textareaRef}
           className="composer-input"
@@ -477,10 +598,12 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
         />
         <button
           className="btn btn-primary composer-send"
+          aria-label={uploadingAttachment ? '添加中' : t('send')}
+          title={uploadingAttachment ? '添加中' : t('send')}
           onClick={() => void submit()}
           disabled={sendDisabled || outbound.sendDisabled(false)}
         >
-          {uploadingAttachment ? '添加中' : t('send')}
+          <span aria-hidden="true">{uploadingAttachment ? '…' : '↑'}</span>
         </button>
       </div>
     </div>

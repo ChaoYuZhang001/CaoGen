@@ -8,6 +8,7 @@ export function validateProviderCredentialInput(input: Partial<ProviderInput>): 
   assertAdditionalTokens(input.additionalTokens)
   assertKeyUpdates(input.keyUpdates)
   assertRemoveKeyIds(input.removeKeyIds)
+  assertRoutingMode(input.credentialRoutingMode)
 }
 
 function assertOptionalStringFields(input: Partial<ProviderInput>): void {
@@ -43,6 +44,7 @@ function assertAdditionalToken(item: ProviderApiKeyInput): void {
   if (item.disabled !== undefined && typeof item.disabled !== 'boolean') {
     throw new Error('Provider additionalTokens.disabled 必须是布尔值')
   }
+  assertPolicy(item.policy, 'Provider additionalTokens.policy')
 }
 
 function assertKeyUpdates(value: ProviderApiKeyUpdateInput[] | undefined): void {
@@ -60,6 +62,25 @@ function assertKeyUpdate(item: ProviderApiKeyUpdateInput): void {
   }
   if (item.disabled !== undefined && typeof item.disabled !== 'boolean') {
     throw new Error('Provider keyUpdates.disabled 必须是布尔值')
+  }
+  assertPolicy(item.policy, 'Provider keyUpdates.policy')
+}
+
+function assertRoutingMode(value: ProviderInput['credentialRoutingMode'] | undefined): void {
+  if (value !== undefined && !['manual', 'preferred', 'automatic'].includes(value)) {
+    throw new Error('Provider credentialRoutingMode 无效')
+  }
+}
+
+function assertPolicy(value: unknown, field: string): void {
+  if (value === undefined) return
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} 必须是对象`)
+  const policy = value as Record<string, unknown>
+  for (const name of ['priority', 'monthlyBudgetUsd', 'minimumBalanceUsd', 'failureCooldownMinutes']) {
+    const item = policy[name]
+    if (item !== undefined && (typeof item !== 'number' || !Number.isFinite(item) || item < 0)) {
+      throw new Error(`${field}.${name} 必须是非负有限数字`)
+    }
   }
 }
 

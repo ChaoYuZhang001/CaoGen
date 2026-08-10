@@ -75,8 +75,8 @@ async function runX1Scenario() {
       })
 
       await check(cdp, 'X1 new session is an inline workspace with no engine selector', async () => {
-        await clickByText(cdp, '+ 新建会话')
-        await waitForText(cdp, '今天想做点什么?')
+        await clickByText(cdp, '新建会话')
+        await waitForText(cdp, '开始一个任务')
         await chooseSelectOptionByText(cdp, '新项目目录')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
         await clickByText(cdp, '工作台')
@@ -102,7 +102,7 @@ async function runX1Scenario() {
       })
 
       await check(cdp, 'X1 send is blocked only until a keyed Provider is selected', async () => {
-        await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', '检查项目')
+        await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', '检查项目')
         await clickSelector(cdp, '.welcome-send')
         await waitForText(cdp, '请选择已配置 API key 的 Provider', 10_000)
         const body = await visibleText(cdp)
@@ -173,7 +173,7 @@ async function runS3Scenario() {
 
       await check(cdp, 'S3 project plus opens inline new session with project preselected', async () => {
         await clickProjectNew(cdp, 'Alpha Project')
-        await waitForText(cdp, '今天想做点什么?')
+        await waitForText(cdp, '开始一个任务')
         const state = await inlineNewSessionState(cdp)
         assert(state.modalCount === 0, `project new session must not open a modal: ${JSON.stringify(state)}`)
         assert(state.projectText === 'Alpha Project', `project context was not preselected: ${JSON.stringify(state)}`)

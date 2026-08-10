@@ -1,10 +1,21 @@
 import type { SessionState, ToolResultInfo } from '../../store'
-import type { GitStatus, SchedulerStrategy, TaskDagAutoMergeStatus, TaskDagTaskStatus } from '../../../../shared/types'
+import type {
+  GitStatus,
+  SchedulerStrategy,
+  TaskDagAutoMergeStatus,
+  TaskDagTaskStatus,
+  WatercolorCharacterState
+} from '../../../../shared/types'
+import { isWorkflowAcceptanceRepairWorkItemId } from '../../../../shared/workflow-repair'
+import {
+  hasOfficeFailoverSignal,
+  latestProviderModelFailoverSignal,
+  type OfficeProviderModelFailoverSignal
+} from './providerModelFailover'
 
 export type OfficeTaskKind = 'subtask' | 'tool'
 export type OfficeTaskStatus = 'pending' | 'running' | 'awaiting' | 'done' | 'error'
 export type OfficeSessionActivity = 'idle' | 'working' | 'awaiting' | 'completed' | 'error'
-
 export interface OfficeTask {
   id: string
   sessionId: string
@@ -99,6 +110,7 @@ export interface OfficeSessionSignal {
   routing?: OfficeRoutingSignal
   failover?: OfficeFailoverSignal
   keyFailover?: OfficeProviderKeyFailoverSignal
+  modelFailover?: OfficeProviderModelFailoverSignal
   budget: OfficeBudgetSignal
   workspace: OfficeWorkspaceSignal
 }
@@ -155,8 +167,21 @@ export function officeActivityOf(session: SessionState): OfficeSessionActivity {
   return 'idle'
 }
 
+export function officeWatercolorStateOf(session: SessionState): WatercolorCharacterState {
+  if (session.pendingPermissions.length > 0) return 'awaiting-approval'
+  if (session.meta.status === 'error') return 'blocked'
+  if (session.meta.status === 'running' || session.meta.status === 'starting') {
+    if (isWorkflowAcceptanceRepairWorkItemId(session.meta.workItemId)) return 'repairing'
+    return Object.keys(session.runningTools).length > 0 ? 'tool-running' : 'thinking'
+  }
+  const latestTurn = [...session.items].reverse().find((item) => item.kind === 'turn-result')
+  if (latestTurn?.kind === 'turn-result') return latestTurn.isError ? 'blocked' : 'delivering'
+  return 'idle'
+}
+
 export interface OfficeSessionModel {
   sessionId: string
+  characterState: WatercolorCharacterState
   tasks: OfficeTask[]
   taskStats: OfficeTaskStats
   currentTask?: OfficeTask
@@ -540,6 +565,7 @@ function sessionSignal(session: SessionState, gitStatus?: GitStatus): OfficeSess
     routing: latestRoutingSignal(session),
     failover: latestFailoverSignal(session),
     keyFailover: latestProviderKeyFailoverSignal(session),
+    modelFailover: latestProviderModelFailoverSignal(session),
     budget: {
       costUsd,
       budgetUsd: hasBudget ? budgetUsd : undefined,
@@ -557,7 +583,7 @@ function mergeRealtime(into: OfficeRealtimeSummary, signal: OfficeSessionSignal)
     into.routedSessions += 1
     into.crossValidationValidators += signal.routing.validators
   }
-  if (signal.failover) into.failoverSessions += 1
+  if (hasOfficeFailoverSignal(signal)) into.failoverSessions += 1
   if (signal.budget.budgetUsd && signal.budget.budgetUsd > 0) {
     into.budgetedSessions += 1
     into.totalBudgetUsd += signal.budget.budgetUsd
@@ -615,7 +641,14 @@ export function buildOfficeModel(
     const taskStats = statsFor(tasks)
     const active = currentTask(tasks)
     const signal = sessionSignal(session, gitStatuses[sessionId])
-    bySession[sessionId] = { sessionId, tasks, taskStats, currentTask: active, signal }
+    bySession[sessionId] = {
+      sessionId,
+      characterState: officeWatercolorStateOf(session),
+      tasks,
+      taskStats,
+      currentTask: active,
+      signal
+    }
     allTasks.push(...tasks)
     mergeStats(totalStats, taskStats)
     mergeRealtime(realtime, signal)

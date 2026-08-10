@@ -18,7 +18,7 @@ const port = await findFreePort(9400)
 const softwareWebglArgs = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1' ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : []
 const PAGE_SMOKE_PROVIDER_ID = 'page-smoke-openai'
 const PAGE_SMOKE_PROVIDER_NAME = 'Page Smoke OpenAI'
-const PAGE_SMOKE_MODEL = 'page-smoke-model'
+const PAGE_SMOKE_MODEL = 'page-smoke-model'; const PAGE_SMOKE_LOCAL_SINK_URL = 'http://127.0.0.1:1'
 const electronBin =
   process.platform === 'win32'
     ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -192,9 +192,6 @@ try {
       })()`
     )
     assert(brand?.ok, `CaoGen app icon logo did not render: ${JSON.stringify(brand)}`)
-    const pluginLogo = readFileSync(path.join(repoRoot, 'plugins/vscode/media/caogen.svg'), 'utf8')
-    assert(pluginLogo.includes('data:image/png;base64,'), 'VS Code extension logo should embed the CaoGen app icon asset')
-    assert(!/<polygon\b|rotate\(45|◇|◆|◈/i.test(pluginLogo), 'VS Code extension logo still looks like an old diamond placeholder')
   })
   await screenshot(cdp, '01-welcome')
 
@@ -212,6 +209,154 @@ try {
     assert(settingsSurface?.pageCount === 1, `settings page missing: ${JSON.stringify(settingsSurface)}`)
     assert(settingsSurface?.settingsBackdropCount === 0, `settings still uses a modal backdrop: ${JSON.stringify(settingsSurface)}`)
     assert(settingsSurface?.workspaceCount === 0, `workspace should be replaced while settings is open: ${JSON.stringify(settingsSurface)}`)
+    await clickByText(cdp, '权限')
+    await waitForText(cdp, '启用 GUI 自动化工具')
+    await clickByText(cdp, '添加规则')
+    await waitForSelector(cdp, '.permission-rule-card')
+    const editedPermissionRule = await evalValue(
+      cdp,
+      `(() => {
+        const input = document.querySelector('.permission-rule-card .permission-rule-targets input');
+        if (!(input instanceof HTMLInputElement)) return false;
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(input, 'bash');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        const details = document.querySelector('.permission-rule-semantics');
+        if (details instanceof HTMLDetailsElement) details.open = true;
+        const networkCapability = details?.querySelector('[data-permission-capability="network"]');
+        if (!(networkCapability instanceof HTMLInputElement)) return false;
+        networkCapability.click();
+        const command = details?.querySelector('.permission-rule-semantic-grid input');
+        if (!(command instanceof HTMLInputElement)) return false;
+        setter?.call(command, 'npm test*');
+        command.dispatchEvent(new Event('input', { bubbles: true }));
+        const semanticLabels = [...(details?.querySelectorAll('label') || [])];
+        const mcpPointer = semanticLabels
+          .find((label) => label.textContent?.includes('MCP 参数指针'))?.querySelector('input');
+        const mcpPattern = semanticLabels
+          .find((label) => label.textContent?.includes('MCP 参数值匹配'))?.querySelector('input');
+        if (!(mcpPointer instanceof HTMLInputElement) || !(mcpPattern instanceof HTMLInputElement)) return false;
+        setter?.call(mcpPointer, '/scope/project');
+        mcpPointer.dispatchEvent(new Event('input', { bubbles: true }));
+        setter?.call(mcpPattern, 'alpha-*');
+        mcpPattern.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()`
+    )
+    assert(editedPermissionRule, 'structured permission rule tool input was not editable')
+    await sleep(100)
+    const guiPermissionSurface = await evalValue(
+      cdp,
+      `(() => {
+        const pane = document.querySelector('.settings-pane');
+        const hint = [...document.querySelectorAll('.settings-hint')]
+          .find((node) => node.textContent?.includes('当前会话'));
+        const rule = document.querySelector('.permission-rule-card');
+        const semanticLabels = [...(rule?.querySelectorAll('.permission-rule-semantic-grid label') || [])];
+        const semanticValue = (labelText) => semanticLabels
+          .find((label) => label.textContent?.includes(labelText))?.querySelector('input')?.value || '';
+        return {
+          toggleCount: [...document.querySelectorAll('.settings-check')]
+            .filter((node) => node.textContent?.includes('GUI 自动化')).length,
+          scopedHint: hint?.textContent || '',
+          structuredRuleCount: document.querySelectorAll('.permission-rule-card').length,
+          structuredTool: rule?.querySelector('.permission-rule-targets input')?.value || '',
+          semanticOpen: rule?.querySelector('.permission-rule-semantics')?.hasAttribute('open') || false,
+          semanticInputCount: rule?.querySelectorAll('.permission-rule-semantic-grid input').length || 0,
+          capabilityKeys: [...(rule?.querySelectorAll('[data-permission-capability]') || [])]
+            .map((node) => node.getAttribute('data-permission-capability')),
+          selectedCapabilities: [...(rule?.querySelectorAll('[data-permission-capability]:checked') || [])]
+            .map((node) => node.getAttribute('data-permission-capability')),
+          commandPattern: rule?.querySelector('.permission-rule-semantic-grid input')?.value || '',
+          mcpArgumentPointer: semanticValue('MCP 参数指针'),
+          mcpArgumentPattern: semanticValue('MCP 参数值匹配'),
+          legacyDslTextareaCount: [...document.querySelectorAll('.settings-pane textarea')]
+            .filter((node) => /tool=|risk[<=>]/.test(node.value || node.placeholder || '')).length,
+          overflow: pane ? Math.max(0, pane.scrollWidth - pane.clientWidth) : -1
+        };
+      })()`
+    )
+    assert(guiPermissionSurface?.toggleCount === 1,
+      `GUI permission toggle missing or duplicated: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.scopedHint.includes('精确目标'),
+      `GUI scoped-grant boundary is not visible: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.structuredRuleCount === 1,
+      `structured permission rule missing or duplicated: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.structuredTool === 'bash',
+      `structured permission rule did not retain the edited tool: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.semanticOpen && guiPermissionSurface?.semanticInputCount === 8,
+      `semantic permission scope is incomplete: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(JSON.stringify(guiPermissionSurface?.capabilityKeys) === JSON.stringify([
+      'workspaceRead', 'workspaceWrite', 'terminal', 'browser', 'network'
+    ]) && JSON.stringify(guiPermissionSurface?.selectedCapabilities) === JSON.stringify(['network']),
+    `capability permission scope is incomplete or did not retain selection: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.commandPattern === 'npm test*',
+      `semantic command scope did not retain the edited pattern: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.mcpArgumentPointer === '/scope/project' &&
+      guiPermissionSurface?.mcpArgumentPattern === 'alpha-*',
+    `MCP argument scope did not retain the edited values: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.legacyDslTextareaCount === 0,
+      `raw permission DSL remains visible: ${JSON.stringify(guiPermissionSurface)}`)
+    assert(guiPermissionSurface?.overflow <= 1,
+      `GUI permission settings overflow ${guiPermissionSurface?.overflow}px`)
+    await evalValue(cdp, `document.querySelector('.permission-rule-card')?.scrollIntoView({ block: 'center' })`)
+    await sleep(150)
+    await screenshot(cdp, '02-settings-permission-rule')
+    try {
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 1,
+        mobile: false
+      })
+      await sleep(250)
+      await evalValue(cdp, `document.querySelector('.permission-rule-card')?.scrollIntoView({ block: 'center' })`)
+      const mobilePermissionRule = await evalValue(
+        cdp,
+        `(() => {
+          const pane = document.querySelector('.settings-pane');
+          const card = document.querySelector('.permission-rule-card');
+          const conditions = document.querySelector('.permission-rule-conditions');
+          const semantics = document.querySelector('.permission-rule-semantic-grid');
+          const capabilities = document.querySelector('.permission-rule-capability-grid');
+          const paneRect = pane?.getBoundingClientRect();
+          const cardRect = card?.getBoundingClientRect();
+          return {
+            bodyScrollWidth: document.body.scrollWidth,
+            cardOverflow: card ? Math.max(0, card.scrollWidth - card.clientWidth) : -1,
+            cardInsidePane: Boolean(paneRect && cardRect && cardRect.left >= paneRect.left - 1 && cardRect.right <= paneRect.right + 1),
+            conditionColumns: conditions ? getComputedStyle(conditions).gridTemplateColumns.split(' ').length : 0,
+            semanticColumns: semantics ? getComputedStyle(semantics).gridTemplateColumns.split(' ').length : 0,
+            capabilityColumns: capabilities ? getComputedStyle(capabilities).gridTemplateColumns.split(' ').length : 0
+          };
+        })()`
+      )
+      assert(mobilePermissionRule?.bodyScrollWidth <= 390,
+        `mobile permission rules overflow viewport: ${JSON.stringify(mobilePermissionRule)}`)
+      assert(mobilePermissionRule?.cardOverflow <= 1 && mobilePermissionRule?.cardInsidePane,
+        `mobile permission rule card overflow: ${JSON.stringify(mobilePermissionRule)}`)
+      assert(mobilePermissionRule?.conditionColumns === 1,
+        `mobile permission condition controls must stack: ${JSON.stringify(mobilePermissionRule)}`)
+      assert(mobilePermissionRule?.semanticColumns === 1,
+        `mobile semantic permission controls must stack: ${JSON.stringify(mobilePermissionRule)}`)
+      assert(mobilePermissionRule?.capabilityColumns === 1,
+        `mobile capability permission controls must stack: ${JSON.stringify(mobilePermissionRule)}`)
+      await screenshot(cdp, '02-settings-permission-rule-mobile')
+    } finally {
+      await cdp.send('Emulation.clearDeviceMetricsOverride')
+      await sleep(250)
+    }
+    await evalValue(
+      cdp,
+      `(() => {
+        const toggle = [...document.querySelectorAll('.settings-check')]
+          .find((node) => node.textContent?.includes('GUI 自动化'));
+        toggle?.scrollIntoView({ block: 'center' });
+        return Boolean(toggle);
+      })()`
+    )
+    await sleep(150)
+    await screenshot(cdp, '02-settings-permissions')
     await clickByText(cdp, '控制室 / 外观')
     await waitForText(cdp, '工作台布局')
     await waitForText(cdp, '聊天缩放')
@@ -295,7 +440,7 @@ try {
     assert(providerEditorSurface?.globalSettingsActionsCount === 0, `global settings actions should hide while editing a provider: ${JSON.stringify(providerEditorSurface)}`)
     await screenshot(cdp, '02-provider-editor-page')
     await chooseProviderEditorSelectOption(cdp, 'CaoGen 中转站模板')
-    await waitForText(cdp, 'CaoGen 中转站预设入口', 10_000)
+    await waitForText(cdp, 'CaoGen 中转站预设入口', 10_000); await setInputByPlaceholder(cdp, 'https://your-gateway.example.com', PAGE_SMOKE_LOCAL_SINK_URL)
     await setInputByPlaceholder(cdp, '例如:公司网关 / OpenRouter', 'CaoGen Relay UI Smoke')
     await setInputByPlaceholder(cdp, '<your-api-key>', 'sk-page-smoke-primary')
     await setInputByPlaceholder(cdp, '例如:主账号 / 备用额度 / 中转站 A', '主账号')
@@ -305,7 +450,7 @@ try {
     await screenshot(cdp, '02-provider-editor-filled')
     await clickProviderEditorSave(cdp)
     await waitForText(cdp, 'CaoGen Relay UI Smoke', 10_000)
-    await waitForText(cdp, 'https://ciyuan2api.com', 10_000)
+    await waitForText(cdp, PAGE_SMOKE_LOCAL_SINK_URL, 10_000)
     await waitForText(cdp, '2 个模型', 10_000)
     await waitForText(cdp, '2 个可用密钥', 10_000)
     const providerListText = await evalValue(cdp, 'document.body.innerText')
@@ -314,7 +459,7 @@ try {
       settingsBefore,
       settingsAfter: JSON.parse(readFileSync(path.join(userDataDir, 'settings.json'), 'utf8')),
       providers: JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8')),
-      providerListText, userDataDir, legacyProviderId: PAGE_SMOKE_PROVIDER_ID, assert
+      providerListText, userDataDir, legacyProviderId: PAGE_SMOKE_PROVIDER_ID, expectedBaseUrl: PAGE_SMOKE_LOCAL_SINK_URL, assert
     })
     await clickByText(cdp, '取消')
   })
@@ -401,14 +546,14 @@ try {
   })
 
   await check(cdp, 'inline new session workspace creates a Provider-scoped project session', async () => {
-    await clickByText(cdp, '+ 新建会话'); await waitForText(cdp, '今天想做点什么?')
+    await clickByText(cdp, '新建会话'); await waitForText(cdp, '开始一个任务')
     await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
     await clickByText(cdp, '工作台'); await clickByText(cdp, '会话与工具')
     await clickByText(cdp, '指定模型')
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_PROVIDER_NAME)
     await chooseSelectOptionByText(cdp, PAGE_SMOKE_MODEL)
-    await setInputByPlaceholder(cdp, '随心输入,回车即开始新会话…', '请检查项目状态')
+    await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', '请检查项目状态')
     await clickSelector(cdp, '.welcome-send')
     await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
   })
@@ -447,10 +592,14 @@ try {
   await screenshot(cdp, '03-project-rules')
 
   await check(cdp, 'chat layout controls resize and density toggle are interactive', async () => {
-    await clickByText(cdp, '会话与工具'); await waitForAriaLabel(cdp, '聊天布局控制', 10_000)
-    await clickByAriaLabel(cdp, '放大聊天内容')
-    await waitForText(cdp, '105%', 5_000)
-    await clickByAriaLabel(cdp, '切换紧凑聊天密度')
+    await clickByText(cdp, '会话与工具'); await waitForAriaLabel(cdp, '更多操作', 10_000)
+    await clickByAriaLabel(cdp, '更多操作')
+    await clickSelector(cdp, '[data-header-action="zoom-in"]')
+    await waitForNoSelector(cdp, '[data-header-action="zoom-in"]', 5_000)
+    await waitForChatScale(cdp, '1.05')
+    await clickByAriaLabel(cdp, '更多操作')
+    await clickSelector(cdp, '[data-header-action="density"]')
+    await waitForNoSelector(cdp, '[data-header-action="density"]', 5_000)
     const state = await evalValue(
       cdp,
       `(() => ({
@@ -460,8 +609,10 @@ try {
     )
     assert(state.compact === true, `compact chat density not applied: ${JSON.stringify(state)}`)
     assert(state.scale === '1.05', `chat scale not persisted on root: ${JSON.stringify(state)}`)
-    await clickByAriaLabel(cdp, '重置聊天缩放')
-    await waitForText(cdp, '100%', 5_000)
+    await clickByAriaLabel(cdp, '更多操作')
+    await clickSelector(cdp, '[data-header-action="zoom-reset"]')
+    await waitForNoSelector(cdp, '[data-header-action="zoom-reset"]', 5_000)
+    await waitForChatScale(cdp, '1')
   })
   await screenshot(cdp, '03-layout-controls')
 
@@ -496,20 +647,23 @@ try {
 
   await check(cdp, 'tool panel layout controls resize and collapse', async () => {
     const before = await toolPanelState(cdp)
-    await dragByAriaLabel(cdp, '拖拽调整工具面板宽度', -80, 0, { yRatio: 0.25 })
+    const drag = await dragByAriaLabel(cdp, '拖拽调整工具面板宽度', -80, 0, {
+      yRatio: 0.25,
+      orientation: 'vertical'
+    })
     const resized = await toolPanelState(cdp)
-    assert(resized.width > before.width + 40, `tool panel width did not grow: ${JSON.stringify({ before, resized })}`)
+    assert(resized.width > before.width + 40, `tool panel width did not grow: ${JSON.stringify({ before, resized, drag })}`)
     await clickByAriaLabel(cdp, '收回工具面板')
     await waitForNoSelector(cdp, '.workbench-side-gutter:not([style*="display: none"])', 5_000)
   })
   await screenshot(cdp, '04-tool-panel-layout')
 
-  await check(cdp, 'workbench panels open from chat toolbar', async () => {
-    // 常显图标(按 aria-label 点击):文件 / 终端
+  await check(cdp, 'workbench panels open from workspace controls', async () => {
     await clickByAriaLabel(cdp, '▣ 文件')
     await waitForText(cdp, 'README.md', 10_000)
-    await clickByAriaLabel(cdp, '❯ 终端')
-    await waitForText(cdp, '终端', 10_000)
+    await clickByAriaLabel(cdp, '打开工具抽屉')
+    await clickByText(cdp, '终端')
+    await waitForSelector(cdp, '[data-workbench-terminal-dock]:not([style*="display: none"])', 10_000)
     // 低频项在 '⋯ 更多' 下拉里:先展开菜单,菜单项按文本点击
     const overflow = [
       ['插件', '插件生态'],
@@ -843,7 +997,7 @@ function writePageSmokeUserData() {
         {
           id: PAGE_SMOKE_PROVIDER_ID,
           name: PAGE_SMOKE_PROVIDER_NAME,
-          baseUrl: 'http://127.0.0.1:1',
+          baseUrl: PAGE_SMOKE_LOCAL_SINK_URL,
           engine: 'openai',
           encryptedToken: `b64:${Buffer.from('mock-key').toString('base64')}`,
           models: [PAGE_SMOKE_MODEL],
@@ -918,12 +1072,29 @@ async function dragByAriaLabel(cdp, label, deltaX, deltaY, origin = {}) {
   const point = await evalValue(
     cdp,
     `(() => {
-      const el = [...document.querySelectorAll('[aria-label=${JSON.stringify(label)}]')].find((candidate) => candidate.getClientRects().length > 0);
+      const orientation = ${JSON.stringify(origin.orientation ?? null)};
+      const el = [...document.querySelectorAll('[aria-label=${JSON.stringify(label)}]')]
+        .find((candidate) => candidate.getClientRects().length > 0 && (!orientation || candidate.getAttribute('aria-orientation') === orientation));
       if (!el) return { ok: false, text: document.body.innerText.slice(0, 2000) };
       const rect = el.getBoundingClientRect();
       const xRatio = ${JSON.stringify(origin.xRatio ?? 0.5)};
       const yRatio = ${JSON.stringify(origin.yRatio ?? 0.5)};
-      return { ok: true, x: rect.left + rect.width * xRatio, y: rect.top + rect.height * yRatio };
+      const x = rect.left + rect.width * xRatio;
+      const y = rect.top + rect.height * yRatio;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        ok: true,
+        x,
+        y,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        selectedClass: el.className,
+        hitClass: hit?.className,
+        hitTag: hit?.tagName,
+        hitAriaLabel: hit?.getAttribute?.('aria-label'),
+        hitText: hit?.textContent?.trim().slice(0, 80),
+        hitParentClass: hit?.parentElement?.className,
+        hitGrandparentClass: hit?.parentElement?.parentElement?.className
+      };
     })()`
   )
   assert(point?.ok, `draggable aria-label not found: ${label}\n${point?.text ?? ''}`)
@@ -934,13 +1105,19 @@ async function dragByAriaLabel(cdp, label, deltaX, deltaY, origin = {}) {
     button: 'left',
     clickCount: 1
   })
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: point.x + deltaX,
-    y: point.y + deltaY,
-    button: 'left',
-    buttons: 1
-  })
+  const started = await evalValue(cdp, `document.body.classList.contains('is-resizing-layout')`)
+  const widths = []
+  for (let step = 1; step <= 4; step += 1) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: point.x + deltaX * (step / 4),
+      y: point.y + deltaY * (step / 4),
+      button: 'left',
+      buttons: 1
+    })
+    await sleep(30)
+    widths.push(await toolPanelState(cdp))
+  }
   await cdp.send('Input.dispatchMouseEvent', {
     type: 'mouseReleased',
     x: point.x + deltaX,
@@ -949,6 +1126,7 @@ async function dragByAriaLabel(cdp, label, deltaX, deltaY, origin = {}) {
     clickCount: 1
   })
   await sleep(300)
+  return { point, started, widths }
 }
 
 async function sidebarState(cdp) {
@@ -964,6 +1142,20 @@ async function sidebarState(cdp) {
       };
     })()`
   )
+}
+
+async function waitForChatScale(cdp, expected, timeout = 5000) {
+  const start = Date.now()
+  let actual = ''
+  while (Date.now() - start < timeout) {
+    actual = await evalValue(
+      cdp,
+      `getComputedStyle(document.querySelector('.chat')).getPropertyValue('--chat-scale').trim()`
+    )
+    if (actual === expected) return
+    await sleep(100)
+  }
+  throw new Error(`chat scale did not settle at ${expected}; got ${actual}`)
 }
 
 async function waitForSidebarState(cdp, predicate, failureMessage, timeout = 5000) {

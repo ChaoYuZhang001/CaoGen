@@ -1,6 +1,10 @@
 import * as React from 'react'
 
 export type HeaderIconName =
+  | 'compose'
+  | 'office'
+  | 'recovery'
+  | 'settings'
   | 'summary'
   | 'panel'
   | 'tools'
@@ -14,8 +18,36 @@ export type HeaderIconName =
   | 'memory'
   | 'browser'
   | 'terminal'
+  | 'zoomOut'
+  | 'zoomReset'
+  | 'zoomIn'
+  | 'density'
 
 const PATHS: Record<HeaderIconName, React.JSX.Element> = {
+  compose: (
+    <>
+      <path d="M3 11.8 3.7 9l6.8-6.8a1.5 1.5 0 0 1 2.1 2.1L5.8 11.1 3 11.8Z" />
+      <path d="m9.6 3.1 2.1 2.1M8 13.2H3" />
+    </>
+  ),
+  office: (
+    <>
+      <rect x="2.6" y="3.1" width="10.8" height="9.8" rx="1.4" />
+      <path d="M5.2 13V8.7h5.6V13M5.3 5.8h.1M8 5.8h.1M10.7 5.8h.1" />
+    </>
+  ),
+  recovery: (
+    <>
+      <path d="M4.1 5.1A5.1 5.1 0 1 1 3 8.3" />
+      <path d="M3.2 3.2v3.3h3.3" />
+    </>
+  ),
+  settings: (
+    <>
+      <circle cx="8" cy="8" r="2.1" />
+      <path d="M8 2.4v1.3M8 12.3v1.3M2.4 8h1.3M12.3 8h1.3M4 4l.9.9M11.1 11.1l.9.9M12 4l-.9.9M4.9 11.1 4 12" />
+    </>
+  ),
   // 摘要 / 上下文
   summary: (
     <>
@@ -105,6 +137,33 @@ const PATHS: Record<HeaderIconName, React.JSX.Element> = {
     <>
       <rect x="2.4" y="3" width="11.2" height="10" rx="1.2" />
       <path d="M5 6.4l2 1.8-2 1.8M8.4 10.6h2.6" />
+    </>
+  ),
+  zoomOut: (
+    <>
+      <circle cx="7" cy="7" r="4.2" />
+      <path d="m10.2 10.2 3 3M5 7h4" />
+    </>
+  ),
+  zoomReset: (
+    <>
+      <path d="M4.3 4.2A5 5 0 1 1 3 8" />
+      <path d="M3.2 2.8v3.3h3.3" />
+      <path d="M8 5.4v5.2" />
+    </>
+  ),
+  zoomIn: (
+    <>
+      <circle cx="7" cy="7" r="4.2" />
+      <path d="m10.2 10.2 3 3M5 7h4M7 5v4" />
+    </>
+  ),
+  density: (
+    <>
+      <path d="M3 4h10M3 8h10M3 12h10" />
+      <circle cx="5" cy="4" r=".7" fill="currentColor" stroke="none" />
+      <circle cx="10.5" cy="8" r=".7" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="12" r=".7" fill="currentColor" stroke="none" />
     </>
   )
 }

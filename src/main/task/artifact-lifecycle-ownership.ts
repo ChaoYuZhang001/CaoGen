@@ -1,5 +1,5 @@
 import type { ProjectWorkspaceState } from '../../shared/project-workspace-types'
-import type { WorkflowRunRecord } from '../../shared/workflow-types'
+import type { WorkflowRunRecord, WorkflowWorkItemRecord } from '../../shared/workflow-types'
 import type {
   ArtifactLifecycleRecord,
   ArtifactProjectOwnership
@@ -33,6 +33,49 @@ export function resolveArtifactProjectOwnership(
     projectRevision: project.revision,
     ...(goalId ? { goalId } : {}),
     workItemId: workItem.id
+  }
+}
+
+export function resolveLegacyArtifactProjectOwnership(
+  run: WorkflowRunRecord,
+  workItem: WorkflowWorkItemRecord | null,
+  projectId: string
+): ArtifactProjectOwnership {
+  assertLegacyRunOwnership(run, workItem, projectId)
+  return {
+    projectId,
+    projectRevision: 0,
+    ...(run.goalId ? { goalId: run.goalId } : {}),
+    workItemId: run.workItemId
+  }
+}
+
+export function assertLegacyArtifactLifecycleOwnership(
+  record: ArtifactLifecycleRecord,
+  run: WorkflowRunRecord | null,
+  workItem: WorkflowWorkItemRecord | null
+): void {
+  if (!run || record.projectRevision !== 0 || record.runRevision > run.revision ||
+      record.runId !== run.id || record.workItemId !== run.workItemId ||
+      record.goalId !== run.goalId) {
+    throw new WorkflowLedgerCorruptionError(
+      `artifact ${record.artifactId} legacy Run ownership is unavailable`
+    )
+  }
+  assertLegacyRunOwnership(run, workItem, record.projectId)
+}
+
+function assertLegacyRunOwnership(
+  run: WorkflowRunRecord,
+  workItem: WorkflowWorkItemRecord | null,
+  projectId: string
+): asserts workItem is WorkflowWorkItemRecord {
+  if (run.projectId !== projectId || !workItem || workItem.source !== 'legacy-derived' ||
+      workItem.id !== run.workItemId || workItem.projectId !== projectId ||
+      workItem.goalId !== run.goalId || !workItem.runIds.includes(run.id)) {
+    throw new WorkflowLedgerCorruptionError(
+      `creating Run ${run.id} lacks legacy-derived Project/WorkItem ownership`
+    )
   }
 }
 

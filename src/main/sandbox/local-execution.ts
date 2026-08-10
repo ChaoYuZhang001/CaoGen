@@ -455,14 +455,16 @@ function isAbsentFilePrecondition(
 async function runHostCommand(
   options: LocalCommandOptions & { command: string }
 ): Promise<LocalCommandExecutionResult> {
-  const shell = process.platform === 'win32' ? 'cmd' : '/bin/sh'
-  const args = process.platform === 'win32' ? ['/c', options.command] : ['-c', options.command]
+  const isWindows = process.platform === 'win32'
+  const shell = isWindows ? process.env.ComSpec || 'cmd.exe' : '/bin/sh'
+  const args = isWindows ? ['/d', '/s', '/c', `"${options.command}"`] : ['-c', options.command]
   const result = await execFilePromise(shell, args, {
     cwd: options.cwd,
     timeoutMs: options.timeoutMs,
     maxBufferBytes: options.maxBufferBytes,
     env: mergeProcessEnv(buildChinaMirrorEnv(options)),
-    signal: options.signal
+    signal: options.signal,
+    windowsVerbatimArguments: isWindows
   })
   return formatResult(result, options.mode, false)
 }
@@ -517,6 +519,7 @@ function execFilePromise(
     maxBufferBytes: number
     env?: NodeJS.ProcessEnv
     signal?: AbortSignal
+    windowsVerbatimArguments?: boolean
   }
 ): Promise<ExecFileResult> {
   return new Promise((resolvePromise) => {
@@ -576,7 +579,8 @@ function execFilePromise(
         cwd: options.cwd,
         env: options.env,
         detached: process.platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsVerbatimArguments: options.windowsVerbatimArguments
       })
     } catch (error) {
       finish({

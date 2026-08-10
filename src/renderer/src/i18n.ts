@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { useStore } from './store'
 import type { AppLanguage } from '../../shared/types'
 import { PROVIDER_CREDENTIAL_TRANSLATIONS } from './i18n/providerCredentialTranslations'
@@ -7,16 +8,19 @@ import { PROVIDER_PROFILE_TRANSLATIONS } from './i18n/providerProfileTranslation
 import { TASK_PLAN_TRANSLATIONS } from './i18n/taskPlanTranslations'
 import { PROVIDER_SETUP_TRANSLATIONS } from './i18n/providerSetupTranslations'
 import { OUTBOUND_CONTEXT_TRANSLATIONS } from './i18n/outboundContextTranslations'
-
+import { ROUTING_RECOVERY_TRANSLATIONS } from './i18n/routingRecoveryTranslations'
+import { WORKBENCH_TRANSLATIONS } from './i18n/workbenchTranslations'
+import { PROVIDER_GATEWAY_TRANSLATIONS } from './i18n/providerGatewayTranslations'
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
  * 支持 {name} 占位符插值:t('key', { name: 'x' })。
  */
 type Dict = Record<string, { zh: string; en: string }>
-
 const DICT: Dict = {
   // 导航 / 通用
   ...SIDEBAR_TRANSLATIONS,
+  ...WORKBENCH_TRANSLATIONS,
+  ...PROVIDER_GATEWAY_TRANSLATIONS,
   contentSearchSection: { zh: '消息内容', en: 'Message content' },
   contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
   recoverableTasks: { zh: '可恢复任务', en: 'Recoverable tasks' },
@@ -34,6 +38,20 @@ const DICT: Dict = {
   archiveSession: { zh: '归档', en: 'Archive' },
   unarchiveSession: { zh: '取消归档', en: 'Unarchive' },
   copyPath: { zh: '复制路径', en: 'Copy path' },
+  copyMessage: { zh: '复制消息', en: 'Copy message' },
+  editMessage: { zh: '编辑消息', en: 'Edit message' },
+  forkFromMessage: { zh: '从此处分支', en: 'Branch from here' },
+  regenerateResponse: { zh: '重新生成', en: 'Regenerate response' },
+  messageRevisionRunning: { zh: '任务运行中，停止后才能编辑或重新生成', en: 'Stop the running task before editing or regenerating' },
+  messageRevisionUnavailable: { zh: '这条消息无法安全恢复', en: 'This message cannot be restored safely' },
+  messageRevisionSessionChanged: { zh: '会话已切换，请在原会话重试', en: 'The session changed; retry in the original session' },
+  messageRevisionConfirm: {
+    zh: '重新发送会回退此轮之后的 {events} 条对话事件和 {files} 个已改文件。继续？',
+    en: 'Resending will rewind {events} conversation events and {files} changed files after this turn. Continue?'
+  },
+  copyCode: { zh: '复制代码', en: 'Copy code' },
+  copied: { zh: '已复制', en: 'Copied' },
+  copyFailed: { zh: '复制失败', en: 'Copy failed' },
   noSessions: { zh: '暂无会话', en: 'No sessions' },
   cancel: { zh: '取消', en: 'Cancel' },
   save: { zh: '保存', en: 'Save' },
@@ -67,6 +85,9 @@ const DICT: Dict = {
   zoomInChat: { zh: '放大聊天内容', en: 'Zoom chat in' },
   resetChatZoom: { zh: '重置聊天缩放', en: 'Reset chat zoom' },
   toggleCompactChat: { zh: '切换紧凑聊天密度', en: 'Toggle compact chat density' },
+  compactChatDensity: { zh: '紧凑消息密度', en: 'Compact message density' },
+  comfortableChatDensity: { zh: '舒适', en: 'Comfortable' },
+  compactChatDensityValue: { zh: '紧凑', en: 'Compact' },
   resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
   collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
   deskRailLabel: { zh: '工作区控制条', en: 'Workspace controls' },
@@ -131,16 +152,7 @@ const DICT: Dict = {
   routingProviderSwitched: { zh: '跨厂商', en: 'Provider switched' },
   routingManualOverride: { zh: '规则命中', en: 'Rule matched' },
   routingBudgetDowngraded: { zh: '预算降级', en: 'Budget downgrade' },
-  failoverTitle: { zh: '厂商故障自动切换', en: 'Automatic provider failover' },
-  failoverText: {
-    zh: '{from} 故障({reason}),已切换 → {to},自动重试中',
-    en: '{from} failed ({reason}), switched → {to}, retrying automatically'
-  },
-  keyFailoverTitle: { zh: 'Provider 密钥自动切换', en: 'Automatic provider key failover' },
-  keyFailoverText: {
-    zh: '{provider} 密钥 {from} 失败({reason}),已切换 → {to},自动重试中',
-    en: '{provider} key {from} failed ({reason}), switched → {to}, retrying automatically'
-  },
+  ...ROUTING_RECOVERY_TRANSLATIONS,
   // 输入区
   composerRunningPlaceholder: {
     zh: '当前任务运行中,可继续输入;完成后再发送',
@@ -151,6 +163,20 @@ const DICT: Dict = {
     en: 'Ask the Agent to do something… (Enter to send, Shift+Enter for newline)'
   },
   send: { zh: '发送', en: 'Send' },
+  addAttachment: { zh: '添加图片或文本文件', en: 'Add image or text file' },
+  attachmentSessionRequired: { zh: '请先创建或选择一个会话', en: 'Create or select a session first' },
+  attachmentNothingSelected: { zh: '没有选择可添加的文件', en: 'No files selected' },
+  documentPathUnavailable: {
+    zh: '无法读取“{name}”的本机路径，请使用附件按钮重新选择',
+    en: 'Cannot read the local path for "{name}". Select it again with the attachment button.'
+  },
+  documentOnlyPrompt: { zh: '请阅读并处理随附文档。', en: 'Read and work with the attached documents.' },
+  documentAttachments: { zh: '文档附件', en: 'Document attachments' },
+  sensitiveAttachmentBlocked: {
+    zh: '敏感文档不会发送到 Provider',
+    en: 'Sensitive documents are blocked from Provider requests'
+  },
+  removeAttachment: { zh: '移除附件 {name}', en: 'Remove attachment {name}' },
   // 权限条
   permissionRequest: { zh: '请求使用工具', en: 'Requests permission to use' },
   allow: { zh: '允许', en: 'Allow' },
@@ -158,8 +184,8 @@ const DICT: Dict = {
   // 欢迎页
   welcomeSub: { zh: '多厂商 AI 工作桌面', en: 'Multi-vendor AI work desktop' },
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
-  welcomeAsk: { zh: '今天想做点什么?', en: 'What should we build today?' },
-  welcomeInputPlaceholder: { zh: '随心输入,回车即开始新会话…', en: 'Type anything, Enter to start…' },
+  welcomeAsk: { zh: '开始一个任务', en: 'Start a task' },
+  welcomeInputPlaceholder: { zh: '描述你希望 CaoGen 完成的工作', en: 'Describe what you want CaoGen to do' },
   welcomePresetStartsNow: { zh: '点击即开始', en: 'Click to start' },
   firstTaskRecommended: { zh: '推荐', en: 'Recommended' },
   firstTaskProgressCompute: { zh: '算力', en: 'Compute' },
@@ -526,8 +552,45 @@ const DICT: Dict = {
   startSuggestionsLoading: { zh: '正在分析当前工作目录…', en: 'Analyzing the current working directory…' },
   startSuggestionsEmpty: { zh: '当前工作目录没有可用的开工建议', en: 'No start suggestions for this working directory' },
   filePanelTitle: { zh: '文件编辑器', en: 'File editor' },
+  fileOpenTabs: { zh: '已打开文件', en: 'Open files' },
+  fileUnsaved: { zh: '未保存', en: 'Unsaved' },
+  closeFileTab: { zh: '关闭 {name}', en: 'Close {name}' },
+  closeDirtyFileConfirm: {
+    zh: '“{name}”有未保存的修改。放弃修改并关闭？',
+    en: '“{name}” has unsaved changes. Discard them and close?'
+  },
   filesTruncated: { zh: '文件过多,已截断', en: 'File list truncated' },
   fileSearchPlaceholder: { zh: '搜索文件…', en: 'Search files…' },
+  fileBrowserMode: { zh: '\u6587\u4ef6\u6d4f\u89c8\u6a21\u5f0f', en: 'File browser mode' },
+  fileTreeMode: { zh: '\u9879\u76ee\u6811', en: 'Project' },
+  fileContentSearchMode: { zh: '\u5168\u6587\u641c\u7d22', en: 'Search' },
+  fileContentSearchPlaceholder: { zh: '\u641c\u7d22\u6587\u4ef6\u5185\u5bb9', en: 'Search file contents' },
+  fileContentSearchAction: { zh: '\u641c\u7d22', en: 'Search' },
+  fileContentSearchLoading: { zh: '\u6b63\u5728\u641c\u7d22\u2026', en: 'Searching\u2026' },
+  fileContentSearchSummary: {
+    zh: '{matches} \u5904\u5339\u914d \u00b7 {files} \u4e2a\u6587\u4ef6 \u00b7 \u5df2\u626b\u63cf {scanned}',
+    en: '{matches} matches \u00b7 {files} files \u00b7 {scanned} scanned'
+  },
+  fileContentSearchTruncated: { zh: '\u7ed3\u679c\u5df2\u622a\u65ad', en: 'Results truncated' },
+  fileProblemsMode: { zh: '\u95ee\u9898', en: 'Problems' },
+  fileProblemsLoading: { zh: '\u6b63\u5728\u5206\u6790\u2026', en: 'Analyzing\u2026' },
+  fileProblemsSummary: {
+    zh: '{problems} \u4e2a\u95ee\u9898 \u00b7 \u5df2\u5206\u6790 {analyzed}/{supported} \u4e2a\u6587\u4ef6',
+    en: '{problems} problems \u00b7 {analyzed}/{supported} files analyzed'
+  },
+  fileProblemsEmpty: { zh: '\u672a\u53d1\u73b0\u95ee\u9898', en: 'No problems found' },
+  fileWorkspaceSymbols: { zh: '\u5de5\u4f5c\u533a\u7b26\u53f7', en: 'Workspace symbols' },
+  fileDefinitions: { zh: '\u5b9a\u4e49', en: 'Definitions' },
+  fileCompletions: { zh: '\u7b26\u53f7\u8865\u5168', en: 'Symbol completions' },
+  fileSymbolsLoading: { zh: '\u6b63\u5728\u5efa\u7acb\u7d22\u5f15\u2026', en: 'Indexing\u2026' },
+  fileSymbolsEmpty: { zh: '\u6ca1\u6709\u5339\u914d\u7b26\u53f7', en: 'No matching symbols' },
+  fileSymbolsFailed: { zh: '\u7b26\u53f7\u67e5\u8be2\u5931\u8d25', en: 'Symbol query failed' },
+  fileSemanticHover: { zh: '\u8bed\u4e49\u4fe1\u606f', en: 'Semantic info' },
+  fileSemanticLoading: { zh: '\u6b63\u5728\u8bf7\u6c42\u8bed\u4e49\u4fe1\u606f\u2026', en: 'Loading semantic information\u2026' },
+  fileSemanticEmpty: { zh: '\u6b64\u4f4d\u7f6e\u6ca1\u6709\u8bed\u4e49\u4fe1\u606f', en: 'No semantic information at this position' },
+  fileSemanticFailed: { zh: '\u8bed\u4e49\u670d\u52a1\u8bf7\u6c42\u5931\u8d25', en: 'Semantic language request failed' },
+  fileSemanticSource: { zh: 'TypeScript LSP', en: 'TypeScript LSP' },
+  fileIndexSource: { zh: '\u9879\u76ee\u7d22\u5f15', en: 'Project index' },
   filesEmpty: { zh: '没有匹配文件', en: 'No matching files' },
   fileNoSelection: { zh: '未选择文件', en: 'No file selected' },
   fileLoading: { zh: '正在打开文件…', en: 'Opening file…' },
@@ -537,6 +600,13 @@ const DICT: Dict = {
   backToWorkspace: { zh: '返回工作区', en: 'Back to workspace' },
   backToProviders: { zh: '返回厂商列表', en: 'Back to providers' },
   settingsNavigation: { zh: '设置分类', en: 'Settings sections' },
+  settingsSearchPlaceholder: { zh: '搜索设置…', en: 'Search settings…' },
+  clearSearch: { zh: '清除搜索', en: 'Clear search' },
+  settingsSearchEmpty: { zh: '没有匹配的设置', en: 'No matching settings' },
+  settingsGroupWorkspace: { zh: '工作区', en: 'Workspace' },
+  settingsGroupPersonalization: { zh: '个性化', en: 'Personalization' },
+  settingsGroupIntegrations: { zh: '集成', en: 'Integrations' },
+  settingsGroupData: { zh: '数据', en: 'Data' },
   tabControlCenter: { zh: '控制中心', en: 'Control' },
   tabGeneral: { zh: '通用', en: 'General' },
   tabPermissions: { zh: '权限', en: 'Permissions' },
@@ -656,6 +726,12 @@ const DICT: Dict = {
     zh: '当前厂商余额不足/限流/宕机时,自动切到健康厂商重试本轮任务。',
     en: 'On credit/rate-limit/outage errors, retry the turn on a healthy provider.'
   },
+  providerCircuitSettings: { zh: 'Provider 熔断器', en: 'Provider circuit breaker' },
+  providerCircuitFailureThreshold: { zh: '连续失败阈值', en: 'Consecutive failure threshold' },
+  providerCircuitSuccessThreshold: { zh: '半开恢复成功阈值', en: 'Half-open success threshold' },
+  providerCircuitTimeout: { zh: '恢复等待时间（秒）', en: 'Recovery cooldown (seconds)' },
+  providerCircuitErrorRate: { zh: '错误率阈值（%）', en: 'Error-rate threshold (%)' },
+  providerCircuitMinRequests: { zh: '错误率最小请求数', en: 'Error-rate minimum requests' },
   notificationsEnabled: { zh: '桌面通知', en: 'Desktop notifications' },
   notificationsHint: {
     zh: '任务完成、等待权限、任务失败时弹系统通知;关闭后全部静默。',
@@ -686,12 +762,56 @@ const DICT: Dict = {
   defaultPermMode: { zh: '默认权限模式', en: 'Default Permission Mode' },
   allowedTools: { zh: '工具白名单(每行一个,空=不限制)', en: 'Allowed tools (one per line, empty = all)' },
   disallowedTools: { zh: '工具黑名单(每行一个)', en: 'Disallowed tools (one per line)' },
+  permissionRulesTitle: { zh: '工具权限规则', en: 'Tool permission rules' },
+  permissionRulesHint: {
+    zh: '拒绝规则优先。工具和路径支持 * 通配符；同一规则中的条件必须全部匹配。临时授权由运行时审批单独管理。',
+    en: 'Deny rules take priority. Tool and path fields support * wildcards; all conditions in one rule must match. Runtime grants are managed separately.'
+  },
+  permissionRuleAdd: { zh: '添加规则', en: 'Add rule' },
+  permissionRulesEmpty: { zh: '没有自定义规则，操作将按风险等级和当前权限模式审批。', en: 'No custom rules. Operations follow risk classification and the active permission mode.' },
+  permissionRuleEnabled: { zh: '启用', en: 'Enabled' },
+  permissionRuleEffect: { zh: '规则动作', en: 'Rule action' },
+  permissionRuleAllow: { zh: '允许', en: 'Allow' },
+  permissionRuleDeny: { zh: '拒绝', en: 'Deny' },
+  permissionRuleTool: { zh: '工具匹配', en: 'Tool match' },
+  permissionRulePath: { zh: '项目路径匹配', en: 'Project path match' },
+  permissionRuleSemanticScope: { zh: '命令、网络、GUI 与 MCP 语义范围', en: 'Command, network, GUI, and MCP scope' },
+  permissionRuleCommand: { zh: '命令匹配', en: 'Command match' },
+  permissionRuleNetworkHost: { zh: '网络主机匹配', en: 'Network host match' },
+  permissionRuleGuiApplication: { zh: 'GUI 应用匹配', en: 'GUI application match' },
+  permissionRuleGuiWindow: { zh: 'GUI 窗口匹配', en: 'GUI window match' },
+  permissionRuleMcpTool: { zh: 'MCP 工具匹配', en: 'MCP tool match' },
+  permissionRuleMcpArgumentPointer: { zh: 'MCP 参数指针', en: 'MCP argument pointer' },
+  permissionRuleMcpArgumentPattern: { zh: 'MCP 参数值匹配', en: 'MCP argument value match' },
+  permissionRuleCapabilities: { zh: '能力范围', en: 'Capability scope' },
+  permissionCapabilityWorkspaceRead: { zh: '读取工作区', en: 'Workspace read' },
+  permissionCapabilityWorkspaceWrite: { zh: '写入工作区', en: 'Workspace write' },
+  permissionCapabilityTerminal: { zh: '终端执行', en: 'Terminal' },
+  permissionCapabilityBrowser: { zh: '浏览器与桌面交互', en: 'Browser and desktop interaction' },
+  permissionCapabilityNetwork: { zh: '网络访问', en: 'Network access' },
+  permissionRequestCapabilities: { zh: '实际能力', en: 'Capabilities' },
+  permissionRuleRequirePostcondition: { zh: '必须声明有效后置条件', en: 'Require a valid postcondition' },
+  permissionRuleRisk: { zh: '风险条件', en: 'Risk condition' },
+  permissionRuleRiskAny: { zh: '不限风险', en: 'Any risk' },
+  permissionRuleRiskExact: { zh: '等于', en: 'Equals' },
+  permissionRuleRiskAtLeast: { zh: '至少', en: 'At least' },
+  permissionRuleRiskAtMost: { zh: '至多', en: 'At most' },
+  permissionRuleLevel: { zh: '风险等级', en: 'Risk level' },
+  permissionRuleExpiry: { zh: '有效期', en: 'Validity' },
+  permissionRulePermanent: { zh: '长期有效', en: 'Until revoked' },
+  permissionRuleTimed: { zh: '指定到期时间', en: 'Set expiration' },
+  permissionRuleExpiresAt: { zh: '到期时间', en: 'Expires at' },
+  permissionRuleDelete: { zh: '删除规则', en: 'Delete rule' },
+  permissionRuleMissingSelector: { zh: '每条权限规则至少需要工具、路径、语义范围或风险条件之一。', en: 'Each permission rule needs at least one tool, path, semantic scope, or risk condition.' },
   guiAutomationEnabled: { zh: '启用 GUI 自动化工具', en: 'Enable GUI automation tools' },
   guiAutomationHint: {
-    zh: '默认关闭。开启后 gui_* 工具仍必须逐次审批,或由你在权限提示中授予 5 分钟临时授权。',
-    en: 'Off by default. When enabled, gui_* tools still require per-action approval or a 5 minute temporary grant from the permission prompt.'
+    zh: '默认关闭。临时授权只匹配当前会话、项目、GUI 动作和精确目标，重启即失效；目标不明确的操作仍须逐次审批。',
+    en: 'Off by default. Temporary grants match only the current session, project, GUI action, and exact target; they expire on restart. Actions without a stable target still require per-action approval.'
   },
-  allowTemporary: { zh: '允许 5 分钟', en: 'Allow 5 min' },
+  allowTemporary: { zh: '精确操作允许 5 分钟', en: 'Allow exact operation for 5 min' },
+  guiActiveGrants: { zh: '当前临时授权', en: 'Active temporary grants' },
+  guiGrantRevoke: { zh: '撤销', en: 'Revoke' },
+  guiGrantRevokeAll: { zh: '全部撤销', en: 'Revoke all' },
   personaLabel: { zh: '通用人设 / 系统提示词追加', en: 'Global persona / system prompt append' },
   personaHint: {
     zh: '追加到所有项目的内置提示词之后;项目专属规则请到“项目规则”页编辑 caogen.md。',
@@ -713,6 +833,7 @@ const DICT: Dict = {
   layoutSidebarCollapsed: { zh: '默认收回侧栏', en: 'Collapse sidebar by default' },
   layoutSidebarWidth: { zh: '侧栏宽度', en: 'Sidebar width' },
   layoutToolPanelWidth: { zh: '工具面板宽度', en: 'Tool panel width' },
+  layoutTerminalDockHeight: { zh: '终端 Dock 高度', en: 'Terminal dock height' },
   layoutChatScale: { zh: '聊天缩放', en: 'Chat zoom' },
   layoutChatDensity: { zh: '聊天密度', en: 'Chat density' },
   chatDensityComfortable: { zh: '舒展', en: 'Comfortable' },
@@ -740,6 +861,8 @@ const DICT: Dict = {
   ...PROVIDER_PROFILE_TRANSLATIONS,
   healthOkTip: { zh: '健康 · 成功 {s} 失败 {f} · 最近延迟 {latencyMs}ms', en: 'Healthy · {s} succeeded, {f} failed · latest latency {latencyMs}ms' },
   healthBadTip: { zh: '异常 · 连续失败 {n} · {error}', en: 'Unhealthy · {n} consecutive failures · {error}' },
+  healthCircuitOpenTip: { zh: '已熔断 · 暂停自动路由 · {error}', en: 'Circuit open · excluded from automatic routing · {error}' },
+  healthCircuitHalfOpenTip: { zh: '半开恢复 · 仅允许受限探测请求', en: 'Half-open recovery · only a limited probe is allowed' },
   officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
   modelsCount: { zh: '{n} 个模型', en: '{n} models' },
   // Provider 编辑器
@@ -794,6 +917,7 @@ const DICT: Dict = {
     en: 'Last failure: {reason} · {time}'
   },
   officeKeyFailover: { zh: '密钥接管', en: 'Key failover' },
+  officeModelFailover: { zh: '模型接管', en: 'Model failover' },
   additionalApiKeysLabel: { zh: '新增备用 API Key', en: 'Add backup API keys' },
   additionalApiKeysHint: {
     zh: '每行一个,格式可写「名称=sk-...」或直接写 key。保存后只显示名称和状态,不会回显明文。',
@@ -873,5 +997,5 @@ export function translate(lang: AppLanguage, key: string, params?: TParams): str
 /** 组件里用:const t = useT(); t('save') 或 t('fetchedModels', { n: 3 }) */
 export function useT(): (key: string, params?: TParams) => string {
   const lang = useStore((s) => s.settings.language)
-  return (key: string, params?: TParams) => translate(lang, key, params)
+  return useCallback((key: string, params?: TParams) => translate(lang, key, params), [lang])
 }

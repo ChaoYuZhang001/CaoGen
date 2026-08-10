@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  chmodSync,
   closeSync,
   copyFileSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -251,7 +253,7 @@ function planExpectedIndex(
     assertFrozenIndexEntries(context.repoRoot, context.objectDir, persistedIndex, expectedIndexEntriesDigest)
     return { expectedIndexEntriesDigest, view }
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTemporaryGitDirectory(tempRoot)
   }
 }
 
@@ -303,9 +305,23 @@ function replaceIndexWithArtifact(target: GitIndexUpdateTarget, artifact: Frozen
     assertExecutionPrecondition(target)
     if (artifact.manifest.indexSha256 !== target.indexArtifactSha256) throw new Error('Git index artifact manifest 不一致')
     writeFileSync(descriptor, artifact.indexBytes)
-    fsyncSync(descriptor)
-    closeSync(descriptor)
-    descriptor = undefined
+    try {
+      fsyncSync(descriptor)
+    } catch (error) {
+      if (process.platform !== 'win32' || !isWindowsFsyncPermissionError(error)) throw error
+      closeSync(descriptor)
+      descriptor = undefined
+      const retryDescriptor = openSync(lockPath, 'r+')
+      try {
+        fsyncSync(retryDescriptor)
+      } finally {
+        closeSync(retryDescriptor)
+      }
+    }
+    if (descriptor !== undefined) {
+      closeSync(descriptor)
+      descriptor = undefined
+    }
     renameSync(lockPath, target.indexPath)
     renamed = true
     fsyncDirectory(dirname(target.indexPath))
@@ -313,6 +329,10 @@ function replaceIndexWithArtifact(target: GitIndexUpdateTarget, artifact: Frozen
     if (descriptor !== undefined) closeSync(descriptor)
     if (ownsLock && !renamed && existsSync(lockPath)) unlinkSync(lockPath)
   }
+}
+
+function isWindowsFsyncPermissionError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPERM'
 }
 
 function assertExecutionPrecondition(target: GitIndexUpdateTarget): void {
@@ -402,8 +422,22 @@ function assertFrozenIndexEntries(
     const observed = observeIndexEntries(repoRoot, planningEnvironment(objectDir, tempIndex, tempObjects))
     if (observed !== expectedDigest) throw new Error('Git index artifact entries 与冻结预期不一致')
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    removeTemporaryGitDirectory(tempRoot)
   }
+}
+
+function removeTemporaryGitDirectory(root: string): void {
+  if (process.platform === 'win32' && existsSync(root)) makeTemporaryGitFilesWritable(root)
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+}
+
+function makeTemporaryGitFilesWritable(path: string): void {
+  const info = lstatSync(path)
+  if (info.isSymbolicLink()) return
+  if (info.isDirectory()) {
+    for (const entry of readdirSync(path)) makeTemporaryGitFilesWritable(join(path, entry))
+  }
+  chmodSync(path, info.isDirectory() ? 0o700 : 0o600)
 }
 
 function gitText(cwd: string, args: string[], env: NodeJS.ProcessEnv): string {

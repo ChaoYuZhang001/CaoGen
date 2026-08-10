@@ -45,6 +45,8 @@ try {
   await check('saved Provider binds target and scoped Broker credential lease', () => verifySavedProviderBinding(runtime))
   await check('credentialed fetch rejects redirects without leaking headers', () => verifyCredentialRedirectRejected(runtime))
   await check('Messages endpoints are constructed canonically', () => verifyEndpointConstruction(runtime))
+  await check('structured Anthropic runtime serializes Thinking and Prompt Cache safely', () => verifyStructuredRuntime(runtime))
+  await check('enabled Thinking fails closed when replay signatures are missing', () => verifyThinkingReplaySignature(runtime))
   await check('SSE preserves thinking/text order and usage', () => verifySseAndUsage(runtime))
   await check('redacted thinking stays opaque across JSON and SSE', () => verifyRedactedThinking(runtime))
   await check('invalid redacted thinking data and deltas fail closed', () => verifyRedactedThinkingFailures(runtime))
@@ -63,6 +65,86 @@ try {
   console.log(JSON.stringify({ status: 'pass', checks }, null, 2))
 } finally {
   cleanupSmokeRuntime()
+}
+
+function verifyStructuredRuntime(runtime) {
+  const request = {
+    model: 'claude-sonnet-4-20250514',
+    maxTokens: 8192,
+    messages: [{ role: 'user', content: 'Keep this request immutable.' }],
+    tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+    system: 'Stable project instructions',
+    temperature: 0.5,
+    topP: 0.9,
+    topK: 32,
+    thinking: { mode: 'enabled', budgetTokens: 2048, display: 'omitted' },
+    promptCaching: { enabled: true, ttl: '1h', strategy: 'system' },
+    extraBody: {
+      thinking: { type: 'disabled' },
+      cache_control: { type: 'ephemeral', ttl: '5m' }
+    }
+  }
+  const wire = runtime.adapter.buildAnthropicMessagesWireBody(request)
+  assert.deepEqual(wire.thinking, { type: 'enabled', budget_tokens: 2048, display: 'omitted' })
+  assert.equal(wire.temperature, 0.5)
+  assert.equal(wire.top_p, 0.9)
+  assert.equal(wire.top_k, 32)
+  assert.equal(wire.cache_control, undefined)
+  assert.deepEqual(wire.system, [{
+    type: 'text',
+    text: 'Stable project instructions',
+    cache_control: { type: 'ephemeral', ttl: '1h' }
+  }])
+  assert.equal(request.system, 'Stable project instructions')
+  assert.equal(request.messages[0].content, 'Keep this request immutable.')
+
+  const automatic = runtime.adapter.buildAnthropicMessagesWireBody({
+    ...messagesRequest('automatic cache'),
+    thinking: { mode: 'adaptive', display: 'summarized' },
+    promptCaching: { enabled: true, ttl: '5m', strategy: 'automatic' }
+  })
+  assert.deepEqual(automatic.thinking, { type: 'adaptive', display: 'summarized' })
+  assert.deepEqual(automatic.cache_control, { type: 'ephemeral', ttl: '5m' })
+
+  const lastUser = runtime.adapter.buildAnthropicMessagesWireBody({
+    ...messagesRequest('cache the latest user turn'),
+    promptCaching: { enabled: true, strategy: 'last-user' }
+  })
+  assert.deepEqual(lastUser.messages[0].content, [{
+    type: 'text',
+    text: 'cache the latest user turn',
+    cache_control: { type: 'ephemeral' }
+  }])
+  assert.throws(
+    () => runtime.adapter.buildAnthropicMessagesWireBody({
+      ...messagesRequest('invalid budget'),
+      maxTokens: 2048,
+      thinking: { mode: 'enabled', budgetTokens: 2048 }
+    }),
+    /less than max_tokens/
+  )
+  assert.throws(
+    () => runtime.adapter.buildAnthropicMessagesWireBody({
+      ...messagesRequest('missing tools'),
+      promptCaching: { enabled: true, strategy: 'tools' }
+    }),
+    /no cacheable block/
+  )
+}
+
+function verifyThinkingReplaySignature(runtime) {
+  const result = {
+    ...resultFixture(),
+    contentBlocks: [
+      { type: 'thinking', thinking: 'unsigned native thinking' },
+      { type: 'text', text: 'answer' }
+    ]
+  }
+  assert.throws(
+    () => runtime.history.assistantHistoryContent(result, true),
+    /missing its replay signature/
+  )
+  assert.deepEqual(runtime.history.assistantHistoryContent(result), [{ type: 'text', text: 'answer' }])
 }
 
 function verifySavedProviderBinding(runtime) {
@@ -253,7 +335,8 @@ async function verifyRedactedThinking(runtime) {
         { role: 'user', content: 'continue the prior answer' },
         { role: 'assistant', content: [{ type: 'redacted_thinking', data: historyData }] },
         { role: 'user', content: 'continue' }
-      ]
+      ],
+      extraBody: { provider_options: { effort: 'low' }, max_tokens: 1 }
     },
     signal: new AbortController().signal,
     onThinking: (text) => callbacks.push(`thinking:${text}`),
@@ -274,6 +357,8 @@ async function verifyRedactedThinking(runtime) {
   })
 
   assert.deepEqual(sentBody.messages[1].content, [{ type: 'redacted_thinking', data: historyData }])
+  assert.deepEqual(sentBody.provider_options, { effort: 'low' })
+  assert.equal(sentBody.max_tokens, 1024)
   assert.deepEqual(callbacks, ['text:visible ', 'text:answer'])
   assert.equal(result.text, 'visible answer')
   assert.equal(result.thinking, '')
@@ -701,7 +786,21 @@ async function verifyCrashUnknownBoundary(runtime) {
 }
 
 async function verifyEngineHarness(runtime) {
-  const fixture = storedTargetFixture(runtime)
+  const fixture = storedTargetFixture(runtime, {
+    advancedConfig: {
+      schemaVersion: 1,
+      runtime: {
+        temperature: 0.5,
+        topP: 0.9,
+        maxOutputTokens: 12_000,
+        anthropic: {
+          thinking: { mode: 'enabled', budgetTokens: 4096, display: 'summarized' },
+          promptCaching: { enabled: true, ttl: '1h', strategy: 'automatic' },
+          topK: 24
+        }
+      }
+    }
+  })
   const target = runtime.target.resolveAnthropicMessagesTarget(
     { providerId: fixture.provider.id },
     fixture.dependencies
@@ -785,6 +884,16 @@ async function verifyEngineHarness(runtime) {
   }
   assert.equal(requests.length, 2)
   assert.equal(requests[0].headers['x-api-key'], undefined)
+  assert.equal(requests[0].request.maxTokens, 12_000)
+  assert.equal(requests[0].request.temperature, 0.5)
+  assert.equal(requests[0].request.topP, 0.9)
+  assert.equal(requests[0].request.topK, 24)
+  assert.deepEqual(requests[0].request.thinking, {
+    mode: 'enabled', budgetTokens: 4096, display: 'summarized'
+  })
+  assert.deepEqual(requests[0].request.promptCaching, {
+    enabled: true, ttl: '1h', strategy: 'automatic'
+  })
   assert.equal(attemptDependencies.calls.start.length, 2)
   assert.equal(attemptDependencies.calls.complete[0].input.status, 'succeeded')
   const retainedImageContent = requests[1].request.messages[0].content

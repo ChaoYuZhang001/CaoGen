@@ -220,6 +220,8 @@ function kindLabel(asset: MigrationAsset, t: ReturnType<typeof useT>): string {
   if (asset.kind === 'rules') return t('migrateKindRules')
   if (asset.kind === 'mcp') return 'MCP'
   if (asset.kind === 'skill') return 'Skill'
+  if (asset.kind === 'prompt') return 'Prompt'
+  if (asset.kind === 'usage') return t('providerUsageTitle')
   if (asset.kind === 'hook') return 'Hook'
   return t('migrateKindConfig')
 }

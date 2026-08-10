@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import ts from 'typescript'
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), '..')
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const mapPath = join(repoRoot, 'src/main/data-lifecycle/local-data-map.ts')
 const required = process.argv.includes('--required')
 const failures = []
@@ -81,9 +81,12 @@ const requiredFamilies = [
   'task-audit',
   'effect-artifacts',
   'providers',
+  'provider-authorizations',
   'notification-connectors',
   'provider-health-and-model-stats',
   'provider-profile-backups',
+  'provider-native-import-backups',
+  'codex-native-config-backups',
   'settings',
   'routines',
   'managed-worktrees',
@@ -225,7 +228,7 @@ function scanPersistenceCandidates(root) {
     if (!file.endsWith('.ts')) continue
     const text = readFileSync(file, 'utf8')
     if (!hasDurableWrite(text)) continue
-    candidates.push(relative(repoRoot, file))
+    candidates.push(relative(repoRoot, file).replaceAll('\\', '/'))
   }
   return candidates.sort()
 }

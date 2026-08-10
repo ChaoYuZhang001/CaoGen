@@ -37,6 +37,7 @@ const outDir = path.join(tempRoot, 'compiled')
 const userData = path.join(tempRoot, 'user-data')
 const workspace = path.join(tempRoot, 'workspace')
 const fixtureBin = path.join(tempRoot, 'bin')
+const ghScript = path.join(fixtureBin, 'fake-gh.mjs')
 const ghState = path.join(tempRoot, 'gh-state.json')
 const ghAudit = path.join(tempRoot, 'gh-audit.jsonl')
 const mcpState = path.join(tempRoot, 'mcp-state.json')
@@ -61,12 +62,12 @@ try {
   mkdirSync(fixtureBin, { recursive: true })
   compileSources(outDir)
   installElectronStub(outDir)
-  installFakeGitHubCli(fixtureBin)
+  installFakeGitHubCli(ghScript)
   installMcpServer(mcpServer)
   initializeGitHubState(ghState)
   initializeMcpState(mcpState)
   initializeRepository(workspace)
-  configureWorkerEnvironment({ userData, fixtureBin, ghState, ghAudit })
+  configureWorkerEnvironment({ userData, fixtureBin, ghScript, ghState, ghAudit })
 
   const api = await loadApi(outDir)
   await runIssueNegativeCases(api, { userData, workspace, ghState })
@@ -86,6 +87,7 @@ try {
     userData,
     workspace,
     fixtureBin,
+    ghScript,
     ghState,
     ghAudit,
     mcpState,
@@ -105,6 +107,7 @@ try {
     userData,
     workspace,
     fixtureBin,
+    ghScript,
     ghState,
     ghAudit,
     mcpState,
@@ -670,8 +673,7 @@ function initializeRepository(cwd) {
   gitOutput(cwd, ['remote', 'add', 'origin', 'https://github.com/acme/caogen-effect-fixture.git'])
 }
 
-function installFakeGitHubCli(binDir) {
-  const file = path.join(binDir, 'gh')
+function installFakeGitHubCli(file) {
   writeFileSync(file, `#!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 const statePath = process.env.CAOGEN_EXTERNAL_GH_STATE
@@ -860,6 +862,10 @@ function configureWorkerEnvironment(payload) {
   if (payload.userData) process.env.CAOGEN_EXTERNAL_EFFECT_USER_DATA = payload.userData
   if (payload.ghState) process.env.CAOGEN_EXTERNAL_GH_STATE = payload.ghState
   if (payload.ghAudit) process.env.CAOGEN_EXTERNAL_GH_AUDIT = payload.ghAudit
+  if (payload.ghScript) {
+    process.env.CAOGEN_GH_EXECUTABLE = process.execPath
+    process.env.CAOGEN_GH_SCRIPT = payload.ghScript
+  }
   if (payload.fixtureBin) process.env.PATH = `${payload.fixtureBin}${path.delimiter}${process.env.PATH ?? ''}`
 }
 
@@ -869,6 +875,8 @@ function workerEnv(payload) {
     CAOGEN_EXTERNAL_EFFECT_USER_DATA: payload.userData,
     CAOGEN_EXTERNAL_GH_STATE: payload.ghState,
     CAOGEN_EXTERNAL_GH_AUDIT: payload.ghAudit,
+    CAOGEN_GH_EXECUTABLE: process.execPath,
+    CAOGEN_GH_SCRIPT: payload.ghScript,
     PATH: `${payload.fixtureBin}${path.delimiter}${process.env.PATH ?? ''}`
   }
 }

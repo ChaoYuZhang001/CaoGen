@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import { HeaderIcon, type HeaderIconName } from './ChatHeaderIcons'
-import MessageItem from './MessageItem'
+import MessageItem, { type MessageFork, type MessageRevision } from './MessageItem'
 import PermissionBar from './PermissionBar'
 import Composer from './Composer'
 import RewindPanel from './RewindPanel'
@@ -71,6 +71,9 @@ export default function ChatView(): React.JSX.Element | null {
   const dismissMemorySuggestion = useStore((s) => s.dismissMemorySuggestion)
   const layout = useStore((s) => s.settings.layout)
   const updateSettings = useStore((s) => s.updateSettings)
+  const restoreCheckpoint = useStore((s) => s.restoreCheckpoint)
+  const sendMessage = useStore((s) => s.sendMessage)
+  const forkFromCheckpoint = useStore((s) => s.forkFromCheckpoint)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -194,6 +197,33 @@ export default function ChatView(): React.JSX.Element | null {
     scheduleScrollSnapshot()
   }
 
+  const reviseMessage = async (revision: MessageRevision, text: string): Promise<boolean> => {
+    const current = useStore.getState()
+    if (current.activeId !== activeId) throw new Error(t('messageRevisionSessionChanged'))
+    const active = current.sessions[activeId]
+    if (!active || active.meta.status === 'running' || active.meta.status === 'starting') {
+      throw new Error(t('messageRevisionRunning'))
+    }
+    const preview = await restoreCheckpoint(revision.checkpointId, revision.restoreMode, true)
+    if (!preview || preview.error) throw new Error(preview?.error || t('messageRevisionUnavailable'))
+    if (!preview.canRewind) throw new Error(preview.note || t('messageRevisionUnavailable'))
+    if (useStore.getState().activeId !== activeId) throw new Error(t('messageRevisionSessionChanged'))
+    const files = preview.filesChanged?.length ?? preview.code?.filesChanged?.length ?? 0
+    const events = preview.chatRemovedEntries ?? preview.chat?.removedEntries ?? 0
+    if (files > 0 && !window.confirm(t('messageRevisionConfirm', { files, events }))) return false
+    const restored = await restoreCheckpoint(revision.checkpointId, revision.restoreMode, false)
+    if (!restored || restored.error || !restored.applied) {
+      throw new Error(restored?.error || t('messageRevisionUnavailable'))
+    }
+    if (useStore.getState().activeId !== activeId) throw new Error(t('messageRevisionSessionChanged'))
+    await sendMessage(text, activeId)
+    return true
+  }
+
+  const forkMessage = (fork: MessageFork): void => {
+    forkFromCheckpoint(fork.checkpointId, fork.text)
+  }
+
   return (
     <div
       className={`chat chat-density-${layout.chatDensity}`}
@@ -218,50 +248,6 @@ export default function ChatView(): React.JSX.Element | null {
             options={modelOptions}
             sessionId={meta.id}
           />
-          <div className="chat-layout-controls" aria-label={t('chatLayoutControls')}>
-            <button
-              type="button"
-              className="icon-btn text-icon-btn"
-              aria-label={t('zoomOutChat')}
-              title={t('zoomOutChat')}
-              disabled={layout.chatScale <= CHAT_SCALE_MIN}
-              onClick={() => setChatScale(layout.chatScale - CHAT_SCALE_STEP)}
-            >
-              A-
-            </button>
-            <button
-              type="button"
-              className="chat-zoom-value"
-              aria-label={t('resetChatZoom')}
-              title={t('resetChatZoom')}
-              onClick={() => setChatScale(1)}
-            >
-              {Math.round(layout.chatScale * 100)}%
-            </button>
-            <button
-              type="button"
-              className="icon-btn text-icon-btn"
-              aria-label={t('zoomInChat')}
-              title={t('zoomInChat')}
-              disabled={layout.chatScale >= CHAT_SCALE_MAX}
-              onClick={() => setChatScale(layout.chatScale + CHAT_SCALE_STEP)}
-            >
-              A+
-            </button>
-            <button
-              type="button"
-              className={`icon-btn text-icon-btn ${layout.chatDensity === 'compact' ? 'icon-btn-active' : ''}`}
-              aria-label={t('toggleCompactChat')}
-              title={t('toggleCompactChat')}
-              onClick={() =>
-                patchLayout({
-                  chatDensity: layout.chatDensity === 'compact' ? 'comfortable' : 'compact'
-                })
-              }
-            >
-              ≡
-            </button>
-          </div>
           {running && (
             <button className="btn btn-danger" onClick={() => void interrupt()}>
               {t('stop')}
@@ -351,6 +337,55 @@ export default function ChatView(): React.JSX.Element | null {
                     openMemoryPanel()
                   }}
                 />
+                <div className="header-more-separator" role="separator" />
+                <MenuItem
+                  action="zoom-out"
+                  disabled={layout.chatScale <= CHAT_SCALE_MIN}
+                  icon="zoomOut"
+                  label={t('zoomOutChat')}
+                  meta={`${Math.round(layout.chatScale * 100)}%`}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    setChatScale(layout.chatScale - CHAT_SCALE_STEP)
+                  }}
+                />
+                <MenuItem
+                  action="zoom-reset"
+                  disabled={layout.chatScale === 1}
+                  icon="zoomReset"
+                  label={t('resetChatZoom')}
+                  meta="100%"
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    setChatScale(1)
+                  }}
+                />
+                <MenuItem
+                  action="zoom-in"
+                  disabled={layout.chatScale >= CHAT_SCALE_MAX}
+                  icon="zoomIn"
+                  label={t('zoomInChat')}
+                  meta={`${Math.round(layout.chatScale * 100)}%`}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    setChatScale(layout.chatScale + CHAT_SCALE_STEP)
+                  }}
+                />
+                <MenuItem
+                  action="density"
+                  checked={layout.chatDensity === 'compact'}
+                  icon="density"
+                  label={t('compactChatDensity')}
+                  meta={layout.chatDensity === 'compact'
+                    ? t('compactChatDensityValue')
+                    : t('comfortableChatDensity')}
+                  onSelect={() => {
+                    setMoreOpen(false)
+                    patchLayout({
+                      chatDensity: layout.chatDensity === 'compact' ? 'comfortable' : 'compact'
+                    })
+                  }}
+                />
               </div>
             )}
           </div>
@@ -404,6 +439,9 @@ export default function ChatView(): React.JSX.Element | null {
             scrollRef={scrollRef}
             scrollSnapshot={scrollSnapshot}
             stickToBottom={stickToBottom}
+            running={running}
+            onRevise={reviseMessage}
+            onFork={forkMessage}
           />
 
           {session.streamThinking && (
@@ -447,10 +485,9 @@ export default function ChatView(): React.JSX.Element | null {
           </button>
         </div>
       )}
+      <ChatStatusBar meta={meta} providerName={providerName} session={session} />
       <Composer running={running} />
       <RewindPanel />
-
-      <ChatStatusBar meta={meta} providerName={providerName} session={session} />
     </div>
   )
 }
@@ -511,6 +548,9 @@ interface MessageListProps {
   scrollRef: React.RefObject<HTMLDivElement>
   scrollSnapshot: ScrollSnapshot
   stickToBottom: React.MutableRefObject<boolean>
+  running: boolean
+  onRevise: (revision: MessageRevision, text: string) => Promise<boolean>
+  onFork: (fork: MessageFork) => void
 }
 
 function MessageList({
@@ -520,13 +560,27 @@ function MessageList({
   runningTools,
   scrollRef,
   scrollSnapshot,
-  stickToBottom
+  stickToBottom,
+  running,
+  onRevise,
+  onFork
 }: MessageListProps): React.JSX.Element {
+  const revisions = useMemo(() => messageRevisions(items, running), [items, running])
+  const forks = useMemo(() => messageForks(items, running), [items, running])
   if (items.length <= VIRTUAL_MESSAGE_THRESHOLD) {
     return (
       <>
         {items.map((item) => (
-          <MessageItem key={item.id} item={item} toolResults={toolResults} runningTools={runningTools} />
+          <MessageItem
+            key={item.id}
+            item={item}
+            toolResults={toolResults}
+            runningTools={runningTools}
+            revision={revisions.get(item.id)}
+            onRevise={onRevise}
+            fork={forks.get(item.id)}
+            onFork={onFork}
+          />
         ))}
       </>
     )
@@ -541,6 +595,9 @@ function MessageList({
       scrollRef={scrollRef}
       scrollSnapshot={scrollSnapshot}
       stickToBottom={stickToBottom}
+      running={running}
+      onRevise={onRevise}
+      onFork={onFork}
     />
   )
 }
@@ -552,8 +609,13 @@ function VirtualMessageList({
   runningTools,
   scrollRef,
   scrollSnapshot,
-  stickToBottom
+  stickToBottom,
+  running,
+  onRevise,
+  onFork
 }: MessageListProps): React.JSX.Element {
+  const revisions = useMemo(() => messageRevisions(items, running), [items, running])
+  const forks = useMemo(() => messageForks(items, running), [items, running])
   const listRef = useRef<HTMLDivElement>(null)
   const sizeById = useRef(new Map<string, number>())
   const heightFrame = useRef<number | null>(null)
@@ -672,6 +734,10 @@ function VirtualMessageList({
             onMeasure={handleMeasure}
             toolResults={toolResults}
             runningTools={runningTools}
+            revision={revisions.get(item.id)}
+            onRevise={onRevise}
+            fork={forks.get(item.id)}
+            onFork={onFork}
           />
         )
       })}
@@ -685,6 +751,10 @@ interface VirtualMessageRowProps {
   toolResults: Record<string, ToolResultInfo>
   runningTools: Record<string, true>
   onMeasure: (id: string, height: number) => void
+  revision?: MessageRevision
+  onRevise: (revision: MessageRevision, text: string) => Promise<boolean>
+  fork?: MessageFork
+  onFork: (fork: MessageFork) => void
 }
 
 function VirtualMessageRow({
@@ -692,7 +762,11 @@ function VirtualMessageRow({
   top,
   toolResults,
   runningTools,
-  onMeasure
+  onMeasure,
+  revision,
+  onRevise,
+  fork,
+  onFork
 }: VirtualMessageRowProps): React.JSX.Element {
   const rowRef = useRef<HTMLDivElement>(null)
 
@@ -710,7 +784,15 @@ function VirtualMessageRow({
 
   return (
     <div ref={rowRef} className="chat-virtual-row" style={{ transform: `translateY(${top}px)` }}>
-      <MessageItem item={item} toolResults={toolResults} runningTools={runningTools} />
+      <MessageItem
+        item={item}
+        toolResults={toolResults}
+        runningTools={runningTools}
+        revision={revision}
+        onRevise={onRevise}
+        fork={fork}
+        onFork={onFork}
+      />
     </div>
   )
 }
@@ -743,22 +825,66 @@ function IconButton({ expert = false, icon, label, onClick }: IconButtonProps): 
 
 interface MenuItemProps {
   action: string
+  checked?: boolean
+  disabled?: boolean
   icon: HeaderIconName
   label: string
+  meta?: string
   onSelect: () => void
 }
 
-function MenuItem({ action, icon, label, onSelect }: MenuItemProps): React.JSX.Element {
+function messageRevisions(items: ChatItem[], running: boolean): Map<string, MessageRevision> {
+  const revisions = new Map<string, MessageRevision>()
+  if (running) return revisions
+  for (const item of items) {
+    if (item.kind !== 'user' || !item.checkpointId || !item.text.trim() || item.attachments?.length) continue
+    revisions.set(item.id, {
+      checkpointId: item.checkpointId,
+      restoreMode: item.checkpointScope === 'chat' ? 'chat' : 'both',
+      kind: 'edit',
+      text: item.text
+    })
+  }
+  const assistantIndex = items.findLastIndex((item) => item.kind === 'assistant')
+  if (assistantIndex < 0) return revisions
+  if (items.slice(assistantIndex + 1).some((item) => item.kind === 'user')) return revisions
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item.kind !== 'user') continue
+    const source = revisions.get(item.id)
+    if (source) {
+      revisions.set(items[assistantIndex].id, { ...source, kind: 'regenerate' })
+    }
+    break
+  }
+  return revisions
+}
+
+function messageForks(items: ChatItem[], running: boolean): Map<string, MessageFork> {
+  const forks = new Map<string, MessageFork>()
+  if (running) return forks
+  for (const item of items) {
+    if (item.kind !== 'user' || !item.checkpointId || !item.text.trim() || item.attachments?.length) continue
+    forks.set(item.id, { checkpointId: item.checkpointId, text: item.text })
+  }
+  return forks
+}
+
+function MenuItem({ action, checked, disabled = false, icon, label, meta, onSelect }: MenuItemProps): React.JSX.Element {
   return (
     <button
       type="button"
       className="header-more-item"
-      role="menuitem"
+      role={checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+      aria-checked={checked}
+      disabled={disabled}
       data-header-action={action}
       onClick={onSelect}
     >
       <HeaderIcon name={icon} />
       <span>{label}</span>
+      {meta && <small>{meta}</small>}
+      {checked !== undefined && <span className="header-more-check" aria-hidden="true">{checked ? '✓' : ''}</span>}
     </button>
   )
 }
