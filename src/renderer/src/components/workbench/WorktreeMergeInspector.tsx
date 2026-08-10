@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import { rovingTabProps, tabPanelProps } from './roving-tabs'
 
 const PATCH_PREVIEW_LIMIT = 12_000
 
@@ -27,6 +28,13 @@ export interface WorktreeMergeConflictFilesResult {
   files?: WorktreeMergeConflictFile[]
   truncatedList?: boolean
   error?: string
+}
+
+interface ConflictColumn {
+  key: string
+  title: string
+  text: string
+  missing: boolean
 }
 
 export interface WorktreeMergeSummarySuccess {
@@ -389,38 +397,20 @@ function ConflictThreePane({
   }
 
   const missingLabel = labels?.conflictMissing ?? '(missing)'
-  const columns: Array<{ key: string; title: string; text: string; missing: boolean }> = selected
-    ? [
-        {
-          key: 'base',
-          title: labels?.conflictColumnBase ?? 'Base',
-          text: selected.base,
-          missing: selected.baseMissing === true
-        },
-        {
-          key: 'worktree',
-          title: labels?.conflictColumnWorktree ?? 'Worktree',
-          text: selected.worktree,
-          missing: selected.worktreeMissing === true
-        },
-        {
-          key: 'main',
-          title: labels?.conflictColumnMain ?? 'Main workspace',
-          text: selected.main,
-          missing: selected.mainMissing === true
-        }
-      ]
-    : []
+  const selectedIndex = Math.max(0, files.indexOf(selected))
+  const columns = conflictColumns(selected, labels)
 
   return (
     <div className="worktree-conflict">
       {files.length > 1 && (
-        <div className="worktree-conflict-files" role="tablist">
-          {files.map((file) => (
+        <div className="worktree-conflict-files" role="tablist" aria-label={labels?.conflictTitle ?? 'Conflicted files'}>
+          {files.map((file, index) => (
             <button
+              id={`worktree-conflict-tab-${index}`}
               key={file.path}
+              type="button"
               role="tab"
-              aria-selected={file.path === selected?.path}
+              {...rovingTabProps(file.path === selected?.path, 'worktree-conflict-panel')}
               className={cx(
                 'worktree-conflict-file',
                 file.path === selected?.path && 'worktree-conflict-file-active'
@@ -447,7 +437,7 @@ function ConflictThreePane({
               </span>
             )}
           </div>
-          <div className="worktree-conflict-columns">
+          <div {...tabPanelProps('worktree-conflict-panel', `worktree-conflict-tab-${selectedIndex}`)} className="worktree-conflict-columns">
             {columns.map((column) => (
               <div key={column.key} className="worktree-conflict-column">
                 <div className="worktree-conflict-column-title">{column.title}</div>
@@ -463,6 +453,18 @@ function ConflictThreePane({
       )}
     </div>
   )
+}
+
+function conflictColumns(
+  selected: WorktreeMergeConflictFile | undefined,
+  labels: WorktreeMergeInspectorLabels | undefined
+): ConflictColumn[] {
+  if (!selected) return []
+  return [
+    { key: 'base', title: labels?.conflictColumnBase ?? 'Base', text: selected.base, missing: selected.baseMissing === true },
+    { key: 'worktree', title: labels?.conflictColumnWorktree ?? 'Worktree', text: selected.worktree, missing: selected.worktreeMissing === true },
+    { key: 'main', title: labels?.conflictColumnMain ?? 'Main workspace', text: selected.main, missing: selected.mainMissing === true }
+  ]
 }
 
 function PrResultBlock({ result }: { result: WorktreeMergePullRequestResult }): React.JSX.Element {

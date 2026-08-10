@@ -4,6 +4,13 @@ import type {
 } from '../../../../shared/types'
 import { useT } from '../../i18n'
 import { useProjectTests, type ProjectTestOutputStream } from './useProjectTests'
+import { rovingTabProps, tabPanelProps } from './roving-tabs'
+
+const TEST_OUTPUT_TAB_IDS: Record<ProjectTestOutputStream, string> = {
+  stdout: 'project-test-output-tab-stdout',
+  stderr: 'project-test-output-tab-stderr'
+}
+const TEST_OUTPUT_PANEL_ID = 'project-test-output-panel'
 
 export default function TestPanel(): React.JSX.Element {
   const t = useT()
@@ -116,9 +123,10 @@ function TestResult(props: {
       <div className="test-output-tabs" role="tablist" aria-label={t('projectTestsOutput')}>
         {(['stdout', 'stderr'] as const).map((name) => (
           <button
+            id={TEST_OUTPUT_TAB_IDS[name]}
             type="button"
             role="tab"
-            aria-selected={stream === name}
+            {...rovingTabProps(stream === name, TEST_OUTPUT_PANEL_ID)}
             className={stream === name ? 'test-output-tab-active' : ''}
             key={name}
             onClick={() => onStream(name)}
@@ -127,7 +135,7 @@ function TestResult(props: {
           </button>
         ))}
       </div>
-      <pre className="test-output">{output || t('projectTestsOutputEmpty')}</pre>
+      <pre {...tabPanelProps(TEST_OUTPUT_PANEL_ID, TEST_OUTPUT_TAB_IDS[stream])} className="test-output">{output || t('projectTestsOutputEmpty')}</pre>
     </div>
   )
 }

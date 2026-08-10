@@ -152,6 +152,8 @@
     "test:project-refactor": "node scripts/project-refactor-smoke.mjs",
     "test:project-refactor:required": "npm run test:project-refactor",
     "test:project-refactor:e2e": "node scripts/project-refactor-panel-e2e.mjs",
+    "test:workbench-keyboard:e2e": "node scripts/workbench-keyboard-accessibility-e2e.mjs",
+    "test:workbench-keyboard:required": "npm run build && npm run test:workbench-keyboard:e2e",
     "test:project-diagnostics": "node scripts/project-diagnostics-smoke.mjs",
     "test:project-language-intelligence": "node scripts/project-language-intelligence-smoke.mjs",
     "test:typescript-language-server": "node scripts/typescript-language-server-smoke.mjs",

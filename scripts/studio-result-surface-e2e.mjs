@@ -303,6 +303,38 @@ try {
     }
   })
 
+  await check('Studio result tabs use linked roving focus with Arrow/Home/End activation', async () => {
+    sessionId = await selectSessionFromSidebar(page, sessionId)
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'result')
+    await page.waitForSelector('[data-studio-result-state="ready"]', { visible: true, timeout: 15_000 })
+    await page.click('[data-studio-result-tab="summary"]')
+    const semantics = await page.$eval('.studio-result-tabs', (tablist) => {
+      const tabs = [...tablist.querySelectorAll('[role="tab"]')]
+      const selected = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true')
+      const tabbable = tabs.filter((tab) => tab.tabIndex === 0)
+      const active = selected[0]
+      const panel = active ? document.getElementById(active.getAttribute('aria-controls') ?? '') : null
+      return {
+        count: tabs.length,
+        selected: selected.length,
+        tabbable: tabbable.length,
+        linked: Boolean(active?.id && panel?.getAttribute('aria-labelledby') === active.id)
+      }
+    })
+    assert(semantics.count === 4 && semantics.selected === 1 && semantics.tabbable === 1 && semantics.linked,
+      `result tab semantics invalid: ${JSON.stringify(semantics)}`)
+    await page.focus('[data-studio-result-tab="summary"]')
+    await page.keyboard.press('ArrowRight')
+    await assertResultTabFocus(page, 'artifacts')
+    await page.keyboard.press('End')
+    await assertResultTabFocus(page, 'timeline')
+    await page.keyboard.press('Home')
+    await assertResultTabFocus(page, 'summary')
+    await page.keyboard.press('ArrowLeft')
+    await assertResultTabFocus(page, 'timeline')
+  })
+
   await check('Studio result UI is complete and responsive at three viewports', async () => {
     sessionId = await selectSessionFromSidebar(page, sessionId)
     await clickMode(page, 'studio')
@@ -441,6 +473,17 @@ async function check(name, run) {
     report.checks.push({ name, status: 'fail', durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) })
     throw error
   }
+}
+
+async function assertResultTabFocus(targetPage, tab) {
+  await targetPage.waitForFunction((expected) => {
+    const target = document.querySelector(`[data-studio-result-tab="${expected}"]`)
+    const panel = document.querySelector(`[data-studio-result-view="${expected}"]`)
+    return target?.getAttribute('aria-selected') === 'true'
+      && target.tabIndex === 0
+      && document.activeElement === target
+      && panel?.checkVisibility()
+  }, { timeout: 10_000 }, tab)
 }
 
 async function createOwnedResultSession(targetPage, baseUrl) {

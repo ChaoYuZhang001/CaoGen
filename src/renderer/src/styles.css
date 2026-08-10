@@ -5266,6 +5266,14 @@ textarea {
   scrollbar-width: thin;
 }
 
+.file-editor-tab-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+}
+
 .file-editor-tab {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 26px;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Braces, ChevronDown, ChevronRight, CircleAlert, Eye, File, FileText, Folder, FolderOpen, FolderTree, Info, Search, X } from 'lucide-react'
+import { Braces, ChevronDown, ChevronRight, CircleAlert, Eye, File, FileText, Folder, FolderOpen, Info, Search, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import type { ProjectDiagnostic, ProjectSymbolLocation, ProjectTextSearchMatch } from '../../../../shared/types'
@@ -10,6 +10,10 @@ import {
   type VisibleProjectFileNode
 } from './project-file-tree'
 import { editorLocationForOffset, editorOffsetForLocation, editorWordRange, replaceEditorWord } from './editor-language-actions'
+import FileBrowserModeTabs, { FILE_MODE_PANEL_ID, FILE_MODE_TAB_IDS, type FileBrowserMode } from './FileBrowserModeTabs'
+import { rovingTabProps, tabPanelProps } from './roving-tabs'
+
+const FILE_EDITOR_PANEL_ID = 'file-editor-tab-panel'
 
 interface LanguageSymbolResult extends ProjectSymbolLocation {
   insertText?: string
@@ -56,6 +60,10 @@ function isLikelyTextFile(path: string): boolean {
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
+}
+
+function fileEditorTabId(index: number): string | undefined {
+  return index < 0 ? undefined : `file-editor-tab-${index}`
 }
 
 function FileTreeRow({
@@ -195,7 +203,7 @@ export default function FilePanel(): React.JSX.Element {
   const closeFileTab = useStore((s) => s.closeFileTab)
   const cycleFileTab = useStore((s) => s.cycleFileTab)
   const activePanelId = useStore((s) => s.workbench.activePanelId)
-  const [mode, setMode] = useState<'tree' | 'search' | 'problems'>('tree')
+  const [mode, setMode] = useState<FileBrowserMode>('tree')
   const [nameQuery, setNameQuery] = useState('')
   const [searchDraft, setSearchDraft] = useState('')
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
@@ -287,7 +295,7 @@ export default function FilePanel(): React.JSX.Element {
     }
     void searchProjectFiles(searchDraft)
   }, [clearProjectFileSearch, searchDraft, searchProjectFiles])
-  const selectMode = useCallback((next: 'tree' | 'search' | 'problems'): void => {
+  const selectMode = useCallback((next: FileBrowserMode): void => {
     setMode(next)
     if (next === 'problems') void refreshProjectDiagnostics()
   }, [refreshProjectDiagnostics])
@@ -487,6 +495,8 @@ export default function FilePanel(): React.JSX.Element {
     setPendingCaret(replacement.caret)
   }, [currentFileContent, openFile, symbolMode, updateDraft])
 
+  const activeFileTabId = fileEditorTabId(sessionTabs.findIndex((tab) => tab.path === currentFilePath))
+
   return (
     <div className="file-panel">
       <header className="workspace-diff-top">
@@ -515,17 +525,7 @@ export default function FilePanel(): React.JSX.Element {
       <div className="file-panel-body">
         <aside className="file-list">
           <div className="file-browser-toolbar">
-            <div className="file-browser-modes" role="tablist" aria-label={t('fileBrowserMode')}>
-              <button type="button" role="tab" title={t('fileTreeMode')} aria-label={t('fileTreeMode')} aria-selected={mode === 'tree'} className={mode === 'tree' ? 'active' : ''} onClick={() => selectMode('tree')}>
-                <FolderTree size={14} aria-hidden="true" />
-              </button>
-              <button type="button" role="tab" title={t('fileContentSearchMode')} aria-label={t('fileContentSearchMode')} aria-selected={mode === 'search'} className={mode === 'search' ? 'active' : ''} onClick={() => selectMode('search')}>
-                <Search size={14} aria-hidden="true" />
-              </button>
-              <button type="button" role="tab" title={t('fileProblemsMode')} aria-label={t('fileProblemsMode')} aria-selected={mode === 'problems'} className={mode === 'problems' ? 'active' : ''} onClick={() => selectMode('problems')}>
-                <CircleAlert size={14} aria-hidden="true" />{problemDiagnostics.length > 0 ? <span className="file-problem-count">{problemDiagnostics.length}</span> : null}
-              </button>
-            </div>
+            <FileBrowserModeTabs label={t('fileBrowserMode')} labels={{ tree: t('fileTreeMode'), search: t('fileContentSearchMode'), problems: t('fileProblemsMode') }} mode={mode} onSelect={selectMode} problemCount={problemDiagnostics.length} />
             {mode === 'tree' ? (
               <input
                 className="input file-search"
@@ -565,7 +565,7 @@ export default function FilePanel(): React.JSX.Element {
               {supportsTypeScriptLanguageServer(currentFilePath) ? <span className="file-semantic-source">{t('fileSemanticSource')}</span> : null}
             </div>
           )}
-          <div className="file-list-scroll">
+          <div {...tabPanelProps(FILE_MODE_PANEL_ID, FILE_MODE_TAB_IDS[mode])} className="file-list-scroll">
             {mode === 'problems' ? (
               (fileDiagnosticsLoading || semanticDiagnosticsLoading) && problemDiagnostics.length === 0 ? (
                 <div className="workspace-diff-empty">{t('fileProblemsLoading')}</div>
@@ -609,7 +609,7 @@ export default function FilePanel(): React.JSX.Element {
         <section className="file-editor">
           {sessionTabs.length > 0 && (
             <div className="file-editor-tabs" role="tablist" aria-label={t('fileOpenTabs')}>
-              {sessionTabs.map((tab) => {
+              {sessionTabs.map((tab, index) => {
                 const active = tab.path === currentFilePath
                 const tabDirty = tab.content !== tab.savedContent
                 return (
@@ -621,10 +621,11 @@ export default function FilePanel(): React.JSX.Element {
                     data-file-tab-dirty={tabDirty || undefined}
                   >
                     <button
+                      id={`file-editor-tab-${index}`}
                       type="button"
                       className="file-editor-tab-select"
                       role="tab"
-                      aria-selected={active}
+                      {...rovingTabProps(active, FILE_EDITOR_PANEL_ID)}
                       title={tab.path}
                       onClick={() => activateFileTab(tab.path)}
                     >
@@ -647,6 +648,7 @@ export default function FilePanel(): React.JSX.Element {
               })}
             </div>
           )}
+          <div {...tabPanelProps(FILE_EDITOR_PANEL_ID, activeFileTabId)} className="file-editor-tab-panel">
           <div className="file-editor-head">
             <div className="file-editor-title" title={currentFilePath}>
               {currentFilePath ?? t('fileNoSelection')}
@@ -770,6 +772,7 @@ export default function FilePanel(): React.JSX.Element {
           ) : (
             <div className="workspace-diff-empty">{t('filePickHint')}</div>
           )}
+          </div>
         </section>
       </div>
     </div>

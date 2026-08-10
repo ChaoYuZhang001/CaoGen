@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type {
   StudioAuditTimelineItem,
   StudioAuditTimelinePage,
@@ -17,6 +17,8 @@ import { AcceptanceSummary } from './AcceptanceSummary'
 import { TraceabilityView } from './TraceabilityView'
 import { HeaderIcon } from '../ChatHeaderIcons'
 import { WorkflowAcceptanceRow } from '../WorkflowAcceptanceRow'
+import StudioResultTabs, { type StudioResultTab } from './StudioResultTabs'
+import { tabPanelProps } from './roving-tabs'
 import {
   isActiveFirstTaskCandidate,
   isFirstTaskComplete,
@@ -24,7 +26,7 @@ import {
   readFirstTaskOnboardingRecord
 } from '../experience/first-task-onboarding'
 
-type ResultTab = 'summary' | 'artifacts' | 'evidence' | 'timeline'
+type ResultTab = StudioResultTab
 type ResultTool = 'diff' | 'files' | 'preview' | 'browser' | 'terminal' | 'tasks'
 type OpenResultTool = (tool: ResultTool, value?: string) => Promise<void>
 
@@ -252,6 +254,7 @@ function ReadyResult({
   language: 'zh' | 'en'
 }): React.JSX.Element {
   const verdict = useMemo(() => deriveDeliveryVerdict(snapshot), [snapshot])
+  const tabBaseId = useId()
   const [evidenceDrill, setEvidenceDrill] = useState<{
     artifactId: string
     evidenceIds: string[]
@@ -307,21 +310,7 @@ function ReadyResult({
     <>
       {/* T03:交付判定横幅(头部下方、Tab 之上),取值仅由 acceptances 派生 */}
       <DeliveryVerdictBanner detail={verdict} language={language} />
-      <nav className="studio-result-tabs" role="tablist" aria-label={labels.resultViews}>
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.id}
-            className={tab === item.id ? 'active' : ''}
-            onClick={() => onTab(item.id)}
-            data-studio-result-tab={item.id}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+      <StudioResultTabs ariaLabel={labels.resultViews} baseId={tabBaseId} onChange={onTab} tabs={tabs} value={tab} />
       <div className="studio-result-quick-actions" aria-label={labels.quickActions}>
         <ResultToolButton tool="diff" icon="review" label={labels.changes} onClick={() => void openTool('diff')} />
         <ResultToolButton tool="files" icon="files" label={labels.workspaceFiles} onClick={() => void openTool('files')} />
@@ -330,11 +319,12 @@ function ReadyResult({
         <ResultToolButton tool="terminal" icon="terminal" label={labels.terminal} onClick={() => void openTool('terminal')} />
         <ResultToolButton tool="tasks" icon="subagents" label={labels.tasks} onClick={() => void openTool('tasks')} />
       </div>
-      {tab === 'summary' && <SummaryView snapshot={snapshot} labels={labels} verdict={verdict} />}
+      {tab === 'summary' && <SummaryView snapshot={snapshot} labels={labels} verdict={verdict} tabBinding={{ tabId: `${tabBaseId}-tab-summary`, panelId: `${tabBaseId}-panel-summary` }} />}
       {tab === 'artifacts' && (
         <ArtifactView
           snapshot={snapshot}
           labels={labels}
+          tabBinding={{ tabId: `${tabBaseId}-tab-artifacts`, panelId: `${tabBaseId}-panel-artifacts` }}
           language={language}
           evidenceProjectId={evidenceProjectId}
           onAttachEvidence={handleAttachEvidence}
@@ -356,6 +346,7 @@ function ReadyResult({
         <EvidenceView
           snapshot={snapshot}
           labels={labels}
+          tabBinding={{ tabId: `${tabBaseId}-tab-evidence`, panelId: `${tabBaseId}-panel-evidence` }}
           language={language}
           acceptanceReview={acceptanceReview}
           verdict={verdict}
@@ -365,7 +356,7 @@ function ReadyResult({
           onOpenRepair={handleOpenRepair}
         />
       )}
-      {tab === 'timeline' && <TimelineView snapshot={snapshot} sessionId={sessionId} labels={labels} />}
+      {tab === 'timeline' && <TimelineView snapshot={snapshot} sessionId={sessionId} labels={labels} tabBinding={{ tabId: `${tabBaseId}-tab-timeline`, panelId: `${tabBaseId}-panel-timeline` }} />}
       {/* T10(P1-4):跨实体追溯视图,挂在 evidence Tab 之下作为总览 */}
       {tab === 'evidence' && (
         <TraceabilityView
@@ -410,6 +401,7 @@ function ResultEmpty({ title, detail }: { title: string; detail: string }): Reac
 function SummaryView({
   snapshot,
   labels,
+  tabBinding,
   verdict,
   language
 }: ResultViewProps & { verdict?: DeliveryVerdictDetail; language?: 'zh' | 'en' }): React.JSX.Element {
@@ -422,7 +414,7 @@ function SummaryView({
     [labels.cost, snapshot.cost.coverage === 'unavailable' ? labels.unknown : `$${snapshot.cost.knownUsd.toFixed(4)}`]
   ]
   return (
-    <div className="studio-result-content" role="tabpanel" data-studio-result-view="summary">
+    <div {...tabPanelProps(tabBinding.panelId, tabBinding.tabId)} className="studio-result-content" data-studio-result-view="summary">
       {/* T04:Goal 完成门禁小标(非交互)。verifiable 才满足 canMarkGoalComplete;not_done 不显示正向完成态 */}
       {verdict && (
         <section className="studio-result-verdict-summary" data-studio-result-verdict-summary>
@@ -486,6 +478,7 @@ function IssueSection({ title, items, empty }: { title: string; items: StudioRes
 function ArtifactView({
   snapshot,
   labels,
+  tabBinding,
   language,
   evidenceProjectId,
   onAttachEvidence,
@@ -499,7 +492,7 @@ function ArtifactView({
   onOpen: (location: StudioResultArtifactLocation) => void
 }): React.JSX.Element {
   return (
-    <div className="studio-result-content" role="tabpanel" data-studio-result-view="artifacts">
+    <div {...tabPanelProps(tabBinding.panelId, tabBinding.tabId)} className="studio-result-content" data-studio-result-view="artifacts">
       {snapshot.artifacts.length === 0 ? <div className="studio-result-muted studio-result-list-empty">{labels.noArtifacts}</div> : (
         <div className="studio-result-artifact-list">
           {snapshot.artifacts.map((artifact) => (
@@ -652,6 +645,7 @@ function ArtifactRow({
 function EvidenceView({
   snapshot,
   labels,
+  tabBinding,
   language,
   acceptanceReview,
   verdict,
@@ -688,7 +682,7 @@ function EvidenceView({
     drilled ? { background: highlightId === id ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.08)', borderRadius: 4, padding: '2px 4px' } : undefined
 
   return (
-    <div className="studio-result-content" role="tabpanel" data-studio-result-view="evidence">
+    <div {...tabPanelProps(tabBinding.panelId, tabBinding.tabId)} className="studio-result-content" data-studio-result-view="evidence">
       <section className="studio-result-section">
         <h3>{labels.acceptance}</h3>
         {/* T05:Acceptance 聚合条(pending/verifying/passed/failed/waived 计数) */}
@@ -748,7 +742,8 @@ function EvidenceView({
 function TimelineView({
   snapshot,
   sessionId,
-  labels
+  labels,
+  tabBinding
 }: ResultViewProps & { sessionId: string | null }): React.JSX.Element {
   const [runId, setRunId] = useState('')
   const [page, setPage] = useState<StudioAuditTimelinePage>()
@@ -757,7 +752,6 @@ function TimelineView({
   const [loadingMore, setLoadingMore] = useState(false)
   const [failed, setFailed] = useState(false)
   const requestRef = useRef(0)
-
   useEffect(() => {
     if (runId && !snapshot.runs.some((run) => run.id === runId)) setRunId('')
   }, [runId, snapshot.runs])
@@ -822,8 +816,8 @@ function TimelineView({
 
   return (
     <div
+      {...tabPanelProps(tabBinding.panelId, tabBinding.tabId)}
       className="studio-result-content studio-result-audit"
-      role="tabpanel"
       data-studio-result-view="timeline"
       data-studio-audit-state={failed ? 'failed' : page?.state ?? (loading ? 'loading' : 'empty')}
     >
@@ -972,6 +966,7 @@ function formatTime(value: number): string {
 interface ResultViewProps {
   snapshot: StudioResultSnapshot
   labels: Labels
+  tabBinding: { tabId: string; panelId: string }
 }
 
 interface Labels {

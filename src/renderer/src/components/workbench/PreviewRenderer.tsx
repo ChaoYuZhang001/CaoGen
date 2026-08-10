@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { lazy, Suspense, useEffect, useId, useMemo, useState, type CSSProperties } from 'react'
 import {
   officePreviewUnit,
   parseOfficePreviewContent,
@@ -6,6 +6,8 @@ import {
   type OfficePreviewUnit
 } from './officePreviewUtils'
 import { parseCsv, prettyJson, searchTextPreview, truncate, type CsvDelimiter } from './previewUtils'
+import OfficePreviewModeTabs, { type OfficePreviewMode } from './OfficePreviewModeTabs'
+import { tabPanelProps } from './roving-tabs'
 
 const Markdown = lazy(() => import('../Markdown'))
 
@@ -515,7 +517,8 @@ function OfficePreview({
   const visualReady = Boolean(visualDocumentSource || visualImageSource)
   const visualFormat = visualDocumentSource ? 'document' : visualImageSource ? 'thumbnail' : 'none'
   const [visualContentLoaded, setVisualContentLoaded] = useState(false)
-  const [selection, setSelection] = useState<'auto' | 'structure' | 'visual'>('auto')
+  const [selection, setSelection] = useState<'auto' | OfficePreviewMode>('auto')
+  const tabBaseId = useId()
   const activeMode =
     selection === 'auto' ? (visualReady ? 'visual' : 'structure') : selection === 'visual' && !visualReady ? 'structure' : selection
   const visualState = visualReady ? 'ready' : visualLoading ? 'loading' : visualError ? 'error' : 'idle'
@@ -543,31 +546,7 @@ function OfficePreview({
       style={styles.officePreviewRoot}
     >
       <div style={styles.officeModeToolbar}>
-        <div aria-label={labels.modeLabel} role="tablist" style={styles.officeModeControl}>
-          <button
-            aria-selected={activeMode === 'visual'}
-            className="btn btn-ghost btn-sm"
-            data-office-preview-mode-option="visual"
-            disabled={!visualReady}
-            onClick={() => setSelection('visual')}
-            role="tab"
-            style={activeMode === 'visual' ? styles.officeModeActive : undefined}
-            type="button"
-          >
-            {labels.visual}
-          </button>
-          <button
-            aria-selected={activeMode === 'structure'}
-            className="btn btn-ghost btn-sm"
-            data-office-preview-mode-option="structure"
-            onClick={() => setSelection('structure')}
-            role="tab"
-            style={activeMode === 'structure' ? styles.officeModeActive : undefined}
-            type="button"
-          >
-            {labels.structure}
-          </button>
-        </div>
+        <OfficePreviewModeTabs activeMode={activeMode} baseId={tabBaseId} labels={labels} onSelect={setSelection} visualReady={visualReady} />
         {visualLoading && !visualReady && <span style={styles.officeVisualStatus}>{labels.loading}</span>}
       </div>
 
@@ -583,7 +562,7 @@ function OfficePreview({
       )}
 
       {activeMode === 'visual' && visualReady ? (
-        <figure style={styles.officeVisualFigure}>
+        <figure {...tabPanelProps(`${tabBaseId}-panel`, `${tabBaseId}-visual-tab`)} style={styles.officeVisualFigure}>
           {visualDocumentSource ? (
             <iframe
               data-office-system-preview="document"
@@ -612,6 +591,8 @@ function OfficePreview({
           labels={labels}
           model={model}
           onUnitIndexChange={setActiveUnitIndex}
+          panelId={`${tabBaseId}-panel`}
+          tabId={`${tabBaseId}-structure-tab`}
           unit={unit}
         />
       )}
@@ -623,11 +604,15 @@ function OfficeStructurePreview({
   labels,
   model,
   onUnitIndexChange,
+  panelId,
+  tabId,
   unit
 }: {
   labels: OfficePreviewLabels
   model: OfficePreviewModel
   onUnitIndexChange: (index: number) => void
+  panelId: string
+  tabId: string
   unit: OfficePreviewUnit
 }): React.JSX.Element {
   const section = model.sections[unit.index] ?? { title: unit.title, body: unit.body, rows: unit.rows }
@@ -677,7 +662,7 @@ function OfficeStructurePreview({
 
   if (model.kind === 'excel') {
     return (
-      <div style={styles.officeStack}>
+      <div {...tabPanelProps(panelId, tabId)} style={styles.officeStack}>
         {navigation}
         <section key={`${section.title}-${unit.index}`} style={styles.officeSection}>
           <div style={styles.officeSectionHead}>
@@ -712,7 +697,7 @@ function OfficeStructurePreview({
   }
   if (model.kind === 'powerpoint') {
     return (
-      <div style={styles.officeStack}>
+      <div {...tabPanelProps(panelId, tabId)} style={styles.officeStack}>
         {navigation}
         <section key={`${section.title}-${unit.index}`} style={styles.officeSlide}>
           <div style={styles.officeSlideNumber}>{section.title}</div>
@@ -722,7 +707,7 @@ function OfficeStructurePreview({
     )
   }
   return (
-    <div style={styles.officeDocument}>
+    <div {...tabPanelProps(panelId, tabId)} style={styles.officeDocument}>
       {navigation}
       <section key={`${section.title}-${unit.index}`} style={styles.officeDocSection}>
         {section.title !== model.title && <strong>{section.title}</strong>}
@@ -1052,21 +1037,6 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10
-  },
-  officeModeControl: {
-    flex: '0 0 auto',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 2,
-    padding: 2,
-    border: '1px solid var(--border)',
-    borderRadius: 7,
-    background: 'var(--bg-input)'
-  },
-  officeModeActive: {
-    borderColor: 'var(--border-strong)',
-    background: 'var(--bg-card)',
-    color: 'var(--text)'
   },
   officeVisualStatus: {
     minWidth: 0,
