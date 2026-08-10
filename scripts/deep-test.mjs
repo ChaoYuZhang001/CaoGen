@@ -81,6 +81,7 @@ const commandDefinitions = [
   { name: 'workflow evidence link idempotency smoke', command: 'node', args: ['scripts/workflow-evidence-link-idempotency-smoke.mjs'], category: 'smoke' },
   { name: 'digitalWorker domain smoke', command: 'node', args: ['scripts/digital-worker-smoke.mjs', '--required'], category: 'smoke' },
   { name: 'DigitalWorker action policy required', command: 'node', args: ['scripts/digital-worker-policy-action-smoke.mjs'], category: 'system' },
+  { name: 'Billable usage ledger required', command: 'node', args: ['scripts/billable-usage-ledger-smoke.mjs'], category: 'system' },
   { name: 'DigitalWorker recruitment policy E2E', command: 'node', args: ['scripts/digital-worker-recruitment-policy-e2e.mjs'], category: 'system' },
   { name: 'DigitalWorker recruitment real Electron E2E', command: 'node', args: ['scripts/digital-worker-recruitment-electron-e2e.mjs'], category: 'ui' },
   { name: 'Assignment owner coordinator crash smoke', command: 'node', args: ['scripts/assignment-owner-coordinator-smoke.mjs'], category: 'system' },

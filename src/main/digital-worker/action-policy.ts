@@ -8,6 +8,7 @@ import type {
 } from '../../shared/digital-worker-types'
 import type { SessionMeta, TaskRunStatus } from '../../shared/types'
 import { monthKeyFor } from '../../shared/budget'
+import { readBillableUsageLedger, type BillableUsageLedgerEntry } from '../task/billable-usage-ledger'
 import { activeSessionRecordsFromDocument } from '../active-session-registry-format'
 import { historyEntriesFromDocument } from '../history-store-format'
 import {
@@ -127,7 +128,7 @@ export function preflightDigitalWorkerAction(
   if (toolDecision) return toolDecision
   const state = prepareActionState(input, rootDir, scope, contract)
   if ('decision' in state) return state.decision
-  const budgetDecision = workerBudgetDecision(input, scope, contract, state)
+  const budgetDecision = workerBudgetDecision(input, rootDir, scope, contract, state)
   if (budgetDecision) return budgetDecision
   const escalationDecision = workerEscalationDecision(input, rootDir, scope, contract)
   if (escalationDecision) return escalationDecision
@@ -215,6 +216,7 @@ function prepareActionState(
 
 function workerBudgetDecision(
   input: DigitalWorkerActionPolicyInput,
+  rootDir: string,
   scope: PolicyScope,
   contract: DigitalWorkerPolicyContract,
   state: Extract<ActionState, { ready: true }>
@@ -229,12 +231,45 @@ function workerBudgetDecision(
   }
   const spent = workerMonthlySpend(
     state.records, scope.document.assignments, scope.worker.id, state.now)
+  let ledger: BillableUsageLedgerEntry[]
+  try {
+    ledger = readBillableUsageLedger(rootDir)
+  } catch (error) {
+    return deniedScope('policy_store_unavailable', `数字员工计费账本读取失败：${errorText(error)}`, scope)
+  }
+  const ledgerSpend = workerMonthlyLedgerSpend(ledger, scope.worker.id, state.now)
+  if (ledgerSpend !== undefined) {
+    if (ledger.some((entry) => entry.digitalWorkerBinding?.kind === 'assigned' &&
+      entry.digitalWorkerBinding.workerId === scope.worker.id &&
+      monthKeyFor(entry.completedAt) === monthKeyFor(state.now) &&
+      entry.status === 'succeeded' && !entry.billable)) {
+      return deniedScope(
+        'budget_untrackable',
+        `数字员工 ${scope.worker.id} 存在未计价的成功 Provider 请求，预算账本无法安全核算`,
+        scope
+      )
+    }
+    if (ledgerSpend >= contract.monthlyBudgetUsd) return deniedScope(
+      'budget_exhausted',
+      `数字员工 ${scope.worker.id} 已达到月度预算 $${contract.monthlyBudgetUsd.toFixed(2)}`,
+      scope
+    )
+    return null
+  }
   if (spent < contract.monthlyBudgetUsd) return null
   return deniedScope(
     'budget_exhausted',
     `数字员工 ${scope.worker.id} 已达到月度预算 $${contract.monthlyBudgetUsd.toFixed(2)}`,
     scope
   )
+}
+
+function workerMonthlyLedgerSpend(entries: readonly BillableUsageLedgerEntry[], workerId: string, now: number): number | undefined {
+  const month = monthKeyFor(now)
+  const relevant = entries.filter((entry) => entry.digitalWorkerBinding?.kind === 'assigned' &&
+    entry.digitalWorkerBinding.workerId === workerId && monthKeyFor(entry.completedAt) === month)
+  if (relevant.length === 0) return undefined
+  return Math.round(relevant.reduce((sum, entry) => sum + (entry.billable ? entry.costUsd ?? 0 : 0), 0) * 1_000_000) / 1_000_000
 }
 
 function workerEscalationDecision(

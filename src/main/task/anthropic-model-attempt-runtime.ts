@@ -41,11 +41,13 @@ export interface AnthropicModelAttemptInput {
   body: unknown
   signal: AbortSignal
   auth: AnthropicModelAttemptAuth
+  rootDir?: string
   requestId?: string
   failoverFromAttemptId?: string
   routeReason?: string
   preflight?: () => void | Promise<void>
   operation: (operationId: string) => Promise<AnthropicMessagesResult>
+  costUsdForUsage?: (usage: ReturnType<typeof modelAttemptUsage>) => number | undefined
 }
 
 export class AnthropicModelAttemptTracker {
@@ -68,14 +70,15 @@ export class AnthropicModelAttemptTracker {
     const attempt = this.attemptInput(input)
     return executePersistedModelAttempt(attempt, () => input.operation(attempt.requestId), {
       dependencies: this.dependencies,
-      success: (result) => ({
-        usage: modelAttemptUsage({
+      success: (result) => {
+        const usage = modelAttemptUsage({
           input: result.usage.input,
           output: result.usage.output,
           cacheRead: result.usage.cacheRead,
           cacheWrite: result.usage.cacheCreation
         })
-      }),
+        return { usage, costUsd: input.costUsdForUsage?.(usage) }
+      },
       failure: (error) => classifyRuntimeModelFailure(error, { aborted: input.signal.aborted })
     })
   }
@@ -128,6 +131,10 @@ export class AnthropicModelAttemptTracker {
       routeReason: input.routeReason?.trim() ||
         `Session uses the saved Provider target with the native ${this.identity.label} adapter`,
       keyIdentity: { providerId: input.providerId, ...input.auth },
+      rootDir: input.rootDir,
+      sessionId: run.sessionId,
+      digitalWorkerBinding: run.digitalWorkerBinding,
+      costUsdForUsage: input.costUsdForUsage,
       ...(predecessorAttemptId ? { failoverFromAttemptId: predecessorAttemptId } : {})
     }
   }

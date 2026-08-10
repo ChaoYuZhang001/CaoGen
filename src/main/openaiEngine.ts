@@ -70,6 +70,7 @@ import {
   redactProviderErrorText
 } from './provider/openai-provider-utils'
 import { applyProviderRequestOverrides } from './provider/providerRequestOverrides'
+import { builtinOpenAiPricingForModel, estimateProviderCostUsd, providerPricingForModel } from './provider/providerAdvancedConfig'
 import { resolveOpenAIProtocol, resolveProviderRuntimeTarget } from './provider/providerRuntimeTarget'
 import {
   ProviderRequestDeadline,
@@ -1694,6 +1695,11 @@ export class OpenAIEngine implements Engine {
       init: { ...init, signal },
       signal,
       auth: { keyId: auth.keyId, keyLabel: auth.keyLabel },
+      rootDir: app.getPath('userData'),
+      costUsdForUsage: (usage) => usage ? estimateProviderCostUsd(
+        providerPricingForModel(auth.provider?.advancedConfig, this.effectiveModel()) ?? builtinOpenAiPricingForModel(this.effectiveModel()),
+        { input: usage.inputTokens, output: usage.outputTokens, cacheRead: usage.cacheReadTokens ?? 0, cacheCreation: usage.cacheWriteTokens ?? 0 }
+      ) : undefined,
       executeFetch: async (operationId) => {
         const deadline = new ProviderRequestDeadline(signal, timeouts, streaming)
         try {

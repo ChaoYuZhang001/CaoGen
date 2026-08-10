@@ -397,6 +397,7 @@
     "test:release-workflow-contract": "node scripts/release-workflow-contract-smoke.mjs && node scripts/windows-unsigned-workflow-contract-smoke.mjs && node scripts/windows-signpath-workflow-contract-smoke.mjs && node scripts/release-integrity-workflow-contract-smoke.mjs",
     "test:windows-unsigned-workflow-contract": "node scripts/windows-unsigned-workflow-contract-smoke.mjs",
     "test:windows-signpath-workflow-contract": "node scripts/windows-signpath-workflow-contract-smoke.mjs",
+    "test:billable-usage-ledger": "node scripts/billable-usage-ledger-smoke.mjs",
     "test:macos-x64-release-evidence": "node scripts/macos-x64-release-evidence-smoke.mjs",
     "test:macos-x64-release-evidence:required": "npm run test:macos-x64-release-evidence",
     "test:release-publication-preflight": "node scripts/release-publication-preflight-smoke.mjs",

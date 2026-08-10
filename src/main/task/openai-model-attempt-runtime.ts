@@ -26,11 +26,13 @@ export interface OpenAIModelAttemptFetch<T> {
   init: RequestInit
   signal: AbortSignal
   auth: OpenAIModelAttemptAuth
+  rootDir?: string
   readUsage: () => UsageTotals | undefined
   consume: (response: Response) => Promise<T>
   preflight?: () => void | Promise<void>
   fetch?: typeof fetch
   executeFetch?: (operationId: string) => Promise<Response>
+  costUsdForUsage?: (usage: ReturnType<typeof modelAttemptUsageDelta>) => number | undefined
 }
 
 interface LogicalRequest {
@@ -115,8 +117,12 @@ export class OpenAIModelAttemptTracker {
           protocol: input.protocol,
           adapterVersion: 'openai-engine-v1',
           context: { url: input.url, method: input.init.method ?? 'GET', body: input.init.body },
-          routeReason: this.attemptRouteReason(failoverFromAttemptId),
+      routeReason: this.attemptRouteReason(failoverFromAttemptId),
           keyIdentity: { providerId: input.providerId, ...input.auth },
+          rootDir: input.rootDir,
+          sessionId: input.run?.sessionId,
+          digitalWorkerBinding: input.run?.digitalWorkerBinding,
+          costUsdForUsage: input.costUsdForUsage,
           failoverFromAttemptId
         }, async () => {
           const response = input.executeFetch
@@ -126,7 +132,10 @@ export class OpenAIModelAttemptTracker {
           return input.consume(response)
         }, {
           dependencies: this.dependencies,
-          success: () => ({ usage: modelAttemptUsageDelta(usageBefore, input.readUsage()) }),
+          success: () => {
+            const usage = modelAttemptUsageDelta(usageBefore, input.readUsage())
+            return { usage, costUsd: input.costUsdForUsage?.(usage) }
+          },
           failure: (error) => classifyRuntimeModelFailure(error, { aborted: input.signal.aborted })
         })
       } catch (error) {

@@ -5,11 +5,13 @@ import type {
   ModelAttemptRecord,
   ModelAttemptUsage
 } from '../../shared/model-attempt-types'
+import type { DigitalWorkerBinding } from '../../shared/digital-worker-types'
 import {
   completePersistedModelAttempt,
   getPersistedModelAttemptRetryAuthorization,
   startPersistedModelAttempt
 } from './model-attempt-api'
+import { appendBillableUsageLedger } from './billable-usage-ledger'
 
 export interface RuntimeModelAttemptInput {
   runId: string
@@ -24,6 +26,9 @@ export interface RuntimeModelAttemptInput {
   keyIdentity?: RuntimeModelKeyIdentity
   failoverFromAttemptId?: string
   rootDir?: string
+  sessionId?: string
+  digitalWorkerBinding?: DigitalWorkerBinding
+  costUsdForUsage?: (usage: import('../../shared/model-attempt-types').ModelAttemptUsage | undefined) => number | undefined
   id?: string
   startedAt?: number
 }
@@ -154,6 +159,7 @@ export async function beginPersistedModelAttempt(
     return persistRuntimeCompletion(
       attempt,
       completion,
+      effectiveInput,
       effectiveInput.rootDir,
       dependencies,
       cause
@@ -294,17 +300,26 @@ async function persistRuntimeStart(
 async function persistRuntimeCompletion(
   attempt: ModelAttemptRecord,
   input: Omit<ModelAttemptCompleteInput, 'commandId' | 'expectedRevision' | 'completedAt'>,
+  runtimeInput: RuntimeModelAttemptInput,
   rootDir: string | undefined,
   dependencies: RuntimeModelAttemptDependencies,
   operationError?: unknown
 ): Promise<ModelAttemptRecord> {
   try {
-    return await dependencies.complete(attempt.id, {
+    const completed = await dependencies.complete(attempt.id, {
       ...input,
       commandId: `model-attempt:${attempt.id}:complete`,
       expectedRevision: attempt.revision,
       completedAt: Math.max(dependencies.now(), attempt.startedAt)
     }, rootDir)
+    if (rootDir && runtimeInput.sessionId) {
+      appendBillableUsageLedger(rootDir, {
+        sessionId: runtimeInput.sessionId,
+        attempt: completed,
+        digitalWorkerBinding: runtimeInput.digitalWorkerBinding
+      })
+    }
+    return completed
   } catch (error) {
     const detail = operationError !== undefined
       ? new Error(`provider operation failed (${errorMessage(operationError)}); ${errorMessage(error)}`)

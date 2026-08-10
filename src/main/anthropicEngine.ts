@@ -68,6 +68,7 @@ import {
 } from './project-workspace/outbound-context-policy'
 import { effectiveSessionModel } from './provider/engine-provider-utils'
 import { redactProviderCredentials } from './providerCredentialRuntime'
+import { estimateProviderCostUsd, providerPricingForModel } from './provider/providerAdvancedConfig'
 import {
   fetchWithProviderCredentialLease,
   providerCredentialScopeForSession
@@ -559,6 +560,11 @@ export class AnthropicEngine implements Engine {
       body: this.dependencies.buildWireBody(request),
       signal: controller.signal,
       auth: { keyId: target.keyId, keyLabel: target.keyLabel },
+      rootDir: app.getPath('userData'),
+      costUsdForUsage: (usage) => usage ? estimateProviderCostUsd(
+        providerPricingForModel(target.credentialProvider.advancedConfig, target.model),
+        { input: usage.inputTokens, output: usage.outputTokens, cacheRead: usage.cacheReadTokens ?? 0, cacheCreation: usage.cacheWriteTokens ?? 0 }
+      ) : undefined,
       preflight: async () => {
         assertDigitalWorkerProviderDispatchAllowed(this.meta)
         const manifest = this.activeOutboundContext
