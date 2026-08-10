@@ -63,6 +63,7 @@ const commandDefinitions = [
   { name: 'chat virtual list smoke', command: 'node', args: ['scripts/chat-virtual-list-smoke.mjs'], category: 'smoke' },
   { name: 'indexer smoke', command: 'node', args: ['scripts/indexer-smoke.mjs'], category: 'smoke' },
   { name: 'indexer large-repo smoke', command: 'node', args: ['scripts/indexer-large-repo-smoke.mjs'], category: 'smoke' },
+  { name: 'indexer network watcher smoke', command: 'node', args: ['scripts/indexer-network-watcher-smoke.mjs'], category: 'smoke' },
   { name: 'workbench keyboard accessibility required UI e2e', command: 'node', args: ['scripts/workbench-keyboard-accessibility-e2e.mjs'], category: 'ui' },
   { name: 'context loader smoke', command: 'node', args: ['scripts/context-loader-smoke.mjs'], category: 'smoke' },
   { name: 'projectRules UI smoke', command: 'node', args: ['scripts/project-rules-ui-smoke.mjs'], category: 'smoke' },

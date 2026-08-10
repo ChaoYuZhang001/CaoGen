@@ -18,6 +18,9 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_SCAN_FILES = 50_000
 const WATCH_DEBOUNCE_MS = 250
 const PERSIST_DEBOUNCE_MS = 300
+const NETWORK_WATCH_POLL_MS = 250
+const NETWORK_PERSIST_RETRIES = 5
+const NETWORK_PERSIST_RETRY_MS = 100
 const STAT_CONCURRENCY = 64
 const DEFAULT_LIMIT = 20
 const DEFAULT_IGNORED_DIRS = new Set([
@@ -150,6 +153,7 @@ export class ProjectIndexer {
   private persistDirty = false
   private persistChain: Promise<void> = Promise.resolve()
   private persistenceWrites = 0
+  private disposing = false
 
   private constructor(
     private readonly root: string,
@@ -179,6 +183,7 @@ export class ProjectIndexer {
   }
 
   async dispose(): Promise<void> {
+    this.disposing = true
     for (const timer of this.pendingUpdates.values()) clearTimeout(timer)
     this.pendingUpdates.clear()
     if (this.watcher) await this.watcher.close()
@@ -211,6 +216,8 @@ export class ProjectIndexer {
         return this.shouldIgnore(rel, statsInfo?.isDirectory() ?? false)
       },
       persistent: true,
+      usePolling: isNetworkPath(this.root),
+      interval: isNetworkPath(this.root) ? NETWORK_WATCH_POLL_MS : undefined,
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
     })
     this.watcher = watcher
@@ -477,12 +484,14 @@ export class ProjectIndexer {
   }
 
   private queueUpdate(fullPath: string): void {
+    if (this.disposing) return
     const relPath = toProjectRelative(this.root, fullPath)
     if (!relPath || this.shouldIgnore(relPath, false) || !languageForFile(fullPath)) return
     const previous = this.pendingUpdates.get(fullPath)
     if (previous) clearTimeout(previous)
     const timer = setTimeout(() => {
       this.pendingUpdates.delete(fullPath)
+      if (this.disposing) return
       const update = this.indexChangedFile(fullPath)
       this.activeUpdates.add(update)
       void update.catch((error: unknown) => {
@@ -562,6 +571,7 @@ export class ProjectIndexer {
   }
 
   private schedulePersist(): void {
+    if (this.disposing) return
     this.persistDirty = true
     if (this.persistTimer) return
     this.persistTimer = setTimeout(() => {
@@ -644,19 +654,31 @@ async function loadSql(): Promise<SqlJsStatic> {
 
 async function writeIndexAtomically(indexPath: string, data: Uint8Array): Promise<void> {
   const temporary = join(dirname(indexPath), `.index.${process.pid}.${randomUUID()}.tmp`)
-  try {
-    const handle = await open(temporary, 'wx', 0o600)
+  let lastError: unknown
+  for (let attempt = 0; attempt < NETWORK_PERSIST_RETRIES; attempt += 1) {
     try {
-      await handle.writeFile(data)
-      await handle.sync()
-    } finally {
-      await handle.close()
+      const handle = await open(temporary, 'wx', 0o600)
+      try {
+        await handle.writeFile(data)
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await rename(temporary, indexPath)
+      return
+    } catch (error) {
+      lastError = error
+      await rm(temporary, { force: true }).catch(() => undefined)
+      if (!isTransientNetworkFsError(error) || attempt === NETWORK_PERSIST_RETRIES - 1) throw error
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, NETWORK_PERSIST_RETRY_MS * (attempt + 1)))
     }
-    await rename(temporary, indexPath)
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined)
-    throw error
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+function isTransientNetworkFsError(error: unknown): boolean {
+  const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+  return ['EBUSY', 'EPERM', 'ENOTEMPTY', 'UNKNOWN'].includes(code)
 }
 
 function errorName(error: unknown): string {
@@ -748,6 +770,10 @@ function normalizeInputPath(root: string, filePath: string): string {
 
 function toProjectRelative(root: string, fullPath: string): string {
   return relative(root, fullPath).split(sep).join('/')
+}
+
+function isNetworkPath(filePath: string): boolean {
+  return filePath.startsWith('\\\\')
 }
 
 function clampLimit(value: number): number {
