@@ -1,3 +1,4 @@
+import type { ModelAttemptUsage } from '../../shared/model-attempt-types'
 import type { TaskRunRecord, UsageTotals } from '../../shared/types'
 import {
   classifyRuntimeModelFailure,
@@ -27,6 +28,7 @@ export interface OpenAIModelAttemptFetch<T> {
   signal: AbortSignal
   auth: OpenAIModelAttemptAuth
   readUsage: () => UsageTotals | undefined
+  estimateCost?: (usage: ModelAttemptUsage | undefined) => number | undefined
   consume: (response: Response) => Promise<T>
   preflight?: () => void | Promise<void>
   fetch?: typeof fetch
@@ -126,8 +128,15 @@ export class OpenAIModelAttemptTracker {
           return input.consume(response)
         }, {
           dependencies: this.dependencies,
-          success: () => ({ usage: modelAttemptUsageDelta(usageBefore, input.readUsage()) }),
-          failure: (error) => classifyRuntimeModelFailure(error, { aborted: input.signal.aborted })
+          success: () => {
+            const usage = modelAttemptUsageDelta(usageBefore, input.readUsage())
+            return { usage, costUsd: input.estimateCost?.(usage) }
+          },
+          failure: (error) => {
+            const failure = classifyRuntimeModelFailure(error, { aborted: input.signal.aborted })
+            const usage = modelAttemptUsageDelta(usageBefore, input.readUsage())
+            return { ...failure, usage, costUsd: input.estimateCost?.(usage) }
+          }
         })
       } catch (error) {
         if (isModelAttemptPersistenceError(error)) throw error

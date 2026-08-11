@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { markRun, updateRoutine, type Routine } from '../routineStore'
+import { writeDurableFile } from '../durable-file'
 
 export type RoutineRunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type RoutineDispatchState = 'preparing' | 'session_created' | 'prompt_accepted'
@@ -425,22 +426,15 @@ async function readRuns(rootDir: string): Promise<RoutineRunsFile> {
         .map(normalizeRunRecord)
         .filter((run): run is RoutineRunRecord => run !== null)
     }
-  } catch {
-    return { version: 1, runs: [] }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, runs: [] }
+    throw new Error(`Routine run store is unreadable: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
 async function writeRuns(rootDir: string, runs: RoutineRunRecord[]): Promise<void> {
   const filePath = runsPath(rootDir)
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`
-  try {
-    await writeFile(tmp, `${JSON.stringify({ version: 1, runs }, null, 2)}\n`, 'utf8')
-    await rename(tmp, filePath)
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => undefined)
-    throw error
-  }
+  await writeDurableFile(filePath, `${JSON.stringify({ version: 1, runs }, null, 2)}\n`)
 }
 
 function runsPath(rootDir: string): string {

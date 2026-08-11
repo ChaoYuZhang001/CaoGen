@@ -1,12 +1,19 @@
 import { app } from 'electron'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
 import type { CreateSessionOptions } from '../../shared/types'
 import { sessionManager } from '../sessionManager'
+import { ensureManagedPersonalWorkspace } from '../project-workspace/managed-personal-workspace'
 
-export function createUnassignedSession(options: CreateSessionOptions): ReturnType<typeof sessionManager.createManaged> {
-  // Projectless sessions receive an app-owned root instead of broad access to the user's home directory.
-  const cwd = join(app.getPath('userData'), 'personal-workspace')
-  mkdirSync(cwd, { recursive: true, mode: 0o700 })
-  return sessionManager.createManaged({ ...options, cwd, isolated: false, unassigned: true })
+export async function createUnassignedSession(
+  options: CreateSessionOptions
+): ReturnType<typeof sessionManager.createManaged> {
+  // Conversations keep their zero-configuration contract while gaining a
+  // stable, app-owned personal Workspace container for retention and recovery.
+  const managed = await ensureManagedPersonalWorkspace(app.getPath('userData'))
+  return sessionManager.createManaged({
+    ...options,
+    cwd: managed.cwd,
+    isolated: false,
+    unassigned: true,
+    personalWorkspaceId: managed.workspace.id
+  })
 }

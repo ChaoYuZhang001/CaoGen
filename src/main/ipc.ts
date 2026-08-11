@@ -114,6 +114,7 @@ import { browserViewManager } from './browserView'
 import { sessionImageAttachmentsRoot } from './attachmentOps'
 import { ocrImage } from './imageOcr'
 import {
+  approvePluginRegistryItem,
   pluginRegistryItemKey,
   readPluginRegistryState,
   scanPluginRegistry,
@@ -841,6 +842,9 @@ export function registerIpc(): void {
 
     const scannedItem = findScannedPluginRegistryItem(item, sessionId)
     if (!scannedItem) return { ok: false, error: '插件条目不在当前允许的扫描范围内' }
+    if (enabled && scannedItem.trust.status !== 'approved') {
+      return { ok: false, error: pluginTrustError(scannedItem) }
+    }
 
     const state = setPluginRegistryItemEnabled(
       readPluginRegistryState(pluginRegistryStateFile()),
@@ -861,6 +865,36 @@ export function registerIpc(): void {
         enabled
       }
     }
+  })
+
+  ipcMain.handle('plugins:approve', (_e, item: unknown, sessionId?: string) => {
+    if (!isPluginRegistryItem(item)) return { ok: false, error: '插件条目无效' }
+    const scannedItem = findScannedPluginRegistryItem(item, sessionId)
+    if (!scannedItem) return { ok: false, error: '插件条目不在当前允许的扫描范围内' }
+    try {
+      const state = approvePluginRegistryItem(readPluginRegistryState(pluginRegistryStateFile()), scannedItem)
+      writePluginRegistryState(pluginRegistryStateFile(), state)
+      const refreshed = scanPluginRegistry(
+        pluginRegistryRoots(sessionId),
+        normalizePluginScanOptions(),
+        state
+      )
+      return {
+        ok: true,
+        item: refreshed.items.find((candidate) => pluginRegistryItemKey(candidate) === pluginRegistryItemKey(scannedItem))
+      }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('plugins:authorize', (_e, item: unknown, sessionId?: string) => {
+    if (!isPluginRegistryItem(item)) return { ok: false, error: '插件条目无效' }
+    const scannedItem = findScannedPluginRegistryItem(item, sessionId)
+    if (!scannedItem) return { ok: false, error: '插件条目不在当前允许的扫描范围内' }
+    if (scannedItem.trust.status !== 'approved') return { ok: false, error: pluginTrustError(scannedItem) }
+    if (!scannedItem.enabled) return { ok: false, error: '该插件条目已停用' }
+    return { ok: true, item: scannedItem }
   })
 
   ipcMain.handle('routines:list', () => listRoutines(routineStoreRoot()))
@@ -1098,6 +1132,12 @@ export function registerIpc(): void {
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
   })
+}
+
+function pluginTrustError(item: PluginRegistryItem): string {
+  if (item.trust.status === 'invalid') return `无法验证 ${item.name} 的内容摘要，已阻止使用`
+  if (item.trust.status === 'changed') return `${item.name} 的内容或能力已变更，需要重新批准`
+  return `${item.name} 尚未批准，已阻止使用`
 }
 
 function isDocumentAttachmentView(value: unknown): value is DocumentAttachmentView {

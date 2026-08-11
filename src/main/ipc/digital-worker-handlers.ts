@@ -5,8 +5,15 @@ import { pathToFileURL } from 'node:url'
 import {
   awaitAssignmentOwnerReadiness,
   DigitalWorkerStore,
+  buildDigitalWorkerHistory,
+  decideDigitalWorkerMemory,
+  exportDigitalWorkerHistory,
   failAssignmentOwnerReadiness,
   openAssignmentOwnerCoordinator,
+  recommendDigitalWorkerTeam,
+  refreshDigitalWorkerPerformance,
+  listDigitalWorkerMemory,
+  proposeDigitalWorkerMemory,
   retryAssignmentOwnerReadiness,
   startAssignmentOwnerReadiness,
   withAssignmentOwnerReadiness,
@@ -29,10 +36,12 @@ import type {
   DigitalWorkerLeaseListFilter,
   DigitalWorkerLifecycleOptions,
   DigitalWorkerListOptions,
+  DigitalWorkerMemoryDraftInput,
   DigitalWorkerReleaseOptions,
   DigitalWorkerReassignInput,
   DigitalWorkerRevisionOptions,
   DigitalWorkerRoleTemplateListOptions,
+  DigitalWorkerTeamRecommendationInput,
   DigitalWorkerStatus,
   DigitalWorkerPatch,
   JsonObject,
@@ -72,6 +81,59 @@ const DIGITAL_WORKER_ACTION_HANDLERS = {
     assertGatewayPayload(payload, [], 'getDigitalWorkerStoreSnapshot')
     return store.snapshot()
   },
+  recommendDigitalWorkerTeam: async (_store, payload) => {
+    assertGatewayPayload(payload, ['input'], 'recommendDigitalWorkerTeam')
+    const input = normalizeTeamRecommendationInput(payload.input)
+    const workspace = await openProjectWorkspaceStore(app.getPath('userData'))
+    const [project, goals, workItems] = await Promise.all([
+      workspace.getWorkspace(input.projectId),
+      workspace.listGoals(input.projectId),
+      workspace.listWorkItems(input.projectId)
+    ])
+    if (!project || project.status !== 'active') {
+      throw new Error(`DigitalWorker project is not active: ${input.projectId}`)
+    }
+    return recommendDigitalWorkerTeam({ project, goals, workItems, goalId: input.goalId })
+  },
+  refreshDigitalWorkerPerformance: (store, payload) => {
+    assertGatewayPayload(payload, ['id'], 'refreshDigitalWorkerPerformance')
+    return refreshDigitalWorkerPerformance(
+      store,
+      app.getPath('userData'),
+      requiredId(payload.id, 'DigitalWorker id')
+    )
+  },
+  getDigitalWorkerHistory: (_store, payload) => {
+    assertGatewayPayload(payload, ['workerId'], 'getDigitalWorkerHistory')
+    return buildDigitalWorkerHistory(
+      app.getPath('userData'),
+      requiredId(payload.workerId, 'DigitalWorker id')
+    )
+  },
+  exportDigitalWorkerHistory: (_store, payload) => {
+    assertGatewayPayload(payload, ['workerId'], 'exportDigitalWorkerHistory')
+    return exportDigitalWorkerHistory(
+      app.getPath('userData'),
+      requiredId(payload.workerId, 'DigitalWorker id')
+    )
+  },
+  listDigitalWorkerMemory: (store, payload) => {
+    assertGatewayPayload(payload, ['workerId'], 'listDigitalWorkerMemory')
+    return listDigitalWorkerMemory(store, app.getPath('userData'), requiredId(payload.workerId, 'DigitalWorker id'))
+  },
+  proposeDigitalWorkerMemory: (store, payload) => {
+    assertGatewayPayload(payload, ['workerId', 'input'], 'proposeDigitalWorkerMemory')
+    return proposeDigitalWorkerMemory(
+      store,
+      app.getPath('userData'),
+      requiredId(payload.workerId, 'DigitalWorker id'),
+      normalizeWorkerMemoryDraftInput(payload.input)
+    )
+  },
+  approveDigitalWorkerMemory: (store, payload) => workerMemoryDecision(store, payload, 'approve'),
+  rejectDigitalWorkerMemory: (store, payload) => workerMemoryDecision(store, payload, 'reject'),
+  revokeDigitalWorkerMemory: (store, payload) => workerMemoryDecision(store, payload, 'revoke'),
+  deleteDigitalWorkerMemory: (store, payload) => workerMemoryDecision(store, payload, 'delete'),
   listDigitalWorkerRoleTemplates: (store, payload) => {
     assertGatewayPayload(payload, ['options'], 'listDigitalWorkerRoleTemplates')
     return store.listRoleTemplates(normalizeRoleTemplateListOptions(payload.options))
@@ -281,6 +343,12 @@ async function assertProjectWorkspaceBoundary(
     await assertActiveProject(input.projectId)
     return
   }
+  if (action === 'refreshDigitalWorkerPerformance') {
+    const worker = await digitalWorkerStore().getDigitalWorker(requiredId(payload.id, 'DigitalWorker id'))
+    if (!worker) throw new Error('DigitalWorker not found')
+    await assertActiveProject(worker.projectId)
+    return
+  }
   if (action === 'createDigitalWorkerAssignment') {
     const input = normalizeAssignmentInput(payload.input)
     await assertProjectWorkItem(input.projectId, input.workItemId)
@@ -352,6 +420,21 @@ function workerLifecycleAction(
       normalizeLifecycleOptions(payload.options)
     )
   }
+}
+
+function workerMemoryDecision(
+  store: DigitalWorkerStore,
+  payload: Record<string, unknown>,
+  action: 'approve' | 'reject' | 'revoke' | 'delete'
+) {
+  assertGatewayPayload(payload, ['workerId', 'recordId'], `${action}DigitalWorkerMemory`)
+  return decideDigitalWorkerMemory(
+    store,
+    app.getPath('userData'),
+    requiredId(payload.workerId, 'DigitalWorker id'),
+    requiredId(payload.recordId, 'Worker Memory record id'),
+    action
+  )
 }
 
 function digitalWorkerStore(): DigitalWorkerStore {
@@ -426,6 +509,31 @@ function normalizeRoleTemplateListOptions(value: unknown): DigitalWorkerRoleTemp
   const record = optionalRecord(value, 'RoleTemplate list options')
   assertAllowedKeys(record, ['includeArchived'], 'RoleTemplate list options')
   return record.includeArchived === undefined ? {} : { includeArchived: booleanValue(record.includeArchived, 'includeArchived') }
+}
+
+function normalizeTeamRecommendationInput(value: unknown): DigitalWorkerTeamRecommendationInput {
+  const record = requiredRecord(value, 'Team recommendation input')
+  assertAllowedKeys(record, ['projectId', 'goalId'], 'Team recommendation input')
+  return {
+    projectId: requiredId(record.projectId, 'projectId'),
+    ...(record.goalId === undefined ? {} : { goalId: requiredId(record.goalId, 'goalId') })
+  }
+}
+
+function normalizeWorkerMemoryDraftInput(value: unknown): DigitalWorkerMemoryDraftInput {
+  const record = requiredRecord(value, 'Worker Memory draft input')
+  assertAllowedKeys(record, ['memoryKind', 'title', 'body', 'reason', 'confidence'], 'Worker Memory draft input')
+  const confidence = record.confidence === undefined
+    ? undefined
+    : nonNegativeNumber(record.confidence, 'confidence')
+  if (confidence !== undefined && confidence > 1) throw new Error('confidence must be between 0 and 1')
+  return {
+    memoryKind: requiredText(record.memoryKind, 'memoryKind', 128),
+    title: requiredContent(record.title, 'title', 512),
+    body: requiredContent(record.body, 'body', 100_000),
+    reason: requiredContent(record.reason, 'reason', 2_000),
+    ...(confidence === undefined ? {} : { confidence })
+  }
 }
 
 function normalizeRoleTemplateInput(value: unknown): RoleTemplateInput {

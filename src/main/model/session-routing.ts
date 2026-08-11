@@ -7,6 +7,7 @@ import type {
   EngineKind,
   ModelRoutingRule,
   ProviderView,
+  RoutingExpertPolicy,
   SchedulerStrategy,
   SendMessagePayload
 } from '../../shared/types'
@@ -14,6 +15,7 @@ import { routeModel } from './model-router'
 import type { ManualModelOverride } from './model-router'
 import { inferTaskProfile, type TaskProfile } from './model-profile'
 import { driveModeLabel, driveRiskAtLeast, driveRouteTuning } from './drive'
+import { applyRoutingExpertPolicy } from './routing-expert-policy'
 import { getHealth } from '../providerHealth'
 import {
   readProjectModelDispatchHintsSync,
@@ -57,6 +59,7 @@ export interface SessionRouteInput {
   documentationProviderId?: string
   documentationModel?: string
   modelRoutingRules?: ModelRoutingRule[]
+  routingExpertPolicy?: RoutingExpertPolicy
   projectPath?: string
 }
 
@@ -75,7 +78,12 @@ export type SessionRouteResult =
 
 export function resolveSessionModelRoute(input: SessionRouteInput): SessionRouteResult {
   if (!input.enabled || input.currentModel !== AUTO_MODEL) return { kind: 'disabled' }
-  const providerSelection = routeableProviders(input.providers, input.engine, input.allowAnyEngine === true)
+  const providerSelection = routeableProviders(
+    input.providers,
+    input.engine,
+    input.allowAnyEngine === true,
+    input.routingExpertPolicy
+  )
   const providers = providerSelection.providers
   if (providers.length === 0) return { kind: 'disabled' }
   const prompt = input.payload.text
@@ -216,24 +224,34 @@ function buildRoutingDecisionView(
 function routeableProviders(
   providers: ProviderView[],
   engine: EngineKind | undefined,
-  allowAnyEngine: boolean
+  allowAnyEngine: boolean,
+  expertPolicy?: RoutingExpertPolicy
 ): { providers: ProviderView[]; warnings: string[] } {
   const compatible = providers.filter((provider) => {
     if (!(provider.ready ?? provider.hasToken) || provider.models.length === 0) return false
     if (allowAnyEngine) return true
     return engine !== undefined && provider.engine === engine
   })
-  const healthy = compatible.filter((provider) => getHealth(provider.id).healthy)
+  const expert = expertPolicy
+    ? applyRoutingExpertPolicy(compatible, expertPolicy)
+    : { providers: compatible, warnings: [] }
+  const healthy = expert.providers.filter((provider) => getHealth(provider.id).healthy)
   if (healthy.length > 0) {
-    const excluded = compatible.length - healthy.length
+    const excluded = expert.providers.length - healthy.length
     return {
       providers: healthy,
-      warnings: excluded > 0 ? [`已跳过 ${excluded} 个近期连续失败的 Provider。`] : []
+      warnings: [
+        ...expert.warnings,
+        ...(excluded > 0 ? [`已跳过 ${excluded} 个近期连续失败的 Provider。`] : [])
+      ]
     }
   }
   return {
-    providers: compatible,
-    warnings: compatible.length > 0 ? ['所有可路由 Provider 均标记为不健康，暂按全部候选继续。'] : []
+    providers: expert.providers,
+    warnings: [
+      ...expert.warnings,
+      ...(expert.providers.length > 0 ? ['所有可路由 Provider 均标记为不健康，暂按全部候选继续。'] : [])
+    ]
   }
 }
 

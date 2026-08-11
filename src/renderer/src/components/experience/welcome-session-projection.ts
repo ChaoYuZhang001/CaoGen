@@ -21,6 +21,7 @@ export interface WelcomeSessionDraft {
   driveMode: CaoGenDriveMode
   model: string
   taskStrategy: TaskStrategy
+  experienceModeOverride: ExperienceMode
   projectId?: string
   providerId: string
   routingMode: WelcomeRoutingMode
@@ -132,6 +133,7 @@ export function welcomeSessionOptions(
     cwd: draft.cwd.trim(),
     projectId: draft.projectId,
     unassigned: draft.unassigned,
+    experienceModeOverride: draft.experienceModeOverride,
     initialPrompt: prompt,
     forkFromSdkSessionId: draft.forkFromSdkSessionId,
     forkCheckpointId: draft.forkCheckpointId

@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { TextDecoder } from 'node:util'
+import { writeDurableFile } from './durable-file'
 
 export const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 export const DEFAULT_MAX_DOCUMENT_BYTES = 1024 * 1024
@@ -205,11 +206,7 @@ export async function persistPreparedDocumentAttachment(
       if (existing.isSymbolicLink() || !existing.isFile()) throw new Error('文档附件目标不是普通文件')
       await ensureExistingFileMatchesHash(targetPath, prepared.hash)
     } else {
-      tmpPath = path.join(canonicalClassRoot, `.${prepared.hash}.${process.pid}.${randomUUID()}.tmp`)
-      ensureInsideRoot(canonicalClassRoot, tmpPath)
-      await writeFile(tmpPath, data, { flag: 'wx' })
-      await rename(tmpPath, targetPath)
-      tmpPath = null
+      await writeDurableFile(targetPath, data, { replace: false })
     }
     const targetInfo = await stat(targetPath)
     return {
@@ -420,11 +417,7 @@ async function persistImageAttachment(
       if (!existing.isFile()) throw new Error('附件目标路径已存在且不是文件')
       await ensureExistingFileMatchesHash(targetPath, hash)
     } else {
-      tmpPath = path.join(root, `.${hash}.${process.pid}.${randomUUID()}.tmp`)
-      ensureInsideRoot(root, tmpPath)
-      await writeFile(tmpPath, buffer, { flag: 'wx' })
-      await rename(tmpPath, targetPath)
-      tmpPath = null
+      await writeDurableFile(targetPath, buffer, { replace: false })
     }
 
     const targetInfo = await stat(targetPath)

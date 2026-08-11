@@ -11,6 +11,7 @@ import { OUTBOUND_CONTEXT_TRANSLATIONS } from './i18n/outboundContextTranslation
 import { ROUTING_RECOVERY_TRANSLATIONS } from './i18n/routingRecoveryTranslations'
 import { WORKBENCH_TRANSLATIONS } from './i18n/workbenchTranslations'
 import { PROVIDER_GATEWAY_TRANSLATIONS } from './i18n/providerGatewayTranslations'
+import { PLUGIN_REGISTRY_TRANSLATIONS } from './i18n/pluginRegistryTranslations'
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
  * 支持 {name} 占位符插值:t('key', { name: 'x' })。
@@ -21,6 +22,7 @@ const DICT: Dict = {
   ...SIDEBAR_TRANSLATIONS,
   ...WORKBENCH_TRANSLATIONS,
   ...PROVIDER_GATEWAY_TRANSLATIONS,
+  ...PLUGIN_REGISTRY_TRANSLATIONS,
   contentSearchSection: { zh: '消息内容', en: 'Message content' },
   contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
   recoverableTasks: { zh: '可恢复任务', en: 'Recoverable tasks' },
@@ -68,6 +70,11 @@ const DICT: Dict = {
   forkConversation: { zh: '切换 Provider / 模型继续', en: 'Continue with another provider / model' },
   conversationForkSource: { zh: '对话分叉 · {title}', en: 'Conversation fork · {title}' },
   conversation: { zh: '原对话', en: 'Source conversation' },
+  taskExperienceMode: { zh: '本任务界面模式', en: 'Task interface mode' },
+  taskExperienceAssistant: { zh: '助手', en: 'Assistant' },
+  taskExperienceStudio: { zh: '工作台', en: 'Studio' },
+  taskExperienceAssistantHint: { zh: '仅本任务使用简洁助手界面，不修改默认模式', en: 'Use the concise Assistant interface for this task only' },
+  taskExperienceStudioHint: { zh: '仅本任务使用完整工作台界面，不修改默认模式', en: 'Use the full Studio interface for this task only' },
   // 会话状态
   statusStarting: { zh: '启动中', en: 'Starting' },
   statusRunning: { zh: '运行中', en: 'Running' },
@@ -671,6 +678,11 @@ const DICT: Dict = {
     zh: '驱动档位控制模型、预算和验证深度;任务策略(查看/规划/执行)在会话中单独选择。',
     en: 'Drive mode controls model, budget and validation depth; task strategy (view/plan/execute) is selected separately in the session.'
   },
+  defaultTaskStrategy: { zh: '新任务默认策略', en: 'Default task strategy' },
+  defaultTaskStrategyHint: {
+    zh: '仅作为新任务起点;在 Welcome 或会话中切换只影响当前任务。',
+    en: 'Used only as the starting point for new tasks; Welcome and in-session changes affect that task only.'
+  },
   defaultProvider: { zh: 'Provider 偏好', en: 'Provider preference' },
   defaultModel: { zh: '模型偏好', en: 'Model preference' },
   modelRolesSection: { zh: '模型角色偏好', en: 'Model role preferences' },
@@ -721,6 +733,13 @@ const DICT: Dict = {
     en: 'Leave empty for no restriction; when several are selected, any inferred task type can match.'
   },
   schedulerStrategy: { zh: '自动调度策略', en: 'Scheduler Strategy' },
+  routingExpertPolicy: { zh: '专家路由边界', en: 'Expert routing boundaries' },
+  routingLocality: { zh: '模型数据位置', en: 'Model data locality' },
+  routingLocalityAny: { zh: '允许本地与远程', en: 'Allow local and remote' },
+  routingLocalityPreferLocal: { zh: '优先本地', en: 'Prefer local' },
+  routingLocalityLocalOnly: { zh: '仅本地（禁止外发）', en: 'Local only (no egress)' },
+  routingAllowedProviders: { zh: '允许的 Provider', en: 'Allowed providers' },
+  routingAllowedProvidersAll: { zh: '未限制 Provider', en: 'All providers allowed' },
   failoverEnabled: { zh: '厂商故障自动切换(任务不中断)', en: 'Auto failover across providers' },
   failoverHint: {
     zh: '当前厂商余额不足/限流/宕机时,自动切到健康厂商重试本轮任务。',

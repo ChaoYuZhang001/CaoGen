@@ -1,8 +1,10 @@
 import type {
   McpProbeResult,
   TaskDagFinalizationResolution,
-  TaskSnapshotRecord
+  TaskSnapshotRecord,
+  WorkItem
 } from '../../../shared/types'
+import type { SupervisorRunRecord } from '../../../shared/supervisor-types'
 import type { McpProbeOperationResult } from '../../../shared/mcp-probe-types'
 import type {
   ModelAttemptReconciliationResolution,
@@ -14,6 +16,10 @@ interface TaskRecoveryState {
   modelAttemptReconciliations: ModelAttemptReconciliationView[]
   taskSnapshotsLoading: boolean
   taskSnapshotsError?: string
+  workflowAttentionWorkItems: WorkItem[]
+  workflowAttentionSupervisorRuns: SupervisorRunRecord[]
+  workflowAttentionLoading: boolean
+  workflowAttentionError?: string
   recoverTaskSnapshot(snapshotId: string): Promise<void>
   refreshTaskSnapshots(): Promise<void>
 }
@@ -25,12 +31,21 @@ type TaskRecoveryStateUpdate = Partial<
     | 'modelAttemptReconciliations'
     | 'taskSnapshotsLoading'
     | 'taskSnapshotsError'
+    | 'workflowAttentionWorkItems'
+    | 'workflowAttentionSupervisorRuns'
+    | 'workflowAttentionLoading'
+    | 'workflowAttentionError'
   >
 >
 
 export interface TaskRecoveryActions {
   modelAttemptReconciliations: ModelAttemptReconciliationView[]
+  workflowAttentionWorkItems: WorkItem[]
+  workflowAttentionSupervisorRuns: SupervisorRunRecord[]
+  workflowAttentionLoading: boolean
+  workflowAttentionError?: string
   hydrateTaskRecoveryCandidates(): Promise<void>
+  refreshWorkflowAttention(): Promise<void>
   resolveTaskEffect(
     snapshotId: string,
     effectId: string,
@@ -64,6 +79,32 @@ export function createTaskRecoveryActions(
 ): TaskRecoveryActions {
   return {
     modelAttemptReconciliations: [],
+    workflowAttentionWorkItems: [],
+    workflowAttentionSupervisorRuns: [],
+    workflowAttentionLoading: false,
+
+    async refreshWorkflowAttention() {
+      set({ workflowAttentionLoading: true, workflowAttentionError: undefined })
+      const [workItemsResult, supervisorResult] = await Promise.allSettled([
+        window.agentDesk.listProjectWorkItems(undefined, { includeArchived: true }),
+        window.agentDesk.listSupervisorRuns()
+      ])
+      const attentionStatuses = new Set<WorkItem['status']>(['running', 'waiting_approval', 'blocked', 'verifying', 'failed'])
+      const errors = [
+        workItemsResult.status === 'rejected' ? `WorkItem: ${errorMessage(workItemsResult.reason)}` : undefined,
+        supervisorResult.status === 'rejected' ? `Supervisor: ${errorMessage(supervisorResult.reason)}` : undefined
+      ].filter((value): value is string => Boolean(value))
+      set({
+        workflowAttentionWorkItems: workItemsResult.status === 'fulfilled'
+          ? workItemsResult.value.filter((item) => attentionStatuses.has(item.status) || item.acceptance?.status === 'failed')
+          : get().workflowAttentionWorkItems,
+        workflowAttentionSupervisorRuns: supervisorResult.status === 'fulfilled'
+          ? supervisorResult.value.filter((run) => ['waiting_approval', 'waiting_reconciliation', 'blocked', 'failed'].includes(run.status))
+          : get().workflowAttentionSupervisorRuns,
+        workflowAttentionLoading: false,
+        workflowAttentionError: errors.length > 0 ? errors.join('\n') : undefined
+      })
+    },
 
     async hydrateTaskRecoveryCandidates() {
       set({ taskSnapshotsLoading: true, taskSnapshotsError: undefined })

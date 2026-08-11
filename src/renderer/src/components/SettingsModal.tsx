@@ -39,6 +39,7 @@ import type {
   ProviderView,
   SchedulerStrategy,
   SessionMeta,
+  TaskStrategy,
   ToolCapabilityGrantView,
   ToolRiskLevel,
   ToolSemanticCapability
@@ -235,6 +236,28 @@ export default function SettingsPage(): React.JSX.Element {
       ...d,
       providerCircuitBreaker: { ...d.providerCircuitBreaker, ...patch }
     }))
+  const setRoutingExpertPolicy = (patch: Partial<typeof draft.routingExpertPolicy>): void =>
+    setDraft((d) => ({
+      ...d,
+      routingExpertPolicy: { ...d.routingExpertPolicy, ...patch }
+    }))
+  const setRoutingProviderAllowed = (providerId: string, allowed: boolean): void => {
+    setDraft((d) => {
+      const allIds = providers.map((provider) => provider.id)
+      const current = d.routingExpertPolicy.allowedProviderIds
+      const effective = current.length === 0 ? allIds : current
+      const next = allowed
+        ? [...new Set([...effective, providerId])]
+        : effective.filter((id) => id !== providerId)
+      return {
+        ...d,
+        routingExpertPolicy: {
+          ...d.routingExpertPolicy,
+          allowedProviderIds: next.length === allIds.length ? [] : next
+        }
+      }
+    })
+  }
   const updateRoutingRule = (id: string, patch: Partial<ModelRoutingRule>): void =>
     setDraft((d) => ({
       ...d,
@@ -573,6 +596,18 @@ export default function SettingsPage(): React.JSX.Element {
                   {selectedDrive.summary} · ${selectedDrive.budgetUsd}/session · {selectedDrive.toolPolicySummary}
                 </p>
                 <p className="settings-hint">{t('driveModeOrthogonalHint')}</p>
+
+                <label className="field-label">{t('defaultTaskStrategy')}</label>
+                <select
+                  className="select select-block"
+                  value={draft.defaultTaskStrategy}
+                  onChange={(event) => set('defaultTaskStrategy', event.target.value as TaskStrategy)}
+                >
+                  <option value="view">{t('taskStrategyView')}</option>
+                  <option value="plan">{t('taskStrategyPlan')}</option>
+                  <option value="execute">{t('taskStrategyExecute')}</option>
+                </select>
+                <p className="settings-hint">{t('defaultTaskStrategyHint')}</p>
 
                 <label className="field-label">{t('defaultProvider')}</label>
                 <select
@@ -950,6 +985,48 @@ export default function SettingsPage(): React.JSX.Element {
                     </option>
                   ))}
                 </select>
+
+                <fieldset className="routing-rule-task-field">
+                  <legend>{t('routingExpertPolicy')}</legend>
+                  <div className="settings-grid-2">
+                    <label className="field-label">
+                      {t('routingLocality')}
+                      <select
+                        className="select select-block"
+                        value={draft.routingExpertPolicy.locality}
+                        onChange={(event) => setRoutingExpertPolicy({
+                          locality: event.target.value === 'prefer_local' || event.target.value === 'local_only'
+                            ? event.target.value
+                            : 'any'
+                        })}
+                      >
+                        <option value="any">{t('routingLocalityAny')}</option>
+                        <option value="prefer_local">{t('routingLocalityPreferLocal')}</option>
+                        <option value="local_only">{t('routingLocalityLocalOnly')}</option>
+                      </select>
+                    </label>
+                    <div className="field-label">
+                      <span>{t('routingAllowedProviders')}</span>
+                      {providers.length === 0 ? (
+                        <small>{t('routingAllowedProvidersAll')}</small>
+                      ) : (
+                        <div className="routing-rule-task-grid">
+                          {providers.map((provider) => (
+                            <label key={provider.id} className="routing-rule-task-option">
+                              <input
+                                type="checkbox"
+                                checked={draft.routingExpertPolicy.allowedProviderIds.length === 0
+                                  || draft.routingExpertPolicy.allowedProviderIds.includes(provider.id)}
+                                onChange={(event) => setRoutingProviderAllowed(provider.id, event.target.checked)}
+                              />
+                              <span>{provider.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </fieldset>
 
                 <label className="settings-check">
                   <input

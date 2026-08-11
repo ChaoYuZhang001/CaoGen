@@ -258,6 +258,90 @@
   margin-top: 14px;
 }
 
+.pws-template-preview {
+  min-width: 0;
+  margin-top: 14px;
+  padding: 13px 0;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.pws-template-preview > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pws-template-preview h4 {
+  margin: 1px 0 0;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.pws-template-preview > header > span,
+.pws-eyebrow {
+  color: var(--text-faint);
+  font: 600 10px/1.3 var(--mono);
+}
+
+.pws-template-preview > p {
+  margin: 7px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.pws-template-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.pws-template-columns > div {
+  min-width: 0;
+}
+
+.pws-template-columns strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.pws-template-columns ol,
+.pws-template-columns ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.pws-template-columns li {
+  overflow-wrap: anywhere;
+}
+
+.pws-template-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pws-template-tags span {
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+  font: 500 10px/1.4 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.pws-template-preview > .pws-template-policy {
+  color: var(--yellow);
+}
+
 .pws-dependency-picker {
   padding-top: 2px;
 }
@@ -1149,6 +1233,7 @@
 
   .pws-form-grid-2,
   .pws-form-grid-3,
+  .pws-template-columns,
   .pws-budget-grid,
   .pws-checkbox-grid,
   .pws-goal-contract {

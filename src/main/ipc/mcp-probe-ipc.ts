@@ -18,6 +18,9 @@ export function registerMcpProbeIpc(dependencies: McpProbeIpcDependencies): void
     for (const item of capped) {
       const scanned = dependencies.findScannedItem(item, sessionId)
       if (!scanned) continue
+      if (scanned.trust.status !== 'approved' || !scanned.enabled) {
+        throw new Error(`${scanned.name} 未批准或已停用，已阻止 MCP 探测`)
+      }
       const config = readScannedMcpConfig(scanned)
       if (config) inputs.push({ id: scanned.id, config })
     }

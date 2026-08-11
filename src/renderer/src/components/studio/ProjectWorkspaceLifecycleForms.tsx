@@ -89,7 +89,15 @@ export function ProjectResourceForm({
     label: '',
     location: '',
     dataClass: 'S2',
-    egressPolicy: 'allow'
+    egressPolicy: 'allow',
+    connectorUsage: ['resource'],
+    connectorCapabilities: 'resource:read',
+    connectorDataDirection: 'read',
+    connectorAuthorizationSubject: 'personal',
+    connectorPrincipalId: '',
+    connectorScopes: 'read',
+    connectorVersion: '1',
+    connectorReconciliation: 'manual_only'
   })
   const update = <K extends keyof ProjectResourceDraft>(field: K, value: ProjectResourceDraft[K]): void => {
     setDraft((current) => ({ ...current, [field]: value }))
@@ -104,10 +112,66 @@ export function ProjectResourceForm({
       <fieldset className="pws-fieldset" disabled={busy}>
         <div className="pws-form-grid pws-form-grid-3">
           <LifecycleField id={`${baseId}-kind`} label={TEXT.resourceKind}>
-            <select id={`${baseId}-kind`} name="resourceKind" className="select select-block" value={draft.kind} onChange={(event) => update('kind', event.target.value as ProjectResourceDraft['kind'])}>
+            <select
+              id={`${baseId}-kind`}
+              name="resourceKind"
+              className="select select-block"
+              value={draft.kind}
+              onChange={(event) => {
+                const kind = event.target.value as ProjectResourceDraft['kind']
+                setDraft((current) => ({ ...current, kind, ...(kind === 'connector' ? { dataClass: 'S1' as const } : {}) }))
+              }}
+            >
               {PROJECT_RESOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </LifecycleField>
+          {draft.kind === 'connector' && (
+            <>
+              <LifecycleField id={`${baseId}-connector-usage`} label="用途">
+                <select
+                  id={`${baseId}-connector-usage`}
+                  className="select select-block"
+                  value={draft.connectorUsage[0] ?? 'resource'}
+                  onChange={(event) => update('connectorUsage', [event.target.value as ProjectResourceDraft['connectorUsage'][number]])}
+                >
+                  <option value="resource">Project Resource</option>
+                  <option value="knowledge_source">知识源</option>
+                  <option value="tool">Tool</option>
+                </select>
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-direction`} label="数据方向">
+                <select id={`${baseId}-connector-direction`} className="select select-block" value={draft.connectorDataDirection} onChange={(event) => update('connectorDataDirection', event.target.value as ProjectResourceDraft['connectorDataDirection'])}>
+                  <option value="read">只读</option>
+                  <option value="write">只写</option>
+                  <option value="bidirectional">双向</option>
+                </select>
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-capabilities`} label="能力清单（逗号分隔）">
+                <input id={`${baseId}-connector-capabilities`} className="input" value={draft.connectorCapabilities} onChange={(event) => update('connectorCapabilities', event.target.value)} required />
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-subject`} label="授权主体">
+                <select id={`${baseId}-connector-subject`} className="select select-block" value={draft.connectorAuthorizationSubject} onChange={(event) => update('connectorAuthorizationSubject', event.target.value as ProjectResourceDraft['connectorAuthorizationSubject'])}>
+                  <option value="personal">个人授权</option>
+                  <option value="shared">共享授权</option>
+                </select>
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-principal`} label="授权账户/组织 ID">
+                <input id={`${baseId}-connector-principal`} className="input" value={draft.connectorPrincipalId} onChange={(event) => update('connectorPrincipalId', event.target.value)} required />
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-scopes`} label="授权作用域（逗号分隔）">
+                <input id={`${baseId}-connector-scopes`} className="input" value={draft.connectorScopes} onChange={(event) => update('connectorScopes', event.target.value)} required />
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-version`} label="连接器版本">
+                <input id={`${baseId}-connector-version`} className="input" value={draft.connectorVersion} onChange={(event) => update('connectorVersion', event.target.value)} required />
+              </LifecycleField>
+              <LifecycleField id={`${baseId}-connector-reconciliation`} label="写操作对账">
+                <select id={`${baseId}-connector-reconciliation`} className="select select-block" value={draft.connectorReconciliation} onChange={(event) => update('connectorReconciliation', event.target.value as ProjectResourceDraft['connectorReconciliation'])}>
+                  <option value="queryable">可查询对账</option>
+                  <option value="manual_only">不透明/仅手动确认</option>
+                </select>
+              </LifecycleField>
+            </>
+          )}
           <LifecycleField id={`${baseId}-label`} label={TEXT.resourceLabel}>
             <input id={`${baseId}-label`} name="resourceLabel" className="input" value={draft.label} onChange={(event) => update('label', event.target.value)} autoFocus />
           </LifecycleField>

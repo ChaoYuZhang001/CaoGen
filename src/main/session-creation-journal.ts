@@ -14,6 +14,10 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import type { CreateSessionOptions, SessionMeta } from '../shared/types'
 import type { SessionCreationDraft } from './session-create-lifecycle'
+import {
+  sessionCreationJournalDocument,
+  sessionCreationJournalRecordsFromDocument
+} from './session-creation-journal-format'
 import { normalizeTaskStrategy } from './task/task-strategy'
 
 interface PendingSessionCreationRecord {
@@ -59,15 +63,16 @@ function readJournal(): PendingSessionCreationRecord[] {
   const file = journalFile()
   if (!existsSync(file)) return []
   const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
-  if (!Array.isArray(parsed) || !parsed.every(isPendingRecord)) {
+  const records = sessionCreationJournalRecordsFromDocument<unknown>(parsed)
+  if (!records.every(isPendingRecord)) {
     throw new Error('session creation journal 已损坏，拒绝继续 managed session lifecycle')
   }
   const seen = new Set<string>()
-  for (const record of parsed) {
+  for (const record of records) {
     if (seen.has(record.sessionId)) throw new Error(`session creation journal 含重复 id: ${record.sessionId}`)
     seen.add(record.sessionId)
   }
-  return parsed.map(cloneRecord)
+  return records.map(cloneRecord)
 }
 
 function writeJournal(records: PendingSessionCreationRecord[]): void {
@@ -78,7 +83,7 @@ function writeJournal(records: PendingSessionCreationRecord[]): void {
   let descriptor: number | undefined
   try {
     descriptor = openSync(temp, 'wx', 0o600)
-    writeFileSync(descriptor, `${JSON.stringify(records, null, 2)}\n`, 'utf8')
+    writeFileSync(descriptor, `${JSON.stringify(sessionCreationJournalDocument(records), null, 2)}\n`, 'utf8')
     fsyncSync(descriptor)
     closeSync(descriptor)
     descriptor = undefined

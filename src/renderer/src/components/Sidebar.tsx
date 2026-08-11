@@ -116,6 +116,8 @@ function Sidebar({
   const projectWorkspaces = useStore((s) => s.projectWorkspaces)
   const taskSnapshots = useStore((s) => s.taskSnapshots)
   const modelAttemptReconciliations = useStore((s) => s.modelAttemptReconciliations)
+  const workflowAttentionWorkItems = useStore((s) => s.workflowAttentionWorkItems)
+  const workflowAttentionSupervisorRuns = useStore((s) => s.workflowAttentionSupervisorRuns)
   const query = useStore((s) => s.sidebarQuery)
   const setSidebarQuery = useStore((s) => s.setSidebarQuery)
   const transcriptSearchResults = useStore((s) => s.transcriptSearchResults)
@@ -228,7 +230,10 @@ function Sidebar({
         modelAttemptMatchesSnapshot(reconciliation, snapshot)
       )
   )
-  const recoveryCount = recoverySnapshots.length + modelAttemptReconciliations.length
+  const pendingPermissionCount = Object.values(sessions)
+    .reduce((total, session) => total + session.pendingPermissions.length, 0)
+  const recoveryCount = recoverySnapshots.length + modelAttemptReconciliations.length +
+    workflowAttentionWorkItems.length + workflowAttentionSupervisorRuns.length + pendingPermissionCount
   const activeEntries: ActiveSidebarEntry[] = order.flatMap((id) => {
     const session = sessions[id]
     if (!session) return []

@@ -48,6 +48,10 @@ import {
 } from './anthropicOpenAiGateway'
 import { getSettings } from '../settings'
 import {
+  applyRoutingExpertPolicy,
+  assertRoutingExpertTargetAllowed
+} from '../model/routing-expert-policy'
+import {
   discardGatewayUpstreamResponse,
   primeGatewayStreamingResponse,
   ProviderGatewayUsageScanner,
@@ -351,6 +355,11 @@ async function executeGatewayUpstreamAttempt(
   startedAt: number,
   state: GatewayAttemptRuntimeState
 ): Promise<void> {
+  assertRoutingExpertTargetAllowed(
+    route.provider.id,
+    route.target.baseUrl,
+    getSettings().routingExpertPolicy
+  )
   configureProviderReliabilityPolicy(route.provider)
   if (!acquireProviderRequest(route.provider.id)) {
     throw gatewayHttpError(503, 'provider_circuit_open', 'Provider circuit is open')
@@ -486,10 +495,12 @@ function resolveGatewayRoutes(
   engine: 'openai' | 'gemini',
   protocol: ProviderGatewayUsageRecord['protocol']
 ): GatewayRoute[] {
-  const initial = resolveGatewayRoute(requestedModel, engine)
+  const settings = getSettings()
+  const policyProviders = gatewayPolicyProviders(engine, settings.routingExpertPolicy)
+  const initial = resolveGatewayRoute(requestedModel, engine, policyProviders)
   const expectedProtocol = protocol === 'gateway.openai.responses' ? 'responses' : 'chat'
-  const fallbackProviderId = getSettings().fallbackProviderId.trim()
-  const alternates = listProviders().flatMap((view): GatewayRoute[] => {
+  const fallbackProviderId = settings.fallbackProviderId.trim()
+  const alternates = policyProviders.flatMap((view): GatewayRoute[] => {
     if (!view.ready || view.engine !== engine || view.id === initial.provider.id) return []
     const provider = getProvider(view.id)
     if (!provider || !providerIsReady(provider) || resolveProviderEngine(provider) !== engine) return []
@@ -514,8 +525,11 @@ function resolveGatewayRoutes(
   return [initial, ...alternates].slice(0, 21)
 }
 
-function resolveGatewayRoute(requestedModel: string, engine: 'openai' | 'gemini'): GatewayRoute {
-  const views = listProviders().filter((provider) => provider.ready && provider.engine === engine)
+function resolveGatewayRoute(
+  requestedModel: string,
+  engine: 'openai' | 'gemini',
+  views = gatewayPolicyProviders(engine, getSettings().routingExpertPolicy)
+): GatewayRoute {
   const explicit = views
     .filter((provider) => requestedModel.startsWith(`${provider.id}/`))
     .map((provider) => ({ provider, model: requestedModel.slice(provider.id.length + 1) }))
@@ -533,6 +547,7 @@ function resolveGatewayRoute(requestedModel: string, engine: 'openai' | 'gemini'
   }
   const target = resolveProviderRuntimeTarget(provider, { appId: 'gateway', model: unique[0].model })
   if (!target.baseUrl || !target.model) throw gatewayHttpError(503, 'provider_unavailable', 'Selected Provider has no usable endpoint or model')
+  assertRoutingExpertTargetAllowed(provider.id, target.baseUrl, getSettings().routingExpertPolicy)
   return {
     provider,
     target,
@@ -595,9 +610,10 @@ function gatewayModelCatalog(
   providers: ProviderView[],
   engine?: 'openai' | 'gemini'
 ): ProviderGatewayModelView[] {
-  const ready = providers.filter((provider) => provider.ready
+  const compatible = providers.filter((provider) => provider.ready
     && (provider.engine === 'openai' || provider.engine === 'gemini')
     && (!engine || provider.engine === engine))
+  const ready = applyRoutingExpertPolicy(compatible, getSettings().routingExpertPolicy).providers
   const counts = new Map<string, number>()
   for (const provider of ready) {
     for (const model of providerModelNames(provider)) {
@@ -614,6 +630,14 @@ function gatewayModelCatalog(
     model,
     engine: provider.engine as 'openai' | 'gemini'
   }))).sort((left, right) => left.id.localeCompare(right.id))
+}
+
+function gatewayPolicyProviders(
+  engine: 'openai' | 'gemini',
+  policy: ReturnType<typeof getSettings>['routingExpertPolicy']
+): ProviderView[] {
+  const compatible = listProviders().filter((provider) => provider.ready && provider.engine === engine)
+  return applyRoutingExpertPolicy(compatible, policy).providers
 }
 
 function providerModelNames(provider: ProviderView): string[] {

@@ -76,10 +76,13 @@ export const DURABLE_WRITE_REGISTRY = [
     'src/main/attachmentOps.ts', 'user_artifact', 'atomic_rename',
     'Publishes immutable attachment bytes after hash and path validation.'
   ),
-  gap(
-    'src/main/browserAnnotations.ts', 'BrowserAnnotation JSON', 'unversioned', 'atomic_rename',
-    'Persists browser annotation metadata as one JSON document per annotation.',
-    'Stored annotations have validation but no explicit schema version or migration contract.'
+  implemented(
+    'src/main/durable-file.ts', 'migration_backup', 'atomic_fsync_rename',
+    'Provides the shared fsync, atomic publication, private-mode, and directory durability primitive.'
+  ),
+  domain(
+    'src/main/browserAnnotations.ts', 'caogen.browser-annotation', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists versioned browser annotation documents durably and upgrades validated legacy records on read.'
   ),
   exempt(
     'src/main/browserView.ts', 'user_artifact', 'direct_write',
@@ -120,11 +123,10 @@ export const DURABLE_WRITE_REGISTRY = [
     'caogen.project-import-source', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists the validated Project import source used by resumable import recovery.'
   ),
-  gap(
+  domain(
     'src/main/data-lifecycle/project-session-purge.ts',
-    'legacy Project-owned session stores', 'mixed and partly unversioned', 'atomic_fsync_rename',
-    'Rewrites multiple legacy session-owned JSON stores while purging a Project.',
-    'The affected legacy stores do not share one versioned schema or migration contract.'
+    'versioned Project-owned session stores', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Rewrites History, Active Session, Session Creation, and Task Plan stores only through their versioned codecs and durable publication.'
   ),
   domain(
     'src/main/data-lifecycle/workflow-project-purge.ts',
@@ -196,11 +198,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'Materializes temporary image bytes for an OCR subprocess.',
     'The OCR input is removed after use and never participates in restart recovery.'
   ),
-  gap(
-    'src/main/indexer/index.ts', 'Project code-index SQLite', 'unversioned', 'direct_write',
-    'Exports a derived sql.js code index into the Project cache directory.',
-    'The index is rebuildable but its file is directly overwritten and has no explicit schema version.' ,
-    'derived_index'
+  derived(
+    'src/main/indexer/index.ts', 'Project code-index SQLite metadata', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Exports the rebuildable sql.js code index durably and rejects unsupported schema metadata.'
   ),
   exempt(
     'src/main/ipc/unassigned-session.ts', 'workspace_effect', 'effect_guarded_workspace',
@@ -225,15 +225,18 @@ export const DURABLE_WRITE_REGISTRY = [
     'LayeredMemoryStore', '1', 'atomic_rename', 'implemented_unverified',
     'Persists the canonical layered Memory index with an explicit store version.'
   ),
-  gap(
-    'src/main/memoryStore.ts', 'legacy ProjectMemoryEntry files', 'unversioned', 'atomic_rename',
-    'Contains the legacy per-entry Memory writer retained for compatibility migration.',
-    'Legacy Memory entries have validated fields but no schema version or migration marker.'
+  domain(
+    'src/main/memoryStore.ts', 'caogen.project-memory-entry', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Retains the legacy per-entry Memory bridge with versioned documents and durable upgrade-on-read publication.'
   ),
   implemented(
     'src/main/migration-apply.ts', 'migration_backup', 'delegated_atomic',
     'Creates private migration staging and backup directories before applying decisions.',
     { delegate: 'src/main/migration-safety.ts' }
+  ),
+  journal(
+    'src/main/migration-contract.ts', 'caogen.migration-contract', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists digest-bound migration state transitions, target progress, and recovery decisions durably.'
   ),
   implemented(
     'src/main/migration-safety.ts', 'migration_backup', 'atomic_rename',
@@ -260,10 +263,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'src/main/pluginRegistry.ts', 'PluginRegistryState', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists plugin enablement state independently from scanned plugin content.'
   ),
-  gap(
-    'src/main/previewAnnotations.ts', 'PreviewAnnotation JSON', 'unversioned', 'atomic_rename',
-    'Persists preview review annotations as validated per-session JSON records.',
-    'Stored preview annotations lack an explicit schema version and migration contract.'
+  domain(
+    'src/main/previewAnnotations.ts', 'caogen.preview-annotation', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists versioned preview review annotations durably and upgrades validated legacy records on read.'
   ),
   exempt(
     'src/main/previewVisual.ts', 'ephemeral_runtime', 'ephemeral',
@@ -367,10 +369,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'ProviderHealthFile', '1', 'atomic_rename', 'implemented_unverified',
     'Persists bounded Provider health and failure history for routing decisions.'
   ),
-  gap(
-    'src/main/provider/providerStoreRepository.ts', 'Provider array', 'unversioned', 'atomic_fsync_rename',
-    'Serializes Provider configuration and encrypted credential references behind the global mutation lock.',
-    'Atomic publication exists, but the Provider store has no top-level schema version or migration contract.'
+  domain(
+    'src/main/provider/providerStoreRepository.ts', 'caogen.provider-store', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Serializes versioned Provider configuration and encrypted credential references durably behind the global mutation lock.'
   ),
   domain(
     'src/main/routines/routine-runner.ts',
@@ -461,11 +462,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'Caches downloaded Provider icons for presentation.',
     'Icon cache entries are derived, replaceable, and never a recovery source.'
   ),
-  gap(
-    'src/main/worktreeMerge.ts', 'WorktreeMergeReceipt array', 'unversioned', 'direct_write',
-    'Writes exported patches and the bounded merge receipt history.',
-    'Merge receipts are unversioned and directly overwritten; patch outputs also lack a durable commit barrier.',
-    'audit_log'
+  audit(
+    'src/main/worktreeMerge.ts', 'caogen.worktree-merge-receipts', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Durably publishes exported patches and the bounded, versioned merge receipt history.'
   ),
   exempt(
     'src/main/worktrees.ts', 'user_artifact', 'direct_write',

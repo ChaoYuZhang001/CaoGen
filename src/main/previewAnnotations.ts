@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { writeDurableFile } from './durable-file'
 import type {
   BrowserAnnotationBoundingBox,
   PreviewAnnotation,
@@ -17,6 +18,8 @@ export class PreviewAnnotationValidationError extends Error {
 }
 
 const JSON_INDENT = 2
+export const PREVIEW_ANNOTATION_SCHEMA_VERSION = 1 as const
+const PREVIEW_ANNOTATION_FORMAT = 'caogen.preview-annotation.v1' as const
 const SAFE_PATH_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 const PREVIEW_TYPES = new Set<PreviewType>(['html', 'markdown', 'text', 'csv', 'json', 'image', 'pdf', 'office', 'unknown'])
 
@@ -37,7 +40,7 @@ export async function savePreviewAnnotation(
   const input = normalizeSaveArgs(sessionOrInput, maybeInput)
   const annotation = normalizePreviewAnnotation(input.sessionId, input)
   const filePath = annotationJsonPath(resolveRootDir(rootDir), annotation.sessionId, annotation.id)
-  await atomicWriteText(filePath, `${JSON.stringify(annotation, null, JSON_INDENT)}\n`)
+  await atomicWriteText(filePath, `${JSON.stringify(storedAnnotation(annotation), null, JSON_INDENT)}\n`)
   return annotation
 }
 
@@ -58,8 +61,11 @@ export async function listPreviewAnnotations(
   for (const name of names.filter((entry) => entry.endsWith('.json')).sort()) {
     const id = normalizePathId(name.slice(0, -'.json'.length), 'annotationId')
     const raw = await readFile(annotationJsonPath(root, safeSessionId, id), 'utf8')
-    const annotation = parseStoredAnnotation(raw, safeSessionId, id)
-    if (!normalizedPath || annotation.path === normalizedPath) annotations.push(annotation)
+    const parsed = parseStoredAnnotation(raw, safeSessionId, id)
+    if (!normalizedPath || parsed.annotation.path === normalizedPath) annotations.push(parsed.annotation)
+    if (parsed.legacy) {
+      await atomicWriteText(annotationJsonPath(root, safeSessionId, id), `${JSON.stringify(storedAnnotation(parsed.annotation), null, JSON_INDENT)}\n`)
+    }
   }
   return annotations.sort(compareAnnotations)
 }
@@ -116,18 +122,28 @@ function normalizeSaveArgs(
   }
 }
 
-function parseStoredAnnotation(raw: string, sessionId: string, annotationId: string): PreviewAnnotation {
+function parseStoredAnnotation(raw: string, sessionId: string, annotationId: string): { annotation: PreviewAnnotation; legacy: boolean } {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch (err) {
     throw new PreviewAnnotationValidationError(`preview annotation JSON 无法解析:${errorMessage(err)}`)
   }
-  const annotation = normalizePreviewAnnotation(sessionId, parsed as PreviewAnnotationInput)
+  if (!isRecord(parsed)) throw new PreviewAnnotationValidationError('preview annotation JSON 必须是对象')
+  const legacy = !hasOwn(parsed, 'schemaVersion') && !hasOwn(parsed, 'format') && hasOwn(parsed, 'id')
+  let input: unknown = parsed
+  if (!legacy) {
+    if (parsed.schemaVersion !== PREVIEW_ANNOTATION_SCHEMA_VERSION || parsed.format !== PREVIEW_ANNOTATION_FORMAT) {
+      throw new PreviewAnnotationValidationError('不支持的 preview annotation schema 版本或格式')
+    }
+    const { schemaVersion: _schemaVersion, format: _format, ...annotation } = parsed
+    input = annotation
+  }
+  const annotation = normalizePreviewAnnotation(sessionId, input as PreviewAnnotationInput)
   if (annotation.id !== annotationId) {
     throw new PreviewAnnotationValidationError('annotation id 与文件名不匹配')
   }
-  return annotation
+  return { annotation, legacy }
 }
 
 function resolveRootDir(rootDir: string): string {
@@ -150,15 +166,14 @@ function annotationJsonPath(root: string, sessionId: string, annotationId: strin
 }
 
 async function atomicWriteText(filePath: string, content: string): Promise<void> {
-  const dir = path.dirname(filePath)
-  await mkdir(dir, { recursive: true })
-  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx' })
-    await rename(tmpPath, filePath)
-  } catch (err) {
-    await rm(tmpPath, { force: true }).catch(() => undefined)
-    throw err
+  await writeDurableFile(filePath, content)
+}
+
+function storedAnnotation(annotation: PreviewAnnotation): Record<string, unknown> {
+  return {
+    schemaVersion: PREVIEW_ANNOTATION_SCHEMA_VERSION,
+    format: PREVIEW_ANNOTATION_FORMAT,
+    ...annotation
   }
 }
 

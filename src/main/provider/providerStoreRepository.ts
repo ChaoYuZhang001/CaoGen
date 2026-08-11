@@ -1,22 +1,17 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
   constants,
-  existsSync,
   fstatSync,
-  fsyncSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
-  readSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
+  readSync
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Provider } from '../../shared/types'
+import { writeDurableFileSync } from '../durable-file'
 import {
   ProviderProfileOperationJournal,
   ProviderProfileOperationJournalError
@@ -27,6 +22,14 @@ import {
 } from './providerStoreMutationLock'
 
 const MAX_PROVIDER_STORE_BYTES = 16 * 1024 * 1024
+export const PROVIDER_STORE_SCHEMA_VERSION = 1 as const
+const PROVIDER_STORE_FORMAT = 'caogen.provider-store.v1' as const
+
+interface ProviderStoreDocument {
+  schemaVersion: typeof PROVIDER_STORE_SCHEMA_VERSION
+  format: typeof PROVIDER_STORE_FORMAT
+  entries: Provider[]
+}
 
 export interface ProviderStoreMutationOptions {
   operationId?: string
@@ -49,6 +52,7 @@ export class ProviderStoreMutationBlockedError extends Error {
 
 export class ProviderStoreRepository {
   private cache: Provider[] | null = null
+  private loadedLegacyDocument = false
   private mutationDepth = 0
   private readonly mutationOptions: ProviderStoreMutationOptions[] = []
 
@@ -66,16 +70,22 @@ export class ProviderStoreRepository {
     if (this.cache) return this.cache
     const file = this.providersFile()
     const info = fileInfo(file)
-    const firstRun = !info
     if (info && (info.isSymbolicLink() || !info.isFile())) {
       throw new Error('Provider Store 必须是常规文件')
     }
-    if (!firstRun && process.platform !== 'win32') chmodSync(file, 0o600)
+    if (!info) {
+      this.cache = []
+      this.loadedLegacyDocument = false
+      return this.cache
+    }
+    if (process.platform !== 'win32') chmodSync(file, 0o600)
     try {
       const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
-      this.cache = Array.isArray(raw) ? raw as Provider[] : []
-    } catch {
-      this.cache = []
+      const decoded = decodeProviderStoreDocument(raw)
+      this.cache = decoded.providers
+      this.loadedLegacyDocument = decoded.legacy
+    } catch (error) {
+      throw new Error(`Provider Store JSON 损坏或版本不受支持: ${errorMessage(error)}`)
     }
     this.migrateLoadedCache()
     return this.cache
@@ -104,6 +114,7 @@ export class ProviderStoreRepository {
       throw new ProviderStoreMutationBlockedError('Provider Store 写入结果与 operation journal 不一致')
     }
     writeProviderStoreAtomic(this.providersFile(), serialized)
+    this.loadedLegacyDocument = false
   }
 
   replace(providers: Provider[] | null): void {
@@ -147,8 +158,7 @@ export class ProviderStoreRepository {
     } finally {
       if (descriptor !== undefined) closeSync(descriptor)
     }
-    if (!Array.isArray(value)) throw new Error('Provider Store 格式无效')
-    return digestProviderStoreValue(value)
+    return digestProviderStoreValue(decodeProviderStoreDocument(value).providers)
   }
 
   private assertMutationAllowed(
@@ -175,14 +185,14 @@ export class ProviderStoreRepository {
   }
 
   private migrateLoadedCache(): void {
-    if (!this.cache || this.cache.length === 0) return
+    if (!this.cache) return
     const loadedProviders = this.cache
     const loadedDigest = digestProviderStoreValue(loadedProviders)
     try {
       this.mutate('迁移 Provider 凭据', { expectedDiskDigest: loadedDigest }, () => {
         const migration = this.dependencies.migrate(loadedProviders)
         this.cache = migration.providers
-        if (migration.changed) this.persist()
+        if (migration.changed || this.loadedLegacyDocument) this.persist()
       })
     } catch (error) {
       this.cache = this.dependencies.sanitize(loadedProviders)
@@ -226,28 +236,8 @@ function readBoundedUtf8(descriptor: number, maxBytes: number): string {
 }
 
 function writeProviderStoreAtomic(file: string, providers: Provider[]): void {
-  const directory = dirname(file)
-  const temporary = join(directory, `.providers.${process.pid}.${randomUUID()}.tmp`)
-  let descriptor: number | undefined
-  try {
-    mkdirSync(directory, { recursive: true })
-    descriptor = openSync(temporary, 'wx', 0o600)
-    writeFileSync(descriptor, `${JSON.stringify(providers, null, 2)}\n`, 'utf8')
-    fsyncSync(descriptor)
-    closeSync(descriptor)
-    descriptor = undefined
-    renameSync(temporary, file)
-    tightenProviderFileMode(file)
-    fsyncDirectory(directory)
-  } catch (error) {
-    if (descriptor !== undefined) {
-      try { closeSync(descriptor) } catch { /* best effort */ }
-    }
-    if (existsSync(temporary)) {
-      try { unlinkSync(temporary) } catch { /* best effort */ }
-    }
-    throw error
-  }
+  writeDurableFileSync(file, `${JSON.stringify(providerStoreDocument(providers), null, 2)}\n`, { mode: 0o600 })
+  tightenProviderFileMode(file)
 }
 
 function tightenProviderFileMode(file: string): void {
@@ -259,12 +249,26 @@ function tightenProviderFileMode(file: string): void {
   }
 }
 
-function fsyncDirectory(directory: string): void {
-  if (process.platform === 'win32') return
-  try {
-    const descriptor = openSync(directory, 'r')
-    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
-  } catch {
-    // The file is already fsynced; some filesystems reject directory fsync.
+function decodeProviderStoreDocument(value: unknown): { providers: Provider[]; legacy: boolean } {
+  if (Array.isArray(value)) return { providers: value as Provider[], legacy: true }
+  if (!value || typeof value !== 'object') throw new Error('Provider Store 格式无效')
+  const document = value as Partial<ProviderStoreDocument>
+  if (document.schemaVersion !== PROVIDER_STORE_SCHEMA_VERSION || document.format !== PROVIDER_STORE_FORMAT) {
+    throw new Error(`Provider Store schema 版本不受支持: ${String(document.schemaVersion)}`)
   }
+  const providers = document.entries
+  if (!Array.isArray(providers)) throw new Error('Provider Store providers 字段无效')
+  return { providers: providers as Provider[], legacy: false }
+}
+
+function providerStoreDocument(providers: Provider[]): Record<string, unknown> {
+  return {
+    schemaVersion: PROVIDER_STORE_SCHEMA_VERSION,
+    format: PROVIDER_STORE_FORMAT,
+    entries: providers
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

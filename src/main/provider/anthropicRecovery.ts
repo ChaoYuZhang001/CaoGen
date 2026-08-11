@@ -1,7 +1,18 @@
 import { AUTO_MODEL } from '../../shared/types'
-import type { AgentEvent, EngineKind, OutboundContextManifest, ProviderView, SessionMeta } from '../../shared/types'
+import type {
+  AgentEvent,
+  EngineKind,
+  OutboundContextManifest,
+  ProviderView,
+  RoutingExpertPolicy,
+  SessionMeta
+} from '../../shared/types'
 import type { AnthropicMessagesTarget } from './anthropicMessagesTarget'
 import { providerAllowedByOutboundContext } from '../project-workspace/outbound-context-policy'
+import {
+  assertRoutingExpertTargetAllowed,
+  providerAllowedByRoutingExpertPolicy
+} from '../model/routing-expert-policy'
 import type { canRotateProviderKey } from '../providerKeyRouting'
 import type { rotateProviderKey } from '../providers'
 import type {
@@ -26,6 +37,7 @@ interface RecoverySettings {
   failoverEnabled: boolean
   fallbackProviderId: string
   fallbackModel: string
+  routingExpertPolicy: RoutingExpertPolicy
 }
 
 export interface AnthropicRecoveryResult {
@@ -102,6 +114,7 @@ function recoverProviderKey(input: AnthropicRecoveryInput): AnthropicRecoveryRes
   let target: AnthropicMessagesTarget
   try {
     target = input.resolveTarget({ providerId: current.providerId, model: current.model })
+    assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, input.settings.routingExpertPolicy)
   } catch {
     triedKeyIds.add(rotation.toKeyId)
     return undefined
@@ -133,7 +146,7 @@ function recoverProviderModel(input: AnthropicRecoveryInput): AnthropicRecoveryR
   const provider = providers.find((candidate) =>
     candidate.id === current.providerId && candidate.engine === (input.engineKind ?? 'anthropic') && candidate.hasToken
   )
-  if (!provider) return undefined
+  if (!provider || !providerAllowedByRoutingExpertPolicy(provider, input.settings.routingExpertPolicy)) return undefined
   const models = resolvableModels(input, provider)
   const selected = input.pickProviderModelFailoverTarget({
     providerId: current.providerId,
@@ -147,6 +160,7 @@ function recoverProviderModel(input: AnthropicRecoveryInput): AnthropicRecoveryR
   let target: AnthropicMessagesTarget
   try {
     target = input.resolveTarget({ providerId: current.providerId, model: selected.model })
+    assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, input.settings.routingExpertPolicy)
   } catch {
     return undefined
   }
@@ -175,6 +189,7 @@ function recoverProvider(input: AnthropicRecoveryInput): AnthropicRecoveryResult
   if (!failure.switchable) return undefined
   const candidates = providers
     .filter((provider) => provider.engine === (input.engineKind ?? 'anthropic') && provider.hasToken)
+    .filter((provider) => providerAllowedByRoutingExpertPolicy(provider, input.settings.routingExpertPolicy))
     .filter((provider) => providerAllowedByOutboundContext(
       input.outboundContext,
       provider,
@@ -193,6 +208,7 @@ function recoverProvider(input: AnthropicRecoveryInput): AnthropicRecoveryResult
   let target: AnthropicMessagesTarget
   try {
     target = input.resolveTarget({ providerId: selected.providerId, model: selected.model })
+    assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, input.settings.routingExpertPolicy)
   } catch {
     return undefined
   }

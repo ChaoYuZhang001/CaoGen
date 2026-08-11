@@ -1,10 +1,12 @@
 import type {
   DigitalWorker,
   DigitalWorkerAssignment,
+  DigitalWorkerRoleRecommendation,
   DigitalWorkerStatus,
   JsonObject,
   JsonValue,
-  RoleTemplate
+  RoleTemplate,
+  RoleTemplateInput
 } from '../../../../shared/types'
 import {
   WATERCOLOR_CHARACTER_ROLES,
@@ -106,7 +108,10 @@ export function projectOptions(
 }
 
 export function permissionsFor(worker: DigitalWorker): string[] {
-  const policy = worker.toolPolicy
+  return toolPolicyLabels(worker.toolPolicy)
+}
+
+export function toolPolicyLabels(policy: JsonObject): string[] {
   const permissions: string[] = []
   appendPermission(permissions, policy.workspaceRead, '读取工作区')
   appendPermission(permissions, policy.workspaceWrite, '修改工作区')
@@ -119,6 +124,58 @@ export function permissionsFor(worker: DigitalWorker): string[] {
   const unique = [...new Set(permissions)]
   if (unique.length === 0 && Object.keys(policy).length > 0) return ['自定义权限策略']
   return unique
+}
+
+export function recommendationDataLabels(recommendation: DigitalWorkerRoleRecommendation): string[] {
+  const allowed = stringArrayValue(recommendation.dataScope.allowedDataClasses)
+  const resources = stringArrayValue(recommendation.dataScope.allowedResourceIds)
+  const labels = [
+    ...(recommendation.dataScope.requireExplicitScope === true ? ['需显式范围'] : []),
+    ...(allowed.length > 0 ? [`数据 ${allowed.join(', ')}`] : []),
+    ...(resources.length > 0 ? [`Resource ${resources.length}`] : [])
+  ]
+  return labels.length > 0 ? labels : ['项目范围']
+}
+
+export function recommendationBudgetLabel(recommendation: DigitalWorkerRoleRecommendation): string {
+  const amount = numberValue(recommendation.budgetPolicy.maxAmount)
+  const currency = stringValue(recommendation.budgetPolicy.currency) ?? 'USD'
+  const runs = numberValue(recommendation.budgetPolicy.maxRuns)
+  const tokens = numberValue(recommendation.budgetPolicy.maxTokens)
+  if (amount !== undefined) return `${currency} ${formatNumber(amount)} / Goal`
+  if (runs !== undefined) return `${formatNumber(runs)} Runs / Goal`
+  if (tokens !== undefined) return `${formatNumber(tokens)} Tokens / Goal`
+  return '继承 Goal 预算'
+}
+
+export function roleTemplateInputForRecommendation(
+  recommendation: DigitalWorkerRoleRecommendation
+): RoleTemplateInput {
+  return {
+    name: recommendation.name,
+    purpose: recommendation.purpose,
+    instructions: [
+      '方法',
+      ...recommendation.methods.map((item) => `- ${item}`),
+      '',
+      '职责',
+      ...recommendation.responsibilities.map((item) => `- ${item}`),
+      '',
+      '产出',
+      ...recommendation.outputs.map((item) => `- ${item}`)
+    ].join('\n'),
+    capabilityRefs: recommendation.capabilityRefs,
+    skillRefs: recommendation.skillRefs,
+    toolPolicy: recommendation.toolPolicy,
+    memoryPolicy: { scope: 'project', learning: 'user-confirmed' },
+    routingRequirements: { providerNeutral: true },
+    verificationPolicy: {
+      acceptance: recommendation.acceptance,
+      requiredOutputs: recommendation.outputs
+    },
+    escalationPolicy: recommendation.escalationPolicy,
+    source: 'system'
+  }
 }
 
 export function workerAllowedDataClasses(worker: DigitalWorker): string[] {
@@ -169,6 +226,30 @@ export function budgetLabel(policy: JsonObject): string {
   const daily = numberValue(policy.dailyLimit)
   if (daily !== undefined) return `${formatNumber(daily)} / 日`
   return Object.keys(policy).length > 0 ? '自定义' : '未设置'
+}
+
+export function performanceProfileLabels(worker: DigitalWorker): string[] {
+  const profile = worker.performanceProfile
+  if (numberValue(profile.schemaVersion) !== 1) return ['暂无绩效样本']
+  const totalRuns = numberValue(profile.totalRuns) ?? 0
+  const acceptanceDecisions = numberValue(profile.acceptanceDecisions) ?? 0
+  const acceptanceRate = numberValue(profile.acceptancePassRate) ?? 0
+  const reliability = numberValue(profile.reliability) ?? 0
+  const reworkRuns = numberValue(profile.reworkRuns) ?? 0
+  const costUsd = numberValue(profile.costUsd) ?? 0
+  const costCoverage = typeof profile.costCoverage === 'string' ? profile.costCoverage : 'complete'
+  const unpricedAttempts = numberValue(profile.unpricedAttempts) ?? 0
+  const averageDurationMs = numberValue(profile.averageDurationMs) ?? 0
+  return [
+    `Run ${formatNumber(totalRuns)}`,
+    acceptanceDecisions > 0 ? `Acceptance ${Math.round(acceptanceRate * 100)}%` : 'Acceptance 暂无',
+    `可靠性 ${Math.round(reliability * 100)}%`,
+    `返工 ${formatNumber(reworkRuns)}`,
+    costCoverage === 'complete'
+      ? `成本 $${formatNumber(costUsd)}`
+      : `成本待核验 ${formatNumber(unpricedAttempts)} 次`,
+    `平均 ${durationLabel(averageDurationMs)}`
+  ]
 }
 
 export function assignmentsForWorker(
@@ -225,4 +306,10 @@ function stringArrayValue(value: JsonValue | undefined): string[] {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value)
+}
+
+function durationLabel(value: number): string {
+  if (value < 1_000) return `${Math.round(value)}ms`
+  if (value < 60_000) return `${formatNumber(value / 1_000)}s`
+  return `${formatNumber(value / 60_000)}m`
 }

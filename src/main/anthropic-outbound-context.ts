@@ -2,7 +2,8 @@ import type { OutboundContextItemView } from '../shared/types'
 
 export function anthropicAdditionalContextItems(
   handoff: string,
-  hasConversationContext: boolean
+  hasConversationContext: boolean,
+  hasMemoryContext = false
 ): OutboundContextItemView[] {
   const items: OutboundContextItemView[] = []
   if (handoff.trim()) {
@@ -11,6 +12,16 @@ export function anthropicAdditionalContextItems(
       kind: 'workflow_context',
       label: 'Workflow handoff',
       dataClass: 'S4',
+      egressPolicy: 'allow',
+      decision: 'included'
+    })
+  }
+  if (hasMemoryContext) {
+    items.push({
+      id: 'context:memory',
+      kind: 'memory_context',
+      label: 'Approved local memory',
+      dataClass: 'S2',
       egressPolicy: 'allow',
       decision: 'included'
     })

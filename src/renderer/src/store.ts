@@ -136,6 +136,7 @@ function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
     `名称: ${item.name}`,
     `类型: ${item.kind}`,
     `状态: ${item.enabled ? '已启用' : '未启用或不可用'}`,
+    `内容摘要: ${item.contentDigest || 'unavailable'}`,
     `来源根目录: ${item.sourceRoot}`,
     `路径: ${item.path}`,
     `摘要: ${item.summary || '(无摘要)'}`,
@@ -937,6 +938,7 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   selectPluginRegistryItem(id: string): void
   revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
   togglePluginRegistryItem(item: PluginRegistryItem, enabled: boolean): Promise<void>
+  approvePluginRegistryItem(item: PluginRegistryItem): Promise<void>
   sendPluginRegistryItemToAgent(item: PluginRegistryItem): Promise<void>
   dispatchPluginAgent(item: PluginRegistryItem): Promise<void>
   /** @deprecated 使用 openPanel('subagent') 代替 */
@@ -1230,6 +1232,8 @@ export const useStore = create<AppStore>((set, get) => {
   history: [],
   settings: {
     driveMode: 'core',
+    defaultTaskStrategy: 'execute',
+    experienceMode: 'assistant',
     defaultModel: '',
     /** DriveMode 风险偏好描述,不再作为会话 permissionMode 默认值;会话 permissionMode 由 taskStrategy 派生。 */
     defaultPermissionMode: 'default',
@@ -1256,6 +1260,7 @@ export const useStore = create<AppStore>((set, get) => {
     modelRoutingRules: [],
     smartModelRoutingEnabled: false,
     modelCrossValidationAutoRunEnabled: false,
+    routingExpertPolicy: { allowedProviderIds: [], locality: 'any' },
     budgetUsdPerSession: 0,
     budgetUsdPerMonth: 0,
     failoverEnabled: true,
@@ -1299,7 +1304,13 @@ export const useStore = create<AppStore>((set, get) => {
   taskSnapshots: [],
   taskSnapshotsLoading: false,
   view: 'list',
-  ...createExperienceModeSlice((update) => set(update)),
+  ...createExperienceModeSlice(
+    (update) => set(update),
+    async (experienceMode) => {
+      const settings = await window.agentDesk.updateSettings({ experienceMode })
+      set({ settings })
+    }
+  ),
   ...createProviderProfileStoreActions(set, get),
   ...createTaskPlanSlice((update) => set(update), () => get()),
   ...createProjectWorkspaceStoreSlice(set, get),
@@ -1384,12 +1395,16 @@ export const useStore = create<AppStore>((set, get) => {
           order.push(meta.id)
         }
       }
+      const activeId = s.activeId ?? order[0] ?? null
       return {
         hydrated: true,
         sessions,
         order,
         settings,
-        activeId: s.activeId ?? order[0] ?? null
+        experienceMode: activeId
+          ? sessions[activeId]?.meta.experienceModeOverride ?? settings.experienceMode
+          : settings.experienceMode,
+        activeId
       }
     })
     // 渲染进程重载会丢掉未决权限请求 + 聊天记录;从主进程补回
@@ -1422,13 +1437,14 @@ export const useStore = create<AppStore>((set, get) => {
         })
       })
     )
-    const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery']
+    const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery', 'workflow attention']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
       get().refreshProviders(),
       get().refreshProjects(),
       get().refreshProjectWorkspaces(),
-      get().hydrateTaskRecoveryCandidates()
+      get().hydrateTaskRecoveryCandidates(),
+      get().refreshWorkflowAttention()
     ])
     secondaryResults.forEach((result, index) => {
       if (result.status === 'rejected') {
@@ -1566,6 +1582,7 @@ export const useStore = create<AppStore>((set, get) => {
       },
       order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
       activeId: meta.id,
+      experienceMode: meta.experienceModeOverride ?? s.experienceMode,
       showNewSession: false,
       newSessionProjectId: null
     }))
@@ -1776,6 +1793,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
     set((s) => ({
       activeId: id, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode),
+      experienceMode: s.sessions[id]?.meta.experienceModeOverride ?? s.settings.experienceMode,
       showNewSession: false,
       newSessionProjectId: null,
       workbench:
@@ -3201,8 +3219,15 @@ export const useStore = create<AppStore>((set, get) => {
 
   async probeMcpRuntime(items) {
     const id = get().activeId ?? undefined
-    const mcpItems = items.filter((item) => item.kind === 'mcp')
-    if (mcpItems.length === 0) return
+    const mcpItems = items.filter((item) => item.kind === 'mcp' && item.enabled && item.trust.status === 'approved')
+    if (mcpItems.length === 0) {
+      set((s) => ({ workbench: {
+        ...s.workbench,
+        pluginRegistryError: '没有已批准且已启用的 MCP 可供探测',
+        pluginRegistryMessage: undefined
+      } }))
+      return
+    }
     set((s) => ({ workbench: { ...s.workbench, mcpProbing: true, pluginRegistryError: undefined } }))
     try {
       const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(mcpItems, id), get().refreshTaskSnapshots)
@@ -3385,6 +3410,35 @@ export const useStore = create<AppStore>((set, get) => {
     }
   },
 
+  async approvePluginRegistryItem(item) {
+    const id = get().activeId ?? undefined
+    set((s) => ({ workbench: {
+      ...s.workbench,
+      selectedPluginRegistryItemId: item.id,
+      pluginRegistryError: undefined,
+      pluginRegistryMessage: undefined
+    } }))
+    try {
+      const result = await window.agentDesk.approvePluginRegistryItem(item, id)
+      if (!result.ok || !result.item) {
+        set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error || '批准失败' } }))
+        return
+      }
+      const updatedItem = result.item
+      set((s) => ({ workbench: {
+        ...s.workbench,
+        pluginRegistry: s.workbench.pluginRegistry ? {
+          ...s.workbench.pluginRegistry,
+          items: s.workbench.pluginRegistry.items.map((candidate) => candidate.id === updatedItem.id ? updatedItem : candidate)
+        } : s.workbench.pluginRegistry,
+        pluginRegistryMessage: `${updatedItem.name} 已绑定当前内容摘要和能力清单`,
+        pluginRegistryError: undefined
+      } }))
+    } catch (err) {
+      set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) } }))
+    }
+  },
+
   async sendPluginRegistryItemToAgent(item) {
     const id = get().activeId
     if (!id) {
@@ -3397,12 +3451,12 @@ export const useStore = create<AppStore>((set, get) => {
       }))
       return
     }
-    if (!item.enabled) {
+    if (!item.enabled || item.trust.status !== 'approved') {
       set((s) => ({
         workbench: {
           ...s.workbench,
           selectedPluginRegistryItemId: item.id,
-          pluginRegistryError: '该插件条目已停用,请先启用再交给 Agent',
+          pluginRegistryError: '该插件条目未批准或已停用，请先批准当前内容',
           pluginRegistryMessage: undefined
         }
       }))
@@ -3417,7 +3471,9 @@ export const useStore = create<AppStore>((set, get) => {
       }
     }))
     try {
-      await get().sendMessage(pluginRegistryItemPrompt(item))
+      const authorization = await window.agentDesk.authorizePluginRegistryItem(item, id)
+      if (!authorization.ok || !authorization.item) throw new Error(authorization.error || '插件信任校验失败')
+      await get().sendMessage(pluginRegistryItemPrompt(authorization.item))
       set((s) => ({
         workbench: {
           ...s.workbench,
@@ -3446,12 +3502,12 @@ export const useStore = create<AppStore>((set, get) => {
       }))
       return
     }
-    if (!item.enabled) {
+    if (!item.enabled || item.trust.status !== 'approved') {
       set((s) => ({
         workbench: {
           ...s.workbench,
           selectedPluginRegistryItemId: item.id,
-          pluginRegistryError: '该 Agent 定义已停用,请先启用再派发子 Agent',
+          pluginRegistryError: '该 Agent 定义未批准或已停用，请先批准当前内容',
           pluginRegistryMessage: undefined
         }
       }))
@@ -3477,13 +3533,16 @@ export const useStore = create<AppStore>((set, get) => {
       }
     }))
     try {
+      const authorization = await window.agentDesk.authorizePluginRegistryItem(item, parentId)
+      if (!authorization.ok || !authorization.item) throw new Error(authorization.error || '插件信任校验失败')
+      const trustedItem = authorization.item
       const result = await get().dispatchSubagents({
         tasks: [
           {
-            id: pluginRegistryAgentTaskId(item),
-            role: item.name,
-            title: `${item.name} 子 Agent`,
-            prompt: pluginRegistryAgentDispatchPrompt(item)
+            id: pluginRegistryAgentTaskId(trustedItem),
+            role: trustedItem.name,
+            title: `${trustedItem.name} 子 Agent`,
+            prompt: pluginRegistryAgentDispatchPrompt(trustedItem)
           }
         ]
       })

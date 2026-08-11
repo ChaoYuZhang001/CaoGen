@@ -15,70 +15,45 @@ import {
 } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import type {
+  PluginCapabilityDiff,
+  PluginRegistryDiagnostic,
+  PluginRegistryItem,
+  PluginRegistryKind,
+  PluginRegistryScanOptions,
+  PluginRegistrySourceKind,
+  PluginRegistryView
+} from '../shared/types'
+import { inspectPluginRegistryItemTrust, pluginRegistryProvenance } from './plugin/plugin-trust'
 
-export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
-export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
-export type PluginRegistryEnabledSource = 'manifest' | 'user'
+export type {
+  PluginRegistryDiagnostic,
+  PluginRegistryItem,
+  PluginRegistryKind,
+  PluginRegistryScanOptions,
+  PluginRegistrySourceKind,
+  PluginRegistryView
+} from '../shared/types'
 
-export interface PluginRegistryItem {
-  id: string
-  name: string
-  kind: PluginRegistryKind
-  sourceKind?: PluginRegistrySourceKind
-  sourceRoot: string
-  path: string
-  enabled: boolean
-  enabledSource?: PluginRegistryEnabledSource
-  enabledUpdatedAt?: string
-  summary?: string
-  /** manifest / frontmatter 声明的版本 */
-  version?: string
-  /** manifest 声明的权限/能力(mcp 为环境变量名);仅声明,未经运行时验证 */
-  permissions?: string[]
-  /** 位于 ~/.claude/plugins 托管目录下,可卸载 */
-  managed?: boolean
-}
-
-export interface PluginRegistryDiagnostic {
-  code:
-    | 'root_missing'
-    | 'read_failed'
-    | 'json_parse_failed'
-    | 'json_shape_invalid'
-    | 'max_files_reached'
-  message: string
-  path: string
-}
-
-export interface PluginRegistryView {
-  roots: string[]
-  items: PluginRegistryItem[]
-  diagnostics: PluginRegistryDiagnostic[]
-  limits: {
-    maxFiles: number
-    maxDepth: number
-  }
-  scannedAt: string
-  truncated: boolean
-}
+type DiscoveredPluginRegistryItem = Omit<
+  PluginRegistryItem,
+  'contentDigest' | 'provenance' | 'capabilityManifest' | 'trust'
+>
 
 export interface PluginRegistryStateEntry {
   enabled: boolean
   updatedAt: string
+  approval?: {
+    contentDigest: string
+    capabilityDigest: string
+    capabilities: string[]
+    approvedAt: string
+  }
 }
 
 export interface PluginRegistryState {
-  version: 1
+  version: 2
   items: Record<string, PluginRegistryStateEntry>
-}
-
-export interface PluginRegistryScanOptions {
-  maxFiles?: number
-  maxDepth?: number
-  maxReadBytes?: number
-  includeSiblingProjectMcp?: boolean
-  /** CaoGen 托管插件根(~/.claude/plugins);位于其下的条目标记 managed 可卸载 */
-  managedRoot?: string
 }
 
 interface ScanLimits {
@@ -117,7 +92,7 @@ export function scanPluginRegistry(
     truncated: false
   }
   const sourceRoots = normalizeRoots(roots)
-  const items: PluginRegistryItem[] = []
+  const items: DiscoveredPluginRegistryItem[] = []
 
   for (const sourceRoot of sourceRoots) {
     if (!isDirectory(sourceRoot)) {
@@ -132,15 +107,16 @@ export function scanPluginRegistry(
     scanMcpConfigs(sourceRoot, items, ctx)
   }
 
-  const mergedItems = applyPluginRegistryState(dedupeItems(items), state).sort(compareItems)
+  const discoveredItems = dedupeItems(items)
   // 托管标记:位于 managedRoot 下的条目可被 CaoGen 卸载(回收站式)
   if (options.managedRoot) {
     const root = resolve(options.managedRoot)
-    for (const item of mergedItems) {
+    for (const item of discoveredItems) {
       const rel = relative(root, resolve(item.path))
       if (rel && !rel.startsWith('..') && !isAbsolute(rel)) item.managed = true
     }
   }
+  const mergedItems = applyPluginRegistryState(discoveredItems, state, ctx).sort(compareItems)
 
   return {
     roots: sourceRoots,
@@ -156,7 +132,7 @@ export function scanPluginRegistry(
 }
 
 export function emptyPluginRegistryState(): PluginRegistryState {
-  return { version: 1, items: {} }
+  return { version: 2, items: {} }
 }
 
 export function readPluginRegistryState(path: string): PluginRegistryState {
@@ -212,12 +188,42 @@ export function setPluginRegistryItemEnabled(
   now: Date = new Date()
 ): PluginRegistryState {
   return {
-    version: 1,
+    version: 2,
     items: {
       ...normalizePluginRegistryState(state).items,
       [pluginRegistryItemKey(item)]: {
+        ...normalizePluginRegistryState(state).items[pluginRegistryItemKey(item)],
         enabled,
         updatedAt: now.toISOString()
+      }
+    }
+  }
+}
+
+export function approvePluginRegistryItem(
+  state: PluginRegistryState,
+  item: PluginRegistryItem,
+  now: Date = new Date()
+): PluginRegistryState {
+  if (!item.contentDigest || item.trust.status === 'invalid') {
+    throw new Error(item.trust.reason || 'Plugin content digest is unavailable')
+  }
+  const normalized = normalizePluginRegistryState(state)
+  const key = pluginRegistryItemKey(item)
+  const approvedAt = now.toISOString()
+  return {
+    version: 2,
+    items: {
+      ...normalized.items,
+      [key]: {
+        enabled: normalized.items[key]?.enabled ?? true,
+        updatedAt: normalized.items[key]?.updatedAt ?? approvedAt,
+        approval: {
+          contentDigest: item.contentDigest,
+          capabilityDigest: item.capabilityManifest.digest,
+          capabilities: [...item.capabilityManifest.capabilities],
+          approvedAt
+        }
       }
     }
   }
@@ -230,22 +236,65 @@ export function pluginRegistryItemKey(
 }
 
 function applyPluginRegistryState(
-  items: PluginRegistryItem[],
-  state: PluginRegistryState
+  items: DiscoveredPluginRegistryItem[],
+  state: PluginRegistryState,
+  ctx: ScanContext
 ): PluginRegistryItem[] {
   const normalized = normalizePluginRegistryState(state)
   return items.map((item) => {
     const override = normalized.items[pluginRegistryItemKey(item)]
-    const withSource = { ...item, sourceKind: sourceKindForRoot(item.sourceRoot) }
-    return override
-      ? {
-          ...withSource,
-          enabled: override.enabled,
-          enabledSource: 'user',
-          enabledUpdatedAt: override.updatedAt
-        }
-      : { ...withSource, enabledSource: 'manifest' }
+    const sourceKind = sourceKindForRoot(item.sourceRoot)
+    const inspection = inspectPluginRegistryItemTrust(item)
+    const approval = override?.approval
+    const capabilityDiff = diffCapabilities(approval?.capabilities, inspection.capabilityManifest.capabilities)
+    const invalid = !inspection.contentDigest || Boolean(inspection.error)
+    const changed = Boolean(approval) && (
+      approval?.contentDigest !== inspection.contentDigest ||
+      approval?.capabilityDigest !== inspection.capabilityManifest.digest
+    )
+    const status = invalid
+      ? 'invalid' as const
+      : !approval
+        ? 'approval_required' as const
+        : changed
+          ? 'changed' as const
+          : 'approved' as const
+    if (inspection.error) addDiagnostic(ctx, 'digest_failed', item.path, inspection.error)
+    return {
+      ...item,
+      sourceKind,
+      enabled: status === 'approved' ? (override?.enabled ?? item.enabled) : false,
+      enabledSource: override ? 'user' : 'manifest',
+      ...(override ? { enabledUpdatedAt: override.updatedAt } : {}),
+      ...(inspection.contentDigest ? { contentDigest: inspection.contentDigest } : {}),
+      provenance: pluginRegistryProvenance(sourceKind, item.managed === true),
+      capabilityManifest: inspection.capabilityManifest,
+      trust: {
+        status,
+        capabilityDiff,
+        ...(approval ? {
+          approvedAt: approval.approvedAt,
+          approvedContentDigest: approval.contentDigest,
+          approvedCapabilityDigest: approval.capabilityDigest
+        } : {}),
+        ...(invalid
+          ? { reason: inspection.error || 'Plugin content digest is unavailable' }
+          : status === 'changed'
+            ? { reason: capabilityDiff.expanded ? 'Content or capabilities expanded after approval' : 'Content changed after approval' }
+            : status === 'approval_required'
+              ? { reason: 'Current content and capabilities have not been approved' }
+              : {})
+      }
+    }
   })
+}
+
+function diffCapabilities(previous: string[] | undefined, current: string[]): PluginCapabilityDiff {
+  const before = new Set(previous ?? [])
+  const after = new Set(current)
+  const added = [...after].filter((capability) => !before.has(capability)).sort()
+  const removed = [...before].filter((capability) => !after.has(capability)).sort()
+  return { added, removed, expanded: added.length > 0 }
 }
 
 function sourceKindForRoot(sourceRoot: string): PluginRegistrySourceKind {
@@ -274,18 +323,36 @@ function normalizePluginRegistryState(value: unknown): PluginRegistryState {
       const updatedAt = typeof entry.updatedAt === 'string' && entry.updatedAt.trim()
         ? entry.updatedAt
         : new Date(0).toISOString()
-      items[key] = { enabled: entry.enabled, updatedAt }
+      const approval = normalizeApproval(entry.approval)
+      items[key] = { enabled: entry.enabled, updatedAt, ...(approval ? { approval } : {}) }
     }
   }
-  return { version: 1, items }
+  return { version: 2, items }
 }
 
-function scanStandaloneSkillRoot(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+function normalizeApproval(value: unknown): PluginRegistryStateEntry['approval'] | undefined {
+  if (!isJsonObject(value)) return undefined
+  if (!isSha256(value.contentDigest) || !isSha256(value.capabilityDigest)) return undefined
+  if (!Array.isArray(value.capabilities) || !value.capabilities.every((entry) => typeof entry === 'string')) return undefined
+  if (typeof value.approvedAt !== 'string' || !value.approvedAt.trim()) return undefined
+  return {
+    contentDigest: value.contentDigest,
+    capabilityDigest: value.capabilityDigest,
+    capabilities: [...new Set(value.capabilities)].sort(),
+    approvedAt: value.approvedAt
+  }
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
+}
+
+function scanStandaloneSkillRoot(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   if (basename(sourceRoot) !== 'skills' && !existsSync(join(sourceRoot, 'SKILL.md'))) return
   visitSkillDir(sourceRoot, sourceRoot, 0, items, ctx)
 }
 
-function scanPluginManifest(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+function scanPluginManifest(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   const manifest = readFirstExistingText(
     [join(sourceRoot, '.codex-plugin', 'plugin.json'), join(sourceRoot, 'plugin.json')],
     ctx
@@ -318,7 +385,7 @@ function readFirstExistingText(paths: string[], ctx: ScanContext): { path: strin
   return null
 }
 
-function scanSkills(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+function scanSkills(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   const skillsDir = join(sourceRoot, 'skills')
   if (!isDirectory(skillsDir)) return
   visitSkillDir(sourceRoot, skillsDir, 0, items, ctx)
@@ -328,7 +395,7 @@ function visitSkillDir(
   sourceRoot: string,
   dir: string,
   depth: number,
-  items: PluginRegistryItem[],
+  items: DiscoveredPluginRegistryItem[],
   ctx: ScanContext
 ): void {
   const skillPath = join(dir, 'SKILL.md')
@@ -359,7 +426,7 @@ function visitSkillDir(
   }
 }
 
-function scanAgents(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+function scanAgents(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   const agentsDir = join(sourceRoot, 'agents')
   if (!isDirectory(agentsDir)) return
 
@@ -385,7 +452,7 @@ function scanAgents(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanCo
   })
 }
 
-function scanMcpConfigs(sourceRoot: string, items: PluginRegistryItem[], ctx: ScanContext): void {
+function scanMcpConfigs(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   const seen = new Set<string>()
 
   walkFiles(sourceRoot, 0, ctx, (filePath, name) => {
@@ -401,7 +468,7 @@ function scanMcpConfigs(sourceRoot: string, items: PluginRegistryItem[], ctx: Sc
 function scanMcpConfigFile(
   sourceRoot: string,
   filePath: string,
-  items: PluginRegistryItem[],
+  items: DiscoveredPluginRegistryItem[],
   ctx: ScanContext,
   seen: Set<string>
 ): void {
@@ -585,13 +652,10 @@ function mcpEnvKeyPermissions(config: unknown): string[] | undefined {
 
 function describeMcpServer(config: unknown): string | undefined {
   if (!isJsonObject(config)) return undefined
-  const command = cleanOneLine(firstString(config.command))
-  if (command) return `command: ${command}`
-  const url = cleanOneLine(firstString(config.url))
-  if (url) return `url: ${url}`
-  const transport = cleanOneLine(firstString(config.transport))
-  if (transport) return `transport: ${transport}`
-  return undefined
+  if (typeof config.command === 'string') return 'transport: stdio'
+  if (typeof config.url === 'string') return 'transport: http'
+  const transport = cleanOneLine(firstString(config.transport))?.toLowerCase()
+  return transport ? `transport: ${transport}` : 'transport: unknown'
 }
 
 function pluginVersionSummary(config: JsonObject): string | undefined {
@@ -717,9 +781,9 @@ function slug(value: string): string {
   return compact.slice(0, 160) || 'item'
 }
 
-function dedupeItems(items: PluginRegistryItem[]): PluginRegistryItem[] {
+function dedupeItems(items: DiscoveredPluginRegistryItem[]): DiscoveredPluginRegistryItem[] {
   const seen = new Set<string>()
-  const unique: PluginRegistryItem[] = []
+  const unique: DiscoveredPluginRegistryItem[] = []
 
   for (const item of items) {
     const key = `${item.kind}\0${item.sourceRoot}\0${item.path}\0${item.name}`

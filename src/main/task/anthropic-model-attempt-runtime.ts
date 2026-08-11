@@ -1,3 +1,4 @@
+import type { ModelAttemptUsage } from '../../shared/model-attempt-types'
 import type { TaskRunRecord } from '../../shared/types'
 import type { AnthropicMessagesResult } from '../anthropicMessagesAdapter'
 import {
@@ -44,6 +45,7 @@ export interface AnthropicModelAttemptInput {
   requestId?: string
   failoverFromAttemptId?: string
   routeReason?: string
+  estimateCost?: (usage: ModelAttemptUsage | undefined) => number | undefined
   preflight?: () => void | Promise<void>
   operation: (operationId: string) => Promise<AnthropicMessagesResult>
 }
@@ -68,14 +70,15 @@ export class AnthropicModelAttemptTracker {
     const attempt = this.attemptInput(input)
     return executePersistedModelAttempt(attempt, () => input.operation(attempt.requestId), {
       dependencies: this.dependencies,
-      success: (result) => ({
-        usage: modelAttemptUsage({
+      success: (result) => {
+        const usage = modelAttemptUsage({
           input: result.usage.input,
           output: result.usage.output,
           cacheRead: result.usage.cacheRead,
           cacheWrite: result.usage.cacheCreation
         })
-      }),
+        return { usage, costUsd: input.estimateCost?.(usage) }
+      },
       failure: (error) => classifyRuntimeModelFailure(error, { aborted: input.signal.aborted })
     })
   }

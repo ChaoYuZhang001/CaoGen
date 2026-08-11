@@ -15,10 +15,14 @@ import type {
   DigitalWorkerAuditEvent,
   DigitalWorkerAuditListFilter,
   DigitalWorkerHeartbeatInput,
+  DigitalWorkerHistoryExport,
+  DigitalWorkerHistorySnapshot,
   DigitalWorkerLease,
   DigitalWorkerLeaseListFilter,
   DigitalWorkerLifecycleOptions,
   DigitalWorkerListOptions,
+  DigitalWorkerMemoryDraftInput,
+  DigitalWorkerMemorySnapshot,
   DigitalWorkerReleaseOptions,
   DigitalWorkerReassignInput,
   DigitalWorkerReassignmentResult,
@@ -26,6 +30,8 @@ import type {
   DigitalWorkerRoleTemplateListOptions,
   DigitalWorkerStoreDocument,
   DigitalWorkerStoreVerification,
+  DigitalWorkerTeamRecommendation,
+  DigitalWorkerTeamRecommendationInput,
   LeaseTokenInput,
   RoleTemplate,
   RoleTemplateInput,
@@ -47,6 +53,31 @@ export const digitalWorkerApi: DigitalWorkerBridgeApi = {
     invokeDigitalWorker('verifyDigitalWorkerStore'),
   getDigitalWorkerStoreSnapshot: (): Promise<DigitalWorkerStoreDocument> =>
     invokeDigitalWorker('getDigitalWorkerStoreSnapshot'),
+  recommendDigitalWorkerTeam: (
+    input: DigitalWorkerTeamRecommendationInput
+  ): Promise<DigitalWorkerTeamRecommendation> =>
+    invokeDigitalWorker('recommendDigitalWorkerTeam', { input }),
+  refreshDigitalWorkerPerformance: (id: string): Promise<DigitalWorker> =>
+    invokeDigitalWorker('refreshDigitalWorkerPerformance', { id }),
+  getDigitalWorkerHistory: (workerId: string): Promise<DigitalWorkerHistorySnapshot> =>
+    invokeDigitalWorker('getDigitalWorkerHistory', { workerId }),
+  exportDigitalWorkerHistory: (workerId: string): Promise<DigitalWorkerHistoryExport> =>
+    invokeDigitalWorker('exportDigitalWorkerHistory', { workerId }),
+  listDigitalWorkerMemory: (workerId: string): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('listDigitalWorkerMemory', { workerId }),
+  proposeDigitalWorkerMemory: (
+    workerId: string,
+    input: DigitalWorkerMemoryDraftInput
+  ): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('proposeDigitalWorkerMemory', { workerId, input }),
+  approveDigitalWorkerMemory: (workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('approveDigitalWorkerMemory', { workerId, recordId }),
+  rejectDigitalWorkerMemory: (workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('rejectDigitalWorkerMemory', { workerId, recordId }),
+  revokeDigitalWorkerMemory: (workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('revokeDigitalWorkerMemory', { workerId, recordId }),
+  deleteDigitalWorkerMemory: (workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot> =>
+    invokeDigitalWorker('deleteDigitalWorkerMemory', { workerId, recordId }),
   listDigitalWorkerRoleTemplates: (options?: DigitalWorkerRoleTemplateListOptions): Promise<RoleTemplate[]> =>
     invokeDigitalWorker('listDigitalWorkerRoleTemplates', { options }),
   getDigitalWorkerRoleTemplate: (id: string): Promise<RoleTemplate | null> =>

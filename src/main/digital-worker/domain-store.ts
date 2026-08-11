@@ -310,6 +310,24 @@ export class DigitalWorkerStore {
       if (!lifecycleTransitionAllowed(current.status, status)) {
         throw new DigitalWorkerConflictError(`DigitalWorker lifecycle transition ${current.status} -> ${status} is not allowed`)
       }
+      if (status === 'retired') {
+        const activeAssignment = document.assignments.find((assignment) =>
+          assignment.assigneeKind === 'digital_worker' &&
+          assignment.assigneeId === current.id &&
+          assignment.status === 'active')
+        if (activeAssignment) {
+          throw new DigitalWorkerConflictError(
+            `DigitalWorker ${current.id} cannot retire with active Assignment ${activeAssignment.id}; release or reassign it first`
+          )
+        }
+        const activeLease = document.leases.find((lease) =>
+          lease.workerId === current.id && lease.status === 'active')
+        if (activeLease) {
+          throw new DigitalWorkerConflictError(
+            `DigitalWorker ${current.id} cannot retire with active lease ${activeLease.id}; release it first`
+          )
+        }
+      }
       const now = normalizeTimestamp(options.now ?? Date.now(), 'lifecycle now')
       const next: DigitalWorker = {
         ...current,

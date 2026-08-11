@@ -1,5 +1,9 @@
 import { useCallback, useId, useState } from 'react'
-import type { ProjectResource, ProjectWorkspace } from '../../../../shared/types'
+import {
+  MANAGED_PERSONAL_WORKSPACE_ID,
+  type ProjectResource,
+  type ProjectWorkspace
+} from '../../../../shared/types'
 import {
   PROJECT_STATUS_LABELS,
   TEXT,
@@ -43,6 +47,7 @@ export default function ProjectWorkspaceLifecycle({
     refreshProjects,
     onMutationSuccess: closeInteraction
   })
+  const systemManaged = project.id === MANAGED_PERSONAL_WORKSPACE_ID
   const busy = actions.busy !== null
   const openPanel = (next: Exclude<ProjectLifecyclePanel, null>): void => {
     actions.clearFeedback()
@@ -64,6 +69,7 @@ export default function ProjectWorkspaceLifecycle({
         </div>
         <ProjectActionBar
           busy={busy}
+          systemManaged={systemManaged}
           project={project}
           onArchive={() => void actions.archiveProject()}
           onDelete={() => openDelete('soft')}
@@ -83,22 +89,22 @@ export default function ProjectWorkspaceLifecycle({
         </p>
       )}
 
-      {panel === 'edit' && project.status === 'active' && (
+      {panel === 'edit' && project.status === 'active' && !systemManaged && (
         <ProjectEditForm project={project} busy={busy} onCancel={() => setPanel(null)} onSubmit={actions.updateProject} />
       )}
-      {panel === 'resource' && project.status === 'active' && (
+      {panel === 'resource' && project.status === 'active' && !systemManaged && (
         <ProjectResourceForm busy={busy} onCancel={() => setPanel(null)} onSubmit={actions.addResource} />
       )}
 
       <ProjectResourceList
         busy={busy}
-        editable={project.status === 'active'}
+        editable={project.status === 'active' && !systemManaged}
         resources={project.resources}
         onAdd={() => openPanel('resource')}
         onRemove={(id) => void actions.removeResource(id)}
       />
 
-      {deleteMode && (
+      {deleteMode && !systemManaged && (
         <ProjectDeleteDialog
           project={project}
           permanent={deleteMode === 'permanent'}
@@ -121,6 +127,7 @@ export default function ProjectWorkspaceLifecycle({
 
 function ProjectActionBar({
   busy,
+  systemManaged,
   onArchive,
   onDelete,
   onEdit,
@@ -131,6 +138,7 @@ function ProjectActionBar({
   project
 }: {
   busy: boolean
+  systemManaged: boolean
   onArchive: () => void
   onDelete: () => void
   onEdit: () => void
@@ -142,13 +150,13 @@ function ProjectActionBar({
 }): React.JSX.Element {
   return (
     <div className="pws-lifecycle-actions" aria-label={TEXT.projectSettings}>
-      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} disabled={busy} data-project-action="edit">{TEXT.editProject}</button>}
-      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onResource} disabled={busy} data-project-action="add-resource">{TEXT.addResource}</button>}
-      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onArchive} disabled={busy} data-project-action="archive">{TEXT.archiveProject}</button>}
-      {project.status !== 'active' && <button type="button" className="btn btn-primary btn-sm" onClick={onRestore} disabled={busy} data-project-action="restore">{TEXT.restoreProject}</button>}
+      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit} disabled={busy || systemManaged} data-project-action="edit">{TEXT.editProject}</button>}
+      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onResource} disabled={busy || systemManaged} data-project-action="add-resource">{TEXT.addResource}</button>}
+      {project.status === 'active' && <button type="button" className="btn btn-ghost btn-sm" onClick={onArchive} disabled={busy || systemManaged} data-project-action="archive">{TEXT.archiveProject}</button>}
+      {project.status !== 'active' && <button type="button" className="btn btn-primary btn-sm" onClick={onRestore} disabled={busy || systemManaged} data-project-action="restore">{TEXT.restoreProject}</button>}
       <button type="button" className="btn btn-ghost btn-sm" onClick={onExport} disabled={busy} data-project-action="export">{TEXT.exportManifest}</button>
-      {project.status !== 'deleted' && <button type="button" className="btn btn-danger btn-sm" onClick={onDelete} disabled={busy} data-project-action="soft-delete">{TEXT.deleteProject}</button>}
-      {project.status === 'deleted' && <button type="button" className="btn btn-danger btn-sm" onClick={onPurge} disabled={busy} data-project-action="purge">{TEXT.purgeProject}</button>}
+      {project.status !== 'deleted' && <button type="button" className="btn btn-danger btn-sm" onClick={onDelete} disabled={busy || systemManaged} data-project-action="soft-delete">{TEXT.deleteProject}</button>}
+      {project.status === 'deleted' && <button type="button" className="btn btn-danger btn-sm" onClick={onPurge} disabled={busy || systemManaged} data-project-action="purge">{TEXT.purgeProject}</button>}
     </div>
   )
 }
@@ -205,9 +213,20 @@ function ProjectResourceRow({
       data-project-resource-kind={kind}
       data-resource-data-class={resourceDataClass(resource)}
       data-resource-egress-policy={resourceEgressPolicy(resource)}
+      data-connector-authorization={resource.connector?.authorization.status}
+      data-connector-direction={resource.connector?.dataDirection}
     >
       <span className="pws-resource-kind">{resourceKindLabel(resource)}</span>
-      <span className="pws-resource-copy"><strong>{label}</strong><small>{resourceLocation(resource)}</small></span>
+      <span className="pws-resource-copy">
+        <strong>{label}</strong>
+        <small>{resourceLocation(resource)}</small>
+        {resource.connector && (
+          <small>
+            v{resource.connector.version} · {resource.connector.dataDirection} · {resource.connector.authorization.subject}
+            {' · '}{resource.connector.authorization.status} · {resource.connector.capabilities.join(', ')}
+          </small>
+        )}
+      </span>
       <span className={`pws-resource-egress pws-resource-egress-${resourceEgressPolicy(resource)}`}>
         {resourceDataClass(resource)} · {resourceEgressLabel(resource)}
       </span>

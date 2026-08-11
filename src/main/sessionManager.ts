@@ -644,10 +644,13 @@ class SessionManager {
       this.taskSnapshotReplay.blocksOrdinarySend(id, options),
       this.supervisor.blocksSend(id, currentRun, options.supervisorControlReplay === true))
     if (sendGateError) return rejectSessionSend(session, sendGateError)
-    const workerPolicyError = digitalWorkerSendPolicyError({
+    const nextRun = !currentRun || isTaskRunTerminal(currentRun.status)
+      ? createSessionTaskRun(session.meta)
+      : currentRun
+    const workerPolicyError = await digitalWorkerSendPolicyError({
       rootDir: app.getPath('userData'),
       meta: session.meta,
-      run: currentRun,
+      run: nextRun,
       supervisorControlReplay: options.supervisorControlReplay,
       activeSessions: [...this.sessions.values()].map((candidate) => candidate.meta)
     })
@@ -675,9 +678,6 @@ class SessionManager {
       return false
     }
     if (!sendableSession(session)) return false
-    const nextRun = !currentRun || isTaskRunTerminal(currentRun.status)
-      ? createSessionTaskRun(session.meta)
-      : currentRun
     try {
       await this.supervisor.authorizeSend(session, nextRun, {
         supervisorControlReplay: options.supervisorControlReplay
@@ -687,6 +687,12 @@ class SessionManager {
       return false
     }
     if (nextRun !== currentRun) this.taskRuns.set(id, nextRun)
+    try {
+      await this.writeTaskSnapshot(id, 'important-event', 0, nextRun.lastEventKind, undefined, true)
+    } catch (error) {
+      session.rejectSend(`TaskRun 持久化失败，已阻止 Provider 请求：${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
     try {
       const payload = normalizeStableMessagePayload(input)
       session.send({ ...payload, messageId: payload.messageId ?? randomUUID() })
@@ -2084,6 +2090,8 @@ class SessionManager {
       goalId: meta.goalId,
       workItemId: meta.workItemId, digitalWorkerBinding: meta.digitalWorkerBinding,
       unassigned: meta.unassigned,
+      personalWorkspaceId: meta.personalWorkspaceId,
+      experienceModeOverride: meta.experienceModeOverride,
       repoRoot: meta.repoRoot,
       worktreePath: meta.worktreePath,
       branch: meta.branch,

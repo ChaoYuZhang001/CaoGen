@@ -1,22 +1,22 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import {
-  closeSync,
   existsSync,
-  fsyncSync,
   lstatSync,
-  mkdirSync,
-  openSync,
   readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
+  rmSync
 } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
+import { TASK_PLAN_SCHEMA_VERSION } from '../../shared/task-plan-types'
 import {
   activeSessionRecordsFromDocument,
   activeSessionRegistryDocument
 } from '../active-session-registry-format'
 import { historyEntriesFromDocument, historyStoreDocument } from '../history-store-format'
+import {
+  sessionCreationJournalDocument,
+  sessionCreationJournalRecordsFromDocument
+} from '../session-creation-journal-format'
+import { writeDurableFileSync } from '../durable-file'
 
 export interface ProjectSessionInventory {
   sessionIds: string[]
@@ -39,7 +39,7 @@ export function collectProjectSessionInventory(
   const records = [
     ...historyArrayDocument(join(root, 'sessions.json')),
     ...activeSessionArrayDocument(join(root, 'active-sessions.json')),
-    ...arrayDocument(join(root, 'session-creation-journal.json'))
+    ...sessionCreationArrayDocument(join(root, 'session-creation-journal.json'))
   ]
   const sessionIds = collectProjectSessionIds(records, project, knownSessionIds)
   addDescendantSessions(records, sessionIds)
@@ -107,7 +107,7 @@ export function purgeProjectSessionData(
     !matchesSessionOrProject(record, sessionIds, project))
   removedRecords.activeSessions = filterActiveSessionDocument(join(root, 'active-sessions.json'), (record) =>
     !matchesSessionOrProject(record, sessionIds, project))
-  removedRecords.sessionCreationJournal = filterArrayDocument(join(root, 'session-creation-journal.json'), (record) =>
+  removedRecords.sessionCreationJournal = filterSessionCreationDocument(join(root, 'session-creation-journal.json'), (record) =>
     !matchesSessionOrProject(record, sessionIds, project))
   removedRecords.taskPlans = purgeTaskPlanSessions(join(root, 'task-plans', 'task-plan-contracts.json'), sessionIds, project)
 
@@ -146,7 +146,7 @@ export function scanProjectSessionResiduals(
   const counts: Record<string, number> = {
     history: historyArrayDocument(join(root, 'sessions.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
     activeSessions: activeSessionArrayDocument(join(root, 'active-sessions.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
-    sessionCreationJournal: arrayDocument(join(root, 'session-creation-journal.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
+    sessionCreationJournal: sessionCreationArrayDocument(join(root, 'session-creation-journal.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
     taskPlans: countTaskPlanSessions(join(root, 'task-plans', 'task-plan-contracts.json'), sessionIds, project),
     ownedPaths: 0
   }
@@ -190,11 +190,11 @@ function sessionIdOf(record: Record<string, unknown>): string | undefined {
   return stringAt(record, 'sessionId') ?? stringAt(record, 'id') ?? stringAt(nested(record, 'draft', 'baseMeta'), 'id')
 }
 
-function filterArrayDocument(file: string, keep: (record: Record<string, unknown>) => boolean): number {
+function filterSessionCreationDocument(file: string, keep: (record: Record<string, unknown>) => boolean): number {
   if (!existsSync(file)) return 0
-  const current = arrayDocument(file)
+  const current = sessionCreationArrayDocument(file)
   const next = current.filter(keep)
-  if (next.length !== current.length) atomicJsonWrite(file, next)
+  if (next.length !== current.length) atomicJsonWrite(file, sessionCreationJournalDocument(next))
   return current.length - next.length
 }
 
@@ -217,6 +217,7 @@ function filterActiveSessionDocument(file: string, keep: (record: Record<string,
 function purgeTaskPlanSessions(file: string, sessionIds: ReadonlySet<string>, projectId: string): number {
   if (!existsSync(file)) return 0
   const state = objectDocument(file)
+  assertTaskPlanStoreVersion(state, file)
   const sessions = objectAt(state, 'sessions')
   let removed = 0
   for (const [sessionId, value] of Object.entries(sessions)) {
@@ -235,7 +236,9 @@ function purgeTaskPlanSessions(file: string, sessionIds: ReadonlySet<string>, pr
 
 function countTaskPlanSessions(file: string, sessionIds: ReadonlySet<string>, projectId: string): number {
   if (!existsSync(file)) return 0
-  const sessions = objectAt(objectDocument(file), 'sessions')
+  const state = objectDocument(file)
+  assertTaskPlanStoreVersion(state, file)
+  const sessions = objectAt(state, 'sessions')
   return Object.entries(sessions).filter(([sessionId, value]) =>
     sessionIds.has(sessionId) || (isRecord(value) && taskPlanBelongsToProject(value, projectId))).length
 }
@@ -246,11 +249,12 @@ function taskPlanBelongsToProject(record: Record<string, unknown>, projectId: st
     (version.binding.workspaceId === projectId || version.binding.projectId === projectId))
 }
 
-function arrayDocument(file: string): Array<Record<string, unknown>> {
+function sessionCreationArrayDocument(file: string): Array<Record<string, unknown>> {
   if (!existsSync(file)) return []
   const value = JSON.parse(readFileSync(file, 'utf8')) as unknown
-  if (!Array.isArray(value) || !value.every(isRecord)) throw new Error(`Project session store is invalid: ${file}`)
-  return structuredClone(value)
+  const records = sessionCreationJournalRecordsFromDocument<unknown>(value, file)
+  if (!records.every(isRecord)) throw new Error(`Project session store is invalid: ${file}`)
+  return structuredClone(records) as Array<Record<string, unknown>>
 }
 
 function historyArrayDocument(file: string): Array<Record<string, unknown>> {
@@ -281,6 +285,12 @@ function objectAt(record: Record<string, unknown>, key: string): Record<string, 
   return value
 }
 
+function assertTaskPlanStoreVersion(state: Record<string, unknown>, file: string): void {
+  if (state.schemaVersion !== TASK_PLAN_SCHEMA_VERSION) {
+    throw new Error(`Project session store schema version is unsupported: ${file}`)
+  }
+}
+
 function nested(record: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
   let current: Record<string, unknown> = record
   for (const key of keys) {
@@ -307,26 +317,7 @@ function removeOwned(root: string, target: string, removed: string[]): void {
 }
 
 function atomicJsonWrite(file: string, value: unknown): void {
-  const directory = dirname(file)
-  mkdirSync(directory, { recursive: true, mode: 0o700 })
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let descriptor: number | undefined
-  try {
-    descriptor = openSync(temporary, 'wx', 0o600)
-    writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    fsyncSync(descriptor)
-    closeSync(descriptor)
-    descriptor = undefined
-    renameSync(temporary, file)
-    if (process.platform !== 'win32') {
-      const directoryHandle = openSync(directory, 'r')
-      try { fsyncSync(directoryHandle) } finally { closeSync(directoryHandle) }
-    }
-  } catch (error) {
-    if (descriptor !== undefined) closeSync(descriptor)
-    rmSync(temporary, { force: true })
-    throw error
-  }
+  writeDurableFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
 
 function safeComponent(value: string, label: string): string {

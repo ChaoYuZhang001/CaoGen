@@ -21,6 +21,7 @@ import type {
   OfficeQualityMode,
   PermissionRuleConfig,
   ProviderCircuitBreakerSettings,
+  RoutingExpertPolicy,
   SchedulerStrategy
 } from '../shared/types'
 
@@ -50,6 +51,8 @@ const MODEL_ROUTING_TASK_KINDS = new Set<ModelRoutingTaskKind>([
 
 const DEFAULTS: AppSettings = {
   driveMode: 'core',
+  defaultTaskStrategy: 'execute',
+  experienceMode: 'assistant',
   defaultModel: '',
   defaultPermissionMode: 'default',
   defaultProviderId: '',
@@ -75,6 +78,7 @@ const DEFAULTS: AppSettings = {
   modelRoutingRules: [],
   smartModelRoutingEnabled: false,
   modelCrossValidationAutoRunEnabled: false,
+  routingExpertPolicy: { allowedProviderIds: [], locality: 'any' },
   budgetUsdPerSession: 0,
   budgetUsdPerMonth: 0,
   failoverEnabled: true,
@@ -169,6 +173,37 @@ function normalizeOffice(raw: unknown, fallback: AppSettings['office']): AppSett
 
 function normalizeSchedulerStrategy(raw: unknown, fallback: SchedulerStrategy): SchedulerStrategy {
   return raw === 'quality' || raw === 'cost' || raw === 'speed' || raw === 'balanced' ? raw : fallback
+}
+
+function normalizeRoutingExpertPolicy(
+  raw: unknown,
+  fallback: RoutingExpertPolicy
+): RoutingExpertPolicy {
+  const value = raw && typeof raw === 'object' ? raw as Partial<RoutingExpertPolicy> : {}
+  const allowedProviderIds = Array.isArray(value.allowedProviderIds)
+    ? [...new Set(value.allowedProviderIds
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean))].slice(0, 100)
+    : fallback.allowedProviderIds
+  const locality = value.locality === 'prefer_local' || value.locality === 'local_only'
+    ? value.locality
+    : 'any'
+  return { allowedProviderIds, locality }
+}
+
+function normalizeDefaultTaskStrategy(
+  raw: unknown,
+  fallback: AppSettings['defaultTaskStrategy']
+): AppSettings['defaultTaskStrategy'] {
+  return raw === 'view' || raw === 'plan' || raw === 'execute' ? raw : fallback
+}
+
+function normalizeExperienceMode(
+  raw: unknown,
+  fallback: AppSettings['experienceMode']
+): AppSettings['experienceMode'] {
+  return raw === 'assistant' || raw === 'studio' ? raw : fallback
 }
 
 function normalizeProviderCircuitBreaker(
@@ -272,9 +307,12 @@ export function getSettings(): AppSettings {
       ...DEFAULTS,
       ...raw,
       driveMode: normalizeCaoGenDriveMode(raw.driveMode),
+      defaultTaskStrategy: normalizeDefaultTaskStrategy(raw.defaultTaskStrategy, DEFAULTS.defaultTaskStrategy),
+      experienceMode: normalizeExperienceMode(raw.experienceMode, DEFAULTS.experienceMode),
       sandboxMode: normalizeSandboxMode(sandboxMode),
       schedulerStrategy: normalizeSchedulerStrategy(raw.schedulerStrategy, DEFAULTS.schedulerStrategy),
       modelRoutingRules: normalizeModelRoutingRules(raw.modelRoutingRules),
+      routingExpertPolicy: normalizeRoutingExpertPolicy(raw.routingExpertPolicy, DEFAULTS.routingExpertPolicy),
       providerCircuitBreaker: normalizeProviderCircuitBreaker(
         raw.providerCircuitBreaker,
         DEFAULTS.providerCircuitBreaker
@@ -300,6 +338,7 @@ export function getSettings(): AppSettings {
     cache = {
       ...DEFAULTS,
       providerCircuitBreaker: { ...DEFAULTS.providerCircuitBreaker },
+      routingExpertPolicy: { ...DEFAULTS.routingExpertPolicy, allowedProviderIds: [] },
       office: { ...DEFAULTS.office },
       layout: { ...DEFAULTS.layout }
     }
@@ -318,6 +357,12 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...prev,
     ...patch,
     driveMode: patch.driveMode === undefined ? prev.driveMode : normalizeCaoGenDriveMode(patch.driveMode),
+    defaultTaskStrategy: patch.defaultTaskStrategy === undefined
+      ? prev.defaultTaskStrategy
+      : normalizeDefaultTaskStrategy(patch.defaultTaskStrategy, prev.defaultTaskStrategy),
+    experienceMode: patch.experienceMode === undefined
+      ? prev.experienceMode
+      : normalizeExperienceMode(patch.experienceMode, prev.experienceMode),
     sandboxMode: patch.sandboxMode === undefined ? prev.sandboxMode : normalizeSandboxMode(patch.sandboxMode),
     schedulerStrategy:
       patch.schedulerStrategy === undefined
@@ -325,6 +370,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
         : normalizeSchedulerStrategy(patch.schedulerStrategy, prev.schedulerStrategy),
     modelRoutingRules:
       patch.modelRoutingRules === undefined ? prev.modelRoutingRules : normalizeModelRoutingRules(patch.modelRoutingRules),
+    routingExpertPolicy: normalizeRoutingExpertPolicy(patch.routingExpertPolicy, prev.routingExpertPolicy),
     providerCircuitBreaker: normalizeProviderCircuitBreaker(
       patch.providerCircuitBreaker,
       prev.providerCircuitBreaker

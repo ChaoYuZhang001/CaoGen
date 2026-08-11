@@ -1,8 +1,6 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
-import type { AvatarRefs } from './AvatarRig'
-import ProgressiveAvatarRig from './ProgressiveAvatarRig'
 import CompactWorkstationShell from './CompactWorkstationShell'
 import Desk from './Desk'
 import OfficeChair from './OfficeChair'
@@ -10,15 +8,16 @@ import MonitorSetup from './MonitorSetup'
 import DeskAccessories from './DeskAccessories'
 import DeskLamp from './DeskLamp'
 import SpeechBubble from './SpeechBubble'
-import { vendorSkin } from './VendorSkins'
 import ProviderLogoBadge from './ProviderLogoBadge'
 import { providerLogoFor } from './ProviderLogos'
 import type { ProviderLogoSpec } from './ProviderLogos'
-import { applyMonitoring, applyTyping, applyTalking, applyThinking } from './AvatarAnimations'
 import { officeActivityOf, type OfficeSessionActivity, type OfficeSessionSignal, type OfficeTask, type OfficeTaskStats } from '../model'
 import { hasOfficeFailoverSignal } from '../providerModelFailover'
-import type { WatercolorCharacterRole, WatercolorCharacterState } from '../../../../../shared/watercolor-character'
-import { hasWatercolorCharacterAsset } from '../watercolor-character-assets'
+import {
+  stableWatercolorRole,
+  type WatercolorCharacterRole,
+  type WatercolorCharacterState
+} from '../../../../../shared/watercolor-character'
 import WatercolorCharacterRig from './WatercolorCharacterRig'
 import type { Group, MeshStandardMaterial } from 'three'
 
@@ -40,8 +39,6 @@ export interface WorkstationProProps {
   vendorKey?: string
   showBadge?: boolean
   liveliness?: number
-  catEars?: boolean
-  loadRobotAssets?: boolean
   watercolorRole?: WatercolorCharacterRole
   watercolorState?: WatercolorCharacterState
   operatorAway?: boolean
@@ -68,8 +65,6 @@ const OFFICE_SIGNAL_ACCENT = '#59b8c8'
 const OFFICE_STRUCTURE_TRIM = '#697680'
 const OFFICE_NEUTRAL_LIGHT = '#9aa8b5'
 const OPERATOR_INPUT_ARRAY_Z = 0.16
-const DESK_HAND_TARGET_Y = 0.93
-const DESK_HAND_TARGET_Z = 0.28
 
 /** 待授权时头顶气泡文案 */
 const AWAITING_TEXT = '等待授权'
@@ -693,8 +688,6 @@ export default function WorkstationPro({
   modelName,
   showBadge = true,
   liveliness = 1,
-  catEars = false,
-  loadRobotAssets = true,
   watercolorRole,
   watercolorState,
   operatorAway = false,
@@ -705,7 +698,6 @@ export default function WorkstationPro({
   onSelect,
   onOpen
 }: WorkstationProProps): React.JSX.Element {
-  const skin = useMemo(() => vendorSkin([brandName, modelName].filter(Boolean).join(' ')), [brandName, modelName])
   const providerLogo = useMemo(
     () => providerLogoFor([brandName, modelName, providerBaseUrl]),
     [brandName, modelName, providerBaseUrl]
@@ -714,7 +706,6 @@ export default function WorkstationPro({
   const progressColor = activity === 'error' ? OFFICE_STRUCTURE_TRIM : screenColor
   const stationAccent = OFFICE_STRUCTURE_TRIM
   const showFaultStrip = activity === 'error'
-  const motionScale = Math.min(Math.max(liveliness, 0.2), 1.2)
   const totalTasks = taskStats?.total ?? 0
   const progress =
     totalTasks > 0
@@ -727,39 +718,11 @@ export default function WorkstationPro({
             ? 1
             : 0.08
   const showOperator = !operatorAway
-  const watercolorOperator = hasWatercolorCharacterAsset(watercolorRole, watercolorState) && watercolorState
-    ? { role: watercolorRole, state: watercolorState }
-    : undefined
+  const watercolorOperator = {
+    role: watercolorRole ?? stableWatercolorRole(sessionId),
+    state: watercolorState ?? 'idle'
+  } as const
   const resolvedDetail: WorkstationDetail = active ? 'full' : (detail ?? 'compact')
-
-  // AvatarRig 在挂载后把各关节写入该句柄;useFrame 内读取并驱动动画。
-  const rigRef = useRef<AvatarRefs>(null)
-  const leftHandTargetRef = useRef<Group>(null)
-  const rightHandTargetRef = useRef<Group>(null)
-
-  // 相位偏移:让同类工位的小人动作错峰,避免整齐划一。
-  const phase = useMemo(
-    () => (position[0] * 1.7 + position[2] * 0.9) % (Math.PI * 2),
-    [position]
-  )
-
-  useFrame((state) => {
-    const refs = rigRef.current
-    if (!refs) return
-    const t = state.clock.getElapsedTime()
-    const opts = {
-      phase,
-      liveliness: motionScale,
-      deskHandTargets: {
-        left: leftHandTargetRef.current,
-        right: rightHandTargetRef.current
-      }
-    }
-    if (activity === 'working') applyTyping(refs, t, opts)
-    else if (activity === 'awaiting') applyTalking(refs, t, opts)
-    else if (activity === 'error') applyThinking(refs, t, opts)
-    else applyMonitoring(refs, t, opts)
-  })
 
   const cursorOver = (e: { stopPropagation: () => void }): void => {
     e.stopPropagation()
@@ -800,37 +763,13 @@ export default function WorkstationPro({
         />
 
         {showOperator && (
-          <>
-            <group
-              ref={leftHandTargetRef}
-              name="desk-left-hand-ik-target"
-              position={[-0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
-            />
-            <group
-              ref={rightHandTargetRef}
-              name="desk-right-hand-ik-target"
-              position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
-            />
-            {watercolorOperator ? (
-              <WatercolorCharacterRig role={watercolorOperator.role} state={watercolorOperator.state} compact scale={0.9} />
-            ) : (
-              <ProgressiveAvatarRig
-                ref={rigRef}
-                loadModel={loadRobotAssets}
-                sessionId={sessionId}
-                position={[0, 0, 0.52]}
-                rotation={[0, Math.PI, 0]}
-                scale={1.2}
-                bodyColor={skin.bodyColor}
-                skinColor={skin.shellColor}
-                accentColor={stationAccent}
-                emblem={skin.emblem}
-                providerLogo={providerLogo}
-                catEars={catEars}
-                detailLevel="low"
-              />
-            )}
-          </>
+          <WatercolorCharacterRig
+            role={watercolorOperator.role}
+            state={watercolorOperator.state}
+            compact
+            scale={0.9}
+            liveliness={liveliness}
+          />
         )}
 
         {activity === 'awaiting' && !operatorAway && (
@@ -975,38 +914,12 @@ export default function WorkstationPro({
             activity={activity}
           />
 
-          {/* 机器人面向 -Z,手掌目标位于前移后的左右输入区中心。 */}
-          <group
-            ref={leftHandTargetRef}
-            name="desk-left-hand-ik-target"
-            position={[-0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
+          {/* 未离席时显示水墨员工；离席时由 AgentWalkers 接管同一身份。 */}
+          <WatercolorCharacterRig
+            role={watercolorOperator.role}
+            state={watercolorOperator.state}
+            liveliness={liveliness}
           />
-          <group
-            ref={rightHandTargetRef}
-            name="desk-right-hand-ik-target"
-            position={[0.18, DESK_HAND_TARGET_Y, DESK_HAND_TARGET_Z]}
-          />
-
-          {/* Agent 操作员:未离席时始终面向 -Z 的显示器;离席时由 AgentWalkers 接管同一个 Agent。 */}
-          {watercolorOperator ? (
-            <WatercolorCharacterRig role={watercolorOperator.role} state={watercolorOperator.state} />
-          ) : (
-            <ProgressiveAvatarRig
-              ref={rigRef}
-              loadModel={loadRobotAssets}
-              sessionId={sessionId}
-              position={[0, 0, 0.52]}
-              rotation={[0, Math.PI, 0]}
-              scale={1.2}
-              bodyColor={skin.bodyColor}
-              skinColor={skin.shellColor}
-              accentColor={stationAccent}
-              emblem={skin.emblem}
-              providerLogo={providerLogo}
-              catEars={catEars}
-              detailLevel="full"
-            />
-          )}
           <OperatorContactLinks accent={stationAccent} activity={activity} />
           <OperatorFocusLinks accent={stationAccent} activity={activity} />
         </>

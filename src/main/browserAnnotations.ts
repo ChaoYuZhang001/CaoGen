@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { writeDurableFile } from './durable-file'
 
 export interface BrowserAnnotationBoundingBox {
   x: number
@@ -52,6 +53,8 @@ export class BrowserAnnotationValidationError extends Error {
 
 const MAX_CONSOLE_ERRORS = 200
 const JSON_INDENT = 2
+export const BROWSER_ANNOTATION_SCHEMA_VERSION = 1 as const
+const BROWSER_ANNOTATION_FORMAT = 'caogen.browser-annotation.v1' as const
 const SAFE_PATH_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:', 'file:'])
 
@@ -94,7 +97,7 @@ export async function saveAnnotation(rootDir: string, input: BrowserAnnotationIn
   await mkdir(sessionDir, { recursive: true })
 
   const filePath = annotationJsonPath(root, annotation.sessionId, annotation.id)
-  await atomicWriteText(filePath, `${JSON.stringify(annotation, null, JSON_INDENT)}\n`)
+  await atomicWriteText(filePath, `${JSON.stringify(storedAnnotation(annotation), null, JSON_INDENT)}\n`)
   return annotation
 }
 
@@ -112,7 +115,11 @@ export async function listAnnotations(rootDir: string, sessionId: string): Promi
     const id = normalizePathId(name.slice(0, -'.json'.length), 'annotationId')
     const filePath = annotationJsonPath(root, safeSessionId, id)
     const raw = await readFile(filePath, 'utf8')
-    annotations.push(parseStoredAnnotation(raw, filePath, safeSessionId, id))
+    const parsed = parseStoredAnnotation(raw, filePath, safeSessionId, id)
+    annotations.push(parsed.annotation)
+    if (parsed.legacy) {
+      await atomicWriteText(filePath, `${JSON.stringify(storedAnnotation(parsed.annotation), null, JSON_INDENT)}\n`)
+    }
   }
 
   return annotations.sort(compareAnnotations)
@@ -133,7 +140,11 @@ export async function readAnnotation(
   })
 
   if (raw === null) return null
-  return parseStoredAnnotation(raw, filePath, safeSessionId, safeAnnotationId)
+  const parsed = parseStoredAnnotation(raw, filePath, safeSessionId, safeAnnotationId)
+  if (parsed.legacy) {
+    await atomicWriteText(filePath, `${JSON.stringify(storedAnnotation(parsed.annotation), null, JSON_INDENT)}\n`)
+  }
+  return parsed.annotation
 }
 
 function parseStoredAnnotation(
@@ -141,23 +152,29 @@ function parseStoredAnnotation(
   filePath: string,
   expectedSessionId: string,
   expectedId: string
-): BrowserAnnotation {
+): { annotation: BrowserAnnotation; legacy: boolean } {
   const value = parseJsonObject(raw, filePath)
-  if (!hasOwn(value, 'id')) {
-    throw new BrowserAnnotationValidationError(`批注 JSON 缺少 id: ${filePath}`)
+  const legacy = !hasOwn(value, 'schemaVersion') && !hasOwn(value, 'format') && hasOwn(value, 'id')
+  let input: unknown = value
+  if (!legacy) {
+    if (value.schemaVersion !== BROWSER_ANNOTATION_SCHEMA_VERSION || value.format !== BROWSER_ANNOTATION_FORMAT) {
+      throw new BrowserAnnotationValidationError(`不支持的批注 schema 版本或格式: ${filePath}`)
+    }
+    const { schemaVersion: _schemaVersion, format: _format, ...annotation } = value
+    input = annotation
   }
-  if (!hasOwn(value, 'createdAt')) {
-    throw new BrowserAnnotationValidationError(`批注 JSON 缺少 createdAt: ${filePath}`)
+  if (!isRecord(input) || !hasOwn(input, 'id') || !hasOwn(input, 'createdAt')) {
+    throw new BrowserAnnotationValidationError(`批注 JSON 缺少必需字段: ${filePath}`)
   }
 
-  const annotation = normalizeAnnotation(value as unknown as BrowserAnnotationInput)
+  const annotation = normalizeAnnotation(input as unknown as BrowserAnnotationInput)
   if (annotation.sessionId !== expectedSessionId) {
     throw new BrowserAnnotationValidationError(`批注 sessionId 与路径不匹配: ${filePath}`)
   }
   if (annotation.id !== expectedId) {
     throw new BrowserAnnotationValidationError(`批注 id 与文件名不匹配: ${filePath}`)
   }
-  return annotation
+  return { annotation, legacy }
 }
 
 function parseJsonObject(raw: string, filePath: string): Record<string, unknown> {
@@ -313,16 +330,14 @@ function annotationJsonPath(root: string, sessionId: string, annotationId: strin
 }
 
 async function atomicWriteText(filePath: string, content: string): Promise<void> {
-  const dir = path.dirname(filePath)
-  await mkdir(dir, { recursive: true })
+  await writeDurableFile(filePath, content)
+}
 
-  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx' })
-    await rename(tmpPath, filePath)
-  } catch (err) {
-    await rm(tmpPath, { force: true }).catch(() => undefined)
-    throw err
+function storedAnnotation(annotation: BrowserAnnotation): Record<string, unknown> {
+  return {
+    schemaVersion: BROWSER_ANNOTATION_SCHEMA_VERSION,
+    format: BROWSER_ANNOTATION_FORMAT,
+    ...annotation
   }
 }
 

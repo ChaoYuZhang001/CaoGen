@@ -1,5 +1,6 @@
-import type { OutboundContextManifest } from '../../shared/types'
+import type { OutboundContextManifest, RoutingExpertPolicy } from '../../shared/types'
 import { getProvider, listProviders, providerIsReady } from '../providers'
+import { providerAllowedByRoutingExpertPolicy } from '../model/routing-expert-policy'
 import { providerAllowedByOutboundContext } from '../project-workspace/outbound-context-policy'
 import { resolveOpenAIProtocol, resolveProviderRuntimeTarget } from './providerRuntimeTarget'
 import { pickFailoverTarget, pickProviderModelFailoverTarget, type FailureClass } from '../scheduler'
@@ -81,10 +82,12 @@ export function planOpenAiProviderModelRecovery(input: {
   failure: FailureClass
   exclude: ReadonlySet<string>
   outboundContext?: OutboundContextManifest
+  routingExpertPolicy?: RoutingExpertPolicy
 }): OpenAiProviderModelRecoveryPlan | null {
   const provider = getProvider(input.providerId)
   const providerView = listProviders().find((candidate) => candidate.id === input.providerId)
   if (!provider || providerView?.engine !== 'openai' || !providerIsReady(provider)) return null
+  if (input.routingExpertPolicy && !providerAllowedByRoutingExpertPolicy(providerView, input.routingExpertPolicy)) return null
   const models = [...new Set(provider.models.map((model) =>
     resolveProviderRuntimeTarget(provider, { appId: 'openai', model }).model
   ))].filter((model) => providerAllowedByOutboundContext(input.outboundContext, providerView, model))
@@ -115,12 +118,14 @@ export function planOpenAiProviderFailover(input: {
   currentProtocol: OpenAIProtocol
   exclude: Set<string>
   outboundContext?: OutboundContextManifest
+  routingExpertPolicy?: RoutingExpertPolicy
 }): OpenAiProviderFailoverPlan | null {
   if (!input.failure.switchable) return null
   const providers = listProviders()
   synchronizeProviderReliabilityPolicies(providers)
   const candidates = providers
     .filter((provider) => provider.engine === 'openai' && provider.baseUrl.trim() && providerIsReady(provider))
+    .filter((provider) => !input.routingExpertPolicy || providerAllowedByRoutingExpertPolicy(provider, input.routingExpertPolicy))
     .map((provider) => {
       const sourceModels = provider.models.length > 0 ? provider.models : [input.currentModel]
       const models = [...new Set(sourceModels.flatMap((model) => {

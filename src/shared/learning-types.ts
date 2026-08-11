@@ -50,7 +50,9 @@ export interface LearningRecord {
   kind: LearningKind
   /** Stable project hash. Raw project paths are never persisted here. */
   project: string
-  scope: 'project'
+  scope: 'project' | 'worker'
+  workerId?: string
+  memoryNamespace?: string
   source: string
   confidence: number
   digest: string
@@ -104,6 +106,8 @@ export interface LearningDraftInput {
   confidence?: number
   supersedes?: string
   expiresAt?: string
+  workerId?: string
+  memoryNamespace?: string
   payload: LearningPayload
 }
 

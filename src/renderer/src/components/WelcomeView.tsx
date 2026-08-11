@@ -343,7 +343,8 @@ export default function WelcomeView(): React.JSX.Element {
     routingMode,
     text
   } = welcome
-  const taskStrategy = welcomeDraft.taskStrategy ?? 'execute'
+  const taskStrategy = welcomeDraft.taskStrategy ?? settings.defaultTaskStrategy
+  const taskExperienceMode = welcomeDraft.experienceModeOverride ?? projection
   const taRef = useRef<HTMLTextAreaElement>(null)
   const computeAvailable = hasAvailableCompute(providers)
   const { localComputeStatus, ensureLocalCompute } = useLocalComputeActivation(
@@ -358,6 +359,7 @@ export default function WelcomeView(): React.JSX.Element {
     driveMode,
     model,
     taskStrategy,
+    experienceModeOverride: taskExperienceMode,
     projectId: availableProjects.some((project) => project.id === projectChoice)
       ? projectChoice
       : undefined,
@@ -484,6 +486,25 @@ export default function WelcomeView(): React.JSX.Element {
               autoFocus
             />
             <div className="welcome-composer-bar">
+              <div
+                className="welcome-experience-override"
+                role="group"
+                aria-label={t('taskExperienceMode')}
+                data-task-experience-mode={taskExperienceMode}
+              >
+                {(['assistant', 'studio'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={taskExperienceMode === mode}
+                    className={taskExperienceMode === mode ? 'active' : ''}
+                    title={t(mode === 'assistant' ? 'taskExperienceAssistantHint' : 'taskExperienceStudioHint')}
+                    onClick={() => welcome.update({ experienceModeOverride: mode })}
+                  >
+                    {t(mode === 'assistant' ? 'taskExperienceAssistant' : 'taskExperienceStudio')}
+                  </button>
+                ))}
+              </div>
               <TaskStrategyControl
                 value={taskStrategy}
                 onChange={(nextStrategy) => welcome.update({ taskStrategy: nextStrategy })}

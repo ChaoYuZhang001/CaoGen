@@ -3,6 +3,7 @@ import path from 'node:path'
 import ts from 'typescript'
 
 const FILESYSTEM_MODULES = new Set(['fs', 'fs/promises', 'node:fs', 'node:fs/promises'])
+const DURABLE_FILE_OPERATIONS = new Set(['writeDurableFile', 'writeDurableFileSync'])
 const FILESYSTEM_OPERATIONS = new Set([
   'appendFile', 'appendFileSync',
   'chmod', 'chmodSync',
@@ -21,7 +22,8 @@ const FILESYSTEM_OPERATIONS = new Set([
   'truncate', 'truncateSync',
   'unlink', 'unlinkSync',
   'utimes', 'utimesSync',
-  'write', 'writeFile', 'writeFileSync', 'writeSync', 'writev', 'writevSync'
+  'write', 'writeFile', 'writeFileSync', 'writeSync', 'writev', 'writevSync',
+  'writeDurableFile', 'writeDurableFileSync'
 ])
 const FILE_HANDLE_OPERATIONS = new Set([
   'appendFile', 'chmod', 'chown', 'createWriteStream', 'datasync', 'sync',
@@ -34,7 +36,7 @@ const MATERIAL_WRITE_OPERATIONS = new Set([
   'appendFile', 'appendFileSync', 'copyFile', 'copyFileSync', 'cp', 'cpSync',
   'createWriteStream', 'link', 'linkSync', 'rename', 'renameSync', 'symlink',
   'symlinkSync', 'truncate', 'truncateSync', 'write', 'writeFile', 'writeFileSync',
-  'writeSync', 'writev', 'writevSync'
+  'writeSync', 'writev', 'writevSync', 'writeDurableFile', 'writeDurableFileSync'
 ])
 
 const DATA_CLASSES = new Set([
@@ -202,11 +204,10 @@ function validateStrategyDeclaration(entry, failures) {
 function validateSourceBackedStrategy(entry, discovered, failures) {
   const operations = new Set(discovered.sinks.map((sink) => sink.operation))
   if (entry.strategy === 'atomic_fsync_rename') {
-    requireOperation(entry, operations, isRename, 'rename', failures)
-    requireOperation(entry, operations, (operation) => DURABILITY_OPERATIONS.has(operation), 'fsync/sync', failures)
+    requireOperation(entry, operations, isDurablePublication, 'durable publication', failures)
   }
   if (entry.strategy === 'atomic_rename') {
-    requireOperation(entry, operations, isRename, 'rename', failures)
+    requireOperation(entry, operations, isDurablePublication, 'rename or durable publication', failures)
   }
   if (entry.strategy === 'atomic_link') {
     requireOperation(entry, operations, (operation) => operation === 'link' || operation === 'linkSync', 'link', failures)
@@ -238,7 +239,7 @@ function requireOperation(entry, operations, predicate, label, failures) {
 }
 
 function collectFilesystemBindings(sourceFile) {
-  const bindings = { direct: new Map(), namespaces: new Set(), importsOpen: false }
+  const bindings = { direct: new Map(), durable: new Map(), namespaces: new Set(), importsOpen: false }
 
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement) && filesystemModule(statement.moduleSpecifier)) {
@@ -250,6 +251,15 @@ function collectFilesystemBindings(sourceFile) {
           const imported = (element.propertyName ?? element.name).text
           if (FILESYSTEM_OPERATIONS.has(imported)) bindings.direct.set(element.name.text, imported)
           if (imported === 'open' || imported === 'openSync') bindings.importsOpen = true
+        }
+      }
+    }
+    if (ts.isImportDeclaration(statement) && durableFileModule(statement.moduleSpecifier)) {
+      const namedBindings = statement.importClause?.namedBindings
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          const imported = (element.propertyName ?? element.name).text
+          if (DURABLE_FILE_OPERATIONS.has(imported)) bindings.durable.set(element.name.text, imported)
         }
       }
     }
@@ -292,7 +302,7 @@ function collectFilesystemSinks(sourceFile, bindings) {
 }
 
 function filesystemCallOperation(expression, bindings) {
-  if (ts.isIdentifier(expression)) return bindings.direct.get(expression.text)
+  if (ts.isIdentifier(expression)) return bindings.direct.get(expression.text) ?? bindings.durable.get(expression.text)
   if (!ts.isPropertyAccessExpression(expression)) return undefined
   const operation = expression.name.text
   if (FILESYSTEM_OPERATIONS.has(operation) && hasNamespaceRoot(expression.expression, bindings.namespaces)) {
@@ -312,6 +322,10 @@ function filesystemModule(node) {
   return ts.isStringLiteralLike(node) && FILESYSTEM_MODULES.has(node.text)
 }
 
+function durableFileModule(node) {
+  return ts.isStringLiteralLike(node) && /(?:^|\/)durable-file$/.test(node.text.replace(/^\.\//, ''))
+}
+
 function isFilesystemRequire(node) {
   if (!ts.isCallExpression(node) || node.arguments.length !== 1) return false
   if (!ts.isIdentifier(node.expression) || node.expression.text !== 'require') return false
@@ -320,6 +334,10 @@ function isFilesystemRequire(node) {
 
 function isRename(operation) {
   return operation === 'rename' || operation === 'renameSync'
+}
+
+function isDurablePublication(operation) {
+  return isRename(operation) || operation === 'writeDurableFile' || operation === 'writeDurableFileSync'
 }
 
 function formatSinks(sinks) {

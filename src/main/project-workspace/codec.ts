@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type {
   AcceptanceResult,
   AcceptanceSpec,
+  ConnectorResourceContract,
   Goal,
   GoalBudget,
   GoalContract,
@@ -107,7 +108,8 @@ function normalizeResource(input: ProjectResourceInput, index: number): ProjectR
   const validKinds = new Set(['directory', 'file_set', 'repository', 'knowledge_base', 'connector', 'url', 'custom'])
   if (!validKinds.has(input.kind)) throw new ProjectWorkspaceError('invalid_input', `resource ${index} kind is invalid`)
   const path = optionalText(input.path, `resource ${index} path`)
-  const uri = optionalText(input.uri, `resource ${index} uri`)
+  const rawUri = optionalText(input.uri, `resource ${index} uri`)
+  const uri = input.kind === 'connector' && rawUri ? sanitizeConnectorUri(rawUri) : rawUri
   if (!path && !uri && input.kind !== 'custom') {
     throw new ProjectWorkspaceError('invalid_input', `resource ${index} requires path or uri`)
   }
@@ -121,7 +123,120 @@ function normalizeResource(input: ProjectResourceInput, index: number): ProjectR
     uri,
     dataClass,
     egressPolicy: dataClass === 'S3' ? 'deny' : requestedEgressPolicy,
+    connector: input.kind === 'connector'
+      ? normalizeConnectorContract(input.connector, index)
+      : undefined,
     metadata: input.metadata ? redact(input.metadata) as Record<string, unknown> : undefined
+  }
+}
+
+function normalizeConnectorContract(value: unknown, index: number): ConnectorResourceContract {
+  if (value === undefined) return legacyRevokedConnectorContract()
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector contract must be an object`)
+  }
+  const input = value as ConnectorResourceContract
+  if (input.schemaVersion !== 1) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector schemaVersion is invalid`)
+  }
+  const usage = normalizedStringSet(input.usage, `resource ${index} connector usage`)
+  if (!usage.every((entry) => entry === 'resource' || entry === 'knowledge_source' || entry === 'tool')) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector usage is invalid`)
+  }
+  const capabilities = normalizedStringSet(input.capabilities, `resource ${index} connector capabilities`)
+  if (input.dataDirection !== 'read' && input.dataDirection !== 'write' && input.dataDirection !== 'bidirectional') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector dataDirection is invalid`)
+  }
+  const authorization = input.authorization
+  if (!authorization || typeof authorization !== 'object') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization is required`)
+  }
+  if (authorization.subject !== 'personal' && authorization.subject !== 'shared') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization subject is invalid`)
+  }
+  if (authorization.status !== 'active' && authorization.status !== 'revoked') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization status is invalid`)
+  }
+  const scopes = normalizedStringSet(authorization.scopes, `resource ${index} connector authorization scopes`)
+  const grantedAt = optionalTimestamp(authorization.grantedAt, `resource ${index} connector grantedAt`)
+  const revokedAt = optionalTimestamp(authorization.revokedAt, `resource ${index} connector revokedAt`)
+  if (authorization.status === 'revoked' && revokedAt === undefined) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} revoked connector requires revokedAt`)
+  }
+  if (!input.revocation || input.revocation.behavior !== 'deny_new_operations' || typeof input.revocation.purgeCachedData !== 'boolean') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector revocation policy is invalid`)
+  }
+  if (!input.writePolicy || input.writePolicy.effect !== 'required' ||
+      (input.writePolicy.reconciliation !== 'queryable' && input.writePolicy.reconciliation !== 'manual_only')) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector write policy is invalid`)
+  }
+  return {
+    schemaVersion: 1,
+    usage: usage as ConnectorResourceContract['usage'],
+    capabilities,
+    dataDirection: input.dataDirection,
+    authorization: {
+      subject: input.authorization.subject,
+      principalId: requiredText(input.authorization.principalId, `resource ${index} connector principalId`),
+      scopes,
+      status: input.authorization.status,
+      ...(grantedAt === undefined ? {} : { grantedAt }),
+      ...(revokedAt === undefined ? {} : { revokedAt })
+    },
+    version: requiredText(input.version, `resource ${index} connector version`),
+    revocation: {
+      behavior: 'deny_new_operations',
+      purgeCachedData: input.revocation.purgeCachedData
+    },
+    writePolicy: {
+      effect: 'required',
+      reconciliation: input.writePolicy.reconciliation
+    }
+  }
+}
+
+function normalizedStringSet(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw new ProjectWorkspaceError('invalid_input', `${label} must be an array`)
+  const normalized = [...new Set(value.map((entry) => requiredText(entry, label)))].sort()
+  if (normalized.length === 0) throw new ProjectWorkspaceError('invalid_input', `${label} must not be empty`)
+  if (normalized.length > 100) throw new ProjectWorkspaceError('invalid_input', `${label} exceeds 100 entries`)
+  return normalized
+}
+
+function optionalTimestamp(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined
+  return timestamp(value, label)
+}
+
+function legacyRevokedConnectorContract(): ConnectorResourceContract {
+  return {
+    schemaVersion: 1,
+    usage: ['resource'],
+    capabilities: ['legacy:untrusted'],
+    dataDirection: 'read',
+    authorization: {
+      subject: 'personal',
+      principalId: 'legacy-unbound',
+      scopes: ['none'],
+      status: 'revoked',
+      revokedAt: 0
+    },
+    version: 'unversioned',
+    revocation: { behavior: 'deny_new_operations', purgeCachedData: true },
+    writePolicy: { effect: 'required', reconciliation: 'manual_only' }
+  }
+}
+
+function sanitizeConnectorUri(value: string): string {
+  try {
+    const url = new URL(value)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return value
   }
 }
 

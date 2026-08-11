@@ -76,9 +76,13 @@ export function resolveWatercolorRole(
   if (semanticRole) return { role: semanticRole, source: 'role-template' }
 
   return {
-    role: WATERCOLOR_CHARACTER_ROLES[stableStringHash(worker.id) % WATERCOLOR_CHARACTER_ROLES.length],
+    role: stableWatercolorRole(worker.id),
     source: 'stable-fallback'
   }
+}
+
+export function stableWatercolorRole(identity: string): WatercolorCharacterRole {
+  return WATERCOLOR_CHARACTER_ROLES[stableStringHash(identity) % WATERCOLOR_CHARACTER_ROLES.length]
 }
 
 export function watercolorCharacterAssetFilename(

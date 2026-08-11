@@ -234,6 +234,17 @@ function validateRecord(value: unknown, project: string, filePath: string): void
       throw new Error(`Learning record field ${key} is invalid: ${filePath}`)
     }
   }
+  if (value.scope !== 'project' && value.scope !== 'worker') {
+    throw new Error(`Learning record scope is invalid: ${filePath}`)
+  }
+  if (value.scope === 'worker') {
+    if (typeof value.workerId !== 'string' || !value.workerId.trim() ||
+      typeof value.memoryNamespace !== 'string' || !value.memoryNamespace.trim()) {
+      throw new Error(`Worker learning namespace is invalid: ${filePath}`)
+    }
+  } else if (value.workerId !== undefined || value.memoryNamespace !== undefined) {
+    throw new Error(`Project learning cannot carry a Worker namespace: ${filePath}`)
+  }
   if (!Number.isInteger(value.version) || (value.version as number) < 1) {
     throw new Error(`Learning record version is invalid: ${filePath}`)
   }

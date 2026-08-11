@@ -6,7 +6,7 @@ import type {
 
 export const WELCOME_DRAFT_STORAGE_KEY = 'caogen.welcome-draft.v1'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const MAX_TEXT_LENGTH = 200_000
 const MAX_PATH_LENGTH = 32_768
 const MAX_ID_LENGTH = 2_048
@@ -14,6 +14,7 @@ const DRIVE_MODES = new Set(['spark', 'core', 'forge', 'command', 'genesis'])
 const ROUTING_MODES = new Set(['fixed', 'provider', 'global'])
 const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypassPermissions'])
 const TASK_STRATEGIES = new Set(['view', 'plan', 'execute'])
+const EXPERIENCE_MODES = new Set(['assistant', 'studio'])
 
 export function loadWelcomeDraft(
   fallback: WelcomeDraftState,
@@ -26,7 +27,7 @@ export function loadWelcomeDraft(
     const payload = JSON.parse(raw) as { schemaVersion?: unknown; draft?: unknown }
     const draft = payload.schemaVersion === SCHEMA_VERSION
       ? parseDraft(payload.draft, false)
-      : payload.schemaVersion === 2
+      : payload.schemaVersion === 3 || payload.schemaVersion === 2
         ? parseDraft(payload.draft, false)
       : payload.schemaVersion === 1
         ? parseDraft(payload.draft, true)
@@ -75,6 +76,7 @@ function parseDraft(value: unknown, legacy: boolean): WelcomeDraftState | null {
   if (!validNullableString(draft.model, MAX_ID_LENGTH)) return null
   if (draft.permissionMode !== null && !PERMISSION_MODES.has(String(draft.permissionMode))) return null
   if (draft.taskStrategy !== undefined && !TASK_STRATEGIES.has(String(draft.taskStrategy))) return null
+  if (draft.experienceModeOverride !== undefined && !EXPERIENCE_MODES.has(String(draft.experienceModeOverride))) return null
   if (!validOptionalString(draft.forkFromSdkSessionId, MAX_ID_LENGTH)) return null
   if (!validOptionalString(draft.forkCheckpointId, MAX_ID_LENGTH)) return null
   if (draft.forkCheckpointId !== undefined && draft.forkFromSdkSessionId === undefined) return null
@@ -112,6 +114,7 @@ function isEmptyDraft(draft: WelcomeDraftState): boolean {
     && draft.computeSelectionSource === 'default' && draft.routingMode === 'global'
     && draft.providerId === null && draft.model === null
     && draft.permissionMode === null && draft.taskStrategy === undefined
+    && draft.experienceModeOverride === undefined
     && draft.forkFromSdkSessionId === undefined && draft.forkCheckpointId === undefined
     && draft.forkSourceTitle === undefined
 }

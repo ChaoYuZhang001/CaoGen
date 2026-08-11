@@ -54,6 +54,11 @@ export interface DigitalWorkerActionPolicyInput {
   failureCount?: number
   escalationApproved?: boolean
   activeSessions?: readonly SessionMeta[]
+  /** Canonical ModelAttempt accounting supplied by billable production preflights. */
+  billableUsage?: {
+    trackable: boolean
+    monthlySpentUsd: number
+  }
   now?: number
 }
 
@@ -65,6 +70,7 @@ export type DigitalWorkerActionPolicyDecision =
       workerId: string
       assignmentId: string
       monthlySpentUsd: number
+      monthlyBudgetUsd?: number
       activeActions: number
     }
   | {
@@ -131,7 +137,7 @@ export function preflightDigitalWorkerAction(
   if (budgetDecision) return budgetDecision
   const escalationDecision = workerEscalationDecision(input, rootDir, scope, contract)
   if (escalationDecision) return escalationDecision
-  return allowedScope(scope, state, contract)
+  return allowedScope(input, scope, state, contract)
 }
 
 function preparePolicyScope(input: DigitalWorkerActionPolicyInput): PreparedPolicyScope {
@@ -220,14 +226,15 @@ function workerBudgetDecision(
   state: Extract<ActionState, { ready: true }>
 ): DigitalWorkerActionPolicyDecision | null {
   if (contract.monthlyBudgetUsd === undefined) return null
-  if (!canTrackCost(input.meta.engine)) {
+  const trackable = input.billableUsage?.trackable ?? canTrackCost(input.meta.engine)
+  if (!trackable) {
     return deniedScope(
       'budget_untrackable',
       `数字员工 ${scope.worker.id} 配置了月度预算，但当前引擎无法可靠回传费用`,
       scope
     )
   }
-  const spent = workerMonthlySpend(
+  const spent = input.billableUsage?.monthlySpentUsd ?? workerMonthlySpend(
     state.records, scope.document.assignments, scope.worker.id, state.now)
   if (spent < contract.monthlyBudgetUsd) return null
   return deniedScope(
@@ -260,19 +267,22 @@ function workerEscalationDecision(
 }
 
 function allowedScope(
+  input: DigitalWorkerActionPolicyInput,
   scope: PolicyScope,
   state: Extract<ActionState, { ready: true }>,
   contract: DigitalWorkerPolicyContract
 ): DigitalWorkerActionPolicyDecision {
   const monthlySpentUsd = contract.monthlyBudgetUsd === undefined
     ? 0
-    : workerMonthlySpend(state.records, scope.document.assignments, scope.worker.id, state.now)
+    : input.billableUsage?.monthlySpentUsd ??
+      workerMonthlySpend(state.records, scope.document.assignments, scope.worker.id, state.now)
   return {
     allowed: true,
     scoped: true,
     workerId: scope.worker.id,
     assignmentId: scope.assignment.id,
     monthlySpentUsd,
+    ...(contract.monthlyBudgetUsd === undefined ? {} : { monthlyBudgetUsd: contract.monthlyBudgetUsd }),
     activeActions: state.activeActions
   }
 }

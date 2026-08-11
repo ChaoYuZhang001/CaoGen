@@ -2058,7 +2058,9 @@ async function waitForOfficeTelemetry(cdp, timeout = 10_000) {
           totalDurationMs: num('data-office-total-duration-ms'),
           routingBudgetPanels: num('data-office-routing-budget-panels'),
           clickableWorkstations: num('data-office-clickable-workstations'),
-          oneRobotPerAgent: num('data-office-one-robot-per-agent'),
+          oneWatercolorCharacterPerAgent: num('data-office-one-watercolor-character-per-agent'),
+          visibleWatercolorCharacters: num('data-office-watercolor-characters'),
+          visibleRobots: num('data-office-visible-robots'),
           selectedSession: wrap?.getAttribute('data-office-selected-session') || '',
           selectedPanelText: (panel?.innerText || panel?.textContent || '').replace(/\\s+/g, ' ').trim(),
           canvas: Boolean(document.querySelector('.office canvas'))
@@ -2078,7 +2080,9 @@ async function waitForOfficeTelemetry(cdp, timeout = 10_000) {
       last.totalDurationMs >= 1 &&
       last.routingBudgetPanels >= 1 &&
       last.clickableWorkstations >= last.sessions &&
-      last.oneRobotPerAgent === 1 &&
+      last.oneWatercolorCharacterPerAgent === 1 &&
+      last.visibleWatercolorCharacters === last.sessions &&
+      last.visibleRobots === 0 &&
       last.selectedSession &&
       [PAGE_SMOKE_MODEL, 'caogen-relay-fast', 'caogen-relay-strong'].some((model) => last.selectedPanelText.includes(model)) &&
       last.selectedPanelText.includes('文件 1') &&

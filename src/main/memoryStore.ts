@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { LearningActor, LearningRecord, MemoryLearningPayload } from '../shared/learning-types'
 import {
@@ -12,6 +12,7 @@ import {
 import { requireTrustedUserLearningActor, type TrustedLearningDecision } from './learning/learning-security'
 import { learningProjectHash, resolveDefaultLearningRoot } from './learning/learning-store'
 import { projectLearningNamespace } from './project-aggregate/project-memory-adapter'
+import { writeDurableFile } from './durable-file'
 
 export interface ProjectMemoryEntry {
   id: string
@@ -23,6 +24,9 @@ export interface ProjectMemoryEntry {
   createdAt: string
   updatedAt: string
 }
+
+const LEGACY_MEMORY_ENTRY_SCHEMA_VERSION = 1 as const
+const LEGACY_MEMORY_ENTRY_FORMAT = 'caogen.project-memory-entry.v1' as const
 
 export interface ProjectMemoryDraft extends ProjectMemoryEntry {
   status: 'draft'
@@ -94,11 +98,11 @@ export async function readProjectMemory(
     readBucket<ProjectMemoryDraft>(path.join(projectDir, 'drafts'), 'drafts')
   ])
   const entries = mergeById(
-    learningProjects.flatMap((learning) => learning.active.filter(isMemoryRecord).map(memoryEntryFromRecord)),
+    learningProjects.flatMap((learning) => learning.active.filter(isProjectMemoryRecord).map(memoryEntryFromRecord)),
     legacyEntries
   )
   const drafts = mergeById(
-    learningProjects.flatMap((learning) => learning.drafts.filter(isMemoryRecord).map(memoryDraftFromRecord)),
+    learningProjects.flatMap((learning) => learning.drafts.filter(isProjectMemoryRecord).map(memoryDraftFromRecord)),
     legacyDrafts
   )
 
@@ -157,7 +161,7 @@ export async function acceptMemoryDraft(
   }
   if (!record) {
     const draftPath = entryJsonPath(projectDir, 'drafts', id)
-    const draft = parseDraft(await readFile(draftPath, 'utf8'), draftPath)
+    const draft = parseDraft(await readFile(draftPath, 'utf8'), draftPath).entry
     recordRoot = target.learningProjectRoot
     record = await createLearningDraft(recordRoot, learningRoot, {
       kind: 'memory',
@@ -249,6 +253,12 @@ function isMemoryRecord(record: LearningRecord): record is LearningRecord & { pa
   return record.kind === 'memory' && record.payload.type === 'memory'
 }
 
+function isProjectMemoryRecord(
+  record: LearningRecord
+): record is LearningRecord & { payload: MemoryLearningPayload } {
+  return record.scope === 'project' && isMemoryRecord(record)
+}
+
 function memoryEntryFromRecord(record: LearningRecord & { payload: MemoryLearningPayload }): ProjectMemoryEntry {
   return {
     id: record.id,
@@ -286,7 +296,7 @@ async function writeEntry(
   const bucketDir = path.join(projectDir, bucket)
 
   await mkdir(bucketDir, { recursive: true })
-  await atomicWriteText(entryJsonPath(projectDir, bucket, entry.id), `${JSON.stringify(entry, null, JSON_INDENT)}\n`)
+  await atomicWriteText(entryJsonPath(projectDir, bucket, entry.id), `${JSON.stringify(storedMemoryEntry(entry), null, JSON_INDENT)}\n`)
   await atomicWriteText(entryMarkdownPath(projectDir, bucket, entry.id), renderEntryMarkdown(entry))
 }
 
@@ -305,36 +315,74 @@ async function readBucket<T extends ProjectMemoryEntry | ProjectMemoryDraft>(
     const id = safeEntryId(name.slice(0, -'.json'.length))
     const filePath = path.join(bucketDir, `${id}.json`)
     const raw = await readFile(filePath, 'utf8')
-    entries.push((bucket === 'drafts' ? parseDraft(raw, filePath) : parseConfirmed(raw, filePath)) as T)
+    const parsed = bucket === 'drafts' ? parseDraft(raw, filePath) : parseConfirmed(raw, filePath)
+    entries.push(parsed.entry as T)
+    if (parsed.legacy) {
+      await atomicWriteText(filePath, `${JSON.stringify(storedMemoryEntry(parsed.entry), null, JSON_INDENT)}\n`)
+    }
   }
 
   return entries.sort(compareEntries)
 }
 
-function parseConfirmed(raw: string, filePath: string): ProjectMemoryEntry {
+function parseConfirmed(raw: string, filePath: string): { entry: ProjectMemoryEntry; legacy: boolean } {
   const value = parseJsonObject(raw, filePath)
+  const legacy = legacyMemoryDocument(value)
+  const record = memoryEntryRecord(value, filePath, legacy)
   const entry: ProjectMemoryEntry = {
-    id: readString(value, 'id', filePath),
-    kind: readString(value, 'kind', filePath),
-    title: readString(value, 'title', filePath),
-    body: readString(value, 'body', filePath),
-    source: readString(value, 'source', filePath),
-    reason: readString(value, 'reason', filePath),
-    createdAt: readString(value, 'createdAt', filePath),
-    updatedAt: readString(value, 'updatedAt', filePath)
+    id: readString(record, 'id', filePath),
+    kind: readString(record, 'kind', filePath),
+    title: readString(record, 'title', filePath),
+    body: readString(record, 'body', filePath),
+    source: readString(record, 'source', filePath),
+    reason: readString(record, 'reason', filePath),
+    createdAt: readString(record, 'createdAt', filePath),
+    updatedAt: readString(record, 'updatedAt', filePath)
   }
   safeEntryId(entry.id)
-  return entry
+  return { entry, legacy }
 }
 
-function parseDraft(raw: string, filePath: string): ProjectMemoryDraft {
+function parseDraft(raw: string, filePath: string): { entry: ProjectMemoryDraft; legacy: boolean } {
   const value = parseJsonObject(raw, filePath)
-  const status = readString(value, 'status', filePath)
+  const legacy = legacyMemoryDocument(value)
+  const record = memoryEntryRecord(value, filePath, legacy)
+  const status = readString(record, 'status', filePath)
   if (status !== 'draft') throw new Error(`记忆草稿状态无效: ${filePath}`)
 
   return {
-    ...parseConfirmed(raw, filePath),
-    status
+    entry: {
+      ...parseConfirmed(raw, filePath).entry,
+      status
+    },
+    legacy
+  }
+}
+
+function legacyMemoryDocument(value: Record<string, unknown>): boolean {
+  return !Object.prototype.hasOwnProperty.call(value, 'schemaVersion') &&
+    !Object.prototype.hasOwnProperty.call(value, 'format') &&
+    Object.prototype.hasOwnProperty.call(value, 'id')
+}
+
+function memoryEntryRecord(
+  value: Record<string, unknown>,
+  filePath: string,
+  legacy: boolean
+): Record<string, unknown> {
+  if (legacy) return value
+  if (value.schemaVersion !== LEGACY_MEMORY_ENTRY_SCHEMA_VERSION || value.format !== LEGACY_MEMORY_ENTRY_FORMAT) {
+    throw new Error(`不支持的记忆 schema 版本或格式: ${filePath}`)
+  }
+  const { schemaVersion: _schemaVersion, format: _format, ...entry } = value
+  return entry
+}
+
+function storedMemoryEntry(entry: ProjectMemoryEntry | ProjectMemoryDraft): Record<string, unknown> {
+  return {
+    schemaVersion: LEGACY_MEMORY_ENTRY_SCHEMA_VERSION,
+    format: LEGACY_MEMORY_ENTRY_FORMAT,
+    ...entry
   }
 }
 
@@ -360,17 +408,7 @@ function readString(value: Record<string, unknown>, key: string, filePath: strin
 }
 
 async function atomicWriteText(filePath: string, content: string): Promise<void> {
-  const dir = path.dirname(filePath)
-  await mkdir(dir, { recursive: true })
-
-  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx' })
-    await rename(tmpPath, filePath)
-  } catch (err) {
-    await rm(tmpPath, { force: true }).catch(() => undefined)
-    throw err
-  }
+  await writeDurableFile(filePath, content)
 }
 
 async function removeEntryFiles(projectDir: string, bucket: MemoryBucket, id: string): Promise<boolean> {

@@ -8,6 +8,9 @@ import type {
   GoalRiskLevel,
   GoalStatus,
   OutboundDataClass,
+  ConnectorAuthorizationSubject,
+  ConnectorDataDirection,
+  ConnectorResourceUsage,
   ProjectResource,
   ProjectResourceEgressPolicy,
   ProjectResourceInput,
@@ -63,6 +66,14 @@ export interface ProjectResourceDraft {
   location: string
   dataClass: OutboundDataClass
   egressPolicy: ProjectResourceEgressPolicy
+  connectorUsage: ConnectorResourceUsage[]
+  connectorCapabilities: string
+  connectorDataDirection: ConnectorDataDirection
+  connectorAuthorizationSubject: ConnectorAuthorizationSubject
+  connectorPrincipalId: string
+  connectorScopes: string
+  connectorVersion: string
+  connectorReconciliation: 'queryable' | 'manual_only'
 }
 
 export interface GoalDraft {
@@ -124,6 +135,7 @@ export const TEXT = {
   projectName: '项目名称',
   projectKind: '项目类型',
   projectCreated: '项目已创建',
+  projectCreatedTemplatePending: '项目已创建，但模板初始化未完成；项目已保留，可重试模板初始化',
   projectImported: '项目已导入',
   goalCreated: '目标已创建',
   goalUpdated: '目标契约已更新',
@@ -571,8 +583,34 @@ export function resourceInputFromDraft(draft: ProjectResourceDraft): ProjectReso
     dataClass: draft.dataClass,
     egressPolicy: draft.dataClass === 'S3' ? 'deny' as const : draft.egressPolicy
   }
-  if (draft.kind === 'connector') return { kind: 'connector', label, uri: location, ...policy }
+  if (draft.kind === 'connector') {
+    return {
+      kind: 'connector',
+      label,
+      uri: location,
+      ...policy,
+      connector: {
+        schemaVersion: 1,
+        usage: draft.connectorUsage,
+        capabilities: splitCommaSeparated(draft.connectorCapabilities),
+        dataDirection: draft.connectorDataDirection,
+        authorization: {
+          subject: draft.connectorAuthorizationSubject,
+          principalId: draft.connectorPrincipalId.trim(),
+          scopes: splitCommaSeparated(draft.connectorScopes),
+          status: 'active'
+        },
+        version: draft.connectorVersion.trim(),
+        revocation: { behavior: 'deny_new_operations', purgeCachedData: true },
+        writePolicy: { effect: 'required', reconciliation: draft.connectorReconciliation }
+      }
+    }
+  }
   return { kind: draft.kind, label, path: location, ...policy }
+}
+
+function splitCommaSeparated(value: string): string[] {
+  return [...new Set(value.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean))]
 }
 
 export function resourceDataClass(resource: ProjectResource): OutboundDataClass {

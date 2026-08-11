@@ -42,6 +42,7 @@ import {
 import { canRotateProviderKey } from './providerKeyRouting'
 import { resolveAnthropicMessagesTarget, type AnthropicMessagesTarget } from './provider/anthropicMessagesTarget'
 import { getSettings } from './settings'
+import { assertRoutingExpertTargetAllowed } from './model/routing-expert-policy'
 import { listHistory } from './history'
 import {
   acquireProviderRequest,
@@ -67,6 +68,7 @@ import {
   prepareOutboundContext
 } from './project-workspace/outbound-context-policy'
 import { effectiveSessionModel } from './provider/engine-provider-utils'
+import { estimateModelAttemptCostUsd } from './provider/modelAttemptCost'
 import { redactProviderCredentials } from './providerCredentialRuntime'
 import {
   fetchWithProviderCredentialLease,
@@ -263,6 +265,7 @@ export class AnthropicEngine implements Engine {
         providerId: this.meta.providerId,
         model: this.meta.model
       })
+      assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, getSettings().routingExpertPolicy)
       this.resolvedModel = target.model
       if (!this.meta.sdkSessionId) {
         this.meta.sdkSessionId = `${this.dependencies.sessionIdPrefix}-${randomUUID()}`
@@ -418,9 +421,11 @@ export class AnthropicEngine implements Engine {
         providerId: this.meta.providerId,
         model: this.meta.model
       })
+      assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, getSettings().routingExpertPolicy)
       rememberAnthropicRecoveryTarget(this.recoveryState, target)
       this.resolvedModel = target.model
-      const layeredPayload = await augmentNativePayloadWithLayeredMemory(payload, this.meta)
+      const layered = await augmentNativePayloadWithLayeredMemory(payload, this.meta, app.getPath('userData'))
+      const layeredPayload = layered.payload
       const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
         .catch((error) => {
           console.error('[caogen] workflow stage handoff retrieval failed:', error)
@@ -432,7 +437,11 @@ export class AnthropicEngine implements Engine {
         payload: layeredPayload,
         providerId: target.providerId,
         model: target.model,
-        additionalItems: anthropicAdditionalContextItems(handoff, this.history.length > 0)
+        additionalItems: anthropicAdditionalContextItems(
+          handoff,
+          this.history.length > 0,
+          layered.hasMemoryContext
+        )
       })
       this.activeOutboundContext = outbound.manifest
       const projectResources = outbound.resourceContext.prompt
@@ -559,8 +568,18 @@ export class AnthropicEngine implements Engine {
       body: this.dependencies.buildWireBody(request),
       signal: controller.signal,
       auth: { keyId: target.keyId, keyLabel: target.keyLabel },
+      estimateCost: (usage) => estimateModelAttemptCostUsd({
+        providerId: target.providerId,
+        model: target.model,
+        protocol: 'anthropic.messages'
+      }, usage),
       preflight: async () => {
-        assertDigitalWorkerProviderDispatchAllowed(this.meta)
+        assertRoutingExpertTargetAllowed(target.providerId, target.baseUrl, getSettings().routingExpertPolicy)
+        await assertDigitalWorkerProviderDispatchAllowed(this.meta, app.getPath('userData'), {
+          providerId: target.providerId,
+          model: target.model,
+          protocol: 'anthropic.messages'
+        })
         const manifest = this.activeOutboundContext
         if (!manifest) {
           throw new OutboundContextPolicyError(

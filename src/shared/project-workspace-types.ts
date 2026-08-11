@@ -5,6 +5,7 @@
  */
 
 export const PROJECT_WORKSPACE_SCHEMA_VERSION = 1 as const
+export const MANAGED_PERSONAL_WORKSPACE_ID = 'caogen-managed-personal-workspace' as const
 
 export type ProjectWorkspaceSchemaVersion = typeof PROJECT_WORKSPACE_SCHEMA_VERSION
 
@@ -37,6 +38,49 @@ export type OutboundDataClass = 'S0' | 'S1' | 'S2' | 'S3' | 'S4'
  */
 export type ProjectResourceEgressPolicy = 'allow' | 'local_only' | 'deny'
 
+export type ConnectorResourceUsage = 'resource' | 'knowledge_source' | 'tool'
+export type ConnectorDataDirection = 'read' | 'write' | 'bidirectional'
+export type ConnectorAuthorizationSubject = 'personal' | 'shared'
+export type ConnectorAuthorizationStatus = 'active' | 'revoked'
+
+export interface ConnectorResourceContract {
+  schemaVersion: 1
+  usage: ConnectorResourceUsage[]
+  capabilities: string[]
+  dataDirection: ConnectorDataDirection
+  authorization: {
+    subject: ConnectorAuthorizationSubject
+    principalId: string
+    scopes: string[]
+    status: ConnectorAuthorizationStatus
+    grantedAt?: number
+    revokedAt?: number
+  }
+  version: string
+  revocation: {
+    behavior: 'deny_new_operations'
+    purgeCachedData: boolean
+  }
+  writePolicy: {
+    effect: 'required'
+    reconciliation: 'queryable' | 'manual_only'
+  }
+}
+
+export interface ConnectorSourceCitation {
+  projectId: string
+  resourceId: string
+  source: string
+  version: string
+  retrievedAt: number
+  contentDigest?: string
+}
+
+export interface ConnectorReadResult<T = unknown> {
+  data: T
+  citation: ConnectorSourceCitation
+}
+
 export interface ProjectResource {
   id: string
   kind: ProjectResourceKind
@@ -48,6 +92,8 @@ export interface ProjectResource {
   dataClass?: OutboundDataClass
   /** Defaults to allow for backward compatibility; S3 is always denied. */
   egressPolicy?: ProjectResourceEgressPolicy
+  /** Required for connector resources; credentials are referenced, never stored here. */
+  connector?: ConnectorResourceContract
   metadata?: Record<string, unknown>
 }
 
@@ -588,6 +634,58 @@ export interface ProjectGoalTaskResult {
   recovered: boolean
 }
 
+export interface ProjectWorkspaceTemplateResourceSuggestion {
+  kind: ProjectResourceKind
+  label: string
+  dataClass: OutboundDataClass
+  egressPolicy: ProjectResourceEgressPolicy
+  reason: string
+}
+
+export interface ProjectWorkspaceTemplateWorkItemPreset {
+  key: string
+  type: WorkItemType
+  title: string
+  description: string
+  dependencyKeys: string[]
+  expectedArtifactKinds: import('./workflow-types').WorkflowArtifactKind[]
+  acceptance: string[]
+}
+
+export interface ProjectWorkspaceTemplateDefinition {
+  schemaVersion: 1
+  id: ProjectWorkspaceKind
+  name: string
+  summary: string
+  goal: {
+    title: string
+    objective: string
+    constraints: string[]
+    successCriteria: string[]
+    forbiddenActions: string[]
+    riskLevel: GoalRiskLevel
+    acceptance: string[]
+  }
+  workItems: ProjectWorkspaceTemplateWorkItemPreset[]
+  resourceSuggestions: ProjectWorkspaceTemplateResourceSuggestion[]
+}
+
+export interface ProjectWorkspaceTemplateApplyInput {
+  requestId: string
+  projectId: string
+  templateId: ProjectWorkspaceKind
+}
+
+export interface ProjectWorkspaceTemplateApplyResult {
+  requestId: string
+  projectId: string
+  templateId: ProjectWorkspaceKind
+  templateDigest: string
+  goal: Goal
+  workItems: WorkItem[]
+  resourceSuggestions: ProjectWorkspaceTemplateResourceSuggestion[]
+}
+
 export interface ProjectDeletionResult {
   operationId: string
   projectId: string
@@ -606,6 +704,7 @@ export interface ProjectWorkspaceApi {
   listProjectWorkspaces(options?: ProjectWorkspaceListOptions): Promise<ProjectWorkspace[]>
   getProjectWorkspace(id: string): Promise<ProjectWorkspace | undefined>
   createProjectWorkspace(input: ProjectWorkspaceInput, options?: MutationOptions): Promise<ProjectWorkspace>
+  applyProjectWorkspaceTemplate(input: ProjectWorkspaceTemplateApplyInput): Promise<ProjectWorkspaceTemplateApplyResult>
   updateProjectWorkspace(id: string, patch: ProjectWorkspacePatch, options?: MutationOptions): Promise<ProjectWorkspace>
   archiveProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>
   restoreProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>

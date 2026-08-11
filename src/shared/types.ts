@@ -52,6 +52,7 @@ export * from './workflow-repair'
 export type * from './digital-worker-types'
 export type * from './watercolor-character'
 export type * from './project-workspace-types'
+export { MANAGED_PERSONAL_WORKSPACE_ID } from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
 export type * from './provider-authorization-types'
@@ -122,6 +123,14 @@ export interface PermissionEffectScopeView {
   summary: string
 }
 export type SchedulerStrategy = 'quality' | 'cost' | 'speed' | 'balanced'
+export type RoutingLocalityPolicy = 'any' | 'prefer_local' | 'local_only'
+
+export interface RoutingExpertPolicy {
+  /** Empty means every configured Provider remains eligible. */
+  allowedProviderIds: string[]
+  /** local_only is the hard no-egress mode for model requests. */
+  locality: RoutingLocalityPolicy
+}
 export type ModelRoutingTaskKind =
   | 'chat'
   | 'coding'
@@ -518,6 +527,10 @@ export interface SessionMeta {
   digitalWorkerBinding?: DigitalWorkerBinding
   /** 明确不归属项目的会话;仍保留工作目录供工具执行。 */
   unassigned?: boolean
+  /** Assistant 托管个人 Workspace 的稳定容器身份；不等同于 canonical 工作流 Workspace 所有权。 */
+  personalWorkspaceId?: string
+  /** 创建该任务时的界面模式快照；只影响任务入口展示，不改变全局偏好或执行合同。 */
+  experienceModeOverride?: 'assistant' | 'studio'
   /** 原仓库根目录。 */
   repoRoot?: string
   /** CaoGen 管理的 worktree 根目录。 */
@@ -594,6 +607,9 @@ export interface HistoryEntry {
   workItemId?: string
   digitalWorkerBinding?: DigitalWorkerBinding
   unassigned?: boolean
+  personalWorkspaceId?: string
+  /** 创建该任务时的界面模式快照；历史恢复时仅作展示参考。 */
+  experienceModeOverride?: 'assistant' | 'studio'
   repoRoot?: string
   worktreePath?: string
   branch?: string
@@ -634,6 +650,9 @@ export interface CreateSessionOptions {
   goalId?: string
   workItemId?: string
   unassigned?: boolean
+  personalWorkspaceId?: string
+  /** 单任务界面模式覆盖；不得写回全局 experienceMode 偏好。 */
+  experienceModeOverride?: 'assistant' | 'studio'
   driveMode?: CaoGenDriveMode
   parentSessionId?: string
   orchestrationId?: string
@@ -1248,6 +1267,10 @@ export interface LayoutSettings {
 export interface AppSettings {
   /** CaoGen Drive 默认档位;新会话默认继承此档位。 */
   driveMode: CaoGenDriveMode
+  /** 新任务默认策略;单个 Session 可以显式覆盖且不改写该偏好。 */
+  defaultTaskStrategy: TaskStrategy
+  /** Assistant/Studio 默认入口；单任务可通过 experienceModeOverride 临时覆盖。 */
+  experienceMode: 'assistant' | 'studio'
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
   defaultPermissionMode: PermissionModeId
@@ -1288,6 +1311,8 @@ export interface AppSettings {
   smartModelRoutingEnabled: boolean
   /** P2-003 自动交叉验证执行开关；默认关闭，仅在智能调度生成复核计划后派发第二模型 */
   modelCrossValidationAutoRunEnabled: boolean
+  /** 专家路由边界；在初始选路、恢复和实际 Provider 请求前强制执行。 */
+  routingExpertPolicy: RoutingExpertPolicy
   /** 单会话全局预算上限;0 = 不限制 */
   budgetUsdPerSession: number
   /** 月度总预算上限;0 = 不限制,用于 P2-003 成本管控和自动降级 */
@@ -1977,6 +2002,37 @@ export interface CheckpointRestoreResult {
 export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
 export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
 export type PluginRegistryEnabledSource = 'manifest' | 'user'
+export type PluginRegistryTrustStatus = 'approved' | 'approval_required' | 'changed' | 'invalid'
+
+export interface PluginCapabilityManifest {
+  schemaVersion: 1
+  capabilities: string[]
+  transport?: 'stdio' | 'http' | 'unknown'
+  /** Names only. Values from MCP configuration never cross into Renderer. */
+  environmentVariables?: string[]
+  digest: string
+}
+
+export interface PluginCapabilityDiff {
+  added: string[]
+  removed: string[]
+  expanded: boolean
+}
+
+export interface PluginRegistryTrustView {
+  status: PluginRegistryTrustStatus
+  approvedAt?: string
+  approvedContentDigest?: string
+  approvedCapabilityDigest?: string
+  capabilityDiff: PluginCapabilityDiff
+  reason?: string
+}
+
+export interface PluginRegistryProvenance {
+  origin: 'project_local' | 'user_local' | 'codex_local' | 'managed_local' | 'other_local'
+  sourceKind: PluginRegistrySourceKind
+  managed: boolean
+}
 
 export interface PluginRegistryItem {
   id: string
@@ -1995,6 +2051,11 @@ export interface PluginRegistryItem {
   permissions?: string[]
   /** 位于 ~/.claude/plugins 下(CaoGen 托管,可卸载) */
   managed?: boolean
+  /** SHA-256 over raw file bytes or a canonical, symlink-safe directory walk. */
+  contentDigest?: string
+  provenance: PluginRegistryProvenance
+  capabilityManifest: PluginCapabilityManifest
+  trust: PluginRegistryTrustView
 }
 
 export interface PluginRegistryDiagnostic {
@@ -2004,6 +2065,7 @@ export interface PluginRegistryDiagnostic {
     | 'json_parse_failed'
     | 'json_shape_invalid'
     | 'max_files_reached'
+    | 'digest_failed'
   message: string
   path: string
 }
@@ -2036,6 +2098,12 @@ export interface PluginRegistryRevealResult {
 }
 
 export interface PluginRegistrySetEnabledResult {
+  ok: boolean
+  item?: PluginRegistryItem
+  error?: string
+}
+
+export interface PluginRegistryTrustMutationResult {
   ok: boolean
   item?: PluginRegistryItem
   error?: string
@@ -2842,6 +2910,14 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Pr
     enabled: boolean,
     sessionId?: string
   ): Promise<PluginRegistrySetEnabledResult>
+  approvePluginRegistryItem(
+    item: PluginRegistryItem,
+    sessionId?: string
+  ): Promise<PluginRegistryTrustMutationResult>
+  authorizePluginRegistryItem(
+    item: PluginRegistryItem,
+    sessionId?: string
+  ): Promise<PluginRegistryTrustMutationResult>
   /** MCP 运行态探测:stdio 真握手 / http 可达性(最多 20 项) */
   probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<import('./mcp-probe-types').McpProbeOperationResult>
   /** 本地安装插件:不传路径则弹目录选择器;仅复制入 ~/.claude/plugins */

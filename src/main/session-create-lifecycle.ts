@@ -69,7 +69,7 @@ export function prepareSessionCreationDraft(
     opts, resumeHistory, resumeWorktreeRecord, historyMode: historySource?.mode, driveMode, routingScope, projectId,
     ...domainOwnership, unassigned,
     selectedModel, selectedProviderId, engine: resolveProviderEngine(provider),
-    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta, forking),
+    taskStrategy: sessionTaskStrategy(opts, resumeHistory, parentMeta, settings, forking),
     defaultPermissionMode: drivePolicy.defaultPermissionMode
   })
   if (historySource?.mode === 'resume' && resumeHistory && resumeWorktreeRecord) {
@@ -143,6 +143,10 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     workspaceId: input.workspaceId,
     goalId: input.goalId,
     workItemId: input.workItemId,
+    personalWorkspaceId: normalizedOptionalId(opts.personalWorkspaceId ?? resumeHistory?.personalWorkspaceId),
+    experienceModeOverride: normalizeExperienceModeOverride(
+      opts.experienceModeOverride ?? resumeHistory?.experienceModeOverride
+    ),
     digitalWorkerBinding: input.historyMode === 'resume' ? resumeHistory?.digitalWorkerBinding : undefined,
     conversationForkSourceSdkSessionId: input.historyMode === 'fork' ? resumeHistory?.sdkSessionId : undefined,
     conversationForkCheckpointId: input.historyMode === 'fork'
@@ -491,12 +495,13 @@ function sessionTaskStrategy(
   opts: CreateSessionOptions,
   history?: HistoryEntry,
   parentMeta?: SessionMeta,
+  settings?: AppSettings,
   forking = false
 ): SessionMeta['taskStrategy'] {
   return normalizeTaskStrategy(
     forking
       ? opts.taskStrategy ?? history?.taskStrategy ?? parentMeta?.taskStrategy
-      : history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy
+      : history?.taskStrategy ?? opts.taskStrategy ?? parentMeta?.taskStrategy ?? settings?.defaultTaskStrategy
   )
 }
 
@@ -687,6 +692,13 @@ function normalizedOptionalId(value: string | undefined): string | undefined {
   return normalized || undefined
 }
 
+function normalizeExperienceModeOverride(
+  value: CreateSessionOptions['experienceModeOverride']
+): CreateSessionOptions['experienceModeOverride'] {
+  if (value === undefined || value === 'assistant' || value === 'studio') return value
+  throw new Error('experienceModeOverride must be assistant or studio')
+}
+
 function initialProviderId(
   opts: CreateSessionOptions,
   settings: AppSettings,
@@ -726,6 +738,7 @@ function initialProviderId(
     documentationProviderId: routeSettings.documentationProviderId,
     documentationModel: routeSettings.documentationModel,
     modelRoutingRules: routeSettings.modelRoutingRules,
+    routingExpertPolicy: routeSettings.routingExpertPolicy,
     projectPath: opts.cwd
   })
   if (initialRoute.kind !== 'routed') throw new Error('没有可用的跨厂商调度候选')

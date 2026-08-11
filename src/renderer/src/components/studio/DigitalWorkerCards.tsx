@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Brain, Gauge, History } from 'lucide-react'
 import type { DigitalWorker, DigitalWorkerAssignment, RoleTemplate } from '../../../../shared/types'
 import type { DigitalWorkerStudioWorkItem } from './digital-worker-studio-model'
 import {
@@ -11,6 +12,7 @@ import {
   dataScopeLabels,
   escalationPolicyLabels,
   permissionsFor,
+  performanceProfileLabels,
   roleForWorker,
   watercolorRoleForWorker,
   workerInitials,
@@ -28,6 +30,9 @@ interface WorkerRosterProps {
   onPause: (worker: DigitalWorker) => void
   onResume: (worker: DigitalWorker) => void
   onRetire: (worker: DigitalWorker) => void
+  onRefreshPerformance: (worker: DigitalWorker) => void
+  onMemory: (worker: DigitalWorker) => void
+  onHistory: (worker: DigitalWorker) => void
   onAssign: (workerId: string) => void
   onHire: () => void
 }
@@ -61,6 +66,9 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
     onPause,
     onResume,
     onRetire,
+    onRefreshPerformance,
+    onMemory,
+    onHistory,
     onAssign
   } = props
   const [confirmRetire, setConfirmRetire] = useState(false)
@@ -131,6 +139,13 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
         </div>
       </section>
 
+      <section className="dws-worker-section" aria-label="绩效">
+        <h4>绩效</h4>
+        <div className="dws-chip-row">
+          {performanceProfileLabels(worker).map((label) => <span key={label} className="dws-chip">{label}</span>)}
+        </div>
+      </section>
+
       <section className="dws-worker-section" aria-label="已分配 WorkItem">
         <h4>WorkItem</h4>
         {activeAssignments.length > 0 ? (
@@ -152,6 +167,41 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
         </div>
       ) : (
         <footer className="dws-worker-actions">
+          <button
+            type="button"
+            className="dws-button"
+            disabled={busy}
+            onClick={() => onMemory(worker)}
+            aria-label={`查看 ${worker.displayName} 的记忆`}
+            data-dws-action="worker-memory"
+          >
+            <Brain aria-hidden="true" />
+            记忆
+          </button>
+          <button
+            type="button"
+            className="dws-button"
+            disabled={busy}
+            onClick={() => onHistory(worker)}
+            aria-label={`查看 ${worker.displayName} 的交付历史`}
+            data-dws-action="worker-history"
+          >
+            <History aria-hidden="true" />
+            历史
+          </button>
+          {worker.status !== 'retired' && (
+            <button
+              type="button"
+              className="dws-button"
+              disabled={busy}
+              onClick={() => onRefreshPerformance(worker)}
+              aria-label={`刷新 ${worker.displayName} 的绩效`}
+              data-dws-action="refresh-performance"
+            >
+              <Gauge aria-hidden="true" />
+              刷新绩效
+            </button>
+          )}
           {worker.status === 'proposed' && (
             <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onActivate(worker)} aria-label={`启用 ${worker.displayName}`} data-dws-action="activate">启用</button>
           )}

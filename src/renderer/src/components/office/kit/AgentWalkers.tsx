@@ -2,11 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Vector3 } from 'three'
 import type { Group } from 'three'
-import type { AvatarRefs } from './AvatarRig'
-import ProgressiveAvatarRig from './ProgressiveAvatarRig'
-import { applyIdle, applyStandingTalking, applyWalking } from './AvatarAnimations'
-import { vendorSkin } from './VendorSkins'
-import { providerLogoFor } from './ProviderLogos'
+import WatercolorCharacterRig from './WatercolorCharacterRig'
+import type { WatercolorCharacterRole } from '../../../../../shared/watercolor-character'
 
 export type AgentWalkReason = 'tea' | 'approval' | 'restroom' | 'dining'
 
@@ -22,6 +19,7 @@ export interface AgentWalkerSpec {
   providerBaseUrl?: string
   modelName?: string
   phase: number
+  watercolorRole: WatercolorCharacterRole
   holdAtTarget?: boolean
   departureDelay?: number
 }
@@ -29,7 +27,6 @@ export interface AgentWalkerSpec {
 interface AgentWalkersProps {
   specs: AgentWalkerSpec[]
   activeSessionId?: string | null
-  loadRobotAssets?: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
@@ -309,27 +306,20 @@ function updateFootTarget(
   target.position.copy(state.target)
 }
 
-function skinKey(providerName?: string, modelName?: string, providerBaseUrl?: string): string {
-  return [providerName, modelName, providerBaseUrl].filter(Boolean).join(' ')
-}
-
 function OneAgentWalker({
   spec,
   active,
-  loadRobotAssets,
   onAwayChange,
   onSelect,
   onOpen
 }: {
   spec: AgentWalkerSpec
   active: boolean
-  loadRobotAssets: boolean
   onAwayChange?: (sessionId: string, away: boolean) => void
   onSelect?: (sessionId: string) => void
   onOpen?: (sessionId: string) => void
 }): React.JSX.Element {
   const groupRef = useRef<Group>(null)
-  const rigRef = useRef<AvatarRefs>(null)
   const leftFootTargetRef = useRef<Group>(null)
   const rightFootTargetRef = useRef<Group>(null)
   const stageRef = useRef<WalkStage>('toTarget')
@@ -349,12 +339,6 @@ function OneAgentWalker({
   const rightFootStepRef = useRef<FootStepState>(createFootStepState())
   const forwardRef = useRef(new Vector3(0, 0, 1))
   const rightRef = useRef(new Vector3(1, 0, 0))
-  const skin = useMemo(() => vendorSkin(skinKey(spec.providerName, spec.modelName, spec.providerBaseUrl)), [spec.providerName, spec.modelName, spec.providerBaseUrl])
-  const providerLogo = useMemo(
-    () => providerLogoFor([spec.providerName, spec.modelName, spec.providerBaseUrl]),
-    [spec.providerName, spec.modelName, spec.providerBaseUrl]
-  )
-
   const travelSeconds = useMemo(
     () => clamp(home.distanceTo(target) / SPEED, MIN_TRAVEL_SECONDS, MAX_TRAVEL_SECONDS),
     [home, target]
@@ -399,11 +383,9 @@ function OneAgentWalker({
 
   useFrame((state, delta) => {
     const group = groupRef.current
-    const refs = rigRef.current
-    if (!group || !refs) return
+    if (!group) return
 
-    const clock = state.clock.getElapsedTime()
-    const elapsed = clock + spec.phase
+    const elapsed = state.clock.getElapsedTime() + spec.phase
     const timelineNow = performance.now() / 1_000
     const oneWayElapsed = Math.max(0, timelineNow - startedAtRef.current)
     const oneWay = spec.reason === 'approval' || spec.holdAtTarget
@@ -458,13 +440,6 @@ function OneAgentWalker({
     group.rotation.y = lerpAngle(group.rotation.y, desiredFacing, turnFactor)
     group.visible = nextAway
 
-    const secondsToStop =
-      nextStage === 'toTarget'
-        ? travelSeconds - local
-        : nextStage === 'toHome'
-          ? backEnd - local
-          : 0
-    const arrivalEase = walking ? smoothstep(clamp(secondsToStop / 0.9, 0, 1)) : 0
     let gaitPhase = 0
     let gaitMotion = 0
     if (walking) {
@@ -512,19 +487,6 @@ function OneAgentWalker({
     }
     previousPositionRef.current.copy(position)
 
-    const animOpts = { phase: spec.phase * 0.17, liveliness: walking ? 0.2 + arrivalEase * 0.72 : 0.62 }
-    if (walking) {
-      applyWalking(refs, clock, {
-        ...animOpts,
-        gaitPhase,
-        gaitSpeed: gaitMotion,
-        walkFootTargets: {
-          left: leftFootTargetRef.current,
-          right: rightFootTargetRef.current
-        }
-      })
-    } else if (nextStage === 'target' && spec.reason === 'approval') applyStandingTalking(refs, clock, animOpts)
-    else applyIdle(refs, clock, animOpts)
   })
 
   return (
@@ -564,17 +526,11 @@ function OneAgentWalker({
             ))}
           </>
         )}
-        <ProgressiveAvatarRig
-          ref={rigRef}
-          loadModel={loadRobotAssets}
-          sessionId={spec.sessionId}
-          detailLevel={active ? 'full' : 'low'}
-          bodyColor={skin.bodyColor}
-          skinColor={skin.shellColor}
-          accentColor={WALKER_ACCENT}
-          emblem={skin.emblem}
-          providerLogo={providerLogo}
-          scale={1}
+        <WatercolorCharacterRig
+          role={spec.watercolorRole}
+          state={stage === 'target' && spec.reason === 'approval' ? 'awaiting-approval' : 'tool-running'}
+          position={[0, 0.68, 0]}
+          scale={active ? 1 : 0.94}
         />
         {stage === 'target' && <AgentStatusMarker reason={spec.reason} accent={WALKER_ACCENT} />}
       </group>
@@ -585,7 +541,6 @@ function OneAgentWalker({
 export default function AgentWalkers({
   specs,
   activeSessionId,
-  loadRobotAssets = true,
   onAwayChange,
   onSelect,
   onOpen
@@ -598,7 +553,6 @@ export default function AgentWalkers({
           key={spec.id}
           spec={spec}
           active={spec.sessionId === activeSessionId}
-          loadRobotAssets={loadRobotAssets}
           onAwayChange={onAwayChange}
           onSelect={onSelect}
           onOpen={onOpen}

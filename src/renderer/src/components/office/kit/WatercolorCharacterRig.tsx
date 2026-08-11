@@ -11,6 +11,7 @@ export interface WatercolorCharacterRigProps {
   position?: [number, number, number]
   scale?: number
   compact?: boolean
+  liveliness?: number
 }
 
 export default function WatercolorCharacterRig(props: WatercolorCharacterRigProps): React.JSX.Element | null {
@@ -22,6 +23,7 @@ export default function WatercolorCharacterRig(props: WatercolorCharacterRigProp
 function LoadedWatercolorCharacterRig({
   assetUrl,
   compact = false,
+  liveliness = 1,
   position = [0, 0.94, 0.58],
   role,
   scale = 1,
@@ -59,8 +61,9 @@ function LoadedWatercolorCharacterRig({
     }
     const time = clock.getElapsedTime()
     const motion = stateMotion(state, time)
-    sprite.position.y = baseY + motion.y
-    sprite.rotation.z = motion.rotation
+    const motionScale = Math.min(Math.max(liveliness, 0.2), 1.2)
+    sprite.position.y = baseY + motion.y * motionScale
+    sprite.rotation.z = motion.rotation * motionScale
     sprite.material.opacity = motion.opacity
   })
 

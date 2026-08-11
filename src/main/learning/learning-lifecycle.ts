@@ -58,6 +58,7 @@ export async function createLearningDraft(
   const source = requiredText(input.source, 'source', 256)
   const confidence = normalizeConfidence(input.confidence)
   const payload = normalizePayload(input.kind, input.payload)
+  const workerScope = normalizeWorkerScope(input, payload)
   const digest = payloadDigest(payload)
   const expiresAt = normalizeOptionalTime(input.expiresAt, 'expiresAt')
 
@@ -65,9 +66,14 @@ export async function createLearningDraft(
     const previous = input.supersedes ? findRecord(state, input.supersedes) : undefined
     if (previous && previous.kind !== input.kind) throw new Error('A learning revision must keep the same kind')
     if (previous && previous.project !== project) throw new Error('Learning project mismatch')
+    if (previous && (previous.scope !== workerScope.scope || previous.workerId !== workerScope.workerId ||
+      previous.memoryNamespace !== workerScope.memoryNamespace)) {
+      throw new Error('A learning revision must keep the same scope and Worker namespace')
+    }
 
     const duplicate = state.records.find((record) =>
       record.status === 'draft' && record.kind === input.kind && record.digest === digest &&
+      record.scope === workerScope.scope && record.workerId === workerScope.workerId &&
       record.supersedes === previous?.id && record.source === source
     )
     if (duplicate) return cloneRecord(duplicate)
@@ -84,7 +90,7 @@ export async function createLearningDraft(
       logicalId,
       kind: input.kind,
       project,
-      scope: 'project',
+      ...workerScope,
       source,
       confidence,
       digest,
@@ -608,6 +614,22 @@ function normalizePayload(kind: LearningDraftInput['kind'], payload: LearningPay
     description: requiredText(payload.description, 'description', 2_000),
     markdown: requiredText(payload.markdown, 'markdown', 500_000),
     relativePath: normalizeSkillRelativePath(payload.relativePath)
+  }
+}
+
+function normalizeWorkerScope(
+  input: LearningDraftInput,
+  payload: LearningPayload
+): Pick<LearningRecord, 'scope' | 'workerId' | 'memoryNamespace'> {
+  if (input.workerId === undefined && input.memoryNamespace === undefined) return { scope: 'project' }
+  if (payload.type !== 'memory') throw new Error('Only Memory learning may use a Worker namespace')
+  if (input.workerId === undefined || input.memoryNamespace === undefined) {
+    throw new Error('Worker learning requires workerId and memoryNamespace')
+  }
+  return {
+    scope: 'worker',
+    workerId: requiredText(input.workerId, 'workerId', 256),
+    memoryNamespace: requiredText(input.memoryNamespace, 'memoryNamespace', 512)
   }
 }
 

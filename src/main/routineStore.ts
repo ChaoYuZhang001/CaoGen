@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { nextAfter } from './cronParse'
+import { writeDurableFile } from './durable-file'
 import type { EngineKind, PermissionModeId, RoutineNotificationOptions } from '../shared/types'
 
 export type RoutinePermissionMode = PermissionModeId
@@ -378,18 +379,15 @@ async function readStore(rootDir: string): Promise<RoutineFile> {
     if (isNodeError(error) && error.code === 'ENOENT') {
       return { version: STORE_VERSION, routines: [] }
     }
-    return { version: STORE_VERSION, routines: [] }
+    throw new RoutineStoreValidationError(`Routine store is unreadable: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
 async function writeStore(rootDir: string, routines: Routine[]): Promise<void> {
   const dir = resolveRootDir(rootDir)
-  await mkdir(dir, { recursive: true })
   const filePath = path.join(dir, ROUTINES_FILE)
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   const payload: RoutineFile = { version: STORE_VERSION, routines }
-  await writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-  await rename(tempPath, filePath)
+  await writeDurableFile(filePath, `${JSON.stringify(payload, null, 2)}\n`)
 }
 
 async function withRoutineStoreWriteLock<T>(rootDir: string, operation: () => Promise<T>): Promise<T> {

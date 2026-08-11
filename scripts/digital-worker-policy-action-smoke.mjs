@@ -684,8 +684,12 @@ async function exerciseOwnerPreflight(runtime) {
 function assertProductionBoundaries() {
   const sessionManager = source('src/main/sessionManager.ts')
   const send = between(sessionManager, '  send(', '  async controlSupervisorRun(')
+  assertOrder(send, 'createSessionTaskRun(session.meta)', 'digitalWorkerSendPolicyError(',
+    'SessionManager freezes the candidate TaskRun before DigitalWorker send policy')
   assertOrder(send, 'digitalWorkerSendPolicyError(', 'this.taskRuns.set(',
-    'DigitalWorker send guard runs before TaskRun mutation')
+    'DigitalWorker send guard runs before TaskRun registry mutation')
+  assertOrder(send, 'await this.writeTaskSnapshot(', 'session.send({ ...payload',
+    'canonical TaskRun persistence completes before Provider dispatch')
   assertOrder(send, 'digitalWorkerSendPolicyError(', 'session.send({ ...payload',
     'DigitalWorker send guard runs before Provider dispatch')
   assert(send.includes('createSessionTaskRun(session.meta)'),

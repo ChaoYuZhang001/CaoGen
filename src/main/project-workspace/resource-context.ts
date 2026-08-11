@@ -10,6 +10,7 @@ import type {
 } from '../../shared/project-workspace-types'
 import type { SessionMeta } from '../../shared/types'
 import { openProjectWorkspaceStore } from './store'
+import { connectorResourceAvailability } from './connector-resource'
 
 const MAX_DISCOVERED_FILES = 24
 const MAX_SOURCE_BYTES = 1024 * 1024
@@ -90,9 +91,13 @@ export async function buildProjectResourceContext(
   const sourceIds = new Set(sources.map((source) => source.resourceId))
   const items: OutboundContextItemView[] = []
   for (const resource of [...workspace.resources].sort((left, right) => left.id.localeCompare(right.id))) {
-    if (!projectResourceIsEnabled(resource)) continue
     const dataClass = projectResourceDataClass(resource)
     const egressPolicy = projectResourceEgressPolicy(resource)
+    if (!projectResourceIsEnabled(resource)) {
+      const availability = resource.kind === 'connector' ? connectorResourceAvailability(resource) : undefined
+      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded', availability?.reason || 'Resource is disabled or revoked'))
+      continue
+    }
     if (egressPolicy === 'deny') {
       items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded',
         dataClass === 'S3' ? 'S3 resources never enter Provider context' : 'Resource is configured as no-egress'))
@@ -158,6 +163,16 @@ export async function buildProjectResourceContext(
       `resourceId: ${resource.id}`,
       `resourceKind: ${resource.kind}`,
       `source: ${sanitizedExternalLocation(resource)}`,
+      ...(resource.kind === 'connector' && resource.connector ? [
+        `connectorVersion: ${resource.connector.version}`,
+        `usage: ${resource.connector.usage.join(', ')}`,
+        `capabilities: ${resource.connector.capabilities.join(', ')}`,
+        `dataDirection: ${resource.connector.dataDirection}`,
+        `authorizationSubject: ${resource.connector.authorization.subject}`,
+        `authorizationPrincipal: ${resource.connector.authorization.principalId}`,
+        `authorizationScopes: ${resource.connector.authorization.scopes.join(', ')}`,
+        `writePolicy: effect_required/${resource.connector.writePolicy.reconciliation}`
+      ] : []),
       'availability: registered metadata only; use the authorized connector runtime to retrieve content and preserve source/version/retrievedAt evidence.'
     )
   }
@@ -302,6 +317,7 @@ function isKnowledgeFileName(name: string): boolean {
 }
 
 export function projectResourceIsEnabled(resource: ProjectResource): boolean {
+  if (resource.kind === 'connector') return connectorResourceAvailability(resource).available
   return resource.metadata?.disabled !== true && resource.metadata?.revokedAt === undefined
 }
 
@@ -324,7 +340,8 @@ export function projectResourcePolicyDigest(workspace: ProjectWorkspace): string
       id: resource.id,
       enabled: projectResourceIsEnabled(resource),
       dataClass: projectResourceDataClass(resource),
-      egressPolicy: projectResourceEgressPolicy(resource)
+      egressPolicy: projectResourceEgressPolicy(resource),
+      connector: resource.kind === 'connector' ? resource.connector : undefined
     }))
   return `sha256:${createHash('sha256').update(JSON.stringify({
     projectId: workspace.id,

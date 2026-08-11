@@ -190,12 +190,33 @@ export function useStudioCreateActions({
     }
   }, [onSuccess])
 
-  const createProject = useCallback((input: ProjectWorkspaceInput) => run(
-    'project',
-    () => window.agentDesk.createProjectWorkspace(input),
-    (created) => refreshProjects(created.id),
-    TEXT.projectCreated
-  ), [refreshProjects, run])
+  const createProject = useCallback(async (input: ProjectWorkspaceInput): Promise<void> => {
+    setBusy('project')
+    setError('')
+    setAnnouncement('')
+    try {
+      const created = await window.agentDesk.createProjectWorkspace(input)
+      let templateError = ''
+      try {
+        await window.agentDesk.applyProjectWorkspaceTemplate({
+          requestId: newProjectTemplateRequestId(),
+          projectId: created.id,
+          templateId: created.kind
+        })
+      } catch (cause) {
+        templateError = errorText(cause)
+      }
+
+      await refreshProjects(created.id)
+      setAnnouncement(TEXT.projectCreated)
+      if (templateError) setError(`${TEXT.projectCreatedTemplatePending}：${templateError}`)
+      onSuccess()
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setBusy(null)
+    }
+  }, [onSuccess, refreshProjects])
   const importProject = useCallback((file: File) => run(
     'import',
     async () => window.agentDesk.importProjectWorkspaceData(await file.text()),
@@ -270,6 +291,10 @@ export function useProjectGoalTaskStart(refreshContents: () => Promise<void>): {
 
 function newGoalTaskRequestId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `goal-task-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function newProjectTemplateRequestId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `project-template-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function chooseProjectId(projects: ProjectWorkspace[], preferredId?: string): string {

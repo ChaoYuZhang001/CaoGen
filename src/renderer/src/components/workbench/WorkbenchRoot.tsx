@@ -136,6 +136,7 @@ function WorkbenchRoot(): React.JSX.Element {
   const selectPluginRegistryItem = useStore((s) => s.selectPluginRegistryItem)
   const revealPluginRegistryItem = useStore((s) => s.revealPluginRegistryItem)
   const togglePluginRegistryItem = useStore((s) => s.togglePluginRegistryItem)
+  const approvePluginRegistryItem = useStore((s) => s.approvePluginRegistryItem)
   const sendPluginRegistryItemToAgent = useStore((s) => s.sendPluginRegistryItemToAgent)
   const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
   const probeMcpRuntime = useStore((s) => s.probeMcpRuntime)
@@ -263,6 +264,7 @@ function WorkbenchRoot(): React.JSX.Element {
           onDispatchAgent: (item: PluginRegistryItem) => void dispatchPluginAgent(item),
           onRevealItem: (item: PluginRegistryItem) => void revealPluginRegistryItem(item),
           onToggleItem: (item: PluginRegistryItem, enabled: boolean) => void togglePluginRegistryItem(item, enabled),
+          onApproveItem: (item: PluginRegistryItem) => void approvePluginRegistryItem(item),
           onProbeMcp: (items: PluginRegistryItem[]) => void probeMcpRuntime(items),
           onInstall: () => void installPluginFromLocal(),
           onUninstall: (item: PluginRegistryItem) => void uninstallManagedPlugin(item),

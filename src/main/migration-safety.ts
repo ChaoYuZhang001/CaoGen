@@ -4,6 +4,7 @@ import {
   closeSync,
   constants,
   fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -14,6 +15,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { writeDurableFileSync } from './durable-file'
 
 export interface SafeFileSnapshot {
   bytes: Buffer
@@ -184,15 +186,7 @@ export function targetFingerprint(targetPath: string): string {
 }
 
 export function writeFileAtomic(targetPath: string, bytes: Buffer | string, mode = 0o600): void {
-  mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 })
-  const temporary = join(dirname(targetPath), `.${basename(targetPath)}.caogen-${process.pid}-${randomUUID()}.tmp`)
-  try {
-    writeFileSync(temporary, bytes, { mode, flag: 'wx' })
-    chmodSync(temporary, mode)
-    renameSync(temporary, targetPath)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  writeDurableFileSync(targetPath, bytes, { mode })
 }
 
 export function writeDirectoryAtomic(targetPath: string, snapshot: SafeDirectorySnapshot): void {
@@ -216,6 +210,7 @@ export function writeDirectoryAtomic(targetPath: string, snapshot: SafeDirectory
     }
     renameSync(temporary, targetPath)
     published = true
+    fsyncDirectory(dirname(targetPath))
     try {
       rmSync(displaced, { recursive: true, force: true })
     } catch {
@@ -236,6 +231,12 @@ export function writeDirectoryAtomic(targetPath: string, snapshot: SafeDirectory
       }
     }
   }
+}
+
+function fsyncDirectory(directory: string): void {
+  if (process.platform === 'win32') return
+  const descriptor = openSync(directory, constants.O_RDONLY)
+  try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
 }
 
 export function removeExactTarget(targetPath: string): void {

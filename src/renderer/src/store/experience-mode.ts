@@ -11,12 +11,16 @@ export interface ExperienceModeSlice {
 type ExperienceModeState = Pick<ExperienceModeSlice, 'experienceMode' | 'studioSurface'>
 
 export function createExperienceModeSlice(
-  set: (update: Partial<ExperienceModeState>) => void
+  set: (update: Partial<ExperienceModeState>) => void,
+  persist?: (mode: ExperienceMode) => void | Promise<void>
 ): ExperienceModeSlice {
   return {
     experienceMode: 'assistant',
     studioSurface: 'workspace',
-    setExperienceMode: (experienceMode) => set({ experienceMode }),
+    setExperienceMode: (experienceMode) => {
+      set({ experienceMode })
+      void persist?.(experienceMode)
+    },
     setStudioSurface: (studioSurface) => set({ studioSurface })
   }
 }

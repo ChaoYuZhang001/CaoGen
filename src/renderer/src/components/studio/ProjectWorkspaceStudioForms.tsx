@@ -8,6 +8,7 @@ import type {
   WorkItem,
   WorkItemInput
 } from '../../../../shared/types'
+import { projectWorkspaceTemplate } from '../../../../shared/project-workspace-templates'
 import {
   EMPTY_GOAL_DRAFT,
   EMPTY_WORK_ITEM_DRAFT,
@@ -39,6 +40,8 @@ export function ProjectCreateForm({
   const kindId = useId()
   const [name, setName] = useState('')
   const [kind, setKind] = useState<ProjectWorkspaceKind>('personal')
+  const template = projectWorkspaceTemplate(kind)
+  const artifacts = [...new Set(template.workItems.flatMap((item) => item.expectedArtifactKinds))]
   const isBusy = busy !== null
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
@@ -60,6 +63,31 @@ export function ProjectCreateForm({
             </select>
           </FormField>
         </div>
+        <section className="pws-template-preview" aria-live="polite" data-project-template={template.id}>
+          <header>
+            <div>
+              <span className="pws-eyebrow">PROJECT TEMPLATE</span>
+              <h4>{template.name}</h4>
+            </div>
+            <span>{template.workItems.length} 个任务</span>
+          </header>
+          <p>{template.summary}</p>
+          <div className="pws-template-columns">
+            <div>
+              <strong>任务骨架</strong>
+              <ol>{template.workItems.map((item) => <li key={item.key}>{item.title}</li>)}</ol>
+            </div>
+            <div>
+              <strong>预期产物</strong>
+              <div className="pws-template-tags">{artifacts.map((artifact) => <span key={artifact}>{artifact}</span>)}</div>
+            </div>
+            <div>
+              <strong>Resource 建议</strong>
+              <ul>{template.resourceSuggestions.map((resource) => <li key={`${resource.kind}:${resource.label}`}>{resource.label}</li>)}</ul>
+            </div>
+          </div>
+          <p className="pws-template-policy">Resource 仅作为建议，不会自动读取目录、连接服务或授予权限。</p>
+        </section>
         <FormActions busy={busy === 'project'} submitLabel={TEXT.createProjectSubmit} onCancel={onCancel} />
       </fieldset>
     </form>

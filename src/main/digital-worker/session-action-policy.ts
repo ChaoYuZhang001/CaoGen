@@ -1,6 +1,7 @@
 import type { SessionMeta, TaskRunRecord } from '../../shared/types'
 import { taskRuntimeRegistry } from '../task/task-runtime-registry'
-import { preflightDigitalWorkerAction } from './action-policy'
+import type { ModelAttemptCostIdentity } from '../provider/modelAttemptCost'
+import { preflightDigitalWorkerBillableAction } from './billable-action-policy'
 
 interface SessionActionPolicyInput {
   rootDir: string
@@ -14,17 +15,18 @@ export class DigitalWorkerProviderDispatchDeniedError extends Error {
 }
 
 /** Recheck the frozen worker/Assignment immediately before every Provider attempt. */
-export function assertDigitalWorkerProviderDispatchAllowed(
+export async function assertDigitalWorkerProviderDispatchAllowed(
   meta: SessionMeta,
-  rootDir?: string
-): void {
+  rootDir?: string,
+  attempt: ModelAttemptCostIdentity = modelAttemptIdentityForSession(meta)
+): Promise<void> {
   const run = taskRuntimeRegistry.get(meta.id)
   if (!run) {
     throw new DigitalWorkerProviderDispatchDeniedError(
       'Provider dispatch 缺少 canonical TaskRun，已阻止请求'
     )
   }
-  const decision = preflightDigitalWorkerAction({
+  const decision = await preflightDigitalWorkerBillableAction({
     rootDir,
     meta,
     action: 'provider_send',
@@ -32,7 +34,7 @@ export function assertDigitalWorkerProviderDispatchAllowed(
     runStatus: run.status,
     runBinding: run.digitalWorkerBinding,
     failureCount: failedRunCount(run)
-  })
+  }, attempt)
   if ('message' in decision) {
     throw new DigitalWorkerProviderDispatchDeniedError(decision.message)
   }
@@ -44,10 +46,10 @@ export function isDigitalWorkerProviderDispatchDeniedError(
   return error instanceof DigitalWorkerProviderDispatchDeniedError
 }
 
-export function digitalWorkerSendPolicyError(
+export async function digitalWorkerSendPolicyError(
   input: SessionActionPolicyInput & { supervisorControlReplay?: boolean }
-): string | null {
-  const decision = preflightDigitalWorkerAction({
+): Promise<string | null> {
+  const decision = await preflightDigitalWorkerBillableAction({
     rootDir: input.rootDir,
     meta: input.meta,
     action: input.supervisorControlReplay ? 'supervisor_resume' : 'provider_send',
@@ -57,14 +59,14 @@ export function digitalWorkerSendPolicyError(
     failureCount: failedRunCount(input.run),
     escalationApproved: input.supervisorControlReplay === true,
     activeSessions: input.activeSessions
-  })
+  }, modelAttemptIdentityForSession(input.meta))
   return 'message' in decision ? decision.message : null
 }
 
-export function digitalWorkerSupervisorPolicyError(
+export async function digitalWorkerSupervisorPolicyError(
   input: SessionActionPolicyInput & { action: 'retry' | 'resume' }
-): string | null {
-  const decision = preflightDigitalWorkerAction({
+): Promise<string | null> {
+  const decision = await preflightDigitalWorkerBillableAction({
     rootDir: input.rootDir,
     meta: input.meta,
     action: input.action === 'retry' ? 'supervisor_retry' : 'supervisor_resume',
@@ -74,8 +76,16 @@ export function digitalWorkerSupervisorPolicyError(
     failureCount: failedRunCount(input.run),
     escalationApproved: true,
     activeSessions: input.activeSessions
-  })
+  }, modelAttemptIdentityForSession(input.meta))
   return 'message' in decision ? decision.message : null
+}
+
+function modelAttemptIdentityForSession(meta: SessionMeta): ModelAttemptCostIdentity {
+  return {
+    providerId: meta.providerId || (meta.engine === 'anthropic' ? 'anthropic' : 'openai'),
+    model: meta.model,
+    protocol: meta.engine === 'anthropic' ? 'anthropic.messages' : 'openai.responses'
+  }
 }
 
 function failedRunCount(run: TaskRunRecord | undefined): number | undefined {

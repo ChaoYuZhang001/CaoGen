@@ -74,6 +74,8 @@ export function watercolorCharacterAssetUrl(
   state: WatercolorCharacterState
 ): string | undefined {
   return ASSET_URL_BY_FILENAME.get(watercolorCharacterAssetFilename(role, state))
+    ?? ASSET_URL_BY_FILENAME.get(watercolorCharacterAssetFilename(role, 'idle'))
+    ?? ASSET_URL_BY_FILENAME.get(watercolorCharacterAssetFilename('researcher', 'idle'))
 }
 
 export function hasWatercolorCharacterAsset(

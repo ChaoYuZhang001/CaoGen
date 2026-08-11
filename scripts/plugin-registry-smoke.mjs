@@ -64,9 +64,12 @@ try {
   )
 
   const view = pluginRegistry.scanPluginRegistry([claudeRoot])
-  assertItem(view, 'skill', 'Foo Skill')
-  assertItem(view, 'agent', 'Bar Agent')
+  const fooSkill = assertItem(view, 'skill', 'Foo Skill')
+  const barAgent = assertItem(view, 'agent', 'Bar Agent')
   const mcp = assertItem(view, 'mcp', 'demo')
+  assertEqual(fooSkill.trust.status, 'approval_required')
+  assertEqual(fooSkill.enabled, false)
+  assertEqual(barAgent.enabled, false)
   assertEqual(mcp.summary, 'command: node')
   assertEqual(view.diagnostics.length, 0)
 
@@ -105,8 +108,15 @@ try {
   assertEqual(pluginMcp.summary, 'url: http://127.0.0.1:4321/mcp')
   assertEqual(pluginView.diagnostics.length, 0)
 
+  const approvedState = [pluginPackage, pluginSkill, pluginMcp].reduce(
+    (state, item) => pluginRegistry.approvePluginRegistryItem(state, item, new Date('2026-07-04T07:00:00.000Z')),
+    pluginRegistry.emptyPluginRegistryState()
+  )
+  const approvedView = pluginRegistry.scanPluginRegistry([pluginRoot], {}, approvedState)
+  assert(findItem(approvedView, 'skill', 'Plugin Skill')?.enabled, 'approved skill should be enabled')
+
   const disabledState = pluginRegistry.setPluginRegistryItemEnabled(
-    pluginRegistry.emptyPluginRegistryState(),
+    approvedState,
     pluginSkill,
     false,
     new Date('2026-07-04T08:00:00.000Z')
@@ -232,7 +242,6 @@ function findCompiledModule(root) {
 function assertItem(view, kind, name) {
   const item = findItem(view, kind, name)
   assert(item, `${kind} ${name} should be discovered`)
-  assertEqual(item.enabled, true)
   assert(item.id, `${kind} ${name} should have an id`)
   assert(item.sourceRoot, `${kind} ${name} should have a sourceRoot`)
   assert(item.path, `${kind} ${name} should have a path`)

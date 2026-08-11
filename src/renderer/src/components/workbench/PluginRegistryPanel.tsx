@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useT } from '../../i18n'
 
 export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
 export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
 export type PluginRegistryEnabledSource = 'manifest' | 'user'
+export type PluginRegistryTrustStatus = 'approved' | 'approval_required' | 'changed' | 'invalid'
 
 export interface PluginRegistryPanelItem {
   id: string
@@ -19,6 +21,25 @@ export interface PluginRegistryPanelItem {
   version?: string
   permissions?: string[]
   managed?: boolean
+  contentDigest?: string
+  provenance: {
+    origin: 'project_local' | 'user_local' | 'codex_local' | 'managed_local' | 'other_local'
+    sourceKind: PluginRegistrySourceKind
+    managed: boolean
+  }
+  capabilityManifest: {
+    schemaVersion: 1
+    capabilities: string[]
+    transport?: 'stdio' | 'http' | 'unknown'
+    environmentVariables?: string[]
+    digest: string
+  }
+  trust: {
+    status: PluginRegistryTrustStatus
+    approvedAt?: string
+    capabilityDiff: { added: string[]; removed: string[]; expanded: boolean }
+    reason?: string
+  }
 }
 
 export interface PluginRegistryPanelDiagnostic {
@@ -94,6 +115,7 @@ export interface PluginRegistryPanelProps {
   onUseItem?: (item: PluginRegistryPanelItem) => void | Promise<void>
   onDispatchAgent?: (item: PluginRegistryPanelItem) => void | Promise<void>
   onToggleItem?: (item: PluginRegistryPanelItem, enabled: boolean) => void | Promise<void>
+  onApproveItem?: (item: PluginRegistryPanelItem) => void | Promise<void>
   /** MCP 运行态:探测可见 mcp 条目的真实连接状态 */
   onProbeMcp?: (items: PluginRegistryPanelItem[]) => void | Promise<void>
   /** 本地安装插件(从目录复制入 ~/.claude/plugins;市场分发不在本版范围) */
@@ -121,59 +143,64 @@ type SourceFilter = PluginRegistrySourceKind | 'all'
 const KIND_ORDER: PluginRegistryKind[] = ['plugin', 'skill', 'agent', 'mcp']
 const SOURCE_ORDER: PluginRegistrySourceKind[] = ['codex', 'project', 'user', 'other']
 
-const DEFAULT_LABELS: Required<PluginRegistryPanelLabels> = {
-  title: '插件生态',
-  subtitle: 'Skills / Agents / MCP',
-  loading: '扫描中',
-  refresh: '刷新',
-  close: '关闭',
-  searchPlaceholder: '搜索名称、摘要或路径',
-  allKinds: '全部',
+function translatedLabels(t: ReturnType<typeof useT>): Required<PluginRegistryPanelLabels> {
+  return {
+  title: t('pluginRegistryTitle'),
+  subtitle: t('pluginRegistrySubtitle'),
+  loading: t('pluginRegistryLoading'),
+  refresh: t('pluginRegistryRefresh'),
+  close: t('pluginRegistryClose'),
+  searchPlaceholder: t('pluginRegistrySearchPlaceholder'),
+  allKinds: t('pluginRegistryAllKinds'),
   plugins: 'Plugins',
   skills: 'Skills',
   agents: 'Agents',
   mcp: 'MCP',
-  allStatuses: '全部状态',
-  allSources: '全部来源',
-  projectSource: 'Project',
-  userSource: 'User',
-  codexSource: 'Codex',
-  otherSource: 'Other',
-  enabled: '已启用',
-  disabled: '已停用',
-  total: '总数',
-  active: '可用',
-  inactive: '停用',
-  roots: '来源',
-  diagnostics: '诊断',
-  truncated: '已截断',
-  yes: '是',
-  no: '否',
-  scanTime: '扫描时间',
-  selected: '当前插件',
-  noSelection: '选择一个插件查看状态',
-  empty: '没有匹配的插件',
-  open: '打开',
-  reveal: '定位',
-  useWithAgent: '用于 Agent',
-  dispatchAgent: '派发子 Agent',
-  enable: '启用',
-  disable: '停用',
-  status: '状态',
-  stateSource: '状态来源',
-  updatedAt: '更新时间',
-  source: '来源',
-  sourceRoot: '来源根目录',
-  path: '路径',
-  summary: '摘要'
+  allStatuses: t('pluginRegistryAllStatuses'),
+  allSources: t('pluginRegistryAllSources'),
+  projectSource: t('pluginRegistryProjectSource'),
+  userSource: t('pluginRegistryUserSource'),
+  codexSource: t('pluginRegistryCodexSource'),
+  otherSource: t('pluginRegistryOtherSource'),
+  enabled: t('pluginRegistryEnabled'),
+  disabled: t('pluginRegistryDisabled'),
+  total: t('pluginRegistryTotal'),
+  active: t('pluginRegistryActive'),
+  inactive: t('pluginRegistryInactive'),
+  roots: t('pluginRegistryRoots'),
+  diagnostics: t('pluginRegistryDiagnostics'),
+  truncated: t('pluginRegistryTruncated'),
+  yes: t('pluginRegistryYes'),
+  no: t('pluginRegistryNo'),
+  scanTime: t('pluginRegistryScanTime'),
+  selected: t('pluginRegistrySelected'),
+  noSelection: t('pluginRegistryNoSelection'),
+  empty: t('pluginRegistryEmpty'),
+  open: t('pluginRegistryOpen'),
+  reveal: t('pluginRegistryReveal'),
+  useWithAgent: t('pluginRegistryUseWithAgent'),
+  dispatchAgent: t('pluginRegistryDispatchAgent'),
+  enable: t('pluginRegistryEnable'),
+  disable: t('pluginRegistryDisable'),
+  status: t('pluginRegistryStatus'),
+  stateSource: t('pluginRegistryStateSource'),
+  updatedAt: t('pluginRegistryUpdatedAt'),
+  source: t('pluginRegistrySource'),
+  sourceRoot: t('pluginRegistrySourceRoot'),
+  path: t('pluginRegistryPath'),
+  summary: t('pluginRegistrySummary')
+  }
 }
 
 function cx(...classes: Array<string | false | undefined>): string {
   return classes.filter(Boolean).join(' ')
 }
 
-function mergeLabels(labels: PluginRegistryPanelLabels | undefined): Required<PluginRegistryPanelLabels> {
-  return { ...DEFAULT_LABELS, ...labels }
+function mergeLabels(
+  labels: PluginRegistryPanelLabels | undefined,
+  t: ReturnType<typeof useT>
+): Required<PluginRegistryPanelLabels> {
+  return { ...translatedLabels(t), ...labels }
 }
 
 function kindLabel(kind: KindFilter, labels: Required<PluginRegistryPanelLabels>): string {
@@ -288,13 +315,15 @@ export default function PluginRegistryPanel({
   onUseItem,
   onDispatchAgent,
   onToggleItem,
+  onApproveItem,
   onProbeMcp,
   onInstall,
   onUninstall,
   mcpProbeResults = {},
   mcpProbing = false
 }: PluginRegistryPanelProps): React.JSX.Element {
-  const labels = mergeLabels(labelOverrides)
+  const t = useT()
+  const labels = mergeLabels(labelOverrides, t)
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
@@ -353,20 +382,20 @@ export default function PluginRegistryPanel({
           {onInstall && (
             <button
               className="btn btn-ghost btn-sm"
-              title="从本地目录安装(复制到 ~/.claude/plugins);市场分发不在本版范围"
+              title={t('pluginRegistryInstallHint')}
               onClick={() => void onInstall()}
             >
-              安装插件
+              {t('pluginRegistryInstall')}
             </button>
           )}
           {onProbeMcp && stats.byKind.mcp > 0 && (
             <button
               className="btn btn-ghost btn-sm"
               disabled={mcpProbing}
-              title="真实连接测试:stdio 发 initialize 握手,http 测可达性"
+              title={t('pluginRegistryProbeMcpHint')}
               onClick={() => void onProbeMcp(items.filter((item) => item.kind === 'mcp'))}
             >
-              {mcpProbing ? '探测中…' : '探测 MCP 连接'}
+              {mcpProbing ? t('pluginRegistryProbingMcp') : t('pluginRegistryProbeMcp')}
             </button>
           )}
           {onRefresh && (
@@ -393,6 +422,7 @@ export default function PluginRegistryPanel({
         <StatCard label={labels.mcp} value={stats.byKind.mcp} />
         <StatCard label={labels.active} value={stats.enabled} tone="enabled" />
         <StatCard label={labels.inactive} value={stats.disabled} tone="disabled" />
+        <StatCard label={t('pluginRegistryPendingApproval')} value={items.filter((item) => item.trust.status !== 'approved').length} tone="disabled" />
       </section>
 
       <section className="plugin-registry-toolbar">
@@ -400,13 +430,16 @@ export default function PluginRegistryPanel({
           className="input plugin-registry-search"
           value={query}
           placeholder={labels.searchPlaceholder}
+          aria-label={labels.searchPlaceholder}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <div className="plugin-registry-filter-group" role="group" aria-label="Plugin kind">
+        <div className="plugin-registry-filter-group" role="group" aria-label={t('pluginRegistryKindFilter')}>
           {(['all', ...KIND_ORDER] as KindFilter[]).map((kind) => (
             <button
+              type="button"
               key={kind}
               className={cx('plugin-registry-filter', kindFilter === kind && 'plugin-registry-filter-active')}
+              aria-pressed={kindFilter === kind}
               onClick={() => setKindFilter(kind)}
             >
               {kindLabel(kind, labels)}
@@ -416,11 +449,13 @@ export default function PluginRegistryPanel({
             </button>
           ))}
         </div>
-        <div className="plugin-registry-filter-group" role="group" aria-label="Plugin status">
+        <div className="plugin-registry-filter-group" role="group" aria-label={t('pluginRegistryStatusFilter')}>
           {(['all', 'enabled', 'disabled'] as StatusFilter[]).map((status) => (
             <button
+              type="button"
               key={status}
               className={cx('plugin-registry-filter', statusFilter === status && 'plugin-registry-filter-active')}
+              aria-pressed={statusFilter === status}
               onClick={() => setStatusFilter(status)}
             >
               {status === 'enabled'
@@ -431,11 +466,13 @@ export default function PluginRegistryPanel({
             </button>
           ))}
         </div>
-        <div className="plugin-registry-filter-group" role="group" aria-label="Plugin source">
+        <div className="plugin-registry-filter-group" role="group" aria-label={t('pluginRegistrySourceFilter')}>
           {(['all', ...SOURCE_ORDER] as SourceFilter[]).map((source) => (
             <button
+              type="button"
               key={source}
               className={cx('plugin-registry-filter', sourceFilter === source && 'plugin-registry-filter-active')}
+              aria-pressed={sourceFilter === source}
               onClick={() => setSourceFilter(source)}
             >
               {sourceLabel(source, labels)}
@@ -462,7 +499,7 @@ export default function PluginRegistryPanel({
                   selectedItem?.id === item.id && 'plugin-registry-row-active'
                 )}
               >
-                <button className="plugin-registry-row-main" title={item.path} onClick={() => selectItem(item)}>
+                <button type="button" className="plugin-registry-row-main" title={item.path} onClick={() => selectItem(item)}>
                   <span className={cx('plugin-registry-kind', `plugin-registry-kind-${item.kind}`)}>
                     {itemKindLabel(item.kind, labels)}
                   </span>
@@ -491,8 +528,8 @@ export default function PluginRegistryPanel({
                           }
                         >
                           {mcpProbeResults[item.id].ok
-                            ? `✓ 已连通${mcpProbeResults[item.id].latencyMs !== undefined ? ` ${mcpProbeResults[item.id].latencyMs}ms` : ''}`
-                            : '✕ 连接失败'}
+                            ? `✓ ${t('pluginRegistryMcpConnected')}${mcpProbeResults[item.id].latencyMs !== undefined ? ` ${mcpProbeResults[item.id].latencyMs}ms` : ''}`
+                            : `✕ ${t('pluginRegistryMcpFailed')}`}
                         </span>
                       )}
                     </span>
@@ -511,7 +548,7 @@ export default function PluginRegistryPanel({
                     aria-label={item.enabled ? labels.enabled : labels.disabled}
                   />
                 </button>
-                {(onOpenItem || onRevealItem || onUseItem || onDispatchAgent || onToggleItem) && (
+                {(onOpenItem || onRevealItem || onUseItem || onDispatchAgent || onToggleItem || onApproveItem) && (
                   <div className="plugin-registry-row-actions">
                     {onOpenItem && (
                       <button className="btn btn-ghost btn-sm" onClick={() => onOpenItem(item)}>
@@ -526,7 +563,7 @@ export default function PluginRegistryPanel({
                     {onUseItem && (
                       <button
                         className="btn btn-primary btn-sm"
-                        disabled={!item.enabled}
+                        disabled={!item.enabled || item.trust.status !== 'approved'}
                         onClick={() => void onUseItem(item)}
                       >
                         {labels.useWithAgent}
@@ -535,7 +572,7 @@ export default function PluginRegistryPanel({
                     {onDispatchAgent && item.kind === 'agent' && (
                       <button
                         className="btn btn-primary btn-sm"
-                        disabled={!item.enabled}
+                        disabled={!item.enabled || item.trust.status !== 'approved'}
                         onClick={() => void onDispatchAgent(item)}
                       >
                         {labels.dispatchAgent}
@@ -547,6 +584,11 @@ export default function PluginRegistryPanel({
                         onClick={() => void onToggleItem(item, !item.enabled)}
                       >
                         {item.enabled ? labels.disable : labels.enable}
+                      </button>
+                    )}
+                    {onApproveItem && item.trust.status !== 'approved' && item.trust.status !== 'invalid' && (
+                      <button className="btn btn-primary btn-sm" onClick={() => void onApproveItem(item)}>
+                        {item.trust.status === 'changed' ? t('pluginRegistryReapprove') : t('pluginRegistryApprove')}
                       </button>
                     )}
                   </div>
@@ -577,7 +619,9 @@ export default function PluginRegistryPanel({
                     {selectedItem.enabled ? labels.enabled : labels.disabled}
                   </span>
                 </MetaRow>
-                <MetaRow label={labels.stateSource}>{selectedItem.enabledSource === 'user' ? 'User override' : 'Manifest'}</MetaRow>
+                <MetaRow label={labels.stateSource}>
+                  {selectedItem.enabledSource === 'user' ? t('pluginRegistryUserOverride') : t('pluginRegistryManifest')}
+                </MetaRow>
                 {selectedItem.enabledUpdatedAt && (
                   <MetaRow label={labels.updatedAt}>{formatScanTime(selectedItem.enabledUpdatedAt)}</MetaRow>
                 )}
@@ -589,9 +633,45 @@ export default function PluginRegistryPanel({
                   {selectedItem.path}
                 </MetaRow>
                 <MetaRow label={labels.summary}>{selectedItem.summary || '-'}</MetaRow>
-                <MetaRow label="版本">{selectedItem.version || '未声明'}</MetaRow>
+                <MetaRow label={t('pluginRegistryVersion')}>{selectedItem.version || t('pluginRegistryUndeclared')}</MetaRow>
+                <MetaRow label={t('pluginRegistryProvenance')}>{selectedItem.provenance.origin}</MetaRow>
+                <MetaRow label={t('pluginRegistryContentDigest')} mono>{selectedItem.contentDigest || t('pluginRegistryUnavailable')}</MetaRow>
+                <MetaRow label={t('pluginRegistryTrustStatus')}>
+                  <span className={cx(
+                    'plugin-registry-badge',
+                    selectedItem.trust.status === 'approved' ? 'plugin-registry-badge-enabled' : 'plugin-registry-badge-disabled'
+                  )}>
+                    {selectedItem.trust.status === 'approved'
+                      ? t('pluginRegistryTrustApproved')
+                      : selectedItem.trust.status === 'changed'
+                        ? t('pluginRegistryTrustChanged')
+                        : selectedItem.trust.status === 'invalid'
+                          ? t('pluginRegistryTrustInvalid')
+                          : t('pluginRegistryTrustPending')}
+                  </span>
+                </MetaRow>
+                {selectedItem.capabilityManifest.transport && (
+                  <MetaRow label={t('pluginRegistryTransport')}>{selectedItem.capabilityManifest.transport}</MetaRow>
+                )}
+                {selectedItem.capabilityManifest.environmentVariables?.length ? (
+                  <MetaRow label={t('pluginRegistryEnvironmentVariables')}>{selectedItem.capabilityManifest.environmentVariables.join(', ')}</MetaRow>
+                ) : null}
                 <div className="plugin-registry-perms">
-                  <div className="plugin-registry-perms-label">权限声明</div>
+                  <div className="plugin-registry-perms-label">{t('pluginRegistryCapabilities')}</div>
+                  <div className="plugin-registry-perm-tags">
+                    {selectedItem.capabilityManifest.capabilities.map((capability) => (
+                      <span key={capability} className="plugin-registry-perm-tag">{capability}</span>
+                    ))}
+                  </div>
+                  {(selectedItem.trust.capabilityDiff.added.length > 0 || selectedItem.trust.capabilityDiff.removed.length > 0) && (
+                    <div className="plugin-registry-perms-hint">
+                      {t('pluginRegistryCapabilitiesAdded')} {selectedItem.trust.capabilityDiff.added.join(', ') || '-'};{' '}
+                      {t('pluginRegistryCapabilitiesRemoved')} {selectedItem.trust.capabilityDiff.removed.join(', ') || '-'}
+                    </div>
+                  )}
+                </div>
+                <div className="plugin-registry-perms">
+                  <div className="plugin-registry-perms-label">{t('pluginRegistryPermissions')}</div>
                   {selectedItem.permissions && selectedItem.permissions.length > 0 ? (
                     <>
                       <div className="plugin-registry-perm-tags">
@@ -601,16 +681,16 @@ export default function PluginRegistryPanel({
                           </span>
                         ))}
                       </div>
-                      <div className="plugin-registry-perms-hint">来自 manifest 自述,未经运行时验证</div>
+                      <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsHint')}</div>
                     </>
                   ) : (
-                    <div className="plugin-registry-perms-hint">未声明权限需求</div>
+                    <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsEmpty')}</div>
                   )}
                 </div>
                 {onUseItem && (
                   <button
                     className="btn btn-primary btn-sm plugin-registry-use-selected"
-                    disabled={!selectedItem.enabled}
+                    disabled={!selectedItem.enabled || selectedItem.trust.status !== 'approved'}
                     onClick={() => void onUseItem(selectedItem)}
                   >
                     {labels.useWithAgent}
@@ -619,23 +699,33 @@ export default function PluginRegistryPanel({
                 {onDispatchAgent && selectedItem.kind === 'agent' && (
                   <button
                     className="btn btn-primary btn-sm plugin-registry-use-selected"
-                    disabled={!selectedItem.enabled}
+                    disabled={!selectedItem.enabled || selectedItem.trust.status !== 'approved'}
                     onClick={() => void onDispatchAgent(selectedItem)}
                   >
                     {labels.dispatchAgent}
                   </button>
                 )}
+                {onApproveItem && selectedItem.trust.status !== 'approved' && selectedItem.trust.status !== 'invalid' && (
+                  <button
+                    className="btn btn-primary btn-sm plugin-registry-use-selected"
+                    onClick={() => void onApproveItem(selectedItem)}
+                  >
+                    {selectedItem.trust.status === 'changed'
+                      ? t('pluginRegistryReapproveCurrent')
+                      : t('pluginRegistryApproveCurrent')}
+                  </button>
+                )}
                 {onUninstall && selectedItem.managed && (
                   <button
                     className="btn btn-danger btn-sm plugin-registry-use-selected"
-                    title="移入 ~/.claude/plugins/.trash 回收站,可手工恢复"
+                    title={t('pluginRegistryUninstallHint')}
                     onClick={() => {
-                      if (window.confirm(`卸载 ${selectedItem.name}?将移入回收站(可恢复)。`)) {
+                      if (window.confirm(t('pluginRegistryUninstallConfirm', { name: selectedItem.name }))) {
                         void onUninstall(selectedItem)
                       }
                     }}
                   >
-                    卸载(回收站)
+                    {t('pluginRegistryUninstall')}
                   </button>
                 )}
               </>

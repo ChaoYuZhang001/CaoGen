@@ -4,6 +4,8 @@ import type {
   DigitalWorker,
   DigitalWorkerAssignment,
   DigitalWorkerInput,
+  DigitalWorkerMemoryDraftInput,
+  DigitalWorkerRoleRecommendation,
   JsonObject,
   RoleTemplate,
   RoleTemplateInput
@@ -24,6 +26,41 @@ interface RoleTemplateFormProps {
   busy: boolean
   onCancel: () => void
   onSubmit: (input: RoleTemplateInput) => Promise<boolean>
+}
+
+interface WorkerMemoryFormProps {
+  busy: boolean
+  onSubmit: (input: DigitalWorkerMemoryDraftInput) => Promise<boolean>
+}
+
+export function WorkerMemoryForm({ busy, onSubmit }: WorkerMemoryFormProps): React.JSX.Element {
+  const [memoryKind, setMemoryKind] = useState('working-preference')
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [reason, setReason] = useState('')
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault()
+    if (await onSubmit({
+      memoryKind: memoryKind.trim(),
+      title: title.trim(),
+      body: body.trim(),
+      reason: reason.trim(),
+      confidence: 1
+    })) {
+      setTitle('')
+      setBody('')
+      setReason('')
+    }
+  }
+  return (
+    <form className="dws-memory-form" onSubmit={(event) => void submit(event)} data-dws-form="worker-memory">
+      <label className="dws-field"><span>类型</span><input value={memoryKind} onChange={(event) => setMemoryKind(event.target.value)} required maxLength={128} /></label>
+      <label className="dws-field"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={512} /></label>
+      <label className="dws-field dws-field-wide"><span>记忆内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} required maxLength={100000} rows={3} /></label>
+      <label className="dws-field dws-field-wide"><span>保留原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} required maxLength={2000} /></label>
+      <button type="submit" className="dws-button dws-button-primary" disabled={busy || !title.trim() || !body.trim() || !reason.trim()}>{busy ? '提交中...' : '提交审核'}</button>
+    </form>
+  )
 }
 
 export function RoleTemplateForm({ busy, onCancel, onSubmit }: RoleTemplateFormProps): React.JSX.Element {
@@ -99,6 +136,7 @@ interface HireWorkerFormProps {
   projectId: string
   roles: readonly RoleTemplate[]
   initialRoleId?: string
+  recommendation?: DigitalWorkerRoleRecommendation
   busy: boolean
   onCancel: () => void
   onSubmit: (input: DigitalWorkerInput, activate: boolean) => Promise<boolean>
@@ -396,32 +434,32 @@ function buildHireWorkerInput(values: HireWorkerInputValues): DigitalWorkerInput
 }
 
 export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
-  const { projectId, roles, initialRoleId, busy, onCancel, onSubmit } = props
+  const { projectId, roles, initialRoleId, recommendation, busy, onCancel, onSubmit } = props
   const titleId = useId()
-  const [displayName, setDisplayName] = useState('')
+  const [displayName, setDisplayName] = useState(recommendation ? `${recommendation.name} 01` : '')
   const [roleId, setRoleId] = useState(initialRoleId || roles[0]?.id || '')
   const [watercolorRole, setWatercolorRole] = useState<WatercolorCharacterRole>(() =>
     suggestedWatercolorRole(initialRoleId || roles[0]?.id || '', roles)
   )
-  const [responsibilities, setResponsibilities] = useState('')
-  const [monthlyBudget, setMonthlyBudget] = useState('')
-  const [concurrency, setConcurrency] = useState('1')
-  const [allowedDataClasses, setAllowedDataClasses] = useState('')
+  const [responsibilities, setResponsibilities] = useState(recommendation?.responsibilities.join('\n') ?? '')
+  const [monthlyBudget, setMonthlyBudget] = useState(jsonNumberText(recommendation?.budgetPolicy.maxAmount))
+  const [concurrency, setConcurrency] = useState(jsonNumberText(recommendation?.budgetPolicy.maxConcurrentRuns) || '1')
+  const [allowedDataClasses, setAllowedDataClasses] = useState(jsonStringList(recommendation?.dataScope.allowedDataClasses))
   const [deniedDataClasses, setDeniedDataClasses] = useState('')
-  const [allowedResourceIds, setAllowedResourceIds] = useState('')
-  const [requireExplicitScope, setRequireExplicitScope] = useState(false)
-  const [minimumEvidenceCount, setMinimumEvidenceCount] = useState('1')
+  const [allowedResourceIds, setAllowedResourceIds] = useState(jsonStringList(recommendation?.dataScope.allowedResourceIds))
+  const [requireExplicitScope, setRequireExplicitScope] = useState(recommendation?.dataScope.requireExplicitScope === true)
+  const [minimumEvidenceCount, setMinimumEvidenceCount] = useState(String(Math.max(1, Math.min(recommendation?.acceptance.length ?? 1, 10000))))
   const [requireUserApproval, setRequireUserApproval] = useState(false)
-  const [escalationTarget, setEscalationTarget] = useState('project-owner')
-  const [escalateAfterFailures, setEscalateAfterFailures] = useState('2')
+  const [escalationTarget, setEscalationTarget] = useState(jsonString(recommendation?.escalationPolicy.target) || 'project-owner')
+  const [escalateAfterFailures, setEscalateAfterFailures] = useState(jsonNumberText(recommendation?.escalationPolicy.afterFailures) || '2')
   const [activate, setActivate] = useState(true)
-  const [permissions, setPermissions] = useState({
-    workspaceRead: true,
-    workspaceWrite: false,
-    terminal: false,
-    browser: false,
-    network: false
-  })
+  const [permissions, setPermissions] = useState(() => ({
+    workspaceRead: recommendation?.toolPolicy.workspaceRead !== false,
+    workspaceWrite: recommendation?.toolPolicy.workspaceWrite === true,
+    terminal: recommendation?.toolPolicy.terminal === true,
+    browser: recommendation?.toolPolicy.browser === true,
+    network: recommendation?.toolPolicy.network === true
+  }))
 
   useEffect(() => {
     if (initialRoleId && roles.some((role) => role.id === initialRoleId)) {
@@ -526,6 +564,20 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
       </div>
     </form>
   )
+}
+
+function jsonString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function jsonNumberText(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+}
+
+function jsonStringList(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string').join(', ')
+    : ''
 }
 
 interface PermissionFieldsProps {

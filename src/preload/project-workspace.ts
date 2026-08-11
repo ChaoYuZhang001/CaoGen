@@ -16,6 +16,7 @@ import type {
   ProjectWorkspaceLeaseOptions,
   ProjectWorkspaceListOptions,
   ProjectWorkspacePatch,
+  ProjectWorkspaceTemplateApplyInput,
   WorkItemInput,
   WorkItemCommentPatch,
   WorkItemOwnerType,
@@ -31,6 +32,7 @@ const invokeProjectWorkspace = (action: string, ...args: unknown[]) =>
 /** Renderer-safe bridge for the native ProjectWorkspace domain. */
 export const projectWorkspaceApi: Pick<AgentDeskApi,
   | 'listProjectWorkspaces' | 'getProjectWorkspace' | 'createProjectWorkspace'
+  | 'applyProjectWorkspaceTemplate'
   | 'updateProjectWorkspace' | 'archiveProjectWorkspace' | 'restoreProjectWorkspace'
   | 'deleteProjectWorkspace' | 'purgeProjectWorkspace' | 'exportProjectWorkspaceManifest'
   | 'exportProjectWorkspaceData'
@@ -54,6 +56,8 @@ export const projectWorkspaceApi: Pick<AgentDeskApi,
   getProjectWorkspace: (id: string) => invokeProjectWorkspace('get', id),
   createProjectWorkspace: (input: ProjectWorkspaceInput, options?: MutationOptions) =>
     invokeProjectWorkspace('create', input, options),
+  applyProjectWorkspaceTemplate: (input: ProjectWorkspaceTemplateApplyInput) =>
+    invokeProjectWorkspace('templates:apply', input),
   updateProjectWorkspace: (id: string, patch: ProjectWorkspacePatch, options?: MutationOptions) =>
     invokeProjectWorkspace('update', id, patch, options),
   archiveProjectWorkspace: (id: string, options?: MutationOptions) =>

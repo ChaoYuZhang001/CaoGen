@@ -283,6 +283,10 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('plugins:reveal', path, sessionId),
   setPluginRegistryItemEnabled: (item, enabled, sessionId?: string) =>
     ipcRenderer.invoke('plugins:setEnabled', item, enabled, sessionId),
+  approvePluginRegistryItem: (item, sessionId?: string) =>
+    ipcRenderer.invoke('plugins:approve', item, sessionId),
+  authorizePluginRegistryItem: (item, sessionId?: string) =>
+    ipcRenderer.invoke('plugins:authorize', item, sessionId),
   probeMcpServers: (items, sessionId?: string) =>
     ipcRenderer.invoke('plugins:probeMcp', items, sessionId),
   installLocalPlugin: (sourcePath?: string, overwrite?: boolean) =>

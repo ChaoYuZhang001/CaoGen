@@ -1,4 +1,4 @@
-import type { ProjectWorkspace } from '../../../shared/types'
+import { MANAGED_PERSONAL_WORKSPACE_ID, type ProjectWorkspace } from '../../../shared/types'
 import type { ExperienceMode } from './experience-mode'
 
 export interface ProjectWorkspaceStoreSlice {
@@ -41,10 +41,10 @@ export function createProjectWorkspaceStoreSlice<T extends ProjectWorkspaceStore
     async refreshProjectWorkspaces() {
       set({ projectWorkspacesLoading: true, projectWorkspacesError: undefined } as Partial<T>)
       try {
-        const projectWorkspaces = await window.agentDesk.listProjectWorkspaces({
+        const projectWorkspaces = (await window.agentDesk.listProjectWorkspaces({
           includeArchived: true,
           includeDeleted: true
-        })
+        })).filter((workspace) => workspace.id !== MANAGED_PERSONAL_WORKSPACE_ID)
         projectWorkspaces.sort((left, right) => right.updatedAt - left.updatedAt)
         set({ projectWorkspaces, projectWorkspacesLoading: false } as Partial<T>)
         return projectWorkspaces
@@ -58,6 +58,7 @@ export function createProjectWorkspaceStoreSlice<T extends ProjectWorkspaceStore
     },
 
     async archiveCanonicalProject(id, archived) {
+      if (id === MANAGED_PERSONAL_WORKSPACE_ID) return
       const project = get().projectWorkspaces.find((item) => item.id === id)
       if (!project) return
       if (archived) {
@@ -69,6 +70,7 @@ export function createProjectWorkspaceStoreSlice<T extends ProjectWorkspaceStore
     },
 
     async deleteCanonicalProject(id) {
+      if (id === MANAGED_PERSONAL_WORKSPACE_ID) return
       const project = get().projectWorkspaces.find((item) => item.id === id)
       if (!project) return
       await window.agentDesk.deleteProjectWorkspace(id, { expectedRevision: project.revision })

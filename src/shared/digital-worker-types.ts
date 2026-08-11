@@ -7,6 +7,15 @@
  */
 
 import type { WorkItem, WorkItemOwner } from './project-workspace-types'
+import type { WatercolorCharacterRole } from './watercolor-character'
+import type { LearningRecord } from './learning-types'
+import type {
+  WorkflowAcceptanceRecord,
+  WorkflowArtifactRecord,
+  WorkflowEvidenceLinkRecord,
+  WorkflowEvidenceRecord,
+  WorkflowLedgerExportTaskEvidenceRecord
+} from './workflow-types'
 
 export const DIGITAL_WORKER_SCHEMA_VERSION = 1 as const
 export const DIGITAL_WORKER_STORE_VERSION = 2 as const
@@ -326,6 +335,149 @@ export interface DigitalWorkerStoreVerification {
   }
 }
 
+/** Goal-scoped input for a deterministic, provider-neutral team recommendation. */
+export interface DigitalWorkerTeamRecommendationInput {
+  projectId: string
+  goalId?: string
+}
+
+export interface DigitalWorkerTeamRecommendationSource {
+  goalId: string
+  goalTitle: string
+  goalStatus: string
+  objective: string
+  workItemCount: number
+}
+
+export interface DigitalWorkerRoleRecommendation {
+  id: string
+  watercolorRole: WatercolorCharacterRole
+  name: string
+  purpose: string
+  rationale: string
+  methods: string[]
+  responsibilities: string[]
+  capabilityRefs: string[]
+  skillRefs: string[]
+  toolPolicy: JsonObject
+  dataScope: JsonObject
+  budgetPolicy: JsonObject
+  outputs: string[]
+  acceptance: string[]
+  escalationPolicy: JsonObject
+}
+
+export interface DigitalWorkerTeamRecommendation {
+  schemaVersion: 1
+  projectId: string
+  goalId: string
+  source: DigitalWorkerTeamRecommendationSource
+  coordinatorRoleId: string
+  roles: DigitalWorkerRoleRecommendation[]
+  digest: string
+}
+
+export interface DigitalWorkerPerformanceProfile extends JsonObject {
+  schemaVersion: 1
+  workerId: string
+  projectId: string
+  sampledAt: number
+  sourceDigest: string
+  totalRuns: number
+  completedRuns: number
+  failedRuns: number
+  acceptanceDecisions: number
+  acceptancePassed: number
+  acceptancePassRate: number
+  reworkRuns: number
+  costUsd: number
+  averageDurationMs: number
+  onTimeRuns: number
+  dueDatedRuns: number
+  onTimeRate: number
+  reliability: number
+  costCoverage: 'complete' | 'partial' | 'untrackable'
+  unpricedAttempts: number
+}
+
+export interface DigitalWorkerMemoryDraftInput {
+  memoryKind: string
+  title: string
+  body: string
+  reason: string
+  confidence?: number
+}
+
+export interface DigitalWorkerMemorySnapshot {
+  schemaVersion: 1
+  projectId: string
+  workerId: string
+  memoryNamespace: string
+  workerStatus: DigitalWorkerStatus
+  projectMemoryReadAllowed: boolean
+  projectMemories: LearningRecord[]
+  workerMemories: LearningRecord[]
+  drafts: LearningRecord[]
+  history: LearningRecord[]
+  effective: LearningRecord[]
+}
+
+/** Renderer-safe immutable history projection retained after worker retirement. */
+export interface DigitalWorkerHistoryRun {
+  id: string
+  sessionId: string
+  taskId: string
+  workItemId: string
+  status: string
+  attempt: number
+  revision: number
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+  acceptanceId?: string
+  taskRunDigest: string
+  errorDigest?: string
+}
+
+export interface DigitalWorkerHistorySnapshot {
+  schemaVersion: 1
+  format: 'caogen.digital-worker-history.v1'
+  generatedAt: number
+  worker: Pick<DigitalWorker, 'id' | 'projectId' | 'roleTemplateId' | 'displayName' | 'status' | 'createdAt' | 'updatedAt' | 'retiredAt' | 'revision'>
+  assignments: DigitalWorkerAssignment[]
+  leases: DigitalWorkerLease[]
+  runs: DigitalWorkerHistoryRun[]
+  artifacts: WorkflowArtifactRecord[]
+  evidence: Array<WorkflowEvidenceRecord | WorkflowLedgerExportTaskEvidenceRecord>
+  evidenceLinks: WorkflowEvidenceLinkRecord[]
+  acceptances: WorkflowAcceptanceRecord[]
+  summary: {
+    assignments: number
+    leases: number
+    runs: number
+    artifacts: number
+    evidence: number
+    evidenceLinks: number
+    acceptances: number
+  }
+  integrity: {
+    complete: true
+    sourceAggregateDigest: string
+    historyDigest: string
+  }
+}
+
+export interface DigitalWorkerHistoryExport {
+  schemaVersion: 1
+  format: 'caogen.digital-worker-history.export.v1'
+  workerId: string
+  projectId: string
+  json: string
+  exportDigest: string
+  snapshot: DigitalWorkerHistorySnapshot
+}
+
 export type AssignmentOwnerOperation = 'assign' | 'release' | 'reassign'
 
 export type AssignmentOwnerJournalPhase =
@@ -452,6 +604,16 @@ export interface AssignmentOwnerRecoveryResult {
 export interface DigitalWorkerApi {
   verifyDigitalWorkerStore(): Promise<DigitalWorkerStoreVerification>
   getDigitalWorkerStoreSnapshot(): Promise<DigitalWorkerStoreDocument>
+  recommendDigitalWorkerTeam(input: DigitalWorkerTeamRecommendationInput): Promise<DigitalWorkerTeamRecommendation>
+  refreshDigitalWorkerPerformance(id: string): Promise<DigitalWorker>
+  getDigitalWorkerHistory(workerId: string): Promise<DigitalWorkerHistorySnapshot>
+  exportDigitalWorkerHistory(workerId: string): Promise<DigitalWorkerHistoryExport>
+  listDigitalWorkerMemory(workerId: string): Promise<DigitalWorkerMemorySnapshot>
+  proposeDigitalWorkerMemory(workerId: string, input: DigitalWorkerMemoryDraftInput): Promise<DigitalWorkerMemorySnapshot>
+  approveDigitalWorkerMemory(workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot>
+  rejectDigitalWorkerMemory(workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot>
+  revokeDigitalWorkerMemory(workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot>
+  deleteDigitalWorkerMemory(workerId: string, recordId: string): Promise<DigitalWorkerMemorySnapshot>
   listDigitalWorkerRoleTemplates(options?: DigitalWorkerRoleTemplateListOptions): Promise<RoleTemplate[]>
   getDigitalWorkerRoleTemplate(id: string): Promise<RoleTemplate | null>
   createDigitalWorkerRoleTemplate(input: RoleTemplateInput): Promise<RoleTemplate>

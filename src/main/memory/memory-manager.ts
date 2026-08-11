@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { writeDurableFile } from '../durable-file'
 
 export type MemoryLayer = 'working' | 'project' | 'user'
 
@@ -175,22 +176,15 @@ async function readStore(rootDir: string): Promise<MemoryFile> {
     const raw = await readFile(filePath, 'utf8')
     const parsed = JSON.parse(raw) as unknown
     return normalizeStore(parsed)
-  } catch {
-    return { version: 1, entries: [] }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, entries: [] }
+    throw new Error(`Memory store is unreadable: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
 async function writeStore(rootDir: string, entries: LayeredMemoryEntry[]): Promise<void> {
   const filePath = storePath(rootDir)
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  try {
-    await writeFile(tmp, `${JSON.stringify({ version: 1, entries }, null, 2)}\n`, 'utf8')
-    await rename(tmp, filePath)
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => undefined)
-    throw error
-  }
+  await writeDurableFile(filePath, `${JSON.stringify({ version: 1, entries }, null, 2)}\n`)
 }
 
 function normalizeStore(value: unknown): MemoryFile {

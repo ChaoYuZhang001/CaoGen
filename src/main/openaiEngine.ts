@@ -38,12 +38,14 @@ import { recordModelFailure, recordModelSuccess } from './modelStats'
 import { getSettings } from './settings'
 import { createLegacyRoutingDecisionView, resolveSessionModelRoute } from './model/session-routing'
 import { settingsForCaoGenDrive } from './model/drive'
+import { assertRoutingExpertTargetAllowed } from './model/routing-expert-policy'
 import { calculateMonthlyBudgetSnapshot } from './model/monthly-budget'
 import { canRotateProviderKey } from './providerKeyRouting'
 import { OPENAI_CODING_TOOLS, RESPONSES_CODING_TOOLS } from './openaiTools'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
 import { buildProjectContextSystemAppendSync } from './agent/context-loader'
 import { buildEffectiveMemoryPrompt } from './memory/memory-retriever'
+import { buildDigitalWorkerMemoryPrompt } from './digital-worker/worker-memory'
 import { buildSkillInvocationPrompt } from './skill/skill-invocation'
 import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
 import {
@@ -70,6 +72,7 @@ import {
   redactProviderErrorText
 } from './provider/openai-provider-utils'
 import { applyProviderRequestOverrides } from './provider/providerRequestOverrides'
+import { estimateModelAttemptCostUsd } from './provider/modelAttemptCost'
 import { resolveOpenAIProtocol, resolveProviderRuntimeTarget } from './provider/providerRuntimeTarget'
 import {
   ProviderRequestDeadline,
@@ -345,6 +348,7 @@ export class OpenAIEngine implements Engine {
           documentationProviderId: settings.documentationProviderId,
           documentationModel: settings.documentationModel,
           modelRoutingRules: settings.modelRoutingRules,
+          routingExpertPolicy: settings.routingExpertPolicy,
           projectPath: this.meta.sourceCwd ?? this.meta.cwd
         })
         if (smart.kind === 'routed') {
@@ -610,6 +614,7 @@ export class OpenAIEngine implements Engine {
       const prepared = await this.augmentPayloadWithLayeredMemory(payload)
       this.activeOutboundContext = prepared.manifest
       auth = this.authConfig()
+      assertRoutingExpertTargetAllowed(auth.providerId, auth.baseUrl, getSettings().routingExpertPolicy)
       this.modelAttempts.setRouteReason(auth.authorizationRouteReason ?? 'Session uses the configured provider and model')
       this.recoveryState.models(this.meta.providerId).add(this.effectiveModel())
       if (!auth.available && auth.authMode !== 'none') throw new Error(this.missingKeyMessage())
@@ -696,6 +701,9 @@ export class OpenAIEngine implements Engine {
         return ''
       })
       : ''
+    const workerMemory = payload.text.trim()
+      ? await buildDigitalWorkerMemoryPrompt(app.getPath('userData'), this.meta)
+      : ''
     const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
       .catch((error) => {
         console.error('[caogen] workflow stage handoff retrieval failed:', error)
@@ -703,7 +711,7 @@ export class OpenAIEngine implements Engine {
       })
     const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
     const additionalItems = openAiAdditionalContextItems({
-      memory,
+      memory: [memory, workerMemory].filter(Boolean).join('\n\n'),
       ideDocumentContext,
       handoff,
       hasConversationContext: this.chatHistory.length > 0 || Boolean(this.lastResponseId)
@@ -721,7 +729,7 @@ export class OpenAIEngine implements Engine {
       payload.documents ?? [],
       sessionImageAttachmentsRoot(app.getPath('userData'), this.meta.id)
     )
-    const enriched = memory.trim() || skillPrompt.trim() || ideDocumentContext.trim() ||
+    const enriched = memory.trim() || workerMemory.trim() || skillPrompt.trim() || ideDocumentContext.trim() ||
       handoff.trim() || projectResources.trim() || documentPrompt.trim()
       ? {
         ...payload,
@@ -731,6 +739,7 @@ export class OpenAIEngine implements Engine {
           skillPrompt,
           ideDocumentContext,
           memory,
+          workerMemory,
           documentPrompt,
           '## Current User Request',
           payload.text
@@ -990,7 +999,8 @@ export class OpenAIEngine implements Engine {
       exclude: this.recoveryState.models(providerId),
       fallbackModel: settings.fallbackModel,
       failure,
-      outboundContext: this.activeOutboundContext
+      outboundContext: this.activeOutboundContext,
+      routingExpertPolicy: settings.routingExpertPolicy
     })
     if (!recovery) return false
 
@@ -1032,7 +1042,8 @@ export class OpenAIEngine implements Engine {
       fallbackModel: settings.fallbackModel,
       failure,
       currentProtocol: this.protocol(),
-      outboundContext: this.activeOutboundContext
+      outboundContext: this.activeOutboundContext,
+      routingExpertPolicy: settings.routingExpertPolicy
     })
     if (!target) return false
 
@@ -1684,16 +1695,20 @@ export class OpenAIEngine implements Engine {
   ): Promise<T> {
     const streaming = providerRequestIsStreaming(init.body)
     const timeouts = providerRequestTimeouts(auth.provider)
+    const providerId = this.meta.providerId || 'openai'
+    const model = this.effectiveModel()
+    const protocol = this.protocol() === 'chat' ? 'openai.chat-completions' : 'openai.responses'
     const deadlines = new WeakMap<Response, ProviderRequestDeadline>()
     return this.modelAttempts.fetch({
       run: taskRuntimeRegistry.get(this.meta.id),
-      providerId: this.meta.providerId || 'openai',
-      model: this.effectiveModel(),
-      protocol: this.protocol() === 'chat' ? 'openai.chat-completions' : 'openai.responses',
+      providerId,
+      model,
+      protocol,
       url,
       init: { ...init, signal },
       signal,
       auth: { keyId: auth.keyId, keyLabel: auth.keyLabel },
+      estimateCost: (usage) => estimateModelAttemptCostUsd({ providerId, model, protocol }, usage),
       executeFetch: async (operationId) => {
         const deadline = new ProviderRequestDeadline(signal, timeouts, streaming)
         try {
@@ -1706,7 +1721,11 @@ export class OpenAIEngine implements Engine {
         }
       },
       preflight: async () => {
-        assertDigitalWorkerProviderDispatchAllowed(this.meta)
+        await assertDigitalWorkerProviderDispatchAllowed(this.meta, app.getPath('userData'), {
+          providerId,
+          model,
+          protocol
+        })
         const manifest = this.activeOutboundContext
         if (!manifest) {
           throw new OutboundContextPolicyError(

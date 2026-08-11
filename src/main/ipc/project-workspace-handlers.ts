@@ -17,6 +17,7 @@ import {
   isProjectWorkspaceKind,
   isWorkItemStatus,
   isWorkItemType,
+  MANAGED_PERSONAL_WORKSPACE_ID,
   type AcceptanceResult,
   type GoalInput,
   type GoalPatch,
@@ -32,6 +33,7 @@ import {
   type ProjectWorkspaceLeaseOptions,
   type ProjectWorkspaceListOptions,
   type ProjectWorkspacePatch,
+  type ProjectWorkspaceTemplateApplyInput,
   type WorkItemInput,
   type WorkItemCommentInput,
   type WorkItemCommentPatch,
@@ -62,6 +64,7 @@ import {
 } from '../data-lifecycle/project-import-coordinator'
 import { sessionManager } from '../sessionManager'
 import { invalidateHistoryCache } from '../history'
+import { applyProjectWorkspaceTemplate } from '../project-workspace/template-service'
 
 const WORKSPACE_KEYS = new Set([
   'id', 'name', 'kind', 'ownerId', 'resources', 'rulesRef',
@@ -92,6 +95,7 @@ const WORK_ITEM_PATCH_KEYS = new Set([
   'owner', 'dueAt', 'acceptanceSpec', 'artifactRefs', 'runRefs'
 ])
 const GOAL_TASK_KEYS = new Set(['requestId', 'projectId', 'objective'])
+const PROJECT_TEMPLATE_APPLY_KEYS = new Set(['requestId', 'projectId', 'templateId'])
 const WORK_ITEM_TRANSFER_KEYS = new Set(['requestId', 'workItemId', 'target', 'reason', 'expectedRevision'])
 const WORK_ITEM_TRANSFER_TARGET_KEYS = new Set(['type', 'id', 'displayName'])
 const SQUAD_KEYS = new Set([
@@ -103,6 +107,7 @@ const COMMENT_CREATE_KEYS = new Set(['id', 'projectId', 'workItemId', 'body', 'm
 const COMMENT_PATCH_KEYS = new Set(['body', 'mentions'])
 const PROJECT_WORKSPACE_MUTATIONS = new Set([
   'create', 'update', 'archive', 'restore', 'delete', 'purge', 'import:data',
+  'templates:apply',
   'goals:create', 'goals:update', 'goals:transition', 'goals:archive', 'goals:restore', 'goals:acceptance',
   'workItems:create', 'workItems:update', 'workItems:transfer', 'workItems:reorder', 'workItems:transition', 'workItems:acceptance',
   'workItems:lease:acquire', 'workItems:lease:renew', 'workItems:lease:release',
@@ -115,14 +120,21 @@ const PROJECT_WORKSPACE_MUTATIONS = new Set([
 type ProjectWorkspaceHandler = (...args: unknown[]) => unknown
 
 const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
-  list: (rawOptions) => withStore((store) => store.listWorkspaces(normalizeListOptions(rawOptions))),
-  get: (rawId) => withStore((store) => store.getWorkspace(requiredString(rawId, 'workspace id'))),
-  create: (rawInput, rawOptions) => withStore((store) => store.createWorkspace(
-    normalizeInput<ProjectWorkspaceInput>(rawInput, WORKSPACE_KEYS, 'workspace'),
-    normalizeMutationOptions(rawOptions)
-  )),
+  list: (rawOptions) => withStore(async (store) => (
+    await store.listWorkspaces(normalizeListOptions(rawOptions))
+  ).filter((workspace) => workspace.id !== MANAGED_PERSONAL_WORKSPACE_ID)),
+  get: (rawId) => withStore((store) => store.getWorkspace(assertUserManagedWorkspaceId(rawId))),
+  create: (rawInput, rawOptions) => withStore((store) => {
+    const input = normalizeInput<ProjectWorkspaceInput>(rawInput, WORKSPACE_KEYS, 'workspace')
+    if (input.id === MANAGED_PERSONAL_WORKSPACE_ID) throw managedPersonalWorkspaceMutationError('create')
+    return store.createWorkspace(input, normalizeMutationOptions(rawOptions))
+  }),
+  'templates:apply': (rawInput) => applyProjectWorkspaceTemplate(
+    app.getPath('userData'),
+    normalizeProjectTemplateApplyInput(rawInput)
+  ),
   update: (rawId, rawPatch, rawOptions) => withStore((store) => store.updateWorkspace(
-    requiredString(rawId, 'workspace id'),
+    assertUserManagedWorkspaceId(rawId, 'update'),
     normalizeInput<ProjectWorkspacePatch>(rawPatch, WORKSPACE_PATCH_KEYS, 'workspace patch'),
     normalizeMutationOptions(rawOptions)
   )),
@@ -130,7 +142,7 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     'archive', rawId, rawOptions
   ),
   restore: (rawId, rawOptions) => withStore((store) => store.restoreWorkspace(
-    requiredString(rawId, 'workspace id'), normalizeMutationOptions(rawOptions)
+    assertUserManagedWorkspaceId(rawId, 'restore'), normalizeMutationOptions(rawOptions)
   )),
   delete: (rawId, rawOptions) => mutateWorkspaceWithoutActiveAssignments(
     'delete', rawId, rawOptions
@@ -305,6 +317,9 @@ async function verifyProjectWorkspaceMutation(action: string, args: unknown[], r
 
 function workspaceMutationProjectId(action: string, args: unknown[], result: unknown): string | undefined {
   if (action === 'create') return recordId(result)
+  if (action === 'templates:apply') {
+    return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
+  }
   if (['update', 'archive', 'restore', 'delete', 'purge'].includes(action)) {
     return optionalString(args[0])
   }
@@ -320,6 +335,21 @@ function workspaceMutationProjectId(action: string, args: unknown[], result: unk
 function normalizeCommentInput(value: unknown): WorkItemCommentInput {
   const input = normalizeInput<ProjectWorkItemCommentCreateInput>(value, COMMENT_CREATE_KEYS, 'comment')
   return { ...input, author: LOCAL_USER_ACTOR }
+}
+
+function normalizeProjectTemplateApplyInput(value: unknown): ProjectWorkspaceTemplateApplyInput {
+  const input = normalizeInput<ProjectWorkspaceTemplateApplyInput>(
+    value,
+    PROJECT_TEMPLATE_APPLY_KEYS,
+    'project template apply'
+  )
+  const templateId = input.templateId
+  if (!isProjectWorkspaceKind(templateId)) throw new Error('project template id is invalid')
+  return {
+    requestId: requiredString(input.requestId, 'project template requestId'),
+    projectId: requiredString(input.projectId, 'project template projectId'),
+    templateId
+  }
 }
 
 function normalizeSquadInput(value: unknown): ProjectSquadInput {
@@ -378,7 +408,7 @@ async function mutateWorkspaceWithoutActiveAssignments(
   rawId: unknown,
   rawOptions: unknown
 ): Promise<unknown> {
-  const id = requiredString(rawId, 'workspace id')
+  const id = assertUserManagedWorkspaceId(rawId, action)
   assertNoActiveProjectAssignment(id, action)
   if (action === 'archive') {
     return withStore((store) => store.archiveWorkspace(id, normalizeMutationOptions(rawOptions)))
@@ -394,6 +424,16 @@ async function mutateWorkspaceWithoutActiveAssignments(
   const result = await purgeProjectPermanently(id, app.getPath('userData'), normalizeMutationOptions(rawOptions))
   invalidateHistoryCache()
   return result
+}
+
+function assertUserManagedWorkspaceId(rawId: unknown, action = 'access'): string {
+  const id = requiredString(rawId, 'workspace id')
+  if (id === MANAGED_PERSONAL_WORKSPACE_ID) throw managedPersonalWorkspaceMutationError(action)
+  return id
+}
+
+function managedPersonalWorkspaceMutationError(action: string): Error {
+  return new Error(`managed personal Workspace is reserved and cannot ${action}`)
 }
 
 function assertNoActiveProjectAssignment(projectId: string, action: string): void {

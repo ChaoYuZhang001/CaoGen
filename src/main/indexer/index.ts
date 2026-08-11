@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { TextDecoder } from 'node:util'
+import { writeDurableFileSync } from '../durable-file'
 import chokidar, { type FSWatcher } from 'chokidar'
 import initSqlJs from 'sql.js'
 import { languageForFile, parseCodeFile, type CodeSymbolKind } from './parsers/languages'
@@ -44,6 +45,8 @@ const RESOLVE_EXTENSIONS = [
   '.rs',
   '.java'
 ]
+const INDEX_SCHEMA_VERSION = 1
+const INDEX_SCHEMA_TABLE = '_caogen_meta'
 
 export interface IndexedSymbol {
   name: string
@@ -156,6 +159,7 @@ export class ProjectIndexer {
       .catch(() => new SQL.Database())
     const indexer = new ProjectIndexer(root, db)
     indexer.setupSchema()
+    indexer.assertSchemaVersion()
     await indexer.rebuild()
     if (options.watch !== false) await indexer.startWatcher()
     return indexer
@@ -315,6 +319,7 @@ export class ProjectIndexer {
 
   private setupSchema(): void {
     this.db.run(`
+      CREATE TABLE IF NOT EXISTS ${INDEX_SCHEMA_TABLE} (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS files (
         path TEXT PRIMARY KEY,
         abs_path TEXT NOT NULL,
@@ -345,6 +350,17 @@ export class ProjectIndexer {
       );
       CREATE INDEX IF NOT EXISTS idx_dependencies_target ON dependencies(target_path);
     `)
+  }
+
+  private assertSchemaVersion(): void {
+    const rows = this.select<{ value: string }>(`SELECT value FROM ${INDEX_SCHEMA_TABLE} WHERE key = 'schemaVersion' LIMIT 1`)
+    if (rows.length === 0) {
+      this.db.run(`INSERT INTO ${INDEX_SCHEMA_TABLE}(key, value) VALUES ('schemaVersion', ?)`, [String(INDEX_SCHEMA_VERSION)])
+      return
+    }
+    if (rows[0].value !== String(INDEX_SCHEMA_VERSION)) {
+      throw new Error(`项目代码索引 schema 版本不受支持: ${rows[0].value}`)
+    }
   }
 
   private async scanFiles(): Promise<ScannedFile[]> {
@@ -496,9 +512,7 @@ export class ProjectIndexer {
 
   private persist(): void {
     const data = this.db.export()
-    writeFile(this.indexPath, data).catch((err: unknown) => {
-      console.error('[caogen] 保存项目索引失败:', err)
-    })
+    writeDurableFileSync(this.indexPath, data, { mode: 0o600 })
   }
 
   private select<T extends Record<string, SqlValue>>(sql: string, params: SqlValue[] = []): T[] {

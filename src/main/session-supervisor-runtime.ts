@@ -248,7 +248,7 @@ export class SessionSupervisorRuntime {
     await this.observationTasks.get(binding.taskRun.sessionId)
     if (request.action !== 'retry' && request.action !== 'resume') return
     const { taskRun } = this.assertRuntimeBinding(binding)
-    const workerPolicyError = digitalWorkerSupervisorPolicyError({
+    const workerPolicyError = await digitalWorkerSupervisorPolicyError({
       rootDir: this.rootDir(),
       meta: binding.session.meta,
       action: request.action,

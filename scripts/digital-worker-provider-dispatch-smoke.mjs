@@ -102,13 +102,13 @@ function loadRuntime() {
   }
 }
 
-function verifyFrozenBinding(runtime) {
+async function verifyFrozenBinding(runtime) {
   const { meta, run } = unscopedFixture(runtime, 'binding')
   runtime.registry.taskRuntimeRegistry.set(meta.id, run)
-  assert.doesNotThrow(() => runtime.policy.assertDigitalWorkerProviderDispatchAllowed(meta, userData))
+  await assert.doesNotReject(() => runtime.policy.assertDigitalWorkerProviderDispatchAllowed(meta, userData))
 
   runtime.registry.taskRuntimeRegistry.clear()
-  assert.throws(
+  await assert.rejects(
     () => runtime.policy.assertDigitalWorkerProviderDispatchAllowed(meta, userData),
     runtime.policy.DigitalWorkerProviderDispatchDeniedError
   )
@@ -117,7 +117,7 @@ function verifyFrozenBinding(runtime) {
     ...run,
     digitalWorkerBinding: { kind: 'assigned', workerId: 'tampered-worker', assignmentId: 'tampered-assignment' }
   })
-  assert.throws(
+  await assert.rejects(
     () => runtime.policy.assertDigitalWorkerProviderDispatchAllowed(meta, userData),
     runtime.policy.DigitalWorkerProviderDispatchDeniedError
   )
@@ -232,7 +232,7 @@ async function verifyAnthropicSuccessorRecheck(runtime) {
 function verifyProductionWiring() {
   const openai = source('src/main/openaiEngine.ts')
   const anthropic = source('src/main/anthropicEngine.ts')
-  const guardedPreflight = /preflight:\s*(?:async\s*)?\(\)\s*=>\s*\{\s*assertDigitalWorkerProviderDispatchAllowed\(this\.meta\)/
+  const guardedPreflight = /preflight:\s*(?:async\s*)?\(\)\s*=>\s*\{\s*await assertDigitalWorkerProviderDispatchAllowed\(this\.meta/
   assert.match(openai, guardedPreflight)
   assert.match(anthropic, guardedPreflight)
 }

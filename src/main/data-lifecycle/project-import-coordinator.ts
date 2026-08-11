@@ -3,7 +3,11 @@ import { resolve } from 'node:path'
 import type { DigitalWorkerAuditEvent } from '../../shared/digital-worker-types'
 import type { ProjectImportResult } from '../../shared/data-lifecycle-types'
 import type { ProjectAggregateAuditRecord, ProjectAggregateExportBundle } from '../../shared/project-aggregate-types'
-import type { ProjectWorkspaceEvent, ProjectWorkspaceState } from '../../shared/project-workspace-types'
+import {
+  MANAGED_PERSONAL_WORKSPACE_ID,
+  type ProjectWorkspaceEvent,
+  type ProjectWorkspaceState
+} from '../../shared/project-workspace-types'
 import { DigitalWorkerStore } from '../digital-worker/domain-store'
 import { mutateLearningState, readLearningState } from '../learning/learning-store'
 import {
@@ -36,6 +40,9 @@ export async function importProjectAggregate(
 ): Promise<ProjectImportResult> {
   const root = requiredRoot(userDataRoot)
   const bundle = parseProjectAggregateImport(rawBundle)
+  if (bundle.projectId === MANAGED_PERSONAL_WORKSPACE_ID) {
+    throw new Error('Project import cannot use the managed personal Workspace identity')
+  }
   await preflightProjectImport(root, bundle)
   const operationId = randomUUID()
   const source = new ProjectImportSourceStore(root).write(operationId, bundle)

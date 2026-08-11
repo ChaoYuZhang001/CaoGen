@@ -18,11 +18,20 @@ import {
   readSafeDirectory,
   readSafeFile,
   removeExactTarget,
+  sha256,
   targetFingerprint,
   writeDirectoryAtomic,
   writeFileAtomic,
   type SafeDirectorySnapshot
 } from './migration-safety'
+import {
+  assertMigrationContractPreflight,
+  createMigrationContract,
+  readMigrationContract,
+  reconcileMigrationContracts,
+  transitionMigrationContract,
+  type MigrationContractJournal
+} from './migration-contract'
 import {
   deleteStoredMigrationScan,
   readStoredMigrationScan,
@@ -65,6 +74,7 @@ export function applyMigration(input: MigrationApplyInput, options: MigrationApp
   if (!stored) return failedApply('migration_scan_expired', '迁移预览已过期,请重新扫描。')
   const skipped: MigrationApplyItemResult[] = []
   try {
+    reconcileBeforeApply(resolve(options.backupRoot ?? defaultMigrationBackupRoot()))
     const selected = selectDecisions(stored.assets, normalizeDecisions(input?.decisions), skipped)
     if (selected.length === 0) {
       return { ok: true, status: 'no_changes', applied: [], skipped, message: '没有需要导入的内容。' }
@@ -73,7 +83,20 @@ export function applyMigration(input: MigrationApplyInput, options: MigrationApp
     const changes = buildTargetChanges(selected)
     const backupRoot = resolve(options.backupRoot ?? defaultMigrationBackupRoot())
     const manifest = createBackup([...changes.files.keys(), ...changes.directories.keys()], backupRoot, 'apply')
-    applyChanges(changes, manifest, backupRoot, options)
+    const contract = createMigrationContract(backupRoot, {
+      migrationId: manifest.backupId,
+      kind: 'external-agent-assets',
+      fromVersion: 0,
+      toVersion: 1,
+      backupId: manifest.backupId,
+      source: {
+        path: `migration-scan:${input.scanId}`,
+        sha256: sha256(Buffer.from(JSON.stringify(stored.result.assets.map((asset) => ({ id: asset.id, digest: asset.sourceDigest }))))),
+        sizeBytes: stored.result.assets.length
+      },
+      targets: manifest.targets.map((target) => ({ path: target.targetPath, beforeFingerprint: target.beforeFingerprint }))
+    })
+    applyChanges(changes, manifest, backupRoot, options, contract)
     deleteStoredMigrationScan(input.scanId)
     const applied = selected.map(({ internal }) => itemResult(internal.asset, 'applied'))
     return {
@@ -97,15 +120,38 @@ export function rollbackMigration(
   const root = resolve(backupRoot)
   try {
     const manifest = readBackupManifest(root, backupId)
-    if (manifest.targets.some((target) => !target.afterFingerprint || targetFingerprint(target.targetPath) !== target.afterFingerprint)) {
+    const contract = readExistingContract(root, backupId)
+    if (contract?.state === 'rolled_back') {
+      return {
+        ok: true,
+        status: 'rolled_back',
+        backupId,
+        restoredTargets: manifest.targets.map((target) => target.targetPath),
+        message: '迁移已回滚,重复请求保持幂等。'
+      }
+    }
+    const targetChangedAfterCommit = manifest.targets.some((target) =>
+      !target.afterFingerprint || targetFingerprint(target.targetPath) !== target.afterFingerprint)
+    const pendingTargetChanged = contract?.state === 'rollback_pending' && contract.targets.some((target) => {
+      const current = targetFingerprint(target.path)
+      return current !== target.beforeFingerprint && current !== target.afterFingerprint
+    })
+    if (contract?.state === 'rollback_pending' ? pendingTargetChanged : targetChangedAfterCommit) {
       return failedRollback(backupId, 'migration_target_changed_after_import')
     }
     const safety = createBackup(manifest.targets.map((target) => target.targetPath), root, 'rollback_safety')
+    const rollbackPending = contract && contract.state === 'committed'
+      ? transitionMigrationContract(root, contract, 'rollback_pending')
+      : contract
     try {
-      restoreManifest(manifest, root, true)
+      restoreManifest(manifest, root, contract?.state === 'committed')
       finalizeBackup(safety, root)
+      if (rollbackPending) transitionMigrationContract(root, rollbackPending, 'rolled_back')
     } catch (error) {
       restoreManifest(safety, root, false)
+      if (rollbackPending && rollbackPending.state !== 'rollback_pending') {
+        transitionMigrationContract(root, rollbackPending, 'rollback_pending')
+      }
       throw error
     }
     return {
@@ -149,24 +195,95 @@ function applyChanges(
   changes: ReturnType<typeof buildTargetChanges>,
   manifest: MigrationBackupManifest,
   backupRoot: string,
-  options: MigrationApplyOptions
+  options: MigrationApplyOptions,
+  initialContract: MigrationContractJournal
 ): void {
   let writes = 0
+  let contract = initialContract
   try {
+    assertMigrationContractPreflight(contract)
+    contract = transitionMigrationContract(backupRoot, contract, 'backup_verified')
+    contract = transitionMigrationContract(backupRoot, contract, 'applying')
     for (const [targetPath, bytes] of changes.files) {
       assertNoSymlinkWithin(requiredTargetRoot(changes, targetPath), targetPath)
       writeFileAtomic(targetPath, bytes)
       maybeFault(options, ++writes)
+      contract = updateContractProgress(backupRoot, contract, writes, targetPath)
     }
     for (const [targetPath, snapshot] of changes.directories) {
       assertNoSymlinkWithin(requiredTargetRoot(changes, targetPath), targetPath)
       writeDirectoryAtomic(targetPath, snapshot)
       maybeFault(options, ++writes)
+      contract = updateContractProgress(backupRoot, contract, writes, targetPath)
     }
     finalizeBackup(manifest, backupRoot)
+    contract = transitionMigrationContract(backupRoot, contract, 'committed', {
+      writesCompleted: writes,
+      targets: manifest.targets.map((target) => ({
+        path: target.targetPath,
+        beforeFingerprint: target.beforeFingerprint,
+        afterFingerprint: target.afterFingerprint
+      }))
+    })
   } catch (error) {
-    restoreManifest(manifest, backupRoot, false)
+    const rollbackPending = contract.state === 'applying' || contract.state === 'backup_verified' || contract.state === 'prepared'
+      ? transitionMigrationContract(backupRoot, contract, 'rollback_pending', { writesCompleted: writes })
+      : contract
+    try {
+      restoreManifest(manifest, backupRoot, false)
+      if (rollbackPending.state === 'rollback_pending') transitionMigrationContract(backupRoot, rollbackPending, 'rolled_back')
+    } catch {
+      // Keep rollback_pending durable when recovery itself cannot be completed.
+    }
     throw error
+  }
+}
+
+function updateContractProgress(
+  root: string,
+  contract: MigrationContractJournal,
+  writes: number,
+  targetPath: string
+): MigrationContractJournal {
+  // Progress updates are durable without adding a new state transition.
+  return transitionMigrationContract(root, contract, 'applying', {
+    writesCompleted: writes,
+    targets: contract.targets.map((target) => target.path === targetPath
+      ? { ...target, afterFingerprint: targetFingerprint(target.path) }
+      : target)
+  })
+}
+
+function reconcileBeforeApply(root: string): void {
+  const pending = reconcileMigrationContracts(root)
+  for (const item of pending) {
+    const contract = readMigrationContract(root, item.migrationId)
+    if (!item.recoverable) {
+      const recoverableAppliedTargets = contract.targets.every((target) => {
+        const current = targetFingerprint(target.path)
+        return current === target.beforeFingerprint || current === target.afterFingerprint
+      })
+      if (!recoverableAppliedTargets) throw new Error('migration_recovery_required')
+      const manifest = readBackupManifest(root, contract.backupId)
+      const rollbackPending = contract.state === 'rollback_pending'
+        ? contract
+        : transitionMigrationContract(root, contract, 'rollback_pending')
+      restoreManifest(manifest, root, false)
+      transitionMigrationContract(root, rollbackPending, 'rolled_back')
+      continue
+    }
+    const rollbackPending = contract.state === 'prepared' || contract.state === 'backup_verified' || contract.state === 'applying'
+      ? transitionMigrationContract(root, contract, 'rollback_pending')
+      : contract
+    if (rollbackPending.state === 'rollback_pending') transitionMigrationContract(root, rollbackPending, 'rolled_back')
+  }
+}
+
+function readExistingContract(root: string, backupId: string): MigrationContractJournal | undefined {
+  try {
+    return readMigrationContract(root, backupId)
+  } catch {
+    return undefined
   }
 }
 

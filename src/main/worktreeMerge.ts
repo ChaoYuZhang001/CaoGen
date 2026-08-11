@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { withSafeLocalGitConfig } from './git/safe-git'
+import { writeDurableFileSync } from './durable-file'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_GIT_BUFFER = 100 * 1024 * 1024
@@ -94,6 +95,7 @@ export interface WorktreeConflictFilesResult {
 
 // 合并回执:applySquashPatch 成功后落盘,供事后验收"到底合了什么"。
 export interface WorktreeMergeReceipt {
+  schemaVersion?: 1
   sessionId: string
   branch: string
   baseSha: string
@@ -104,11 +106,20 @@ export interface WorktreeMergeReceipt {
   patchSha256: string
 }
 
+export class WorktreeMergeReceiptFormatError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'WorktreeMergeReceiptFormatError'
+  }
+}
+
 // 冲突文件上限与单文件内容上限(需求约定:20 个文件、200KB/文件)。
 const MAX_CONFLICT_FILES = 20
 const MAX_CONFLICT_FILE_BYTES = 200 * 1024
 // 回执文件只保留最近 N 条,避免无限增长。
 const MAX_MERGE_RECEIPTS = 200
+const MERGE_RECEIPT_SCHEMA_VERSION = 1 as const
+const MERGE_RECEIPT_FORMAT = 'caogen.worktree-merge-receipts.v1' as const
 
 export type PullRequestTool = 'gh' | 'glab'
 
@@ -193,7 +204,7 @@ export function createSquashPatch(
     const patchDir = normalizeOutputDirectory(outDir)
     const patchPath = path.join(patchDir, patchFileName(context))
     const patchText = ensureTrailingNewline(patch.patchText)
-    writeFileSync(patchPath, patchText, 'utf8')
+    writeDurableFileSync(patchPath, patchText, { mode: 0o600 })
 
     return {
       ok: true,
@@ -362,21 +373,35 @@ export function patchSha256(patchText: string): string {
 /** 追加一条合并回执到指定 JSON 文件(数组格式,只保留最近 MAX_MERGE_RECEIPTS 条)。 */
 export function appendMergeReceipt(filePath: string, receipt: WorktreeMergeReceipt): void {
   const receipts = listMergeReceipts(filePath)
-  receipts.push(receipt)
+  receipts.push({ ...receipt, schemaVersion: MERGE_RECEIPT_SCHEMA_VERSION })
   const trimmed = receipts.slice(-MAX_MERGE_RECEIPTS)
-  mkdirSync(path.dirname(filePath), { recursive: true })
-  writeFileSync(filePath, JSON.stringify(trimmed, null, 2))
+  writeDurableFileSync(filePath, `${JSON.stringify({ schemaVersion: MERGE_RECEIPT_SCHEMA_VERSION, format: MERGE_RECEIPT_FORMAT, receipts: trimmed }, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** 读取合并回执列表;文件缺失/损坏时返回空数组(回执是附加验收信息,不阻断主流程)。 */
 export function listMergeReceipts(filePath: string): WorktreeMergeReceipt[] {
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
-    if (!Array.isArray(raw)) return []
-    return raw.filter(isMergeReceipt)
-  } catch {
+    const decoded = decodeMergeReceiptDocument(raw)
+    const receipts = decoded.receipts.filter(isMergeReceipt).map((receipt) => ({ ...receipt, schemaVersion: MERGE_RECEIPT_SCHEMA_VERSION }))
+    if (decoded.legacy && receipts.length > 0) {
+      writeDurableFileSync(filePath, `${JSON.stringify({ schemaVersion: MERGE_RECEIPT_SCHEMA_VERSION, format: MERGE_RECEIPT_FORMAT, receipts }, null, 2)}\n`, { mode: 0o600 })
+    }
+    return receipts
+  } catch (error) {
+    if (error instanceof WorktreeMergeReceiptFormatError) throw error
     return []
   }
+}
+
+function decodeMergeReceiptDocument(value: unknown): { receipts: unknown[]; legacy: boolean } {
+  if (Array.isArray(value)) return { receipts: value, legacy: true }
+  if (!value || typeof value !== 'object') throw new WorktreeMergeReceiptFormatError('worktree merge receipt document is invalid')
+  const document = value as { schemaVersion?: unknown; format?: unknown; receipts?: unknown }
+  if (document.schemaVersion !== MERGE_RECEIPT_SCHEMA_VERSION || document.format !== MERGE_RECEIPT_FORMAT || !Array.isArray(document.receipts)) {
+    throw new WorktreeMergeReceiptFormatError(`worktree merge receipt schema version is unsupported: ${String(document.schemaVersion)}`)
+  }
+  return { receipts: document.receipts, legacy: false }
 }
 
 function isMergeReceipt(value: unknown): value is WorktreeMergeReceipt {
@@ -390,7 +415,8 @@ function isMergeReceipt(value: unknown): value is WorktreeMergeReceipt {
     typeof receipt.insertions === 'number' &&
     typeof receipt.deletions === 'number' &&
     typeof receipt.mergedAt === 'number' &&
-    typeof receipt.patchSha256 === 'string'
+    typeof receipt.patchSha256 === 'string' &&
+    (receipt.schemaVersion === undefined || receipt.schemaVersion === MERGE_RECEIPT_SCHEMA_VERSION)
   )
 }
 
