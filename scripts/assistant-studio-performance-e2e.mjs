@@ -19,7 +19,8 @@ import {
   DEFAULT_PERFORMANCE_SAMPLE_INTEGRITY_POLICY,
   classifyPerformanceSampleIntegrity,
   performanceMetricDeltas,
-  recordPerformancePhaseAttempt
+  recordPerformancePhaseAttempt,
+  waitForFrameHealth
 } from './lib/performance-sample-integrity.mjs'
 import {
   measureStudioDataReady,
@@ -41,6 +42,10 @@ const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const softwareWebglArgs = ciSoftwareWebgl
+  ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+  : []
 const thresholdMs = 300
 const maxFreshRendererAttempts = 2
 // Sixty samples keep one short scheduler stall from owning the entire nearest-rank P95 tail.
@@ -152,7 +157,8 @@ function createReport(sourceBuildBinding) {
       arch: process.arch,
       osRelease: release(),
       nodeVersion: process.version,
-      electronVersion: electronPackage.version
+      electronVersion: electronPackage.version,
+      softwareWebgl: ciSoftwareWebgl
     },
     sourceBuildBinding: { status: sourceBuildBinding.status, initial: sourceBuildBinding },
     phases: [],
@@ -279,15 +285,7 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     phase.status = 'pass'
     return phase
   } catch (error) {
-    phase.failureCode = performanceFailureCode(error)
-    phase.status = phase.failureCode === 'studio-data-readiness-timeout'
-      ? 'studio-data-readiness-timeout'
-      : 'fail'
-    phase.error = error instanceof Error ? error.stack || error.message : String(error)
-    if (error && typeof error === 'object' && 'diagnostics' in error) {
-      phase.studioDataReadyDiagnostics = error.diagnostics
-    }
-    if (page) await captureScreenshot(page, phase, `${viewport.name}-failure`).catch(() => undefined)
+    await recordPhaseFailure(phase, error, page, viewport.name)
     return phase
   } finally {
     clearTimeout(watchdog)
@@ -297,6 +295,21 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     phase.process = { ...processOutput.read(), exited }
     report.warnings.push(...summarizeProcessOutput(viewport.name, phase.process))
   }
+}
+
+async function recordPhaseFailure(phase, error, page, viewportName) {
+  phase.failureCode = performanceFailureCode(error)
+  phase.status = ['scheduler-contaminated', 'studio-data-readiness-timeout'].includes(phase.failureCode)
+    ? phase.failureCode
+    : 'fail'
+  phase.error = error instanceof Error ? error.stack || error.message : String(error)
+  if (error && typeof error === 'object' && 'diagnostics' in error) {
+    phase.studioDataReadyDiagnostics = error.diagnostics
+  }
+  if (error && typeof error === 'object' && 'frameHealthDiagnostics' in error) {
+    phase.frameHealthDiagnostics = error.frameHealthDiagnostics
+  }
+  if (page) await captureScreenshot(page, phase, `${viewportName}-failure`).catch(() => undefined)
 }
 
 function createPhase(viewport) {
@@ -317,6 +330,7 @@ function createPhase(viewport) {
     studioShellInteraction: null,
     studioDataReady: null,
     studioDataReadyDiagnostics: null,
+    frameHealthDiagnostics: null,
     browserRuntime: null,
     warnings: [],
     failureCode: null,
@@ -332,6 +346,7 @@ function launchElectron(remotePort, userDataDir) {
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
+    ...softwareWebglArgs,
     mainEntry
   ], {
     cwd: repoRoot,
@@ -663,6 +678,7 @@ function summarizeMeasurementAttempt(phase) {
     coldSampleIntegrity: phase.coldSampleIntegrity,
     studioDataReady: phase.studioDataReady,
     studioDataReadyDiagnostics: phase.studioDataReadyDiagnostics,
+    frameHealthDiagnostics: phase.frameHealthDiagnostics,
     processExited: phase.process?.exited ?? null
   }
 }
@@ -679,6 +695,10 @@ function formatAttemptRetry(phase, disposition) {
   if (diagnostics) {
     details.push(`aria-busy=${diagnostics.dom.ariaBusy ?? 'missing'}`)
     details.push(`selectedProjectId=${diagnostics.dom.selectedProjectId || 'none'}`)
+  }
+  if (phase.frameHealthDiagnostics) {
+    details.push(`${phase.frameHealthDiagnostics.maxObservedGapMs}ms foreground max frame gap`)
+    details.push(`${phase.frameHealthDiagnostics.resetCount} foreground health resets`)
   }
   const suffix = details.length > 0 ? ` (${details.join(', ')})` : ''
   return `${phase.name} attempt ${phase.attempt} retained as ${disposition.reason}${suffix}; retrying once in a fresh renderer`
@@ -700,43 +720,6 @@ function performanceFailureCode(error) {
 
 function firstLine(value) {
   return String(value).split(/\r?\n/, 1)[0]
-}
-
-async function waitForFrameHealth(page) {
-  const result = await page.evaluate(() => new Promise((resolve, reject) => {
-    const startedAt = performance.now()
-    const deadline = startedAt + 5_000
-    let consecutive = 0
-    let lastFrameAt = startedAt
-    let maxObservedGapMs = 0
-    let resetCount = 0
-    const sample = () => {
-      const now = performance.now()
-      const gap = now - lastFrameAt
-      lastFrameAt = now
-      maxObservedGapMs = Math.max(maxObservedGapMs, gap)
-      if (gap <= 50) consecutive += 1
-      else {
-        consecutive = 0
-        resetCount += 1
-      }
-      if (consecutive >= 4) {
-        resolve({ waitedMs: now - startedAt, maxObservedGapMs, resetCount })
-        return
-      }
-      if (now >= deadline) {
-        reject(new Error(`foreground frame health unavailable: max gap ${maxObservedGapMs.toFixed(1)}ms`))
-        return
-      }
-      requestAnimationFrame(sample)
-    }
-    requestAnimationFrame(sample)
-  }))
-  return {
-    waitedMs: roundMs(result.waitedMs),
-    maxObservedGapMs: roundMs(result.maxObservedGapMs),
-    resetCount: result.resetCount
-  }
 }
 
 async function verifyStudioShellInteraction(page) {

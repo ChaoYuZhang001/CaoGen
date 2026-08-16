@@ -84,6 +84,56 @@ export function performanceMetricDeltas(before, after) {
   }
 }
 
+export function frameHealthDiagnosticsOrThrow(result) {
+  const diagnostics = {
+    waitedMs: roundedMs(finiteNumber(result?.waitedMs)),
+    maxObservedGapMs: roundedMs(finiteNumber(result?.maxObservedGapMs)),
+    resetCount: Math.max(0, Math.trunc(finiteNumber(result?.resetCount) ?? 0))
+  }
+  if (result?.status !== 'scheduler-contaminated') return diagnostics
+
+  const maxGap = diagnostics.maxObservedGapMs === null
+    ? 'unavailable'
+    : `${diagnostics.maxObservedGapMs.toFixed(1)}ms`
+  const error = new Error(`foreground frame health unavailable: max gap ${maxGap}`)
+  error.code = 'scheduler-contaminated'
+  error.frameHealthDiagnostics = diagnostics
+  throw error
+}
+
+export async function waitForFrameHealth(page) {
+  const result = await page.evaluate(() => new Promise((resolve) => {
+    const startedAt = performance.now()
+    const deadline = startedAt + 5_000
+    let consecutive = 0
+    let lastFrameAt = startedAt
+    let maxObservedGapMs = 0
+    let resetCount = 0
+    const sample = () => {
+      const now = performance.now()
+      const gap = now - lastFrameAt
+      lastFrameAt = now
+      maxObservedGapMs = Math.max(maxObservedGapMs, gap)
+      if (gap <= 50) consecutive += 1
+      else {
+        consecutive = 0
+        resetCount += 1
+      }
+      if (consecutive >= 4) {
+        resolve({ status: 'healthy', waitedMs: now - startedAt, maxObservedGapMs, resetCount })
+        return
+      }
+      if (now >= deadline) {
+        resolve({ status: 'scheduler-contaminated', waitedMs: now - startedAt, maxObservedGapMs, resetCount })
+        return
+      }
+      requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }))
+  return frameHealthDiagnosticsOrThrow(result)
+}
+
 function metricDeltaMs(before, after, name) {
   const previous = finiteNumber(before?.[name])
   const current = finiteNumber(after?.[name])
@@ -92,7 +142,11 @@ function metricDeltaMs(before, after, name) {
 }
 
 function retryableAttemptReason(phase, coldDurationMs, thresholdMs) {
-  if (phase?.status === 'scheduler-contaminated' || phase?.coldSampleIntegrity?.status === 'scheduler-contaminated') {
+  if (
+    phase?.status === 'scheduler-contaminated' ||
+    phase?.failureCode === 'scheduler-contaminated' ||
+    phase?.coldSampleIntegrity?.status === 'scheduler-contaminated'
+  ) {
     return 'scheduler-contaminated'
   }
   if (phase?.status === 'studio-data-readiness-timeout' || phase?.failureCode === 'studio-data-readiness-timeout') {

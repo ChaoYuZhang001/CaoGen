@@ -35,19 +35,6 @@
     "preloadListenerTotal": 6
   },
   "files": {
-    "scripts/assistant-studio-performance-e2e.mjs": {
-      "profile": "automation",
-      "lines": 1202,
-      "contentHash": "7498c46c2274857b657c0f7855ac1c3651d3411a518d4888a2eb66079c25ff92",
-      "oversizedFunctionCount": 0,
-      "maxFunctionLines": 120,
-      "complexFunctionCount": 0,
-      "maxComplexity": 15,
-      "forbiddenSuppressionCount": 0,
-      "unreasonedSuppressionCount": 0,
-      "malformedDebtMarkerCount": 0,
-      "functionDebt": {}
-    },
     "scripts/audit-timeline-required.mjs": {
       "profile": "automation",
       "lines": 428,

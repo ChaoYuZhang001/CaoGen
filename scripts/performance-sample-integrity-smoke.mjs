@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   classifyPerformanceAttemptDisposition,
   classifyPerformanceSampleIntegrity,
+  frameHealthDiagnosticsOrThrow,
   performanceMetricDeltas,
   recordPerformancePhaseAttempt
 } from './lib/performance-sample-integrity.mjs'
@@ -16,6 +17,20 @@ assert.deepEqual(
   { taskDurationMs: 25.14, scriptDurationMs: 11.03, layoutDurationMs: 8.23, styleDurationMs: 2.75 }
 )
 assert.equal(performanceMetricDeltas({ TaskDuration: null }, { TaskDuration: 1 }).taskDurationMs, null)
+
+assert.deepEqual(
+  frameHealthDiagnosticsOrThrow({ status: 'healthy', waitedMs: 48.126, maxObservedGapMs: 17.884, resetCount: 1 }),
+  { waitedMs: 48.13, maxObservedGapMs: 17.88, resetCount: 1 }
+)
+assert.throws(
+  () => frameHealthDiagnosticsOrThrow({ status: 'scheduler-contaminated', waitedMs: 5001.2, maxObservedGapMs: 68.14, resetCount: 74 }),
+  (error) => {
+    assert.equal(error.code, 'scheduler-contaminated')
+    assert.equal(error.message, 'foreground frame health unavailable: max gap 68.1ms')
+    assert.deepEqual(error.frameHealthDiagnostics, { waitedMs: 5001.2, maxObservedGapMs: 68.14, resetCount: 74 })
+    return true
+  }
+)
 
 const contaminated = classifyPerformanceSampleIntegrity({
   temperature: 'cold',
@@ -81,6 +96,14 @@ assert.equal(
 assert.equal(
   classifyPerformanceAttemptDisposition({ status: 'scheduler-contaminated', attempt: 2, samples: [] }, { maxAttempts: 2 }).action,
   'fail'
+)
+assert.deepEqual(
+  classifyPerformanceAttemptDisposition({ status: 'fail', failureCode: 'scheduler-contaminated', attempt: 1, samples: [] }, { maxAttempts: 2 }),
+  { action: 'retry', reason: 'scheduler-contaminated', retryable: true, attemptsRemaining: 1 }
+)
+assert.deepEqual(
+  classifyPerformanceAttemptDisposition({ status: 'fail', failureCode: 'scheduler-contaminated', attempt: 2, samples: [] }, { maxAttempts: 2 }),
+  { action: 'fail', reason: 'repeated-scheduler-contaminated', retryable: true, attemptsRemaining: 0 }
 )
 assert.deepEqual(
   classifyPerformanceAttemptDisposition({ status: 'fail', attempt: 1, samples: [] }, { maxAttempts: 2 }),

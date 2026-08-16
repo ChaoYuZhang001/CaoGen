@@ -21,6 +21,7 @@ const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'),
 const packageLock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'))
 const pageOperationSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'page-operation-smoke.mjs'), 'utf8')
 const assistantStudioUiSource = readFileSync(path.join(repoRoot, 'scripts', 'assistant-studio-ui-e2e.mjs'), 'utf8')
+const assistantStudioPerformanceSource = readFileSync(path.join(repoRoot, 'scripts', 'assistant-studio-performance-e2e.mjs'), 'utf8')
 const workflow = yaml.load(source)
 const triggers = workflow.on
 
@@ -119,6 +120,7 @@ for (const value of [
 ]) {
   assert(pageOperationSmokeSource.includes(value), `page operations must consume the software WebGL contract: ${value}`)
   assert(assistantStudioUiSource.includes(value), `Assistant/Studio UI must consume the software WebGL contract: ${value}`)
+  assert(assistantStudioPerformanceSource.includes(value), `Assistant/Studio performance must consume the software WebGL contract: ${value}`)
 }
 const deepFailureDiagnosticsStep = workflow.jobs['macos-x64'].steps.find(
   (step) => step.name === 'Upload x64 Deep failure diagnostics'
