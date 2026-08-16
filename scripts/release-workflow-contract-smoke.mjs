@@ -101,12 +101,13 @@ assert.deepEqual(linuxRollup?.cpu, ['x64'])
 assert.equal(linuxRollup?.optional, true)
 const p2Step = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run release-scope P2 gate')
 assert.deepEqual(p2Step?.env, {
+  CAOGEN_P2_RELEASE_P2_DEFAULT_TIMEOUT_MS: '600000',
   CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000',
   CAOGEN_P2_RELEASE_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '480000',
   CAOGEN_JETBRAINS_RECORDER_E2E_TIMEOUT_MS: '360000',
   CAOGEN_JETBRAINS_RECORDER_E2E_MODE: 'ide-script',
   JAVA_TOOL_OPTIONS: '-Didea.is.internal=true -Didea.trust.all.projects=true -Didea.initially.ask.config=never -Djb.consents.confirmation.enabled=false -Djb.privacy.policy.text=<!--999.999-->'
-}, 'the x64 release lane must tolerate cold tool downloads and use the deterministic real-IDE starter')
+}, 'the x64 release lane must tolerate a cold aggregate P2 run and use the deterministic real-IDE starter')
 const deepStep = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run exact-commit Deep gate')
 assert.deepEqual(
   deepStep?.env,
