@@ -707,19 +707,19 @@
     },
     "scripts/packaged-app-smoke.mjs": {
       "profile": "automation",
-      "lines": 670,
-      "contentHash": "85cd8799960a44db06110bb14013c7930b8485586c7306ebc9db7b8aa51d6735",
+      "lines": 674,
+      "contentHash": "8a5c1fa0e5e3ec77a359921112a7e102426e088f7159abee345c09dd518aebd4",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 61,
       "complexFunctionCount": 1,
-      "maxComplexity": 23,
+      "maxComplexity": 22,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "assertReleaseAuditBinding#1": {
-          "lines": 26,
-          "complexity": 23
+          "lines": 29,
+          "complexity": 22
         }
       }
     },

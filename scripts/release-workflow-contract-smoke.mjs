@@ -8,6 +8,7 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import {
   artifactReportChecks,
+  artifactSetEntryForPath,
   candidateIdentityChecks,
   macUpdateMetadataChecks,
   macosX64UpdateMetadataChecks,
@@ -238,9 +239,53 @@ try {
     false,
     'downloaded asset tampering must fail the evidence contract'
   )
+  verifyPackagedArtifactBindingFixture(tempRoot)
   runMatrixAssemblyFixture(tempRoot)
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function verifyPackagedArtifactBindingFixture(parentRoot) {
+  const fixtureRoot = path.join(parentRoot, 'packaged-artifact-binding')
+  const distDir = path.join(fixtureRoot, 'dist')
+  const artifactName = 'CaoGen-0.1.8.dmg'
+  const artifactPath = path.join(distDir, artifactName)
+  const entry = { size: 123, sha256: 'a'.repeat(64) }
+  mkdirSync(distDir, { recursive: true })
+  writeFileSync(artifactPath, 'fixture\n', 'utf8')
+
+  for (const reportedPath of [artifactName, `dist/${artifactName}`]) {
+    assert.equal(
+      artifactSetEntryForPath({ [reportedPath]: entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+      entry,
+      `packaged artifact binding must resolve ${reportedPath}`
+    )
+  }
+  assert.equal(
+    artifactSetEntryForPath({ [`../dist/${artifactName}`]: entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+    undefined,
+    'packaged artifact binding must reject parent traversal'
+  )
+  assert.equal(
+    artifactSetEntryForPath({ [`nested/../dist/${artifactName}`]: entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+    undefined,
+    'packaged artifact binding must reject normalized-away parent traversal'
+  )
+  assert.equal(
+    artifactSetEntryForPath({ [artifactPath]: entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+    undefined,
+    'packaged artifact binding must reject POSIX absolute report paths'
+  )
+  assert.equal(
+    artifactSetEntryForPath({ 'C:\\dist\\CaoGen-0.1.8.dmg': entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+    undefined,
+    'packaged artifact binding must reject Windows absolute report paths'
+  )
+  assert.equal(
+    artifactSetEntryForPath({ 'CaoGen-0.1.8-mac.zip': entry }, { repoRoot: fixtureRoot, distDir, artifactPath }),
+    undefined,
+    'packaged artifact binding must reject a different asset'
+  )
 }
 
 function runMatrixAssemblyFixture(parentRoot) {

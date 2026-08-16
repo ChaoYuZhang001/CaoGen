@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { artifactSetEntryForPath } from './lib/release-matrix-evidence.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -529,8 +530,11 @@ function assertReleaseAuditBinding(audit, artifactPath, allowDirty = false) {
   if (!allowDirty && (audit.data.git?.worktreeClean !== true || !git.worktreeClean)) failures.push('cleanGit')
   if (allowDirty && audit.data.allowDirtyPreview !== true) failures.push('allowDirtyPreview')
   if (!/^[0-9a-f]{64}$/i.test(audit.data.artifactSetSha256 || '')) failures.push('artifactSetSha256')
-  const auditedArtifact = Object.entries(audit.data.artifactSet?.files || {})
-    .find(([relativePath]) => path.resolve(repoRoot, relativePath) === path.resolve(artifactPath))?.[1]
+  const auditedArtifact = artifactSetEntryForPath(audit.data.artifactSet?.files, {
+    repoRoot,
+    distDir: path.join(repoRoot, 'dist'),
+    artifactPath
+  })
   if (!auditedArtifact) {
     failures.push('sourceArtifactPath')
   } else {

@@ -59,6 +59,27 @@ export function artifactReportChecks(report, expectedFiles, distDir) {
   return checks
 }
 
+export function artifactSetEntryForPath(reportedFiles, { repoRoot, distDir, artifactPath }) {
+  if (!reportedFiles || typeof reportedFiles !== 'object' || Array.isArray(reportedFiles)) return undefined
+  const targetPath = path.resolve(artifactPath)
+  for (const [reportedPath, entry] of Object.entries(reportedFiles)) {
+    if (
+      typeof reportedPath !== 'string' ||
+      !reportedPath ||
+      path.posix.isAbsolute(reportedPath) ||
+      path.win32.isAbsolute(reportedPath) ||
+      reportedPath.split(/[\\/]/).includes('..')
+    ) continue
+    const normalized = path.normalize(reportedPath)
+    const baseDir = path.dirname(normalized) === '.' ? distDir : repoRoot
+    const resolved = path.resolve(baseDir, normalized)
+    const relative = path.relative(baseDir, resolved)
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue
+    if (resolved === targetPath) return entry
+  }
+  return undefined
+}
+
 export function renderMacUpdateMetadata({ version, distDir, releaseDate }) {
   const assetNames = [
     `CaoGen-${version}-mac.zip`,
