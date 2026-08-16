@@ -27,6 +27,11 @@ try {
   const output = JSON.parse(prepared.stdout)
   assert.equal(output.status, 'prepared')
   assert.equal(output.evidenceDir, evidenceDir)
+  assert.deepEqual(output.releaseBinding, {
+    releaseTag: 'v0.1.8',
+    candidateCommit: '9a00bb92e1bed90a6dbf644790d4c253375cef4a',
+    assetSha256: 'e0362fc3fda196259a5c6b782eedcf62cbf45eaaea36336bb3eba4afc617553d'
+  })
   assert.deepEqual(readdirSync(evidenceDir).sort(), ['HOST-CHECKLIST.txt', 'm1-first-user.json'])
 
   if (process.platform !== 'win32') {
@@ -43,7 +48,7 @@ try {
   assert.equal(record.evidenceGovernance.redactionReviewCompleted, false)
   assert.equal(record.evidenceGovernance.deletionStatus, 'scheduled')
   assert.equal(record.evidenceGovernance.deletedAt, null)
-  assert.equal(record.installerPath, path.join(evidenceDir, 'CaoGen-0.1.7.dmg'))
+  assert.equal(record.installerPath, path.join(evidenceDir, 'CaoGen-0.1.8.dmg'))
   assert.equal(record.evidenceFiles.length, 4)
   assert.equal(new Set(record.evidenceFiles.map((item) => item.path)).size, 4)
   assert.ok(record.evidenceFiles.every((item) => item.path.startsWith(`${evidenceDir}${path.sep}`)))

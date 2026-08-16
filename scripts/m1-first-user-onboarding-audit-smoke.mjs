@@ -9,9 +9,9 @@ import { spawnSync } from 'node:child_process'
 const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-m1-first-user-'))
 const scriptPath = path.join(repoRoot, 'scripts', 'm1-first-user-onboarding-audit.mjs')
-const releaseTag = 'v0.1.7'
+const releaseTag = 'v0.1.8'
 const candidateCommit = 'b'.repeat(40)
-const installerPath = writeFixture('CaoGen-0.1.7.dmg', 'signed-intel-dmg-fixture')
+const installerPath = writeFixture('CaoGen-0.1.8.dmg', 'signed-intel-dmg-fixture')
 const installerSha256 = sha256('signed-intel-dmg-fixture')
 const baseArgs = [
   '--expected-release-tag', releaseTag,
@@ -166,9 +166,9 @@ function makeRecord() {
     websiteUrl: 'https://caogen.dev/',
     platform: 'macos-x64',
     architecture: 'x86_64',
-    installedVersion: '0.1.7',
+    installedVersion: '0.1.8',
     installedCandidateCommit: candidateCommit,
-    installerAssetName: 'CaoGen-0.1.7.dmg',
+    installerAssetName: 'CaoGen-0.1.8.dmg',
     installerPath,
     providerProtocol: 'openai-compatible',
     startedAt: new Date(startedAt).toISOString(),

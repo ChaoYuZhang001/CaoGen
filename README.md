@@ -8,11 +8,10 @@
 
 ## 用你自己的 Key，在本地让 AI 完成真实工作；服务不可用时按策略切换，改动全程可审查。
 
-<img src="https://img.shields.io/badge/release-v0.1.7-blue" alt="latest public release v0.1.7">
-<img src="https://img.shields.io/badge/source-v0.1.8--dev-orange" alt="current source line v0.1.8 development">
+<img src="https://img.shields.io/badge/release-v0.1.8-blue" alt="latest public release v0.1.8">
+<img src="https://img.shields.io/badge/source-main-informational" alt="current source branch main">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
 <img src="https://img.shields.io/badge/macOS-Intel%20x64%20signed-success" alt="macOS Intel x64 signed and notarized">
-<img src="https://img.shields.io/badge/Windows-x64%20unsigned%20preview-yellow" alt="Windows x64 unsigned preview">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
@@ -42,10 +41,10 @@ CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面
 ## 当前进展
 
 <!-- caogen-public-status:start -->
-截至 2026-08-14，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
+截至 2026-08-16，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
 <!-- caogen-public-status:end -->
 
-这不是版本完成率或发布承诺。已发布的 `v0.1.7` 不是 1.0 stable；完整证据和边界统一放在 [STATUS.md](./STATUS.md) 与 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)。公共数字由 `npm run update:public-status` 从 PRD 状态和 STATUS 日期生成，不应手工修改。
+这不是版本完成率或发布承诺。已发布的 `v0.1.8` 不是 1.0 stable；完整证据和边界统一放在 [STATUS.md](./STATUS.md) 与 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)。公共数字由 `npm run update:public-status` 从 PRD 状态和 STATUS 日期生成，不应手工修改。
 
 > **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
 
@@ -55,8 +54,8 @@ CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面
 
 | 平台 | 当前入口 | 信任状态 |
 |---|---|---|
-| macOS Intel x64 | [v0.1.7 DMG / ZIP](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | Developer ID 签名、Apple 公证 |
-| Windows x64 | [v0.1.7 unsigned preview](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | 未签名，Windows 会显示未知发布者 |
+| macOS Intel x64 | [v0.1.8 DMG / ZIP](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.8) | Developer ID 签名、Apple 公证并已 staple |
+| Windows x64 | 暂无现行 v0.1.8 安装包 | 历史 unsigned preview 不是当前正式发布 |
 | macOS Apple Silicon / Linux | 暂无现行安装包 | 从源码构建 |
 
 1. **下载并核对来源**：只使用本仓库的 GitHub Releases，并按 Release Notes 核对 SHA-256。

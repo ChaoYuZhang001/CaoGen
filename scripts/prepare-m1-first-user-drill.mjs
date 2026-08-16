@@ -14,9 +14,9 @@ import path from 'node:path'
 const repoRoot = realpathSync(process.cwd())
 const evidenceDirArg = argValue('--evidence-dir')
 const releaseBinding = {
-  releaseTag: 'v0.1.7',
-  candidateCommit: 'bbec526554aea9785291edf4d8164084145347ae',
-  assetSha256: 'a6b65ddd7d11bc8aab36cd800a7ddd9055b562d5aa85b39ef0296fb9c4f78a7b'
+  releaseTag: 'v0.1.8',
+  candidateCommit: '9a00bb92e1bed90a6dbf644790d4c253375cef4a',
+  assetSha256: 'e0362fc3fda196259a5c6b782eedcf62cbf45eaaea36336bb3eba4afc617553d'
 }
 
 if (process.argv.includes('--help')) {
@@ -140,6 +140,7 @@ function buildRecord(evidenceDir) {
 }
 
 function buildChecklist(evidenceDir, recordPath) {
+  const expectedVersion = releaseBinding.releaseTag.replace(/^v/, '')
   return `CaoGen M1 first-user drill - private host checklist
 
 KEEP PRIVATE
@@ -161,7 +162,7 @@ EXPECTED RELEASE
 - DMG SHA-256: ${releaseBinding.assetSha256}
 
 EXPECTED PRIVATE FILES
-- ${path.join(evidenceDir, 'CaoGen-0.1.7.dmg')}
+- ${path.join(evidenceDir, `CaoGen-${expectedVersion}.dmg`)}
 - ${path.join(evidenceDir, 'screen-recording.mov')}
 - ${path.join(evidenceDir, 'system-architecture.txt')}
 - ${path.join(evidenceDir, 'installed-app-identity.json')}
