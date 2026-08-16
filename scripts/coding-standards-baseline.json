@@ -707,8 +707,8 @@
     },
     "scripts/packaged-app-smoke.mjs": {
       "profile": "automation",
-      "lines": 702,
-      "contentHash": "ed8a4d7d537e947fe6b30d86ea2e75aeda8310d89026aca6f583b5d7f2151986",
+      "lines": 712,
+      "contentHash": "c38c651f3d7e6c565b5aeab74fcc4cfb70360c99276acbce6835e192e72f71c1",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 61,
       "complexFunctionCount": 1,
