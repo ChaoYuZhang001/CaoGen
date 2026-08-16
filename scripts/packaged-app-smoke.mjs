@@ -424,7 +424,7 @@ async function cleanupInstalledCandidate() {
 
   await waitForPathAbsent(installRoot, 45_000)
   installation.uninstall.installRootRemoved = true
-  installation.uninstall.residualInstallations = inspectExistingWindowsInstallations()
+  installation.uninstall.residualInstallations = await waitForWindowsInstallationsAbsent(30_000)
   if (installation.uninstall.residualInstallations.length > 0) {
     throw new Error('NSIS uninstaller left a CaoGen uninstall registry entry')
   }
@@ -438,6 +438,16 @@ async function waitForPathAbsent(targetPath, timeoutMs) {
     await delay(250)
   }
   throw new Error(`NSIS uninstaller left the isolated installation directory after ${timeoutMs}ms`)
+}
+
+async function waitForWindowsInstallationsAbsent(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  let installations = inspectExistingWindowsInstallations()
+  while (installations.length > 0 && Date.now() < deadline) {
+    await delay(250)
+    installations = inspectExistingWindowsInstallations()
+  }
+  return installations
 }
 
 function detachMountedDmg(mountPoint) {
