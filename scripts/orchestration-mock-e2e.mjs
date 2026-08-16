@@ -12,7 +12,7 @@ import {
   clickProjectedWorkstationTarget
 } from './lib/office-canvas-click.mjs'
 import {
-  focusElectronPage,
+  captureStableOfficeScreenshot, focusElectronPage,
   readOfficeViewDiagnostics,
   startOfficeViewDiagnostics,
   waitForOfficeRenderLoop,
@@ -107,6 +107,7 @@ try {
   await waitForDebugPort(remotePort, 60_000)
   browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
   const page = await waitForElectronPage(browser, 60_000)
+  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   focusSession = await page.target().createCDPSession()
   await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.on('console', (msg) => {
@@ -907,9 +908,8 @@ try {
       5_000,
       'waiting for overview before office visibility screenshot'
     )
-    await sleep(1_200)
-    const file = await screenshot(page, '02-office-subagent-packets')
-    const stats = analyzeOfficeScreenshot(file)
+    const stats = await captureStableOfficeScreenshot((attempt) => screenshot(page, `02-office-subagent-packets-${attempt + 1}`), analyzeOfficeScreenshot,
+      officeScreenshotThresholds.workAreaNonDark)
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > officeScreenshotThresholds.sceneNonDark, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)

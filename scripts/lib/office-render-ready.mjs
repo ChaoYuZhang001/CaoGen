@@ -90,6 +90,16 @@ export async function waitForOfficeScenePixels(page, timeout = 15_000) {
   throw new Error(`3D office canvas did not become visibly nonblank: ${JSON.stringify(lastStats)}`)
 }
 
+export async function captureStableOfficeScreenshot(capture, analyze, workAreaNonDark, maxAttempts = 3) {
+  let stats
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (attempt > 0) await delay(900)
+    stats = analyze(await capture(attempt))
+    if (stats.nonErrorWorkArea.nonDarkRatio > workAreaNonDark && stats.nonErrorWorkArea.redRatio < 0.02) return stats
+  }
+  return stats
+}
+
 async function readCanvasState(page) {
   return page.evaluate(() => {
     const canvas = document.querySelector('.office canvas')
