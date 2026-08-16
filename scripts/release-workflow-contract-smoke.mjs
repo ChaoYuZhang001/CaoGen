@@ -18,6 +18,7 @@ const repoRoot = process.cwd()
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'release-candidate-evidence.yml')
 const source = readFileSync(workflowPath, 'utf8')
 const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
+const packageLock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'))
 const pageOperationSmokeSource = readFileSync(path.join(repoRoot, 'scripts', 'page-operation-smoke.mjs'), 'utf8')
 const assistantStudioUiSource = readFileSync(path.join(repoRoot, 'scripts', 'assistant-studio-ui-e2e.mjs'), 'utf8')
 const workflow = yaml.load(source)
@@ -85,6 +86,17 @@ assert(
   candidateStepNames.indexOf('Install exact dependencies') < candidateStepNames.indexOf('Verify candidate identity'),
   'the dependency-backed identity preflight must run after npm ci'
 )
+const rollupVersion = packageLock.packages?.['node_modules/rollup']?.version
+const linuxRollup = packageLock.packages?.['node_modules/@rollup/rollup-linux-x64-gnu']
+assert.equal(
+  packageJson.optionalDependencies?.['@rollup/rollup-linux-x64-gnu'],
+  `^${rollupVersion}`,
+  'the Ubuntu candidate preflight must install the Rollup Linux binary from the root lock entry'
+)
+assert.equal(linuxRollup?.version, rollupVersion, 'the Linux Rollup binary must match the locked Rollup version')
+assert.deepEqual(linuxRollup?.os, ['linux'])
+assert.deepEqual(linuxRollup?.cpu, ['x64'])
+assert.equal(linuxRollup?.optional, true)
 const p2Step = workflow.jobs['macos-x64'].steps.find((step) => step.name === 'Run release-scope P2 gate')
 assert.deepEqual(p2Step?.env, {
   CAOGEN_P2_RELEASE_IDE_BUILD_AND_VSCODE_TIMEOUT_MS: '600000',

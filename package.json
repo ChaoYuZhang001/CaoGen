@@ -750,6 +750,7 @@
   "optionalDependencies": {
     "@esbuild/win32-x64": "^0.25.12",
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "@rollup/rollup-linux-x64-gnu": "^4.62.2",
     "@rollup/rollup-win32-x64-msvc": "^4.62.2"
   },
   "devDependencies": {
