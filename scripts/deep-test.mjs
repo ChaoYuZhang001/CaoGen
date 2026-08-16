@@ -187,6 +187,7 @@ const commandDefinitions = [
   { name: 'plugin install IPC electron e2e', command: 'node', args: ['scripts/plugin-install-ipc-e2e.mjs'], category: 'ui' },
   { name: 'providerPresets smoke', command: 'node', args: ['scripts/provider-presets-smoke.mjs'], category: 'smoke' },
   { name: 'providerKeys smoke', command: 'node', args: ['scripts/provider-keys-smoke.mjs'], category: 'smoke' },
+  { name: 'protected storage policy smoke', command: 'node', args: ['scripts/protected-storage-policy-smoke.mjs'], category: 'smoke' },
   { name: 'provider credential target binding smoke', command: 'node', args: ['scripts/provider-credential-target-binding-smoke.mjs'], category: 'smoke' },
   { name: 'provider runtime containment smoke', command: 'node', args: ['scripts/provider-runtime-containment-smoke.mjs'], category: 'smoke' },
   { name: 'providerConnectivity smoke', command: 'node', args: ['scripts/provider-connectivity-smoke.mjs'], category: 'smoke' },

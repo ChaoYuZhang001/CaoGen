@@ -131,8 +131,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 647,
-      "contentHash": "f8b494f95a2977e55aaacc76a20523764195e2c7f615249df792b651fde52488",
+      "lines": 648,
+      "contentHash": "664236a6d171579830c1a268d64b7f2704dff5bba092bf8de0b4250bad985cfc",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -622,7 +622,7 @@
     "scripts/orchestration-mock-e2e.mjs": {
       "profile": "automation",
       "lines": 1522,
-      "contentHash": "aca360147dc032b3be629c4c63706d7e3ec4147cef2c3e98e378cc86848bd952",
+      "contentHash": "719a76456f33b53e8e1ec0b5670dcfbc3769772eca5d2b3829836e6b28ca37ca",
       "oversizedFunctionCount": 3,
       "maxFunctionLines": 345,
       "complexFunctionCount": 4,
@@ -707,8 +707,8 @@
     },
     "scripts/packaged-app-smoke.mjs": {
       "profile": "automation",
-      "lines": 674,
-      "contentHash": "8a5c1fa0e5e3ec77a359921112a7e102426e088f7159abee345c09dd518aebd4",
+      "lines": 702,
+      "contentHash": "ed8a4d7d537e947fe6b30d86ea2e75aeda8310d89026aca6f583b5d7f2151986",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 61,
       "complexFunctionCount": 1,
@@ -726,7 +726,7 @@
     "scripts/page-operation-smoke.mjs": {
       "profile": "automation",
       "lines": 2333,
-      "contentHash": "a259ddaad8a6c1631029c966dd2d8eb972354fef0baab67193dbd44b14bc8c18",
+      "contentHash": "795279a7162497a5c2325652ae04e4f07bf38fb66e8d9f75597e1c5ce109f7cc",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 220,
       "complexFunctionCount": 0,
@@ -1820,8 +1820,8 @@
     },
     "src/main/notification/notification-connector-store.ts": {
       "profile": "product",
-      "lines": 310,
-      "contentHash": "035abf9f2669e1a6b1d8ebd0f65dd6aa000979678f9097e576d6d47d95860998",
+      "lines": 311,
+      "contentHash": "6ee7833d70de086bab04d188be338021fc48a991a761aedefb9a394ba8dd87d0",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 36,
       "complexFunctionCount": 1,
@@ -2148,8 +2148,8 @@
     },
     "src/main/provider/codexNativeConfigService.ts": {
       "profile": "product",
-      "lines": 504,
-      "contentHash": "3a5752467181f09ac1c251309d1003e58e2d2f8f900e32e73ad62a179b3738c9",
+      "lines": 505,
+      "contentHash": "1f2672f5697cd0a76a8eb711196f03bf8d591fd002a41aa80779daeef8ad7714",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 37,
       "complexFunctionCount": 1,
@@ -2269,7 +2269,7 @@
     "src/main/providers.ts": {
       "profile": "product",
       "lines": 924,
-      "contentHash": "4ce42463707f74bbc6899787bab8adb517a972466b082760635b6d6bf8b25848",
+      "contentHash": "6c4300bfada88d64c6e8710c776cf8cf2664df4969b79489b782ab6de487c111",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 56,
       "complexFunctionCount": 0,
@@ -3008,8 +3008,8 @@
     },
     "src/main/task/workflow-delivery-identity.ts": {
       "profile": "product",
-      "lines": 646,
-      "contentHash": "01172a2531cbfa7a13d02c1a2332e12d685b57386f3733eac67668f6b626709e",
+      "lines": 660,
+      "contentHash": "bbeedc91968cac90ae48fa40f8d4bbcebd37d127e4fc7872574b4b0644e13b94",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 52,
       "complexFunctionCount": 3,
@@ -3060,8 +3060,8 @@
     },
     "src/main/task/workflow-delivery-trust-store.ts": {
       "profile": "product",
-      "lines": 656,
-      "contentHash": "326361d0dce19b2acb45c625865b6d238d61caea5f1edfda5a37ebf7c1daf49b",
+      "lines": 667,
+      "contentHash": "a9c5d3bfc2694cc25963835d4783e518ee5abcdefb03473eea1e67b537599db4",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 80,
       "complexFunctionCount": 3,
@@ -3572,10 +3572,10 @@
     },
     "src/renderer/src/components/office/OfficeView.tsx": {
       "profile": "product",
-      "lines": 1323,
-      "contentHash": "dfc97f791a07a35b372a6d518cff11557c7dfdb467785e5be59c4b63bf018e5f",
+      "lines": 1322,
+      "contentHash": "d50785c5c6b2f712c18551f544d5b7742067f8f8cce93ce25b784980aae0715d",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 927,
+      "maxFunctionLines": 926,
       "complexFunctionCount": 1,
       "maxComplexity": 98,
       "forbiddenSuppressionCount": 0,
@@ -3583,7 +3583,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "OfficeView#1": {
-          "lines": 927,
+          "lines": 926,
           "complexity": 98
         }
       }
@@ -4064,8 +4064,8 @@
     },
     "src/renderer/src/components/studio/ProjectDeliveryWorkbench.tsx": {
       "profile": "product",
-      "lines": 1167,
-      "contentHash": "35f98b2cbee2c367a7954723c92fd3bb0cb0c90b49974a665a9c666b41180de1",
+      "lines": 1165,
+      "contentHash": "6cd265f604f7d5a8ca77b7ac8932228a6ed9fab6d00b3dd286a0de74ec22b570",
       "oversizedFunctionCount": 3,
       "maxFunctionLines": 252,
       "complexFunctionCount": 2,
@@ -4083,8 +4083,8 @@
           "complexity": 32
         },
         "DeliveryIdentityTrustList#1": {
-          "lines": 226,
-          "complexity": 11
+          "lines": 224,
+          "complexity": 15
         }
       }
     },
@@ -4592,7 +4592,7 @@
     "src/shared/workflow-types.ts": {
       "profile": "product",
       "lines": 1281,
-      "contentHash": "09cc1eefb6e9085056f580dad10549b3ccb68edcc3f0ae2ddfacd171411f53ed",
+      "contentHash": "6743dcc5696dd923134ce305ede0b252b44a9aae464590d1bb87bde343faca06",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 0,
       "complexFunctionCount": 0,

@@ -1,4 +1,3 @@
-import { safeStorage } from 'electron'
 import {
   ProviderCredentialBroker,
   type ProviderCredentialLease,
@@ -9,9 +8,10 @@ import {
   type ProviderCredentialResolution,
   type ProviderCredentialSessionSnapshot
 } from './providerCredentialBroker'
+import { protectedStorage } from './security/protected-storage-runtime'
 import { configureKnownCredentialRedactor } from './security/secret-redaction'
 
-const broker = new ProviderCredentialBroker(safeStorage)
+const broker = new ProviderCredentialBroker(protectedStorage)
 configureKnownCredentialRedactor((value) => broker.redactKnownCredentials(value))
 
 export function storeProviderCredential(ref: ProviderCredentialRef, token: string): ProviderCredentialRecord {

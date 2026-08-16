@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
@@ -24,6 +24,7 @@ import type {
   CodexNativeConfigSummary
 } from '../../shared/types'
 import { looksLikeProviderCredentialValue } from '../providerCredentialBroker'
+import { protectedStorage } from '../security/protected-storage-runtime'
 
 const PREVIEW_TTL_MS = 15 * 60 * 1_000
 const MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -317,18 +318,18 @@ function createBackup(pending: PendingConfigEdit, afterDigest: string): CodexNat
 }
 
 function encryptBackupSource(source: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!protectedStorage.isEncryptionAvailable()) {
     throw new Error('System credential encryption is unavailable; Codex configuration was not changed')
   }
-  return `enc:${safeStorage.encryptString(source).toString('base64')}`
+  return `enc:${protectedStorage.encryptString(source).toString('base64')}`
 }
 
 function decryptBackupSource(value: string | undefined): string {
-  if (!value?.startsWith('enc:') || !safeStorage.isEncryptionAvailable()) {
+  if (!value?.startsWith('enc:') || !protectedStorage.isEncryptionAvailable()) {
     throw new Error('Codex configuration backup cannot be decrypted')
   }
   try {
-    return safeStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
+    return protectedStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
   } catch {
     throw new Error('Codex configuration backup cannot be decrypted')
   }

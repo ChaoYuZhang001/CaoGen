@@ -2288,7 +2288,6 @@ function connectCdp(url) {
     let nextId = 1
     const pending = new Map()
     const listeners = new Map()
-
     ws.addEventListener('message', (event) => {
       const data = JSON.parse(event.data)
       if (!data.id && data.method) {
@@ -2299,6 +2298,7 @@ function connectCdp(url) {
       if (!data.id || !pending.has(data.id)) return
       const item = pending.get(data.id)
       pending.delete(data.id)
+      clearTimeout(item.timeout)
       if (data.error) item.reject(new Error(data.error.message || JSON.stringify(data.error)))
       else item.resolve(data.result ?? {})
     })
@@ -2306,16 +2306,16 @@ function connectCdp(url) {
       resolve({
         send(method, params = {}) {
           const id = nextId++
-          ws.send(JSON.stringify({ id, method, params }))
           return new Promise((resolveSend, rejectSend) => {
-            pending.set(id, { resolve: resolveSend, reject: rejectSend })
             const timeoutMs = method === 'Runtime.evaluate' ? 30_000 : 15_000
-            setTimeout(() => {
+            const timeout = setTimeout(() => {
               if (pending.has(id)) {
                 pending.delete(id)
                 rejectSend(new Error(`CDP timeout: ${method}`))
               }
             }, timeoutMs)
+            pending.set(id, { resolve: resolveSend, reject: rejectSend, timeout })
+            ws.send(JSON.stringify({ id, method, params }))
           })
         },
         on(method, callback) {

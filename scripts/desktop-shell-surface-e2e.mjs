@@ -28,7 +28,8 @@ const electronBin = process.platform === 'win32'
 const electronEnv = Object.fromEntries(
   Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path')
 )
-electronEnv.Path = [path.dirname(electronBin), process.env.Path ?? process.env.PATH]
+const electronPathKey = process.platform === 'win32' ? 'Path' : 'PATH'
+electronEnv[electronPathKey] = [path.dirname(electronBin), process.env.PATH ?? process.env.Path]
   .filter(Boolean)
   .join(path.delimiter)
 

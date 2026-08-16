@@ -107,6 +107,7 @@ function verifyRuntimeIntegration() {
   const balance = read('src/main/provider/providerBalanceService.ts')
   const anthropic = read('src/main/provider/anthropicMessagesTarget.ts')
   const openai = read('src/main/openaiEngine.ts')
+  const openaiAuth = read('src/main/provider/openAiAuthorizationRouting.ts')
   assert(types.includes("export type ProviderCredentialRoutingMode = 'manual' | 'preferred' | 'automatic'"))
   assert(providers.includes('providerKeyDecision(provider') && providers.includes('providerCredentialMetrics(provider.id'))
   assert(providers.includes('withNormalizedProviderCredentialRouting'))
@@ -114,7 +115,10 @@ function verifyRuntimeIntegration() {
   assert(usage.includes('refreshProviderCredentialMetrics'))
   assert(balance.includes('recordProviderCredentialBalance'))
   assert(anthropic.includes('selectProviderCredential(provider)'))
-  assert(openai.includes('selectProviderCredential(provider)'))
+  assert(openaiAuth.includes('selectProviderCredential(input.provider)'))
+  assert(openai.includes('resolveOpenAiAuthConfig({'))
+  assert(openai.includes('issueProviderCredentialLease(currentProvider, scope, {}, auth.keyId)'))
+  assert(openai.includes('fetchWithProviderCredentialLease({'))
   assert(!editor.includes('encryptedToken'))
 }
 

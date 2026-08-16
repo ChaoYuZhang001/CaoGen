@@ -297,9 +297,11 @@ async function runUiPhase() {
   const previewKeyLabel = await seedPreviewKey(alpha.id)
   const urlCanary = writeUnsafeUiProfileImport()
   const win = await openProviderProfileSettings()
+  await verifySessionKeyAvailable(alpha.id, previewKeyLabel, 'after opening Provider settings')
   await verifyLocalVersionHistoryUi(win)
   await verifyProviderSyncSurface(win)
   await runProviderPricingCatalogUi(win, alpha.id)
+  await verifySessionKeyAvailable(alpha.id, previewKeyLabel, 'after Provider editor save')
   await verifyUnsafeUiProfileRejected(win, urlCanary)
   writePortableUiProfileImport()
   await verifyUiProfilePreview(win, previewKeyLabel)
@@ -307,6 +309,16 @@ async function runUiPhase() {
   await verifyNoAuthCredentialDeletionUi(win, alpha.id)
   await captureUiScreenshot(win, 'provider-no-auth-confirmed.png')
   persistUiState(previous)
+}
+
+async function verifySessionKeyAvailable(providerId, keyLabel, stage) {
+  const providers = await invoke('providers:list')
+  const provider = providers.find((candidate) => candidate.id === providerId)
+  check(`session-only Provider Key remains available ${stage}`,
+    provider?.hasToken === true
+      && provider?.keyCount === 1
+      && provider?.activeKeyLabel === keyLabel,
+    JSON.stringify({ hasToken: provider?.hasToken, keyCount: provider?.keyCount, activeKeyLabel: provider?.activeKeyLabel }))
 }
 
 async function verifyLocalVersionHistoryUi(win) {
@@ -326,12 +338,15 @@ async function verifyLocalVersionHistoryUi(win) {
         && typeof window.agentDesk.applyProviderProfileBackupPreview === 'function',
       rows: panel?.querySelectorAll('.provider-profile-version-row').length || 0,
       hasCounts: text.includes('恢复') && text.includes('更新') && text.includes('删除'),
+      hasRollback: [...(panel?.querySelectorAll('button') || [])]
+        .some((button) => button.textContent.trim() === '回滚'),
       hasEndpoint: /https?:\\/\\//i.test(text),
       hasCanary: text.includes(${JSON.stringify(primaryCredentialCanary)})
     };
   })()`)
   check('local Provider version preview shows a complete sanitized change plan',
-    preview.apiReady && preview.rows > 0 && preview.hasCounts && !preview.hasEndpoint && !preview.hasCanary,
+    preview.apiReady && preview.rows > 0 && preview.hasCounts && preview.hasRollback
+      && !preview.hasEndpoint && !preview.hasCanary,
     JSON.stringify(preview))
   win.setSize(760, 700)
   await settleRenderer(win)
@@ -506,10 +521,12 @@ async function openProviderProfileSettings(requireBackup = true) {
   const initialUi = await rendererValue(win, `({
     hasImport: [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '导入'),
     hasExport: [...document.querySelectorAll('button')].some((button) => button.textContent.trim() === '导出'),
-    hasRollback: document.body.innerText.includes('回滚')
+    hasVersionPreview: [...document.querySelectorAll('.provider-profile-backup-row button')]
+      .some((button) => button.textContent.trim() === '查看变更')
   })`)
-  check('Provider settings expose import/export and rollback',
-    initialUi.hasImport && initialUi.hasExport && (!requireBackup || initialUi.hasRollback))
+  check('Provider settings expose import, export, and diff-first version history',
+    initialUi.hasImport && initialUi.hasExport && (!requireBackup || initialUi.hasVersionPreview),
+    JSON.stringify(initialUi))
   return win
 }
 

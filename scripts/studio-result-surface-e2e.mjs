@@ -126,6 +126,18 @@ try {
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page)
 
+  await check('delivery trust snapshot exposes explicit local identity availability', async () => {
+    const snapshot = await page.evaluate(() => window.agentDesk.listWorkflowDeliveryTrustedIdentities())
+    assert(['available', 'protected_storage_unavailable'].includes(snapshot.localIdentityStatus),
+      `unexpected local identity status: ${snapshot.localIdentityStatus}`)
+    assert(Boolean(snapshot.localIdentity) === (snapshot.localIdentityStatus === 'available'),
+      'local identity payload does not match its availability status')
+    if (process.platform === 'darwin') {
+      assert(snapshot.localIdentityStatus === 'protected_storage_unavailable',
+        'unsigned macOS test runtime unexpectedly enabled protected storage')
+    }
+  })
+
   await check('seed canonical Project Goal WorkItem Run Artifact Evidence and Acceptance', async () => {
     const owned = await createOwnedResultSession(page, mock.baseUrl)
     sessionId = owned.sessionId
@@ -304,53 +316,67 @@ try {
   })
 
   await check('Studio result UI is complete and responsive at three viewports', async () => {
+    const activeResult = '#studio-projection-panel-result:not([hidden])'
     sessionId = await selectSessionFromSidebar(page, sessionId)
     await clickMode(page, 'studio')
     await clickStudioSurface(page, 'result')
-    await page.waitForSelector('[data-studio-result-state="ready"]', { visible: true, timeout: 15_000 })
+    await page.waitForSelector(`${activeResult} [data-studio-result-state="ready"]`, { visible: true, timeout: 15_000 })
     for (const viewport of viewports) {
       await page.setViewport({ width: viewport.width, height: viewport.height, deviceScaleFactor: 1 })
       await sleep(180)
       const viewportReport = { ...viewport, tabs: [] }
       for (const tab of ['summary', 'artifacts', 'evidence', 'timeline']) {
-        await page.click(`[data-studio-result-tab="${tab}"]`)
-        await page.waitForSelector(`[data-studio-result-view="${tab}"]`, { visible: true, timeout: 5_000 })
+        const tabSelector = `${activeResult} [data-studio-result-view="${tab}"]`
+        await page.click(`${activeResult} [data-studio-result-tab="${tab}"]`)
+        await page.waitForSelector(tabSelector, { visible: true, timeout: 5_000 })
         if (tab === 'timeline') {
-          await page.waitForSelector('[data-studio-audit-state="ready"]', { visible: true, timeout: 15_000 })
+          await page.waitForSelector(`${tabSelector}[data-studio-audit-state="ready"]`, { visible: true, timeout: 15_000 })
           if (viewport.name === 'desktop') {
-            await loadAuditUntilSelector(page, '[data-studio-audit-category="model_attempt"]')
+            await loadAuditUntilSelector(page, tabSelector, '[data-studio-audit-category="model_attempt"]')
           }
           if (viewport.name === 'mobile') {
-            await page.waitForSelector('[data-studio-audit-load-more]', { visible: true, timeout: 5_000 })
-            const before = await page.$$eval('[data-studio-audit-item]', (nodes) => nodes.length)
-            await page.click('[data-studio-audit-load-more]')
-            await page.waitForFunction((count) => document.querySelectorAll('[data-studio-audit-item]').length > count, { timeout: 10_000 }, before)
-            await page.select('[data-studio-audit-run-filter]', runIdValue)
-            await page.waitForFunction((expectedRunId) => {
-              const select = document.querySelector('[data-studio-audit-run-filter]')
-              const rows = [...document.querySelectorAll('[data-studio-audit-item]')]
+            await page.waitForSelector(`${tabSelector} [data-studio-audit-load-more]`, { visible: true, timeout: 5_000 })
+            const before = await page.$$eval(`${tabSelector} [data-studio-audit-item]`, (nodes) => nodes.length)
+            await page.click(`${tabSelector} [data-studio-audit-load-more]`)
+            await page.waitForFunction((rootSelector, count) => {
+              const root = document.querySelector(rootSelector)
+              return root && root.querySelectorAll('[data-studio-audit-item]').length > count
+            }, { timeout: 10_000 }, tabSelector, before)
+            await page.select(`${tabSelector} [data-studio-audit-run-filter]`, runIdValue)
+            await page.waitForFunction((rootSelector) =>
+              document.querySelector(rootSelector)?.getAttribute('data-studio-audit-state') === 'loading',
+            { timeout: 5_000 }, tabSelector)
+            await page.waitForSelector(`${tabSelector}[data-studio-audit-state="ready"]`, { visible: true, timeout: 15_000 })
+            await page.waitForFunction((rootSelector, expectedRunId) => {
+              const root = document.querySelector(rootSelector)
+              const select = root?.querySelector('[data-studio-audit-run-filter]')
+              const rows = [...(root?.querySelectorAll('[data-studio-audit-item]') ?? [])]
               return select?.value === expectedRunId && rows.length > 0 && rows.every((row) => {
                 const rowRunId = row.getAttribute('data-studio-audit-run')
                 return !rowRunId || rowRunId === expectedRunId
               })
-            }, { timeout: 15_000 }, runIdValue)
+            }, { timeout: 15_000 }, tabSelector, runIdValue)
           }
         }
-        const overflow = await readOverflow(page)
+        const overflow = await readOverflow(page, `${activeResult} [data-studio-result-panel]`)
         assert(overflow.documentOverflow <= 1, `${viewport.name}/${tab} document overflow ${overflow.documentOverflow}px`)
         assert(overflow.panelOverflow <= 1, `${viewport.name}/${tab} panel overflow ${overflow.panelOverflow}px`)
         if (tab === 'artifacts') {
-          assert(await page.$(`[data-studio-result-artifact="${ids.artifact}"]`), `${viewport.name} Artifact row missing`)
+          assert(await page.$(`${tabSelector} [data-studio-result-artifact="${ids.artifact}"]`), `${viewport.name} Artifact row missing`)
         }
         if (tab === 'evidence') {
-          assert(await page.$(`[data-studio-result-evidence="${ids.evidence}"]`), `${viewport.name} Evidence row missing`)
-          await page.waitForSelector(`[data-acceptance-review="${ids.acceptance}"]`, { visible: true, timeout: 5_000 })
+          assert(await page.$(`${tabSelector} [data-studio-result-evidence="${ids.evidence}"]`), `${viewport.name} Evidence row missing`)
+          await assertVisibleInViewport(
+            page,
+            `${tabSelector} [data-acceptance-review="${ids.acceptance}"]`,
+            `${viewport.name} Acceptance review`
+          )
         }
         if (tab === 'timeline') {
-          assert(await page.$('[data-studio-audit-actor]'), `${viewport.name} audit actor missing`)
-          assert(await page.$('[data-studio-audit-digest]'), `${viewport.name} audit digest missing`)
+          assert(await page.$(`${tabSelector} [data-studio-audit-actor]`), `${viewport.name} audit actor missing`)
+          assert(await page.$(`${tabSelector} [data-studio-audit-digest]`), `${viewport.name} audit digest missing`)
           if (viewport.name === 'desktop') {
-            assert(await page.$('[data-studio-audit-provider]'), 'desktop ModelAttempt Provider attribution missing')
+            assert(await page.$(`${tabSelector} [data-studio-audit-provider]`), 'desktop ModelAttempt Provider attribution missing')
           }
         }
         await screenshot(page, `${viewport.name}-${tab}`)
@@ -617,26 +643,66 @@ async function clickStudioSurface(targetPage, surface) {
   await targetPage.waitForSelector(`#studio-projection-panel-${surface}:not([hidden])`, { visible: true, timeout: 10_000 })
 }
 
-async function readOverflow(targetPage) {
-  return targetPage.evaluate(() => {
-    const panel = document.querySelector('[data-studio-result-panel]')
+async function readOverflow(targetPage, panelSelector = '[data-studio-result-panel]') {
+  return targetPage.evaluate((selector) => {
+    const panel = document.querySelector(selector)
     return {
       documentOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
       panelOverflow: panel ? Math.max(0, panel.scrollWidth - panel.clientWidth) : -1
     }
-  })
+  }, panelSelector)
 }
 
-async function loadAuditUntilSelector(targetPage, selector, maxPages = 10) {
+async function assertVisibleInViewport(targetPage, selector, label) {
+  await targetPage.waitForSelector(selector, { timeout: 5_000 })
+  const geometry = await waitForValue(() => targetPage.evaluate((candidateSelector) => {
+    const candidates = [...document.querySelectorAll(candidateSelector)]
+    const node = candidates.find((candidate) => {
+      const candidateStyle = getComputedStyle(candidate)
+      const candidateRect = candidate.getBoundingClientRect()
+      return candidateStyle.display !== 'none' && candidateStyle.visibility !== 'hidden' &&
+        Number.parseFloat(candidateStyle.opacity || '1') > 0 &&
+        candidateRect.width > 0 && candidateRect.height > 0
+    })
+    if (!node) return { rendered: false, intersectsViewport: false, matchCount: candidates.length }
+    node.scrollIntoView({ block: 'center', inline: 'nearest' })
+    const style = getComputedStyle(node)
+    const rect = node.getBoundingClientRect()
+    const rendered = style.display !== 'none' && style.visibility !== 'hidden' &&
+      Number.parseFloat(style.opacity || '1') > 0 && rect.width > 0 && rect.height > 0
+    const intersectsViewport = rect.right > 0 && rect.bottom > 0 &&
+      rect.left < window.innerWidth && rect.top < window.innerHeight
+    return {
+      rendered,
+      intersectsViewport,
+      matchCount: candidates.length,
+      display: style.display,
+      visibility: style.visibility,
+      opacity: style.opacity,
+      width: rect.width,
+      height: rect.height,
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    }
+  }, selector), (value) => value.rendered && value.intersectsViewport, 5_000, `${label} is not visible`)
+  assert(geometry.rendered && geometry.intersectsViewport, `${label} is not visible: ${JSON.stringify(geometry)}`)
+}
+
+async function loadAuditUntilSelector(targetPage, rootSelector, selector, maxPages = 10) {
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-    if (await targetPage.$(selector)) return
-    const more = await targetPage.$('[data-studio-audit-load-more]')
+    if (await targetPage.$(`${rootSelector} ${selector}`)) return
+    const more = await targetPage.$(`${rootSelector} [data-studio-audit-load-more]`)
     if (!more) break
-    const count = await targetPage.$$eval('[data-studio-audit-item]', (nodes) => nodes.length)
+    const count = await targetPage.$$eval(`${rootSelector} [data-studio-audit-item]`, (nodes) => nodes.length)
     await more.click()
-    await targetPage.waitForFunction((previous) =>
-      document.querySelectorAll('[data-studio-audit-item]').length > previous,
-    { timeout: 10_000 }, count)
+    await targetPage.waitForFunction((activeRoot, previous) => {
+      const root = document.querySelector(activeRoot)
+      return root && root.querySelectorAll('[data-studio-audit-item]').length > previous
+    }, { timeout: 10_000 }, rootSelector, count)
   }
   throw new Error(`audit selector did not appear after pagination: ${selector}`)
 }

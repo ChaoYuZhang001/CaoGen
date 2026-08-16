@@ -12,7 +12,8 @@
 <img src="https://img.shields.io/badge/source-main-informational" alt="current source branch main">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
 <img src="https://img.shields.io/badge/macOS-Intel%20x64%20signed-success" alt="macOS Intel x64 signed and notarized">
-<img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
+<img src="https://img.shields.io/badge/release%20Electron-40.10.2-informational" alt="v0.1.8 uses Electron 40.10.2">
+<img src="https://img.shields.io/badge/source%20Electron-41.10.3-informational" alt="current source uses Electron 41.10.3">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
 [下载](https://github.com/ChaoYuZhang001/CaoGen/releases) · [快速开始](#quick-start) · [讨论](https://github.com/ChaoYuZhang001/CaoGen/discussions) · [贡献](#贡献-caogen) · [路线图](#roadmap--长期愿景建设中)
@@ -41,10 +42,12 @@ CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面
 ## 当前进展
 
 <!-- caogen-public-status:start -->
-截至 2026-08-16，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
+截至 2026-08-17，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
 <!-- caogen-public-status:end -->
 
 这不是版本完成率或发布承诺。已发布的 `v0.1.8` 不是 1.0 stable；完整证据和边界统一放在 [STATUS.md](./STATUS.md) 与 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)。公共数字由 `npm run update:public-status` 从 PRD 状态和 STATUS 日期生成，不应手工修改。
+
+> **源码与发布包边界**：公开的 `v0.1.8` Intel x64 安装包固定使用 Electron `40.10.2`。当前 `main` 源码已进入 Electron `41.10.3` 和依赖安全更新验证，但尚未形成新的正式发布；这批变更通过 clean candidate 门禁后必须使用后续补丁版本，不能覆盖或重发 `v0.1.8`。
 
 > **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
 

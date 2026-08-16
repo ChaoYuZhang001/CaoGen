@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
@@ -22,6 +22,7 @@ import {
   ProviderCredentialBroker,
   type ProviderCredentialRecord
 } from '../providerCredentialBroker'
+import { protectedStorage } from '../security/protected-storage-runtime'
 import { stableValueDigest } from '../task/tool-idempotency'
 
 interface StoredNotificationConnector {
@@ -44,7 +45,7 @@ export interface ResolvedNotificationConnector extends NotificationConnectorView
   secret?: string
 }
 
-const credentialBroker = new ProviderCredentialBroker(safeStorage)
+const credentialBroker = new ProviderCredentialBroker(protectedStorage)
 let cache: StoredNotificationConnector[] | null = null
 
 export function listNotificationConnectors(): NotificationConnectorView[] {

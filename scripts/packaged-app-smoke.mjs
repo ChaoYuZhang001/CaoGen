@@ -21,10 +21,15 @@ const targetPlatform = requestedPlatform === 'macos' ? 'darwin' : requestedPlatf
 const targetArch = argValue('--arch') || process.arch
 const unsignedBuild = process.argv.includes('--unsigned')
 const previewMode = process.argv.includes('--preview')
+const localUnsignedBuild = process.argv.includes('--local-unsigned')
 const allowDirtyPreview = previewMode && process.argv.includes('--allow-dirty')
 const interactiveInstaller = process.argv.includes('--interactive-installer')
 const ciUnattendedInstaller = process.argv.includes('--ci-unattended-installer')
-const distributionChannel = previewMode || unsignedBuild ? 'unsigned_preview' : 'formal'
+const distributionChannel = localUnsignedBuild
+  ? 'local_unsigned_diagnostic'
+  : previewMode || unsignedBuild
+    ? 'unsigned_preview'
+    : 'formal'
 const sourceArtifact = argValue('--artifact')
   ? path.resolve(repoRoot, argValue('--artifact'))
   : releaseArtifactPath(targetPlatform, targetArch, packageJson.version, previewMode)
@@ -66,9 +71,14 @@ try {
     throw new Error(`packaged app smoke for ${targetPlatform} must run on ${targetPlatform}, got ${process.platform}`)
   }
   if (targetArch !== 'x64' && targetArch !== 'arm64') throw new Error(`unsupported packaged app architecture: ${targetArch}`)
-  if (unsignedBuild && previewMode) throw new Error('use either --unsigned or --preview, not both')
+  if ([unsignedBuild, previewMode, localUnsignedBuild].filter(Boolean).length > 1) {
+    throw new Error('use only one of --unsigned, --preview, or --local-unsigned')
+  }
   if (unsignedBuild && targetPlatform !== 'win32') throw new Error('unsigned packaged app smoke is Windows-only')
   if (previewMode && targetPlatform !== 'win32') throw new Error('preview packaged app smoke is Windows-only')
+  if (localUnsignedBuild && targetPlatform !== 'darwin') {
+    throw new Error('local unsigned packaged app smoke is macOS-only')
+  }
   if (interactiveInstaller && ciUnattendedInstaller) {
     throw new Error('use either --interactive-installer or --ci-unattended-installer, not both')
   }
@@ -81,7 +91,9 @@ try {
   if (!existsSync(sourceArtifact)) {
     throw new Error(`release installer is missing: ${path.relative(repoRoot, sourceArtifact)}`)
   }
-  if (!unsignedBuild) assertReleaseAuditBinding(releaseAudit, sourceArtifact, allowDirtyPreview)
+  if (!unsignedBuild && !localUnsignedBuild) {
+    assertReleaseAuditBinding(releaseAudit, sourceArtifact, allowDirtyPreview)
+  }
   if (targetPlatform === 'win32') {
     installation.existingInstallations = inspectExistingWindowsInstallations()
     if (installation.existingInstallations.length > 0) {
@@ -121,7 +133,7 @@ try {
     if (signing.app.status !== 'NotSigned') {
       throw new Error(`unsigned application has unexpected Authenticode status: ${signing.app.status}`)
     }
-  } else {
+  } else if (!localUnsignedBuild) {
     const inspectedProvenance = readPackagedReleaseProvenanceFromAsar(packagedAsarPath(appRoot, targetPlatform))
     buildProvenance = inspectedProvenance.value
     if (inspectedProvenance.error) throw new Error(`packaged release provenance is unreadable: ${inspectedProvenance.error}`)
@@ -184,7 +196,15 @@ if (!failure && cleanupFailure) failure = `temporary user-data cleanup failed: $
 
 const report = {
   status: failure ? 'failed' : 'passed',
-  mode: unsignedBuild ? 'unsigned' : previewMode ? 'unsigned-preview' : 'signed-release',
+  evidenceClass: localUnsignedBuild ? 'development_diagnostic' : 'distribution_validation',
+  closesFormalReleaseGate: distributionChannel === 'formal',
+  mode: localUnsignedBuild
+    ? 'local-unsigned'
+    : unsignedBuild
+      ? 'unsigned'
+      : previewMode
+        ? 'unsigned-preview'
+        : 'signed-release',
   distributionChannel,
   runId,
   reportDir,
@@ -194,10 +214,12 @@ const report = {
   allowDirtyPreview,
   appExecutable: appExecutable ? 'isolated-install/CaoGen' : null,
   git,
-  artifactSetSha256: unsignedBuild ? null : releaseAudit.data?.artifactSetSha256 || null,
+  artifactSetSha256: unsignedBuild || localUnsignedBuild ? null : releaseAudit.data?.artifactSetSha256 || null,
   releaseAudit: {
     path: releaseAudit.relativePath,
-    status: unsignedBuild ? 'not-required' : releaseAudit.data?.status || (releaseAudit.error ? 'invalid_json' : 'missing')
+    status: unsignedBuild || localUnsignedBuild
+      ? 'not-required'
+      : releaseAudit.data?.status || (releaseAudit.error ? 'invalid_json' : 'missing')
   },
   buildProvenance,
   signing,
@@ -211,10 +233,16 @@ const report = {
 }
 mkdirSync(reportDir, { recursive: true })
 writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-const latestReportName = previewMode ? 'latest-preview.json' : 'latest.json'
+const latestReportName = localUnsignedBuild
+  ? 'latest-local-unsigned.json'
+  : previewMode
+    ? 'latest-preview.json'
+    : 'latest.json'
 writeFileSync(path.join(reportRoot, latestReportName), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
 const latestPlatformName = previewMode
   ? `latest-${platformLabel(targetPlatform)}-${targetArch}-preview.json`
+  : localUnsignedBuild
+    ? `latest-${platformLabel(targetPlatform)}-local-unsigned-${targetArch}.json`
   : unsignedBuild
     ? `latest-${platformLabel(targetPlatform)}-unsigned-${targetArch}.json`
     : `latest-${platformLabel(targetPlatform)}-${targetArch}.json`

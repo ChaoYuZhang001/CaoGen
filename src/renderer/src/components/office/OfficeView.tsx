@@ -352,7 +352,6 @@ export default function OfficeView(): React.JSX.Element {
   const operationalRefreshSequence = useRef(0)
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
-
   const handleOfficeFrame = useCallback(
     (frameMs: number): void => {
       renderQuality.recordFrame(frameMs)
@@ -1237,7 +1236,7 @@ export default function OfficeView(): React.JSX.Element {
             position={cameraPose.position}
             target={cameraPose.target}
             auto={false}
-            minDistance={cameraMinDistance}
+            minDistance={cameraMinDistance} onSettledChange={(settled) => document.querySelector('.office-canvas-wrap')?.setAttribute('data-office-camera-settled', settled ? '1' : '0')}
           />
 
           </Canvas>

@@ -797,7 +797,7 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
       next.advancedConfig = advancedConfig
       const view = toView(next)
       const nextList = [...list.slice(0, idx), next, ...list.slice(idx + 1)]
-      if (persistedProviderStoreDigest(list) === persistedProviderStoreDigest(nextList)) return view
+      if (persistedProviderStoreDigest(list) === persistedProviderStoreDigest(nextList)) { providerStore.replace(nextList); return view }
       writeAutomaticProviderProfileBackup(app.getPath('userData'), 'provider-update', list, persistedProviders(list))
       providerStore.replace(nextList)
       persistUnlocked()

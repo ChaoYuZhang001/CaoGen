@@ -1,4 +1,3 @@
-import { safeStorage } from 'electron'
 import {
   createCipheriv,
   createDecipheriv,
@@ -13,6 +12,7 @@ import {
 import { lstat, readFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { writeDurableFile } from '../durable-file'
+import { protectedStorage } from '../security/protected-storage-runtime'
 import { canonicalJson, digest } from './workflow-ledger-codec'
 
 const IDENTITY_FORMAT = 'caogen.workflow-delivery-identity.v1'
@@ -57,6 +57,11 @@ export interface WorkflowDeliveryIdentityProfile extends WorkflowDeliverySigning
   createdAt: number
   retiredIdentities: WorkflowDeliveryRetiredIdentity[]
 }
+
+export type WorkflowDeliveryIdentityStorageStatus =
+  | 'available'
+  | 'encryption_unavailable'
+  | 'insecure_linux_backend'
 
 interface WorkflowDeliveryIdentityBackupPayload {
   schemaVersion: 1
@@ -140,6 +145,14 @@ export async function getWorkflowDeliveryIdentityProfile(rootDir: string): Promi
     createdAt: resolved.createdAt,
     retiredIdentities: resolved.retiredIdentities.map((item) => ({ ...item }))
   }
+}
+
+export function workflowDeliveryIdentityStorageStatus(): WorkflowDeliveryIdentityStorageStatus {
+  if (!protectedStorage.isEncryptionAvailable()) return 'encryption_unavailable'
+  if (process.platform === 'linux' && protectedStorage.getSelectedStorageBackend() === 'basic_text') {
+    return 'insecure_linux_backend'
+  }
+  return 'available'
 }
 
 export async function signWorkflowDeliveryCanonicalPayload(
@@ -403,7 +416,7 @@ function createStoredWorkflowDeliveryIdentity(
     publicKeyFormat: 'spki-der-base64',
     publicKey,
     publicKeyFingerprint,
-    encryptedPrivateKey: `enc:${safeStorage.encryptString(privateDer.toString('base64')).toString('base64')}`,
+    encryptedPrivateKey: `enc:${protectedStorage.encryptString(privateDer.toString('base64')).toString('base64')}`,
     ...(retiredIdentities.length > 0 ? { retiredIdentities: mergeRetiredIdentities(retiredIdentities) } : {})
   }
   return {
@@ -457,7 +470,7 @@ function parseStoredIdentity(raw: unknown): StoredWorkflowDeliveryIdentity {
 function decryptPrivateKey(value: string): ReturnType<typeof createPrivateKey> {
   assertProtectedStorageAvailable()
   try {
-    const decrypted = safeStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
+    const decrypted = protectedStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
     if (!isBoundedBase64(decrypted, 1024)) throw new Error('invalid key encoding')
     const key = createPrivateKey({ key: Buffer.from(decrypted, 'base64'), type: 'pkcs8', format: 'der' })
     if (key.asymmetricKeyType !== 'ed25519') throw new Error('wrong key type')
@@ -468,10 +481,11 @@ function decryptPrivateKey(value: string): ReturnType<typeof createPrivateKey> {
 }
 
 function assertProtectedStorageAvailable(): void {
-  if (!safeStorage.isEncryptionAvailable()) {
+  const status = workflowDeliveryIdentityStorageStatus()
+  if (status === 'encryption_unavailable') {
     throw new Error('System credential encryption is unavailable; the delivery package was not created')
   }
-  if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
+  if (status === 'insecure_linux_backend') {
     throw new Error('Protected system credential storage is unavailable; the delivery package was not created')
   }
 }

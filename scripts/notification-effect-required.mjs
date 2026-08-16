@@ -777,7 +777,8 @@ export const app = { getPath: () => process.env.CAOGEN_NOTIFICATION_USER_DATA }
 export const safeStorage = {
   isEncryptionAvailable: () => true,
   encryptString: (value) => transform(value),
-  decryptString: (value) => transform(value).toString('utf8')
+  decryptString: (value) => transform(value).toString('utf8'),
+  getSelectedStorageBackend: () => 'keychain'
 }
 `)
   writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n')

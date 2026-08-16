@@ -10,7 +10,8 @@ import { writeDurableFile } from '../durable-file'
 import { canonicalJson, digest } from './workflow-ledger-codec'
 import {
   getWorkflowDeliveryIdentityProfile,
-  signWorkflowDeliveryCanonicalPayload
+  signWorkflowDeliveryCanonicalPayload,
+  workflowDeliveryIdentityStorageStatus
 } from './workflow-delivery-identity'
 
 const TRUST_STORE_FORMAT = 'caogen.workflow-delivery-identity-trust-store.v1'
@@ -476,18 +477,28 @@ async function snapshotWithLocalIdentity(
   rootDir: string,
   document: TrustStoreDocument
 ): Promise<WorkflowDeliveryIdentityTrustSnapshot> {
-  const local = await getWorkflowDeliveryIdentityProfile(rootDir)
+  const localIdentityStatus = workflowDeliveryIdentityStorageStatus() === 'available'
+    ? 'available' as const
+    : 'protected_storage_unavailable' as const
+  const local = localIdentityStatus === 'available'
+    ? await getWorkflowDeliveryIdentityProfile(rootDir)
+    : undefined
   return {
     schemaVersion: 1,
     format: 'caogen.workflow-delivery-identity-trust-view.v1',
     revision: document.revision,
     identities: document.identities.map(clone),
     policy: effectivePolicy(document),
-    localIdentity: {
-      fingerprint: local.fingerprint,
-      createdAt: local.createdAt,
-      retiredIdentities: local.retiredIdentities.map((item) => ({ ...item }))
-    }
+    localIdentityStatus,
+    ...(local
+      ? {
+          localIdentity: {
+            fingerprint: local.fingerprint,
+            createdAt: local.createdAt,
+            retiredIdentities: local.retiredIdentities.map((item) => ({ ...item }))
+          }
+        }
+      : {})
   }
 }
 

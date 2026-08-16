@@ -1,5 +1,5 @@
 /**
- * Electron 40 ships V8 headers that require C++20. tree-sitter 0.21.x still
+ * Electron 40+ ships V8 headers that require C++20. tree-sitter 0.21.x still
  * pins its native binding to C++17, so cross-arch electron-builder rebuilds can
  * fail unless the local install is adjusted before packaging.
  */

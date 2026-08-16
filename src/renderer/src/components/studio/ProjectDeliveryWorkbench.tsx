@@ -414,6 +414,7 @@ function DeliveryIdentityTrustList({
   const [busy, setBusy] = useState<'policy' | 'trust-export' | 'trust-import' | 'backup' | 'restore' | 'rotate' | ''>('')
   const [passphrase, setPassphrase] = useState('')
   const [confirmingRotation, setConfirmingRotation] = useState(false)
+  const localIdentityAvailable = snapshot.localIdentityStatus === 'available'
   const updatePolicy = useCallback(async (
     mode: WorkflowDeliveryIdentityTrustSnapshot['policy']['mode']
   ): Promise<void> => {
@@ -536,7 +537,7 @@ function DeliveryIdentityTrustList({
           <button type="button" className="btn btn-ghost btn-xs" onClick={() => void importTrustBundle()} disabled={Boolean(busy)} title="导入交付身份信任包">
             <Upload size={12} aria-hidden="true" />{busy === 'trust-import' ? '导入中...' : '导入信任'}
           </button>
-          <button type="button" className="btn btn-ghost btn-xs" onClick={() => void exportTrustBundle()} disabled={Boolean(busy)} title="导出交付身份信任包">
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => void exportTrustBundle()} disabled={Boolean(busy) || !localIdentityAvailable} title="导出交付身份信任包">
             <Download size={12} aria-hidden="true" />{busy === 'trust-export' ? '导出中...' : '导出信任'}
           </button>
         </div>
@@ -554,30 +555,26 @@ function DeliveryIdentityTrustList({
           </button>
         ))}
       </div>
-      {snapshot.localIdentity && (
-        <div className="pws-delivery-local-identity">
-          <div>
-            <KeyRound size={13} aria-hidden="true" />
-            <strong>本机签名身份</strong>
+      <div className="pws-delivery-local-identity" data-local-identity-status={snapshot.localIdentityStatus}>
+        <div>
+          <KeyRound size={13} aria-hidden="true" />
+          <strong>本机签名身份</strong>
+          {snapshot.localIdentity ? (
+            <>
             <code>{shortDigest(snapshot.localIdentity.fingerprint)}</code>
             <span>{snapshot.localIdentity.retiredIdentities.length} 个历史身份</span>
-          </div>
-          {!confirmingRotation ? (
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setConfirmingRotation(true)} disabled={Boolean(busy)} title="轮换本机交付签名身份">
-              <RotateCw size={12} aria-hidden="true" />轮换
-            </button>
-          ) : (
-            <div className="pws-delivery-rotation-confirm">
-              <button type="button" className="btn btn-danger btn-xs" onClick={() => void rotateIdentity()} disabled={Boolean(busy)}>
-                <RotateCw size={12} aria-hidden="true" />{busy === 'rotate' ? '轮换中...' : '确认轮换'}
-              </button>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setConfirmingRotation(false)} disabled={Boolean(busy)} title="取消轮换">
-                <X size={12} aria-hidden="true" />取消
-              </button>
-            </div>
-          )}
+            </>
+          ) : <span>系统凭据加密不可用</span>}
         </div>
-      )}
+        {snapshot.localIdentity && (!confirmingRotation ? (
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setConfirmingRotation(true)} disabled={Boolean(busy)} title="轮换本机交付签名身份"><RotateCw size={12} aria-hidden="true" />轮换</button>
+        ) : (
+          <div className="pws-delivery-rotation-confirm">
+            <button type="button" className="btn btn-danger btn-xs" onClick={() => void rotateIdentity()} disabled={Boolean(busy)}><RotateCw size={12} aria-hidden="true" />{busy === 'rotate' ? '轮换中...' : '确认轮换'}</button>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setConfirmingRotation(false)} disabled={Boolean(busy)} title="取消轮换"><X size={12} aria-hidden="true" />取消</button>
+          </div>
+        ))}
+      </div>
       <div className="pws-delivery-identity-backup">
         <input
           type="password"
@@ -588,11 +585,12 @@ function DeliveryIdentityTrustList({
           placeholder="身份备份密码（至少 12 位）"
           aria-label="交付身份备份密码"
           autoComplete="new-password"
+          disabled={!localIdentityAvailable}
         />
-        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void backupIdentity()} disabled={Boolean(busy) || passphrase.length < 12}>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void backupIdentity()} disabled={Boolean(busy) || !localIdentityAvailable || passphrase.length < 12}>
           <Save size={12} aria-hidden="true" />{busy === 'backup' ? '备份中...' : '备份身份'}
         </button>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void restoreIdentity()} disabled={Boolean(busy) || passphrase.length < 12}>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void restoreIdentity()} disabled={Boolean(busy) || !localIdentityAvailable || passphrase.length < 12}>
           <Upload size={12} aria-hidden="true" />{busy === 'restore' ? '恢复中...' : '恢复身份'}
         </button>
       </div>

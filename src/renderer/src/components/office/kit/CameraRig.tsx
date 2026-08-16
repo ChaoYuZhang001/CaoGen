@@ -15,6 +15,8 @@ interface Props {
   minDistance?: number
   /** 用户缩放的最远距离 */
   maxDistance?: number
+  /** 通知宿主相机是否已收敛到当前预设。 */
+  onSettledChange?: (settled: boolean) => void
 }
 
 /**
@@ -26,9 +28,11 @@ export default function CameraRig({
   target,
   auto = true,
   minDistance = 5.5,
-  maxDistance = 22
+  maxDistance = 22,
+  onSettledChange
 }: Props): React.JSX.Element {
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null)
+  const settledRef = useRef<boolean | null>(null)
 
   // 闭包外复用:期望聚焦点 + 临时向量,避免 useFrame 内 new 对象
   const desired = useMemo(() => new Vector3(0, 0.6, 0), [])
@@ -52,6 +56,14 @@ export default function CameraRig({
     controls.object.position.lerp(desiredPosition, a)
     controls.target.lerp(desired, a)
     controls.update()
+    if (onSettledChange) {
+      const settled = controls.object.position.distanceToSquared(desiredPosition) <= 0.0025 &&
+        controls.target.distanceToSquared(desired) <= 0.0025
+      if (settledRef.current !== settled) {
+        settledRef.current = settled
+        onSettledChange(settled)
+      }
+    }
   })
 
   return (

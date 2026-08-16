@@ -748,10 +748,10 @@ export interface WorkflowDeliveryIdentityTrustSnapshot {
   format: 'caogen.workflow-delivery-identity-trust-view.v1'
   revision: number
   identities: WorkflowDeliveryTrustedIdentityView[]
+  localIdentityStatus: 'available' | 'protected_storage_unavailable'
   localIdentity?: WorkflowDeliveryLocalIdentityView
   policy: WorkflowDeliveryTrustPolicyView
 }
-
 export type WorkflowDeliveryTrustPolicyMode =
   | 'audit_only'
   | 'require_valid_signature'

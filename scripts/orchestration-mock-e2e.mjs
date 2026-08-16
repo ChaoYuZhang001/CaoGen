@@ -32,8 +32,8 @@ const approvalFilePath = path.join(projectDir, 'office-approval-required.txt')
 const officeFailureMessage = 'office deterministic validation fault'
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
 const officeScreenshotThresholds = ciSoftwareWebgl
-  ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftDark: 0.91, leftBuckets: 48, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006, redAreaMax: 0.015 }
-  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftDark: 0.82, leftBuckets: 56, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012, redAreaMax: 0.015 }
+  ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftNonDark: 0.42, leftPalette: 0.0015, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006, redAreaMax: 0.015 }
+  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftNonDark: 0.5, leftPalette: 0.002, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012, redAreaMax: 0.015 }
 const OFFICE_OVERVIEW_CAMERA = {
   position: [0.2, 7.1, 16.8],
   target: [0, 0.75, 0.15],
@@ -902,8 +902,8 @@ try {
   await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
     await page.click('[data-office-camera-preset="overview"]')
     await waitForValue(
-      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
-      (value) => value === 'overview',
+      () => page.evaluate(() => ({ preset: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? '', settled: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-camera-settled') ?? '' })),
+      (value) => value.preset === 'overview' && value.settled === '1',
       5_000,
       'waiting for overview before office visibility screenshot'
     )
@@ -920,9 +920,9 @@ try {
       `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`
     )
     assert(
-      stats.leftSightline.darkRatio < officeScreenshotThresholds.leftDark &&
-        stats.leftSightline.uniqueColorBuckets >= officeScreenshotThresholds.leftBuckets &&
-        stats.leftSightline.coloredRatio > 0.004,
+      stats.leftSightline.nonDarkRatio > officeScreenshotThresholds.leftNonDark &&
+        stats.leftSightline.coloredRatio > 0.004 &&
+        stats.leftSightline.otherPaletteRatio > officeScreenshotThresholds.leftPalette,
       `left sightline still looks wall-obstructed: ${JSON.stringify(stats.leftSightline)}`
     )
     assert(
