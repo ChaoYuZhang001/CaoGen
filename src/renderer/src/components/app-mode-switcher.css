@@ -114,6 +114,12 @@
   transition: background-color 140ms ease, color 140ms ease, transform 110ms ease-out;
 }
 
+.app-mode-icon {
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
 .app-mode-switcher button:active {
   transform: scale(0.97);
 }
@@ -127,6 +133,45 @@
 .app-mode-switcher button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Keep navigation reachable when the desktop sidebar is collapsed. */
+.sidebar-collapsed .app-mode-bar,
+.sidebar-collapsed .sidebar-footer {
+  display: block;
+}
+
+.sidebar-collapsed .sidebar-footer {
+  padding: 6px 4px 8px;
+}
+
+.sidebar-collapsed .app-mode-switcher {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.sidebar-collapsed .app-mode-switcher button,
+.sidebar-collapsed .sidebar-footer .sidebar-nav-item {
+  width: 48px;
+  min-height: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-collapsed .app-mode-icon {
+  display: inline-flex;
+}
+
+.sidebar-collapsed .app-mode-label,
+.sidebar-collapsed .sidebar-footer .sidebar-nav-item > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .experience-pane {

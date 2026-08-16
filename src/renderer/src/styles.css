@@ -1261,11 +1261,9 @@ textarea {
 
 .sidebar-collapsed .brand-name,
 .sidebar-collapsed .sidebar-header-action,
-.sidebar-collapsed .app-mode-bar,
 .sidebar-collapsed .sidebar-primary-nav,
 .sidebar-collapsed .sidebar-search-wrap,
 .sidebar-collapsed .sidebar-scroll,
-.sidebar-collapsed .sidebar-footer,
 .sidebar-collapsed .sidebar-resize-handle {
   display: none;
 }

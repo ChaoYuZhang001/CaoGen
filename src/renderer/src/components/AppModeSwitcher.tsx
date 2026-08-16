@@ -1,5 +1,6 @@
 import type * as React from 'react'
 import { flushSync } from 'react-dom'
+import { Film, FolderKanban, MessageSquare } from 'lucide-react'
 import type { ExperienceMode } from '../store/experience-mode'
 import './app-mode-switcher.css'
 
@@ -18,36 +19,30 @@ export default function AppModeSwitcher({ language, mode, onChange }: Props): Re
     flushSync(() => onChange(next))
   }
 
+  const options: Array<{ mode: ExperienceMode; label: string; icon: React.JSX.Element }> = [
+    { mode: 'assistant', label: labels.assistant, icon: <MessageSquare size={14} strokeWidth={1.8} aria-hidden="true" /> },
+    { mode: 'studio', label: labels.studio, icon: <FolderKanban size={14} strokeWidth={1.8} aria-hidden="true" /> },
+    { mode: 'video', label: labels.video, icon: <Film size={14} strokeWidth={1.8} aria-hidden="true" /> }
+  ]
+
   return (
     <nav className="app-mode-bar no-drag" role="group" aria-label={labels.navigation} data-experience-mode-switcher>
       <div className="app-mode-switcher">
-        <button
-          type="button"
-          aria-pressed={mode === 'assistant'}
-          data-experience-mode-option="assistant"
-          className={mode === 'assistant' ? 'active' : ''}
-          onClick={() => selectMode('assistant')}
-        >
-          {labels.assistant}
-        </button>
-        <button
-          type="button"
-          aria-pressed={mode === 'studio'}
-          data-experience-mode-option="studio"
-          className={mode === 'studio' ? 'active' : ''}
-          onClick={() => selectMode('studio')}
-        >
-          {labels.studio}
-        </button>
-        <button
-          type="button"
-          aria-pressed={mode === 'video'}
-          data-experience-mode-option="video"
-          className={mode === 'video' ? 'active' : ''}
-          onClick={() => selectMode('video')}
-        >
-          {labels.video}
-        </button>
+        {options.map((option) => (
+          <button
+            key={option.mode}
+            type="button"
+            aria-label={option.label}
+            aria-pressed={mode === option.mode}
+            data-experience-mode-option={option.mode}
+            className={mode === option.mode ? 'active' : ''}
+            title={option.label}
+            onClick={() => selectMode(option.mode)}
+          >
+            <span className="app-mode-icon">{option.icon}</span>
+            <span className="app-mode-label">{option.label}</span>
+          </button>
+        ))}
       </div>
     </nav>
   )

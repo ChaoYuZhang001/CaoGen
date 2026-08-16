@@ -622,6 +622,28 @@ try {
     const resized = await sidebarState(cdp)
     assert(resized.width > before.width + 24, `sidebar width did not grow: ${JSON.stringify({ before, resized })}`)
     await clickByAriaLabel(cdp, '收回侧栏'); await waitForSidebarState(cdp, (state) => state.ok && state.collapsed && state.width <= 80, 'collapsed sidebar did not settle')
+    const collapsedModeState = await evalValue(
+      cdp,
+      `(() => {
+        const switcher = document.querySelector('.sidebar-collapsed [data-experience-mode-switcher]');
+        const options = Array.from(switcher?.querySelectorAll('[data-experience-mode-option]') ?? []);
+        return {
+          present: Boolean(switcher),
+          options: options.map((option) => ({
+            mode: option.getAttribute('data-experience-mode-option'),
+            width: option.getBoundingClientRect().width,
+            height: option.getBoundingClientRect().height,
+            label: option.getAttribute('aria-label')
+          }))
+        };
+      })()`
+    )
+    assert(collapsedModeState.present, 'collapsed sidebar removed the experience mode switcher')
+    assert(
+      collapsedModeState.options.length === 3 &&
+      collapsedModeState.options.every((option) => option.width > 0 && option.height > 0 && option.label),
+      `collapsed sidebar experience switcher is not fully reachable: ${JSON.stringify(collapsedModeState)}`
+    )
     await clickByAriaLabel(cdp, '展开侧栏'); await waitForSidebarState(cdp, (state) => state.ok && !state.collapsed && state.width >= 280, 'expanded sidebar did not restore width')
   })
   await screenshot(cdp, '03-sidebar-layout')
